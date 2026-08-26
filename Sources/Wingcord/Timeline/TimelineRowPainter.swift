@@ -45,6 +45,8 @@ nonisolated enum TimelineRowPainter {
             drawConversationStart(name: name, in: rowFrame, context: context, style: style)
         case .skeleton(let index):
             drawSkeleton(index: index, in: rowFrame, context: context)
+        case .loadingFirstPage:
+            drawLoadingFirstPage(in: rowFrame, context: context, style: style)
         case .message(let message):
             drawMessage(
                 message,
@@ -246,6 +248,15 @@ nonisolated enum TimelineRowPainter {
     }
 
     /// One line of plain text.
+    ///
+    /// Returns the width it **actually drew**, which is not the width it was
+    /// offered and not the width the string would have taken untruncated.
+    /// Anything positioned after a label — a tag chip, an APP badge — has to use
+    /// this number: measuring the full string and clamping it to the available
+    /// width places the chip at the end of the SLOT rather than at the end of
+    /// the text, which is a visible gap on every truncated name and on nothing
+    /// else.
+    @discardableResult
     static func drawText(
         _ string: String,
         font: NSFont,
@@ -254,8 +265,8 @@ nonisolated enum TimelineRowPainter {
         maxWidth: CGFloat,
         alignment: NSTextAlignment = .left,
         context: CGContext
-    ) {
-        guard !string.isEmpty else { return }
+    ) -> CGFloat {
+        guard !string.isEmpty else { return 0 }
         let paragraph = NSMutableParagraphStyle()
         paragraph.lineBreakMode = .byTruncatingTail
         paragraph.alignment = alignment
@@ -277,12 +288,10 @@ nonisolated enum TimelineRowPainter {
         context.scaleBy(x: 1, y: -1)
         // A truncating line needs a width to truncate against; without one it
         // draws past the rect and over whatever is beside it.
-        if let truncated = truncate(line, to: maxWidth, font: font, color: color) {
-            CTLineDraw(truncated, context)
-        } else {
-            CTLineDraw(line, context)
-        }
+        let drawn = truncate(line, to: maxWidth, font: font, color: color) ?? line
+        CTLineDraw(drawn, context)
         context.restoreGState()
+        return ceil(CTLineGetTypographicBounds(drawn, nil, nil, nil))
     }
 
     private static func truncate(
@@ -570,6 +579,28 @@ nonisolated enum TimelineRowPainter {
             color: style.secondaryColor,
             at: CGPoint(x: frame.minX + inset, y: frame.minY + 62),
             maxWidth: frame.width - inset * 2,
+            context: context
+        )
+    }
+
+    /// The first page is still in flight.
+    ///
+    /// One quiet line rather than a runway. The runway is a gesture affordance —
+    /// somewhere for a flick that is already travelling to go — and on a channel
+    /// with nothing in it yet there is no such gesture, so twenty placeholder
+    /// groups are just a wall of grey bars that reads as content that failed.
+    private static func drawLoadingFirstPage(
+        in frame: CGRect,
+        context: CGContext,
+        style: MessageTextStyle
+    ) {
+        drawText(
+            "Loading messages…",
+            font: style.metadataFont,
+            color: style.tertiaryColor,
+            at: CGPoint(x: frame.minX, y: frame.minY + 10),
+            maxWidth: frame.width,
+            alignment: .center,
             context: context
         )
     }

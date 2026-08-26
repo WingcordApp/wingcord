@@ -70,10 +70,16 @@ struct ChannelSidebar: View, Equatable {
 
     /// Empty room at the head of the list, standing in for the banner.
     ///
-    /// The banner is not in the list, so the content reserves the space it
-    /// occupies or the first category starts underneath the artwork.
+    /// The banner is not in the list — it is a layer behind it — so the content
+    /// has to reserve the space it occupies or the first rows are drawn
+    /// underneath the artwork.
+    ///
+    /// **The whole banner, not the banner minus the pill.** The pill FLOATS over
+    /// both; it takes no space in either. Subtracting its slot here left the
+    /// first row starting a pill's height too high, which is exactly the amount
+    /// by which "Channels & Roles" appeared behind the artwork.
     private var bannerReserve: CGFloat {
-        hasBanner ? max(0, bannerHeight + Spacing.base - pillSlot) : 0
+        hasBanner ? bannerHeight + Spacing.base : 0
     }
 
     var body: some View {

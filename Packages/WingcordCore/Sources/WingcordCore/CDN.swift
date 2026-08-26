@@ -144,6 +144,14 @@ public enum CDN {
         )
     }
 
+    /// The badge that rides inside a clan tag chip.
+    ///
+    /// Always PNG and always small: it is drawn at eleven points beside nine-point
+    /// letters, so there is nothing a larger rung buys.
+    public static func guildTagBadge(guildID: GuildID, hash: String) -> URL? {
+        URL(string: "\(host)/clan-badges/\(guildID.rawValue)/\(hash).png?size=32")
+    }
+
     public static func roleIcon(
         roleID: RoleID,
         hash: String,

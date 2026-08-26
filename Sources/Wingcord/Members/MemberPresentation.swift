@@ -40,6 +40,9 @@ struct MemberEntry: Hashable, Sendable, Identifiable {
     var isBot: Bool
     /// The clan / guild tag chip beside the name.
     var tag: String?
+    /// The tag's guild badge, drawn inside the chip. A tag without it is only
+    /// half the mark people recognise.
+    var tagBadgeURL: URL?
     /// Full-row artwork drawn behind everything else.
     var nameplateURL: URL?
 

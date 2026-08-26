@@ -38,6 +38,16 @@ final class SessionController {
     /// them. Buffering for a beat and applying once turns a hundred
     /// invalidations into one, and the cost is that someone's dot goes green up
     /// to a fifth of a second late — which nobody has ever noticed.
+    /// The account a session is being brought up for, if one is.
+    ///
+    /// **Starting a session must be idempotent.** Two calls — a click that
+    /// registers twice, an auto-resume racing a picker, a retry from a view that
+    /// re-appeared — otherwise open two gateway connections, each with its own
+    /// READY, its own heartbeat and its own event stream, both writing into the
+    /// same store. The symptom is double the memory and every event applied
+    /// twice, and nothing about it looks like a bug from the outside.
+    private var startingAccountID: String?
+
     private var pendingPresences: [UserID: Presence] = [:]
     private var presenceFlushTask: Task<Void, Never>?
     private static let presenceFlushInterval = Duration.milliseconds(200)
@@ -55,6 +65,11 @@ final class SessionController {
     /// to the Keychain, is retried on every launch forever — and the app cannot
     /// tell "offline" from "this credential is dead".
     func beginSession(token: String) {
+        guard startingAccountID == nil else {
+            Self.trace("sign-in already in flight")
+            return
+        }
+        startingAccountID = "pending"
         model.connectionState = .connecting
         Task { [weak self] in
             guard let self else { return }
@@ -74,12 +89,26 @@ final class SessionController {
             } catch {
                 model.connectionState = .failed(Self.describe(error))
             }
+            startingAccountID = nil
         }
     }
 
     /// Reconnects with a token already in the Keychain.
     func resumeSession(for account: StoredAccount) {
+        // Already coming up for this account, or for another one. Either way a
+        // second connection is never what was wanted.
+        guard startingAccountID == nil else {
+            Self.trace("resume ignored, \(startingAccountID ?? "?") already starting")
+            return
+        }
+        if model.currentUserID?.description == account.id,
+           model.connectionState == .ready
+        {
+            Self.trace("resume ignored, already signed in as \(account.id)")
+            return
+        }
         Self.trace("resume \(account.id)")
+        startingAccountID = account.id
         model.connectionState = .connecting
         Task { [weak self] in
             guard let self else { return }
@@ -97,6 +126,7 @@ final class SessionController {
                 Self.trace("no token in keychain")
                 AccountLedger.remove(account.id)
                 model.connectionState = .failed("No stored credential for that account.")
+                startingAccountID = nil
                 return
             } catch {
                 // Denied, not missing. The credential is still there and may work
@@ -106,6 +136,7 @@ final class SessionController {
                     "Could not read the saved credential for \(account.preferredName). "
                     + "Sign in again to replace it."
                 )
+                startingAccountID = nil
                 return
             }
 
@@ -125,6 +156,7 @@ final class SessionController {
                 Self.trace("validation failed: \(Self.describe(error))")
                 model.connectionState = .failed(Self.describe(error))
             }
+            startingAccountID = nil
         }
     }
 
@@ -160,6 +192,7 @@ final class SessionController {
     /// presences against invisible ids, cached rosters, folders, and every badge
     /// derived from them.
     func signOut() {
+        startingAccountID = nil
         teardownConnection()
         model.currentUserID = nil
         model.mentionableIDs = []
@@ -352,7 +385,10 @@ final class SessionController {
     private func apply(_ update: GatewayUpdate) {
         switch update {
         case .messageCreated(let message, let author, _, _):
-            model.users[author.id] = author
+            if model.users[author.id] != author {
+                model.users[author.id] = author
+                model.identityRevision &+= 1
+            }
             model.mutateBox(message.channelID) { $0.upsert(message) }
             model.channelIndex.patchLastMessage(message.id, in: message.channelID)
             model.messageContentRevision &+= 1
@@ -521,15 +557,23 @@ final class SessionController {
             guard let self else { return }
             do {
                 let page = try await rest.messages(in: channelID, before: before)
+                Self.trace(
+                    "history \(channelID): \(page.messages.count) messages, "
+                    + "\(page.authors.count) authors"
+                )
+                // Authors first: a row laid out before its author is known draws
+                // "Unknown" and would need a second relayout to correct itself.
+                model.users.merge(page.authors) { _, new in new }
+                model.identityRevision &+= 1
                 model.mutateBox(channelID) { box in
-                    for message in page { box.upsert(message) }
+                    for message in page.messages { box.upsert(message) }
                     box.isLoadingHistory = false
                     box.historyFailed = false
                     // A short page is the only signal history has run out. The
                     // limit and this test read the SAME constant: drifting them
                     // either stops paging early or offers a load that can never
                     // land.
-                    box.hasMoreHistory = page.count >= DiscordREST.historyPageSize
+                    box.hasMoreHistory = page.messages.count >= DiscordREST.historyPageSize
                 }
                 model.messageContentRevision &+= 1
             } catch {
@@ -537,6 +581,7 @@ final class SessionController {
                     box.isLoadingHistory = false
                     box.historyFailed = true
                 }
+                Self.trace("history \(channelID) FAILED: \(Self.describe(error))")
                 Self.log.error("history load failed: \(Self.describe(error), privacy: .public)")
             }
         }
@@ -544,9 +589,29 @@ final class SessionController {
 
     /// Loads the newest page when a channel is opened.
     func openChannel(_ channelID: ChannelID) {
-        guard model.permissionGate.canReadHistory(channelID) else { return }
+        let permissions = model.permissionGate.permissions(in: channelID)
+        guard model.permissionGate.canReadHistory(channelID) else {
+            Self.trace(
+                "open \(channelID) refused: view=\(permissions.contains(.viewChannel)) "
+                + "history=\(permissions.contains(.readMessageHistory))"
+            )
+            // Not an error state: a channel the reader can see but not read the
+            // history of is a real Discord configuration. It has to LOOK like
+            // that rather than like a page that never arrives.
+            model.mutateBox(channelID) { box in
+                box.hasMoreHistory = false
+                box.isLoadingHistory = false
+            }
+            model.messageContentRevision &+= 1
+            subscribeToMemberList(for: channelID)
+            return
+        }
         let box = model.messages(in: channelID)
-        guard box?.messages.isEmpty ?? true, box?.isLoadingHistory != true else { return }
+        guard box?.messages.isEmpty ?? true, box?.isLoadingHistory != true else {
+            Self.trace("open \(channelID) already loaded")
+            return
+        }
+        Self.trace("open \(channelID), fetching newest page")
         model.mutateBox(channelID) { $0.isLoadingHistory = true }
         loadHistory(in: channelID, before: nil)
         subscribeToMemberList(for: channelID)

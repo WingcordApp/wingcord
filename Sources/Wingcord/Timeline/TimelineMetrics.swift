@@ -33,6 +33,8 @@ nonisolated enum TimelineMetrics {
     static let conversationStartHeight: CGFloat = 120
     /// One placeholder group in the history runway.
     static let skeletonHeight: CGFloat = 56
+    /// The quiet "still loading" line shown before the first page lands.
+    static let loadingRowHeight: CGFloat = 36
 
     /// Between the message text and an attachment under it.
     static let attachmentGap: CGFloat = 6

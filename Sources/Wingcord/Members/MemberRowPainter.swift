@@ -84,50 +84,52 @@ nonisolated enum MemberRowPainter {
         let hasSubtitle = entry.subtitle != nil
         let nameY = hasSubtitle ? plate.midY - 15 : plate.midY - 8
 
-        var nameWidth = available
-        var tagWidth: CGFloat = 0
+        // Room for whatever chip follows the name, reserved before the name is
+        // drawn so the name truncates to leave space rather than colliding.
+        let chipFont = NSFont.systemFont(ofSize: 9, weight: .bold)
+        var chipLabel: String?
+        var chipFill: NSColor?
+        var chipBadge: URL?
         if let tag = entry.tag {
-            tagWidth = TimelineLayoutEngine.measure(
-                tag,
-                font: NSFont.systemFont(ofSize: 9, weight: .bold)
-            ) + 12
-            nameWidth -= tagWidth + 6
+            chipLabel = tag
+            chipBadge = entry.tagBadgeURL
         } else if entry.isBot {
-            tagWidth = 32
-            nameWidth -= tagWidth + 6
+            chipLabel = "APP"
+            chipFill = NSColor.controlAccentColor
         }
 
-        let measuredName = min(
-            nameWidth,
-            TimelineLayoutEngine.measure(entry.name, font: style.bodyFont)
-        )
+        var chipWidth: CGFloat = 0
+        if let chipLabel {
+            chipWidth = TimelineLayoutEngine.measure(chipLabel, font: chipFont) + 12
+            if chipBadge != nil { chipWidth += 14 }
+        }
+        let nameWidth = max(20, available - (chipWidth > 0 ? chipWidth + 6 : 0))
 
-        TimelineRowPainter.drawText(
+        // **The chip follows the DRAWN text, not the slot.** `drawText` returns
+        // the width it actually painted; measuring the full name and clamping it
+        // to the available width instead places the chip at the end of the slot,
+        // which is a visible gap on every truncated name and on nothing else.
+        let drawnName = TimelineRowPainter.drawText(
             entry.name,
             font: style.bodyFont,
             color: entry.colorValue.map { NSColor(Color(hex: $0)) }
                 ?? (entry.status == .offline ? style.tertiaryColor : style.primaryColor),
             at: CGPoint(x: textX, y: nameY),
-            maxWidth: max(20, nameWidth),
+            maxWidth: nameWidth,
             context: context
         )
 
-        if let tag = entry.tag {
+        if let chipLabel {
             drawTagChip(
-                tag,
-                at: CGPoint(x: textX + measuredName + 6, y: nameY + 1),
-                width: tagWidth,
-                context: context,
-                style: style
-            )
-        } else if entry.isBot {
-            drawTagChip(
-                "APP",
-                at: CGPoint(x: textX + measuredName + 6, y: nameY + 1),
-                width: tagWidth,
+                chipLabel,
+                at: CGPoint(x: textX + drawnName + 6, y: nameY + 1),
+                width: chipWidth,
                 context: context,
                 style: style,
-                fill: NSColor.controlAccentColor
+                fill: chipFill,
+                badge: chipBadge,
+                images: images,
+                scale: scale
             )
         }
 
@@ -325,27 +327,61 @@ nonisolated enum MemberRowPainter {
         }
     }
 
+    /// A clan tag or an APP badge.
+    ///
+    /// A clan tag carries the guild's **badge image** beside its letters — that
+    /// is what a tag IS on Discord, and drawing only the letters loses the half
+    /// people recognise. The badge is a tiny asset, so it is drawn at the chip's
+    /// own size and comes out of the same cache as everything else.
     private static func drawTagChip(
         _ label: String,
         at origin: CGPoint,
         width: CGFloat,
         context: CGContext,
         style: MessageTextStyle,
-        fill: NSColor? = nil
+        fill: NSColor? = nil,
+        badge: URL? = nil,
+        images: ImageStore? = nil,
+        scale: CGFloat = 2
     ) {
-        let frame = CGRect(x: origin.x, y: origin.y + 1, width: width, height: 14)
+        let frame = CGRect(x: origin.x, y: origin.y + 1, width: width, height: 15)
         context.addPath(CGPath(
             roundedRect: frame, cornerWidth: 4, cornerHeight: 4, transform: nil
         ))
         context.setFillColor((fill ?? NSColor.white.withAlphaComponent(0.12)).cgColor)
         context.fillPath()
+
+        var textX = frame.minX
+        var textWidth = frame.width
+        if let badge, let images {
+            let glyph = CGRect(
+                x: frame.minX + 3,
+                y: frame.midY - 5.5,
+                width: 11,
+                height: 11
+            )
+            if let image = images.cached(ImageStore.Key(
+                url: badge,
+                maximumPixelSize: Int((11 * scale).rounded(.up))
+            )) {
+                context.saveGState()
+                context.translateBy(x: 0, y: glyph.midY)
+                context.scaleBy(x: 1, y: -1)
+                context.translateBy(x: 0, y: -glyph.midY)
+                context.draw(image, in: glyph)
+                context.restoreGState()
+            }
+            textX = glyph.maxX + 2
+            textWidth = frame.maxX - textX
+        }
+
         TimelineRowPainter.drawText(
             label,
             font: NSFont.systemFont(ofSize: 9, weight: .bold),
             color: fill == nil ? style.secondaryColor : .white,
-            at: CGPoint(x: frame.minX, y: frame.midY - 6),
-            maxWidth: frame.width,
-            alignment: .center,
+            at: CGPoint(x: textX, y: frame.midY - 6),
+            maxWidth: textWidth,
+            alignment: badge == nil ? .center : .left,
             context: context
         )
     }

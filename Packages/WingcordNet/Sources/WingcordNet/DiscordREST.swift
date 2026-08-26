@@ -7,6 +7,12 @@ import WingcordCore
 /// `nonisolated` throughout: a history page is up to a hundred messages of JSON
 /// and decoding it must never touch the main thread. Nothing here reaches into
 /// the store — every method returns values, and the caller applies them.
+/// A page of history, plus the people who wrote it.
+public struct MessagePage: Sendable {
+    public var messages: [Message]
+    public var authors: [UserID: User]
+}
+
 public actor DiscordREST {
     private static let log = Logger(subsystem: "dev.wingcord.Wingcord", category: "REST")
 
@@ -101,7 +107,7 @@ public actor DiscordREST {
         after: MessageID? = nil,
         around: MessageID? = nil,
         limit: Int = DiscordREST.historyPageSize
-    ) async throws -> [Message] {
+    ) async throws -> MessagePage {
         var items = [URLQueryItem(name: "limit", value: String(limit))]
         if let before { items.append(URLQueryItem(name: "before", value: before.description)) }
         if let after { items.append(URLQueryItem(name: "after", value: after.description)) }
@@ -113,10 +119,21 @@ public actor DiscordREST {
             query: items,
             as: [MessageDTO].self
         )
+        // **The authors come back with the page, and they have to.** A history
+        // response is the only place this client ever learns who wrote an old
+        // message: READY carries the reader's own member record and their
+        // friends, and nothing else. Dropping them leaves every name in the
+        // transcript reading "Unknown" over a "?" avatar.
+        var authors: [UserID: User] = [:]
+        for dto in page {
+            guard let author = dto.author else { continue }
+            authors[author.id] = author.domain
+        }
+
         // Discord returns newest first; the store keeps oldest first, and
         // reversing here means no surface ever has to remember which way round
         // a page arrived.
-        return page.reversed().map(\.domain)
+        return MessagePage(messages: page.reversed().map(\.domain), authors: authors)
     }
 
     public func sendMessage(

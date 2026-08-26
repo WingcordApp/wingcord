@@ -44,19 +44,54 @@ public struct Snowflake<Tag>: Hashable, Sendable, Comparable, CustomStringConver
     }
 }
 
-// A snowflake decodes from Discord's string form and encodes back to it, so the
-// wire shape is preserved without any call site having to think about it.
+// A snowflake encodes back to Discord's string form, so the wire shape is
+// preserved without any call site having to think about it.
 extension Snowflake: Codable {
+    /// Decodes a snowflake from **either** a string or a number.
+    ///
+    /// **Discord sends both, in the same payload.** Snowflakes are documented as
+    /// strings — JavaScript cannot hold a 64-bit integer, which is the whole
+    /// reason for the convention — but the rule is not enforced everywhere, and
+    /// a READY carrying four hundred read-state entries has been observed with
+    /// `last_message_id` as a bare number on some of them.
+    ///
+    /// A decoder that accepts only the documented form fails the WHOLE bootstrap
+    /// on one such field: the payload is one JSON document, so a single type
+    /// mismatch seven megabytes in throws away everything. That is not a
+    /// hypothetical — it is the defect this initialiser was written to fix, and
+    /// it presented as a client that connected and then sat on "Connecting…"
+    /// forever.
+    ///
+    /// The number is decoded as `UInt64` and never as `Double`: a snowflake is
+    /// 19 digits and a `Double` has 53 bits of mantissa, so going through one
+    /// silently rounds the low digits away and produces an id that belongs to
+    /// nothing.
     public init(from decoder: any Decoder) throws {
         let container = try decoder.singleValueContainer()
-        let text = try container.decode(String.self)
-        guard let value = UInt64(text) else {
-            throw DecodingError.dataCorruptedError(
-                in: container,
-                debugDescription: "Snowflake is not a decimal integer: \(text)"
-            )
+
+        if let text = try? container.decode(String.self) {
+            guard let value = UInt64(text) else {
+                throw DecodingError.dataCorruptedError(
+                    in: container,
+                    debugDescription: "snowflake is not a decimal integer: \(text)"
+                )
+            }
+            rawValue = value
+            return
         }
-        rawValue = value
+
+        if let value = try? container.decode(UInt64.self) {
+            rawValue = value
+            return
+        }
+
+        throw DecodingError.typeMismatch(
+            Snowflake<Tag>.self,
+            DecodingError.Context(
+                codingPath: container.codingPath,
+                debugDescription: "snowflake was neither a string nor an unsigned integer"
+            )
+        )
     }
 
     public func encode(to encoder: any Encoder) throws {

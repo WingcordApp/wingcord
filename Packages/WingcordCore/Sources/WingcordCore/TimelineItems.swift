@@ -24,7 +24,15 @@ public enum TimelineItem: Hashable, Sendable {
     /// refusing to scroll. A deep runway of these is somewhere to go, and it
     /// also means the request goes out earlier, because the placeholder
     /// materialises as the viewport approaches it rather than when it arrives.
+    ///
+    /// **It only appears ABOVE messages that already exist.** A runway is a
+    /// gesture affordance — somewhere for a flick that is already travelling to
+    /// go — and there is no such gesture on a channel that has not loaded yet.
+    /// Twenty placeholder groups filling an empty viewport is not a loading
+    /// state, it is a wall of grey bars that looks like the real content failed.
     case historySkeleton(index: Int)
+    /// The first page is still in flight. One quiet row, not a runway.
+    case loadingFirstPage
 
     public var messageID: MessageID? {
         if case .message(let item) = self { return item.id }
@@ -118,9 +126,9 @@ public enum TimelineReducer {
         calendar: Calendar = .current
     ) -> [TimelineItem] {
         guard !messages.isEmpty else {
-            return hasMoreHistory
-                ? (0..<skeletonDepth).map { .historySkeleton(index: $0) }
-                : [.conversationStart]
+            // Nothing loaded yet. A channel with more history to fetch is
+            // LOADING; one without is genuinely at its beginning.
+            return hasMoreHistory ? [.loadingFirstPage] : [.conversationStart]
         }
 
         // One allocation for the whole reduction. The row count is bounded by

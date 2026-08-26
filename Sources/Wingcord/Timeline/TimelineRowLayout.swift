@@ -19,6 +19,7 @@ nonisolated struct TimelineRow: Sendable {
         case unreadDivider
         case conversationStart(name: String)
         case skeleton(index: Int)
+        case loadingFirstPage
         case message(MessageRow)
     }
 
@@ -180,6 +181,12 @@ nonisolated struct TimelineLayoutEngine: Sendable {
                 rows.append(TimelineRow(
                     height: TimelineMetrics.skeletonHeight,
                     kind: .skeleton(index: index)
+                ))
+
+            case .loadingFirstPage:
+                rows.append(TimelineRow(
+                    height: TimelineMetrics.loadingRowHeight,
+                    kind: .loadingFirstPage
                 ))
 
             case .message(let message):

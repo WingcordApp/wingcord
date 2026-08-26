@@ -211,38 +211,66 @@ struct SignInView: View {
     }
 }
 
+/// One stored account.
+///
+/// **A real `Button`, not a row with `.onTapGesture`.** A tap gesture looks
+/// identical and is not the same control: it takes no keyboard focus, reports
+/// nothing to VoiceOver, gives no press feedback, and cannot be activated by
+/// Return or by an automation click. This is the first control anyone touches in
+/// the app, so it has to be the real thing.
+///
+/// The Forget button sits OUTSIDE the account button rather than inside it — a
+/// button nested in a button is one hit region the outer one swallows.
 private struct AccountRow: View {
     var account: StoredAccount
     var resume: () -> Void
     var forget: () -> Void
 
+    @Environment(\.motion) private var motion
+    @State private var isHovering = false
+
     var body: some View {
-        HStack(spacing: Spacing.snug) {
-            AvatarView(
-                url: account.avatarHash.flatMap {
-                    URL(string: "\(CDN.host)/avatars/\(account.id)/\($0).webp?size=64")
-                },
-                monogram: account.preferredName.first.map(String.init)?.uppercased() ?? "?",
-                side: 32
-            )
-            VStack(alignment: .leading, spacing: 0) {
-                Text(account.preferredName)
-                    .font(.system(.subheadline, weight: .semibold))
-                    .foregroundStyle(Ink.primary)
-                Text(account.username)
-                    .font(.system(.caption))
-                    .foregroundStyle(Ink.secondary)
+        HStack(spacing: 0) {
+            Button(action: resume) {
+                HStack(spacing: Spacing.snug) {
+                    AvatarView(
+                        url: account.avatarHash.flatMap {
+                            URL(string: "\(CDN.host)/avatars/\(account.id)/\($0).webp?size=64")
+                        },
+                        monogram: account.preferredName.first.map(String.init)?.uppercased() ?? "?",
+                        side: 32
+                    )
+                    VStack(alignment: .leading, spacing: 0) {
+                        Text(account.preferredName)
+                            .font(.system(.subheadline, weight: .semibold))
+                            .foregroundStyle(Ink.primary)
+                        Text(account.username)
+                            .font(.system(.caption))
+                            .foregroundStyle(Ink.secondary)
+                    }
+                    Spacer(minLength: Spacing.base)
+                }
+                .padding(Spacing.snug)
+                .contentShape(.rect)
             }
-            Spacer(minLength: Spacing.base)
+            .buttonStyle(.plain)
+            .accessibilityLabel(Text("Continue as \(account.preferredName)"))
+
             Button("Forget", systemImage: "xmark", action: forget)
                 .labelStyle(.iconOnly)
                 .buttonStyle(.plain)
                 .foregroundStyle(Ink.tertiary)
+                .padding(.trailing, Spacing.snug)
+                .accessibilityLabel(Text("Forget \(account.preferredName)"))
         }
-        .padding(Spacing.snug)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Palette.surfaceRaised, in: .rect(cornerRadius: Radius.glass))
-        .contentShape(.rect(cornerRadius: Radius.glass))
-        .onTapGesture(perform: resume)
+        .background {
+            RoundedRectangle(cornerRadius: Radius.glass, style: .continuous)
+                .fill(isHovering ? Palette.selectionFill : Palette.surfaceRaised)
+        }
+        .onHover { hovering in
+            guard isHovering != hovering else { return }
+            isHovering = hovering
+        }
+        .animation(motion.hover, value: isHovering)
     }
 }

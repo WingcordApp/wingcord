@@ -85,6 +85,12 @@ extension AppModel {
                     ?? presence?.customStatus?.rowSubtitle,
                 isBot: user.isBot,
                 tag: user.decoration?.primaryGuildTag,
+                tagBadgeURL: user.decoration.flatMap { decoration in
+                    guard let guildID = decoration.primaryGuildID,
+                          let hash = decoration.primaryGuildBadgeHash
+                    else { return nil }
+                    return CDN.guildTagBadge(guildID: guildID, hash: hash)
+                },
                 // Reserved. See `MemberEntry.nameplateURL`.
                 nameplateURL: nil
             )
