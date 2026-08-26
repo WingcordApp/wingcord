@@ -23,6 +23,15 @@ struct RootView: View {
             .overlay(alignment: .top) {
                 ConnectionBanner(state: model.connectionState)
             }
+            // No chrome before there is anything to be chrome FOR.
+            //
+            // The split view is always in the tree — it is held at opacity 0 so
+            // its column widths and scroll positions survive a reconnect — and a
+            // split view installs its own sidebar toggle whether or not anyone
+            // can see the sidebar. Hiding the window's toolbar is what removes
+            // it, because the item is the system's and there is nothing of ours
+            // to take away.
+            .toolbarVisibility(model.showsWorkspace ? .automatic : .hidden, for: .windowToolbar)
             .animation(.easeOut(duration: 0.2), value: model.showsWorkspace)
             // A channel becoming the destination is what triggers its history
             // fetch and its roster subscription. Driven from `onChange` rather
@@ -61,6 +70,7 @@ extension AppModel {
     func resumeStoredSessionIfAvailable() async {
         guard case .signedOut = connectionState else { return }
         let accounts = AccountLedger.accounts()
+        DiagnosticLog.trace("app", "stored accounts: \(accounts.count)")
         guard accounts.count == 1, let account = accounts.first else { return }
         resumeSession(for: account)
     }

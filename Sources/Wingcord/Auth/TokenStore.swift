@@ -22,21 +22,43 @@ nonisolated enum TokenStore {
         case keychain(OSStatus)
     }
 
+    /// Why a read did not produce a token.
+    ///
+    /// **Missing and denied are different**, and collapsing them is destructive:
+    /// the caller deletes the account on a miss, so a denied read — which is
+    /// what an ad-hoc-signed app gets after a rebuild changes its code signature
+    /// — would silently throw away a perfectly good credential.
+    enum ReadFailure: Error {
+        /// There is no item. The account really is gone.
+        case missing
+        /// The item exists but this build could not read it: the signing
+        /// identity changed, the user declined the prompt, or the Mac is locked.
+        case denied(OSStatus)
+    }
+
     /// Reads the token for one account.
-    static func token(forAccount accountID: String) -> String? {
+    ///
+    /// **Call this off the main thread.** A Keychain read can put a prompt up —
+    /// "Wingcord wants to use your confidential information" — and
+    /// `SecItemCopyMatching` does not return until it is answered. On the main
+    /// thread that is a frozen window.
+    static func token(forAccount accountID: String) throws(ReadFailure) -> String {
         var query = baseQuery(accountID: accountID)
         query[kSecReturnData as String] = true
         query[kSecMatchLimit as String] = kSecMatchLimitOne
 
         var item: CFTypeRef?
         let status = SecItemCopyMatching(query as CFDictionary, &item)
-        guard status == errSecSuccess, let data = item as? Data else {
-            if status != errSecItemNotFound {
-                log.error("keychain read failed: \(status, privacy: .public)")
-            }
-            return nil
+        if status == errSecItemNotFound { throw .missing }
+        guard status == errSecSuccess,
+              let data = item as? Data,
+              let token = String(data: data, encoding: .utf8),
+              !token.isEmpty
+        else {
+            log.error("keychain read failed: \(status, privacy: .public)")
+            throw .denied(status)
         }
-        return String(data: data, encoding: .utf8)
+        return token
     }
 
     /// Writes a token, replacing any previous one for the same account.

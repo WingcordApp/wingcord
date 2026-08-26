@@ -23,6 +23,7 @@ struct DiscordLoginView: View {
     @State private var page: WebPage
     @State private var isPolling = true
     @State private var didFail = false
+    @State private var hasPainted = false
 
     init(onToken: @escaping (String) -> Void) {
         self.onToken = onToken
@@ -36,11 +37,34 @@ struct DiscordLoginView: View {
     }
 
     var body: some View {
-        WebView(page)
-            .frame(minWidth: 520, minHeight: 640)
+        // A web view paints its own white ground before the page it is loading
+        // has anything to draw, and on a dark sheet that is a full-window white
+        // flash. The ground underneath is painted first and the web view is
+        // faded in once the page reports it has content, so the sheet opens dark
+        // and stays dark.
+        ZStack {
+            Palette.canvas
+
+            WebView(page)
+                .opacity(hasPainted ? 1 : 0)
+                .animation(.easeOut(duration: 0.18), value: hasPainted)
+
+            if !hasPainted {
+                ProgressView()
+                    .controlSize(.large)
+            }
+        }
+        .frame(minWidth: 520, minHeight: 640)
+        .background(Palette.canvas)
             .task {
                 page.load(URLRequest(url: DiscordLoginView.loginURL))
                 await pollForToken()
+            }
+            .onChange(of: page.isLoading) { _, isLoading in
+                // The first time loading STOPS, the page has painted. Fading in
+                // on the first navigation instead would show Discord's own
+                // white pre-paint, which is the flash this exists to remove.
+                if !isLoading, page.url != nil { hasPainted = true }
             }
             .overlay(alignment: .bottom) {
                 if didFail {

@@ -1,5 +1,6 @@
 import AppKit
 import SwiftUI
+import WingcordNet
 
 @main
 struct WingcordApp: App {
@@ -10,6 +11,12 @@ struct WingcordApp: App {
         // while the process is healthy precisely so the signal handler never has
         // to allocate.
         CrashReporter.install()
+        if DiagnosticLog.isEnabled {
+            GatewaySocket.traceSink = { message in
+                DiagnosticLog.trace("gateway", message)
+            }
+        }
+        DiagnosticLog.trace("app", "launched")
         let model = AppModel()
         if LaunchOptions.current.usesDemoFixtures {
             DemoFixtures.populate(model)

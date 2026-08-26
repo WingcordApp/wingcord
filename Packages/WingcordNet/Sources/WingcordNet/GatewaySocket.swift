@@ -18,6 +18,26 @@ import WingcordCore
 public actor GatewaySocket {
     private static let log = Logger(subsystem: "dev.wingcord.Wingcord", category: "Gateway")
 
+    /// Where lifecycle tracing goes.
+    ///
+    /// A sink the app installs rather than a file this module opens: the network
+    /// layer has no business deciding where diagnostics live, and a socket that
+    /// never produces a READY is diagnosed by reading the ORDER of a handful of
+    /// events alongside the app's own.
+    ///
+    /// Off by default and free when off — one optional check.
+    nonisolated(unsafe) public static var traceSink: (@Sendable (String) -> Void)? = {
+        guard ProcessInfo.processInfo.environment["WINGCORD_LIVE"] == "1" else { return nil }
+        return { message in
+            FileHandle.standardError.write(Data("[gateway] \(message)\n".utf8))
+        }
+    }()
+
+    nonisolated static func trace(_ message: @autoclosure () -> String) {
+        guard let traceSink else { return }
+        traceSink(message())
+    }
+
     public enum Event: Sendable {
         case connecting
         case ready(ReadySnapshot)
@@ -44,6 +64,11 @@ public actor GatewaySocket {
     private var resumeURL: String?
     private var lastHeartbeatAcknowledged = true
     private var reconnectAttempt = 0
+    /// How many times to retry before saying so. Ten attempts with the back-off
+    /// below spans roughly five minutes, which is long enough to ride out a
+    /// laptop lid or a Wi-Fi change and short enough that a broken client says
+    /// something the same session.
+    static let maximumReconnectAttempts = 10
     /// A one-way latch. Everything checks it, so nothing resumed after teardown
     /// writes into a session that is gone.
     private var isStopped = false
@@ -121,7 +146,10 @@ public actor GatewaySocket {
     }
 
     private func openSocket(resuming: Bool) {
-        guard !isStopped, let token else { return }
+        // The token is not read here — IDENTIFY sends it — but a socket must
+        // never be opened without one, or the connection comes up and then sits
+        // silent waiting for an authentication that can never be sent.
+        guard !isStopped, token != nil else { return }
 
         heartbeatTask?.cancel()
         receiveTask?.cancel()
@@ -145,11 +173,11 @@ public actor GatewaySocket {
         request.setValue(metadata.userAgent, forHTTPHeaderField: "User-Agent")
         request.setValue("https://discord.com", forHTTPHeaderField: "Origin")
 
+        Self.trace("opening \(url.absoluteString)")
         let socket = session.webSocketTask(with: request)
         task = socket
         socket.resume()
         continuation?.yield(.connecting)
-        _ = token
         startReceiving()
     }
 
@@ -163,6 +191,7 @@ public actor GatewaySocket {
                     guard let message = try await self.receiveNext() else { break }
                     await self.handle(message)
                 } catch {
+                    GatewaySocket.trace("receive failed: \(error)")
                     await self.socketFailed(error)
                     return
                 }
@@ -188,22 +217,49 @@ public actor GatewaySocket {
         @unknown default:
             data = nil
         }
-        guard let data, !data.isEmpty else { return }
+        guard let data, !data.isEmpty else {
+            Self.trace("frame produced no payload")
+            return
+        }
 
         do {
             let frame = try decoder.decode(GatewayFrame.self, from: data)
+            Self.trace("op=\(frame.opcode) seq=\(frame.sequence.map(String.init) ?? "-") bytes=\(data.count)")
             if let sequence = frame.sequence { self.sequence = sequence }
             process(frame)
         } catch {
-            Self.log.error("gateway decode failed: \(error)")
+            // **A swallowed decode failure is invisible and permanent.** If the
+            // frame that failed was READY, the app sits at "Connecting…" for as
+            // long as it is open, with a healthy socket and no error anywhere —
+            // which is indistinguishable from a network problem and is the one
+            // failure mode this whole layer must not have.
+            //
+            // So the envelope is re-read with a decoder that cannot fail, purely
+            // to find out WHICH event was lost, and a lost bootstrap is
+            // reported rather than logged.
+            let envelope = try? JSONDecoder().decode(FrameEnvelope.self, from: data)
+            let name = envelope?.t ?? "op \(envelope?.op ?? -1)"
+            Self.trace("DECODE FAILED for \(name) (\(data.count) bytes): \(error)")
+            Self.log.error("gateway decode failed for \(name, privacy: .public): \(error)")
+
+            if envelope?.t == "READY" {
+                continuation?.yield(.disconnected(
+                    reason: "Discord sent a bootstrap payload this client could not read.",
+                    willRetry: false
+                ))
+                stop()
+            }
         }
     }
 
     private func inflate(_ frame: Data) -> Data? {
         guard let inflater else { return frame }
         do {
-            return try inflater.push(frame)
+            let result = try inflater.push(frame)
+            Self.trace("inflate \(frame.count) -> \(result.map { String($0.count) } ?? "partial")")
+            return result
         } catch {
+            Self.trace("inflate failed: \(error)")
             Self.log.error("inflate failed: \(error)")
             // A corrupt stream cannot be recovered by continuing to read it —
             // the shared dictionary is now wrong for every following frame.
@@ -215,6 +271,7 @@ public actor GatewaySocket {
     private func process(_ frame: GatewayFrame) {
         switch frame.payload {
         case .hello(let hello):
+            Self.trace("hello, interval=\(hello.heartbeat_interval)ms")
             startHeartbeat(interval: hello.heartbeat_interval / 1000)
             if sessionID != nil, sequence != nil {
                 sendResume()
@@ -233,6 +290,7 @@ public actor GatewaySocket {
             scheduleReconnect(reason: "session invalidated", resumable: resumable)
 
         case .ready(let ready):
+            Self.trace("READY guilds=\(ready.guilds?.count ?? 0) dms=\(ready.private_channels?.count ?? 0)")
             reconnectAttempt = 0
             sessionID = ready.session_id
             resumeURL = ready.resume_gateway_url
@@ -338,8 +396,10 @@ public actor GatewaySocket {
             // The payload is never logged. An IDENTIFY carries the account token
             // in the clear, and a log line is a file, a screen share and a
             // sysdiagnose.
+            Self.trace("send \(data.count) bytes")
             task.send(.data(data)) { error in
                 if let error {
+                    GatewaySocket.trace("send failed: \(error.localizedDescription)")
                     Self.log.error("gateway send failed: \(error.localizedDescription, privacy: .public)")
                 }
             }
@@ -387,15 +447,97 @@ public actor GatewaySocket {
 
     private func socketFailed(_ error: any Error) {
         guard !isStopped else { return }
+
+        // **The close code is on the TASK, not in the error.** A gateway that
+        // rejects an IDENTIFY closes the socket, and `receive()` then fails with
+        // a generic `NSPOSIXErrorDomain 57 "Socket is not connected"` — the
+        // 4004 that says *why* is only in `closeCode`.
+        //
+        // Reading the error instead is how a rejected token becomes an infinite
+        // reconnect loop that reports "Connecting…" forever: the check for 4004
+        // never matches, so every rejection looks like a transient network
+        // failure worth retrying.
+        let closeCode = task?.closeCode ?? .invalid
+        let closeReason = task?.closeReason
+            .flatMap { String(data: $0, encoding: .utf8) }
         let nsError = error as NSError
-        // 4004 is Discord's "authentication failed" close code. Retrying a
-        // rejected token is a loop that never succeeds and never stops.
-        if nsError.code == 4004 {
-            continuation?.yield(.authenticationFailed)
-            stop()
-            return
+        Self.trace(
+            "socket failed: close=\(closeCode.rawValue) reason=\(closeReason ?? "-") "
+            + "domain=\(nsError.domain) code=\(nsError.code)"
+        )
+
+        if let outcome = CloseOutcome(closeCode: closeCode.rawValue) {
+            switch outcome {
+            case .authentication:
+                continuation?.yield(.authenticationFailed)
+                stop()
+                return
+            case .fatal(let reason):
+                continuation?.yield(.disconnected(reason: reason, willRetry: false))
+                stop()
+                return
+            case .resumable:
+                break
+            case .freshSession:
+                sessionID = nil
+                sequence = nil
+            }
         }
-        scheduleReconnect(reason: error.localizedDescription, resumable: true)
+
+        scheduleReconnect(
+            reason: closeReason ?? Self.describe(closeCode: closeCode.rawValue)
+                ?? error.localizedDescription,
+            resumable: sessionID != nil
+        )
+    }
+
+    /// What a gateway close code means for the retry policy.
+    ///
+    /// Discord's codes divide into three groups and treating them alike is the
+    /// difference between an app that recovers and one that loops: a token that
+    /// will never work must not be retried, and a session that cannot be resumed
+    /// must not be resumed.
+    enum CloseOutcome {
+        case authentication
+        case fatal(String)
+        case resumable
+        case freshSession
+
+        init?(closeCode: Int) {
+            switch closeCode {
+            case 4004:
+                self = .authentication
+            case 4010, 4011, 4013, 4014:
+                self = .fatal(GatewaySocket.describe(closeCode: closeCode) ?? "Gateway refused this client.")
+            case 4007, 4009:
+                // The sequence or the session is gone; reconnecting is right but
+                // resuming is not.
+                self = .freshSession
+            case 4000, 4001, 4002, 4003, 4005, 4008:
+                self = .resumable
+            default:
+                return nil
+            }
+        }
+    }
+
+    nonisolated static func describe(closeCode: Int) -> String? {
+        switch closeCode {
+        case 4000: "The gateway reported an unknown error."
+        case 4001: "The gateway rejected an opcode this client sent."
+        case 4002: "The gateway could not decode a payload this client sent."
+        case 4003: "The gateway received a payload before authentication."
+        case 4004: "The session token was rejected."
+        case 4005: "The gateway received a second authentication."
+        case 4007: "The resume sequence was invalid."
+        case 4008: "Too many payloads were sent too quickly."
+        case 4009: "The session timed out."
+        case 4010: "The shard this client asked for is invalid."
+        case 4011: "This account needs sharding."
+        case 4013: "The gateway rejected the requested intents."
+        case 4014: "The gateway refused the requested privileged intents."
+        default: nil
+        }
     }
 
     private func scheduleReconnect(reason: String, resumable: Bool = true) {
@@ -406,6 +548,19 @@ public actor GatewaySocket {
         task = nil
 
         reconnectAttempt += 1
+        // A client that retries forever without ever coming up reports
+        // "Connecting…" indefinitely, which tells the reader nothing and costs a
+        // connection attempt every few seconds for as long as the app is open.
+        // After enough attempts it says so and stops.
+        if reconnectAttempt > Self.maximumReconnectAttempts {
+            Self.trace("giving up after \(reconnectAttempt) attempts")
+            continuation?.yield(.disconnected(
+                reason: "Could not reach Discord after several attempts. \(reason)",
+                willRetry: false
+            ))
+            stop()
+            return
+        }
         // Exponential back-off with a ceiling and jitter. Without the ceiling a
         // long outage ends with the client asleep for an hour; without the
         // jitter every client returns simultaneously.
@@ -425,6 +580,17 @@ public actor GatewaySocket {
         guard !isStopped else { return }
         openSocket(resuming: resuming && sessionID != nil)
     }
+}
+
+/// Just enough of a frame to name it.
+///
+/// Every field optional and nothing nested, so this decoder cannot itself fail —
+/// which is the entire point: it exists to identify a payload that the real
+/// decoder could not read.
+struct FrameEnvelope: Decodable, Sendable {
+    var op: Int?
+    var t: String?
+    var s: Int?
 }
 
 /// READY, converted to domain values.

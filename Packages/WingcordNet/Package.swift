@@ -18,6 +18,6 @@ let package = Package(
         // fifteen lines of manifest and removes the guesswork.
         .systemLibrary(name: "CZlib", path: "Sources/CZlib"),
         .target(name: "WingcordNet", dependencies: ["WingcordCore", "CZlib"]),
-        .testTarget(name: "WingcordNetTests", dependencies: ["WingcordNet"]),
+        .testTarget(name: "WingcordNetTests", dependencies: ["WingcordNet", "CZlib"]),
     ]
 )

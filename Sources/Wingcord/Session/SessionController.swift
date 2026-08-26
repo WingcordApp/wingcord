@@ -20,6 +20,10 @@ import WingcordNet
 final class SessionController {
     private static let log = Logger(subsystem: "dev.wingcord.Wingcord", category: "Session")
 
+    nonisolated static func trace(_ message: @autoclosure () -> String) {
+        DiagnosticLog.trace("session", message())
+    }
+
     private unowned let model: AppModel
     private let metadata = ClientMetadata()
     private let rest: DiscordREST
@@ -75,30 +79,57 @@ final class SessionController {
 
     /// Reconnects with a token already in the Keychain.
     func resumeSession(for account: StoredAccount) {
-        guard let token = TokenStore.token(forAccount: account.id) else {
-            AccountLedger.remove(account.id)
-            model.connectionState = .failed("No stored credential for that account.")
-            return
-        }
+        Self.trace("resume \(account.id)")
         model.connectionState = .connecting
         Task { [weak self] in
             guard let self else { return }
-            await rest.setToken(token)
+
+            // The Keychain read happens OFF the main thread. It can raise a
+            // prompt — "Wingcord wants to use your confidential information" —
+            // and `SecItemCopyMatching` does not return until that prompt is
+            // answered, which on the main thread is a frozen window.
+            let token: String
             do {
-                _ = try await rest.currentUser()
+                token = try await Task.detached(priority: .userInitiated) {
+                    try TokenStore.token(forAccount: account.id)
+                }.value
+            } catch TokenStore.ReadFailure.missing {
+                Self.trace("no token in keychain")
+                AccountLedger.remove(account.id)
+                model.connectionState = .failed("No stored credential for that account.")
+                return
+            } catch {
+                // Denied, not missing. The credential is still there and may work
+                // from another build or after unlocking, so the account is KEPT.
+                Self.trace("keychain denied: \(error)")
+                model.connectionState = .failed(
+                    "Could not read the saved credential for \(account.preferredName). "
+                    + "Sign in again to replace it."
+                )
+                return
+            }
+
+            await rest.setToken(token)
+            Self.trace("validating token")
+            do {
+                let user = try await rest.currentUser()
+                Self.trace("validated as \(user.username)")
                 connect(token: token)
             } catch DiscordREST.Failure.unauthorized {
+                Self.trace("401 — token rejected")
                 // A 401 on a stored account drops just that account and leaves
                 // every other one alone.
                 AccountLedger.remove(account.id)
                 model.connectionState = .failed("That account's session expired. Sign in again.")
             } catch {
+                Self.trace("validation failed: \(Self.describe(error))")
                 model.connectionState = .failed(Self.describe(error))
             }
         }
     }
 
     private func connect(token: String) {
+        Self.trace("connecting gateway")
         teardownConnection()
         isTornDown = false
         let socket = GatewaySocket(metadata: metadata)
@@ -109,7 +140,11 @@ final class SessionController {
 
         eventTask = Task { [weak self] in
             await socket.connect(token: token)
-            guard let stream = await socket.events else { return }
+            guard let stream = await socket.events else {
+                SessionController.trace("no event stream")
+                return
+            }
+            SessionController.trace("consuming events")
             for await event in stream {
                 guard let self, !self.isTornDown else { return }
                 self.apply(event)
@@ -173,13 +208,18 @@ final class SessionController {
         case .connecting:
             if model.connectionState != .ready { model.connectionState = .connecting }
         case .ready(let snapshot):
+            Self.trace("applying READY")
             applyReady(snapshot)
         case .resumed:
             model.connectionState = .ready
         case .update(let update):
             apply(update)
-        case .disconnected(_, let willRetry):
-            model.connectionState = willRetry ? .reconnecting : .signedOut
+        case .disconnected(let reason, let willRetry):
+            Self.trace("disconnected (retry: \(willRetry)): \(reason)")
+            // A disconnect that will NOT be retried has to say why. Falling back
+            // to `.signedOut` throws the reason away and shows a sign-in screen
+            // that looks like nothing happened.
+            model.connectionState = willRetry ? .reconnecting : .failed(reason)
         case .authenticationFailed:
             if let userID = model.currentUserID {
                 AccountLedger.remove(userID.description)
