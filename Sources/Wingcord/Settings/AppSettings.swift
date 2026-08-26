@@ -35,7 +35,14 @@ final class AppSettings {
     }
 
     private var storedTextScale: Double = 1.0 {
-        didSet { defaults.set(storedTextScale, forKey: Key.textScale) }
+        didSet {
+            guard storedTextScale != oldValue else { return }
+            defaults.set(storedTextScale, forKey: Key.textScale)
+            // The drawn surfaces laid their rows out against the previous size,
+            // and nothing about the messages changed — so this counter is the
+            // only thing that can tell them to re-measure.
+            PresentationRevision.shared.textScaleDidChange()
+        }
     }
 
     /// Compact mode: tighter message rows, no run spacing.

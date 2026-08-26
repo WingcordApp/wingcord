@@ -55,8 +55,13 @@ nonisolated struct MessageTextStyle: @unchecked Sendable {
     /// resolve against the current appearance, which is main-actor state. The
     /// resulting value is `Sendable` and is handed to the layout task.
     @MainActor
-    static func current() -> MessageTextStyle {
-        let body = NSFont.preferredFont(forTextStyle: .body)
+    static func current(scale: Double = AppSettings.shared.textScale) -> MessageTextStyle {
+        // The app's own scale on top of the SYSTEM text size, never instead of
+        // it. `preferredFont` already carries the accessibility setting; scaling
+        // its point size preserves that and adds the app's, so a reader who has
+        // raised the system size and then lowered the app's gets both.
+        let systemBody = NSFont.preferredFont(forTextStyle: .body)
+        let body = NSFont.systemFont(ofSize: systemBody.pointSize * scale)
         let manager = NSFontManager.shared
         let bold = manager.convert(body, toHaveTrait: .boldFontMask)
         let italic = manager.convert(body, toHaveTrait: .italicFontMask)
@@ -73,7 +78,9 @@ nonisolated struct MessageTextStyle: @unchecked Sendable {
             boldItalicFont: boldItalic,
             codeFont: code,
             authorFont: manager.convert(body, toHaveTrait: .boldFontMask),
-            metadataFont: NSFont.preferredFont(forTextStyle: .caption1),
+            metadataFont: NSFont.systemFont(
+                ofSize: NSFont.preferredFont(forTextStyle: .caption1).pointSize * scale
+            ),
             primaryColor: .labelColor,
             secondaryColor: .secondaryLabelColor,
             tertiaryColor: .tertiaryLabelColor,

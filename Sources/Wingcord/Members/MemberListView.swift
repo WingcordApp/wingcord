@@ -6,6 +6,8 @@ import WingcordCore
 /// The member list, hosted in SwiftUI.
 struct MemberListView: NSViewRepresentable {
     var sections: [MemberSection]
+    /// See `TimelineView.presentationRevision`.
+    var presentationRevision: UInt64 = 0
     var openProfile: (UserID, CGRect) -> Void = { _, _ in }
 
     func makeCoordinator() -> MemberListCoordinator {
@@ -18,7 +20,10 @@ struct MemberListView: NSViewRepresentable {
 
     func updateNSView(_ scrollView: NSScrollView, context: Context) {
         context.coordinator.openProfile = openProfile
-        context.coordinator.update(sections: sections)
+        context.coordinator.update(
+            sections: sections,
+            presentationRevision: presentationRevision
+        )
     }
 
     static func dismantleNSView(_ scrollView: NSScrollView, coordinator: MemberListCoordinator) {
@@ -146,8 +151,17 @@ final class MemberListCoordinator: NSObject {
         }
     }
 
-    func update(sections: [MemberSection]) {
+    private var presentationRevision: UInt64 = 0
+
+    func update(sections: [MemberSection], presentationRevision: UInt64) {
         guard !isTornDown else { return }
+        if presentationRevision != self.presentationRevision {
+            self.presentationRevision = presentationRevision
+            canvas?.style = PresentationRevision.shared.style
+            self.sections = sections
+            applyRows()
+            return
+        }
         // `Array ==` short-circuits on buffer identity, so a presence flush that
         // moved nobody settles here in a pointer comparison — which is the whole
         // reason the roster comes from a memo.

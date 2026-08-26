@@ -12,6 +12,10 @@ import WingcordCore
 struct TimelineView: NSViewRepresentable {
     var channelID: ChannelID
     var rows: [TimelineItem]
+    /// Moves when the appearance or the text size changes. Carried as an INPUT
+    /// so a change re-runs `updateNSView`, which is the only place the
+    /// coordinator can be told about it.
+    var presentationRevision: UInt64
     var model: AppModel
 
     func makeCoordinator() -> TimelineCoordinator {
@@ -23,7 +27,11 @@ struct TimelineView: NSViewRepresentable {
     }
 
     func updateNSView(_ scrollView: NSScrollView, context: Context) {
-        context.coordinator.update(channelID: channelID, items: rows)
+        context.coordinator.update(
+            channelID: channelID,
+            items: rows,
+            presentationRevision: presentationRevision
+        )
     }
 
     /// **Teardown is explicit and complete.** A representable that leaves its
@@ -205,8 +213,21 @@ final class TimelineCoordinator: NSObject {
 
     // MARK: Updating
 
-    func update(channelID: ChannelID, items: [TimelineItem]) {
+    func update(channelID: ChannelID, items: [TimelineItem], presentationRevision: UInt64) {
         guard !isTornDown else { return }
+
+        // An appearance or text-size change invalidates every laid-out row: the
+        // `CTFrame`s were built against fonts that no longer apply. Nothing
+        // about the MESSAGES changed, so no other key can see it — which is the
+        // whole reason this revision exists.
+        if presentationRevision != self.presentationRevision {
+            self.presentationRevision = presentationRevision
+            style = PresentationRevision.shared.style
+            canvas?.style = style
+            rowCache.removeAll(keepingCapacity: true)
+            if !items.isEmpty { runLayout(preservingPosition: true) }
+        }
+
         let channelChanged = channelID != self.channelID
         if channelChanged {
             // A different conversation shares nothing with the previous one, and
