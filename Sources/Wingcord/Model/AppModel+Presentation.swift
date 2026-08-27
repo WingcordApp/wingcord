@@ -14,6 +14,10 @@ struct RailMemoKey: Hashable, Sendable {
 
 struct SidebarMemoKey: Hashable, Sendable {
     var structureRevision: UInt64
+    /// The DM list's order IS recency, so it has to key on the revision that
+    /// moves when a `lastMessageID` does — the one the guild tree deliberately
+    /// ignores. Without it the DM list is built once and never reorders again.
+    var valueRevision: UInt64
     var sidebarRevision: UInt64
     /// Permissions decide which channels exist at all in this list, so a role
     /// change has to rebuild it. Leaving this out of the key is how a channel
@@ -72,20 +76,26 @@ extension AppModel {
     var sidebarPresentation: SidebarPresentation {
         let key = SidebarMemoKey(
             structureRevision: channelIndex.structureRevision,
+            valueRevision: channelIndex.valueRevision,
             sidebarRevision: sidebarRevision,
             roleRevision: roleRevision,
             guildID: selectedGuildID,
             collapsedCategories: collapsedCategoryIDs
         )
         let guildTable = guilds
+        // Read before the early return, so a cache hit still registers the
+        // dependency its reader needs.
+        let userTable = users
 
         if let sidebarCache, sidebarCache.key == key { return sidebarCache.value }
 
         let value: SidebarPresentation
-        if let guildID = selectedGuildID, let guild = guildTable[guildID] {
-            value = buildGuildSidebar(guild: guild)
+        if let guildID = selectedGuildID {
+            // A guild that is selected but has not arrived yet is a real state
+            // during bootstrap. It gets an empty list, not the DM list.
+            value = guildTable[guildID].map { buildGuildSidebar(guild: $0) } ?? .empty
         } else {
-            value = .empty
+            value = buildDirectMessageSidebar(users: userTable)
         }
         sidebarCache = (key, value)
         return value
@@ -211,6 +221,52 @@ extension AppModel {
         }
 
         return items
+    }
+
+    /// The direct-message home.
+    ///
+    /// **This is a destination, not the absence of one.** With no guild selected
+    /// the sidebar used to answer `.empty`, which is why the column went blank:
+    /// the 109 conversations READY delivers were in the index the whole time and
+    /// nothing ever asked for them.
+    ///
+    /// No categories, no permission gate — a DM is visible to its participants
+    /// by construction — and the order is `ChannelIndex`'s own, which is
+    /// recency. That order is already maintained by `patchLastMessage`, so a new
+    /// message moves a conversation to the top without this rebuilding anything.
+    private func buildDirectMessageSidebar(users userTable: [UserID: User]) -> SidebarPresentation {
+        let channelIDs = channelIndex.privateChannelIDs()
+        var rows: [SidebarRow] = []
+        rows.reserveCapacity(channelIDs.count)
+
+        for channelID in channelIDs {
+            guard let channel = channelIndex[channelID] else { continue }
+            let state = unreadState(of: channel)
+            // The other person, for a one-to-one conversation. A group has no
+            // single face, so it takes the group glyph and no presence dot.
+            let partnerID = channel.kind == .directMessage
+                ? channel.recipientIDs.first { $0 != currentUserID }
+                : nil
+            let partner = partnerID.flatMap { userTable[$0] }
+
+            rows.append(.channel(SidebarChannel(
+                id: channelID,
+                name: displayName(of: channel),
+                kind: channel.kind,
+                isUnread: state.unread,
+                mentionCount: state.mentions,
+                isMuted: state.muted,
+                voiceMembers: [],
+                avatarURL: partner.flatMap { avatarURL(for: $0, side: Metrics.avatarRow) },
+                monogram: partner?.monogram,
+                status: partnerID.map { presences[$0]?.status ?? .offline }
+            )))
+        }
+
+        return SidebarPresentation(
+            header: SidebarHeader(guildID: nil, name: "Direct Messages", bannerURL: nil),
+            rows: rows
+        )
     }
 
     private func buildGuildSidebar(guild: Guild) -> SidebarPresentation {

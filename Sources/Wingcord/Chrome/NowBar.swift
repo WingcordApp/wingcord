@@ -50,12 +50,20 @@ struct NowBar: View, Equatable {
             .padding(.horizontal, Spacing.base)
             .frame(height: Metrics.nowBarHeight)
         }
-        .background {
-            // One capsule for the whole bar. The controls above live inside it.
-            RoundedRectangle(cornerRadius: Radius.glass, style: .continuous)
-                .fill(Palette.selectionFill)
-                .glassEffect(.regular, in: .rect(cornerRadius: Radius.glass))
-        }
+        // One capsule for the whole bar. The controls above are regions inside
+        // it, never bodies on top of it.
+        //
+        // **The tint is part of the material, not a fill behind it.** This was
+        // a `RoundedRectangle().fill(selectionFill).glassEffect(...)`, which is
+        // a fill *underneath* glass — the case `INVARIANTS.md` §4 rule 3
+        // forbids, and the reason a glass surface stops lensing and starts
+        // reading as a flat lighter panel. `.regular.tint(...)` lights the
+        // material itself and keeps what is behind the window refracting
+        // through it.
+        .glassEffect(
+            .regular.tint(Palette.selectionFill),
+            in: .rect(cornerRadius: Radius.glass)
+        )
         .padding(.horizontal, Spacing.base)
         .padding(.bottom, Spacing.base)
         .animation(motion.panel, value: presentation.voiceChannelName)
@@ -210,6 +218,15 @@ struct PresenceDot: View {
     var status: PresenceStatus
     var side: CGFloat
     var isOnMobile: Bool = false
+    /// The opaque disc behind the dot, which separates it from whatever it
+    /// overlaps.
+    ///
+    /// **Off on a profile, where the separation is a hole rather than a disc.**
+    /// A plate is a flat circle of the window's background colour painted over
+    /// the artwork; against a profile banner that reads as a black blot stuck to
+    /// the avatar. There the gap is cut out of the avatar instead, so what shows
+    /// through it is the card's own ground.
+    var hasPlate: Bool = true
 
     var body: some View {
         Group {
@@ -242,9 +259,11 @@ struct PresenceDot: View {
             }
         }
         .frame(width: side, height: side)
-        .padding(side * 0.16)
+        .padding(hasPlate ? side * 0.16 : 0)
         .background {
-            Circle().fill(Color(nsColor: .windowBackgroundColor))
+            if hasPlate {
+                Circle().fill(Color(nsColor: .windowBackgroundColor))
+            }
         }
         .accessibilityHidden(true)
     }

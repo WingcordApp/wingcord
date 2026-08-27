@@ -1,0 +1,387 @@
+import SwiftUI
+import WingcordCore
+
+/// Emoji, stickers or GIFs — **one mode per picker**, chosen by which control in
+/// the composer opened it.
+///
+/// There is no tab bar inside. Three controls that each open their own thing is
+/// one gesture to what you wanted; a tab bar is a control that opens a control,
+/// and it spends the top of a small panel restating what the button you just
+/// pressed already said.
+///
+/// **Everything floats and the grid runs underneath.** The rail and the search
+/// field are glass bars the cells pass beneath, and the section heading is a
+/// pill that holds under them as its section scrolls — sticky headers, with the
+/// next section's pill shoving the last one out, which is the arrangement the
+/// channel list already uses under the server pill.
+///
+/// The bars take **`.clear` glass, not `.regular`**. What passes under them is
+/// emoji, server artwork and stickers — media — and `.regular` over media is
+/// frost: it blurs the content away instead of lensing it, which is what makes
+/// the bar read as a grey slab rather than as glass. See `INVARIANTS.md` §4.
+///
+/// **What is a view here and what is drawn.** The grid is an AppKit canvas —
+/// nineteen hundred Unicode glyphs plus every custom emoji in the account is not
+/// a number of view nodes anything survives. The chrome is a handful of controls
+/// and stays SwiftUI, where it belongs.
+///
+/// The external-expression gate — which servers' emoji are usable from here — is
+/// resolved against the store's **selected** channel, which is the channel the
+/// composer that opened this is sitting over. See `AppModel.emojiCatalog`.
+struct ExpressionPicker: View {
+    var mode: ExpressionMode
+    var onPick: (ExpressionItem) -> Void
+    var onPickGIF: (GIF) -> Void
+
+    @Environment(AppModel.self) private var model
+    @Environment(\.motion) private var motion
+    /// The shared instance, held as `@State` so the view observes it — the same
+    /// way every other surface that reads a preference does.
+    @State private var settings = AppSettings.shared
+
+    @State private var query = ""
+    @State private var jump: ExpressionJump?
+    @State private var jumpToken = 0
+    @State private var topSection = 0
+    /// What the pointer is over. Written by the grid on a change, never per
+    /// frame — a hover moves at a person's pace.
+    @State private var hover: ExpressionHover?
+    /// What the floating chrome actually measures.
+    ///
+    /// **Measured, not summed.** The grid's content inset has to equal the
+    /// chrome's height exactly or the first row hides behind the search field,
+    /// and a hand-kept sum of five paddings is a number that drifts the first
+    /// time any one of them changes. This is the one thing here worth a
+    /// measurement — see `INVARIANTS.md` §2.
+    @State private var chromeHeight: CGFloat = 0
+
+    /// The panel's size. A popover has no natural one, and a grid inside a
+    /// container that sizes to its content has no width to lay out against.
+    static let width: CGFloat = 388
+    static let height: CGFloat = 424
+
+    /// The rail's icon side. Here rather than inside the rail because the grid's
+    /// top inset is derived from it, and the two must not drift.
+    private static let railSide: CGFloat = 28
+
+    private var catalog: ExpressionCatalog {
+        switch mode {
+        case .emoji: model.emojiCatalog
+        case .stickers: model.stickerCatalog
+        case .gifs: ExpressionCatalog()
+        }
+    }
+
+    private var showsRail: Bool { !catalog.sections.isEmpty }
+
+    var body: some View {
+        Group {
+            if mode == .gifs {
+                GIFBoard(query: $query, onPick: onPickGIF).environment(model)
+            } else {
+                gridTab
+            }
+        }
+        .frame(width: Self.width, height: Self.height)
+        // No background: the popover's own material IS the panel, and painting
+        // over it is what turns liquid glass into a flat dark rectangle.
+        .task(id: mode) {
+            guard mode == .stickers else { return }
+            await model.sessionController.loadDefaultStickerPacks()
+        }
+    }
+
+    private var gridTab: some View {
+        // Resolved once and handed to both the rail and the grid: they are one
+        // control showing the same list twice, and computing it twice is a
+        // second pass over the account's whole emoji set.
+        let sections = catalog.filtered(by: query)
+
+        return ZStack(alignment: .top) {
+            if sections.isEmpty {
+                emptyState
+            } else {
+                ExpressionGridView(
+                    sections: sections,
+                    mode: mode,
+                    topInset: chromeHeight,
+                    // Reduce Motion is resolved once at the root and read from
+                    // the environment; the app's own preference sits beside it.
+                    animates: settings.playsAnimatedContent && !motion.reduceMotion,
+                    // A search result set is one flat section; jumping into it
+                    // has no meaning and would fight the reader's scroll.
+                    jump: query.isEmpty ? jump : nil,
+                    onPick: onPick,
+                    onTopSectionChange: { topSection = $0 },
+                    onHover: { hover = $0 }
+                )
+            }
+            chrome
+            footer
+        }
+    }
+
+    /// What the pointer is over: its shortcode, and the server it came from.
+    ///
+    /// **Present only while something is hovered**, and it takes no space when
+    /// it is not — a permanent strip at the foot of a small panel is a row of
+    /// emoji spent on a caption that is usually empty. It floats over the grid
+    /// like the chrome above it, so nothing reflows when it appears.
+    @ViewBuilder
+    private var footer: some View {
+        if let hover {
+            HStack(spacing: Spacing.base) {
+                art(hover.art)
+                    .frame(width: Metrics.control, height: Metrics.control)
+
+                VStack(alignment: .leading, spacing: 0) {
+                    Text(hover.hasShortcode ? ":\(hover.name):" : hover.name)
+                        .font(.system(.subheadline, weight: .semibold))
+                        .foregroundStyle(Ink.primary)
+                        .lineLimit(1)
+                    Text("from \(hover.source)")
+                        .font(.system(.caption2))
+                        .foregroundStyle(Ink.secondary)
+                        .lineLimit(1)
+                }
+
+                Spacer(minLength: 0)
+                badge(hover.sourceBadge, side: 20)
+            }
+            .padding(.horizontal, Spacing.snug)
+            .padding(.vertical, Spacing.tight)
+            .chromeOverMedia(in: .rect(cornerRadius: Radius.glass, style: .continuous))
+            .padding(.horizontal, Spacing.snug)
+            .padding(.bottom, Spacing.snug)
+            .frame(maxHeight: .infinity, alignment: .bottom)
+            .transition(.opacity)
+            .animation(motion.fadeQuick, value: hover)
+            .allowsHitTesting(false)
+        }
+    }
+
+    @ViewBuilder
+    private func art(_ art: ExpressionItem.Art) -> some View {
+        switch art {
+        case .glyph(let glyph):
+            Text(glyph).font(.system(size: 22))
+        case .image(let url, let animated):
+            // The still, with the film over it — the same stack the grid uses,
+            // and the only way a Lottie sticker shows anything here at all,
+            // since it has no still to fall back on.
+            Color.clear
+                .overlay { RemoteImage(url: url, side: Metrics.control) { Color.clear } }
+                .overlay {
+                    if animated, let url {
+                        AnimatedDecoration(
+                            url: url,
+                            side: Metrics.control,
+                            byteBudget: ExpressionGridPainter.filmBudget
+                        )
+                    }
+                }
+        }
+    }
+
+    @ViewBuilder
+    private func badge(_ badge: ExpressionSection.Badge, side: CGFloat) -> some View {
+        switch badge {
+        case .glyph(let glyph):
+            Text(glyph).font(.system(size: side * 0.8))
+        case .image(let url, let monogram):
+            RemoteImage(url: url, side: side) {
+                Text(monogram)
+                    .font(.system(.caption2, weight: .bold))
+                    .foregroundStyle(Ink.secondary)
+                    .frame(width: side, height: side)
+                    .background(Palette.surfaceRaised)
+            }
+            .frame(width: side, height: side)
+            .clipShape(.rect(cornerRadius: 6, style: .continuous))
+        }
+    }
+
+    /// The rail and the field, as one glass assembly over the grid.
+    ///
+    /// **One `GlassEffectContainer` around both.** Two adjacent glass surfaces
+    /// rendered independently double the material where they meet, which is the
+    /// stacking `INVARIANTS.md` §4 forbids. Merged, the system renders them as
+    /// one piece of material carrying two shapes.
+    private var chrome: some View {
+        GlassEffectContainer(spacing: Spacing.base) {
+            VStack(spacing: Spacing.base) {
+                if showsRail {
+                    ExpressionRail(
+                        sections: catalog.sections,
+                        selection: topSection,
+                        side: Self.railSide,
+                        onSelect: { index in
+                            // The token is what makes a repeat click a new
+                            // request: the same index twice is the same value,
+                            // and a value cannot express "again".
+                            jumpToken += 1
+                            jump = ExpressionJump(section: index, token: jumpToken)
+                            topSection = index
+                        }
+                    )
+                }
+                searchRow
+            }
+            .padding(.horizontal, Spacing.snug)
+            .padding(.top, Spacing.base)
+        }
+        .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { height in
+            // A `@State` write of an equal value still invalidates, and this
+            // fires on every layout pass.
+            guard abs(chromeHeight - height) > 0.5 else { return }
+            chromeHeight = height
+        }
+    }
+
+    private var searchRow: some View {
+        HStack(spacing: Spacing.base) {
+            HStack(spacing: Spacing.base) {
+                Image(systemName: "magnifyingglass")
+                    .font(.system(.subheadline))
+                    .foregroundStyle(Ink.tertiary)
+
+                TextField(mode.searchPlaceholder, text: $query)
+                    .textFieldStyle(.plain)
+                    .font(.system(.subheadline))
+
+                if !query.isEmpty {
+                    Button { query = "" } label: {
+                        Image(systemName: "xmark.circle.fill")
+                            .font(.system(.subheadline))
+                            .foregroundStyle(Ink.tertiary)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Clear search")
+                }
+            }
+            .padding(.horizontal, Spacing.snug)
+            .frame(minHeight: Metrics.control)
+            .chromeOverMedia()
+
+            if mode == .emoji { skinTone }
+        }
+    }
+
+    /// The tone every emoji that takes one is drawn in.
+    ///
+    /// A menu rather than a row of six swatches: the row is what a *touch*
+    /// picker needs, because a menu is awkward under a thumb. A pointer has no
+    /// such problem, and six controls where one will do is five controls of
+    /// permanent chrome.
+    private var skinTone: some View {
+        Menu {
+            ForEach(UnicodeEmoji.SkinTone.allCases) { tone in
+                Button("\(tone.swatch)  \(tone.title)") { settings.skinTone = tone }
+            }
+        } label: {
+            Text(settings.skinTone.swatch)
+                .font(.system(size: 15))
+                .frame(width: Metrics.control, height: Metrics.control)
+        }
+        .menuStyle(.button)
+        .buttonStyle(.plain)
+        .menuIndicator(.hidden)
+        .fixedSize()
+        .interactiveChromeOverMedia(in: .circle)
+        .animation(motion.glassMorph, value: settings.skinTone)
+        .help("Skin tone")
+        .accessibilityLabel("Skin tone: \(settings.skinTone.title)")
+    }
+
+    private var emptyState: some View {
+        VStack {
+            Spacer()
+            Text(query.isEmpty ? "Nothing here yet" : "No results for “\(query)”")
+                .font(.system(.subheadline))
+                .foregroundStyle(Ink.secondary)
+                .multilineTextAlignment(.center)
+            Spacer()
+        }
+        .frame(maxWidth: .infinity)
+    }
+}
+
+// MARK: - The rail
+
+/// One icon per section: a server's artwork, or a Unicode category's glyph.
+///
+/// **Two-way with the grid.** Clicking jumps the grid; scrolling the grid moves
+/// the selection here and scrolls the rail to keep it on screen. The two are one
+/// control showing the same position twice — a rail that only leads is one that
+/// silently disagrees with what is on screen.
+private struct ExpressionRail: View {
+    var sections: [ExpressionSection]
+    var selection: Int
+    var side: CGFloat
+    var onSelect: (Int) -> Void
+
+    @Environment(\.motion) private var motion
+
+    var body: some View {
+        ScrollViewReader { rail in
+            ScrollView(.horizontal) {
+                HStack(spacing: Spacing.tight) {
+                    ForEach(Array(sections.enumerated()), id: \.element.id) { index, section in
+                        icon(section, index: index).id(index)
+                    }
+                }
+                .padding(.horizontal, Spacing.base)
+                .padding(.vertical, Spacing.base)
+            }
+            .scrollIndicators(.never)
+            .frame(height: side + Spacing.base * 2)
+            .chromeOverMedia()
+            .onChange(of: selection) { _, index in
+                withAnimation(motion.standard) { rail.scrollTo(index, anchor: .center) }
+            }
+        }
+    }
+
+    private func icon(_ section: ExpressionSection, index: Int) -> some View {
+        let isSelected = index == selection
+
+        return Button { onSelect(index) } label: {
+            badge(section.badge)
+                .frame(width: side, height: side)
+                // Squircle at rest, rounder when selected — the shape language
+                // the guild rail already uses, so a server looks like the same
+                // object in both places.
+                .clipShape(.rect(cornerRadius: isSelected ? 8 : 13, style: .continuous))
+                // Dimmed, not removed: the section is still worth looking at,
+                // and a rail that omits servers reads as those servers having
+                // nothing in them.
+                .opacity(section.isLocked ? 0.4 : 1)
+                .contentShape(.rect)
+        }
+        .buttonStyle(.plain)
+        .animation(motion.standard, value: isSelected)
+        .help(section.title)
+        .accessibilityLabel(Text(section.title))
+        .accessibilityAddTraits(isSelected ? [.isSelected] : [])
+    }
+
+    @ViewBuilder
+    private func badge(_ badge: ExpressionSection.Badge) -> some View {
+        switch badge {
+        case .glyph(let glyph):
+            Text(glyph)
+                .font(.system(size: side * 0.66))
+                .frame(width: side, height: side)
+        case .image(let url, let monogram):
+            // Static, never animated: a rail can hold a hundred servers, and
+            // animating all of them costs the same as animating the grid.
+            RemoteImage(url: url, side: side) {
+                Text(monogram)
+                    .font(.system(.caption2, weight: .bold))
+                    .foregroundStyle(Ink.secondary)
+                    .frame(width: side, height: side)
+                    .background(Palette.surfaceRaised)
+            }
+        }
+    }
+}

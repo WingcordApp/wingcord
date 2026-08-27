@@ -28,8 +28,43 @@ struct ComposerContainer: View {
             ),
             send: send,
             cancelReply: { model.mutateBox(channelID) { $0.replyingTo = nil } },
-            attach: {}
+            attach: {},
+            completions: completions,
+            completionQuery: completionQuery ?? "",
+            commitCompletion: commit,
+            onPick: { model.apply($0.pick, in: channelID) },
+            onPickGIF: { gif in
+                // A GIF is sent as its URL, which every other client unfurls
+                // back into an embed. Straight out rather than into the draft:
+                // picking one is the whole message.
+                model.sendMessage(gif.url.absoluteString, in: channelID)
+            }
         )
+    }
+
+    /// The shortcode being typed, if any.
+    private var completionQuery: String? {
+        EmojiAutocomplete.query(in: model.messages(in: channelID)?.draft ?? "")
+    }
+
+    /// What to offer for it.
+    ///
+    /// Resolved in the body rather than kept in state: it is a prefix search
+    /// over a memoized catalog, and state would need invalidating from three
+    /// places that can each change the answer.
+    private var completions: [ExpressionItem] {
+        guard let completionQuery else { return [] }
+        return EmojiAutocomplete.matches(
+            for: completionQuery,
+            custom: model.emojiCatalog.sections
+        )
+    }
+
+    private func commit(_ item: ExpressionItem) {
+        guard case .insert(let text) = item.pick else { return }
+        model.mutateBox(channelID) { box in
+            box.draft = EmojiAutocomplete.applying(text, to: box.draft)
+        }
     }
 
     private var replyingToAuthor: String? {

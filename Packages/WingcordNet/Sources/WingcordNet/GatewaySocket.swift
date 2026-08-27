@@ -175,6 +175,21 @@ public actor GatewaySocket {
 
         Self.trace("opening \(url.absoluteString)")
         let socket = session.webSocketTask(with: request)
+        // **The default cap is 1 MB, and READY is bigger than that.**
+        //
+        // `URLSessionWebSocketTask` rejects any message larger than
+        // `maximumMessageSize` by failing the *receive* with POSIX `EMSGSIZE`
+        // (code 40, "Message too long") and tearing the socket down. The client
+        // then reconnects, asks for the same READY, and fails identically —
+        // which reads as an endless "Reconnecting…" with a perfectly healthy
+        // network, and gets worse the more servers the account joins.
+        //
+        // This account's compressed READY sits right around the default, which
+        // is why it connected for weeks and then stopped: it did not break, it
+        // grew. The ceiling is generous because the failure is fatal and the
+        // cost of headroom is nothing — the buffer is sized by what arrives, not
+        // by this number.
+        socket.maximumMessageSize = 16 * 1024 * 1024
         task = socket
         socket.resume()
         continuation?.yield(.connecting)
@@ -225,6 +240,12 @@ public actor GatewaySocket {
         do {
             let frame = try decoder.decode(GatewayFrame.self, from: data)
             Self.trace("op=\(frame.opcode) seq=\(frame.sequence.map(String.init) ?? "-") bytes=\(data.count)")
+            // READY only, once per connection: name the keys Discord actually
+            // sent. Discord has moved these before — `user_settings` for one —
+            // and a missing key is silent, because every non-structural field
+            // here is optional by design. Reading the key list off the wire is
+            // the difference between knowing and guessing.
+            if case .ready = frame.payload { Self.traceReadyShape(data) }
             if let sequence = frame.sequence { self.sequence = sequence }
             process(frame)
         } catch {
@@ -249,6 +270,27 @@ public actor GatewaySocket {
                 ))
                 stop()
             }
+        }
+    }
+
+    /// Names the top-level keys of a READY payload, and the settings shape
+    /// inside it. Diagnostic only, and gated on the trace sink being installed.
+    nonisolated private static func traceReadyShape(_ data: Data) {
+        guard traceSink != nil else { return }
+        guard
+            let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+            let body = root["d"] as? [String: Any]
+        else { return }
+        trace("READY keys: \(body.keys.sorted().joined(separator: ","))")
+        if let settings = body["user_settings"] as? [String: Any] {
+            let folders = settings["guild_folders"] as? [Any]
+            trace("READY user_settings keys: \(settings.keys.sorted().joined(separator: ","))")
+            trace("READY guild_folders: \(folders?.count.description ?? "absent")")
+        } else {
+            trace("READY user_settings: ABSENT")
+        }
+        if let proto = body["user_settings_proto"] as? String {
+            trace("READY user_settings_proto: \(proto.count) base64 chars")
         }
     }
 
@@ -603,6 +645,12 @@ public struct ReadySnapshot: Sendable {
     public var guilds: [Guild]
     public var channelsByGuild: [GuildID: [Channel]]
     public var rolesByGuild: [GuildID: [RoleID: Role]]
+    /// A server's own emoji and stickers, for the expression picker. Kept beside
+    /// the guilds rather than on them, the way roles and members already are:
+    /// these are per-guild collections that most of the app never reads, and a
+    /// `Guild` copied on every scalar change should not carry thousands of them.
+    public var emojisByGuild: [GuildID: [EmojiRef]]
+    public var stickersByGuild: [GuildID: [StickerRef]]
     public var membersByGuild: [GuildID: [UserID: Member]]
     public var privateChannels: [Channel]
     public var users: [UserID: User]
@@ -618,6 +666,8 @@ public struct ReadySnapshot: Sendable {
         var guilds: [Guild] = []
         var channelsByGuild: [GuildID: [Channel]] = [:]
         var rolesByGuild: [GuildID: [RoleID: Role]] = [:]
+        var emojisByGuild: [GuildID: [EmojiRef]] = [:]
+        var stickersByGuild: [GuildID: [StickerRef]] = [:]
         var membersByGuild: [GuildID: [UserID: Member]] = [:]
         var users: [UserID: User] = [:]
         var presences: [UserID: Presence] = [:]
@@ -637,6 +687,14 @@ public struct ReadySnapshot: Sendable {
                 for role in roles { table[role.id] = role.domain }
                 rolesByGuild[guild.id] = table
             }
+            if let emojis = guildDTO.emojis {
+                let usable = emojis.compactMap(\.catalogEntry)
+                if !usable.isEmpty { emojisByGuild[guild.id] = usable }
+            }
+            if let stickers = guildDTO.stickers {
+                let usable = stickers.compactMap(\.catalogEntry)
+                if !usable.isEmpty { stickersByGuild[guild.id] = usable }
+            }
             if let members = guildDTO.members {
                 var table: [UserID: Member] = [:]
                 table.reserveCapacity(members.count)
@@ -655,6 +713,8 @@ public struct ReadySnapshot: Sendable {
         self.guilds = guilds
         self.channelsByGuild = channelsByGuild
         self.rolesByGuild = rolesByGuild
+        self.emojisByGuild = emojisByGuild
+        self.stickersByGuild = stickersByGuild
         self.membersByGuild = membersByGuild
 
         var privateChannels: [Channel] = []
@@ -697,7 +757,15 @@ public struct ReadySnapshot: Sendable {
         self.readStates = readStates
         self.mutedGuildIDs = mutedGuildIDs
         self.mutedChannelIDs = mutedChannelIDs
-        settings = payload.user_settings?.domain
+        // The protobuf first, the JSON second, empty last.
+        //
+        // Discord moved the settings into `user_settings_proto` and stopped
+        // sending `user_settings` — measured on a live READY — so the order is
+        // not a preference: reading the JSON first would take an absent value
+        // over a present one. The JSON branch stays because it costs nothing and
+        // some sessions still answer with it.
+        settings = payload.user_settings_proto.flatMap { UserSettingsProto.decode(base64: $0) }
+            ?? payload.user_settings?.domain
             ?? ClientSettings(folders: [], status: .online, customStatus: nil)
     }
 }
@@ -715,9 +783,15 @@ public enum GatewayUpdate: Sendable {
         roles: [RoleID: Role],
         members: [UserID: Member],
         users: [UserID: User],
-        presences: [UserID: Presence]
+        presences: [UserID: Presence],
+        emojis: [EmojiRef],
+        stickers: [StickerRef]
     )
     case guildUpdated(Guild)
+    /// A server's emoji or sticker set was replaced. `nil` on either side means
+    /// that half did not change — the two arrive on separate events, and
+    /// treating a missing one as empty would empty the picker.
+    case guildExpressionsUpdated(GuildID, emojis: [EmojiRef]?, stickers: [StickerRef]?)
     case guildRemoved(GuildID, wasLeft: Bool)
     case channelUpserted(Channel)
     case channelRemoved(ChannelID)
@@ -778,10 +852,16 @@ public enum GatewayUpdate: Sendable {
                 roles: roles,
                 members: members,
                 users: users,
-                presences: presences
+                presences: presences,
+                emojis: (dto.emojis ?? []).compactMap(\.catalogEntry),
+                stickers: (dto.stickers ?? []).compactMap(\.catalogEntry)
             )
         case .guildUpdate(let dto):
             self = .guildUpdated(dto.domain)
+        case .guildEmojisUpdate(let payload):
+            self = .guildExpressionsUpdated(payload.guild_id, emojis: payload.catalog, stickers: nil)
+        case .guildStickersUpdate(let payload):
+            self = .guildExpressionsUpdated(payload.guild_id, emojis: nil, stickers: payload.catalog)
         case .guildDelete(let payload):
             // An unavailable guild is an outage, not a departure. Removing it
             // from the rail and putting it back reads as being kicked and

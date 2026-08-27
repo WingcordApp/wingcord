@@ -24,10 +24,7 @@ struct SidebarChannelRow: View {
         Button(action: action) {
             VStack(alignment: .leading, spacing: Spacing.tight) {
                 HStack(spacing: Spacing.base) {
-                    Image(systemName: channel.kind.symbolName)
-                        .font(.system(.caption))
-                        .foregroundStyle(Ink.tertiary)
-                        .frame(width: 16)
+                    SidebarRowLeading(channel: channel)
 
                     Text(channel.name)
                         .font(channel.isUnread ? Typeface.rowTitleUnread : Typeface.rowTitle)
@@ -64,9 +61,14 @@ struct SidebarChannelRow: View {
                     .opacity(isHovering && !isSelected ? 1 : 0)
 
                 if isSelected {
-                    RoundedRectangle(cornerRadius: Radius.row, style: .continuous)
-                        .fill(Palette.selectionFill)
-                        .glassEffect(.regular, in: .rect(cornerRadius: Radius.row))
+                    // The tint is IN the material. A `.fill` under
+                    // `.glassEffect` is a fill behind glass — §4 rule 3 — and
+                    // it is what stops the pill lensing the row beneath it.
+                    Color.clear
+                        .glassEffect(
+                            .regular.tint(Palette.selectionFill),
+                            in: .rect(cornerRadius: Radius.row)
+                        )
                         .glassEffectID(SidebarSelection.id, in: namespace)
                 }
             }
@@ -84,6 +86,41 @@ struct SidebarChannelRow: View {
         if isSelected || channel.isUnread { AnyShapeStyle(Ink.primary) }
         else if channel.isMuted { AnyShapeStyle(Ink.quaternary) }
         else { AnyShapeStyle(Ink.secondary) }
+    }
+}
+
+/// What sits in a channel row's gutter.
+///
+/// A guild channel is identified by its **kind**, so it takes a glyph. A DM is
+/// identified by **who it is with**, so it takes that person's face — the name
+/// alone is not enough when half a DM list is people you know by their picture.
+///
+/// One view with an internal `switch` rather than an `if` at the call site: the
+/// branches are different view types, and branching in the row's builder gives
+/// the row two identities, which makes the whole list re-materialise when a
+/// guild is swapped for the DM home.
+private struct SidebarRowLeading: View {
+    var channel: SidebarChannel
+
+    var body: some View {
+        switch channel.kind {
+        case .directMessage, .groupDirectMessage:
+            AvatarView(
+                url: channel.avatarURL,
+                monogram: channel.monogram ?? "?",
+                side: Metrics.avatarRow
+            )
+            .overlay(alignment: .bottomTrailing) {
+                if let status = channel.status {
+                    PresenceDot(status: status, side: 9).offset(x: 1, y: 1)
+                }
+            }
+        default:
+            Image(systemName: channel.kind.symbolName)
+                .font(.system(.caption))
+                .foregroundStyle(Ink.tertiary)
+                .frame(width: 16)
+        }
     }
 }
 

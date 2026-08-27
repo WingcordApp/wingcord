@@ -5,15 +5,40 @@ import WingcordCore
 struct ConversationPane: View {
     var channelID: ChannelID
 
-    @Environment(AppModel.self) private var model
+    /// The composer's measured height, handed to the transcript as a content
+    /// inset. Measured rather than assumed: the bar grows with a reply banner
+    /// and with a message long enough to wrap, and a hard-coded clearance is
+    /// wrong in both directions the moment either happens.
+    @State private var composerHeight: CGFloat = 0
 
     var body: some View {
-        TimelineContainer(channelID: channelID)
-            // `safeAreaBar`, not `safeAreaInset`: the composer both reserves its
-            // height AND registers as a bar, which is what makes messages blur
-            // into it as they pass underneath instead of sliding under it sharp.
+        TimelineContainer(channelID: channelID, bottomInset: composerHeight)
+            // **The transcript runs to the window's foot, under the composer.**
+            //
+            // Left inset by the bar, the scroll view stops above it — so the
+            // composer's glass had the opaque reading surface behind it and
+            // nothing to refract, which is the flat black slab it looked like.
+            // Extending underneath and paying for it with a content inset is
+            // what puts moving content beneath the material.
+            .ignoresSafeArea(.container, edges: .bottom)
+            // `safeAreaBar`, not `safeAreaInset`: the composer registers as a
+            // bar, which is what the scroll edge effect keys off.
             .safeAreaBar(edge: .bottom, spacing: 0) {
                 ComposerContainer(channelID: channelID)
+                    .background {
+                        GeometryReader { proxy in
+                            Color.clear
+                                .onChange(of: proxy.size.height, initial: true) { _, height in
+                                    guard abs(composerHeight - height) > 0.5 else { return }
+                                    // A measured value: written with animations
+                                    // off, or the transcript lurches whenever
+                                    // the composer grows a line.
+                                    var transaction = Transaction()
+                                    transaction.disablesAnimations = true
+                                    withTransaction(transaction) { composerHeight = height }
+                                }
+                        }
+                    }
             }
     }
 }

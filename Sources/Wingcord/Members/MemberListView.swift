@@ -252,6 +252,23 @@ final class MemberListCoordinator: NSObject {
                     requests.append((key, .thumbnail))
                 }
             }
+            // The guild badge inside a clan tag. Missing from this loop is how
+            // every tag in the list drew as bare letters: the painter only ever
+            // *peeks* at the cache — it cannot start a fetch from inside a draw
+            // — so an asset nobody prefetches is an asset that never arrives.
+            // The key has to match the painter's exactly, or the picture lands
+            // in a slot the draw never looks in.
+            if let url = entry.tagBadgeURL {
+                let key = ImageStore.Key(
+                    url: url,
+                    maximumPixelSize: Int(
+                        (MemberRowGeometry.tagBadgeSide * scale).rounded(.up)
+                    )
+                )
+                if seen.insert(key).inserted, ImageStore.shared.cached(key) == nil {
+                    requests.append((key, .thumbnail))
+                }
+            }
             if let url = entry.nameplateURL {
                 let key = ImageStore.Key(
                     url: url,

@@ -86,7 +86,6 @@ nonisolated enum MemberRowPainter {
 
         // Room for whatever chip follows the name, reserved before the name is
         // drawn so the name truncates to leave space rather than colliding.
-        let chipFont = NSFont.systemFont(ofSize: 9, weight: .bold)
         var chipLabel: String?
         var chipFill: NSColor?
         var chipBadge: URL?
@@ -100,10 +99,15 @@ nonisolated enum MemberRowPainter {
 
         var chipWidth: CGFloat = 0
         if let chipLabel {
-            chipWidth = TimelineLayoutEngine.measure(chipLabel, font: chipFont) + 12
-            if chipBadge != nil { chipWidth += 14 }
+            chipWidth = MemberRowGeometry.tagChipWidth(
+                textWidth: TimelineLayoutEngine.measure(
+                    chipLabel, font: MemberRowGeometry.tagChipFont
+                ),
+                hasBadge: chipBadge != nil
+            )
         }
-        let nameWidth = max(20, available - (chipWidth > 0 ? chipWidth + 6 : 0))
+        let reserved = chipWidth > 0 ? chipWidth + MemberRowGeometry.tagChipGap : 0
+        let nameWidth = max(20, available - reserved)
 
         // **The chip follows the DRAWN text, not the slot.** `drawText` returns
         // the width it actually painted; measuring the full name and clamping it
@@ -120,10 +124,19 @@ nonisolated enum MemberRowPainter {
         )
 
         if let chipLabel {
+            // **Centred on the name's capitals, not on its line box.** A line
+            // box is ascent plus descent, and a chip centred on that sits
+            // visibly low beside a name that has no descenders in it — which,
+            // for the majority of names, is what the eye compares it against.
+            let capCenter = nameY + style.bodyFont.ascender - style.bodyFont.capHeight / 2
             drawTagChip(
                 chipLabel,
-                at: CGPoint(x: textX + drawnName + 6, y: nameY + 1),
-                width: chipWidth,
+                in: CGRect(
+                    x: textX + drawnName + MemberRowGeometry.tagChipGap,
+                    y: (capCenter - MemberRowGeometry.tagChipHeight / 2).rounded(),
+                    width: chipWidth,
+                    height: MemberRowGeometry.tagChipHeight
+                ),
                 context: context,
                 style: style,
                 fill: chipFill,
@@ -267,11 +280,15 @@ nonisolated enum MemberRowPainter {
             context.setFillColor(NSColor(Palette.surfaceRaised).cgColor)
             context.fill(frame)
             context.restoreGState()
+            let font = NSFont.systemFont(ofSize: frame.width * 0.42, weight: .semibold)
             TimelineRowPainter.drawText(
                 entry.monogram,
-                font: NSFont.systemFont(ofSize: frame.width * 0.42, weight: .semibold),
+                font: font,
                 color: style.secondaryColor,
-                at: CGPoint(x: frame.minX, y: frame.midY - frame.width * 0.3),
+                at: CGPoint(
+                    x: frame.minX,
+                    y: TimelineRowPainter.capCenteredY(of: font, in: frame)
+                ),
                 maxWidth: frame.width,
                 alignment: .center,
                 context: context
@@ -331,12 +348,17 @@ nonisolated enum MemberRowPainter {
     ///
     /// A clan tag carries the guild's **badge image** beside its letters — that
     /// is what a tag IS on Discord, and drawing only the letters loses the half
-    /// people recognise. The badge is a tiny asset, so it is drawn at the chip's
-    /// own size and comes out of the same cache as everything else.
+    /// people recognise. The badge comes out of the same cache as every other
+    /// picture, at the same key `MemberListView` prefetches it under; a key that
+    /// disagrees by one pixel is a badge that is fetched and then never found.
+    ///
+    /// The frame arrives already sized by `MemberRowGeometry.tagChipWidth`, so
+    /// the padding here and the width reserved for the chip cannot disagree —
+    /// and the contents are laid out from the leading padding rightwards, which
+    /// leaves the trailing padding equal to it by construction.
     private static func drawTagChip(
         _ label: String,
-        at origin: CGPoint,
-        width: CGFloat,
+        in frame: CGRect,
         context: CGContext,
         style: MessageTextStyle,
         fill: NSColor? = nil,
@@ -344,25 +366,25 @@ nonisolated enum MemberRowPainter {
         images: ImageStore? = nil,
         scale: CGFloat = 2
     ) {
-        let frame = CGRect(x: origin.x, y: origin.y + 1, width: width, height: 15)
+        let corner = MemberRowGeometry.tagChipHeight / 2
         context.addPath(CGPath(
-            roundedRect: frame, cornerWidth: 4, cornerHeight: 4, transform: nil
+            roundedRect: frame, cornerWidth: corner, cornerHeight: corner, transform: nil
         ))
         context.setFillColor((fill ?? NSColor.white.withAlphaComponent(0.12)).cgColor)
         context.fillPath()
 
-        var textX = frame.minX
-        var textWidth = frame.width
+        var textX = frame.minX + MemberRowGeometry.tagChipPadding
         if let badge, let images {
+            let side = MemberRowGeometry.tagBadgeSide
             let glyph = CGRect(
-                x: frame.minX + 3,
-                y: frame.midY - 5.5,
-                width: 11,
-                height: 11
+                x: textX,
+                y: (frame.midY - side / 2).rounded(),
+                width: side,
+                height: side
             )
             if let image = images.cached(ImageStore.Key(
                 url: badge,
-                maximumPixelSize: Int((11 * scale).rounded(.up))
+                maximumPixelSize: Int((side * scale).rounded(.up))
             )) {
                 context.saveGState()
                 context.translateBy(x: 0, y: glyph.midY)
@@ -371,17 +393,16 @@ nonisolated enum MemberRowPainter {
                 context.draw(image, in: glyph)
                 context.restoreGState()
             }
-            textX = glyph.maxX + 2
-            textWidth = frame.maxX - textX
+            textX = glyph.maxX + MemberRowGeometry.tagBadgeGap
         }
 
+        let font = MemberRowGeometry.tagChipFont
         TimelineRowPainter.drawText(
             label,
-            font: NSFont.systemFont(ofSize: 9, weight: .bold),
+            font: font,
             color: fill == nil ? style.secondaryColor : .white,
-            at: CGPoint(x: textX, y: frame.midY - 6),
-            maxWidth: textWidth,
-            alignment: badge == nil ? .center : .left,
+            at: CGPoint(x: textX, y: TimelineRowPainter.capCenteredY(of: font, in: frame)),
+            maxWidth: frame.maxX - MemberRowGeometry.tagChipPadding - textX,
             context: context
         )
     }

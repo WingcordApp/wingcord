@@ -47,16 +47,73 @@ struct ProfilePresentation: Equatable, Sendable {
     /// The profile accent. Nil and zero are different states — zero is a
     /// deliberate black accent — so this stays optional all the way down.
     var accentColorValue: UInt32?
+    /// The profile's own two-colour theme, primary first. Empty when unthemed —
+    /// which is most people, and the card must look deliberate for them too.
+    var themeColorValues: [UInt32] = []
     var status: PresenceStatus
     var customStatus: String?
     var activity: Activity?
     var bio: String?
     var isBot: Bool
     var badges: [ProfileBadge]
+    /// The clan tag they wear: the letters, and the guild badge that goes with
+    /// them. Half a tag is not a tag — the badge is the half people recognise.
+    var guildTag: GuildTag?
     var roles: [ProfileRole]
     var memberSince: Date?
     var accountCreated: Date
     var isSelf: Bool
+    /// Free text the account chose, shown beside the handle.
+    var pronouns: String?
+    /// The layered animation drawn over the card, once its SKU has resolved.
+    var effect: ProfileEffect?
+    var connections: [ConnectedAccount]
+    var premiumTier: PremiumTier
+    var premiumSince: Date?
+    /// The pre-2023 `name#1234`, when Discord still knows it.
+    var legacyUsername: String?
+    /// The servers the reader shares with them, resolved for drawing.
+    ///
+    /// The **list**, because the row that shows it opens onto it: a count with
+    /// nothing behind it is a fact the reader then has to go and check
+    /// somewhere else, and the profile route already sent the answer.
+    var mutualServers: [MutualServer]
+    /// The server the profile was opened in — its name and icon, so the
+    /// "joined" line can say *which* server rather than showing a bare date
+    /// beside an anonymous symbol. Nil in a DM.
+    var guild: MutualServer?
+    /// The existing direct message with them, when there is one.
+    ///
+    /// Nil covers both "this is you" and "you have never spoken" — and the
+    /// second is not something this client can fix yet, because opening a new
+    /// DM is a round trip it does not make. A Message button that silently does
+    /// nothing is worse than one that is not offered, so the view keys off this
+    /// rather than off `isSelf`.
+    var directMessageChannelID: ChannelID?
+    /// Whether the detail fetch is still out.
+    ///
+    /// The card opens immediately with what the roster already knows, and the
+    /// banner, bio, colours and badges land afterwards. Without this the card
+    /// cannot tell "this person has no bio" from "the bio has not arrived", and
+    /// draws a stripped-down profile that then visibly fills in.
+    var isLoading: Bool
+}
+
+/// A clan tag, as it is worn beside a name.
+struct GuildTag: Equatable, Sendable {
+    var text: String
+    var badgeURL: URL?
+}
+
+/// One shared server, named and pictured rather than left as an id.
+struct MutualServer: Equatable, Sendable, Identifiable {
+    var id: GuildID
+    var name: String
+    var iconURL: URL?
+    /// Drawn when there is no icon, which is most servers.
+    var monogram: String
+    /// The nickname they carry there, when it is not the name already shown.
+    var nickname: String?
 }
 
 struct ProfileRole: Equatable, Sendable, Identifiable {
@@ -67,34 +124,13 @@ struct ProfileRole: Equatable, Sendable, Identifiable {
 
 struct ProfileBadge: Equatable, Sendable, Identifiable {
     var id: String
+    /// Discord's own artwork, when the profile route named it. Preferred over
+    /// the symbol: the flag bits can only describe the handful of badges Discord
+    /// has had longest, and every Nitro tier and boost month is invisible to
+    /// them.
+    var iconURL: URL?
+    /// The fallback mark, for a badge derived from a flag bit.
     var symbolName: String
+    /// What the badge means. Shown on hover, and read by VoiceOver.
     var label: String
-}
-
-extension UserFlags {
-    /// The badges a set of account flags earns.
-    ///
-    /// SF Symbols rather than Discord's own artwork: the badge row is chrome,
-    /// and chrome that ships bitmaps has to ship a light and a dark set, at three
-    /// scales, and re-ship them whenever Discord changes one.
-    var badges: [ProfileBadge] {
-        var result: [ProfileBadge] = []
-        func add(_ flag: UserFlags, _ id: String, _ symbol: String, _ label: String) {
-            guard contains(flag) else { return }
-            result.append(ProfileBadge(id: id, symbolName: symbol, label: label))
-        }
-        add(.staff, "staff", "shield.lefthalf.filled", "Discord Staff")
-        add(.partner, "partner", "checkmark.seal.fill", "Partnered Server Owner")
-        add(.certifiedModerator, "mod", "checkmark.shield.fill", "Moderator Programs Alumni")
-        add(.hypesquadEvents, "hypesquad", "sparkles", "HypeSquad Events")
-        add(.hypesquadBravery, "bravery", "shield.fill", "HypeSquad Bravery")
-        add(.hypesquadBrilliance, "brilliance", "flame.fill", "HypeSquad Brilliance")
-        add(.hypesquadBalance, "balance", "scalemass.fill", "HypeSquad Balance")
-        add(.bugHunterLevel1, "bug1", "ant.fill", "Bug Hunter")
-        add(.bugHunterLevel2, "bug2", "ant.circle.fill", "Bug Hunter Level 2")
-        add(.earlySupporter, "early", "heart.fill", "Early Supporter")
-        add(.activeDeveloper, "activedev", "hammer.fill", "Active Developer")
-        add(.verifiedDeveloper, "verifieddev", "chevron.left.forwardslash.chevron.right", "Early Verified Bot Developer")
-        return result
-    }
 }

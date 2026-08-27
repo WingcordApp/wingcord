@@ -47,6 +47,10 @@ nonisolated enum TimelineRowPainter {
             drawSkeleton(index: index, in: rowFrame, context: context)
         case .loadingFirstPage:
             drawLoadingFirstPage(in: rowFrame, context: context, style: style)
+        case .historyUnavailable(let reason):
+            drawHistoryUnavailable(
+                reason: reason, in: rowFrame, context: context, style: style
+            )
         case .message(let message):
             drawMessage(
                 message,
@@ -256,6 +260,16 @@ nonisolated enum TimelineRowPainter {
     /// width places the chip at the end of the SLOT rather than at the end of
     /// the text, which is a visible gap on every truncated name and on nothing
     /// else.
+    ///
+    /// **Alignment is applied here, by moving the pen.** It used to be set on a
+    /// paragraph style — which `CTLine` ignores, because alignment is resolved
+    /// by a *framesetter* laying lines into a column and there is no column
+    /// here. Every centred label in the app was therefore drawn hard against the
+    /// left edge of the box it was centred in: the text inside a chip, an
+    /// avatar's monogram, the play glyph on a video, the "Loading messages…"
+    /// line, and the gutter timestamp that asked to be right-aligned. The
+    /// paragraph style went with it — allocating one per call, on every label of
+    /// every row of every repaint, bought exactly nothing.
     @discardableResult
     static func drawText(
         _ string: String,
@@ -267,31 +281,42 @@ nonisolated enum TimelineRowPainter {
         context: CGContext
     ) -> CGFloat {
         guard !string.isEmpty else { return 0 }
-        let paragraph = NSMutableParagraphStyle()
-        paragraph.lineBreakMode = .byTruncatingTail
-        paragraph.alignment = alignment
-        let attributed = NSAttributedString(
+        let line = CTLineCreateWithAttributedString(NSAttributedString(
             string: string,
-            attributes: [
-                .font: font,
-                .foregroundColor: color,
-                .paragraphStyle: paragraph,
-            ]
-        )
-        let line = CTLineCreateWithAttributedString(attributed)
+            attributes: [.font: font, .foregroundColor: color]
+        ))
         var ascent: CGFloat = 0
         CTLineGetTypographicBounds(line, &ascent, nil, nil)
 
-        context.saveGState()
-        context.textMatrix = .identity
-        context.translateBy(x: point.x, y: point.y + ascent)
-        context.scaleBy(x: 1, y: -1)
         // A truncating line needs a width to truncate against; without one it
         // draws past the rect and over whatever is beside it.
         let drawn = truncate(line, to: maxWidth, font: font, color: color) ?? line
+        let width = ceil(CTLineGetTypographicBounds(drawn, nil, nil, nil))
+        let slack = max(0, maxWidth - width)
+        let x: CGFloat = switch alignment {
+        case .center: point.x + (slack / 2).rounded()
+        case .right: point.x + slack.rounded()
+        default: point.x
+        }
+
+        context.saveGState()
+        context.textMatrix = .identity
+        context.translateBy(x: x, y: point.y + ascent)
+        context.scaleBy(x: 1, y: -1)
         CTLineDraw(drawn, context)
         context.restoreGState()
-        return ceil(CTLineGetTypographicBounds(drawn, nil, nil, nil))
+        return width
+    }
+
+    /// Where a single line's `y` has to be so its capitals sit centred in
+    /// `rect`.
+    ///
+    /// Cap height rather than the full line box: a line box is ascent plus
+    /// descent, and centring *that* leaves an all-caps label — which every chip
+    /// in this app carries — visibly high, because it has no descenders to fill
+    /// the space reserved under it.
+    static func capCenteredY(of font: NSFont, in rect: CGRect) -> CGFloat {
+        rect.midY + font.capHeight / 2 - font.ascender
     }
 
     private static func truncate(
@@ -338,11 +363,12 @@ nonisolated enum TimelineRowPainter {
             context.setFillColor(NSColor(Palette.surfaceRaised).cgColor)
             context.fill(frame)
             context.restoreGState()
+            let font = NSFont.systemFont(ofSize: frame.width * 0.4, weight: .semibold)
             drawText(
                 monogram,
-                font: NSFont.systemFont(ofSize: frame.width * 0.4, weight: .semibold),
+                font: font,
                 color: style.secondaryColor,
-                at: CGPoint(x: frame.minX, y: frame.midY - frame.width * 0.28),
+                at: CGPoint(x: frame.minX, y: capCenteredY(of: font, in: frame)),
                 maxWidth: frame.width,
                 alignment: .center,
                 context: context
@@ -437,25 +463,43 @@ nonisolated enum TimelineRowPainter {
         )
         context.fillPath()
 
-        let glyphRect = CGRect(x: frame.minX + 5, y: frame.midY - 8, width: 16, height: 16)
-        if let url = slot.imageURL,
-           let image = images.cached(ImageStore.Key(
-               url: url,
-               maximumPixelSize: Int((16 * scale).rounded(.up))
-           ))
-        {
-            context.saveGState()
-            context.translateBy(x: 0, y: glyphRect.midY)
-            context.scaleBy(x: 1, y: -1)
-            context.translateBy(x: 0, y: -glyphRect.midY)
-            context.draw(image, in: glyphRect)
-            context.restoreGState()
+        let side = TimelineMetrics.reactionGlyphSide
+        let glyphRect = CGRect(
+            x: frame.minX + TimelineMetrics.reactionLeadingInset,
+            y: frame.midY - side / 2,
+            width: side,
+            height: side
+        )
+        if let url = slot.imageURL {
+            // A CUSTOM emoji. Its picture is the only correct answer — its
+            // `name` is a word like "blobcat", not a glyph — so a miss draws the
+            // same soft plate the inline path draws rather than the word.
+            if let image = images.cached(ImageStore.Key(
+                url: url,
+                maximumPixelSize: Int((side * scale).rounded(.up))
+            )) {
+                context.saveGState()
+                context.translateBy(x: 0, y: glyphRect.midY)
+                context.scaleBy(x: 1, y: -1)
+                context.translateBy(x: 0, y: -glyphRect.midY)
+                context.draw(image, in: glyphRect)
+                context.restoreGState()
+            } else {
+                context.setFillColor(style.codeBackground.withAlphaComponent(0.5).cgColor)
+                context.fillEllipse(in: glyphRect.insetBy(dx: 2, dy: 2))
+            }
         } else {
+            // A Unicode emoji, whose `name` IS the glyph.
+            //
+            // The box has to be at least as wide as the glyph advances or tail
+            // truncation eats it: an emoji at size 13 advances 19pt, and the
+            // 16pt box this used to get turned every reaction into a lone
+            // ellipsis. `reactionGlyphSide` is that measurement.
             drawText(
                 slot.emoji.name,
-                font: NSFont.systemFont(ofSize: 13),
+                font: NSFont.systemFont(ofSize: TimelineMetrics.reactionEmojiFontSize),
                 color: style.primaryColor,
-                at: CGPoint(x: glyphRect.minX, y: glyphRect.minY),
+                at: CGPoint(x: glyphRect.minX, y: glyphRect.midY - side / 2 + 2),
                 maxWidth: glyphRect.width,
                 context: context
             )
@@ -465,29 +509,43 @@ nonisolated enum TimelineRowPainter {
             String(slot.count),
             font: style.metadataFont,
             color: slot.isMine ? NSColor.controlAccentColor : style.secondaryColor,
-            at: CGPoint(x: glyphRect.maxX + 3, y: frame.midY - 7),
-            maxWidth: frame.maxX - glyphRect.maxX - 6,
+            at: CGPoint(x: glyphRect.maxX + TimelineMetrics.reactionGlyphGap, y: frame.midY - 7),
+            maxWidth: max(
+                0,
+                frame.maxX - glyphRect.maxX
+                    - TimelineMetrics.reactionGlyphGap
+                    - TimelineMetrics.reactionTrailingInset
+            ),
             context: context
         )
     }
 
+    /// A small filled label — the APP mark, SPOILER, the unread band's NEW.
+    ///
+    /// `radius` defaults to a capsule, which is the shape every floating chip in
+    /// this app is: a hand-picked small radius on a 15pt-tall label is a
+    /// *different* shape from the capsules beside it rather than a smaller
+    /// version of one.
     private static func drawChip(
         _ label: String,
         in frame: CGRect,
         fill: NSColor,
         textColor: NSColor,
         font: NSFont,
+        radius: CGFloat? = nil,
         context: CGContext
     ) {
-        let path = CGPath(roundedRect: frame, cornerWidth: 3, cornerHeight: 3, transform: nil)
-        context.addPath(path)
+        let corner = radius ?? frame.height / 2
+        context.addPath(CGPath(
+            roundedRect: frame, cornerWidth: corner, cornerHeight: corner, transform: nil
+        ))
         context.setFillColor(fill.cgColor)
         context.fillPath()
         drawText(
             label,
             font: font,
             color: textColor,
-            at: CGPoint(x: frame.minX, y: frame.midY - font.pointSize * 0.62),
+            at: CGPoint(x: frame.minX, y: capCenteredY(of: font, in: frame)),
             maxWidth: frame.width,
             alignment: .center,
             context: context
@@ -526,34 +584,52 @@ nonisolated enum TimelineRowPainter {
         )
     }
 
+    /// The line between what has been read and what has not.
+    ///
+    /// Built as the day separator's sibling — one rule, broken around one label
+    /// — so the two read as the same object in two colours rather than as two
+    /// unrelated decorations. What is different is deliberate: the label sits at
+    /// the **trailing** end rather than centred, because this is a boundary
+    /// rather than a heading and a centred red pill competes with the first
+    /// unread message directly under it; and it is filled rather than quiet,
+    /// because it is the one mark in the transcript whose whole job is to be
+    /// found by a reader scrolling for it.
+    ///
+    /// The label is a **capsule**, like every other chip in the app, and its
+    /// text is centred in it by cap height. Both were wrong before: the shape
+    /// was a 3pt-radius rectangle, and the text sat hard against its leading
+    /// edge with the whole of the padding pooled on the right.
     private static func drawUnreadDivider(
         in frame: CGRect,
         context: CGContext,
         style: MessageTextStyle
     ) {
-        let midY = frame.midY
+        let midY = frame.midY.rounded() + 0.5   // a hairline, on the pixel grid
         let inset = TimelineMetrics.horizontalMargin
-        let label = "New"
-        let width = TimelineLayoutEngine.measure(label, font: style.metadataFont) + 14
-
-        context.setStrokeColor(NSColor(Palette.unreadBadge).withAlphaComponent(0.85).cgColor)
-        context.setLineWidth(1)
-        context.move(to: CGPoint(x: frame.minX + inset, y: midY))
-        context.addLine(to: CGPoint(x: frame.maxX - inset - width - 6, y: midY))
-        context.strokePath()
-
+        let font = TimelineMetrics.unreadLabelFont
+        let label = "NEW"
+        let width = TimelineLayoutEngine.measure(label, font: font)
+            + TimelineMetrics.unreadLabelPadding * 2
         let chip = CGRect(
             x: frame.maxX - inset - width,
-            y: midY - 8,
+            y: (midY - TimelineMetrics.unreadLabelHeight / 2).rounded(),
             width: width,
-            height: 16
+            height: TimelineMetrics.unreadLabelHeight
         )
+
+        let tint = NSColor(Palette.unreadBadge)
+        context.setStrokeColor(tint.withAlphaComponent(0.85).cgColor)
+        context.setLineWidth(1)
+        context.move(to: CGPoint(x: frame.minX + inset, y: midY))
+        context.addLine(to: CGPoint(x: chip.minX - TimelineMetrics.unreadLabelGap, y: midY))
+        context.strokePath()
+
         drawChip(
             label,
             in: chip,
-            fill: NSColor(Palette.unreadBadge),
+            fill: tint,
             textColor: .white,
-            font: NSFont.systemFont(ofSize: 10, weight: .bold),
+            font: font,
             context: context
         )
     }
@@ -600,6 +676,40 @@ nonisolated enum TimelineRowPainter {
             color: style.tertiaryColor,
             at: CGPoint(x: frame.minX, y: frame.minY + 10),
             maxWidth: frame.width,
+            alignment: .center,
+            context: context
+        )
+    }
+
+    /// The first page was asked for and did not arrive.
+    ///
+    /// It says so, and it says WHY. The alternative — leaving "Loading
+    /// messages..." on screen — is the same picture whether the page is one
+    /// second away or will never come, and the reader has no way to tell a slow
+    /// client from a broken one.
+    private static func drawHistoryUnavailable(
+        reason: String,
+        in frame: CGRect,
+        context: CGContext,
+        style: MessageTextStyle
+    ) {
+        let inset = TimelineMetrics.horizontalMargin
+        let width = frame.width - inset * 2
+        drawText(
+            "Messages did not load",
+            font: NSFont.systemFont(ofSize: style.bodyFont.pointSize, weight: .semibold),
+            color: style.secondaryColor,
+            at: CGPoint(x: frame.minX + inset, y: frame.minY + 34),
+            maxWidth: width,
+            alignment: .center,
+            context: context
+        )
+        drawText(
+            reason,
+            font: style.metadataFont,
+            color: style.tertiaryColor,
+            at: CGPoint(x: frame.minX + inset, y: frame.minY + 58),
+            maxWidth: width,
             alignment: .center,
             context: context
         )

@@ -38,6 +38,22 @@ public enum CDN {
         animated ? "gif" : "webp"
     }
 
+    /// Whether a URL this type built can animate at all.
+    ///
+    /// The extension is a **complete** answer for banners, icons and emoji,
+    /// because it was chosen from the hash's own `a_` prefix on the way out. A
+    /// complete answer here is worth having: a still banner that is *asked*
+    /// whether it animates costs a second download of the same bytes, a
+    /// multi-frame decode to discover there is one frame, and a view and a
+    /// coordinator to hold the answer — for the majority of assets, which are
+    /// still.
+    ///
+    /// Avatar decorations are the exception and must not be tested with this:
+    /// they are always PNG and usually animated, so only a decode can tell.
+    public static func canAnimate(_ url: URL) -> Bool {
+        url.pathExtension == "gif"
+    }
+
     public static func avatar(
         userID: UserID,
         hash: String,
@@ -142,6 +158,16 @@ public enum CDN {
             string: "\(host)/channel-icons/\(channelID.rawValue)/\(hash).webp"
                 + "?size=\(rung(forSide: side, scale: scale))"
         )
+    }
+
+    /// An account badge — Nitro, HypeSquad, a bug hunter mark.
+    ///
+    /// Discord serves these as authored artwork rather than as anything a symbol
+    /// can stand in for, and the profile route names them by hash. Always PNG:
+    /// they carry alpha and are drawn at sixteen points, so a larger rung buys
+    /// nothing.
+    public static func accountBadge(hash: String) -> URL? {
+        URL(string: "\(host)/badge-icons/\(hash).png?size=64")
     }
 
     /// The badge that rides inside a clan tag chip.

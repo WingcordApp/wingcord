@@ -27,9 +27,23 @@ struct Composer: View {
     var send: () -> Void = {}
     var cancelReply: () -> Void = {}
     var attach: () -> Void = {}
+    /// The `:shortcode` completions for what is currently typed. Empty closes
+    /// the list, which is the only thing that does.
+    var completions: [ExpressionItem] = []
+    var completionQuery: String = ""
+    var commitCompletion: (ExpressionItem) -> Void = { _ in }
+    /// The picker, opened from the controls at the composer's trailing end.
+    var onPick: (ExpressionItem) -> Void = { _ in }
+    var onPickGIF: (GIF) -> Void = { _ in }
 
     @Environment(\.motion) private var motion
     @FocusState private var isFocused: Bool
+    @State private var openTab: ExpressionMode?
+    @State private var completionSelection = 0
+    /// The query Escape was pressed on. The list is derived from the draft, so
+    /// dismissing it cannot mean clearing a list — it means remembering the one
+    /// the reader said no to, until they type something else.
+    @State private var dismissedQuery: String?
 
     private var hasText: Bool {
         !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
@@ -37,6 +51,17 @@ struct Composer: View {
 
     var body: some View {
         VStack(spacing: Spacing.tight) {
+            if !visibleCompletions.isEmpty {
+                EmojiAutocompleteList(
+                    query: completionQuery,
+                    items: visibleCompletions,
+                    selection: completionSelection,
+                    onPick: commitCompletion,
+                    onHover: { completionSelection = $0 }
+                )
+                .transition(.materialize(from: .bottom))
+            }
+
             if let replyingToAuthor {
                 ReplyBanner(author: replyingToAuthor, cancel: cancelReply)
                     .transition(.materialize(from: .bottom))
@@ -52,6 +77,11 @@ struct Composer: View {
         .padding(.bottom, Spacing.snug)
         .animation(motion.panel, value: replyingToAuthor)
         .animation(motion.standard, value: canSend)
+        .animation(motion.fadeQuick, value: visibleCompletions.isEmpty)
+        // A new set of matches starts at the top. Keeping the index across a
+        // changed list selects whatever happens to be in that slot, which is how
+        // a completion list sends the wrong emoji.
+        .onChange(of: completions) { _, _ in completionSelection = 0 }
     }
 
     private var composerRow: some View {
@@ -73,7 +103,22 @@ struct Composer: View {
                 .lineLimit(1...Metrics.composerMaxLines)
                 .focused($isFocused)
                 .onSubmit(send)
+                // The completion list owns these keys while it is open, and
+                // hands them straight back when it is not. Returning `.ignored`
+                // is what lets Return still send and the arrows still move the
+                // caret the rest of the time.
+                .onKeyPress(.upArrow) { moveCompletion(-1) }
+                .onKeyPress(.downArrow) { moveCompletion(1) }
+                .onKeyPress(.return) { commitSelectedCompletion() }
+                .onKeyPress(.tab) { commitSelectedCompletion() }
+                .onKeyPress(.escape) {
+                    guard !visibleCompletions.isEmpty else { return .ignored }
+                    dismissCompletions()
+                    return .handled
+                }
                 .frame(minHeight: Metrics.composerFieldMinHeight)
+
+                expressionControls
 
                 if hasText {
                     SendControl(action: send)
@@ -89,6 +134,101 @@ struct Composer: View {
         // Clicking anywhere on the bar puts the caret in the field, which is
         // what every composer on this platform does.
         .onTapGesture { isFocused = true }
+    }
+
+    /// What the list actually shows: the matches, unless this exact query was
+    /// dismissed.
+    private var visibleCompletions: [ExpressionItem] {
+        completionQuery == dismissedQuery ? [] : completions
+    }
+
+    private func dismissCompletions() { dismissedQuery = completionQuery }
+
+    private func moveCompletion(_ delta: Int) -> KeyPress.Result {
+        guard !visibleCompletions.isEmpty else { return .ignored }
+        // Wrapping, so holding a direction never dead-ends at either end of a
+        // list this short.
+        let count = visibleCompletions.count
+        completionSelection = ((completionSelection + delta) % count + count) % count
+        return .handled
+    }
+
+    private func commitSelectedCompletion() -> KeyPress.Result {
+        let items = visibleCompletions
+        guard items.indices.contains(completionSelection) else { return .ignored }
+        commitCompletion(items[completionSelection])
+        return .handled
+    }
+
+    /// GIF, sticker and emoji — rightmost is the one reached for most.
+    ///
+    /// **A popover per control, not one shared between them.** A popover points
+    /// at what opened it, and three controls sharing one leaves the arrow under
+    /// whichever the group happened to centre on. Only one is ever presented,
+    /// and the catalog behind them is memoized on the store, so the second and
+    /// third cost a view value each.
+    private var expressionControls: some View {
+        HStack(spacing: Spacing.hair) {
+            control(.gifs) {
+                // The word, not a glyph. Every icon for this is a rectangle with
+                // something in it, and at 26 points "GIF" is the only mark that
+                // says GIF.
+                Text("GIF")
+                    .font(.system(size: 10, weight: .heavy))
+            }
+            control(.stickers) {
+                // A sticker peeling off its sheet. Deliberately not a second
+                // face: the emoji control beside it is already the face, and two
+                // faces is two controls nobody can tell apart.
+                Image(systemName: "rectangle.on.rectangle.angled")
+                    .font(Typeface.controlGlyph)
+            }
+            control(.emoji) {
+                Image(systemName: "face.smiling")
+                    .font(Typeface.controlGlyph)
+            }
+        }
+    }
+
+    private func control(
+        _ tab: ExpressionMode,
+        @ViewBuilder mark: () -> some View
+    ) -> some View {
+        Button {
+            openTab = openTab == tab ? nil : tab
+        } label: {
+            mark()
+                .foregroundStyle(
+                    openTab == tab ? AnyShapeStyle(Palette.accent) : AnyShapeStyle(Ink.secondary)
+                )
+                .frame(width: Metrics.compactControl, height: Metrics.compactControl)
+                .contentShape(.rect)
+        }
+        .buttonStyle(.plain)
+        .help(tab.rawValue)
+        .accessibilityLabel(tab.rawValue)
+        .popover(
+            isPresented: Binding(
+                get: { openTab == tab },
+                set: { if !$0, openTab == tab { openTab = nil } }
+            ),
+            arrowEdge: .top
+        ) {
+            ExpressionPicker(
+                mode: tab,
+                onPick: { item in
+                    onPick(item)
+                    // A sticker sends and the picker's work is done; an emoji is
+                    // typed, and a picker that closed after each one would make
+                    // choosing three emoji three round trips.
+                    if case .sticker = item.pick { openTab = nil }
+                },
+                onPickGIF: { gif in
+                    onPickGIF(gif)
+                    openTab = nil
+                }
+            )
+        }
     }
 }
 

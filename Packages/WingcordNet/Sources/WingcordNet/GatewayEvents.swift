@@ -32,6 +32,11 @@ struct GatewayFrame: Decodable, Sendable {
         case guildCreate(GuildDTO)
         case guildDelete(GuildDeletePayload)
         case guildUpdate(GuildDTO)
+        /// A server's emoji or sticker set changed. Discord dispatches these
+        /// rather than a whole GUILD_UPDATE, so without them the picker's
+        /// catalog is only as fresh as the last reconnect.
+        case guildEmojisUpdate(GuildEmojisPayload)
+        case guildStickersUpdate(GuildStickersPayload)
         case channelCreate(ChannelDTO)
         case channelUpdate(ChannelDTO)
         case channelDelete(ChannelDTO)
@@ -99,6 +104,10 @@ struct GatewayFrame: Decodable, Sendable {
             payload = .messageReactionRemove(try decode(ReactionEventPayload.self))
         case "GUILD_CREATE": payload = .guildCreate(try decode(GuildDTO.self))
         case "GUILD_UPDATE": payload = .guildUpdate(try decode(GuildDTO.self))
+        case "GUILD_EMOJIS_UPDATE":
+            payload = .guildEmojisUpdate(try decode(GuildEmojisPayload.self))
+        case "GUILD_STICKERS_UPDATE":
+            payload = .guildStickersUpdate(try decode(GuildStickersPayload.self))
         case "GUILD_DELETE": payload = .guildDelete(try decode(GuildDeletePayload.self))
         case "CHANNEL_CREATE": payload = .channelCreate(try decode(ChannelDTO.self))
         case "CHANNEL_UPDATE": payload = .channelUpdate(try decode(ChannelDTO.self))
@@ -126,6 +135,9 @@ struct ReadyPayload: Decodable, Sendable {
     var private_channels: [ChannelDTO]?
     var read_state: ReadStateEnvelope?
     var user_settings: ClientSettingsDTO?
+    /// Base64 `PreloadedUserSettings`. **This is where the folders live now** —
+    /// `user_settings` is absent from a modern READY. See `UserSettingsProto`.
+    var user_settings_proto: String?
     var user_guild_settings: GuildSettingsEnvelope?
     var users: [UserDTO]?
     var relationships: [RelationshipDTO]?
@@ -269,4 +281,21 @@ struct MessageAckPayload: Decodable, Sendable {
     var channel_id: ChannelID
     var message_id: MessageID?
     var mention_count: Int?
+}
+
+/// `GUILD_EMOJIS_UPDATE` — the server's whole emoji set, not a delta.
+public struct GuildEmojisPayload: Decodable, Sendable {
+    public var guild_id: GuildID
+    var emojis: [EmojiDTO]?
+
+    /// The usable custom emoji, in the order the server lists them.
+    public var catalog: [EmojiRef] { emojis?.compactMap(\.catalogEntry) ?? [] }
+}
+
+/// `GUILD_STICKERS_UPDATE` — likewise the whole set.
+public struct GuildStickersPayload: Decodable, Sendable {
+    public var guild_id: GuildID
+    var stickers: [StickerDTO]?
+
+    public var catalog: [StickerRef] { stickers?.compactMap(\.catalogEntry) ?? [] }
 }

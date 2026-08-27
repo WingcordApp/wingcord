@@ -21,6 +21,7 @@ extension AppModel {
             oldestID: box?.messages.first?.id,
             anchor: readState?.lastAcknowledgedID,
             hasMoreHistory: box?.hasMoreHistory ?? false,
+            failure: box?.historyFailure,
             contentRevision: messageContentRevision
         )
         if let timelineCache, timelineCache.key == key { return timelineCache.value }
@@ -29,7 +30,8 @@ extension AppModel {
             messages: box?.messages ?? [],
             unreadAnchor: readState?.lastAcknowledgedID,
             mentionedIDs: mentionable,
-            hasMoreHistory: box?.hasMoreHistory ?? false
+            hasMoreHistory: box?.hasMoreHistory ?? false,
+            failure: box?.historyFailure
         )
         timelineCache = (key, value)
         return value
@@ -88,6 +90,17 @@ extension AppModel {
     /// the transcript then serves `@user` and `#channel` to everyone, forever.
     func mentionContext() -> MentionContext {
         let guildID = selectedChannelID.flatMap { channelIndex.guildID(of: $0) }
+        // Read before the cache is consulted, so a hit still registers the
+        // dependency its reader needs.
+        let key = MentionMemoKey(
+            guildID: guildID,
+            identityRevision: identityRevision,
+            memberRevision: memberRevision,
+            structureRevision: channelIndex.structureRevision,
+            roleRevision: roleRevision
+        )
+        if let mentionCache, mentionCache.key == key { return mentionCache.value }
+
         var context = MentionContext()
         context.selfIDs = mentionableIDs
         context.token = identityRevision
@@ -107,11 +120,24 @@ extension AppModel {
                 context.channelNames[channelID] = channel.name
             }
         }
+        // **Every user in the session, and this is why it is memoized.**
+        //
+        // `runLayout` calls this, and `runLayout` runs on every inbound message.
+        // Unmemoized, a single message anywhere in the account walked the whole
+        // user table — tens of thousands of entries on an account this size —
+        // did a per-user member lookup, and built a fresh dictionary of that
+        // many strings, all to redraw one row. That is a full table walk several
+        // times a second at rest.
+        //
+        // Nicknames are resolved once here rather than per lookup because the
+        // builder is `nonisolated` and cannot reach the store at all.
+        context.userNames.reserveCapacity(users.count)
+        let guildMembers = guildID.flatMap { members[$0] }
         for (userID, user) in users {
-            context.userNames[userID] = guildID
-                .flatMap { members[$0]?[userID]?.nickname }
-                ?? user.preferredName
+            context.userNames[userID] = guildMembers?[userID]?.nickname ?? user.preferredName
         }
+
+        mentionCache = (key, context)
         return context
     }
 
@@ -124,10 +150,24 @@ extension AppModel {
         guard var box = messageBoxes[channelID], box.hasMoreHistory, !box.isLoadingHistory else {
             return
         }
+        box.historyFailure = nil
         box.isLoadingHistory = true
         setMessages(box, in: channelID)
         historyLoader?(channelID, box.messages.first?.id)
     }
+}
+
+/// What can change a mention's rendered form.
+///
+/// Deliberately narrow. `messageContentRevision` is NOT here: a message arriving
+/// cannot rename anybody, and keying on it would make the memo miss on exactly
+/// the event it exists to survive.
+struct MentionMemoKey: Hashable, Sendable {
+    var guildID: GuildID?
+    var identityRevision: UInt64
+    var memberRevision: UInt64
+    var structureRevision: UInt64
+    var roleRevision: UInt64
 }
 
 struct TimelineMemoKey: Hashable, Sendable {
@@ -137,6 +177,7 @@ struct TimelineMemoKey: Hashable, Sendable {
     var oldestID: MessageID?
     var anchor: MessageID?
     var hasMoreHistory: Bool
+    var failure: String?
     /// Moves when a message's *content* changes without the set changing — an
     /// edit, a reaction, an embed unfurling. Without it, editing a message in
     /// the middle of a page changes nothing the key can see and the transcript

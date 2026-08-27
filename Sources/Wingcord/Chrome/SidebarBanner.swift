@@ -1,4 +1,5 @@
 import SwiftUI
+import WingcordCore
 
 /// The server's banner: artwork behind the channel list, rounded like a card.
 ///
@@ -14,25 +15,83 @@ import SwiftUI
 /// ever non-zero.
 struct SidebarBanner: View {
     var header: SidebarHeader
-    var naturalHeight: CGFloat
-    var scrollOffset: CGFloat
+    /// Every number this view draws from — the chrome overhang it runs under,
+    /// the pull that grows it, and the scroll that carries it up.
+    ///
+    /// **The same value the name pill is placed from.** They are one object
+    /// drawn in two layers, and handing each of them its own copy of the
+    /// arithmetic is how the pill ended up sitting in a band of empty column
+    /// below the artwork rather than in its corner.
+    ///
+    /// The pull is **not** derived from the scroll offset here, and that
+    /// separation is the fix: AppKit's elastic overscroll returns to zero
+    /// between trackpad flicks, so artwork that follows the raw offset both ways
+    /// collapses to rest in the gap between one flick and the next — measured at
+    /// 30fps, four full rises and collapses inside a single continuous gesture.
+    /// The caller owns the asymmetry; this view is handed numbers and draws them.
+    var layout: SidebarBannerLayout
+
+    // MARK: What the two layers are fetched at
+    //
+    // Separate numbers, because the two are bounded by different things. The
+    // still is one bitmap and can afford the sharpest rendition the CDN serves.
+    // The filmstrip is that bitmap N times over in RAM, so every pixel of
+    // over-decode costs N times, and asking for more than the column can show is
+    // paid for entirely in dropped frames.
+
+    /// The still layer. One frame, so it takes the sharp rendition.
+    private static let stillSide: CGFloat = 512
+
+    /// The animated layer, in points.
+    ///
+    /// **Sized to what the column actually shows, not to the source.** A guild
+    /// banner is a 16:9 strip aspect-filled into a block roughly 220 wide and
+    /// 200 tall; the binding edge is the height, so covering it needs
+    /// `200 * 16/9` of width and nothing more. Asking for 512 left every frame
+    /// at the source's own 960x540 — 2 MB each, five times what the column can
+    /// draw — and the frame budget then bought three of them.
+    private static let filmSide: CGFloat = 360
+
+    /// What that filmstrip may hold.
+    ///
+    /// The default budget is sized for a 33 KB decoration frame. A banner frame
+    /// at the size above is around a megabyte, so it needs a budget in the same
+    /// units it will be spent in. This is one asset, on screen for as long as
+    /// the server is open and evicted when it is not, against a 64 MB store —
+    /// the same trade the profile effect's layers already make.
+    private static let filmBudget = 20 * 1024 * 1024
 
     var body: some View {
-        let stretch = max(0, -scrollOffset)
-        let travel = max(0, scrollOffset)
-        let height = naturalHeight + stretch
-        let zoom = naturalHeight > 0 ? height / naturalHeight : 1
+        let base = layout.bannerRestingHeight
+        let height = layout.bannerDrawnHeight
+        let zoom = base > 0 ? height / base : 1
 
         artwork
-            .frame(height: naturalHeight)
+            .frame(height: base)
             .scaleEffect(zoom, anchor: .center)
             .frame(height: height)
             // Outside the scaled artwork, so the block's bottom treatment stays
             // put instead of zooming away with the picture.
             .overlay(alignment: .bottom) { bottomScrim }
-            .clipShape(.rect(cornerRadius: Radius.card, style: .continuous))
-            .padding(.horizontal, Spacing.base)
-            .offset(y: -travel)
+            // **Rounded on the leading side, square on the trailing one.**
+            //
+            // The trailing edge is not an edge of the banner — it is where the
+            // sidebar column ends and the reading surface begins. A radius there
+            // rounds the artwork away from a boundary that is already a hard
+            // vertical line, which reads as the picture having shrunk back from
+            // the seam. The leading side has no such boundary: it meets the rail
+            // and the window's own corner, so it keeps its radius.
+            .clipShape(
+                .rect(
+                    topLeadingRadius: Radius.card,
+                    bottomLeadingRadius: Radius.card,
+                    bottomTrailingRadius: 0,
+                    topTrailingRadius: 0,
+                    style: .continuous
+                )
+            )
+            .padding(.leading, Spacing.base)
+            .offset(y: -layout.travel)
             .allowsHitTesting(false)
     }
 
@@ -58,10 +117,26 @@ struct SidebarBanner: View {
                 )
             }
             .overlay {
-                RemoteImage(url: header.bannerURL, side: 512, bucket: .artwork) {
-                    Color.clear
+                ZStack {
+                    RemoteImage(url: header.bannerURL, side: Self.stillSide, bucket: .artwork) {
+                        Color.clear
+                    }
+                    .aspectRatio(contentMode: .fill)
+
+                    // A boosted server's banner can be animated, and only then
+                    // is there a second layer at all — the extension says so
+                    // outright, so a still banner never pays for the fetch, the
+                    // multi-frame decode, or the view and coordinator that would
+                    // hold the answer.
+                    if let url = header.bannerURL, CDN.canAnimate(url) {
+                        AnimatedDecoration(
+                            url: url,
+                            side: Self.filmSide,
+                            gravity: .resizeAspectFill,
+                            byteBudget: Self.filmBudget
+                        )
+                    }
                 }
-                .aspectRatio(contentMode: .fill)
             }
             .clipped()
             .accessibilityHidden(true)

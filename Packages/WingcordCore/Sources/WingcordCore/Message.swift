@@ -343,6 +343,16 @@ public struct EmojiRef: Hashable, Sendable, Codable {
         if let id { return "\(name):\(id.rawValue)" }
         return name
     }
+
+    /// What a picker types into the composer.
+    ///
+    /// A custom emoji goes out as Discord's inline form — `<:name:id>`, with the
+    /// `a` prefix when it is animated — which every other client unfurls back
+    /// into the picture. A Unicode one is just itself.
+    public var messageToken: String {
+        guard let id else { return name }
+        return "<\(isAnimated ? "a" : ""):\(name):\(id.rawValue)>"
+    }
 }
 
 public struct StickerRef: Hashable, Sendable, Identifiable, Codable {
@@ -362,6 +372,15 @@ public struct StickerRef: Hashable, Sendable, Identifiable, Codable {
             default: .unknown
             }
         }
+
+        /// Whether the picture moves.
+        ///
+        /// All three moving formats end up as the same filmstrip: APNG and GIF
+        /// through `CGImageSource`, Lottie through the rasteriser. **Lottie has
+        /// no bitmap on the CDN at all** — measured, both its `.png` and `.gif`
+        /// endpoints answer 404 — so it has no still to fall back on and its
+        /// cell is empty until the strip lands.
+        public var isAnimated: Bool { self != .png }
     }
 
     public var id: UInt64

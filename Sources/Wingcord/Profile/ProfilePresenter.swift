@@ -24,10 +24,7 @@ struct ProfilePresenter: ViewModifier {
         @Bindable var model = model
         content
             .popover(
-                item: Binding(
-                    get: { model.profileRequest?.depth == .mini ? model.profileRequest : nil },
-                    set: { if $0 == nil { model.profileRequest = nil } }
-                ),
+                item: request(at: .mini),
                 // The anchor is the frame of the row that opened it, in this
                 // view's coordinates — which is the window's, because this
                 // modifier is applied at the root and nowhere else. A card that
@@ -37,6 +34,11 @@ struct ProfilePresenter: ViewModifier {
                 arrowEdge: .leading
             ) { request in
                 if let profile = model.profilePresentation(for: request) {
+                    // The popover supplies no material of its own, so the card's
+                    // is the only one. Without this an unthemed card's glass is
+                    // stacked on the popover's own backing — glass on glass, §4
+                    // rule 2 — and two materials in series read as frosted
+                    // rather than as glass.
                     MiniProfileCard(
                         profile: profile,
                         openFullProfile: {
@@ -49,28 +51,49 @@ struct ProfilePresenter: ViewModifier {
                             // silently — leaving the flag set so the next
                             // attempt no-ops too.
                             model.profileRequest?.depth = .full
-                        },
-                        sendMessage: { model.profileRequest = nil }
+                        }
                     )
+                    .presentationBackground(.clear)
                 }
             }
             // The full profile is a sheet rather than a second window: it is
             // modal to the conversation, and a window would outlive the account
             // switch that invalidates everything in it.
-            .sheet(
-                item: Binding(
-                    get: { model.profileRequest?.depth == .full ? model.profileRequest : nil },
-                    set: { if $0 == nil { model.profileRequest = nil } }
-                )
-            ) { request in
+            .sheet(item: request(at: .full)) { request in
                 if let profile = model.profilePresentation(for: request) {
                     FullProfileView(
                         profile: profile,
-                        sendMessage: { model.profileRequest = nil },
+                        openDirectMessage: { model.openDirectMessage($0) },
                         dismiss: { model.profileRequest = nil }
                     )
                 }
             }
+    }
+
+    /// A binding that presents the request only at `depth`.
+    ///
+    /// **The setter may only clear the store when the store is still AT that
+    /// depth**, and getting that wrong is why the full profile could not be
+    /// opened at all. Raising it is one write — `profileRequest?.depth = .full`
+    /// — which makes the popover's `get` answer nil, so SwiftUI dismisses the
+    /// card and, on the way out, calls the setter with nil. A setter that
+    /// clears unconditionally then wipes the request it was just handed: the
+    /// card closed, the sheet's `get` found nothing, and the click read as
+    /// "dismiss and do nothing".
+    ///
+    /// With the guard, that dismissal is a no-op — the store is already at
+    /// `.full` and this binding is the `.mini` one — and only a real dismissal,
+    /// where the depth still matches, clears anything.
+    private func request(at depth: ProfileRequest.Depth) -> Binding<ProfileRequest?> {
+        Binding(
+            get: {
+                model.profileRequest?.depth == depth ? model.profileRequest : nil
+            },
+            set: { newValue in
+                guard newValue == nil, model.profileRequest?.depth == depth else { return }
+                model.profileRequest = nil
+            }
+        )
     }
 }
 

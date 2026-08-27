@@ -66,7 +66,9 @@ struct SidebarPresentation: Hashable, Sendable {
 }
 
 struct SidebarHeader: Hashable, Sendable {
-    var guildID: GuildID
+    /// Nil for the direct-message home, which is a real destination with a real
+    /// channel list and no guild behind it.
+    var guildID: GuildID?
     var name: String
     var bannerURL: URL?
     /// Whether the guild's own banner exists. Most do not — it is a boost perk —
@@ -109,6 +111,40 @@ struct SidebarChannel: Hashable, Sendable, Identifiable {
     /// People currently in this voice channel, drawn beneath the row so you can
     /// see who is in a call without joining it.
     var voiceMembers: [VoiceMemberChip]
+    /// A conversation's face, for the rows that have one. A DM is identified by
+    /// **who** it is with, so it takes an avatar where a guild channel takes a
+    /// glyph in the same gutter — same row, same metrics, different leading
+    /// element. Nil everywhere else.
+    var avatarURL: URL?
+    var monogram: String?
+    /// Drawn on the avatar. Nil for a group DM, which has no single presence.
+    var status: PresenceStatus?
+}
+
+extension SidebarChannel {
+    /// The guild-channel form: a glyph in the gutter, no face.
+    init(
+        id: ChannelID,
+        name: String,
+        kind: ChannelKind,
+        isUnread: Bool,
+        mentionCount: Int,
+        isMuted: Bool,
+        voiceMembers: [VoiceMemberChip]
+    ) {
+        self.init(
+            id: id,
+            name: name,
+            kind: kind,
+            isUnread: isUnread,
+            mentionCount: mentionCount,
+            isMuted: isMuted,
+            voiceMembers: voiceMembers,
+            avatarURL: nil,
+            monogram: nil,
+            status: nil
+        )
+    }
 }
 
 struct VoiceMemberChip: Hashable, Sendable, Identifiable {

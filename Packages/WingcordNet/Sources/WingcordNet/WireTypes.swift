@@ -225,6 +225,11 @@ struct GuildDTO: Decodable, Sendable {
     var rules_channel_id: ChannelID?
     var large: Bool?
     var roles: [RoleDTO]?
+    /// A server's own emoji and stickers. Present on the READY guild objects and
+    /// on GUILD_CREATE, which is what keeps the picker's catalog current without
+    /// a fetch of its own.
+    var emojis: [EmojiDTO]?
+    var stickers: [StickerDTO]?
     var channels: [ChannelDTO]?
     var members: [MemberDTO]?
     var presences: [PresenceDTO]?
@@ -298,9 +303,19 @@ struct EmojiDTO: Decodable, Sendable {
     var id: EmojiID?
     var name: String?
     var animated: Bool?
+    /// False for an emoji the server has lost the boost tier to keep. Discord
+    /// keeps sending them; nothing may use them.
+    var available: Bool?
 
     var domain: EmojiRef {
         EmojiRef(id: id, name: name ?? "", isAnimated: animated ?? false)
+    }
+
+    /// The picker's form: a **custom** emoji that is usable. Unicode entries
+    /// have no id and belong to the generated table, not to a server.
+    var catalogEntry: EmojiRef? {
+        guard id != nil, available != false, let name, !name.isEmpty else { return nil }
+        return EmojiRef(id: id, name: name, isAnimated: animated ?? false)
     }
 }
 
@@ -401,14 +416,22 @@ struct StickerDTO: Decodable, Sendable {
     var id: UInt64
     var name: String?
     var format_type: Int?
+    /// As on `EmojiDTO`: a sticker the server can no longer offer.
+    var available: Bool?
 
-    private enum CodingKeys: String, CodingKey { case id, name, format_type }
+    private enum CodingKeys: String, CodingKey { case id, name, format_type, available }
 
     init(from decoder: any Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         id = UInt64(try container.decode(String.self, forKey: .id)) ?? 0
         name = try container.decodeIfPresent(String.self, forKey: .name)
         format_type = try container.decodeIfPresent(Int.self, forKey: .format_type)
+        available = try container.decodeIfPresent(Bool.self, forKey: .available)
+    }
+
+    var catalogEntry: StickerRef? {
+        guard id != 0, available != false else { return nil }
+        return domain
     }
 
     var domain: StickerRef {
@@ -605,7 +628,235 @@ struct ClientSettingsDTO: Decodable, Sendable {
 
 /// The account's own client settings, as the app uses them.
 public struct ClientSettings: Sendable {
+    /// The account's favourite GIFs, from the settings proto. Empty for an
+    /// account with none, and empty for a blob this client could not read —
+    /// see `UserSettingsProto.FavoritesField`.
+    public var favoriteGIFs: [GIF] = []
     public var folders: [GuildFolder]
+    /// The rail's order for guilds that are not in a folder.
+    ///
+    /// Discord keeps this **separate** from the folder list, and a client that
+    /// reads only the folders has no order for everything else — which on this
+    /// account is most of it. Empty when the account has never rearranged.
+    public var guildPositions: [GuildID] = []
     public var status: PresenceStatus
     public var customStatus: String?
+
+    public init(
+        folders: [GuildFolder],
+        guildPositions: [GuildID] = [],
+        status: PresenceStatus,
+        customStatus: String?,
+        favoriteGIFs: [GIF] = []
+    ) {
+        self.folders = folders
+        self.guildPositions = guildPositions
+        self.status = status
+        self.customStatus = customStatus
+        self.favoriteGIFs = favoriteGIFs
+    }
+}
+
+// MARK: - Profile
+
+/// `GET /users/{id}/profile`.
+///
+/// **The route exists because nothing else answers with a banner, a bio or a
+/// theme.** The user objects READY and the member-list op deliver are the
+/// *minimal* form — id, name, avatar, flags — and every profile surface built on
+/// them draws a person with no banner, no colours and no words, which is exactly
+/// what this client was doing. Those three fields are only ever sent here.
+///
+/// It answers in layers, and the layering is the point: `user` is the account,
+/// `user_profile` is the account's profile, and `guild_member_profile` is the
+/// per-guild override. Discord lets someone carry a different banner and bio in
+/// one server than they do globally, so the guild layer wins where it is
+/// present — and it is *often* present and empty, which is not the same as
+/// absent and must not overwrite the global answer.
+struct UserProfileDTO: Decodable, Sendable {
+    var user: UserDTO
+    var user_profile: ProfileLayer?
+    var guild_member_profile: ProfileLayer?
+    var badges: [BadgeDTO]?
+    var mutual_guilds: [MutualGuildDTO]?
+    var premium_since: String?
+    var premium_type: Int?
+    var legacy_username: String?
+    var connected_accounts: [ConnectionDTO]?
+
+    struct ConnectionDTO: Decodable, Sendable {
+        var id: String?
+        var type: String?
+        var name: String?
+        var verified: Bool?
+
+        var domain: ConnectedAccount? {
+            guard let id, let type, let name else { return nil }
+            return ConnectedAccount(
+                id: id, service: type, name: name, isVerified: verified ?? false
+            )
+        }
+    }
+
+    struct ProfileLayer: Decodable, Sendable {
+        var banner: String?
+        var accent_color: UInt32?
+        var bio: String?
+        /// Two 24-bit colours, primary first. Discord sends `[a, b]`.
+        var theme_colors: [UInt32]?
+        var pronouns: String?
+        /// A purchase, not an asset: `{ sku_id, expires_at }`.
+        var profile_effect: EffectRef?
+    }
+
+    struct EffectRef: Decodable, Sendable {
+        var sku_id: String?
+    }
+
+    struct BadgeDTO: Decodable, Sendable {
+        var id: String?
+        var description: String?
+        var icon: String?
+
+        var domain: AccountBadge? {
+            guard let id else { return nil }
+            return AccountBadge(
+                id: id,
+                iconHash: icon,
+                // The description is the hover text, so a badge that arrives
+                // without one falls back to its id rather than to nothing —
+                // an unlabelled badge is an icon nobody can identify.
+                label: description ?? id
+            )
+        }
+    }
+
+    struct MutualGuildDTO: Decodable, Sendable {
+        var id: GuildID?
+        var nick: String?
+
+        /// Dropped without an id: a mutual server nobody can name is not a fact
+        /// the profile can show, and counting it would leave the card claiming
+        /// one more server than the list it opens holds.
+        var domain: MutualGuild? {
+            guard let id else { return nil }
+            return MutualGuild(id: id, nickname: nick.flatMap { $0.isEmpty ? nil : $0 })
+        }
+    }
+
+    /// Discord's ISO-8601 with fractional seconds. Parsed with a formatter that
+    /// accepts them: the default `.iso8601` strategy rejects `.878000+00:00` and
+    /// would silently yield nil for every subscription date.
+    private static func date(from string: String) -> Date? {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return formatter.date(from: string) ?? ISO8601DateFormatter().date(from: string)
+    }
+
+    /// The account, with every profile layer folded onto its decoration.
+    ///
+    /// Merged rather than replaced field by field: an empty guild layer must not
+    /// erase a global banner, so each field takes the first non-empty answer in
+    /// guild-then-global-then-account order.
+    var domain: User {
+        let base = user.domain
+        func pick<T>(_ path: (ProfileLayer) -> T?) -> T? {
+            if let value = guild_member_profile.flatMap(path) { return value }
+            return user_profile.flatMap(path)
+        }
+        let bio = pick(\.bio).flatMap { $0.isEmpty ? nil : $0 }
+        let theme = pick(\.theme_colors).flatMap { $0.isEmpty ? nil : $0 }
+
+        let decoration = UserDecoration(
+            avatarDecorationHash: base.decoration?.avatarDecorationHash,
+            nameplateAsset: base.decoration?.nameplateAsset,
+            bannerHash: pick(\.banner) ?? base.decoration?.bannerHash,
+            accentColor: pick(\.accent_color) ?? base.decoration?.accentColor,
+            bio: bio ?? base.decoration?.bio,
+            themeColorValues: theme,
+            badges: badges?.compactMap(\.domain) ?? [],
+            profileEffectSKU: pick { $0.profile_effect?.sku_id },
+            pronouns: pick(\.pronouns).flatMap { $0.isEmpty ? nil : $0 },
+            connectedAccounts: connected_accounts?.compactMap(\.domain) ?? [],
+            premiumTier: premium_type.flatMap { PremiumTier(rawValue: $0) } ?? .none,
+            premiumSince: premium_since.flatMap(Self.date(from:)),
+            legacyUsername: legacy_username,
+            mutualGuilds: mutual_guilds?.compactMap(\.domain) ?? [],
+            primaryGuildTag: base.decoration?.primaryGuildTag,
+            primaryGuildBadgeHash: base.decoration?.primaryGuildBadgeHash,
+            primaryGuildID: base.decoration?.primaryGuildID
+        )
+        return User(
+            id: base.id,
+            username: base.username,
+            displayName: base.displayName,
+            avatarHash: base.avatarHash,
+            discriminator: base.discriminator,
+            flags: base.flags,
+            isBot: base.isBot,
+            isSystem: base.isSystem,
+            decoration: decoration.isEmpty ? nil : decoration
+        )
+    }
+}
+
+// MARK: - Collectibles
+
+/// `GET /collectibles-products/{sku_id}`.
+///
+/// How a profile effect's `sku_id` becomes artwork. Captured from a live
+/// response: the payload is a store product whose `items` carry the actual
+/// composition, and the fields that matter are camelCase inside an otherwise
+/// snake_case API — which is worth writing down, because a decoder that assumes
+/// one convention silently drops the other.
+struct CollectiblesProductDTO: Decodable, Sendable {
+    var sku_id: String?
+    var name: String?
+    var items: [Item]?
+
+    struct Item: Decodable, Sendable {
+        var sku_id: String?
+        var title: String?
+        var accessibilityLabel: String?
+        var reducedMotionSrc: String?
+        var staticFrameSrc: String?
+        var effects: [Effect]?
+    }
+
+    struct Effect: Decodable, Sendable {
+        var src: String?
+        /// Milliseconds, both of them.
+        var start: Double?
+        var duration: Double?
+        var loop: Bool?
+        var zIndex: Int?
+        var width: Double?
+        var height: Double?
+    }
+
+    var domain: ProfileEffect? {
+        guard let item = items?.first, let sku = sku_id ?? item.sku_id else { return nil }
+        let layers: [ProfileEffect.Layer] = (item.effects ?? []).compactMap { effect in
+            guard let source = effect.src, let url = URL(string: source) else { return nil }
+            return ProfileEffect.Layer(
+                url: url,
+                // Discord sends milliseconds; read as seconds they would each
+                // last most of an hour.
+                start: (effect.start ?? 0) / 1000,
+                duration: (effect.duration ?? 0) / 1000,
+                loops: effect.loop ?? false,
+                zIndex: effect.zIndex ?? 0,
+                size: CGSize(width: effect.width ?? 450, height: effect.height ?? 880)
+            )
+        }
+        guard !layers.isEmpty else { return nil }
+        return ProfileEffect(
+            skuID: sku,
+            title: item.title ?? name ?? "",
+            accessibilityLabel: item.accessibilityLabel,
+            reducedMotionURL: (item.reducedMotionSrc ?? item.staticFrameSrc)
+                .flatMap { URL(string: $0) },
+            layers: layers
+        )
+    }
 }

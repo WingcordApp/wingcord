@@ -33,6 +33,14 @@ public enum TimelineItem: Hashable, Sendable {
     case historySkeleton(index: Int)
     /// The first page is still in flight. One quiet row, not a runway.
     case loadingFirstPage
+    /// The first page was asked for and did not arrive.
+    ///
+    /// **A distinct case, because "loading" and "failed" look identical from the
+    /// outside and only one of them is going to change on its own.** Without it
+    /// a channel whose fetch was refused sits under "Loading messages..."
+    /// forever, which is the difference between a client that is slow and a
+    /// client that is broken — and the reader cannot tell which.
+    case historyUnavailable(reason: String)
 
     public var messageID: MessageID? {
         if case .message(let item) = self { return item.id }
@@ -122,12 +130,15 @@ public enum TimelineReducer {
         mentionedIDs: Set<UInt64> = [],
         mentionsEveryoneCountsAsMention: Bool = true,
         hasMoreHistory: Bool = false,
+        failure: String? = nil,
         skeletonDepth: Int = 20,
         calendar: Calendar = .current
     ) -> [TimelineItem] {
         guard !messages.isEmpty else {
-            // Nothing loaded yet. A channel with more history to fetch is
-            // LOADING; one without is genuinely at its beginning.
+            // Nothing loaded yet, and three different states look the same from
+            // here. A page that FAILED says so; a channel with more history to
+            // fetch is LOADING; one with neither is genuinely at its beginning.
+            if let failure { return [.historyUnavailable(reason: failure)] }
             return hasMoreHistory ? [.loadingFirstPage] : [.conversationStart]
         }
 

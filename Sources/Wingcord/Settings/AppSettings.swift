@@ -1,4 +1,5 @@
 import Foundation
+import WingcordCore
 import Observation
 
 /// The user's own preferences.
@@ -43,6 +44,16 @@ final class AppSettings {
             // only thing that can tell them to re-measure.
             PresentationRevision.shared.textScaleDidChange()
         }
+    }
+
+    /// The skin tone the emoji picker applies to every emoji that takes one.
+    ///
+    /// Stored as the modifier's index rather than the glyph: the table is
+    /// generated and the enum is the thing both ends agree on, so a defaults
+    /// entry written by an older build cannot decode into a tone that no longer
+    /// exists — it falls back to the default.
+    var skinTone: UnicodeEmoji.SkinTone = .default {
+        didSet { defaults.set(skinTone.rawValue, forKey: Key.skinTone) }
     }
 
     /// Compact mode: tighter message rows, no run spacing.
@@ -104,6 +115,8 @@ final class AppSettings {
         playsAnimatedContent = defaults.object(forKey: Key.playsAnimated) as? Bool ?? true
         loadsImagesAutomatically = defaults.object(forKey: Key.loadsImages) as? Bool ?? true
         showsPerformanceInspector = defaults.object(forKey: Key.showsInspector) as? Bool ?? false
+        skinTone = (defaults.object(forKey: Key.skinTone) as? Int)
+            .flatMap(UnicodeEmoji.SkinTone.init(rawValue:)) ?? .default
     }
 
     private enum Key {
@@ -115,5 +128,6 @@ final class AppSettings {
         static let playsAnimated = "chat.playsAnimatedContent"
         static let loadsImages = "chat.loadsImagesAutomatically"
         static let showsInspector = "diagnostics.showsPerformanceInspector"
+        static let skinTone = "expressions.skinTone"
     }
 }

@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 import WingcordCore
 
@@ -36,133 +37,395 @@ struct ChannelSidebar: View, Equatable {
     /// reader inside the content — a reader in there measures the *content's*
     /// frame, which the stretchy banner is already deforming.
     @State private var scrollOffset: CGFloat = 0
-
-    /// Tall enough that the name pill sits on colour rather than straddling the
-    /// edge between artwork and list. Below roughly this the glass has nothing
-    /// to lens for most of its body and the pill reads as a toolbar.
-    private var bannerHeight: CGFloat { 116 }
+    /// How much room the window's chrome takes above this column.
+    ///
+    /// **Read from a view that RESPECTS the safe area.** The opposite is the
+    /// intuition, it is what this file used to do, and it is wrong: a reader
+    /// that ignores the inset has already been handed the region the inset
+    /// describes, so it has nothing left to report. Measured on a live window,
+    /// both readers in the same frame: **0.00 ignoring, 52.00 respecting.**
+    ///
+    /// The banner needs it in order to run underneath the chrome, and it is the
+    /// only thing in this view that does — every other number stays in the
+    /// column's own space. See `chromeInsetProbe`.
+    @State private var topInset: CGFloat = 0
+    /// How far the list is pulled past its top, as the BANNER should see it.
+    ///
+    /// Deliberately not `max(0, -scrollOffset)`. A trackpad delivers a pull as a
+    /// burst of discrete scroll events, and `NSScrollView` springs its elastic
+    /// offset back to zero in the gaps between them — so artwork mapped straight
+    /// onto that offset rises and collapses once per flick while the reader is
+    /// still pulling. Measured from a 30fps capture: four complete rise-and-
+    /// collapse cycles inside one gesture, each returning to exactly the resting
+    /// height.
+    ///
+    /// So the two directions are separated. Growing follows the pull exactly —
+    /// anything else feels like lag against the fingers. Returning is a spring
+    /// this view owns, which outlives the gap between flicks, so consecutive
+    /// pulls accumulate into one continuous stretch instead of fighting each
+    /// other.
+    @State private var pull: CGFloat = 0
+    /// Whether `pull` last moved outward. Decides whether the change animates.
+    @State private var isPullGrowing = false
+    /// Whether a scroll gesture is still in progress. While it is, the stretch
+    /// holds rather than tracking the elastic offset back to zero.
+    @State private var isScrollActive = false
+    /// How wide this column is. Measured for one reason only: an over-wide
+    /// toolbar item is dropped rather than truncated, so the title has to know
+    /// what it may occupy. See `SidebarBannerLayout.toolbarTitleWidth`.
+    @State private var columnWidth: CGFloat = 0
 
     private var hasBanner: Bool { presentation.header?.hasBanner ?? false }
 
-    /// Vertical room the pill occupies, its own breathing space included.
-    private var pillSlot: CGFloat { Metrics.control + Spacing.base }
-
-    /// Where the pill sits with the list at the top: on the banner's lower edge,
-    /// which is the whole reason the banner is tall enough to have one. With no
-    /// banner there is no travel to do and the pill is parked from the first
-    /// frame.
-    private var pillRestY: CGFloat { hasBanner ? bannerHeight - pillSlot : 0 }
-
-    /// The pill's current top edge. It travels 1:1 with the scroll and stops at
-    /// the top of the column.
-    private var pillY: CGFloat { max(0, pillRestY - scrollOffset) }
-
-    /// Whether there is still artwork behind the pill, which is what decides its
-    /// material.
+    /// Everything positioned against the banner, from the four numbers that
+    /// decide it. See `SidebarBannerLayout` for the arithmetic and for the one
+    /// measurement it rests on.
     ///
-    /// Measured against the pill's own midpoint rather than either edge, so the
-    /// material changes when the ground behind it is half and half — both the
-    /// least visible moment to switch and the most honest one.
-    private var isPillOverBanner: Bool {
-        guard hasBanner else { return false }
-        return bannerHeight - scrollOffset > pillY + Metrics.control / 2
+    /// Recomputed rather than stored: it is four `CGFloat`s over values already
+    /// in hand, and a stored copy is a copy that can be stale — which is exactly
+    /// how an earlier version parked the pill at the *previous* server's banner
+    /// height on a server that had none.
+    private var layout: SidebarBannerLayout {
+        SidebarBannerLayout(
+            hasBanner: hasBanner,
+            chromeInset: topInset,
+            stretch: pull,
+            travel: max(0, scrollOffset),
+            columnWidth: columnWidth
+        )
     }
 
-    /// Empty room at the head of the list, standing in for the banner.
+    /// How the banner answers a pull. The pill takes the **same** animation:
+    /// they are one object drawn in two layers, and giving only one of them a
+    /// spring is what makes the pill arrive at the new height before the artwork
+    /// does.
     ///
-    /// The banner is not in the list — it is a layer behind it — so the content
-    /// has to reserve the space it occupies or the first rows are drawn
-    /// underneath the artwork.
-    ///
-    /// **The whole banner, not the banner minus the pill.** The pill FLOATS over
-    /// both; it takes no space in either. Subtracting its slot here left the
-    /// first row starting a pill's height too high, which is exactly the amount
-    /// by which "Channels & Roles" appeared behind the artwork.
-    private var bannerReserve: CGFloat {
-        hasBanner ? bannerHeight + Spacing.base : 0
+    /// Out tracks the gesture, back is a critically damped return this view
+    /// drives. `liveTracking` rather than `nil` on the way out: a flick arriving
+    /// while the previous one is still easing back would otherwise jump the
+    /// height straight to the new value from wherever the decay had reached,
+    /// which is a visible snap *downward* in the middle of a pull. An
+    /// interactive spring re-targets from the presented value instead, so an
+    /// interrupted return blends into the new pull rather than cutting to it.
+    private var bannerSpring: Animation {
+        isPullGrowing ? Motion.liveTracking : motion.reposition
     }
 
     var body: some View {
         ZStack(alignment: .top) {
             if hasBanner, let header = presentation.header {
-                SidebarBanner(
-                    header: header,
-                    naturalHeight: bannerHeight,
-                    scrollOffset: scrollOffset
-                )
+                SidebarBanner(header: header, layout: layout)
+                    .animation(bannerSpring, value: pull)
+                    // Up to the window's top edge, under the toolbar, so the
+                    // sidebar toggle sits on the artwork instead of on a bare
+                    // strip above it. It is also what makes the banner's frame
+                    // start at `-topInset`, which is the placement every other
+                    // number here is measured against.
+                    .ignoresSafeArea(.container, edges: .top)
             }
             list
         }
-        // Over both layers, so it can sit on the banner at rest and over the
-        // channel list once parked.
+        .background(alignment: .top) { chromeInsetProbe }
+        // Over both layers, so it sits ON the artwork rather than in the band
+        // below it.
         //
         // Inside the scroll view it could only do one of two things: scroll away
-        // with the content, or pin and never move. What is wanted is neither —
-        // it travels while there is banner above it, then stops. That is a
-        // position rather than a layout, so it is drawn on top and told where to
-        // be. Nothing here blocks the scroll: the row is a menu button and a
-        // spacer, and a spacer has no hit region of its own.
+        // at the LIST's pace, or pin and never move. What is wanted is neither —
+        // it travels at the BANNER's pace, which includes the stretch the list
+        // knows nothing about. That is a position rather than a layout, so it is
+        // drawn on top and told where to be. Nothing here blocks the scroll: the
+        // row is a menu button and a spacer, and a spacer has no hit region.
         .overlay(alignment: .topLeading) {
-            if let header = presentation.header {
-                ServerNamePill(
-                    name: header.name,
-                    overMedia: isPillOverBanner,
-                    action: openGuildMenu
-                )
-                .padding(.horizontal, Spacing.snug)
-                .offset(y: pillY)
+            if hasBanner, let header = presentation.header {
+                ServerNamePill(name: header.name, openMenu: openGuildMenu)
+                    .padding(.leading, SidebarBannerLayout.pillLeading)
+                    .padding(.trailing, Spacing.snug)
+                    .offset(y: layout.pillTop)
+                    .opacity(layout.pillOpacity)
+                    // A pill faded to nothing must not still be taking clicks
+                    // out of the strip it has slid into.
+                    .allowsHitTesting(layout.pillOpacity > 0)
+                    .animation(bannerSpring, value: pull)
             }
         }
+        // The other half of the name, and the half that is REACHABLE — see
+        // `showsToolbarTitle` for why the parked pill could not be.
+        //
+        // Placement is `.automatic`, not `.navigation`: measured on a live
+        // window, `.navigation` lands the item at x=376, AFTER the split view's
+        // sidebar toggle and out over the detail column. `.automatic` lands it
+        // at x=96, in the sidebar's own span of the bar — the gap between the
+        // traffic lights and the toggle that is otherwise flexible space — and
+        // at y=830..866, which is the toggle's own row to the point.
+        //
+        // Declared here rather than beside the rest of the chrome because the
+        // scroll position that decides it is this view's own `@State`. Routing
+        // it through the store instead would publish a write on every scroll
+        // tick to every surface observing it.
+        .toolbar {
+            ToolbarItem(placement: .automatic) {
+                if layout.showsToolbarTitle, let header = presentation.header {
+                    ServerTitleItem(
+                        name: header.name,
+                        maxWidth: layout.toolbarTitleWidth,
+                        // Nil for the direct-message home, which is a
+                        // destination rather than a server: there is nothing to
+                        // invite anyone to, nothing to configure, and nothing
+                        // to leave.
+                        openMenu: header.guildID == nil ? nil : openGuildMenu
+                    )
+                    .equatable()
+                }
+            }
+            // Pushes the title to the LEADING edge of the sidebar's span.
+            // Without it the section right-aligns against the toggle and the
+            // name lands at x=196 — a hundred points right of where the
+            // floating pill just faded out, so the hand-off reads as a jump
+            // rather than as one name staying put while its material changes.
+            // With it, x=96 against the resting pill's 88.
+            ToolbarSpacer(.flexible)
+        }
+    }
+
+    @ViewBuilder
+    private func row(_ row: SidebarRow) -> some View {
+        switch row {
+        case .guildAction(let action):
+            SidebarActionRow(action: action)
+        case .category(let category):
+            // A category only reaches here if it has no section of its own,
+            // which the grouping above does not produce. Rendered anyway rather
+            // than dropped: a row the model contains and the view silently skips
+            // is a channel nobody can reach.
+            SidebarCategoryRow(category: category, toggle: { toggleCategory(category.id) })
+        case .channel(let channel):
+            SidebarChannelRow(
+                channel: channel,
+                isSelected: channel.id == selectedChannelID,
+                namespace: selectionNamespace,
+                action: { selectChannel(channel.id) }
+            )
+        }
+    }
+
+    /// How a row arrives when the whole list is replaced.
+    ///
+    /// The list unfolds from the top rather than appearing all at once: each row
+    /// drops a few points into place a beat after the one above it, which reads
+    /// as one list settling instead of as a hard cut between two servers.
+    ///
+    /// **The stagger is capped.** Left proportional to the index, a fifty-row
+    /// server would still be arriving a second after the click — and past
+    /// roughly 200ms a response animation stops reading as motion and starts
+    /// reading as latency. Ten steps of 18ms is the whole budget; every row
+    /// below the tenth arrives with it.
+    ///
+    /// Reduce Motion is handled by `motion.panel` itself, which drops the travel
+    /// and leaves the fade — so the cascade degrades to a plain cross-fade
+    /// rather than having to be branched around here.
+    private func rowEntrance(at index: Int) -> AnyTransition {
+        let delay = Double(min(index, 10)) * 0.018
+        return .asymmetric(
+            insertion: .move(edge: .top)
+                .combined(with: .opacity)
+                .animation(motion.panel.delay(delay)),
+            // The outgoing list must not linger under the incoming one — two
+            // channel lists overlapping mid-swap is the one thing that would
+            // make this read as a glitch rather than as a transition.
+            removal: .opacity.animation(motion.fadeQuick)
+        )
+    }
+
+    /// Reports how much room the chrome takes above this column.
+    ///
+    /// **It reads the inset WITHOUT ignoring it, and that one modifier is the
+    /// defect this file spent six attempts on.** A reader that ignores the safe
+    /// area has already been handed the region the inset describes, so there is
+    /// nothing left for it to report: measured on a live window, 0.00 from an
+    /// ignoring reader against 52.00 from this one, in the same view on the same
+    /// frame. With zero in hand the banner was built a toolbar's height short,
+    /// its lower lip landed 52 points above where every other number in this
+    /// view assumed it was, and the pill — placed correctly against an edge that
+    /// was not there — floated in the gap underneath the artwork.
+    ///
+    /// A `Color.clear` rather than a `GeometryReader`: the reader would add a
+    /// layout container and a second pass to answer a question the background's
+    /// own proxy already answers.
+    ///
+    /// The write is wrapped in a transaction with animations disabled: this is a
+    /// measured value, it can change during a live resize, and animating on one
+    /// makes the banner lurch every time the window is dragged.
+    private var chromeInsetProbe: some View {
+        Color.clear
+            .onGeometryChange(for: CGFloat.self) { $0.safeAreaInsets.top } action: { inset in
+                write(inset, into: $topInset)
+            }
+            .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width in
+                write(width, into: $columnWidth)
+            }
+            .allowsHitTesting(false)
+    }
+
+    /// Stores a measured value, guarded and unanimated.
+    ///
+    /// Guarded because a `@State` write of an equal value still invalidates, and
+    /// both of these are read on every layout pass. Unanimated because a
+    /// measurement can change mid-resize, and animating on one makes the banner
+    /// lurch every time the window is dragged.
+    private func write(_ value: CGFloat, into binding: Binding<CGFloat>) {
+        guard abs(binding.wrappedValue - value) > 0.5 else { return }
+        var transaction = Transaction()
+        transaction.disablesAnimations = true
+        withTransaction(transaction) { binding.wrappedValue = value }
+    }
+
+    /// The rows, grouped for pinning.
+    ///
+    /// **The presentation stays flat; the grouping happens here.** `INVARIANTS`
+    /// rejects a nested sidebar model, and that still holds — a nested *model*
+    /// re-materialises whole sections on every rebuild and cannot be diffed
+    /// per row. What it was protecting against is not this: each row keeps its
+    /// own stable id, `ForEach` still diffs row by row, and the only thing the
+    /// grouping adds is a `Section` boundary for `pinnedViews` to hold on to.
+    ///
+    /// That boundary is the entire reason a category heading can stay under the
+    /// server pill while its channels scroll past it, which is not expressible
+    /// over a flat `LazyVStack` at all.
+    private struct Group_: Identifiable {
+        var id: UInt64
+        /// Nil for the rows above the first category — the guild actions.
+        var header: SidebarCategory?
+        var rows: [(index: Int, row: SidebarRow)]
+    }
+
+    private var groups: [Group_] {
+        var result: [Group_] = []
+        var loose: [(Int, SidebarRow)] = []
+        for (index, row) in presentation.rows.enumerated() {
+            if case .category(let category) = row {
+                if !loose.isEmpty {
+                    result.append(Group_(id: 0, header: nil, rows: loose))
+                    loose = []
+                }
+                result.append(Group_(id: category.id.rawValue, header: category, rows: []))
+            } else if result.isEmpty || result[result.count - 1].header == nil {
+                loose.append((index, row))
+            } else {
+                result[result.count - 1].rows.append((index, row))
+            }
+        }
+        if !loose.isEmpty { result.append(Group_(id: 0, header: nil, rows: loose)) }
+        return result
     }
 
     private var list: some View {
         ScrollView {
-            LazyVStack(spacing: 1) {
-                if bannerReserve > 0 {
+            LazyVStack(spacing: 1, pinnedViews: [.sectionHeaders]) {
+                if layout.listReserve > 0 {
                     Color.clear
-                        .frame(height: bannerReserve)
+                        .frame(height: layout.listReserve)
                         .accessibilityHidden(true)
                 }
 
-                ForEach(presentation.rows) { row in
-                    switch row {
-                    case .guildAction(let action):
-                        SidebarActionRow(action: action)
-                    case .category(let category):
-                        SidebarCategoryRow(
-                            category: category,
-                            toggle: { toggleCategory(category.id) }
-                        )
-                    case .channel(let channel):
-                        SidebarChannelRow(
-                            channel: channel,
-                            isSelected: channel.id == selectedChannelID,
-                            namespace: selectionNamespace,
-                            action: { selectChannel(channel.id) }
-                        )
+                ForEach(groups) { group in
+                    Section {
+                        ForEach(group.rows, id: \.row.id) { entry in
+                            row(entry.row)
+                                .transition(rowEntrance(at: entry.index))
+                        }
+                    } header: {
+                        if let category = group.header {
+                            SidebarCategoryRow(
+                                category: category,
+                                toggle: { toggleCategory(category.id) }
+                            )
+                            // The header travels with the list until it reaches
+                            // the top, then stays — so it needs a ground of its
+                            // own, or the channels it is pinned over scroll
+                            // through it. The pill's glass is that ground; the
+                            // padding is what stops the row beneath touching it.
+                            .padding(.vertical, 2)
+                        }
                     }
                 }
             }
             .padding(.horizontal, Spacing.base)
-            .padding(.top, hasBanner ? 0 : pillSlot)
             .padding(.bottom, Spacing.base)
         }
+        // Switching servers replaces every row id at once, so every row is an
+        // INSERTION and the transitions above fire together. Declared here, on
+        // the container, rather than by wrapping the change in `withAnimation`:
+        // a global transaction animates every view in the window that happens to
+        // re-lay-out while it runs.
+        .animation(motion.panel, value: presentation.header?.guildID)
+        // Collapsing or expanding a category adds or removes its channels, so
+        // the row count is exactly the signal — and the same per-row entrance
+        // transition then cascades them in or out rather than cutting.
+        .animation(motion.standard, value: presentation.rows.count)
         .scrollIndicators(.never)
+        // **Bounce even when the list fits.** A scroll view's default policy
+        // only rubber-bands once the content exceeds the viewport, so on a
+        // server with few channels there is no elastic overscroll at all — and
+        // the banner, which is driven by that overscroll, simply never stretched
+        // there. That is the whole of "it works on one server and not another".
+        .scrollBounceBehavior(.always, axes: .vertical)
         // One read, feeding both the banner's stretch and the pill's travel.
         .onScrollGeometryChange(for: CGFloat.self) { geometry in
             geometry.contentOffset.y + geometry.contentInsets.top
         } action: { _, offset in
             // A `@State` write of an equal value still invalidates, and this one
             // fires on every scroll tick.
-            guard abs(scrollOffset - offset) > 0.5 else { return }
-            scrollOffset = offset
+            if abs(scrollOffset - offset) > 0.5 { scrollOffset = offset }
+
+            // Resisted rather than linear: a hard fling would otherwise drive
+            // the artwork to any height at all, and a boundary with no
+            // resistance reads as broken rather than as elastic.
+            //
+            // Reduce Motion removes the effect rather than shortening it. A
+            // stretch IS the motion here — there is no quieter version of it —
+            // and the system preference is read once at the root, never asked
+            // of the OS by hand.
+            let pulled = motion.reduceMotion
+                ? 0
+                : Motion.rubberBand(offset: max(0, -offset), limit: SidebarBannerLayout.bannerHeight * 0.75)
+            guard abs(pulled - pull) > 0.5 else { return }
+
+            // **Growing follows the gesture; shrinking waits for it to end.**
+            //
+            // A trackpad delivers a pull as a burst of discrete scroll events,
+            // and the scroll view springs its elastic offset back to zero in the
+            // gaps between them. Following that offset down means the artwork
+            // collapses once per flick while the reader is still pulling —
+            // measured from a 30fps capture: four complete rise-and-collapse
+            // cycles inside one gesture, each returning to exactly the resting
+            // height. Slowing the return does not fix it, because the TARGET is
+            // what keeps returning to zero.
+            //
+            // So while a scroll is still live and the list is still at its top,
+            // the stretch HOLDS at its high-water mark. It is released when the
+            // gesture ends, or the moment the reader actually scrolls down into
+            // the content — which is the one case where holding would be wrong.
+            let hasScrolledIntoContent = offset > 0.5
+            if pulled > pull || !isScrollActive || hasScrolledIntoContent {
+                isPullGrowing = pulled > pull
+                pull = pulled
+            }
+        }
+        .onScrollPhaseChange { _, phase in
+            let active = phase != .idle
+            guard isScrollActive != active else { return }
+            isScrollActive = active
+            // The gesture is over: let whatever was being held ease back.
+            if !active, pull != 0 {
+                isPullGrowing = false
+                pull = 0
+            }
         }
         .softScrollEdgesVertical()
     }
 }
 
-/// The server's name, at rest on the banner's lower edge and parked under the
-/// chrome once the list has been scrolled that far.
+/// The server's name, floating on the banner's lower lip.
 ///
 /// Sized down from a standalone floating control: at full size with a headline
 /// inside, the name reads as a page title with a whole navigation bar's weight
@@ -180,30 +443,25 @@ struct ChannelSidebar: View, Equatable {
 /// glass morphs with it; without the value the two names cut, and a capsule that
 /// changes size instantaneously reads as two different controls rather than as
 /// one control being re-labelled.
-struct ServerNamePill: View {
+///
+/// **One material and one branch fewer than it used to carry.** This view exists
+/// only where there is artwork under it — a banner is what it sits on, and the
+/// only server without a menu is the direct-message home, which has no banner —
+/// so the ground behind it is never in question. The pair of ink styles, the
+/// four-way material modifier and the optional target all described states this
+/// pill cannot be in; `ServerTitleItem` covers the ones it cannot reach.
+private struct ServerNamePill: View {
     var name: String
-    var overMedia: Bool
-    var action: () -> Void
+    var openMenu: () -> Void
 
     @Environment(\.motion) private var motion
 
     var body: some View {
         HStack(spacing: Spacing.base) {
             Menu {
-                ServerMenuContent(action: action)
+                ServerMenuContent(action: openMenu)
             } label: {
-                HStack(spacing: Spacing.tight) {
-                    Text(name)
-                        .font(.system(.subheadline, weight: .semibold))
-                        .foregroundStyle(overMedia ? AnyShapeStyle(InkColor.primary) : AnyShapeStyle(Ink.primary))
-                        .lineLimit(1)
-                    Image(systemName: "chevron.down")
-                        .font(.system(.caption2, weight: .bold))
-                        .foregroundStyle(overMedia ? AnyShapeStyle(InkColor.secondary) : AnyShapeStyle(Ink.secondary))
-                }
-                .padding(.horizontal, Spacing.snug)
-                .frame(minHeight: Metrics.control)
-                .contentShape(.capsule)
+                label
             }
             // `.button` + `.plain` + a content shape, THEN the glass. The
             // borderless style with `.fixedSize` collapses the label frame on
@@ -213,7 +471,7 @@ struct ServerNamePill: View {
             // Hugs the label. Everything above this in the chain must leave the
             // width alone.
             .fixedSize()
-            .modifier(PillChrome(overMedia: overMedia))
+            .interactiveChromeOverMedia()
             .animation(motion.glassMorph, value: name)
             .accessibilityLabel(Text(name))
             .accessibilityHint("Server options")
@@ -224,23 +482,112 @@ struct ServerNamePill: View {
             Spacer(minLength: Spacing.base)
         }
     }
+
+    /// Fixed ink rather than the vibrant hierarchy: this label composites
+    /// against a picture nobody chose, where a hierarchical style resolves to
+    /// whatever the artwork happens to be and stops being readable.
+    private var label: some View {
+        HStack(spacing: Spacing.tight) {
+            Text(name)
+                .font(.system(.subheadline, weight: .semibold))
+                .foregroundStyle(InkColor.primary)
+                .lineLimit(1)
+            Image(systemName: "chevron.down")
+                .font(.system(.caption2, weight: .bold))
+                .foregroundStyle(InkColor.secondary)
+        }
+        .padding(.horizontal, Spacing.snug)
+        .frame(minHeight: Metrics.control)
+        .contentShape(.capsule)
+    }
 }
 
-/// Picks the pill's material from what is behind it.
+/// The server's name in the toolbar, level with the sidebar toggle, for every
+/// moment the banner is not carrying it.
 ///
-/// A `ViewModifier` rather than an `if` in the builder, because the two branches
-/// are different view types and switching between them replaces the control's
-/// identity — so the pill would pop rather than change material when a banner
-/// finishes loading.
-private struct PillChrome: ViewModifier {
-    var overMedia: Bool
+/// **It draws no glass and sets no size**, for the same reason `ChannelPill`
+/// does not: a `ToolbarItem` on macOS 27 already arrives with the system's
+/// material at the system's size, and a second one inside it is the
+/// capsule-inside-a-platter that `INVARIANTS.md` §4 rule 2 forbids.
+///
+/// It is also the only version of the name that can be *pressed* up there.
+/// Measured on a live window, the top 32 points belong to `NSTitlebarView` — a
+/// sibling above the hosting view, which takes the mouse first — so a capsule
+/// drawn level with the toggle would be visible, unclickable, and would drag
+/// the window when pressed. A toolbar item is level with the toggle by
+/// construction and reachable by definition.
+private struct ServerTitleItem: View, Equatable {
+    var name: String
+    /// The widest the label may draw. See `SidebarBannerLayout.toolbarTitleWidth`
+    /// — over the span, the toolbar drops the item rather than truncating it.
+    var maxWidth: CGFloat
+    /// What the chevron opens. **Nil is the direct-message home**, which is a
+    /// destination and not a server: it has no invite, no settings and nothing
+    /// to leave, and a menu offering all three is three commands that cannot
+    /// mean anything. Without it this is a label rather than a control.
+    var openMenu: (() -> Void)?
 
-    func body(content: Content) -> some View {
-        if overMedia {
-            content.interactiveChromeOverMedia()
-        } else {
-            content.interactiveChrome()
+    @Environment(\.motion) private var motion
+
+    /// The sidebar's body runs on **every scroll tick**, so without a place to
+    /// stop, the label below would be re-measured on each one. Name and width
+    /// are the only things that can change what this draws; the closure is
+    /// recreated on every parent evaluation and is deliberately excluded, which
+    /// is the same trade `ChannelSidebar` itself makes.
+    static func == (lhs: ServerTitleItem, rhs: ServerTitleItem) -> Bool {
+        lhs.name == rhs.name
+            && lhs.maxWidth == rhs.maxWidth
+            && (lhs.openMenu == nil) == (rhs.openMenu == nil)
+    }
+
+    var body: some View {
+        Group {
+            if let openMenu {
+                Menu {
+                    ServerMenuContent(action: openMenu)
+                } label: {
+                    title
+                }
+                .accessibilityHint("Server options")
+            } else {
+                title.accessibilityAddTraits(.isHeader)
+            }
         }
+        // Switching servers reflows the label rather than cutting between two
+        // of them, and the system's material morphs along with the width.
+        .animation(motion.glassMorph, value: name)
+        .help(name)
+        .accessibilityLabel(Text(name))
+    }
+
+    private var title: some View {
+        Text(name)
+            .fontWeight(.semibold)
+            .lineLimit(1)
+            .truncationMode(.tail)
+            // **A width, not a maxWidth.** The bar sizes its items against an
+            // unspecified proposal, where a maximum is advisory and the label
+            // still reports its full ideal — measured, `maxWidth` left a
+            // 35-character name being dropped exactly as before, while a width
+            // drew it at 104.5 and put the toggle back at x=324.
+            //
+            // `min` with the label's own width is what keeps the pill hugging
+            // its name: a flat width would give "bitrig" the same slab as
+            // "Counter-Strike Discord | CSGO & CS2".
+            .frame(width: min(naturalWidth, maxWidth), alignment: .leading)
+            .contentTransition(.interpolate)
+    }
+
+    /// What the label would take if nothing stopped it.
+    ///
+    /// Measured through AppKit rather than asked of SwiftUI: a hidden `Text` and
+    /// an `onGeometryChange` would answer the same question a layout pass later
+    /// and write it into state that the next server invalidates. Rounded up, and
+    /// a point of slack, so a name that fits is never truncated by a rounding
+    /// difference between the two text stacks.
+    private var naturalWidth: CGFloat {
+        let font = NSFont.systemFont(ofSize: NSFont.systemFontSize, weight: .semibold)
+        return ceil((name as NSString).size(withAttributes: [.font: font]).width) + 1
     }
 }
 

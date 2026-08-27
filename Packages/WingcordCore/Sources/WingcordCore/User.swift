@@ -97,6 +97,77 @@ public struct User: Hashable, Sendable, Identifiable, Codable {
     }
 }
 
+/// One account badge, as the profile route describes it.
+///
+/// **Named artwork, not a symbol.** The flag bits on a `User` can be turned into
+/// a rough SF Symbol each, but they cover only the handful of badges Discord has
+/// had longest — every Nitro tier, every guild-boost month and every seasonal
+/// mark is invisible to them. The profile route answers with the real list, and
+/// this is what carries it.
+public struct AccountBadge: Hashable, Sendable, Codable {
+    public let id: String
+    /// The CDN hash of the artwork. Nil for a badge the route named without one.
+    public let iconHash: String?
+    /// What the badge means, in Discord's own words. This is the hover text.
+    public let label: String
+
+    public init(id: String, iconHash: String?, label: String) {
+        self.id = id
+        self.iconHash = iconHash
+        self.label = label
+    }
+}
+
+/// An account linked to a Discord profile — Steam, Spotify, GitHub.
+public struct ConnectedAccount: Hashable, Sendable, Codable, Identifiable {
+    public let id: String
+    /// Discord's service key: `steam`, `spotify`, `github`, `youtube`…
+    public let service: String
+    public let name: String
+    public let isVerified: Bool
+
+    public init(id: String, service: String, name: String, isVerified: Bool) {
+        self.id = id
+        self.service = service
+        self.name = name
+        self.isVerified = isVerified
+    }
+}
+
+/// A server the reader shares with someone.
+///
+/// The **list**, not a count, because the count is the only thing that can be
+/// derived from the list and not the other way round — and a "1 Mutual Server"
+/// line that cannot say *which* server is a fact the reader has to go and look
+/// up somewhere else.
+public struct MutualGuild: Hashable, Sendable, Codable, Identifiable {
+    public let id: GuildID
+    /// The nickname they use in that server, when it differs from their name.
+    public let nickname: String?
+
+    public init(id: GuildID, nickname: String? = nil) {
+        self.id = id
+        self.nickname = nickname
+    }
+}
+
+/// Which Nitro an account carries.
+public enum PremiumTier: Int, Hashable, Sendable, Codable {
+    case none = 0
+    case classic = 1
+    case nitro = 2
+    case basic = 3
+
+    public var label: String? {
+        switch self {
+        case .none: nil
+        case .classic: "Nitro Classic"
+        case .nitro: "Nitro"
+        case .basic: "Nitro Basic"
+        }
+    }
+}
+
 /// Cosmetics, profile extras, and everything else a `User` almost never has.
 ///
 /// A class, not a struct: it is optional on `User` and shared by every copy of
@@ -115,6 +186,29 @@ public final class UserDecoration: Hashable, Sendable, Codable {
     /// zero is a deliberate black accent.
     public let accentColor: UInt32?
     public let bio: String?
+    /// The two colours a profile is themed with, primary first.
+    ///
+    /// Separate from `accentColor`, which is a single legacy swatch: a themed
+    /// profile carries a PAIR and reads as a gradient, and collapsing the pair
+    /// to its first colour is why a profile that should be purple-to-blue comes
+    /// out as one flat purple. Empty and nil are both "no theme".
+    public let themeColorValues: [UInt32]?
+    /// The account's badges, as named by the profile route.
+    public let badges: [AccountBadge]
+    /// The SKU of the profile effect, if they own one. Resolved to artwork
+    /// separately — the profile route names the purchase, not the pictures.
+    public let profileEffectSKU: String?
+    /// Free text the account chose. Discord shows it beside the handle.
+    public let pronouns: String?
+    public let connectedAccounts: [ConnectedAccount]
+    public let premiumTier: PremiumTier
+    /// When the Nitro subscription started, for the "since" line.
+    public let premiumSince: Date?
+    /// The pre-2023 `name#1234`, when Discord still knows it.
+    public let legacyUsername: String?
+    /// The servers the reader shares with them, as the profile route listed
+    /// them. Empty until that route has answered.
+    public let mutualGuilds: [MutualGuild]
     /// The clan / guild tag shown beside the name.
     public let primaryGuildTag: String?
     public let primaryGuildBadgeHash: String?
@@ -126,6 +220,15 @@ public final class UserDecoration: Hashable, Sendable, Codable {
         bannerHash: String? = nil,
         accentColor: UInt32? = nil,
         bio: String? = nil,
+        themeColorValues: [UInt32]? = nil,
+        badges: [AccountBadge] = [],
+        profileEffectSKU: String? = nil,
+        pronouns: String? = nil,
+        connectedAccounts: [ConnectedAccount] = [],
+        premiumTier: PremiumTier = .none,
+        premiumSince: Date? = nil,
+        legacyUsername: String? = nil,
+        mutualGuilds: [MutualGuild] = [],
         primaryGuildTag: String? = nil,
         primaryGuildBadgeHash: String? = nil,
         primaryGuildID: GuildID? = nil
@@ -135,6 +238,15 @@ public final class UserDecoration: Hashable, Sendable, Codable {
         self.bannerHash = bannerHash
         self.accentColor = accentColor
         self.bio = bio
+        self.themeColorValues = themeColorValues
+        self.badges = badges
+        self.profileEffectSKU = profileEffectSKU
+        self.pronouns = pronouns
+        self.connectedAccounts = connectedAccounts
+        self.premiumTier = premiumTier
+        self.premiumSince = premiumSince
+        self.legacyUsername = legacyUsername
+        self.mutualGuilds = mutualGuilds
         self.primaryGuildTag = primaryGuildTag
         self.primaryGuildBadgeHash = primaryGuildBadgeHash
         self.primaryGuildID = primaryGuildID
@@ -146,6 +258,10 @@ public final class UserDecoration: Hashable, Sendable, Codable {
     public var isEmpty: Bool {
         avatarDecorationHash == nil && nameplateAsset == nil && bannerHash == nil
             && accentColor == nil && bio == nil && primaryGuildTag == nil
+            && (themeColorValues?.isEmpty ?? true) && badges.isEmpty
+            && profileEffectSKU == nil && pronouns == nil
+            && connectedAccounts.isEmpty && premiumTier == .none
+            && legacyUsername == nil && mutualGuilds.isEmpty
     }
 
     public static func == (lhs: UserDecoration, rhs: UserDecoration) -> Bool {
@@ -155,6 +271,15 @@ public final class UserDecoration: Hashable, Sendable, Codable {
                 && lhs.bannerHash == rhs.bannerHash
                 && lhs.accentColor == rhs.accentColor
                 && lhs.bio == rhs.bio
+                && lhs.themeColorValues == rhs.themeColorValues
+                && lhs.badges == rhs.badges
+                && lhs.profileEffectSKU == rhs.profileEffectSKU
+                && lhs.pronouns == rhs.pronouns
+                && lhs.connectedAccounts == rhs.connectedAccounts
+                && lhs.premiumTier == rhs.premiumTier
+                && lhs.premiumSince == rhs.premiumSince
+                && lhs.legacyUsername == rhs.legacyUsername
+                && lhs.mutualGuilds == rhs.mutualGuilds
                 && lhs.primaryGuildTag == rhs.primaryGuildTag
                 && lhs.primaryGuildBadgeHash == rhs.primaryGuildBadgeHash
                 && lhs.primaryGuildID == rhs.primaryGuildID)
@@ -165,6 +290,9 @@ public final class UserDecoration: Hashable, Sendable, Codable {
         hasher.combine(nameplateAsset)
         hasher.combine(bannerHash)
         hasher.combine(accentColor)
+        hasher.combine(themeColorValues)
+        hasher.combine(badges)
+        hasher.combine(profileEffectSKU)
         hasher.combine(primaryGuildTag)
     }
 }

@@ -15,6 +15,9 @@ struct WingcordApp: App {
             GatewaySocket.traceSink = { message in
                 DiagnosticLog.trace("gateway", message)
             }
+            DiscordREST.traceSink = { message in
+                DiagnosticLog.trace("rest", message)
+            }
         }
         DiagnosticLog.trace("app", "launched")
         let model = AppModel()

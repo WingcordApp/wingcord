@@ -167,17 +167,40 @@ final class TimelineCanvasView: NSView {
     /// synchronously and that callback can relayout and install newer geometry;
     /// installing this pass's bounds first means it cannot overwrite the
     /// corrected bounds after the callback returns.
+    /// Moves the canvas, keeping its coordinate system at 1:1.
+    ///
+    /// **The frame goes first, and the bounds follows as SIZE and ORIGIN
+    /// separately.** `bounds` is not a passive mirror of `frame`: assigning a
+    /// bounds whose size differs from the frame's *defines a scale* between the
+    /// two, and AppKit remembers it. Assigning the bounds first — while the
+    /// frame is still the previous size, or still zero at bootstrap — therefore
+    /// installs a scale factor, and every row is drawn stretched or microscopic
+    /// until some later pass happens to make the two sizes agree again. That
+    /// "until later" is why this looked like it corrected itself: the next
+    /// scroll re-entered here with the sizes already matching.
+    ///
+    /// Measured in the old order from a zero-sized bootstrap, a frame of
+    /// 300x800 yields a bounds of **90000x640000** and a scale of 0.003; a
+    /// column resize from 300 to 240 yields a 1.25x horizontal stretch. Frame
+    /// first, then bounds size, holds both axes at 1.0 through every step.
     func installViewport(frame newFrame: CGRect, bounds newBounds: CGRect) {
-        if bounds != newBounds {
-            bounds = newBounds
+        if frame != newFrame {
+            frame = newFrame
+            needsDisplay = true
+        }
+        // The size is the half that can introduce a scale; `setBoundsOrigin`
+        // provably cannot, which is why the two are never assigned together.
+        if bounds.size != newFrame.size {
+            setBoundsSize(newFrame.size)
+            needsDisplay = true
+        }
+        if bounds.origin != newBounds.origin {
+            setBoundsOrigin(newBounds.origin)
             // A fast gesture can replace the whole overscanned window in one
             // event. Ask for the new contents explicitly so Core Animation never
             // presents an empty slice while waiting for an unrelated
             // invalidation.
             needsDisplay = true
-        }
-        if frame != newFrame {
-            frame = newFrame
         }
     }
 

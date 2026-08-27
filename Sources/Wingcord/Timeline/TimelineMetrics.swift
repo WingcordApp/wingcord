@@ -1,3 +1,4 @@
+import AppKit
 import CoreGraphics
 import Foundation
 
@@ -30,17 +31,60 @@ nonisolated enum TimelineMetrics {
 
     static let daySeparatorHeight: CGFloat = 34
     static let unreadDividerHeight: CGFloat = 26
+
+    // The unread band's label. Layout does not need these — the row is a fixed
+    // height — but the painter draws three things that have to agree with each
+    // other, and a chip whose padding lives at one call site and whose width
+    // lives at another is the geometry that drifts first.
+    static let unreadLabelHeight: CGFloat = 16
+    /// Each side, inside the capsule.
+    static let unreadLabelPadding: CGFloat = 8
+    /// Between the rule and the capsule.
+    static let unreadLabelGap: CGFloat = 8
+    /// Built once. `NSFont.systemFont` goes through the font manager, and this
+    /// is drawn per repaint of a row that stays on screen for as long as the
+    /// reader is catching up.
+    ///
+    /// `nonisolated(unsafe)` for the same reason `MessageTextStyle` is
+    /// `@unchecked Sendable`: an `NSFont` is immutable once created and safe to
+    /// read from any thread, and this one is never written after launch.
+    nonisolated(unsafe) static let unreadLabelFont = NSFont.systemFont(
+        ofSize: 9, weight: .heavy
+    )
     static let conversationStartHeight: CGFloat = 120
     /// One placeholder group in the history runway.
     static let skeletonHeight: CGFloat = 56
     /// The quiet "still loading" line shown before the first page lands.
     static let loadingRowHeight: CGFloat = 36
+    /// The "this did not load" block: a symbol, a headline and the reason.
+    static let historyUnavailableHeight: CGFloat = 108
 
     /// Between the message text and an attachment under it.
     static let attachmentGap: CGFloat = 6
     /// Between reaction chips and the content above them.
     static let reactionGap: CGFloat = 6
     static let reactionChipHeight: CGFloat = 22
+
+    // The reaction chip's parts. Layout and painter read the SAME constants,
+    // because they are two halves of one geometry and drifting them is
+    // invisible until it isn't.
+    //
+    // `reactionGlyphSide` is MEASURED, not chosen. Apple Color Emoji advances
+    // about 1.46x its point size — 19.0pt at size 13 — so the 16pt box this
+    // replaced was narrower than every single emoji it was asked to hold, and
+    // `drawText`'s tail truncation duly replaced each one with an ellipsis.
+    // That is the whole of "reactions render as ...".
+    static let reactionEmojiFontSize: CGFloat = 13
+    static let reactionGlyphSide: CGFloat = 19
+    static let reactionLeadingInset: CGFloat = 6
+    static let reactionGlyphGap: CGFloat = 4
+    static let reactionTrailingInset: CGFloat = 7
+
+    /// A chip's width, given the width its count label measured to.
+    static func reactionChipWidth(countWidth: CGFloat) -> CGFloat {
+        reactionLeadingInset + reactionGlyphSide + reactionGlyphGap
+            + countWidth + reactionTrailingInset
+    }
 
     /// The quote rule's width and its distance from the text it marks.
     static let quoteRuleWidth: CGFloat = 3

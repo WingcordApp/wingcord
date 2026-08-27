@@ -34,6 +34,17 @@ final class AppModel {
     var users: [UserID: User] = [:]
     var members: [GuildID: [UserID: Member]] = [:]
     var roles: [GuildID: [RoleID: Role]] = [:]
+    /// A server's own emoji and stickers, for the expression picker.
+    ///
+    /// Beside the guilds rather than on them, exactly as `roles` and `members`
+    /// are: these are per-guild collections most of the app never reads, and a
+    /// `Guild` is a value copied on every scalar change.
+    ///
+    /// Servers with none are **absent rather than empty** — the picker's rail
+    /// shows one icon per server that has something, and a stored empty array
+    /// would put an icon there that opens onto nothing.
+    var guildEmojis: [GuildID: [EmojiRef]] = [:]
+    var guildStickers: [GuildID: [StickerRef]] = [:]
     var presences: [UserID: Presence] = [:]
     var readStates: [ChannelID: ReadState] = [:]
     /// The rail's arrangement, from the account's own client settings.
@@ -90,6 +101,13 @@ final class AppModel {
     // every row on every evaluation.
 
     var profileRequest: ProfileRequest?
+    /// Whose detail fetch is still in flight. Observed, so a card can show a
+    /// skeleton while it waits and swap to the real thing when it lands.
+    var profilesLoading: Set<UserID> = []
+    /// Profile effects, by SKU rather than by person: an effect is a purchase
+    /// twenty people in one server may share, and fetching it per wearer would
+    /// ask for the same composition twenty times.
+    var profileEffects: [String: ProfileEffect] = [:]
 
     // MARK: Revisions
     //
@@ -109,6 +127,14 @@ final class AppModel {
     var sidebarRevision: UInt64 = 0
     /// Moves when the roster of the selected channel changes.
     var rosterRevision: UInt64 = 0
+    /// Moves when any server's emoji or sticker set changes — a server becoming
+    /// available, or one of the two catalog events.
+    ///
+    /// **Deliberately its own counter.** The picker's sections are built from
+    /// every guild in the account, which is the most expensive snapshot in the
+    /// app to rebuild; keyed on `railRevision` it would rebuild on every unread
+    /// badge, and keyed on nothing it would rebuild per frame.
+    var expressionRevision: UInt64 = 0
     /// Moves when a guild's member records change — someone joined, left, was
     /// renamed, or had roles changed.
     var memberRevision: UInt64 = 0
@@ -142,6 +168,16 @@ final class AppModel {
     @ObservationIgnored var sidebarCache: (key: SidebarMemoKey, value: SidebarPresentation)?
     @ObservationIgnored var timelineCache: (key: TimelineMemoKey, value: [TimelineItem])?
     @ObservationIgnored var rosterCache: (key: RosterMemoKey, value: [MemberSection])?
+    @ObservationIgnored var emojiCatalogCache: (key: ExpressionMemoKey, value: ExpressionCatalog)?
+    @ObservationIgnored var stickerCatalogCache: (key: ExpressionMemoKey, value: ExpressionCatalog)?
+    /// Discord's own sticker packs, fetched once per launch. Not per guild and
+    /// not per channel: the set is the same for every account.
+    @ObservationIgnored var defaultStickerPacks: [ExpressionSection] = []
+    /// The mention table. The most expensive memo in the app to miss — it is
+    /// proportional to the whole account rather than to a page — and the one
+    /// most often asked for, because the timeline rebuilds its layout input on
+    /// every inbound message.
+    @ObservationIgnored var mentionCache: (key: MentionMemoKey, value: MentionContext)?
 
     /// Asks the session for a page of history above what is loaded.
     ///
@@ -163,6 +199,10 @@ final class AppModel {
     /// machinery rather than state — nothing observes it, and everything it
     /// changes it changes through the properties above.
     @ObservationIgnored lazy var sessionController = SessionController(model: self)
+
+    /// The account's favourite GIFs, from its settings blob. Read-only here —
+    /// this client has no route that writes one back.
+    var favoriteGIFs: [GIF] = []
 
     /// Guilds the account has muted. Their unread never reaches the rail.
     var mutedGuildIDs: Set<GuildID> = []
@@ -196,25 +236,114 @@ final class AppModel {
         boxRecency.removeAll(keepingCapacity: false)
     }
 
+    /// Records that a channel's box was used, and evicts past the limit.
+    ///
+    /// **Two rules, and both exist because breaking either threw away the
+    /// transcript the reader was looking at.**
+    ///
+    /// 1. *Only a box that HOLDS a transcript occupies a resident slot.* A box
+    ///    is created by anything that writes to one — a typing indicator, a
+    ///    draft keystroke, a delete for a message that was never loaded — and
+    ///    those arrive for **every channel in the account**, not for the three
+    ///    being read. Letting a channel with no messages claim a slot means
+    ///    three strangers typing anywhere evicts the open channel.
+    /// 2. *The channel on screen is never a candidate.* It is the one box whose
+    ///    eviction is guaranteed to be visible, and nothing re-requests it:
+    ///    `openChannel` runs on a selection change, and the selection did not
+    ///    change. The transcript simply emptied, `hasMoreHistory` reset to true,
+    ///    and the reducer answered `.loadingFirstPage` — which is the
+    ///    "Loading messages..." that came back seconds after the messages did,
+    ///    and why scrolling appeared to fix it: a scroll asks for history.
     private func touchBox(_ channelID: ChannelID) {
+        guard messageBoxes[channelID]?.messages.isEmpty == false else {
+            // Nothing to evict later, so nothing to hold a slot with.
+            boxRecency.removeAll { $0 == channelID }
+            return
+        }
         boxRecency.removeAll { $0 == channelID }
         boxRecency.append(channelID)
-        while boxRecency.count > Self.residentChannelLimit {
-            let evicted = boxRecency.removeFirst()
+
+        var index = 0
+        while boxRecency.count > Self.residentChannelLimit, index < boxRecency.count {
+            let candidate = boxRecency[index]
+            guard candidate != selectedChannelID else {
+                index += 1
+                continue
+            }
+            boxRecency.remove(at: index)
             // The transcript goes; unsent user input never does. A draft the
             // reader typed and a reply they were composing are not cache.
-            messageBoxes[evicted]?.evictTranscript()
+            messageBoxes[candidate]?.evictTranscript()
         }
     }
 
     /// Responds to real memory pressure by dropping everything not on screen.
+    ///
+    /// **The roster tables are the ones that actually grow without bound.** A
+    /// transcript is already capped at three channels and the image caches have
+    /// byte budgets, but `members` gains a whole guild's roster every time a
+    /// channel is opened in it, and `presences` gains an entry per person seen
+    /// anywhere. Over a long session on an account this size — 97 guilds — those
+    /// two are the tables with no ceiling at all.
+    ///
+    /// Both are **re-requested on demand**: opening a channel subscribes to its
+    /// guild's member list through the op-14 lazy subscription, which answers
+    /// with members and their presences together. So dropping them costs a
+    /// round trip on the next visit and nothing else, which is exactly the
+    /// trade a pressure signal is asking for.
+    ///
+    /// `users` is deliberately NOT pruned. It is what turns an author id into a
+    /// name, a message that outlives its author's roster entry still has to
+    /// render, and the failure mode — a transcript of people called "Unknown" —
+    /// is worse than the memory it would return.
     func relieveMemoryPressure() {
         let keep = selectedChannelID
         for channelID in messageBoxes.keys where channelID != keep {
             messageBoxes[channelID]?.evictTranscript()
         }
         boxRecency = keep.map { [$0] } ?? []
+
+        let keptGuild = selectedGuildID
+        if members.count > 1 {
+            members = keptGuild.flatMap { id in members[id].map { [id: $0] } } ?? [:]
+        }
+        presences = survivingPresences(inGuild: keptGuild)
+
         ImageStore.shared.purge()
+        // Filmstrips are the most expensive and least essential pixels the app
+        // holds — up to forty-eight bitmaps for one ring around one avatar.
+        AnimatedImageStore.shared.purge()
+        // Every memo now describes tables that no longer exist.
+        railCache = nil
+        sidebarCache = nil
+        rosterCache = nil
+        emojiCatalogCache = nil
+        stickerCatalogCache = nil
+        mentionCache = nil
+        memberRevision &+= 1
+        presenceRevision &+= 1
+    }
+
+    /// The presences still worth holding: the people on screen or one click from
+    /// it — the selected guild's roster, whoever is in a DM, and the reader.
+    private func survivingPresences(inGuild guildID: GuildID?) -> [UserID: Presence] {
+        var keep: Set<UserID> = []
+        if let currentUserID { keep.insert(currentUserID) }
+        if let guildID, let table = members[guildID] {
+            keep.formUnion(table.keys)
+        }
+        for channelID in channelIndex.privateChannelIDs() {
+            guard let channel = channelIndex[channelID] else { continue }
+            keep.formUnion(channel.recipientIDs)
+        }
+        guard keep.count < presences.count else { return presences }
+
+        var result: [UserID: Presence] = [:]
+        result.reserveCapacity(keep.count)
+        for userID in keep {
+            if let presence = presences[userID] { result[userID] = presence }
+        }
+        return result
     }
 }
 
@@ -225,7 +354,11 @@ struct MessageBox: Sendable {
     var messages: [Message] = []
     var hasMoreHistory = true
     var isLoadingHistory = false
-    var historyFailed = false
+    /// Why the last history request failed, in the reader's words. Nil when the
+    /// last request succeeded or none has been made. A reason rather than a
+    /// flag, because "you cannot read this channel" and "the network dropped"
+    /// need different words and only one of them is worth retrying.
+    var historyFailure: String?
     /// The reader's own unsent text. Survives eviction.
     var draft: String = ""
     /// A message being replied to. Survives eviction.
@@ -239,6 +372,7 @@ struct MessageBox: Sendable {
         typing.removeAll(keepingCapacity: false)
         hasMoreHistory = true
         isLoadingHistory = false
+        historyFailure = nil
     }
 
     /// Inserts or replaces one message, keeping the array sorted.

@@ -36,18 +36,63 @@ struct TimelineReducerTests {
         #expect(rows == [.conversationStart])
     }
 
-    @Test("An empty page with more history lays a runway, not a spinner")
+    @Test("An empty page still loading is one quiet line, not a wall of bars")
     func emptyWithHistory() {
         let rows = TimelineReducer.rows(messages: [], hasMoreHistory: true, skeletonDepth: 20)
-        #expect(rows.count == 20)
-        #expect(rows.allSatisfy { if case .historySkeleton = $0 { true } else { false } })
+        #expect(rows == [.loadingFirstPage])
     }
 
-    @Test("The runway is deeper than one flick can travel")
+    @Test("The runway is deeper than one flick can travel — above real messages")
     func runwayDepth() {
-        // Four groups is crossed in a few hundred milliseconds, which is less
-        // than a round trip; twenty is past what one throw covers.
-        #expect(TimelineReducer.rows(messages: [], hasMoreHistory: true).count == 20)
+        // A runway is a gesture affordance: somewhere for a flick that is
+        // already travelling to go. That only exists where there is already
+        // content to flick, which is why the depth is asserted over a loaded
+        // page and the empty case above gets a single line instead.
+        //
+        // Four groups is crossed in a few hundred milliseconds, less than a
+        // round trip; twenty is past what one throw covers.
+        let rows = TimelineReducer.rows(
+            messages: [message(1, author: 10, at: 0)],
+            hasMoreHistory: true
+        )
+        let skeletons = rows.filter { if case .historySkeleton = $0 { true } else { false } }
+        let count = skeletons.count
+        #expect(count == 20)
+        // And the runway is ABOVE the content, not interleaved with it.
+        let firstMessageIndex = rows.firstIndex { $0.messageID != nil }
+        #expect(firstMessageIndex != nil)
+        let lastSkeletonIndex = rows.lastIndex {
+            if case .historySkeleton = $0 { true } else { false }
+        }
+        #expect(lastSkeletonIndex != nil)
+        if let firstMessageIndex, let lastSkeletonIndex {
+            #expect(lastSkeletonIndex < firstMessageIndex)
+        }
+    }
+
+    @Test("A page that failed says so, rather than loading forever")
+    func failedFirstPage() {
+        // "Loading" and "failed" are the same picture from the reader's side,
+        // and only one of them is going to change on its own.
+        let rows = TimelineReducer.rows(
+            messages: [],
+            hasMoreHistory: true,
+            failure: "Discord returned 500."
+        )
+        #expect(rows == [.historyUnavailable(reason: "Discord returned 500.")])
+    }
+
+    @Test("A failure outranks an empty beginning")
+    func failureOutranksBeginning() {
+        let rows = TimelineReducer.rows(
+            messages: [],
+            hasMoreHistory: false,
+            failure: "You do not have access to this channel."
+        )
+        #expect(rows.count == 1)
+        if case .historyUnavailable = rows[0] {} else {
+            Issue.record("expected a failure row, got \(rows)")
+        }
     }
 
     @Test("Consecutive messages from one author form a run")

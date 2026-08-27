@@ -1,3 +1,4 @@
+import AppKit
 import CoreGraphics
 import Foundation
 import WingcordCore
@@ -90,6 +91,37 @@ nonisolated enum MemberRowGeometry {
 
     static func textOriginX(in rowFrame: CGRect) -> CGFloat {
         avatarRect(in: rowFrame).maxX + avatarGap
+    }
+
+    // The tag chip beside a name — a clan tag, or the APP mark. Its width is
+    // reserved before the name is drawn and its parts are drawn afterwards, so
+    // every number below is read twice and must be read from one place.
+
+    static let tagChipHeight: CGFloat = 15
+    /// Each side, inside the chip.
+    static let tagChipPadding: CGFloat = 5
+    /// Between the name and the chip.
+    static let tagChipGap: CGFloat = 5
+    /// The guild badge drawn inside a clan tag.
+    static let tagBadgeSide: CGFloat = 11
+    /// Between that badge and the letters.
+    static let tagBadgeGap: CGFloat = 3
+    /// Built once. `NSFont.systemFont` goes through the font manager, and this
+    /// is asked for twice per tagged row per repaint.
+    ///
+    /// `nonisolated(unsafe)` for the same reason `MessageTextStyle` is
+    /// `@unchecked Sendable`: an `NSFont` is immutable once created and
+    /// documented as safe to read from any thread, and this one is never
+    /// written after launch.
+    nonisolated(unsafe) static let tagChipFont = NSFont.systemFont(ofSize: 9, weight: .bold)
+
+    /// How wide a chip holding `textWidth` of letters comes out.
+    ///
+    /// The reservation and the draw both call this. Two hand-written sums that
+    /// have to agree is how a chip ends up with its padding pooled on one side.
+    static func tagChipWidth(textWidth: CGFloat, hasBadge: Bool) -> CGFloat {
+        tagChipPadding * 2 + textWidth
+            + (hasBadge ? tagBadgeSide + tagBadgeGap : 0)
     }
 
     /// The width nameplate art is fetched at.

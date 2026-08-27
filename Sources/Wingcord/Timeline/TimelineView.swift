@@ -16,6 +16,13 @@ struct TimelineView: NSViewRepresentable {
     /// so a change re-runs `updateNSView`, which is the only place the
     /// coordinator can be told about it.
     var presentationRevision: UInt64
+    /// How much of the scroll view's foot the composer covers.
+    ///
+    /// The transcript deliberately extends UNDERNEATH the composer so messages
+    /// pass beneath its glass and it has something to refract — a floating bar
+    /// over an opaque surface is just a panel. The inset is what keeps the
+    /// newest message reachable rather than parked behind the bar.
+    var bottomInset: CGFloat
     var model: AppModel
 
     func makeCoordinator() -> TimelineCoordinator {
@@ -30,7 +37,8 @@ struct TimelineView: NSViewRepresentable {
         context.coordinator.update(
             channelID: channelID,
             items: rows,
-            presentationRevision: presentationRevision
+            presentationRevision: presentationRevision,
+            bottomInset: bottomInset
         )
     }
 
@@ -213,7 +221,19 @@ final class TimelineCoordinator: NSObject {
 
     // MARK: Updating
 
-    func update(channelID: ChannelID, items: [TimelineItem], presentationRevision: UInt64) {
+    func update(channelID: ChannelID, items: [TimelineItem], presentationRevision: UInt64,
+        bottomInset: CGFloat) {
+        if let scrollView, abs(scrollView.contentInsets.bottom - bottomInset) > 0.5 {
+            // Set on the SCROLL VIEW, not reserved in the canvas: an inset keeps
+            // the content scrollable under the bar, where extra canvas padding
+            // would leave dead space that can never hold a message.
+            scrollView.contentInsets = NSEdgeInsets(
+                top: 0, left: 0, bottom: max(0, bottomInset), right: 0
+            )
+            scrollView.scrollerInsets = NSEdgeInsets(
+                top: 0, left: 0, bottom: max(0, bottomInset), right: 0
+            )
+        }
         guard !isTornDown else { return }
 
         // An appearance or text-size change invalidates every laid-out row: the

@@ -30,6 +30,11 @@ struct ChannelToolbar: ToolbarContent {
             }
         }
 
+        // Without a spacer the trailing item packs against the navigation
+        // items, so the member toggle sat beside the channel pill at the
+        // leading edge instead of at the far end of the bar.
+        ToolbarSpacer(.flexible)
+
         ToolbarItem(placement: .primaryAction) {
             if chrome.canShowMemberList {
                 Button(action: toggleMemberList) {

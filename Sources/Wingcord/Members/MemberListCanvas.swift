@@ -96,12 +96,25 @@ final class MemberListCanvas: NSView {
         return first..<max(first, last)
     }
 
+    /// Moves the canvas, keeping its coordinate system at 1:1.
+    ///
+    /// See `TimelineCanvasView.installViewport` for why the order is what it is:
+    /// assigning `bounds` while the frame is still a different size defines a
+    /// SCALE between the two, and every row then draws stretched or microscopic
+    /// until a later pass happens to make the sizes agree.
     func installViewport(frame newFrame: CGRect, bounds newBounds: CGRect) {
-        if bounds != newBounds {
-            bounds = newBounds
+        if frame != newFrame {
+            frame = newFrame
             needsDisplay = true
         }
-        if frame != newFrame { frame = newFrame }
+        if bounds.size != newFrame.size {
+            setBoundsSize(newFrame.size)
+            needsDisplay = true
+        }
+        if bounds.origin != newBounds.origin {
+            setBoundsOrigin(newBounds.origin)
+            needsDisplay = true
+        }
     }
 
     override func setFrameSize(_ newSize: NSSize) {
@@ -192,11 +205,59 @@ final class MemberListCanvas: NSView {
               rows.indices.contains(index),
               let userID = rows[index].userID
         else { return }
-        // The profile card is anchored to the ROW that opened it, in window
-        // coordinates, so it can appear beside the row rather than at the
-        // pointer — a card that follows the click reads as a menu.
-        let frame = convert(rowFrame(at: index), to: nil)
-        onOpenProfile?(userID, frame)
+        // The profile card is anchored to the ROW that opened it, so it appears
+        // beside that person rather than at the pointer — a card that follows
+        // the click reads as a menu.
+        //
+        // **The anchor must be expressed in the SwiftUI ROOT's coordinate
+        // space, which is the hosting view's — not the window's.**
+        //
+        // Three things were wrong here in turn, and each looked plausible:
+        // window coordinates are bottom-left, so the first version handed
+        // SwiftUI a vertically mirrored rect; the correction to subtract from
+        // the content view's height double-flipped it, because a SwiftUI
+        // window's content view IS an `NSHostingView` and therefore already
+        // flipped; and converting into the content view still answers in the
+        // wrong space when the hosting view does not start at the content
+        // view's origin, which is what left the card opening a row or two below
+        // the person clicked.
+        //
+        // Converting into the hosting view itself removes the whole class of
+        // error: it is the exact view the `.popover` modifier is attached
+        // within, so its coordinates are the ones the attachment anchor is
+        // interpreted in, whatever AppKit has done with the window around it.
+        let rowRect = rowFrame(at: index)
+        let host = Self.hostingAncestor(of: self) ?? window?.contentView
+        guard let host else {
+            onOpenProfile?(userID, convert(rowRect, to: nil))
+            return
+        }
+        let inHost = convert(rowRect, to: host)
+        let anchor = host.isFlipped
+            ? inHost
+            : CGRect(
+                x: inHost.minX,
+                y: host.bounds.height - inHost.maxY,
+                width: inHost.width,
+                height: inHost.height
+            )
+        onOpenProfile?(userID, anchor)
+    }
+
+    /// The outermost SwiftUI hosting view above this canvas.
+    ///
+    /// Walked to the TOP of the chain rather than stopping at the first match:
+    /// SwiftUI nests hosting views for representables, and the innermost one is
+    /// this canvas's own container, whose origin is the scroll view's — not the
+    /// window root's.
+    private static func hostingAncestor(of view: NSView) -> NSView? {
+        var found: NSView?
+        var candidate: NSView? = view.superview
+        while let current = candidate {
+            if String(describing: type(of: current)).contains("Hosting") { found = current }
+            candidate = current.superview
+        }
+        return found
     }
 
     override func accessibilityChildren() -> [Any]? {

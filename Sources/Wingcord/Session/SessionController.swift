@@ -48,6 +48,10 @@ final class SessionController {
     /// twice, and nothing about it looks like a bug from the outside.
     private var startingAccountID: String?
 
+    /// Profile fetches in flight, so opening the same card twice — or a hover
+    /// and a click on the same row — asks once.
+    private var profileFetches: Set<UserID> = []
+    private var effectFetches: Set<String> = []
     private var pendingPresences: [UserID: Presence] = [:]
     private var presenceFlushTask: Task<Void, Never>?
     private static let presenceFlushInterval = Duration.milliseconds(200)
@@ -291,13 +295,17 @@ final class SessionController {
         model.guilds = guilds
         model.channelIndex = index
         model.roles = snapshot.rolesByGuild
+        model.guildEmojis = snapshot.emojisByGuild
+        model.guildStickers = snapshot.stickersByGuild
         model.members = snapshot.membersByGuild
         model.presences = snapshot.presences
         model.readStates = readStates
         model.folders = Self.railOrder(
             settingsFolders: snapshot.settings.folders,
+            guildPositions: snapshot.settings.guildPositions,
             guilds: snapshot.guilds
         )
+        model.favoriteGIFs = snapshot.settings.favoriteGIFs
         model.selfStatus = snapshot.settings.status
         model.selfCustomStatus = snapshot.settings.customStatus
         model.mutedGuildIDs = snapshot.mutedGuildIDs
@@ -330,18 +338,39 @@ final class SessionController {
 
     /// The rail's order.
     ///
-    /// Discord's settings only list guilds the account has *arranged*. Anything
-    /// joined since — and on a fresh account, everything — is absent, so a rail
-    /// built from the settings alone silently hides servers. The missing ones go
-    /// on the end, which is where Discord puts them.
+    /// Three sources, and each covers a case the others cannot:
+    ///
+    ///   1. **The folder list** gives both the grouping and the position of
+    ///      everything the account has arranged. A single-guild entry here is
+    ///      not a folder — it is a guild sitting loose at that position — and
+    ///      `GuildFolder.isRealFolder` is what tells them apart downstream.
+    ///   2. **`guild_positions`** orders what the folder list does not mention.
+    ///      Discord keeps the two separate, so a client reading only folders has
+    ///      no order at all for the rest, which on a 97-guild account is most of
+    ///      the rail. Its absence is why the rack looked arbitrary.
+    ///   3. **READY's own guild order**, last, for anything in neither — a guild
+    ///      joined since the account last rearranged. Discord puts new servers at
+    ///      the end, and so does this.
+    ///
+    /// Guilds named in the settings but no longer joined are dropped rather than
+    /// carried as holes: `guild_positions` outlives leaving a server.
     private static func railOrder(
         settingsFolders: [GuildFolder],
+        guildPositions: [GuildID],
         guilds: [Guild]
     ) -> [GuildFolder] {
+        // One lookup rather than a linear scan per id. At 97 guilds against a
+        // 97-entry position list the scan is ~9,000 comparisons on the launch
+        // path, for an answer a set gives in one.
+        var known = Set<GuildID>()
+        known.reserveCapacity(guilds.count)
+        for guild in guilds { known.insert(guild.id) }
+
         var placed = Set<GuildID>()
         var result: [GuildFolder] = []
+
         for folder in settingsFolders {
-            let present = folder.guildIDs.filter { id in guilds.contains { $0.id == id } }
+            let present = folder.guildIDs.filter { known.contains($0) && !placed.contains($0) }
             guard !present.isEmpty else { continue }
             placed.formUnion(present)
             result.append(GuildFolder(
@@ -351,6 +380,12 @@ final class SessionController {
                 guildIDs: present
             ))
         }
+
+        for guildID in guildPositions where known.contains(guildID) && !placed.contains(guildID) {
+            placed.insert(guildID)
+            result.append(GuildFolder(guildIDs: [guildID]))
+        }
+
         for guild in guilds where !placed.contains(guild.id) {
             result.append(GuildFolder(guildIDs: [guild.id]))
         }
@@ -427,11 +462,16 @@ final class SessionController {
                 isMine: userID == model.currentUserID
             )
 
-        case .guildAvailable(let guild, let channels, let roles, let members, let users, let presences):
+        case .guildAvailable(
+            let guild, let channels, let roles, let members, let users, let presences,
+            let emojis, let stickers
+        ):
             model.guilds[guild.id] = guild
             model.channelIndex.replaceChannels(channels, inGuild: guild.id)
             model.roles[guild.id] = roles
             if !members.isEmpty { model.members[guild.id] = members }
+            model.guildEmojis[guild.id] = emojis.isEmpty ? nil : emojis
+            model.guildStickers[guild.id] = stickers.isEmpty ? nil : stickers
             model.users.merge(users) { _, new in new }
             model.presences.merge(presences) { _, new in new }
             model.permissionGate.invalidate()
@@ -439,14 +479,29 @@ final class SessionController {
             model.sidebarRevision &+= 1
             model.roleRevision &+= 1
             model.memberRevision &+= 1
+            model.expressionRevision &+= 1
+
+        case .guildExpressionsUpdated(let guildID, let emojis, let stickers):
+            // Each event replaces one half. A nil side did not change, and
+            // writing it as empty would clear a catalog the server still has.
+            if let emojis { model.guildEmojis[guildID] = emojis.isEmpty ? nil : emojis }
+            if let stickers { model.guildStickers[guildID] = stickers.isEmpty ? nil : stickers }
+            model.expressionRevision &+= 1
 
         case .guildUpdated(let guild):
             model.guilds[guild.id] = guild
             model.railRevision &+= 1
             model.sidebarRevision &+= 1
+            // The picker labels its sections with the server's name and draws
+            // its icon on the rail, and this is the only event that changes
+            // either.
+            model.expressionRevision &+= 1
 
         case .guildRemoved(let guildID, let wasLeft):
             guard wasLeft else { return }
+            model.guildEmojis[guildID] = nil
+            model.guildStickers[guildID] = nil
+            model.expressionRevision &+= 1
             model.guilds[guildID] = nil
             model.roles[guildID] = nil
             model.members[guildID] = nil
@@ -552,7 +607,7 @@ final class SessionController {
 
     // MARK: Requests
 
-    func loadHistory(in channelID: ChannelID, before: MessageID?) {
+    func loadHistory(in channelID: ChannelID, before: MessageID?, attempt: Int = 1) {
         Task { [weak self] in
             guard let self else { return }
             do {
@@ -563,12 +618,22 @@ final class SessionController {
                 )
                 // Authors first: a row laid out before its author is known draws
                 // "Unknown" and would need a second relayout to correct itself.
-                model.users.merge(page.authors) { _, new in new }
-                model.identityRevision &+= 1
+                //
+                // The revision moves only if a name actually changed. It is the
+                // mention table's memo key, and that table is proportional to
+                // the whole account — so bumping it for a page whose authors
+                // were all already known rebuilds every name in the session to
+                // discover that none of them moved.
+                var namesChanged = false
+                for (userID, author) in page.authors where model.users[userID] != author {
+                    model.users[userID] = author
+                    namesChanged = true
+                }
+                if namesChanged { model.identityRevision &+= 1 }
                 model.mutateBox(channelID) { box in
                     for message in page.messages { box.upsert(message) }
                     box.isLoadingHistory = false
-                    box.historyFailed = false
+                    box.historyFailure = nil
                     // A short page is the only signal history has run out. The
                     // limit and this test read the SAME constant: drifting them
                     // either stops paging early or offers a load that can never
@@ -577,13 +642,49 @@ final class SessionController {
                 }
                 model.messageContentRevision &+= 1
             } catch {
+                Self.trace(
+                    "history \(channelID) FAILED (attempt \(attempt)): \(Self.describe(error))"
+                )
+                Self.log.error("history load failed: \(Self.describe(error), privacy: .public)")
+
+                // Retrying a refusal is pointless — the answer will not change,
+                // and the log for this account shows the same 403 asked for
+                // three times in a row on launch. A dropped connection is the
+                // opposite: it is worth exactly one more try, and that one try
+                // is what turns "messages fail to load sometimes" into a blip.
+                if Self.isWorthRetrying(error), attempt < 2 {
+                    try? await Task.sleep(for: .milliseconds(1200))
+                    guard !Task.isCancelled else { return }
+                    // Still wanted? The reader may have moved on.
+                    guard model.messages(in: channelID)?.isLoadingHistory == true else { return }
+                    loadHistory(in: channelID, before: before, attempt: attempt + 1)
+                    return
+                }
+
                 model.mutateBox(channelID) { box in
                     box.isLoadingHistory = false
-                    box.historyFailed = true
+                    box.historyFailure = Self.describe(error)
+                    // A refusal is not a gap in the history; there is nothing
+                    // above to page to. Leaving `hasMoreHistory` true keeps the
+                    // viewport asking for a page that can never land.
+                    if !Self.isWorthRetrying(error) { box.hasMoreHistory = false }
                 }
-                Self.trace("history \(channelID) FAILED: \(Self.describe(error))")
-                Self.log.error("history load failed: \(Self.describe(error), privacy: .public)")
+                model.messageContentRevision &+= 1
             }
+        }
+    }
+
+    /// Whether asking again could plausibly answer differently.
+    private static func isWorthRetrying(_ error: any Error) -> Bool {
+        switch error {
+        case DiscordREST.Failure.forbidden,
+             DiscordREST.Failure.unauthorized,
+             DiscordREST.Failure.notFound:
+            false
+        case DiscordREST.Failure.api(let status, _, _):
+            status >= 500 || status == 429
+        default:
+            true
         }
     }
 
@@ -601,6 +702,9 @@ final class SessionController {
             model.mutateBox(channelID) { box in
                 box.hasMoreHistory = false
                 box.isLoadingHistory = false
+                box.historyFailure = permissions.contains(.viewChannel)
+                    ? "You do not have permission to read this channel's history."
+                    : "You do not have access to this channel."
             }
             model.messageContentRevision &+= 1
             subscribeToMemberList(for: channelID)
@@ -612,7 +716,10 @@ final class SessionController {
             return
         }
         Self.trace("open \(channelID), fetching newest page")
-        model.mutateBox(channelID) { $0.isLoadingHistory = true }
+        model.mutateBox(channelID) { box in
+            box.isLoadingHistory = true
+            box.historyFailure = nil
+        }
         loadHistory(in: channelID, before: nil)
         subscribeToMemberList(for: channelID)
     }
@@ -630,6 +737,57 @@ final class SessionController {
         Task { await socket.subscribeToMemberList(guildID: guildID, channelID: channelID) }
     }
 
+    /// Fills in the parts of somebody that only the profile route answers with.
+    ///
+    /// Fire-and-forget, and deliberately so: the card opens immediately with
+    /// what the roster already knows and gains its banner, bio and colours when
+    /// they land. Making the card wait would trade a complete card for a
+    /// spinner, and the fields that arrive late are decorative.
+    func loadProfile(of userID: UserID, inGuild guildID: GuildID?) {
+        guard profileFetches.insert(userID).inserted else { return }
+        model.profilesLoading.insert(userID)
+        Task { [weak self] in
+            guard let self else { return }
+            defer {
+                profileFetches.remove(userID)
+                model.profilesLoading.remove(userID)
+            }
+            do {
+                let user = try await rest.profile(of: userID, inGuild: guildID)
+                // Only if it actually added something. Replacing an equal value
+                // still publishes, and this runs while a popover is open.
+                if model.users[userID] != user {
+                    model.users[userID] = user
+                    model.identityRevision &+= 1
+                }
+                // The profile names the effect by SKU; the artwork is a second
+                // request, and only for a SKU nothing has resolved yet.
+                if let sku = user.decoration?.profileEffectSKU,
+                   model.profileEffects[sku] == nil
+                {
+                    loadEffect(sku: sku)
+                }
+            } catch {
+                Self.trace("profile \(userID) failed: \(Self.describe(error))")
+            }
+        }
+    }
+
+    /// Resolves one collectible SKU to its layered composition.
+    func loadEffect(sku: String) {
+        guard effectFetches.insert(sku).inserted else { return }
+        Task { [weak self] in
+            guard let self else { return }
+            defer { effectFetches.remove(sku) }
+            do {
+                guard let effect = try await rest.collectible(sku: sku) else { return }
+                model.profileEffects[sku] = effect
+            } catch {
+                Self.trace("effect \(sku) failed: \(Self.describe(error))")
+            }
+        }
+    }
+
     func acknowledge(_ messageID: MessageID, in channelID: ChannelID) {
         var state = model.readStates[channelID] ?? ReadState()
         guard state.lastAcknowledgedID != messageID else { return }
@@ -641,9 +799,18 @@ final class SessionController {
         Task { try? await rest.acknowledge(messageID, in: channelID) }
     }
 
-    func send(_ content: String, in channelID: ChannelID, replyingTo: MessageID?) {
+    /// - Parameter stickerIDs: Stickers to send. A sticker is a message on its
+    ///   own, so this is the one path where empty content is legitimate.
+    func send(
+        _ content: String,
+        in channelID: ChannelID,
+        replyingTo: MessageID?,
+        stickerIDs: [UInt64] = []
+    ) {
         let trimmed = content.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty, let userID = model.currentUserID else { return }
+        guard !trimmed.isEmpty || !stickerIDs.isEmpty, let userID = model.currentUserID else {
+            return
+        }
         // A nonce, so the gateway's echo can be matched to this send and replace
         // the optimistic row rather than appearing beside it.
         let nonce = String(UInt64(Date.now.timeIntervalSince1970 * 1000))
@@ -654,7 +821,8 @@ final class SessionController {
                     in: channelID,
                     content: trimmed,
                     nonce: nonce,
-                    replyingTo: replyingTo
+                    replyingTo: replyingTo,
+                    stickerIDs: stickerIDs
                 )
                 model.mutateBox(channelID) { $0.upsert(message) }
                 model.messageContentRevision &+= 1
@@ -677,4 +845,57 @@ final class SessionController {
         default: error.localizedDescription
         }
     }
+}
+
+// MARK: - Expressions
+//
+// The picker's fetches. They live here rather than on the store for the reason
+// `AppModel.historyLoader` gives: the store is what a test constructs, and a
+// store that reaches for a socket is a store that cannot be constructed in one.
+
+extension SessionController {
+    /// Discord's own sticker packs, fetched **once per launch** and kept.
+    ///
+    /// The set is the same for every account and changes about twice a year, so
+    /// a request per picker open is a request per open for an answer that
+    /// cannot have changed.
+    func loadDefaultStickerPacks() async {
+        guard model.defaultStickerPacks.isEmpty else { return }
+        guard let packs = try? await rest.stickerPacks(), !packs.isEmpty else { return }
+        // Eight of Discord's fourteen standard packs are entirely Lottie, which
+        // is why `LottieFilmstrip` exists — without it these sections were
+        // headings with nothing under them.
+        model.defaultStickerPacks = packs.compactMap { pack in
+            guard !pack.stickers.isEmpty else { return nil }
+            let cover = pack.stickers.first { $0.id == pack.coverStickerID }
+                ?? pack.stickers[0]
+            return ExpressionSection(
+                id: "pack.\(pack.id)",
+                title: pack.name,
+                badge: .image(
+                    CDN.sticker(id: cover.id, format: cover.format),
+                    monogram: String(pack.name.prefix(1)).uppercased()
+                ),
+                items: pack.stickers.map { sticker in
+                    ExpressionItem(
+                        id: String(sticker.id),
+                        art: .image(
+                            CDN.sticker(id: sticker.id, format: sticker.format),
+                            animated: sticker.format.isAnimated
+                        ),
+                        name: sticker.name.lowercased(),
+                        pick: .sticker(sticker.id)
+                    )
+                }
+            )
+        }
+        // The catalog is memoized on this counter, and the packs are one of its
+        // inputs — without the bump a picker already open never sees them.
+        model.expressionRevision &+= 1
+        model.stickerCatalogCache = nil
+    }
+
+    func gifLanding() async throws -> GIFLanding { try await rest.gifLanding() }
+    func trendingGIFs() async throws -> [GIF] { try await rest.trendingGIFs() }
+    func searchGIFs(_ query: String) async throws -> [GIF] { try await rest.searchGIFs(query) }
 }

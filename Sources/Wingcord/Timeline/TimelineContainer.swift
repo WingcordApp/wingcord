@@ -4,6 +4,7 @@ import WingcordCore
 /// Reads the store and hands the timeline its rows.
 struct TimelineContainer: View {
     var channelID: ChannelID
+    var bottomInset: CGFloat = 0
 
     @Environment(AppModel.self) private var model
     @State private var presentation = PresentationRevision.shared
@@ -13,6 +14,7 @@ struct TimelineContainer: View {
             channelID: channelID,
             rows: model.timelineRows(for: channelID),
             presentationRevision: presentation.value,
+            bottomInset: bottomInset,
             model: model
         )
     }

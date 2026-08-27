@@ -146,43 +146,114 @@ nonisolated final class ImageStore: @unchecked Sendable {
 
         // Join an in-flight request for the same key rather than starting a
         // second one.
-        let task: Task<CGImage?, Never> = inflight.withLock { table in
-            if let existing = table[key] { return existing }
+        //
+        // **The entry is cleared by whoever CREATED it, after awaiting — never
+        // from inside the task body.** Clearing it from inside is a race the
+        // wrong way round: the body can reach its cleanup before
+        // `table[key] = created` has run, so the removal happens first and the
+        // *finished* task is then installed permanently. Every later request for
+        // that key joins a completed task and gets its result forever — and if
+        // that result was a failure, the picture is replaced by a monogram for
+        // the life of the process. That is the "some avatars just never load"
+        // shape: not a slow fetch, a cached nil.
+        let (task, isOwner) = inflight.withLock { table -> (Task<CGImage?, Never>, Bool) in
+            if let existing = table[key] { return (existing, false) }
             let created = Task<CGImage?, Never> { [weak self] in
                 guard let self else { return nil }
-                let result = await self.load(key: key, bucket: bucket)
-                self.inflight.withLock { $0[key] = nil }
-                return result
+                return await self.load(key: key, bucket: bucket)
             }
             table[key] = created
-            return created
+            return (created, true)
         }
-        return await task.value
+        let result = await task.value
+        if isOwner { inflight.withLock { $0[key] = nil } }
+        return result
     }
 
     private func load(key: Key, bucket: Bucket) async -> CGImage? {
+        // One retry, and only for a *transport* failure.
+        //
+        // A view has no second chance at this: `RemoteImage` asks once from
+        // `.task(id:)`, and the canvas asks once per viewport change. So a
+        // dropped connection during a roster's avatar burst — which is exactly
+        // when many connections are open at once — leaves a monogram where a
+        // face should be until something unrelated happens to ask again.
+        //
+        // A 404 or a 403 is not retried: the answer will not change, and asking
+        // twice for every deleted avatar on a large server doubles that traffic
+        // for nothing.
+        for attempt in 0..<2 {
+            let outcome = await attemptLoad(key: key, bucket: bucket)
+            switch outcome {
+            case .image(let image):
+                return image
+            case .permanentFailure:
+                return nil
+            case .transientFailure:
+                guard attempt == 0 else { return nil }
+                try? await Task.sleep(for: .milliseconds(400))
+                if Task.isCancelled { return nil }
+            }
+        }
+        return nil
+    }
+
+    private enum LoadOutcome {
+        case image(CGImage)
+        /// Worth asking again — a dropped connection, a timeout, a 5xx.
+        case transientFailure
+        /// Not worth asking again — a 404, a 403, or bytes that are not an image.
+        case permanentFailure
+    }
+
+    private func attemptLoad(key: Key, bucket: Bucket) async -> LoadOutcome {
         await decodeGate.run {
             do {
                 let (data, response) = try await session.data(from: key.url)
-                if let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
-                    return nil
+                if let http = response as? HTTPURLResponse,
+                   !(200..<300).contains(http.statusCode)
+                {
+                    return http.statusCode >= 500 || http.statusCode == 429
+                        ? .transientFailure
+                        : .permanentFailure
                 }
                 guard let image = Self.decode(data, maximumPixelSize: key.maximumPixelSize) else {
-                    return nil
+                    // Bytes arrived and were not a picture. Asking again gets
+                    // the same bytes.
+                    return .permanentFailure
                 }
                 cache(for: bucket).setObject(
                     Entry(image: image),
                     forKey: key.cacheKey,
                     cost: image.height * image.bytesPerRow
                 )
-                return image
+                return .image(image)
             } catch is CancellationError {
-                return nil
+                return .permanentFailure
             } catch {
                 Self.log.debug("image load failed: \(key.url.absoluteString, privacy: .public)")
-                return nil
+                return .transientFailure
             }
         }
+    }
+
+    /// Fetches bytes through this store's session.
+    ///
+    /// Exposed so `AnimatedImageStore` shares the connection pool AND the disk
+    /// cache rather than standing up a second `URLSession` beside it. Two
+    /// sessions pointed at one `diskPath` is a corrupt cache; two pointed at
+    /// different ones means a decoration is downloaded twice — once as a still
+    /// and once as a filmstrip — for the same bytes.
+    func data(for url: URL) async throws -> Data {
+        let (data, response) = try await session.data(from: url)
+        if let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
+            throw Failure.status(http.statusCode)
+        }
+        return data
+    }
+
+    enum Failure: Error {
+        case status(Int)
     }
 
     /// Decodes at the drawn size.

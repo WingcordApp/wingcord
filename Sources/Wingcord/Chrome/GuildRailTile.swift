@@ -18,6 +18,9 @@ struct GuildRailTile: View {
 
     @Environment(\.motion) private var motion
     @State private var isHovering = false
+    /// Whether the animated layer has frames on screen. Drives the still's
+    /// hand-off, so there is never both and never neither.
+    @State private var isPlaying = false
 
     private var side: CGFloat { Metrics.guildTile }
 
@@ -38,7 +41,46 @@ struct GuildRailTile: View {
                         .frame(width: side, height: side)
                         .background(Palette.surfaceRaised)
                 }
+                // **Hidden once the filmstrip is up.** The still is the GIF's
+                // own first frame, but the two are decoded by different paths at
+                // different sizes and an animated icon is authored with a soft
+                // or transparent rim — so the still showed as a second, slightly
+                // larger copy sitting behind the moving one. It is only there to
+                // cover the moment before the film lands, so it goes when the
+                // film arrives and comes back when the pointer leaves.
+                .opacity(isPlaying ? 0 : 1)
                 .frame(width: side, height: side)
+                // **Animated icons play under the pointer and nowhere else.**
+                //
+                // A rail of ninety-seven servers is, on a well-decorated
+                // account, dozens of animated icons — dozens of filmstrips
+                // resident and dozens of layers being written every clock tick,
+                // for a column nobody is looking at while they read. Hovering is
+                // the moment someone is actually looking at one, so that is when
+                // it plays: the view exists only while `isHovering` is true, and
+                // `AnimatedDecoration` subscribes to the clock on appear and
+                // unsubscribes on disappear, so a rail at rest costs nothing at
+                // all.
+                //
+                // The still underneath is the GIF's own first frame — the icon
+                // URL is already the animated rendition — so there is nothing to
+                // cross-fade to on the way in, and the way out is a cut back to
+                // frame zero rather than a dissolve between two unrelated
+                // frames.
+                .overlay {
+                    if isHovering, let url = guild.iconURL, CDN.canAnimate(url) {
+                        AnimatedDecoration(
+                            url: url,
+                            side: side,
+                            gravity: .resizeAspectFill,
+                            onPlayback: { playing in
+                                guard isPlaying != playing else { return }
+                                isPlaying = playing
+                            }
+                        )
+                        .allowsHitTesting(false)
+                    }
+                }
                 .clipShape(.rect(cornerRadius: cornerRadius, style: .continuous))
                 .overlay(alignment: .bottomTrailing) {
                     if guild.mentionCount > 0 {
@@ -60,6 +102,9 @@ struct GuildRailTile: View {
             // A `@State` write of an equal value still invalidates.
             guard isHovering != hovering else { return }
             isHovering = hovering
+            // The animated layer leaves the tree with the hover, and it cannot
+            // report that it has stopped once it is gone.
+            if !hovering { isPlaying = false }
         }
         .animation(motion.hover, value: isHovering)
         .animation(motion.glassMorph, value: isSelected)

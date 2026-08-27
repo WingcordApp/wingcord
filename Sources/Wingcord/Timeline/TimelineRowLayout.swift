@@ -20,6 +20,7 @@ nonisolated struct TimelineRow: Sendable {
         case conversationStart(name: String)
         case skeleton(index: Int)
         case loadingFirstPage
+        case historyUnavailable(reason: String)
         case message(MessageRow)
     }
 
@@ -189,6 +190,12 @@ nonisolated struct TimelineLayoutEngine: Sendable {
                     kind: .loadingFirstPage
                 ))
 
+            case .historyUnavailable(let reason):
+                rows.append(TimelineRow(
+                    height: TimelineMetrics.historyUnavailableHeight,
+                    kind: .historyUnavailable(reason: reason)
+                ))
+
             case .message(let message):
                 let key = CacheKey(
                     messageID: message.id,
@@ -314,7 +321,11 @@ nonisolated struct TimelineLayoutEngine: Sendable {
             var x = contentX
             for reaction in message.reactions {
                 let label = "\(reaction.count)"
-                let width = 26 + Self.measure(label, font: input.style.metadataFont)
+                // Built from the same parts the painter draws, so the chip
+                // cannot be narrower than its own contents.
+                let width = TimelineMetrics.reactionChipWidth(
+                    countWidth: Self.measure(label, font: input.style.metadataFont)
+                )
                 if x + width > contentX + contentWidth, x > contentX {
                     x = contentX
                     y += TimelineMetrics.reactionChipHeight + 4

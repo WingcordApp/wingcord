@@ -27,12 +27,36 @@ extension AppModel {
         sessionController.openChannel(channelID)
     }
 
-    func sendMessage(_ content: String, in channelID: ChannelID) {
+    func sendMessage(
+        _ content: String,
+        in channelID: ChannelID,
+        stickerIDs: [UInt64] = []
+    ) {
         let replyingTo = messages(in: channelID)?.replyingTo
-        sessionController.send(content, in: channelID, replyingTo: replyingTo)
+        sessionController.send(
+            content, in: channelID, replyingTo: replyingTo, stickerIDs: stickerIDs
+        )
         mutateBox(channelID) {
             $0.draft = ""
             $0.replyingTo = nil
+        }
+    }
+
+    /// Puts what a picker chose into the draft, or sends it if it is a sticker.
+    ///
+    /// A sticker is a message; an emoji is text. Routing both through one entry
+    /// point is what keeps the composer from having to know the difference.
+    func apply(_ pick: ExpressionItem.Pick, in channelID: ChannelID) {
+        switch pick {
+        case .sticker(let id):
+            sendMessage("", in: channelID, stickerIDs: [id])
+        case .insert(let text):
+            mutateBox(channelID) { box in
+                // A separator, unless the draft already ends in one. Two emoji
+                // picked in a row must not fuse into one unparseable token.
+                let needsSpace = !box.draft.isEmpty && !(box.draft.last?.isWhitespace ?? true)
+                box.draft += (needsSpace ? " " : "") + text
+            }
         }
     }
 

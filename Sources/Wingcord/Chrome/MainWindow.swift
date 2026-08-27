@@ -33,7 +33,17 @@ struct MainWindow: View {
                 )
         } detail: {
             WorkspacePane(presentation: model.workspacePresentation)
-                .toolbar { ChannelToolbar(chrome: model.channelChrome) }
+                .toolbar {
+                    // **The closures have to be passed.** They default to `{}`,
+                    // so a toolbar built without them compiles, renders, and
+                    // does nothing at all when clicked — which is exactly what
+                    // the member-list toggle was doing.
+                    ChannelToolbar(
+                        chrome: model.channelChrome,
+                        toggleMemberList: { model.isMemberListShown.toggle() },
+                        openChannelDetails: {}
+                    )
+                }
         }
         .navigationSplitViewStyle(.balanced)
         // The title is drawn by the toolbar, not by the window's own title bar.
@@ -52,10 +62,18 @@ private struct SidebarColumn: View {
     var body: some View {
         HStack(spacing: 0) {
             GuildRailContainer()
+
+            // **The bar belongs to the channel column, not to the whole
+            // sidebar.** Attached to the `HStack`, it spanned the rail as well
+            // and cut the last server tiles off behind it — and the rail is a
+            // different surface with a different scroll, so a bar that reserves
+            // space in it is reserving space in the wrong list. Scoped here it
+            // insets exactly the list it floats over, and the rail runs to the
+            // window's foot the way it runs to its top.
             ChannelSidebarContainer()
-        }
-        .safeAreaBar(edge: .bottom, spacing: 0) {
-            NowBarContainer()
+                .safeAreaBar(edge: .bottom, spacing: 0) {
+                    NowBarContainer()
+                }
         }
     }
 }

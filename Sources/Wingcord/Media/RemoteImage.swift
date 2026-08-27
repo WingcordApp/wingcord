@@ -39,7 +39,22 @@ struct RemoteImage<Placeholder: View>: View {
     private var resolved: CGImage? {
         if let decoded, decodedURL == url { return decoded }
         guard let key else { return nil }
+        if let url, LottieFilmstrip.handles(url) {
+            return AnimatedImageStore.shared.cached(filmKey(for: key))?.frames.first
+        }
         return ImageStore.shared.cached(key, bucket: bucket)
+    }
+
+    /// Lottie's slot in the filmstrip cache.
+    ///
+    /// **A vector animation has no still anywhere**: `CGImageSource` cannot open
+    /// it and the CDN serves no bitmap for it, so the only way to draw one at
+    /// all is to rasterise it and take a frame. Its first frame is the poster,
+    /// which is what a badge or a row thumbnail wants — the strip it comes from
+    /// is a few kilobytes at these sizes, and nothing here subscribes to a clock
+    /// for it.
+    private func filmKey(for key: ImageStore.Key) -> AnimatedImageStore.Key {
+        AnimatedImageStore.Key(url: key.url, maximumPixelSize: key.maximumPixelSize)
     }
 
     var body: some View {
@@ -60,13 +75,18 @@ struct RemoteImage<Placeholder: View>: View {
             // Synchronously, before any await: a row that has been repointed
             // must not keep showing the previous subject while the new fetch is
             // in flight.
+            let isLottie = LottieFilmstrip.handles(key.url)
             if decodedURL != key.url {
-                decoded = ImageStore.shared.cached(key, bucket: bucket)
+                decoded = isLottie
+                    ? AnimatedImageStore.shared.cached(filmKey(for: key))?.frames.first
+                    : ImageStore.shared.cached(key, bucket: bucket)
                 decodedURL = decoded == nil ? nil : key.url
             }
             guard decoded == nil else { return }
 
-            let image = await ImageStore.shared.image(for: key, bucket: bucket)
+            let image = isLottie
+                ? await AnimatedImageStore.shared.image(for: filmKey(for: key))?.frames.first
+                : await ImageStore.shared.image(for: key, bucket: bucket)
             // A cancelled task can still resume and write a stale answer into
             // shared state, so the id is re-checked after the await.
             guard !Task.isCancelled, key.url == url else { return }
@@ -103,8 +123,24 @@ struct AvatarView: View {
         .clipShape(.circle)
         .overlay {
             if let decorationURL {
-                RemoteImage(url: decorationURL, side: side * Metrics.decorationScale) {
-                    Color.clear
+                // **Two layers, and the still one is not wasted.**
+                //
+                // Discord serves decorations as APNG, and most of them animate —
+                // but not all, and the filmstrip takes a fetch and a multi-frame
+                // decode to discover which. The still underneath draws on the
+                // first frame from the ordinary image cache; the animated layer
+                // above it stays empty until it has something real to show, and
+                // stays empty forever for an asset that turns out to be a single
+                // frame. So a decoration is never missing while it resolves, and
+                // a still one costs no clock subscription at all.
+                ZStack {
+                    RemoteImage(url: decorationURL, side: side * Metrics.decorationScale) {
+                        Color.clear
+                    }
+                    AnimatedDecoration(
+                        url: decorationURL,
+                        side: side * Metrics.decorationScale
+                    )
                 }
                 .frame(
                     width: side * Metrics.decorationScale,

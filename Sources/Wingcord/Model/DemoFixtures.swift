@@ -48,6 +48,15 @@ enum DemoFixtures {
             guilds[guildID] = Guild(
                 id: guildID,
                 name: spec.name,
+                // A hash, so `SidebarHeader.hasBanner` is true and the banner
+                // layout is actually exercised — the flag above used to set
+                // nothing but the boost tier, so `--demo` never drew a banner
+                // at all and the one arrangement in the chrome with real
+                // arithmetic behind it could not be screenshotted without an
+                // account. The CDN answers 404 for it, which is the honest
+                // outcome for a fabricated guild and leaves the block showing
+                // its loading ground: a flat rectangle with measurable edges.
+                bannerHash: spec.hasBanner ? "demofixturebanner" : nil,
                 ownerID: userIDs[0],
                 premiumTier: spec.hasBanner ? 2 : 0,
                 features: spec.isCommunity ? ["COMMUNITY"] : [],
