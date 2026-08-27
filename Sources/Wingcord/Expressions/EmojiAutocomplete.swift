@@ -89,6 +89,20 @@ nonisolated enum EmojiAutocomplete {
 
 /// The list itself, floating over the transcript above the composer.
 ///
+/// **Glass, like every other floating surface in this app.** It used to be a
+/// flat `surfaceRaised` panel with a hairline — a solid slab hanging over a
+/// scrolling transcript, which is the one composition `INVARIANTS.md` §4 rule 3
+/// singles out: an opaque fill behind a floating surface is what stops it
+/// reading as glass at all. It sits directly on top of the composer, which is
+/// `.regular` glass over the reading surface, so it takes the same material and
+/// the two read as one object growing upward.
+///
+/// **The selection is a travelling pill in a shared namespace** — one shape
+/// matched across the rows rather than a fill that appears and disappears per
+/// row, so moving down the list is one mark sliding rather than twelve fading in
+/// and out behind the pointer. It is a tinted region *inside* the panel's
+/// material and not a second glass body on it; see `row`.
+///
 /// Keyboard-first: the arrow keys move the selection, Return and Tab commit, and
 /// Escape dismisses. A completion list you have to reach for with the pointer is
 /// slower than typing the emoji's name out.
@@ -99,45 +113,94 @@ struct EmojiAutocompleteList: View {
     var onPick: (ExpressionItem) -> Void
     var onHover: (Int) -> Void
 
+    @Environment(\.motion) private var motion
+    @Namespace private var selectionNamespace
+
+    /// The art beside a row. Sized to the row rather than to the glyph, so a
+    /// custom emoji and a Unicode one occupy the same column.
+    private static let artSide: CGFloat = 20
+    private static let rowHeight: CGFloat = 30
+
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            Text("EMOJI MATCHING  :\(query)")
-                .font(.system(.caption2, weight: .bold))
-                .foregroundStyle(Ink.tertiary)
-                .padding(.horizontal, Spacing.snug)
-                .padding(.top, Spacing.base)
-                .padding(.bottom, Spacing.tight)
+            header
 
-            ForEach(Array(items.enumerated()), id: \.element.id) { index, item in
-                row(item, isSelected: index == selection)
-                    .onHover { if $0 { onHover(index) } }
-                    .onTapGesture { onPick(item) }
+            // No container around these rows. A `GlassEffectContainer`
+            // PROMOTES its glass elements above ordinary siblings and renders
+            // them itself — §4 rule 4 — so a pill living in a row's
+            // `.background` would be lifted above the emoji and the shortcode it
+            // is meant to sit behind. There is no glass in here to contain
+            // anyway; see `row`.
+            VStack(alignment: .leading, spacing: 0) {
+                ForEach(Array(items.enumerated()), id: \.element.id) { index, item in
+                    row(item, isSelected: index == selection)
+                        .onHover { if $0 { onHover(index) } }
+                        .onTapGesture { onPick(item) }
+                }
             }
+            .padding(.horizontal, Spacing.base)
+            .padding(.bottom, Spacing.base)
         }
-        .padding(.bottom, Spacing.tight)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Palette.surfaceRaised, in: .rect(cornerRadius: Radius.glass, style: .continuous))
-        .overlay {
-            RoundedRectangle(cornerRadius: Radius.glass, style: .continuous)
-                .strokeBorder(Color.white.opacity(0.08), lineWidth: 1)
-        }
+        .glassEffect(.regular, in: .rect(cornerRadius: Radius.glass, style: .continuous))
+        .animation(motion.glassMorph, value: selection)
+        .accessibilityLabel(Text("Emoji matching \(query)"))
+    }
+
+    /// What the list is answering.
+    ///
+    /// The query is repeated back because the trailing token is what the list is
+    /// derived from, and a reader who typed `:sob` after a URL needs to see
+    /// *which* token was taken.
+    private var header: some View {
+        Text("MATCHING  :\(query)")
+            .font(Typeface.sectionHeader)
+            .foregroundStyle(Ink.tertiary)
+            .padding(.horizontal, Spacing.snug)
+            .padding(.top, Spacing.snug)
+            .padding(.bottom, Spacing.base)
+            .accessibilityHidden(true)
     }
 
     private func row(_ item: ExpressionItem, isSelected: Bool) -> some View {
         HStack(spacing: Spacing.base) {
             art(item.art)
-                .frame(width: 20, height: 20)
+                .frame(width: Self.artSide, height: Self.artSide)
             Text(":\(item.name):")
                 .font(.system(.subheadline))
-                .foregroundStyle(Ink.primary)
+                .foregroundStyle(isSelected ? AnyShapeStyle(Ink.primary) : AnyShapeStyle(Ink.secondary))
                 .lineLimit(1)
+                .truncationMode(.middle)
             Spacer(minLength: 0)
         }
-        .padding(.horizontal, Spacing.snug)
-        .frame(height: 28)
-        .background(isSelected ? Palette.selectionFill : .clear)
+        .padding(.horizontal, Spacing.base)
+        .frame(height: Self.rowHeight)
+        .background {
+            if isSelected {
+                // **A tinted region inside the panel's material, not a second
+                // glass body on top of it.** The panel is already `.regular`
+                // glass, so a `.glassEffect` here would be glass on glass — §4
+                // rule 2 — and the inner surface would have the outer one's
+                // blurred output to sample rather than what is behind the
+                // window, which reads as a flat lighter slab. This is the same
+                // shape the now bar's controls take for the same reason.
+                //
+                // It travels rather than fading: one shape moving between slots,
+                // matched across the rows, so running down the list is a mark
+                // sliding instead of twelve appearing and disappearing behind
+                // the pointer.
+                RoundedRectangle(cornerRadius: Radius.row, style: .continuous)
+                    .fill(Palette.selectionFill)
+                    .matchedGeometryEffect(id: Self.selectionID, in: selectionNamespace)
+            }
+        }
         .contentShape(.rect)
     }
+
+    /// One id for the one pill. A constant, because there is only ever a single
+    /// selection and giving each row its own id would make the mark cut rather
+    /// than travel.
+    private static let selectionID = "emoji.completion.selection"
 
     @ViewBuilder
     private func art(_ art: ExpressionItem.Art) -> some View {
@@ -148,7 +211,7 @@ struct EmojiAutocompleteList: View {
             // Still, even for an animated emoji: this is a list of twelve rows
             // that exists for a couple of keystrokes, and a filmstrip each is a
             // decode nobody sees finish.
-            RemoteImage(url: url, side: 20) { Color.clear }
+            RemoteImage(url: url, side: Self.artSide) { Color.clear }
         }
     }
 }

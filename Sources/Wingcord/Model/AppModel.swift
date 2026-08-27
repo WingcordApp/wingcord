@@ -72,11 +72,21 @@ final class AppModel {
     /// you were rather than to the top of the list.
     var lastChannelByGuild: [GuildID: ChannelID] = [:]
     var isMemberListShown = true
+    /// Whether a direct message shows the other person's profile beside it.
+    ///
+    /// Its own flag rather than sharing the member list's: a DM has no member
+    /// list and a guild channel has no profile pane, so one flag would mean
+    /// hiding the roster in a server also hides the profile in every DM.
+    var isDirectMessageProfileShown = true
 
     // MARK: Self state
 
     var selfStatus: PresenceStatus = .online
     var selfCustomStatus: String?
+    /// The glyph beside the reader's own custom status. Kept beside the text
+    /// rather than inside it: the wire carries them as two fields, and a status
+    /// with an emoji and no words is a real state.
+    var selfCustomStatusEmoji: String?
     var isSelfMuted = false
     var isSelfDeafened = false
     var connectedVoiceChannelID: ChannelID?
@@ -104,6 +114,33 @@ final class AppModel {
     /// Whose detail fetch is still in flight. Observed, so a card can show a
     /// skeleton while it waits and swap to the real thing when it lands.
     var profilesLoading: Set<UserID> = []
+    /// The emoji or sticker whose card is open.
+    var expressionInfoRequest: ExpressionInfoRequest?
+    /// The media the lightbox is showing, and the rest of its message's.
+    ///
+    /// **A snapshot, not a pointer back into the store.** The channel it came
+    /// from can be evicted by the LRU and the message can be deleted while
+    /// somebody is looking at the picture; neither should make it disappear.
+    var mediaViewer: MediaViewerRequest?
+    /// Server tag cards, by guild rather than by wearer: a tag is worn by
+    /// everyone in the server, and fetching it per person would ask for the same
+    /// answer once a name.
+    var guildProfiles: [GuildID: GuildProfile] = [:]
+    var guildProfilesLoading: Set<GuildID> = []
+    /// Where a foreign emoji or sticker came from, keyed by its own snowflake.
+    ///
+    /// **One table for both**, because an emoji id and a sticker id are both
+    /// snowflakes from the same space and the answer has the same shape. It is
+    /// only ever asked for an expression **no resident server owns** — one of
+    /// the reader's own is nameable with no round trip at all.
+    var expressionSources: [UInt64: ExpressionSource] = [:]
+    var expressionSourcesLoading: Set<UInt64> = []
+    /// The message the transcript is being sent to, if any. Consumed by the
+    /// timeline coordinator, which clears it once it has scrolled.
+    var pendingJump: MessageJump?
+    /// Distinguishes two jumps to the same message. `@ObservationIgnored`
+    /// because nothing reads it — it exists only to make `pendingJump` differ.
+    @ObservationIgnored var jumpToken: UInt64 = 0
     /// Profile effects, by SKU rather than by person: an effect is a purchase
     /// twenty people in one server may share, and fetching it per wearer would
     /// ask for the same composition twenty times.

@@ -92,6 +92,37 @@ final class AppSettings {
         didSet { defaults.set(loadsImagesAutomatically, forKey: Key.loadsImages) }
     }
 
+    // MARK: Media
+
+    /// The viewer's playback volume, shared by every clip.
+    ///
+    /// A computed facade over private storage, because it is clamped — see the
+    /// note at the top for why clamping in `didSet` is a crash rather than a
+    /// clamp.
+    var mediaVolume: Double {
+        get { storedMediaVolume }
+        set { storedMediaVolume = min(1, max(0, newValue)) }
+    }
+
+    private var storedMediaVolume: Double = 1 {
+        didSet {
+            guard storedMediaVolume != oldValue else { return }
+            defaults.set(storedMediaVolume, forKey: Key.mediaVolume)
+        }
+    }
+
+    /// Whether the viewer starts a clip silent. Kept apart from a zero volume:
+    /// unmuting has to restore the level that was set, and a mute written as
+    /// `volume = 0` has thrown that away.
+    var mutesMedia = false {
+        didSet { defaults.set(mutesMedia, forKey: Key.mutesMedia) }
+    }
+
+    /// Whether a video repeats when it reaches the end.
+    var loopsVideo = false {
+        didSet { defaults.set(loopsVideo, forKey: Key.loopsVideo) }
+    }
+
     // MARK: Diagnostics
 
     /// Shows the performance inspector overlay.
@@ -115,6 +146,9 @@ final class AppSettings {
         playsAnimatedContent = defaults.object(forKey: Key.playsAnimated) as? Bool ?? true
         loadsImagesAutomatically = defaults.object(forKey: Key.loadsImages) as? Bool ?? true
         showsPerformanceInspector = defaults.object(forKey: Key.showsInspector) as? Bool ?? false
+        storedMediaVolume = defaults.object(forKey: Key.mediaVolume) as? Double ?? 1
+        mutesMedia = defaults.object(forKey: Key.mutesMedia) as? Bool ?? false
+        loopsVideo = defaults.object(forKey: Key.loopsVideo) as? Bool ?? false
         skinTone = (defaults.object(forKey: Key.skinTone) as? Int)
             .flatMap(UnicodeEmoji.SkinTone.init(rawValue:)) ?? .default
     }
@@ -129,5 +163,8 @@ final class AppSettings {
         static let loadsImages = "chat.loadsImagesAutomatically"
         static let showsInspector = "diagnostics.showsPerformanceInspector"
         static let skinTone = "expressions.skinTone"
+        static let mediaVolume = "media.volume"
+        static let mutesMedia = "media.muted"
+        static let loopsVideo = "media.loopsVideo"
     }
 }

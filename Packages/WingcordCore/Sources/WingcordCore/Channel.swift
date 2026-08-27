@@ -115,6 +115,9 @@ public struct Channel: Hashable, Sendable, Identifiable, Codable {
     public var recipientIDs: [UserID]
     /// A group DM's custom icon hash.
     public var iconHash: String?
+    /// A group DM's owner — the person who made it, and the only one who can
+    /// rename it or remove anybody. Nil everywhere else.
+    public var ownerID: UserID?
     /// Threads only: the parent conversation's id is `parentID`, and this is the
     /// message count Discord reports.
     public var messageCount: Int?
@@ -133,6 +136,7 @@ public struct Channel: Hashable, Sendable, Identifiable, Codable {
         overwrites: [PermissionOverwrite] = [],
         recipientIDs: [UserID] = [],
         iconHash: String? = nil,
+        ownerID: UserID? = nil,
         messageCount: Int? = nil
     ) {
         self.id = id
@@ -148,6 +152,7 @@ public struct Channel: Hashable, Sendable, Identifiable, Codable {
         self.overwrites = overwrites
         self.recipientIDs = recipientIDs
         self.iconHash = iconHash
+        self.ownerID = ownerID
         self.messageCount = messageCount
     }
 

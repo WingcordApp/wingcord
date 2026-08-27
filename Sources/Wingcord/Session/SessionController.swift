@@ -52,6 +52,20 @@ final class SessionController {
     /// and a click on the same row — asks once.
     private var profileFetches: Set<UserID> = []
     private var effectFetches: Set<String> = []
+    /// Server-tag fetches in flight. A busy channel can show one tag on twenty
+    /// consecutive rows; every one of them must share a single request.
+    private var guildProfileFetches: Set<GuildID> = []
+    private var expressionSourceFetches: Set<UInt64> = []
+    /// Channels whose transcript is being re-anchored around a linked message.
+    private var jumpFetches: Set<ChannelID> = []
+    /// When the reader was last reported as typing, per channel.
+    ///
+    /// Discord's own indicator lasts ten seconds, so the client re-posts at
+    /// eight — often enough that it never lapses mid-sentence, rarely enough
+    /// that a fast typist sends one request per eight seconds rather than one
+    /// per keystroke.
+    private var lastTypingSent: [ChannelID: Date] = [:]
+    private static let typingInterval: TimeInterval = 8
     private var pendingPresences: [UserID: Presence] = [:]
     private var presenceFlushTask: Task<Void, Never>?
     private static let presenceFlushInterval = Duration.milliseconds(200)
@@ -420,8 +434,9 @@ final class SessionController {
     private func apply(_ update: GatewayUpdate) {
         switch update {
         case .messageCreated(let message, let author, _, _):
-            if model.users[author.id] != author {
-                model.users[author.id] = author
+            let merged = author.merged(over: model.users[author.id])
+            if model.users[author.id] != merged {
+                model.users[author.id] = merged
                 model.identityRevision &+= 1
             }
             model.mutateBox(message.channelID) { $0.upsert(message) }
@@ -472,7 +487,10 @@ final class SessionController {
             if !members.isEmpty { model.members[guild.id] = members }
             model.guildEmojis[guild.id] = emojis.isEmpty ? nil : emojis
             model.guildStickers[guild.id] = stickers.isEmpty ? nil : stickers
-            model.users.merge(users) { _, new in new }
+            // **Merged, never replaced.** A roster user carries no bio, no
+            // banner and no badges, so writing one straight over a
+            // profile-fetched record wipes the card the reader is looking at.
+            model.users.merge(users) { existing, new in new.merged(over: existing) }
             model.presences.merge(presences) { _, new in new }
             model.permissionGate.invalidate()
             model.railRevision &+= 1
@@ -548,7 +566,10 @@ final class SessionController {
              .memberListUpdated(let guildID, let members, let users, let presences):
             guard !members.isEmpty else { return }
             model.members[guildID, default: [:]].merge(members) { _, new in new }
-            model.users.merge(users) { _, new in new }
+            // **Merged, never replaced.** A roster user carries no bio, no
+            // banner and no badges, so writing one straight over a
+            // profile-fetched record wipes the card the reader is looking at.
+            model.users.merge(users) { existing, new in new.merged(over: existing) }
             model.presences.merge(presences) { _, new in new }
             model.permissionGate.invalidate()
             model.memberRevision &+= 1
@@ -562,7 +583,7 @@ final class SessionController {
             model.railRevision &+= 1
 
         case .currentUserUpdated(let user):
-            model.users[user.id] = user
+            model.users[user.id] = user.merged(over: model.users[user.id])
             model.identityRevision &+= 1
         }
     }
@@ -625,8 +646,10 @@ final class SessionController {
                 // were all already known rebuilds every name in the session to
                 // discover that none of them moved.
                 var namesChanged = false
-                for (userID, author) in page.authors where model.users[userID] != author {
-                    model.users[userID] = author
+                for (userID, author) in page.authors {
+                    let merged = author.merged(over: model.users[userID])
+                    guard model.users[userID] != merged else { continue }
+                    model.users[userID] = merged
                     namesChanged = true
                 }
                 if namesChanged { model.identityRevision &+= 1 }
@@ -754,6 +777,11 @@ final class SessionController {
             }
             do {
                 let user = try await rest.profile(of: userID, inGuild: guildID)
+                // **Assigned whole, not merged.** This route is the
+                // authoritative answer for every cosmetic field, so a bio
+                // somebody deleted has to be able to disappear — see
+                // `User.merged(over:)`, which every OTHER write goes through.
+                //
                 // Only if it actually added something. Replacing an equal value
                 // still publishes, and this runs while a popover is open.
                 if model.users[userID] != user {
@@ -770,6 +798,182 @@ final class SessionController {
             } catch {
                 Self.trace("profile \(userID) failed: \(Self.describe(error))")
             }
+        }
+    }
+
+    /// Resolves the card behind a server tag.
+    ///
+    /// Cached on the store by guild, so the same tag opened on twenty different
+    /// people is one request. Nothing invalidates it during a session: a
+    /// server's description, badge and traits change about as often as its name.
+    func loadGuildProfile(_ guildID: GuildID) {
+        guard model.guildProfiles[guildID] == nil,
+              guildProfileFetches.insert(guildID).inserted
+        else { return }
+        model.guildProfilesLoading.insert(guildID)
+        Task { [weak self] in
+            guard let self else { return }
+            defer {
+                guildProfileFetches.remove(guildID)
+                model.guildProfilesLoading.remove(guildID)
+            }
+            do {
+                model.guildProfiles[guildID] = try await rest.guildProfile(of: guildID)
+            } catch {
+                Self.trace("guild profile \(guildID) failed: \(Self.describe(error))")
+            }
+        }
+    }
+
+    /// Resolves where a foreign emoji or sticker came from.
+    ///
+    /// Cached on the store by id, so an expression clicked twice asks once. Only
+    /// ever called for one **no resident server owns**.
+    ///
+    /// The two routes answer differently shaped payloads for the same idea, so
+    /// which one to call is decided here and nowhere else.
+    func loadExpressionSource(_ id: UInt64, isSticker: Bool) {
+        guard model.expressionSources[id] == nil,
+              expressionSourceFetches.insert(id).inserted
+        else { return }
+        model.expressionSourcesLoading.insert(id)
+        Task { [weak self] in
+            guard let self else { return }
+            defer {
+                expressionSourceFetches.remove(id)
+                model.expressionSourcesLoading.remove(id)
+            }
+            do {
+                let source = isSticker
+                    ? try await rest.stickerSource(id)
+                    : try await rest.emojiSource(EmojiID(rawValue: id))
+                guard let source else { return }
+                model.expressionSources[id] = source
+            } catch {
+                // A refusal is a real answer here — an expression whose server
+                // has gone, or one the account may not ask about. The card falls
+                // back to what it could already say.
+                Self.trace("expression source \(id) failed: \(Self.describe(error))")
+            }
+        }
+    }
+
+    /// Re-anchors a transcript around one message and asks the timeline to go
+    /// to it.
+    ///
+    /// **The page has to be fetched with `around`, not `before`.** A link can
+    /// point anywhere in a channel's history, and paging backwards to reach it
+    /// is an unbounded chain of round trips the reader watches — on a busy
+    /// channel, thousands of them. One request centred on the target is the only
+    /// shape that answers in constant time.
+    ///
+    /// The existing transcript is **replaced**, not merged. A page from a year
+    /// ago and the newest page are two disjoint runs, and keeping both would put
+    /// a silent gap in the middle of the transcript with nothing to say it is
+    /// there.
+    func jumpToMessage(_ messageID: MessageID, in channelID: ChannelID) {
+        model.selectChannel(channelID)
+
+        if model.messages(in: channelID)?.messages.contains(where: { $0.id == messageID }) == true {
+            model.requestJump(to: messageID, in: channelID)
+            return
+        }
+        guard jumpFetches.insert(channelID).inserted else { return }
+        model.mutateBox(channelID) { box in
+            box.isLoadingHistory = true
+            box.historyFailure = nil
+        }
+        Task { [weak self] in
+            guard let self else { return }
+            defer { jumpFetches.remove(channelID) }
+            do {
+                let page = try await rest.messages(in: channelID, around: messageID)
+                var namesChanged = false
+                for (userID, author) in page.authors {
+                    let merged = author.merged(over: model.users[userID])
+                    guard model.users[userID] != merged else { continue }
+                    model.users[userID] = merged
+                    namesChanged = true
+                }
+                if namesChanged { model.identityRevision &+= 1 }
+                model.mutateBox(channelID) { box in
+                    box.messages = page.messages
+                    box.isLoadingHistory = false
+                    box.historyFailure = nil
+                    box.hasMoreHistory = page.messages.count >= DiscordREST.historyPageSize
+                }
+                model.messageContentRevision &+= 1
+                model.requestJump(to: messageID, in: channelID)
+            } catch {
+                Self.trace("jump \(messageID) failed: \(Self.describe(error))")
+                model.mutateBox(channelID) { box in
+                    box.isLoadingHistory = false
+                    box.historyFailure = Self.describe(error)
+                }
+                model.messageContentRevision &+= 1
+            }
+        }
+    }
+
+    /// Sends a vote, and puts the poll back if it does not land.
+    ///
+    /// **The revert carries the whole previous poll, not a delta.** A vote that
+    /// failed has to leave the tally exactly as it was, and reversing the
+    /// optimistic write by arithmetic gets that wrong the moment a real update
+    /// arrives from the gateway in between.
+    func castVote(
+        _ answerID: Int,
+        on messageID: MessageID,
+        in channelID: ChannelID,
+        revertingTo previous: Poll
+    ) {
+        Task { [weak self] in
+            guard let self else { return }
+            do {
+                try await rest.vote(answerIDs: [answerID], onPoll: messageID, in: channelID)
+            } catch {
+                Self.trace("vote \(messageID) failed: \(Self.describe(error))")
+                model.restorePoll(previous, on: messageID, in: channelID)
+            }
+        }
+    }
+
+    /// Tells the channel the reader is typing, at most once every eight seconds.
+    ///
+    /// **Throttled at the call site's own clock rather than with a timer.** A
+    /// timer per channel is a timer that outlives the channel; a timestamp is
+    /// one comparison on a keystroke and nothing at all when nobody is typing.
+    func reportTyping(in channelID: ChannelID) {
+        let now = Date()
+        if let last = lastTypingSent[channelID], now.timeIntervalSince(last) < Self.typingInterval {
+            return
+        }
+        lastTypingSent[channelID] = now
+        Task { [weak self] in
+            guard let self else { return }
+            do {
+                try await rest.typing(in: channelID)
+            } catch {
+                // A dropped typing signal costs a reader three dots they never
+                // knew were coming. It is never worth a retry and never worth a
+                // message on screen.
+                Self.trace("typing \(channelID) failed: \(Self.describe(error))")
+            }
+        }
+    }
+
+    /// Publishes the reader's own status.
+    ///
+    /// Over the socket, because the settings route stores a status without
+    /// broadcasting one — an account that changed status there stays green to
+    /// everyone else until it reconnects.
+    func publishPresence() {
+        guard let socket else { return }
+        let status = model.selfStatus.rawValue
+        let text = model.selfCustomStatus
+        let emoji = model.selfCustomStatusEmoji
+        Task {
+            await socket.updatePresence(status: status, customStatus: text, customEmoji: emoji)
         }
     }
 

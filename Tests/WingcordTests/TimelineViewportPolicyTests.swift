@@ -25,6 +25,49 @@ struct TimelineViewportPolicyTests {
         viewportHeight + TimelineMetrics.overscan * 2
     }
 
+    /// **The composer's content inset makes the viewport hang past the
+    /// content**, and the canvas must not react to it.
+    ///
+    /// The transcript runs UNDER the composer and pays for it with a bottom
+    /// content inset, so a clip view scrolled fully down reports a viewport
+    /// whose foot is one composer-height past the end of the document. There is
+    /// nothing to draw down there — the canvas is clamped to the document — so
+    /// the overhang must change neither the canvas's size nor its position.
+    ///
+    /// The size is the half that broke: deriving the canvas height from a
+    /// viewport clipped to the document shrinks it as the reader reaches the
+    /// foot of a channel, and a canvas that changes size is re-laid-out and
+    /// fully repainted — on every scroll tick, in exactly the region people
+    /// read in.
+    @Test("A viewport hanging past the document changes neither size nor position")
+    func viewportPastTheDocumentStaysPut() {
+        let shortDocument: CGFloat = 4_000
+        let composerInset: CGFloat = 90
+
+        // Settle the canvas at the foot of the document.
+        let settled = TimelineViewportPolicy.geometry(
+            viewport: viewport(at: shortDocument - viewportHeight),
+            documentHeight: shortDocument,
+            currentFrame: .zero
+        )
+        #expect(settled.frame.height == canvasHeight)
+
+        // Now scroll into the inset: the viewport's foot runs past the content.
+        let overhanging = CGRect(
+            x: 0,
+            y: shortDocument + composerInset - viewportHeight,
+            width: width,
+            height: viewportHeight
+        )
+        let after = TimelineViewportPolicy.geometry(
+            viewport: overhanging,
+            documentHeight: shortDocument,
+            currentFrame: settled.frame
+        )
+        #expect(after.frame.height == canvasHeight)
+        #expect(after.frame == settled.frame)
+    }
+
     @Test("The canvas is viewport-sized plus overscan, never document-sized")
     func canvasIsBounded() {
         let geometry = TimelineViewportPolicy.geometry(

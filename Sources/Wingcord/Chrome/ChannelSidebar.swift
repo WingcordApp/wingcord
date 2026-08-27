@@ -560,33 +560,85 @@ private struct ServerTitleItem: View, Equatable {
         .accessibilityLabel(Text(name))
     }
 
+    /// The label, sized by the toolbar wherever it can be.
+    ///
+    /// **A cap is imposed only on a name that needs one.** The `.frame(width:)`
+    /// below exists for exactly one reason — an over-wide toolbar item is
+    /// *dropped* rather than truncated, and the neighbouring controls slide into
+    /// the hole — so a name that already fits the sidebar's span has nothing to
+    /// be saved from, and giving it a hand-measured frame anyway is how the
+    /// platter came to sit a couple of points off its own text.
+    ///
+    /// The measurement and SwiftUI's own layout are two different text stacks
+    /// and they do not have to agree to a point. Where the cap is not needed,
+    /// they are not asked to: the item is sized the way `ChannelPill` is, by the
+    /// bar, which is the arrangement that has always looked right.
+    ///
+    /// **A width, not a maxWidth**, in the case that does need it. The bar sizes
+    /// its items against an unspecified proposal, where a maximum is advisory
+    /// and the label still reports its full ideal — measured, `maxWidth` left a
+    /// 35-character name being dropped exactly as before, while a width drew it
+    /// at 104.5 and put the toggle back at x=324.
+    /// How much breathing room a **bare label** needs inside its platter.
+    ///
+    /// **A toolbar platter hugs a `Text` far more tightly than it hugs a
+    /// control's label**, and this item is the only bare one in the app: on a
+    /// server it is a `Menu`, which arrives with the system's own control
+    /// insets, and on the direct-message home there is nothing to open so it is
+    /// a label. The two therefore came out visibly different — the DM title sat
+    /// with its first and last letters almost touching the ends of its capsule
+    /// while every other item in the bar breathed.
+    ///
+    /// Six points a side, which is the difference measured against the `Menu`
+    /// beside it. It is *not* a hand-set control size — `INVARIANTS.md` §1
+    /// forbids that and means it — it is padding on a piece of text the bar has
+    /// declined to treat as a control.
+    private static let bareLabelInset: CGFloat = 6
+
+    /// What the label's own frame may occupy, once its padding is taken out.
+    ///
+    /// The cap exists to stop the bar DROPPING an over-wide item, so the padding
+    /// has to come out of it rather than be added on top — otherwise the fix for
+    /// a cramped short name is what makes a long one disappear.
+    private var labelWidthCap: CGFloat {
+        openMenu == nil ? max(20, maxWidth - Self.bareLabelInset * 2) : maxWidth
+    }
+
+    @ViewBuilder
     private var title: some View {
-        Text(name)
+        let label = Text(name)
             .fontWeight(.semibold)
             .lineLimit(1)
             .truncationMode(.tail)
-            // **A width, not a maxWidth.** The bar sizes its items against an
-            // unspecified proposal, where a maximum is advisory and the label
-            // still reports its full ideal — measured, `maxWidth` left a
-            // 35-character name being dropped exactly as before, while a width
-            // drew it at 104.5 and put the toggle back at x=324.
-            //
-            // `min` with the label's own width is what keeps the pill hugging
-            // its name: a flat width would give "bitrig" the same slab as
-            // "Counter-Strike Discord | CSGO & CS2".
-            .frame(width: min(naturalWidth, maxWidth), alignment: .leading)
             .contentTransition(.interpolate)
+
+        Group {
+            if naturalWidth > labelWidthCap {
+                label.frame(width: labelWidthCap, alignment: .leading)
+            } else {
+                label
+            }
+        }
+        .padding(.horizontal, openMenu == nil ? Self.bareLabelInset : 0)
     }
 
     /// What the label would take if nothing stopped it.
     ///
     /// Measured through AppKit rather than asked of SwiftUI: a hidden `Text` and
     /// an `onGeometryChange` would answer the same question a layout pass later
-    /// and write it into state that the next server invalidates. Rounded up, and
-    /// a point of slack, so a name that fits is never truncated by a rounding
-    /// difference between the two text stacks.
+    /// and write it into state that the next server invalidates.
+    ///
+    /// **The font has to be the one SwiftUI will actually draw.** `Text` in a
+    /// toolbar resolves to the body text style, which tracks the reader's text
+    /// size — so measuring against a fixed `systemFontSize` is right only at the
+    /// default and progressively wrong above and below it, which is a cap that
+    /// truncates a name that fits or drops one that would have.
+    ///
+    /// Rounded up with a point of slack, so a name near the cap is never
+    /// truncated by a rounding difference between the two stacks.
     private var naturalWidth: CGFloat {
-        let font = NSFont.systemFont(ofSize: NSFont.systemFontSize, weight: .semibold)
+        let body = NSFont.preferredFont(forTextStyle: .body)
+        let font = NSFontManager.shared.convert(body, toHaveTrait: .boldFontMask)
         return ceil((name as NSString).size(withAttributes: [.font: font]).width) + 1
     }
 }

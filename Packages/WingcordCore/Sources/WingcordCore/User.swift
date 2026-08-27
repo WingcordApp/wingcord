@@ -168,6 +168,34 @@ public enum PremiumTier: Int, Hashable, Sendable, Codable {
     }
 }
 
+extension User {
+    /// This user, keeping anything `existing` knows that this one does not.
+    ///
+    /// **The fix for a profile that goes blank while you are looking at it.**
+    /// A user arrives from four places — READY, a member-list op, a message
+    /// author, and the profile route — and only the last carries a banner, a
+    /// bio, badges, connections or theme colours. Writing whichever arrived last
+    /// straight into the table means a presence flush or a roster update lands
+    /// *while the card is open* and wipes everything the profile fetch paid for:
+    /// the banner goes, the bio goes, the badge row drops to whatever the flag
+    /// bits alone can say.
+    ///
+    /// Identity comes from the incoming record — a rename has to take effect —
+    /// and the decoration is merged field by field.
+    ///
+    /// **The profile route does NOT go through this.** It is the authoritative
+    /// answer for every cosmetic field, so a bio somebody deleted has to be able
+    /// to disappear; merging there would make removal impossible.
+    public func merged(over existing: User?) -> User {
+        guard let existing else { return self }
+        var result = self
+        result.decoration = UserDecoration.merged(
+            incoming: decoration, existing: existing.decoration
+        )
+        return result
+    }
+}
+
 /// Cosmetics, profile extras, and everything else a `User` almost never has.
 ///
 /// A class, not a struct: it is optional on `User` and shared by every copy of
@@ -250,6 +278,56 @@ public final class UserDecoration: Hashable, Sendable, Codable {
         self.primaryGuildTag = primaryGuildTag
         self.primaryGuildBadgeHash = primaryGuildBadgeHash
         self.primaryGuildID = primaryGuildID
+    }
+
+    /// The fuller of two decorations, field by field.
+    ///
+    /// Nil where both are nil, so a user with no cosmetics still costs no
+    /// allocation. Every field takes the incoming answer where it has one and
+    /// falls back to what was already known — which is what lets a roster
+    /// update refresh somebody's nameplate without taking their bio with it.
+    static func merged(
+        incoming: UserDecoration?,
+        existing: UserDecoration?
+    ) -> UserDecoration? {
+        guard let existing else { return incoming }
+        guard let incoming else { return existing }
+        let merged = UserDecoration(
+            avatarDecorationHash: incoming.avatarDecorationHash
+                ?? existing.avatarDecorationHash,
+            nameplateAsset: incoming.nameplateAsset ?? existing.nameplateAsset,
+            bannerHash: incoming.bannerHash ?? existing.bannerHash,
+            accentColor: incoming.accentColor ?? existing.accentColor,
+            bio: incoming.bio ?? existing.bio,
+            themeColorValues: incoming.themeColorValues?.isEmpty == false
+                ? incoming.themeColorValues
+                : existing.themeColorValues,
+            badges: incoming.badges.isEmpty ? existing.badges : incoming.badges,
+            profileEffectSKU: incoming.profileEffectSKU ?? existing.profileEffectSKU,
+            pronouns: incoming.pronouns ?? existing.pronouns,
+            connectedAccounts: incoming.connectedAccounts.isEmpty
+                ? existing.connectedAccounts
+                : incoming.connectedAccounts,
+            premiumTier: incoming.premiumTier == .none
+                ? existing.premiumTier
+                : incoming.premiumTier,
+            premiumSince: incoming.premiumSince ?? existing.premiumSince,
+            legacyUsername: incoming.legacyUsername ?? existing.legacyUsername,
+            mutualGuilds: incoming.mutualGuilds.isEmpty
+                ? existing.mutualGuilds
+                : incoming.mutualGuilds,
+            // The tag is one fact in three fields and they move together: an
+            // account that took its tag off sends all three empty, and keeping
+            // the old id beside a new nil badge would draw half a mark.
+            primaryGuildTag: incoming.primaryGuildTag ?? existing.primaryGuildTag,
+            primaryGuildBadgeHash: incoming.primaryGuildTag != nil
+                ? incoming.primaryGuildBadgeHash
+                : existing.primaryGuildBadgeHash,
+            primaryGuildID: incoming.primaryGuildTag != nil
+                ? incoming.primaryGuildID
+                : existing.primaryGuildID
+        )
+        return merged.isEmpty ? nil : merged
     }
 
     /// Whether the box holds anything at all. A decoder that builds one of these

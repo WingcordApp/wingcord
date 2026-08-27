@@ -52,6 +52,10 @@ struct ProfilePresentation: Equatable, Sendable {
     var themeColorValues: [UInt32] = []
     var status: PresenceStatus
     var customStatus: String?
+    /// The glyph beside it. Kept apart from the text because the wire keeps them
+    /// apart, and because a status that is *only* an emoji is a real state that
+    /// a single concatenated string cannot represent.
+    var customStatusEmoji: EmojiRef?
     var activity: Activity?
     var bio: String?
     var isBot: Bool
@@ -100,9 +104,16 @@ struct ProfilePresentation: Equatable, Sendable {
 }
 
 /// A clan tag, as it is worn beside a name.
+///
+/// The guild id travels with the letters because the tag is a *destination*: the
+/// two-to-four characters are the only thing on a profile that stands for a
+/// place, and without the id the chip can say a server exists and not which one.
+/// Nil where the id is not known — the member-list painter draws tags from a
+/// row snapshot that carries only what it needs to paint.
 struct GuildTag: Equatable, Sendable {
     var text: String
     var badgeURL: URL?
+    var guildID: GuildID?
 }
 
 /// One shared server, named and pictured rather than left as an id.

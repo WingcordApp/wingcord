@@ -56,6 +56,10 @@ public struct Message: Hashable, Sendable, Identifiable, Codable {
 
     public var attachments: [Attachment] { payload?.attachments ?? [] }
     public var embeds: [Embed] { payload?.embeds ?? [] }
+    public var components: [ActionRow] { payload?.components ?? [] }
+    public var displayComponents: [DisplayComponent] { payload?.displayComponents ?? [] }
+    public var poll: Poll? { payload?.poll }
+    public var stickers: [StickerRef] { payload?.stickers ?? [] }
     public var reactions: [Reaction] { payload?.reactions ?? [] }
     public var referencedMessageID: MessageID? { payload?.referencedMessageID }
     public var mentionedUserIDs: [UserID] { payload?.mentionedUserIDs ?? [] }
@@ -75,7 +79,8 @@ public struct Message: Hashable, Sendable, Identifiable, Codable {
     /// Whether the message has any renderable body at all.
     public var isEmpty: Bool {
         content.isEmpty && attachments.isEmpty && embeds.isEmpty
-            && (payload?.stickers.isEmpty ?? true) && !isComponentsOnly
+            && stickers.isEmpty && components.isEmpty && displayComponents.isEmpty
+            && poll == nil && !isComponentsOnly
     }
 
     /// Whether this row addresses an *object* rather than something someone
@@ -105,6 +110,15 @@ public final class MessagePayload: Hashable, Sendable, Codable {
     public let embeds: [Embed]
     public let reactions: [Reaction]
     public let stickers: [StickerRef]
+    /// The controls an app attached. Empty for everything a person typed, which
+    /// is the overwhelming majority — the array costs a word on a box that only
+    /// exists for messages that are already unusual.
+    public let components: [ActionRow]
+    /// The Components V2 tree, when the message is built out of one. Empty for
+    /// everything else, which is nearly everything.
+    public let displayComponents: [DisplayComponent]
+    /// The poll, when there is one. A message carrying one has no body at all.
+    public let poll: Poll?
     public let mentionedUserIDs: [UserID]
     public let mentionedRoleIDs: [RoleID]
     public let mentionsEveryone: Bool
@@ -123,6 +137,9 @@ public final class MessagePayload: Hashable, Sendable, Codable {
         embeds: [Embed] = [],
         reactions: [Reaction] = [],
         stickers: [StickerRef] = [],
+        components: [ActionRow] = [],
+        displayComponents: [DisplayComponent] = [],
+        poll: Poll? = nil,
         mentionedUserIDs: [UserID] = [],
         mentionedRoleIDs: [RoleID] = [],
         mentionsEveryone: Bool = false,
@@ -135,6 +152,9 @@ public final class MessagePayload: Hashable, Sendable, Codable {
         self.embeds = embeds
         self.reactions = reactions
         self.stickers = stickers
+        self.components = components
+        self.displayComponents = displayComponents
+        self.poll = poll
         self.mentionedUserIDs = mentionedUserIDs
         self.mentionedRoleIDs = mentionedRoleIDs
         self.mentionsEveryone = mentionsEveryone
@@ -148,7 +168,8 @@ public final class MessagePayload: Hashable, Sendable, Codable {
     /// for every plain message has undone the point of the type.
     public var isEmpty: Bool {
         attachments.isEmpty && embeds.isEmpty && reactions.isEmpty
-            && stickers.isEmpty && mentionedUserIDs.isEmpty
+            && stickers.isEmpty && components.isEmpty && displayComponents.isEmpty
+            && poll == nil && mentionedUserIDs.isEmpty
             && mentionedRoleIDs.isEmpty && !mentionsEveryone
             && referencedMessageID == nil && webhookID == nil && nonce == nil
     }
@@ -162,6 +183,9 @@ public final class MessagePayload: Hashable, Sendable, Codable {
                 && lhs.embeds == rhs.embeds
                 && lhs.reactions == rhs.reactions
                 && lhs.stickers == rhs.stickers
+                && lhs.components == rhs.components
+                && lhs.displayComponents == rhs.displayComponents
+                && lhs.poll == rhs.poll
                 && lhs.mentionedUserIDs == rhs.mentionedUserIDs
                 && lhs.mentionedRoleIDs == rhs.mentionedRoleIDs
                 && lhs.mentionsEveryone == rhs.mentionsEveryone

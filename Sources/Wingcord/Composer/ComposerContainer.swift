@@ -24,7 +24,17 @@ struct ComposerContainer: View {
             replyingToAuthor: replyingToAuthor,
             text: Binding(
                 get: { model.messages(in: channelID)?.draft ?? "" },
-                set: { newValue in model.mutateBox(channelID) { $0.draft = newValue } }
+                set: { newValue in
+                    // Reported before the write, while the previous draft is
+                    // still readable. **Only on growth**: deleting a mistake is
+                    // not typing, and telling the channel it is keeps the
+                    // indicator alive through a minute of somebody backspacing.
+                    let previous = model.messages(in: channelID)?.draft ?? ""
+                    if newValue.count > previous.count {
+                        model.sessionController.reportTyping(in: channelID)
+                    }
+                    model.mutateBox(channelID) { $0.draft = newValue }
+                }
             ),
             send: send,
             cancelReply: { model.mutateBox(channelID) { $0.replyingTo = nil } },

@@ -66,7 +66,35 @@ nonisolated struct MessageRow: Sendable {
     var textOrigin: CGPoint
 
     var attachments: [AttachmentSlot]
+    var stickers: [StickerSlot]
+    var embeds: [EmbedSlot]
+    /// The controls an app attached, laid out into rows.
+    var components: [ComponentSlot]
+    /// The poll, when the message is one.
+    var poll: PollSlot?
     var reactions: [ReactionSlot]
+
+    /// A system event's gutter glyph — a join, a boost, a pin.
+    ///
+    /// **A field on the ordinary row rather than a row kind of its own.** A
+    /// system message is still a message: it has an id, an author, a timestamp,
+    /// reactions and a place in the layout cache, and the only things that
+    /// differ are that the gutter holds a symbol instead of a face and the
+    /// sentence is composed rather than typed. A separate kind would duplicate
+    /// the cache key, the height calculation and the hit testing to change two
+    /// of them.
+
+    /// A system event's gutter glyph — a join, a boost, a pin.
+    ///
+    /// **A field on the ordinary row rather than a row kind of its own.** A
+    /// system message is still a message: it has an id, an author, a timestamp,
+    /// reactions and a place in the layout cache, and the only things that
+    /// differ are that the gutter holds a symbol instead of a face and the
+    /// sentence is composed rather than typed. A separate kind would duplicate
+    /// the cache key, the height calculation and the hit testing to change two
+    /// of them.
+    var systemSymbol: String?
+    var systemTint: NSColor?
 
     /// One plain string for one accessibility node.
     ///
@@ -88,6 +116,48 @@ nonisolated struct AttachmentSlot: Sendable {
     var altText: String?
     /// The pixel width the image should be decoded at.
     var decodeWidth: CGFloat
+}
+
+/// A sticker's box.
+///
+/// **Its own slot rather than an attachment.** A sticker is not a file somebody
+/// uploaded — it has a fixed authored size, no filename, no spoiler state, and a
+/// third of them are vector animations with no bitmap on the CDN at all. Folding
+/// it into `AttachmentSlot` would mean four fields that are never set and one
+/// that means something different.
+nonisolated struct StickerSlot: Sendable {
+    var rect: CGRect
+    var sticker: StickerRef
+    var url: URL?
+    /// Whether the asset is Lottie, which lives in the filmstrip cache rather
+    /// than the still one — `CGImageSource` cannot open it and the CDN serves no
+    /// bitmap for it, so its poster is the first frame of a rasterised strip.
+    var isVector: Bool
+    /// Whether it moves.
+    ///
+    /// **All three animated formats end up as the same filmstrip** — APNG and
+    /// GIF through `CGImageSource`, Lottie through the rasteriser — so this is
+    /// one flag rather than three cases, and it is what decides whether the
+    /// canvas subscribes to the clock at all.
+    var isAnimated: Bool
+}
+
+/// One button an app attached to a message.
+///
+/// **Only a link button is live.** Everything else needs an interaction round
+/// trip this client does not make, so it is drawn dimmed — a bot's message is
+/// unreadable without its controls, and a control that looks pressable and does
+/// nothing is worse than one that says it is not.
+nonisolated struct ComponentSlot: Sendable {
+    var rect: CGRect
+    var label: String
+    var emoji: EmojiRef?
+    /// Where it goes. Nil for anything this client cannot honour.
+    var url: String?
+    var isEnabled: Bool
+    var style: MessageComponent.Style
+    /// A select menu, drawn as its placeholder with a disclosure.
+    var isMenu: Bool
 }
 
 nonisolated struct ReactionSlot: Sendable {
@@ -208,7 +278,9 @@ nonisolated struct TimelineLayoutEngine: Sendable {
                     rows.append(TimelineRow(height: rowHeight(of: cached), kind: .message(cached)))
                     continue
                 }
-                let row = buildMessage(message, input: input, parser: parser)
+                let row = message.message.isSystemEvent
+                    ? buildSystemMessage(message, input: input)
+                    : buildMessage(message, input: input, parser: parser)
                 cache[key] = row
                 rows.append(TimelineRow(height: rowHeight(of: row), kind: .message(row)))
             }
@@ -238,7 +310,11 @@ nonisolated struct TimelineLayoutEngine: Sendable {
         if let block = row.textBlock {
             bottom = max(bottom, row.textOrigin.y + block.size.height)
         }
+        for slot in row.stickers { bottom = max(bottom, slot.rect.maxY) }
         for slot in row.attachments { bottom = max(bottom, slot.rect.maxY) }
+        for slot in row.embeds { bottom = max(bottom, slot.rect.maxY) }
+        for slot in row.components { bottom = max(bottom, slot.rect.maxY) }
+        if let poll = row.poll { bottom = max(bottom, poll.rect.maxY) }
         for slot in row.reactions { bottom = max(bottom, slot.rect.maxY) }
         return ceil(bottom + TimelineMetrics.runBottomPadding)
     }
@@ -287,18 +363,41 @@ nonisolated struct TimelineLayoutEngine: Sendable {
         }
 
         // Body text.
+        //
+        // A message that is nothing but emoji is drawn large — the rule every
+        // client shares, and the one that decides whether a lone thumbs-up
+        // reads as a reply or as punctuation. The decision is made on the
+        // PARSED tree, because `<:blobcat:123>` is not emoji by any character
+        // test and `:thumbsup:` was expanded server-side long before this.
         var textBlock: TimelineTextBlock?
         let textOrigin = CGPoint(x: contentX, y: y)
         if !message.content.isEmpty {
             let document = parser.parse(message.content)
+            let style = document.jumboEmojiCount == nil ? input.style : input.style.jumbo
             let text = MessageTextBuilder.build(
                 document: document,
                 context: input.mentions,
-                style: input.style
+                style: style
             )
-            let block = TimelineTextBlock(text: text, width: contentWidth, style: input.style)
+            let block = TimelineTextBlock(text: text, width: contentWidth, style: style)
             textBlock = block
             y += block.size.height
+        }
+
+        // Stickers, above attachments: a sticker IS the message, and one drawn
+        // under a screenshot reads as a caption on it.
+        var stickers: [StickerSlot] = []
+        for sticker in message.stickers {
+            y += TimelineMetrics.attachmentGap
+            let side = min(Metrics.stickerInline, contentWidth)
+            stickers.append(StickerSlot(
+                rect: CGRect(x: contentX, y: y, width: side, height: side),
+                sticker: sticker,
+                url: CDN.sticker(id: sticker.id, format: sticker.format),
+                isVector: sticker.format == .lottie,
+                isAnimated: sticker.format.isAnimated
+            ))
+            y += side
         }
 
         // Attachments.
@@ -314,38 +413,81 @@ nonisolated struct TimelineLayoutEngine: Sendable {
             y = slot.rect.maxY
         }
 
+        // A poll IS the message: it arrives beside an empty body, so a renderer
+        // that does not know about one draws an author line over a blank row.
+        var poll: PollSlot?
+        if let value = message.poll {
+            y += TimelineMetrics.attachmentGap
+            let slot = PollLayoutEngine.layout(
+                value,
+                origin: CGPoint(x: contentX, y: y),
+                availableWidth: contentWidth,
+                style: input.style
+            )
+            poll = slot
+            y = slot.rect.maxY
+        }
+
+        // Embeds. A link unfurl, a bot's status card, a release note — all the
+        // same object with different subsets populated, which is why the layout
+        // branches on what is present rather than on the `kind` string.
+        var embeds: [EmbedSlot] = []
+        for embed in message.embeds {
+            y += TimelineMetrics.attachmentGap
+            let slot = EmbedLayoutEngine.layout(
+                embed,
+                origin: CGPoint(x: contentX, y: y),
+                availableWidth: contentWidth,
+                style: input.style,
+                mentions: input.mentions,
+                parser: parser
+            )
+            embeds.append(slot)
+            y = slot.rect.maxY
+        }
+
+        // A Components V2 tree, which is the whole body of the message it
+        // arrives on. It produces the same two things an embed does — cards and
+        // controls — so nothing downstream needs a case for it.
+        var components: [ComponentSlot] = []
+        if !message.displayComponents.isEmpty {
+            y += TimelineMetrics.attachmentGap
+            let tree = ComponentsLayoutEngine.layout(
+                message.displayComponents,
+                origin: CGPoint(x: contentX, y: y),
+                width: min(Metrics.embedMaxWidth, contentWidth),
+                context: ComponentsLayoutEngine.Context(
+                    style: input.style,
+                    mentions: input.mentions,
+                    parser: parser
+                )
+            )
+            embeds.append(contentsOf: tree.cards)
+            components.append(contentsOf: tree.controls)
+            y = tree.bottom
+        } else if !message.components.isEmpty {
+            // The ordinary flat form: rows of buttons under a body or an embed.
+            y += TimelineMetrics.componentGap
+            y = Self.layoutComponents(
+                message.components,
+                contentX: contentX,
+                y: y,
+                width: contentWidth,
+                style: input.style,
+                into: &components
+            )
+        }
+
         // Reaction chips.
         var reactions: [ReactionSlot] = []
-        if !message.reactions.isEmpty {
-            y += TimelineMetrics.reactionGap
-            var x = contentX
-            for reaction in message.reactions {
-                let label = "\(reaction.count)"
-                // Built from the same parts the painter draws, so the chip
-                // cannot be narrower than its own contents.
-                let width = TimelineMetrics.reactionChipWidth(
-                    countWidth: Self.measure(label, font: input.style.metadataFont)
-                )
-                if x + width > contentX + contentWidth, x > contentX {
-                    x = contentX
-                    y += TimelineMetrics.reactionChipHeight + 4
-                }
-                reactions.append(ReactionSlot(
-                    rect: CGRect(
-                        x: x, y: y,
-                        width: width, height: TimelineMetrics.reactionChipHeight
-                    ),
-                    emoji: reaction.emoji,
-                    count: reaction.count,
-                    isMine: reaction.isMine,
-                    imageURL: reaction.emoji.id.flatMap {
-                        CDN.emoji(id: $0, animated: reaction.emoji.isAnimated, side: 16)
-                    }
-                ))
-                x += width + 4
-            }
-            y += TimelineMetrics.reactionChipHeight
-        }
+        y = Self.layoutReactions(
+            message.reactions,
+            contentX: contentX,
+            y: y,
+            width: contentWidth,
+            style: input.style,
+            into: &reactions
+        )
 
         return MessageRow(
             id: message.id,
@@ -368,14 +510,287 @@ nonisolated struct TimelineLayoutEngine: Sendable {
             textBlock: textBlock,
             textOrigin: textOrigin,
             attachments: attachments,
+            stickers: stickers,
+            embeds: embeds,
+            components: components,
+            poll: poll,
             reactions: reactions,
             accessibilityLabel: Self.accessibilityLabel(
                 author: author?.name ?? "Unknown",
                 time: Self.compactTime(message.sentAt),
                 body: textBlock?.text.plainLabel ?? "",
-                attachments: message.attachments.count
+                attachments: message.attachments.count,
+                stickers: stickers.map(\.sticker.name),
+                extra: Self.spokenBody(of: message)
             )
         )
+    }
+
+    /// A message nobody typed: a join, a boost, a pin, a call.
+    ///
+    /// **The words are the client's, and without them the row is blank.** These
+    /// arrive with `content: ""` — a renderer that only knows how to draw
+    /// content puts an avatar, a name and a timestamp over an empty space, which
+    /// on a `#welcome` channel is the whole channel.
+    ///
+    /// Drawn compactly: a tinted glyph where the avatar would be, one sentence
+    /// with the member's name in their colour, and the time inline after it. A
+    /// system event is a fact about the channel rather than something somebody
+    /// said, and giving it a full author header makes a hundred joins look like
+    /// a hundred conversations.
+    private func buildSystemMessage(
+        _ item: TimelineMessage,
+        input: Input
+    ) -> MessageRow {
+        let message = item.message
+        let author = input.authors[message.authorID]
+        let name = author?.name ?? "Someone"
+        let sentence = SystemMessageText.sentence(for: message, name: name)
+        let contentX = TimelineMetrics.contentInset
+        let contentWidth = max(80, input.width - contentX - TimelineMetrics.horizontalMargin)
+        let y = TimelineMetrics.runSpacing
+
+        let text = Self.systemText(
+            sentence,
+            authorID: message.authorID,
+            colorValue: author?.colorValue,
+            time: Self.timestampLabel(message.sentAt, calendar: input.calendar),
+            style: input.style
+        )
+        let block = TimelineTextBlock(text: text, width: contentWidth, style: input.style)
+
+        // A join message can be reacted to like any other, and dropping them
+        // would be dropping data the payload already carries.
+        var reactions: [ReactionSlot] = []
+        _ = Self.layoutReactions(
+            message.reactions,
+            contentX: contentX,
+            y: y + block.size.height,
+            width: contentWidth,
+            style: input.style,
+            into: &reactions
+        )
+
+        return MessageRow(
+            id: message.id,
+            authorID: message.authorID,
+            isRunHead: false,
+            mentionsMe: item.flags.contains(.mentionsMe),
+            isPending: false,
+            isFailed: false,
+            avatarRect: nil,
+            avatarURL: nil,
+            avatarMonogram: "",
+            decorationURL: nil,
+            authorName: name,
+            authorColor: nil,
+            authorRect: CGRect(x: contentX, y: y, width: 0, height: 0),
+            timestampText: "",
+            timestampRect: .zero,
+            gutterTimestampText: "",
+            isBot: false,
+            textBlock: block,
+            textOrigin: CGPoint(x: contentX, y: y),
+            attachments: [],
+            stickers: [],
+            embeds: [],
+            components: [],
+            poll: nil,
+            reactions: reactions,
+            systemSymbol: sentence?.symbolName ?? "circle",
+            systemTint: Self.tintColor(sentence?.tint),
+            accessibilityLabel: text.plainLabel
+        )
+    }
+
+    /// The sentence, with the name coloured and clickable and the time after it.
+    ///
+    /// Built as one attributed string rather than three drawn runs so it wraps
+    /// as a sentence — a long nickname on a narrow column has to break like
+    /// prose, not leave the verb hanging off the edge.
+    private static func systemText(
+        _ sentence: SystemSentence?,
+        authorID: UserID,
+        colorValue: UInt32?,
+        time: String,
+        style: MessageTextStyle
+    ) -> MessageText {
+        let body: [NSAttributedString.Key: Any] = [
+            .font: style.bodyFont,
+            .foregroundColor: style.secondaryColor,
+        ]
+        let output = NSMutableAttributedString()
+        var links: [MessageText.LinkRun] = []
+
+        guard let sentence else {
+            output.append(NSAttributedString(string: "Message", attributes: body))
+            return .plain(output)
+        }
+
+        output.append(NSAttributedString(string: sentence.prefix, attributes: body))
+        if !sentence.name.isEmpty {
+            let start = output.length
+            output.append(NSAttributedString(string: sentence.name, attributes: [
+                .font: style.boldFont,
+                .foregroundColor: colorValue.map { NSColor(Color(hex: $0)) }
+                    ?? style.primaryColor,
+            ]))
+            links.append(.init(
+                range: NSRange(location: start, length: output.length - start),
+                target: .user(authorID)
+            ))
+        }
+        output.append(NSAttributedString(string: sentence.suffix, attributes: body))
+        output.append(NSAttributedString(string: "  " + time, attributes: [
+            .font: style.metadataFont,
+            .foregroundColor: style.tertiaryColor,
+        ]))
+        return .plain(output, links: links)
+    }
+
+    private static func tintColor(_ tint: SystemSentence.Tint?) -> NSColor {
+        switch tint {
+        case .affirmative: NSColor(Palette.presenceOnline)
+        case .celebratory: NSColor(Palette.accent)
+        case .destructive: NSColor(Palette.unreadBadge)
+        case .quiet, nil: NSColor.tertiaryLabelColor
+        }
+    }
+
+    /// The reaction chips under a message, wrapped to the column.
+    ///
+    /// Shared by the ordinary row and the system one — a join message can be
+    /// reacted to like any other, and a second copy of this arithmetic is a
+    /// second place for the chip width to drift from what the painter draws.
+    ///
+    /// Returns the y the next thing starts at, unchanged when there is nothing
+    /// to lay out.
+    private static func layoutReactions(
+        _ reactions: [Reaction],
+        contentX: CGFloat,
+        y startY: CGFloat,
+        width: CGFloat,
+        style: MessageTextStyle,
+        into slots: inout [ReactionSlot]
+    ) -> CGFloat {
+        guard !reactions.isEmpty else { return startY }
+        var y = startY + TimelineMetrics.reactionGap
+        var x = contentX
+
+        for reaction in reactions {
+            // Built from the same parts the painter draws, so the chip cannot be
+            // narrower than its own contents.
+            let chipWidth = TimelineMetrics.reactionChipWidth(
+                countWidth: measure("\(reaction.count)", font: style.metadataFont)
+            )
+            if x + chipWidth > contentX + width, x > contentX {
+                x = contentX
+                y += TimelineMetrics.reactionChipHeight + 4
+            }
+            slots.append(ReactionSlot(
+                rect: CGRect(
+                    x: x, y: y,
+                    width: chipWidth, height: TimelineMetrics.reactionChipHeight
+                ),
+                emoji: reaction.emoji,
+                count: reaction.count,
+                isMine: reaction.isMine,
+                imageURL: reaction.emoji.id.flatMap {
+                    CDN.emoji(id: $0, animated: reaction.emoji.isAnimated, side: 16)
+                }
+            ))
+            x += chipWidth + 4
+        }
+        return y + TimelineMetrics.reactionChipHeight
+    }
+
+    /// The button rows under a message, wrapped to the column.
+    ///
+    /// Returns the y the next thing starts at.
+    /// Shared with `ComponentsLayoutEngine`, which lays rows out inside a card.
+    static func layoutComponentRows(
+        _ rows: [ActionRow],
+        contentX: CGFloat,
+        y: CGFloat,
+        width: CGFloat,
+        style: MessageTextStyle,
+        into slots: inout [ComponentSlot]
+    ) -> CGFloat {
+        layoutComponents(rows, contentX: contentX, y: y, width: width, style: style, into: &slots)
+    }
+
+    private static func layoutComponents(
+        _ rows: [ActionRow],
+        contentX: CGFloat,
+        y startY: CGFloat,
+        width: CGFloat,
+        style: MessageTextStyle,
+        into slots: inout [ComponentSlot]
+    ) -> CGFloat {
+        var y = startY
+        let font = NSFont.systemFont(ofSize: style.metadataFont.pointSize, weight: .semibold)
+
+        for row in rows {
+            var x = contentX
+            var usedRow = false
+            for control in row.components {
+                let glyphRoom = control.emoji == nil
+                    ? 0
+                    : TimelineMetrics.componentGlyphSide + TimelineMetrics.componentGlyphGap
+                let chevronRoom: CGFloat = control.kind == .menu ? 14 : 0
+                let labelWidth = measure(control.label, font: font)
+                let buttonWidth = min(
+                    width,
+                    TimelineMetrics.componentPadding * 2 + glyphRoom + labelWidth + chevronRoom
+                )
+                if usedRow, x + buttonWidth > contentX + width {
+                    x = contentX
+                    y += TimelineMetrics.componentHeight + TimelineMetrics.componentGap
+                }
+                slots.append(ComponentSlot(
+                    rect: CGRect(
+                        x: x, y: y,
+                        width: buttonWidth, height: TimelineMetrics.componentHeight
+                    ),
+                    label: control.label,
+                    emoji: control.emoji,
+                    url: control.destination,
+                    isEnabled: control.isActionable,
+                    style: control.style,
+                    isMenu: control.kind == .menu
+                ))
+                x += buttonWidth + TimelineMetrics.componentGap
+                usedRow = true
+            }
+            if usedRow { y += TimelineMetrics.componentHeight + TimelineMetrics.componentGap }
+        }
+        // The last row contributed a trailing gap the caller does not want. With
+        // nothing laid out at all there is no gap to take back.
+        return slots.isEmpty ? startY : y - TimelineMetrics.componentGap
+    }
+
+    /// What a message says when its body is not `content`.
+    ///
+    /// Folded once, at layout time, for the same reason `plainText` is: a row is
+    /// one accessibility node with a plain `String`, and letting the platform
+    /// derive a label from styled text re-resolves every run into attributes on
+    /// every render — per run, per frame, whether or not anybody is using
+    /// VoiceOver.
+    private static func spokenBody(of message: Message) -> String {
+        var parts: [String] = []
+        for node in message.displayComponents {
+            let text = node.plainText
+            if !text.isEmpty { parts.append(text) }
+        }
+        if let poll = message.poll {
+            parts.append("Poll. \(poll.question)")
+            for answer in poll.answers {
+                parts.append(poll.showsResults
+                    ? "\(answer.text), \(answer.count) votes"
+                    : answer.text)
+            }
+        }
+        return parts.joined(separator: ". ")
     }
 
     // MARK: Helpers
@@ -457,10 +872,21 @@ nonisolated struct TimelineLayoutEngine: Sendable {
         author: String,
         time: String,
         body: String,
-        attachments: Int
+        attachments: Int,
+        stickers: [String],
+        extra: String
     ) -> String {
         var label = "\(author), \(time)"
         if !body.isEmpty { label += ". \(body)" }
+        // **A components-only message and a poll have no `content` at all**, so
+        // a label folded from the body alone leaves VoiceOver reading a name and
+        // a timestamp over what is, to a sighted reader, a whole card.
+        if !extra.isEmpty { label += ". \(extra)" }
+        // Named rather than counted: a sticker's name is what it says, and
+        // "1 sticker" is the one description that tells a reader nothing.
+        for name in stickers where !name.isEmpty {
+            label += ". Sticker, \(name)"
+        }
         if attachments > 0 {
             label += attachments == 1 ? ". 1 attachment" : ". \(attachments) attachments"
         }

@@ -140,9 +140,33 @@ extension AppModel {
         case .voice, .stage: .voice(channelID)
         default: .conversation(channelID)
         }
-        let supplementary: WorkspacePresentation.Supplementary? =
-            isMemberListShown && channel.guildID != nil ? .members : nil
-        return WorkspacePresentation(primary: primary, supplementary: supplementary)
+        return WorkspacePresentation(
+            primary: primary,
+            supplementary: supplementary(for: channel)
+        )
+    }
+
+    /// What sits beside the transcript.
+    ///
+    /// A server channel offers its roster; a one-to-one conversation offers the
+    /// person you are talking to. A group DM offers neither — it has several
+    /// people and no roster route, and a pane showing one of them would be
+    /// arbitrary.
+    private func supplementary(for channel: Channel) -> WorkspacePresentation.Supplementary? {
+        if channel.guildID != nil {
+            return isMemberListShown ? .members : nil
+        }
+        // A group DM has a roster — its recipients — and no single person, so it
+        // takes the member list rather than the profile pane. The same toggle
+        // drives it, because from the reader's side it is the same control:
+        // "show me who is in here".
+        if channel.kind == .groupDirectMessage {
+            return isMemberListShown ? .members : nil
+        }
+        guard isDirectMessageProfileShown, channel.kind == .directMessage,
+              let partnerID = channel.recipientIDs.first(where: { $0 != currentUserID })
+        else { return nil }
+        return .userProfile(partnerID)
     }
 
     /// The toolbar's channel chrome.
@@ -154,7 +178,9 @@ extension AppModel {
                 kind: .text,
                 topic: nil,
                 isMemberListShown: false,
-                canShowMemberList: false
+                canShowMemberList: false,
+                isUserProfileShown: false,
+                canShowUserProfile: false
             )
         }
         return ChannelChrome(
@@ -164,6 +190,9 @@ extension AppModel {
             topic: channel.topic,
             isMemberListShown: isMemberListShown,
             canShowMemberList: channel.guildID != nil
+                || channel.kind == .groupDirectMessage,
+            isUserProfileShown: isDirectMessageProfileShown,
+            canShowUserProfile: channel.guildID == nil && channel.kind == .directMessage
         )
     }
 
@@ -248,17 +277,40 @@ extension AppModel {
                 ? channel.recipientIDs.first { $0 != currentUserID }
                 : nil
             let partner = partnerID.flatMap { userTable[$0] }
+            let name = displayName(of: channel)
+
+            // **A group has a face too, and it is the group's own.** A group DM
+            // carries an `icon` hash on a CDN path of its own — `/channel-icons`
+            // — and a row built only for the one-to-one case leaves every group
+            // in the account showing a bare "?" plate, which is what a hundred
+            // identical grey circles in the DM list actually was.
+            let avatarURL: URL? = switch channel.kind {
+            case .directMessage:
+                partner.flatMap { avatarURL(for: $0, side: Metrics.avatarRow) }
+            case .groupDirectMessage:
+                channel.iconHash.flatMap {
+                    CDN.channelIcon(channelID: channelID, hash: $0, side: Metrics.avatarRow)
+                }
+            default:
+                nil
+            }
 
             rows.append(.channel(SidebarChannel(
                 id: channelID,
-                name: displayName(of: channel),
+                name: name,
                 kind: channel.kind,
                 isUnread: state.unread,
                 mentionCount: state.mentions,
                 isMuted: state.muted,
                 voiceMembers: [],
-                avatarURL: partner.flatMap { avatarURL(for: $0, side: Metrics.avatarRow) },
-                monogram: partner?.monogram,
+                avatarURL: avatarURL,
+                // A group with no icon gets its own initials rather than the
+                // channel glyph: the name IS the identity there, and a row of
+                // identical glyphs is a list nobody can scan.
+                monogram: partner?.monogram ?? Self.monogram(of: name),
+                // A group has several people and no single presence; a dot on
+                // one of them would be a fact about somebody the row does not
+                // name.
                 status: partnerID.map { presences[$0]?.status ?? .offline }
             )))
         }
@@ -399,6 +451,12 @@ extension AppModel {
         if !channel.name.isEmpty { return channel.name }
         let names = channel.recipientIDs.compactMap { users[$0]?.preferredName }
         return names.isEmpty ? "Direct Message" : names.joined(separator: ", ")
+    }
+
+    /// Initials for something with a name and no picture.
+    static func monogram(of name: String) -> String {
+        let letters = name.split(separator: " ").compactMap(\.first).prefix(2)
+        return letters.isEmpty ? "#" : String(letters).uppercased()
     }
 
     func avatarURL(for user: User, side: CGFloat) -> URL? {

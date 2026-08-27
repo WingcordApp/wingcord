@@ -46,6 +46,14 @@ struct MemberEntry: Hashable, Sendable, Identifiable {
     var tagBadgeURL: URL?
     /// Full-row artwork drawn behind everything else.
     var nameplateURL: URL?
+    /// Whether this person owns the conversation.
+    ///
+    /// A group DM's creator, drawn with a crown after their name. **Only ever
+    /// true in a group**: a guild has an owner too, and Discord marks them the
+    /// same way — but a guild roster is grouped by hoisted role and the owner is
+    /// already at the top of it, so a second mark there says nothing the reader
+    /// did not already know.
+    var isOwner: Bool = false
 
     var id: UInt64 { userID.rawValue }
 }
@@ -61,6 +69,8 @@ nonisolated enum MemberRowGeometry {
     static let contentInset: CGFloat = 8
     static let avatarSide = Metrics.avatarRow
     static let avatarGap: CGFloat = 8
+    /// The owner's crown, beside a name.
+    static let crownSide: CGFloat = 12
     static let sectionHeaderHeight: CGFloat = 28
     static let sectionSpacing: CGFloat = 6
 

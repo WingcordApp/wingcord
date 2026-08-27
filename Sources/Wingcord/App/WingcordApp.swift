@@ -43,7 +43,9 @@ struct WingcordApp: App {
             // therefore goes above `.environment`, which stays outermost.
             RootView()
                 .showsPerformanceInspector()
+                .presentsMedia()
                 .presentsProfiles()
+                .presentsExpressionInfo()
                 .resolvesMotion()
                 .environment(model)
                 .frame(

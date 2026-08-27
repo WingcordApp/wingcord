@@ -108,7 +108,11 @@ struct GuildRailTile: View {
         }
         .animation(motion.hover, value: isHovering)
         .animation(motion.glassMorph, value: isSelected)
-        .help(guild.name)
+        // **A flyout, not `.help()`.** A rail tile is a wordless 44-point
+        // picture, so its name is the only thing that identifies it — and a
+        // system tooltip answers that most of a second after the reader gave up
+        // asking, in a box drawn in nothing this app's design system shares.
+        .hoverFlyout(guild.name)
         .accessibilityLabel(Text(guild.name))
         .accessibilityAddTraits(isSelected ? [.isButton, .isSelected] : .isButton)
     }
@@ -157,7 +161,7 @@ struct HomeRailTile: View {
         }
         .animation(motion.hover, value: isHovering)
         .animation(motion.glassMorph, value: isSelected)
-        .help("Direct Messages")
+        .hoverFlyout("Direct Messages")
         .accessibilityLabel(Text("Direct Messages"))
         .accessibilityAddTraits(isSelected ? [.isButton, .isSelected] : .isButton)
     }

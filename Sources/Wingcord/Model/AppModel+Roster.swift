@@ -7,9 +7,42 @@ struct RosterMemoKey: Hashable, Sendable {
     var memberRevision: UInt64
     var presenceRevision: UInt64
     var roleRevision: UInt64
+    /// A group conversation's roster IS its channel's recipient list, so this
+    /// memo has to see a channel change. It is the revision that deliberately
+    /// does **not** move on an inbound message — see `ChannelIndex` — so
+    /// carrying it costs a rebuild when somebody joins the group and never
+    /// otherwise.
+    var structureRevision: UInt64
 }
 
 extension AppModel {
+
+    /// Names in order, sorted once on a precomputed key.
+    ///
+    /// **Never sort with `localizedCaseInsensitiveCompare` in a comparator.** It
+    /// is an ICU call per comparison, and a roster of five hundred is ~4,500
+    /// comparisons — measured at roughly a third of a second of main thread on
+    /// the app this replaces, on every roster rebuild. Decorate, sort, undecorate.
+    ///
+    /// Shared by the guild roster and the group one: two copies of a sort is two
+    /// places for a tie-break to differ, and a list that orders differently in
+    /// two surfaces is a list nobody can scan.
+    static func sortedByName(_ entries: [MemberEntry]) -> [MemberEntry] {
+        struct SortKey {
+            var key: String
+            var entry: MemberEntry
+        }
+        var decorated: [SortKey] = []
+        decorated.reserveCapacity(entries.count)
+        for entry in entries {
+            decorated.append(SortKey(key: entry.name.localizedLowercase, entry: entry))
+        }
+        decorated.sort { lhs, rhs in
+            if lhs.key != rhs.key { return lhs.key < rhs.key }
+            return lhs.entry.userID < rhs.entry.userID
+        }
+        return decorated.map(\.entry)
+    }
 
     /// The member list for the selected channel.
     ///
@@ -25,7 +58,8 @@ extension AppModel {
             channelID: selectedChannelID,
             memberRevision: memberRevision,
             presenceRevision: presenceRevision,
-            roleRevision: roleRevision
+            roleRevision: roleRevision,
+            structureRevision: channelIndex.structureRevision
         )
         // Read the observable inputs before the early return, so a cache hit
         // still registers the dependency the reader needs.
@@ -43,6 +77,14 @@ extension AppModel {
         members memberTable: [GuildID: [UserID: Member]],
         presences presenceTable: [UserID: Presence]
     ) -> [MemberSection] {
+        // A group conversation has a roster of its own — its recipients — and
+        // no guild behind it, so it never reaches the table lookup below.
+        if let channelID = selectedChannelID,
+           let channel = channelIndex[channelID],
+           channel.kind == .groupDirectMessage
+        {
+            return buildGroupRoster(channel, presences: presenceTable)
+        }
         guard let guildID = selectedGuildID,
               let guildMembers = memberTable[guildID]
         else { return [] }
@@ -104,29 +146,7 @@ extension AppModel {
             }
         }
 
-        // Decorate-sort-undecorate on a precomputed lowercased key.
-        //
-        // **Never sort with `localizedCaseInsensitiveCompare` in a comparator.**
-        // It is an ICU call per comparison, and a roster of five hundred is
-        // ~4,500 comparisons — measured at roughly a third of a second of main
-        // thread on the app this replaces, on every roster rebuild.
-        struct SortKey {
-            var key: String
-            var entry: MemberEntry
-        }
-
-        func sorted(_ entries: [MemberEntry]) -> [MemberEntry] {
-            var decorated: [SortKey] = []
-            decorated.reserveCapacity(entries.count)
-            for entry in entries {
-                decorated.append(SortKey(key: entry.name.localizedLowercase, entry: entry))
-            }
-            decorated.sort { lhs, rhs in
-                if lhs.key != rhs.key { return lhs.key < rhs.key }
-                return lhs.entry.userID < rhs.entry.userID
-            }
-            return decorated.map(\.entry)
-        }
+        let sorted = Self.sortedByName
 
         var sections: [MemberSection] = []
         for role in guildRoles.values.filter({ hoisted[$0.id] != nil })
@@ -164,6 +184,87 @@ extension AppModel {
             ))
         }
 
+        return sections
+    }
+
+    /// The roster of a group conversation.
+    ///
+    /// **Built from the channel, not from a member table.** A group has no guild
+    /// and therefore no member records, no roles and no hoisting — its people
+    /// are the `recipients` array Discord already sent with the channel, plus
+    /// the reader, who is in the conversation and is not in that array.
+    ///
+    /// Two sections, Online and Offline, because that is the only grouping a
+    /// group has. The owner carries a crown wherever they land rather than being
+    /// hoisted into a section of one.
+    private func buildGroupRoster(
+        _ channel: Channel,
+        presences presenceTable: [UserID: Presence]
+    ) -> [MemberSection] {
+        var online: [MemberEntry] = []
+        var offline: [MemberEntry] = []
+
+        // The reader first, so a conversation whose recipients have not arrived
+        // still lists somebody — and so the list matches the group's own
+        // membership rather than everybody-but-you.
+        var participants = channel.recipientIDs
+        if let currentUserID, !participants.contains(currentUserID) {
+            participants.append(currentUserID)
+        }
+
+        for userID in participants {
+            guard let user = users[userID] else { continue }
+            let presence = presenceTable[userID]
+            let status = presence?.status ?? .offline
+            let entry = MemberEntry(
+                userID: userID,
+                name: user.preferredName,
+                // No roles in a group, so no role colour. Nil is the default
+                // ink, which is what every name here should be.
+                colorValue: nil,
+                avatarURL: avatarURL(for: user, side: Metrics.avatarRow),
+                monogram: user.monogram,
+                decorationURL: user.decoration?.avatarDecorationHash
+                    .flatMap { CDN.avatarDecoration(hash: $0) },
+                status: status,
+                isOnMobile: presence?.isOnMobile ?? false,
+                subtitle: presence?.primaryActivity?.rowSubtitle
+                    ?? presence?.customStatus?.rowSubtitle,
+                isBot: user.isBot,
+                tag: user.decoration?.primaryGuildTag,
+                tagBadgeURL: user.decoration.flatMap { decoration in
+                    guard let guildID = decoration.primaryGuildID,
+                          let hash = decoration.primaryGuildBadgeHash
+                    else { return nil }
+                    return CDN.guildTagBadge(guildID: guildID, hash: hash)
+                },
+                nameplateURL: nil,
+                isOwner: userID == channel.ownerID
+            )
+            if status == .offline { offline.append(entry) } else { online.append(entry) }
+        }
+
+        var sections: [MemberSection] = []
+        if !online.isEmpty {
+            let entries = Self.sortedByName(online)
+            sections.append(MemberSection(
+                roleID: nil,
+                title: "Online",
+                count: entries.count,
+                colorValue: nil,
+                members: entries
+            ))
+        }
+        if !offline.isEmpty {
+            let entries = Self.sortedByName(offline)
+            sections.append(MemberSection(
+                roleID: nil,
+                title: "Offline",
+                count: entries.count,
+                colorValue: nil,
+                members: entries
+            ))
+        }
         return sections
     }
 

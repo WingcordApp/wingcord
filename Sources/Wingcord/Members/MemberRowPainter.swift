@@ -146,6 +146,33 @@ nonisolated enum MemberRowPainter {
             )
         }
 
+        // The owner's crown, after the name and after whatever chip follows it.
+        //
+        // A glyph rather than a chip: the tag and the APP mark are things a
+        // person *chose*, and a crown is a fact about the conversation. Drawing
+        // it as a third capsule would put it in the same category as the other
+        // two.
+        if entry.isOwner {
+            let trailing = textX + drawnName
+                + (chipWidth > 0 ? chipWidth + MemberRowGeometry.tagChipGap : 0)
+            let capCenter = nameY + style.bodyFont.ascender - style.bodyFont.capHeight / 2
+            let side = MemberRowGeometry.crownSide
+            let crown = CGRect(
+                x: trailing + MemberRowGeometry.tagChipGap,
+                y: (capCenter - side / 2).rounded(),
+                width: side,
+                height: side
+            )
+            if crown.maxX <= plate.maxX - MemberRowGeometry.contentInset {
+                TimelineRowPainter.drawSymbol(
+                    "crown.fill",
+                    tint: NSColor(Palette.presenceIdle),
+                    in: crown,
+                    context: context
+                )
+            }
+        }
+
         if let subtitle = entry.subtitle {
             TimelineRowPainter.drawText(
                 subtitle,

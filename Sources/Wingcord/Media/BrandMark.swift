@@ -252,18 +252,25 @@ nonisolated enum BrandMark {
 /// path outside any isolation, and the whole operation is a dictionary read
 /// measured in nanoseconds — an actor hop would cost more than the parse it
 /// saves.
-private nonisolated final class MarkCache: @unchecked Sendable {
+/// Parsed outlines, held for the process.
+///
+/// Not private to this file: the guild standing rosette is the same kind of
+/// object — one authored outline asked for again on every size change — and a
+/// second cache class for it would be a second lock, a second dictionary and a
+/// second place for the "parse once" rule to be forgotten. Keys are namespaced
+/// by their owner (`"guild.rosette"`), so a service and a mark cannot collide.
+nonisolated final class MarkCache: @unchecked Sendable {
     static let shared = MarkCache()
 
     private let lock = NSLock()
     private var paths: [String: CGPath] = [:]
 
-    func path(for service: String, outline: String) -> CGPath? {
+    func path(for key: String, outline: String) -> CGPath? {
         lock.lock()
         defer { lock.unlock() }
-        if let hit = paths[service] { return hit }
+        if let hit = paths[key] { return hit }
         guard let built = VectorPath.parse(outline) else { return nil }
-        paths[service] = built
+        paths[key] = built
         return built
     }
 }

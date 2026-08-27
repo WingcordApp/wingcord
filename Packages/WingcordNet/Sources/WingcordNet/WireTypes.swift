@@ -37,6 +37,11 @@ struct UserDTO: Decodable, Sendable {
     var avatar_decoration_data: AvatarDecorationDTO?
     var collectibles: CollectiblesDTO?
     var primary_guild: PrimaryGuildDTO?
+    /// Which Nitro the account carries. **Present on `/users/@me` and on
+    /// nobody else**, which is exactly where it is needed: Nitro is what decides
+    /// whether the reader may use another server's emoji, and that is a question
+    /// only ever asked about the reader.
+    var premium_type: Int?
 
     var domain: User {
         // The box is built only when there is something to put in it. One
@@ -48,6 +53,7 @@ struct UserDTO: Decodable, Sendable {
             bannerHash: banner,
             accentColor: accent_color,
             bio: bio?.isEmpty == true ? nil : bio,
+            premiumTier: premium_type.flatMap { PremiumTier(rawValue: $0) } ?? .none,
             primaryGuildTag: primary_guild?.tag,
             primaryGuildBadgeHash: primary_guild?.badge,
             primaryGuildID: primary_guild?.identity_guild_id
@@ -189,6 +195,7 @@ struct ChannelDTO: Decodable, Sendable {
     var recipients: [UserDTO]?
     var recipient_ids: [UserID]?
     var icon: String?
+    var owner_id: UserID?
     var message_count: Int?
 
     func domain(guildID: GuildID? = nil) -> Channel {
@@ -206,6 +213,7 @@ struct ChannelDTO: Decodable, Sendable {
             overwrites: permission_overwrites?.map(\.domain) ?? [],
             recipientIDs: recipients?.map(\.id) ?? recipient_ids ?? [],
             iconHash: icon,
+            ownerID: owner_id,
             messageCount: message_count
         )
     }
@@ -455,6 +463,8 @@ struct MessageDTO: Decodable, Sendable {
     var embeds: [EmbedDTO]?
     var reactions: [ReactionDTO]?
     var sticker_items: [StickerDTO]?
+    var components: [ComponentDTO]?
+    var poll: PollDTO?
     var mentions: [UserDTO]?
     var mention_roles: [RoleID]?
     var mention_everyone: Bool?
@@ -498,6 +508,9 @@ struct MessageDTO: Decodable, Sendable {
             embeds: embeds?.map(\.domain) ?? [],
             reactions: reactions?.map(\.domain) ?? [],
             stickers: sticker_items?.map(\.domain) ?? [],
+            components: ComponentDTO.rows(components),
+            displayComponents: ComponentDTO.display(components),
+            poll: poll?.domain,
             mentionedUserIDs: mentions?.map(\.id) ?? [],
             mentionedRoleIDs: mention_roles ?? [],
             mentionsEveryone: mention_everyone ?? false,
@@ -858,5 +871,488 @@ struct CollectiblesProductDTO: Decodable, Sendable {
                 .flatMap { URL(string: $0) },
             layers: layers
         )
+    }
+}
+
+// MARK: - Guild profiles
+//
+// `GET /guilds/{id}/profile`. The route behind a server tag: what the letters
+// beside somebody's name stand for.
+
+struct GuildProfileDTO: Decodable, Sendable {
+    var id: GuildID
+    var name: String?
+    var icon_hash: String?
+    var banner_hash: String?
+    /// The tag profile's own header artwork. Most servers carrying a tag have
+    /// this and no `banner_hash` at all.
+    var custom_banner_hash: String?
+    var description: String?
+    var member_count: Int?
+    var online_count: Int?
+    var tag: String?
+    var badge_hash: String?
+    /// `#rrggbb`, which is the one place in this API a colour is a string.
+    var badge_color_primary: String?
+    var badge_color_secondary: String?
+    var traits: [TraitDTO]?
+    var features: [String]?
+    var premium_subscription_count: Int?
+    var premium_tier: Int?
+
+    struct TraitDTO: Decodable, Sendable {
+        var emoji_id: EmojiID?
+        var emoji_name: String?
+        var emoji_animated: Bool?
+        var label: String?
+        var position: Int?
+
+        /// Dropped without a label. The emoji is decoration; the word is the
+        /// trait, and a chip holding only a picture says nothing.
+        func domain(fallbackPosition: Int) -> GuildTrait? {
+            guard let label, !label.isEmpty else { return nil }
+            return GuildTrait(
+                id: position ?? fallbackPosition,
+                emojiID: emoji_id,
+                emojiName: emoji_name,
+                emojiAnimated: emoji_animated ?? false,
+                label: label
+            )
+        }
+    }
+
+    var domain: GuildProfile {
+        var traitList: [GuildTrait] = []
+        for (index, trait) in (traits ?? []).enumerated() {
+            guard let value = trait.domain(fallbackPosition: index) else { continue }
+            traitList.append(value)
+        }
+        traitList.sort { $0.id < $1.id }
+
+        return GuildProfile(
+            id: id,
+            name: name ?? "Unknown",
+            iconHash: icon_hash,
+            // The ordinary boost banner first, the tag profile's own second.
+            // Both are drawn the same way, and a server with neither draws its
+            // plate.
+            bannerHash: banner_hash ?? custom_banner_hash,
+            description: description.flatMap { $0.isEmpty ? nil : $0 },
+            memberCount: member_count,
+            onlineCount: online_count,
+            tag: tag.flatMap { $0.isEmpty ? nil : $0 },
+            badgeHash: badge_hash,
+            badgeColorPrimary: Self.color(badge_color_primary),
+            badgeColorSecondary: Self.color(badge_color_secondary),
+            traits: traitList,
+            features: Set(features ?? []),
+            premiumSubscriptionCount: premium_subscription_count ?? 0,
+            premiumTier: premium_tier ?? 0
+        )
+    }
+
+    /// `#2be12b` to `0x2BE12B`.
+    ///
+    /// Nil rather than black on anything unexpected: the badge falls back to the
+    /// standing's own colour, and a silent zero would paint every unparsed
+    /// badge as a black rosette.
+    private static func color(_ text: String?) -> UInt32? {
+        guard var text, !text.isEmpty else { return nil }
+        if text.hasPrefix("#") { text.removeFirst() }
+        guard text.count == 6 else { return nil }
+        return UInt32(text, radix: 16)
+    }
+}
+
+
+// MARK: - Message components
+//
+// Discord's component tree, read down to the two shapes a reading client can
+// draw: the action row and the button. Everything past those is skipped rather
+// than failed — the tree grows, and a decoder that throws on an unknown type
+// throws away the whole message page.
+
+struct ComponentDTO: Decodable, Sendable {
+    /// Hand-written so the one recursive key can be boxed.
+    ///
+    /// Everything else is the synthesised behaviour; only `accessory` differs,
+    /// because Discord sends it as a single object and the property has to be an
+    /// array for the type to have a layout at all.
+    init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        type = try container.decodeIfPresent(Int.self, forKey: .type)
+        style = try container.decodeIfPresent(Int.self, forKey: .style)
+        label = try container.decodeIfPresent(String.self, forKey: .label)
+        url = try container.decodeIfPresent(String.self, forKey: .url)
+        custom_id = try container.decodeIfPresent(String.self, forKey: .custom_id)
+        disabled = try container.decodeIfPresent(Bool.self, forKey: .disabled)
+        placeholder = try container.decodeIfPresent(String.self, forKey: .placeholder)
+        emoji = try container.decodeIfPresent(EmojiDTO.self, forKey: .emoji)
+        components = try container.decodeIfPresent([ComponentDTO].self, forKey: .components)
+        content = try container.decodeIfPresent(String.self, forKey: .content)
+        accent_color = try container.decodeIfPresent(UInt32.self, forKey: .accent_color)
+        divider = try container.decodeIfPresent(Bool.self, forKey: .divider)
+        spacing = try container.decodeIfPresent(Int.self, forKey: .spacing)
+        items = try container.decodeIfPresent([MediaItemDTO].self, forKey: .items)
+        media = try container.decodeIfPresent(MediaSourceDTO.self, forKey: .media)
+        accessory = try container.decodeIfPresent(ComponentDTO.self, forKey: .accessory).map { [$0] }
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case type, style, label, url, custom_id, disabled, placeholder, emoji
+        case components, content, accent_color, divider, spacing, items, media, accessory
+    }
+
+    var type: Int?
+    var style: Int?
+    var label: String?
+    var url: String?
+    var custom_id: String?
+    var disabled: Bool?
+    var placeholder: String?
+    var emoji: EmojiDTO?
+    var components: [ComponentDTO]?
+    // Components V2 carries its content on the node itself.
+    var content: String?
+    var accent_color: UInt32?
+    var divider: Bool?
+    var spacing: Int?
+    var items: [MediaItemDTO]?
+    /// A section's trailing accessory — a thumbnail or a button.
+    ///
+    /// **Boxed in an array, because a struct cannot recursively contain
+    /// itself.** `[ComponentDTO]` is a heap buffer, so the recursion is
+    /// indirect; `ComponentDTO?` inside `ComponentDTO` is not a type Swift can
+    /// lay out. Discord sends one object, and `decodeIfPresent` on an array
+    /// would reject it — so the key is decoded by hand into a one-element array.
+    var accessory: [ComponentDTO]?
+    var media: MediaSourceDTO?
+
+    /// The top-level rows, flattened to what can be drawn.
+    ///
+    /// Rows with nothing drawable in them are dropped rather than kept empty: an
+    /// action row holding only a component type this client does not know is a
+    /// blank strip of reserved height under a message.
+    static func rows(_ payload: [ComponentDTO]?) -> [ActionRow] {
+        guard let payload, !payload.isEmpty else { return [] }
+        var rows: [ActionRow] = []
+        rows.reserveCapacity(payload.count)
+        for row in payload {
+            // Type 1 is an action row; anything else at the top level is a
+            // Components V2 container, which `Message.isComponentsOnly` already
+            // flags and which this client does not lay out.
+            guard row.type == 1 else { continue }
+            var controls: [MessageComponent] = []
+            for child in row.components ?? [] {
+                guard let control = child.domain else { continue }
+                controls.append(control)
+            }
+            guard !controls.isEmpty else { continue }
+            rows.append(ActionRow(components: controls))
+        }
+        return rows
+    }
+
+    fileprivate var control: MessageComponent? { domain }
+
+    private var domain: MessageComponent? {
+        switch type {
+        case 2:
+            let style = MessageComponent.Style(rawValue: self.style ?? 2)
+            let kind: MessageComponent.Kind
+            if style == .link {
+                // A link button with no URL is not a link button. It cannot be
+                // pressed and it cannot say where it goes, so it is drawn as the
+                // inert control it is rather than as a live one.
+                guard let url, !url.isEmpty else { return nil }
+                kind = .link(url)
+            } else {
+                kind = .action
+            }
+            let text = label ?? ""
+            // A button with neither words nor a glyph has nothing to draw.
+            guard !text.isEmpty || emoji != nil else { return nil }
+            return MessageComponent(
+                id: custom_id ?? url ?? text,
+                label: text,
+                kind: kind,
+                style: style,
+                isDisabled: disabled ?? false,
+                emoji: emoji?.domain
+            )
+        case 3, 5, 6, 7, 8:
+            // Every flavour of select menu. Drawn as its own placeholder, which
+            // is the only thing about it a reader can act on the meaning of.
+            let text = placeholder ?? "Select an option"
+            return MessageComponent(
+                id: custom_id ?? text,
+                label: text,
+                kind: .menu,
+                style: .secondary,
+                isDisabled: true
+            )
+        default:
+            return nil
+        }
+    }
+}
+
+
+// MARK: - Components V2
+
+extension ComponentDTO {
+    /// The display tree, or empty for a message built the ordinary way.
+    ///
+    /// **Empty is the answer for a V1 message**, and that is what keeps the two
+    /// paths from drawing the same buttons twice: a payload whose top level is
+    /// nothing but action rows is handled by `rows` above, and only a payload
+    /// carrying a genuine V2 node — a container, a text display, a section, a
+    /// gallery or a separator — becomes a tree. When it does, the rows come with
+    /// it, in tree order, so a row declared inside a container is drawn inside
+    /// it rather than hoisted underneath.
+    static func display(_ payload: [ComponentDTO]?) -> [DisplayComponent] {
+        guard let payload, payload.contains(where: { $0.isDisplayNode }) else { return [] }
+        return nodes(payload)
+    }
+
+    private static func nodes(_ payload: [ComponentDTO]) -> [DisplayComponent] {
+        var result: [DisplayComponent] = []
+        result.reserveCapacity(payload.count)
+        for child in payload {
+            guard let node = child.node, !node.isEmpty else { continue }
+            result.append(node)
+        }
+        return result
+    }
+
+    /// Whether this is a V2 node rather than a plain action row.
+    private var isDisplayNode: Bool {
+        switch type {
+        case 9, 10, 12, 14, 17: true
+        default: false
+        }
+    }
+
+    private var node: DisplayComponent? {
+        switch type {
+        case 17:
+            .container(
+                // Discord sends `accent_color` as an integer here, unlike the
+                // `#rrggbb` string on a guild profile. Zero is a real black
+                // accent nobody picks and an unset one arrives as null, so it
+                // is dropped rather than drawn as a black rule.
+                accent: accent_color.flatMap { $0 == 0 ? nil : $0 },
+                children: Self.nodes(components ?? [])
+            )
+        case 9:
+            .section(
+                children: Self.nodes(components ?? []),
+                thumbnail: accessory?.first?.media?.domain
+            )
+        case 10:
+            content.map { DisplayComponent.text($0) }
+        case 12:
+            .gallery((items ?? []).compactMap { $0.media?.domain })
+        case 14:
+            // Discord's spacing is 1 (small) or 2 (large); a divider defaults to
+            // drawn, which is what an omitted flag means on this node.
+            .separator(isDivider: divider ?? true, isLarge: (spacing ?? 1) >= 2)
+        case 1:
+            {
+                var controls: [MessageComponent] = []
+                for child in components ?? [] {
+                    guard let control = child.control else { continue }
+                    controls.append(control)
+                }
+                return controls.isEmpty ? nil : .row(ActionRow(components: controls))
+            }()
+        default:
+            nil
+        }
+    }
+}
+
+struct MediaItemDTO: Decodable, Sendable {
+    var media: MediaSourceDTO?
+    var description: String?
+}
+
+struct MediaSourceDTO: Decodable, Sendable {
+    var url: String?
+    var proxy_url: String?
+    var width: Int?
+    var height: Int?
+
+    var domain: Embed.Media? {
+        guard let url, !url.isEmpty else { return nil }
+        return Embed.Media(url: url, proxyURL: proxy_url, width: width, height: height)
+    }
+}
+
+// MARK: - Polls
+
+struct PollDTO: Decodable, Sendable {
+    var question: MediaTextDTO?
+    var answers: [AnswerDTO]?
+    var expiry: Date?
+    var allow_multiselect: Bool?
+    var results: ResultsDTO?
+
+    struct MediaTextDTO: Decodable, Sendable {
+        var text: String?
+        var emoji: EmojiDTO?
+    }
+
+    struct AnswerDTO: Decodable, Sendable {
+        var answer_id: Int?
+        var poll_media: MediaTextDTO?
+    }
+
+    struct ResultsDTO: Decodable, Sendable {
+        var is_finalized: Bool?
+        var answer_counts: [CountDTO]?
+
+        struct CountDTO: Decodable, Sendable {
+            var id: Int?
+            var count: Int?
+            var me_voted: Bool?
+        }
+    }
+
+    /// Nil for anything that is not a poll worth drawing.
+    ///
+    /// **The tally is a separate array keyed by answer id**, and an answer
+    /// missing from it has genuinely had no votes — Discord omits the entry
+    /// rather than sending a zero. Reading it as "absent means unknown" is what
+    /// would leave a fresh poll with no bars at all.
+    var domain: Poll? {
+        guard let text = question?.text, !text.isEmpty else { return nil }
+        var counts: [Int: (count: Int, mine: Bool)] = [:]
+        for entry in results?.answer_counts ?? [] {
+            guard let id = entry.id else { continue }
+            counts[id] = (entry.count ?? 0, entry.me_voted ?? false)
+        }
+
+        var answers: [Poll.Answer] = []
+        for answer in self.answers ?? [] {
+            guard let id = answer.answer_id else { continue }
+            let label = answer.poll_media?.text ?? ""
+            let emoji = answer.poll_media?.emoji?.domain
+            // An answer with neither words nor a glyph cannot be voted for by
+            // anybody who can see it.
+            guard !label.isEmpty || emoji != nil else { continue }
+            let tally = counts[id]
+            answers.append(Poll.Answer(
+                id: id,
+                text: label,
+                emoji: emoji,
+                count: tally?.count ?? 0,
+                isMine: tally?.mine ?? false
+            ))
+        }
+        guard !answers.isEmpty else { return nil }
+
+        return Poll(
+            question: text,
+            answers: answers,
+            expiresAt: expiry,
+            allowsMultiselect: allow_multiselect ?? false,
+            isFinalized: results?.is_finalized ?? false
+        )
+    }
+}
+
+
+// MARK: - Expression sources
+
+struct ExpressionSourceDTO: Decodable, Sendable {
+    var type: String?
+    var guild: SourceGuildDTO?
+    var application: SourceApplicationDTO?
+
+    struct SourceGuildDTO: Decodable, Sendable {
+        var id: GuildID?
+        var name: String?
+        var icon: String?
+        var description: String?
+        var approximate_member_count: Int?
+        var approximate_presence_count: Int?
+        var features: [String]?
+        var emojis: [EmojiDTO]?
+    }
+
+    struct SourceApplicationDTO: Decodable, Sendable {
+        var name: String?
+        var icon: String?
+    }
+
+    /// Nil for a source this client has nothing to say about.
+    ///
+    /// Branching on the payload rather than on `type`: the string is advisory,
+    /// and a guild object with a name in it is a guild whatever it is labelled.
+    var domain: ExpressionSource? {
+        if let guild, let id = guild.id, let name = guild.name, !name.isEmpty {
+            // A sample, not the set. The route sends every emoji the server has
+            // and the card shows a strip of them; holding hundreds to draw four
+            // is a copy of somebody else's catalogue per hover.
+            var sample: [EmojiRef] = []
+            for emoji in guild.emojis ?? [] {
+                guard let entry = emoji.catalogEntry else { continue }
+                sample.append(entry)
+                if sample.count == ExpressionSourceDTO.sampleLimit { break }
+            }
+            return .guild(ExpressionSource.Guild(
+                id: id,
+                name: name,
+                iconHash: guild.icon,
+                description: guild.description.flatMap { $0.isEmpty ? nil : $0 },
+                memberCount: guild.approximate_member_count,
+                onlineCount: guild.approximate_presence_count,
+                features: Set(guild.features ?? []),
+                sampleEmoji: sample
+            ))
+        }
+        if let application, let name = application.name, !name.isEmpty {
+            return .application(name: name, iconHash: application.icon)
+        }
+        return nil
+    }
+
+    /// How many of a server's expressions the card shows.
+    static let sampleLimit = 6
+}
+
+/// `GET /stickers/{id}/guild`, which answers with the guild **directly** rather
+/// than wrapping it — the emoji route nests one under `guild`, and this one does
+/// not. Two shapes for one idea, so each gets its own reader and neither has to
+/// guess.
+struct StickerSourceDTO: Decodable, Sendable {
+    var id: GuildID?
+    var name: String?
+    var icon: String?
+    var description: String?
+    var approximate_member_count: Int?
+    var approximate_presence_count: Int?
+    var features: [String]?
+    var stickers: [StickerDTO]?
+
+    var domain: ExpressionSource? {
+        guard let id, let name, !name.isEmpty else { return nil }
+        var sample: [StickerRef] = []
+        for sticker in stickers ?? [] {
+            guard let entry = sticker.catalogEntry else { continue }
+            sample.append(entry)
+            if sample.count == ExpressionSourceDTO.sampleLimit { break }
+        }
+        return .guild(ExpressionSource.Guild(
+            id: id,
+            name: name,
+            iconHash: icon,
+            description: description.flatMap { $0.isEmpty ? nil : $0 },
+            memberCount: approximate_member_count,
+            onlineCount: approximate_presence_count,
+            features: Set(features ?? []),
+            sampleStickers: sample
+        ))
     }
 }

@@ -159,6 +159,56 @@ public actor DiscordREST {
     /// Where diagnostic lines go. Installed by the app when tracing is on.
     nonisolated(unsafe) public static var traceSink: (@Sendable (String) -> Void)?
 
+    /// Where a custom emoji came from.
+    ///
+    /// **The only route that answers for a server the reader is not in**, which
+    /// is the only case the question is ever asked about — an emoji from one of
+    /// your own servers is already nameable from the resident tables.
+    ///
+    /// It answers for private servers too, since it is scoped to the emoji
+    /// rather than to the server; what to publish from that is the client's
+    /// decision, and `EmojiSource.Guild.isPublic` is where it is made.
+    public func emojiSource(_ emojiID: EmojiID) async throws -> ExpressionSource? {
+        try await get(
+            "/emojis/\(emojiID.rawValue)/source",
+            // Bucketed by route: a busy channel can raise a dozen of these in a
+            // minute and each must share one bucket.
+            route: "emojis/{id}/source",
+            as: ExpressionSourceDTO.self
+        ).domain
+    }
+
+    /// The server a sticker came from.
+    ///
+    /// **A different shape from the emoji route**: this one answers with the
+    /// guild directly where that one nests it under `guild`, so the two have
+    /// separate readers rather than one that guesses.
+    public func stickerSource(_ stickerID: UInt64) async throws -> ExpressionSource? {
+        try await get(
+            "/stickers/\(stickerID)/guild",
+            route: "stickers/{id}/guild",
+            as: StickerSourceDTO.self
+        ).domain
+    }
+
+    /// The card behind a server tag.
+    ///
+    /// **Answered for servers the reader is not in**, which is the whole point:
+    /// a tag is worn across every server its owner is in, and the reader has to
+    /// be able to find out what it stands for without joining anything. Nothing
+    /// resident can answer it — the online count, the description, the badge
+    /// artwork and the traits are on this route and on no other.
+    public func guildProfile(of guildID: GuildID) async throws -> GuildProfile {
+        try await get(
+            "/guilds/\(guildID.rawValue)/profile",
+            // Bucketed by route, not by URL: a reader hovering a busy channel
+            // can ask about a dozen tags in a minute and each must share one
+            // bucket, or the limiter stops limiting anything.
+            route: "guilds/{id}/profile",
+            as: GuildProfileDTO.self
+        ).domain
+    }
+
     /// Resolves a collectible SKU to its artwork.
     ///
     /// Profile effects are named on a profile by SKU and described here. Shared
@@ -323,6 +373,27 @@ public actor DiscordREST {
             path: "/channels/\(channelID.rawValue)/messages/\(messageID.rawValue)/ack",
             route: "channels/\(channelID.rawValue)/ack",
             body: Body()
+        )
+    }
+
+    /// Casts the reader's vote.
+    ///
+    /// **The whole ballot every time, not a delta.** The route replaces the
+    /// reader's selection, so un-voting is an empty array and changing a vote on
+    /// a single-choice poll is the new id on its own — a client that sent only
+    /// the id just clicked would leave the previous one standing on a
+    /// multiselect poll.
+    public func vote(
+        answerIDs: [Int],
+        onPoll messageID: MessageID,
+        in channelID: ChannelID
+    ) async throws {
+        struct Body: Encodable { var answer_ids: [String] }
+        _ = try await requestData(
+            method: "PUT",
+            path: "/channels/\(channelID.rawValue)/polls/\(messageID.rawValue)/answers/@me",
+            route: "channels/\(channelID.rawValue)/polls/:id/answers",
+            body: Body(answer_ids: answerIDs.map(String.init))
         )
     }
 

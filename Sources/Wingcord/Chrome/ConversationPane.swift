@@ -24,8 +24,17 @@ struct ConversationPane: View {
             // `safeAreaBar`, not `safeAreaInset`: the composer registers as a
             // bar, which is what the scroll edge effect keys off.
             .safeAreaBar(edge: .bottom, spacing: 0) {
-                ComposerContainer(channelID: channelID)
-                    .background {
+                // The indicator rides INSIDE the bar rather than over the
+                // transcript, so the height it takes is measured with the
+                // composer's and the newest message is never hidden behind it.
+                VStack(spacing: 0) {
+                    // Above the composer, not below it. The composer floats at
+                    // the window's foot, so a line under it is a line jammed
+                    // against the edge of the screen.
+                    TypingIndicatorContainer(channelID: channelID)
+                    ComposerContainer(channelID: channelID)
+                }
+                .background {
                         GeometryReader { proxy in
                             Color.clear
                                 .onChange(of: proxy.size.height, initial: true) { _, height in

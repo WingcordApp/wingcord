@@ -12,6 +12,13 @@ struct ExpressionMemoKey: Hashable, Sendable {
     /// changes, or when a server is added, removed or renamed.
     var expressionRevision: UInt64
     var skinTone: UnicodeEmoji.SkinTone
+    /// Whether the reader carries Nitro.
+    ///
+    /// Part of the key because it decides which sections are locked, and it
+    /// arrives *after* the first catalog is built: `/users/@me` answers a beat
+    /// into the session, and a memo blind to it would serve a catalog computed
+    /// while the answer was still "no" for the rest of the launch.
+    var hasNitro: Bool
 }
 
 extension AppModel {
@@ -32,7 +39,8 @@ extension AppModel {
         let key = ExpressionMemoKey(
             channelID: selectedChannelID,
             expressionRevision: expressionRevision,
-            skinTone: AppSettings.shared.skinTone
+            skinTone: AppSettings.shared.skinTone,
+            hasNitro: hasNitro
         )
         // Read every observable input before the early return: a memo that
         // returns its cache without touching them registers no dependency, and
@@ -89,6 +97,7 @@ extension AppModel {
         return catalog
     }
 
+
     /// The sticker tab: one section per server that has any.
     ///
     /// Servers with none are absent rather than empty — a rail icon that opens
@@ -97,7 +106,8 @@ extension AppModel {
         let key = ExpressionMemoKey(
             channelID: selectedChannelID,
             expressionRevision: expressionRevision,
-            skinTone: .default
+            skinTone: .default,
+            hasNitro: hasNitro
         )
         let stickerTable = guildStickers
         let guildTable = guilds
@@ -224,18 +234,35 @@ extension AppModel {
 
     // MARK: Gates
 
-    /// Whether another server's emoji may be used in this channel.
+    /// Whether the reader carries Nitro.
     ///
-    /// A server's own emoji are always usable in that server. Everything else
-    /// needs the permission, which on a real account is what Nitro grants.
-    func canUseExternalEmoji(in channelID: ChannelID) -> Bool {
-        permissionGate.permissions(in: channelID).contains(.useExternalEmojis)
+    /// **This is the gate, and the channel permission is only half of it.**
+    /// `useExternalEmojis` is granted to `@everyone` in most servers, so a gate
+    /// written on that alone unlocks every server's emoji for every account —
+    /// and then the send fails server-side with the shortcode left in the
+    /// message as literal text. The subscription is what actually grants the
+    /// right; the permission decides whether the *channel* allows exercising it.
+    ///
+    /// Read off the reader's own record, which is the one place `premium_type`
+    /// arrives — `/users/@me` carries it and no other user object does.
+    var hasNitro: Bool {
+        guard let currentUserID, let user = users[currentUserID] else { return false }
+        return user.decoration?.premiumTier ?? .none != .none
     }
 
-    /// Stickers ride the same permission on this client. Discord has a separate
-    /// bit for them; it is not modelled here, and treating them alike is the
-    /// answer that is wrong in the safe direction — a locked section is dimmed,
-    /// never hidden, so nothing becomes unreachable either way.
+    /// Whether another server's emoji may be used in this channel.
+    ///
+    /// A server's own emoji are always usable in that server, by anyone. Using
+    /// one *anywhere else* is the Nitro perk, and it still needs the channel to
+    /// permit external emoji.
+    func canUseExternalEmoji(in channelID: ChannelID) -> Bool {
+        hasNitro && permissionGate.permissions(in: channelID).contains(.useExternalEmojis)
+    }
+
+    /// Stickers ride the same pair on this client. Discord has a separate
+    /// permission bit for them; it is not modelled here, and treating them alike
+    /// is the answer that is wrong in the safe direction — a locked section is
+    /// dimmed, never hidden, so nothing becomes unreachable either way.
     func canUseExternalStickers(in channelID: ChannelID) -> Bool {
         canUseExternalEmoji(in: channelID)
     }

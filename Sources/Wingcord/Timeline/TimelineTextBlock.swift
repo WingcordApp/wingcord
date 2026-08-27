@@ -21,6 +21,8 @@ nonisolated final class TimelineTextBlock: @unchecked Sendable {
     /// Where each inline emoji's box landed, in the block's own coordinates
     /// (origin top-left, y increasing downward).
     let emojiRects: [(rect: CGRect, emoji: EmojiRef)]
+    /// Where each inline SF Symbol's box landed, in the block's own coordinates.
+    let symbolRects: [(rect: CGRect, name: String)]
     /// Clickable regions, resolved once.
     let linkRects: [(rect: CGRect, target: MessageText.LinkTarget)]
     /// Concealed regions, painted over until revealed.
@@ -56,6 +58,7 @@ nonisolated final class TimelineTextBlock: @unchecked Sendable {
         )
 
         var emojiRects: [(CGRect, EmojiRef)] = []
+        var symbolRects: [(CGRect, String)] = []
         var linkRects: [(CGRect, MessageText.LinkTarget)] = []
         var spoilerRects: [CGRect] = []
         Self.resolveRuns(
@@ -64,11 +67,14 @@ nonisolated final class TimelineTextBlock: @unchecked Sendable {
             text: text,
             emojiWidth: style.emojiWidth,
             emojiAscent: style.emojiAscent,
+            symbolSide: style.symbolSide,
             into: &emojiRects,
+            symbols: &symbolRects,
             links: &linkRects,
             spoilers: &spoilerRects
         )
         self.emojiRects = emojiRects
+        self.symbolRects = symbolRects
         self.linkRects = linkRects
         self.spoilerRects = spoilerRects
     }
@@ -85,7 +91,9 @@ nonisolated final class TimelineTextBlock: @unchecked Sendable {
         text: MessageText,
         emojiWidth: CGFloat,
         emojiAscent: CGFloat,
+        symbolSide: CGFloat,
         into emojiRects: inout [(CGRect, EmojiRef)],
+        symbols: inout [(CGRect, String)],
         links: inout [(CGRect, MessageText.LinkTarget)],
         spoilers: inout [CGRect]
     ) {
@@ -103,25 +111,38 @@ nonisolated final class TimelineTextBlock: @unchecked Sendable {
             let baselineY = blockHeight - origin.y
             let lineRange = CTLineGetStringRange(line)
 
-            // Emoji boxes.
-            if !text.inlineEmoji.isEmpty,
+            // Inline boxes — emoji and symbols. One walk over the runs for
+            // both: a second pass would be a second walk of every glyph run on
+            // every line of every message that has one.
+            if !text.inlineEmoji.isEmpty || !text.inlineSymbols.isEmpty,
                let runs = CTLineGetGlyphRuns(line) as? [CTRun]
             {
                 for run in runs {
                     let runRange = CTRunGetStringRange(run)
-                    guard let emoji = text.inlineEmoji[runRange.location],
-                          runRange.length == 1
-                    else { continue }
-                    let offset = CTLineGetOffsetForStringIndex(line, runRange.location, nil)
-                    emojiRects.append((
-                        CGRect(
-                            x: origin.x + offset,
-                            y: baselineY - emojiAscent,
-                            width: emojiWidth,
-                            height: emojiAscent + descent
-                        ),
-                        emoji
-                    ))
+                    guard runRange.length == 1 else { continue }
+                    if let emoji = text.inlineEmoji[runRange.location] {
+                        let offset = CTLineGetOffsetForStringIndex(line, runRange.location, nil)
+                        emojiRects.append((
+                            CGRect(
+                                x: origin.x + offset,
+                                y: baselineY - emojiAscent,
+                                width: emojiWidth,
+                                height: emojiAscent + descent
+                            ),
+                            emoji
+                        ))
+                    } else if let name = text.inlineSymbols[runRange.location] {
+                        let offset = CTLineGetOffsetForStringIndex(line, runRange.location, nil)
+                        symbols.append((
+                            CGRect(
+                                x: origin.x + offset,
+                                y: baselineY - symbolSide * 0.86,
+                                width: symbolSide,
+                                height: symbolSide
+                            ),
+                            name
+                        ))
+                    }
                 }
             }
 
@@ -175,8 +196,12 @@ nonisolated final class TimelineTextBlock: @unchecked Sendable {
     }
 
     /// What is under a point in this block, if anything.
-    func linkTarget(at point: CGPoint) -> MessageText.LinkTarget? {
-        for entry in linkRects where entry.rect.contains(point) { return entry.target }
+    ///
+    /// The rect comes back with the target because the click needs somewhere to
+    /// anchor a card: a mention opens a profile, and a profile that appears at
+    /// the pointer reads as a menu rather than as belonging to that person.
+    func link(at point: CGPoint) -> (rect: CGRect, target: MessageText.LinkTarget)? {
+        for entry in linkRects where entry.rect.contains(point) { return entry }
         return nil
     }
 }

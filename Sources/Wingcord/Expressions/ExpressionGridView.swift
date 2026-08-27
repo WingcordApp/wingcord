@@ -204,6 +204,11 @@ final class ExpressionGridCanvas: NSView {
     override func mouseDown(with event: NSEvent) {
         let point = convert(event.locationInWindow, from: nil)
         guard let cell = layout.item(at: point), isValid(cell) else { return }
+        // **A locked section is dimmed AND unpickable.** Dimming is a statement
+        // and a click is an action: a cell that looks unavailable and still
+        // types `<:blobcat:123>` into the draft sends a message that arrives as
+        // literal text, which is worse than either honest answer.
+        guard !sections[cell.section].isLocked else { return }
         onPick?(sections[cell.section].items[cell.item])
     }
 

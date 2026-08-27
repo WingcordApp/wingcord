@@ -133,8 +133,30 @@ enum ProfileGround: Equatable {
 struct ProfileGroundFill: ViewModifier {
     var ground: ProfileGround
     var corner: CGFloat
+    /// Whether this surface paints a ground at all.
+    ///
+    /// **False where the ground belongs to the pane around it** — the profile
+    /// column beside a direct message, whose colour has to run the full height
+    /// of the window rather than stopping where the content does. A flag rather
+    /// than a case on `ProfileGround`, because "nothing" is a fact about the
+    /// *surface*, not a kind of ground: a column and a card can carry the same
+    /// person's theme and only one of them paints it.
+    ///
+    /// Constant for the life of a surface, so the branch below never changes a
+    /// view's identity.
+    var paints: Bool = true
 
+    @ViewBuilder
     func body(content: Content) -> some View {
+        if !paints {
+            content
+        } else {
+            fill(content)
+        }
+    }
+
+    @ViewBuilder
+    private func fill(_ content: Content) -> some View {
         switch ground {
         case .themed(let primary, let secondary):
             // Solid, not glass, and deliberately: a theme is a GRADIENT and

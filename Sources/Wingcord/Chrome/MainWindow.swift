@@ -41,6 +41,7 @@ struct MainWindow: View {
                     ChannelToolbar(
                         chrome: model.channelChrome,
                         toggleMemberList: { model.isMemberListShown.toggle() },
+                        toggleUserProfile: { model.isDirectMessageProfileShown.toggle() },
                         openChannelDetails: {}
                     )
                 }
@@ -137,7 +138,14 @@ private struct NowBarContainer: View {
                 if model.isSelfDeafened { model.isSelfMuted = true }
             },
             openSettings: { SettingsWindow.open() },
-            openSelfProfile: {},
+            openSelfProfile: {
+                guard let userID = model.currentUserID else { return }
+                // The full profile is a sheet and anchors to nothing, so there
+                // is no rect to hand it.
+                model.openProfile(userID, anchor: .zero, depth: .full)
+            },
+            setStatus: { model.updateSelfStatus($0) },
+            setCustomStatus: { model.updateSelfCustomStatus($0) },
             disconnectVoice: { model.connectedVoiceChannelID = nil }
         )
         .equatable()

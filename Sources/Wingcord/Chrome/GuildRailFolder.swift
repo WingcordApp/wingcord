@@ -43,7 +43,8 @@ struct GuildRailFolder: View {
             }
             .buttonStyle(.plain)
             .frame(width: Proportions.railWidth, height: side)
-            .help(folder.name ?? "Folder")
+            .hoverFlyout(folder.name ?? "Folder")
+            .accessibilityLabel(Text(folder.name ?? "Folder"))
 
             if folder.isExpanded {
                 VStack(spacing: Spacing.base) {

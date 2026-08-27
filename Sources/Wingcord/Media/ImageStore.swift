@@ -252,6 +252,29 @@ nonisolated final class ImageStore: @unchecked Sendable {
         return data
     }
 
+    /// Streams an asset to a temporary file, reporting progress as it goes.
+    ///
+    /// **A download, not `data(for:)`.** A video attachment can be hundreds of
+    /// megabytes and `data` holds every byte of it in memory before anything can
+    /// be written; `URLSessionDownloadTask` streams to disk and peaks at a
+    /// buffer. Through this store's session, so a save reuses the connection
+    /// pool rather than standing up a second one.
+    ///
+    /// The returned file lives in the system's temporary directory and is the
+    /// caller's the moment this returns — move it, do not copy it, and do not
+    /// leave it.
+    func download(
+        _ url: URL,
+        onProgress: @escaping @Sendable (Double) -> Void
+    ) async throws -> URL {
+        let delegate = DownloadProgressDelegate(onProgress: onProgress)
+        let (file, response) = try await session.download(from: url, delegate: delegate)
+        if let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
+            throw Failure.status(http.statusCode)
+        }
+        return file
+    }
+
     enum Failure: Error {
         case status(Int)
     }
@@ -317,6 +340,43 @@ extension ImageStore.Key {
     nonisolated var cacheKey: NSString {
         "\(maximumPixelSize)|\(url.absoluteString)" as NSString
     }
+}
+
+/// Reports a download's progress.
+///
+/// A task-scoped delegate rather than one on the session: it lives exactly as
+/// long as the one save it was created for, so there is no shared state to
+/// key by task and nothing to unregister.
+private final class DownloadProgressDelegate: NSObject, URLSessionDownloadDelegate,
+    @unchecked Sendable
+{
+    private let onProgress: @Sendable (Double) -> Void
+
+    init(onProgress: @escaping @Sendable (Double) -> Void) {
+        self.onProgress = onProgress
+    }
+
+    func urlSession(
+        _ session: URLSession,
+        downloadTask: URLSessionDownloadTask,
+        didWriteData bytesWritten: Int64,
+        totalBytesWritten: Int64,
+        totalBytesExpectedToWrite: Int64
+    ) {
+        // A server that sends no length reports -1 here, and dividing by it
+        // gives a bar that runs backwards.
+        guard totalBytesExpectedToWrite > 0 else { return }
+        onProgress(Double(totalBytesWritten) / Double(totalBytesExpectedToWrite))
+    }
+
+    /// Required by the protocol. The async `download(from:delegate:)` owns the
+    /// file and hands it back through its return value, so there is nothing to
+    /// do here.
+    func urlSession(
+        _ session: URLSession,
+        downloadTask: URLSessionDownloadTask,
+        didFinishDownloadingTo location: URL
+    ) {}
 }
 
 /// Bounds how many operations run at once, without a semaphore blocking a

@@ -42,6 +42,21 @@ struct RootView: View {
                 guard let channelID else { return }
                 model.channelDidOpen(channelID)
             }
+            // **Where SwiftUI's root actually starts.** Every popover raised
+            // from a drawn canvas is anchored to a rect in *this* view's space,
+            // and this view is laid out below the titlebar strip while the
+            // hosting view under it spans the whole window. Publishing the
+            // origin is what lets `anchorInHostingRoot` finish the conversion
+            // instead of guessing at it — see `PresentationOrigin`.
+            //
+            // `onGeometryChange` rather than a `GeometryReader`: it reads the
+            // value the layout already computed and fires only when it changes,
+            // where a reader is an extra layout container and an extra pass.
+            .onGeometryChange(for: CGPoint.self) { proxy in
+                proxy.frame(in: .global).origin
+            } action: { origin in
+                PresentationOrigin.record(origin)
+            }
             .task {
                 MemoryPressureWatcher.shared.start()
                 Breadcrumbs.record("root appeared")

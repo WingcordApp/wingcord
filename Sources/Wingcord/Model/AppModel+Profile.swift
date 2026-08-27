@@ -36,6 +36,7 @@ extension AppModel {
             themeColorValues: decoration?.themeColorValues ?? [],
             status: presence?.status ?? .offline,
             customStatus: presence?.customStatus?.state,
+            customStatusEmoji: presence?.customStatus?.emoji,
             activity: presence?.primaryActivity,
             bio: decoration?.bio,
             isBot: user.isBot,
@@ -48,7 +49,8 @@ extension AppModel {
                               let hash = decoration.primaryGuildBadgeHash
                         else { return nil }
                         return CDN.guildTagBadge(guildID: guildID, hash: hash)
-                    }
+                    },
+                    guildID: decoration?.primaryGuildID
                 )
             },
             roles: (member?.roleIDs ?? [])

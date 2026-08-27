@@ -42,8 +42,17 @@ final class TimelineCanvasView: NSView {
     // MARK: Interaction state
 
     private var hoveredRow: Int?
+    /// The origin, in row space, of the button under the pointer.
+    ///
+    /// Identified by its origin rather than by an index: the index of a button
+    /// only means anything beside the array it came from, and the canvas keeps
+    /// no such array between passes.
+    private var hoveredComponent: CGPoint?
     private var highlightedMessageID: MessageID?
     private var revealedSpoilers: [MessageID: Set<Int>] = [:]
+    /// Which spoilered attachments have been uncovered, keyed the same way and
+    /// deliberately in a separate table — see `TimelineRowPainter.State`.
+    private var revealedAttachments: [MessageID: Set<Int>] = [:]
     /// Suppressed while a scroll is running. `.onContinuousHover`-shaped work is
     /// worst exactly during a scroll: a trackpad flick moves no pointer at all
     /// yet drags every row in the list underneath a stationary one, so the
@@ -55,6 +64,7 @@ final class TimelineCanvasView: NSView {
             if isScrolling, hoveredRow != nil {
                 let previous = hoveredRow
                 hoveredRow = nil
+                hoveredComponent = nil
                 invalidateRow(previous)
             } else if !isScrolling {
                 updateHover(at: currentPointerLocation())
@@ -70,11 +80,44 @@ final class TimelineCanvasView: NSView {
 
     var onWidthChange: ((CGFloat) -> Void)?
     var onDocumentHeightChange: ((CGFloat) -> Void)?
-    var onOpenLink: ((MessageText.LinkTarget) -> Void)?
+    var onOpenLink: ((MessageText.LinkTarget, CGRect) -> Void)?
     var onVisibleRangeChange: ((Range<Int>) -> Void)?
     var onActivateMessage: ((MessageID) -> Void)?
+    /// A face or a name was clicked. The rect is in this view's own space; the
+    /// coordinator converts it for the popover.
+    var onOpenProfile: ((UserID, CGRect) -> Void)?
+    var onOpenEmoji: ((EmojiRef, CGRect) -> Void)?
+    var onOpenSticker: ((StickerRef, CGRect) -> Void)?
+    /// A picture, a GIF or a video in a message was clicked.
+    ///
+    /// The widths travel with it because the viewer opens on the rendition the
+    /// transcript already decoded, and that cache entry is keyed by the size it
+    /// was drawn at — a peek built from any other number looks in a slot nothing
+    /// was ever put in.
+    var onOpenAttachment: ((MessageID, Int, [CGFloat]) -> Void)?
+    /// A poll answer was chosen.
+    var onVote: ((MessageID, Int) -> Void)?
 
     private var trackingArea: NSTrackingArea?
+
+    // MARK: Animated stickers
+    //
+    // **The canvas subscribes to the shared clock, not one timer per sticker.**
+    // A drawn transcript has no per-sticker view to hang a display link off, and
+    // a link each would be the one-timer-per-animation problem `AnimationClock`
+    // exists to prevent. One subscriber invalidates only the rects whose FRAME
+    // has actually changed — the clock runs at up to 24 fps and stickers are
+    // authored at 10-20, so most ticks resolve to the picture already on screen
+    // and cost a dictionary lookup.
+    //
+    // It does not run through a scroll: `AnimationClock`'s default parks
+    // playback while a gesture is in flight, which is what buys the scroll its
+    // frames.
+
+    /// The frame index each visible sticker is currently showing.
+    private var shownStickerFrames: [UInt64: Int] = [:]
+    private var isAnimatingStickers = false
+    private var animationToken: ObjectIdentifier { ObjectIdentifier(self) }
 
     init(style: MessageTextStyle) {
         self.style = style
@@ -119,7 +162,76 @@ final class TimelineCanvasView: NSView {
         // Clear any hover that referred to a row index that no longer exists.
         if let hoveredRow, hoveredRow >= rows.count { self.hoveredRow = nil }
         needsDisplay = true
+        refreshStickerAnimation()
         return running
+    }
+
+    /// Subscribes to the clock while a moving sticker is on screen, and stops
+    /// the moment none is.
+    ///
+    /// Called from every place the answer can change: a rows change, a viewport
+    /// move, and the pass that installs newly-decoded film. Idempotent, so those
+    /// three can call it freely.
+    func refreshStickerAnimation() {
+        let wanted = window != nil && hasVisibleAnimatedSticker
+        guard wanted != isAnimatingStickers else { return }
+        isAnimatingStickers = wanted
+        if wanted {
+            AnimationClock.shared.subscribe(animationToken) { [weak self] in
+                self?.advanceStickers()
+            }
+        } else {
+            AnimationClock.shared.unsubscribe(animationToken)
+            shownStickerFrames.removeAll(keepingCapacity: true)
+        }
+    }
+
+    /// Releases the clock subscription. Idempotent.
+    func stopStickerAnimation() {
+        guard isAnimatingStickers else { return }
+        isAnimatingStickers = false
+        AnimationClock.shared.unsubscribe(animationToken)
+        shownStickerFrames.removeAll(keepingCapacity: false)
+    }
+
+    private var hasVisibleAnimatedSticker: Bool {
+        for index in visibleRowRange() {
+            guard case .message(let row) = rows[index].kind else { continue }
+            if row.stickers.contains(where: \.isAnimated) { return true }
+        }
+        return false
+    }
+
+    /// One clock tick: repaint only the stickers whose frame actually moved.
+    private func advanceStickers() {
+        let time = AnimationClock.shared.time
+        let scale = window?.backingScaleFactor ?? 2
+        for index in visibleRowRange() {
+            guard case .message(let row) = rows[index].kind, !row.stickers.isEmpty else {
+                continue
+            }
+            let frame = rowFrame(at: index)
+            for slot in row.stickers where slot.isAnimated {
+                guard let url = slot.url else { continue }
+                let key = AnimatedImageStore.Key(
+                    url: url,
+                    maximumPixelSize: Int((slot.rect.width * scale).rounded(.up))
+                )
+                guard let film = AnimatedImageStore.shared.cached(key) else { continue }
+                let next = film.index(at: time)
+                guard shownStickerFrames[slot.sticker.id] != next else { continue }
+                shownStickerFrames[slot.sticker.id] = next
+                setNeedsDisplay(slot.rect.offsetBy(dx: frame.minX, dy: frame.minY))
+            }
+        }
+    }
+
+    /// The clock holds a closure over this view, so leaving the window has to
+    /// release it — a canvas that outlives its window as a clock subscriber is a
+    /// display link running for a transcript nobody can see.
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        refreshStickerAnimation()
     }
 
     /// The row containing a document-space y, by binary search.
@@ -196,6 +308,9 @@ final class TimelineCanvasView: NSView {
         }
         if bounds.origin != newBounds.origin {
             setBoundsOrigin(newBounds.origin)
+            // What is visible has changed, and with it whether anything on
+            // screen moves.
+            refreshStickerAnimation()
             // A fast gesture can replace the whole overscanned window in one
             // event. Ask for the new contents explicitly so Core Animation never
             // presents an empty slice while waiting for an unrelated
@@ -234,9 +349,12 @@ final class TimelineCanvasView: NSView {
                     state.isHovered = true
                     state.showsGutterTimestamp = true
                 }
+                state.animationTime = AnimationClock.shared.time
                 if let messageID = row.messageID {
                     state.isHighlighted = messageID == highlightedMessageID
                     state.revealedSpoilers = revealedSpoilers[messageID] ?? []
+                    state.revealedAttachments = revealedAttachments[messageID] ?? []
+                    if hoveredRow == index { state.hoveredComponent = hoveredComponent }
                 }
                 TimelineRowPainter.draw(
                     row: row,
@@ -284,6 +402,8 @@ final class TimelineCanvasView: NSView {
     }
 
     override func mouseExited(with event: NSEvent) {
+        applyCursor(nil)
+        hoveredComponent = nil
         guard hoveredRow != nil else { return }
         let previous = hoveredRow
         hoveredRow = nil
@@ -297,34 +417,179 @@ final class TimelineCanvasView: NSView {
               case .message(let row) = rows[index].kind
         else { return }
 
+        switch target(in: row, at: point, rowIndex: index) {
+        case .spoiler(let spoilerIndex):
+            revealedSpoilers[row.id, default: []].insert(spoilerIndex)
+            invalidateRow(index)
+        case .attachment(let attachmentIndex, let isHidden):
+            // The first click on a spoiler uncovers it and stops there. Opening
+            // it full-screen in the same press would show the picture to the
+            // room before the reader had decided to.
+            guard !isHidden else {
+                revealedAttachments[row.id, default: []].insert(attachmentIndex)
+                invalidateRow(index)
+                return
+            }
+            onOpenAttachment?(row.id, attachmentIndex, row.attachments.map(\.decodeWidth))
+        case .link(let destination, let rect):
+            onOpenLink?(destination, rect)
+        case .emoji(let emoji, let rect):
+            onOpenEmoji?(emoji, rect)
+        case .sticker(let sticker, let rect):
+            onOpenSticker?(sticker, rect)
+        case .person(let userID, let rect):
+            onOpenProfile?(userID, rect)
+        case .component(let url, _):
+            // A disabled control consumes the click and does nothing, which is
+            // what a disabled control is.
+            if let url { onOpenLink?(.url(url), .zero) }
+        case .pollAnswer(let answerID, _):
+            if let answerID { onVote?(row.id, answerID) }
+        case nil:
+            if event.clickCount == 2 { onActivateMessage?(row.id) }
+        }
+    }
+
+    // MARK: Hit testing
+
+    /// What is under a point in a message row.
+    ///
+    /// **One resolver, used by the click AND by the cursor.** A pointing hand
+    /// over something that turns out not to be clickable — or a plain arrow over
+    /// something that is — is the kind of drift that appears the moment the two
+    /// answers are written twice.
+    ///
+    /// Rects come back in this view's own space, which is document space, so a
+    /// popover can be anchored to the exact face or picture that was clicked.
+    private enum Target {
+        case spoiler(Int)
+        /// A picture, a GIF or a video, and whether it is still covered.
+        case attachment(index: Int, isHidden: Bool)
+        case link(MessageText.LinkTarget, CGRect)
+        case emoji(EmojiRef, CGRect)
+        case sticker(StickerRef, CGRect)
+        case person(UserID, CGRect)
+        /// A button an app attached. Carries its origin in row space so the
+        /// painter can light the one under the pointer.
+        case component(url: String?, origin: CGPoint)
+        /// One answer in a poll. `answerID` is nil where the poll cannot be
+        /// voted in — the row still swallows the click rather than letting it
+        /// fall through to whatever is beneath.
+        case pollAnswer(answerID: Int?, origin: CGPoint)
+    }
+
+    private func target(in row: MessageRow, at point: CGPoint, rowIndex index: Int) -> Target? {
         let frame = rowFrame(at: index)
         let local = CGPoint(x: point.x - frame.minX, y: point.y - frame.minY)
 
-        // A spoiler beats a link: the reveal has to happen before the thing
-        // underneath can be clicked, or a masked link inside a spoiler opens
-        // without ever being read.
+        // A spoiler beats everything under it: the reveal has to happen before
+        // the thing underneath can be reached, or a masked link inside a spoiler
+        // opens without ever being read.
         if let block = row.textBlock {
             let inBlock = CGPoint(
                 x: local.x - row.textOrigin.x,
                 y: local.y - row.textOrigin.y
             )
-            var revealed = revealedSpoilers[row.id] ?? []
+            let revealed = revealedSpoilers[row.id] ?? []
             for (spoilerIndex, rect) in block.spoilerRects.enumerated()
             where !revealed.contains(spoilerIndex) && rect.contains(inBlock) {
-                revealed.insert(spoilerIndex)
-                revealedSpoilers[row.id] = revealed
-                invalidateRow(index)
-                return
+                return .spoiler(spoilerIndex)
             }
-            if let target = block.linkTarget(at: inBlock) {
-                onOpenLink?(target)
-                return
+            // Emoji before links, because an emoji sits inside a run that may
+            // also carry a link attribute — a custom emoji written inside a
+            // markdown link is rare and the picture is what was clicked.
+            for entry in block.emojiRects where entry.rect.contains(inBlock) {
+                return .emoji(
+                    entry.emoji,
+                    entry.rect
+                        .offsetBy(dx: row.textOrigin.x, dy: row.textOrigin.y)
+                        .offsetBy(dx: frame.minX, dy: frame.minY)
+                )
+            }
+            if let hit = block.link(at: inBlock) {
+                return .link(
+                    hit.target,
+                    hit.rect
+                        .offsetBy(dx: row.textOrigin.x, dy: row.textOrigin.y)
+                        .offsetBy(dx: frame.minX, dy: frame.minY)
+                )
             }
         }
 
-        if event.clickCount == 2 {
-            onActivateMessage?(row.id)
+        // An embed's own runs carry links: a title that is a URL, an author
+        // that is one, a description full of them. The block was laid out in
+        // embed space, so the point has to be brought into it the same way the
+        // body's is.
+        for text in row.embeds.lazy.flatMap(\.texts) {
+            let inBlock = CGPoint(x: local.x - text.origin.x, y: local.y - text.origin.y)
+            guard inBlock.x >= 0, inBlock.y >= 0,
+                  inBlock.x <= text.block.size.width, inBlock.y <= text.block.size.height,
+                  let hit = text.block.link(at: inBlock)
+            else { continue }
+            return .link(
+                hit.target,
+                hit.rect
+                    .offsetBy(dx: text.origin.x, dy: text.origin.y)
+                    .offsetBy(dx: frame.minX, dy: frame.minY)
+            )
         }
+
+        // Every button is a hit, live or not: a dead one still has to swallow
+        // the click rather than letting it fall through to whatever is beneath.
+        for slot in row.components where slot.rect.contains(local) {
+            return .component(url: slot.url, origin: slot.rect.origin)
+        }
+
+        if let poll = row.poll, poll.rect.contains(local) {
+            for answer in poll.answers where answer.rect.contains(local) {
+                return .pollAnswer(
+                    answerID: poll.isVotable ? answer.answerID : nil,
+                    origin: answer.rect.origin
+                )
+            }
+        }
+
+        for slot in row.stickers where slot.rect.contains(local) {
+            return .sticker(slot.sticker, slot.rect.offsetBy(dx: frame.minX, dy: frame.minY))
+        }
+
+        let revealedHere = revealedAttachments[row.id] ?? []
+        for (attachmentIndex, slot) in row.attachments.enumerated()
+        where slot.rect.contains(local) {
+            return .attachment(
+                index: attachmentIndex,
+                isHidden: slot.isSpoiler && !revealedHere.contains(attachmentIndex)
+            )
+        }
+
+        // The face, then the name. Both open the same card, and both are things
+        // a reader points at when they want to know who somebody is.
+        if let avatarRect = row.avatarRect, avatarRect.contains(local) {
+            return .person(
+                row.authorID,
+                avatarRect.offsetBy(dx: frame.minX, dy: frame.minY)
+            )
+        }
+        if row.isRunHead, row.authorRect.contains(local) {
+            return .person(
+                row.authorID,
+                row.authorRect.offsetBy(dx: frame.minX, dy: frame.minY)
+            )
+        }
+        return nil
+    }
+
+    /// The cursor currently installed by this view, so an equal set is skipped.
+    ///
+    /// `NSCursor.set()` is not free and the pointer generates moves at event
+    /// rate; setting the same cursor sixty times a second is sixty calls into
+    /// the window server for no change at all.
+    private var installedCursor: NSCursor?
+
+    private func applyCursor(_ cursor: NSCursor?) {
+        guard installedCursor !== cursor else { return }
+        installedCursor = cursor
+        (cursor ?? .arrow).set()
     }
 
     private func currentPointerLocation() -> CGPoint {
@@ -334,12 +599,37 @@ final class TimelineCanvasView: NSView {
 
     private func updateHover(at point: CGPoint) {
         let index: Int? = bounds.contains(point) ? rowIndex(at: point.y) : nil
+
+        // The pointing hand and the lit button, resolved from the same function
+        // the click uses. Bounded work: one row's rectangles, and only while
+        // nothing is scrolling.
+        var cursor: NSCursor?
+        var component: CGPoint?
+        if let index, rows.indices.contains(index), case .message(let row) = rows[index].kind {
+            switch target(in: row, at: point, rowIndex: index) {
+            case .component(let url, let origin):
+                component = origin
+                cursor = url == nil ? nil : .pointingHand
+            case .pollAnswer(let answerID, let origin):
+                component = origin
+                cursor = answerID == nil ? nil : .pointingHand
+            case .some:
+                cursor = .pointingHand
+            case nil:
+                break
+            }
+        }
+        applyCursor(cursor)
+
         // A write of an equal value still costs a redraw request, and the
         // pointer generates these at event rate.
-        guard index != hoveredRow else { return }
+        let rowChanged = index != hoveredRow
+        let componentChanged = component != hoveredComponent
+        guard rowChanged || componentChanged else { return }
         let previous = hoveredRow
         hoveredRow = index
-        invalidateRow(previous)
+        hoveredComponent = component
+        if rowChanged { invalidateRow(previous) }
         invalidateRow(index)
     }
 

@@ -23,6 +23,10 @@ struct TimelineView: NSViewRepresentable {
     /// over an opaque surface is just a panel. The inset is what keeps the
     /// newest message reachable rather than parked behind the bar.
     var bottomInset: CGFloat
+    /// The message the transcript has been asked to go to, if any. An INPUT
+    /// rather than a call, so a jump raised from anywhere in the app — a link, a
+    /// reply header — reaches the one object that owns the scroll view.
+    var jump: MessageJump?
     var model: AppModel
 
     func makeCoordinator() -> TimelineCoordinator {
@@ -38,7 +42,8 @@ struct TimelineView: NSViewRepresentable {
             channelID: channelID,
             items: rows,
             presentationRevision: presentationRevision,
-            bottomInset: bottomInset
+            bottomInset: bottomInset,
+            jump: jump
         )
     }
 
@@ -79,6 +84,15 @@ final class TimelineCoordinator: NSObject {
     private var scrollBeganObserver: NSObjectProtocol?
     private var scrollEndedObserver: NSObjectProtocol?
     private var liveScrollTimeout: Task<Void, Never>?
+    /// Clears the landing mark after a jump. Cancelled by the next jump, so two
+    /// in quick succession leave one mark lit rather than the first clearing the
+    /// second.
+    private var highlightTask: Task<Void, Never>?
+    /// The jump already performed, so re-running `updateNSView` for an unrelated
+    /// input does not scroll the reader back.
+    private var appliedJumpToken: UInt64 = 0
+    /// A jump asked for before its message had been laid out.
+    private var pendingJump: MessageJump?
 
     private var isNearBottom = true
     private var isApplyingUpdate = false
@@ -106,8 +120,39 @@ final class TimelineCoordinator: NSObject {
         canvas.onWidthChange = { [weak self] width in
             self?.relayout(forWidth: width)
         }
-        canvas.onOpenLink = { [weak self] target in
-            self?.open(target)
+        canvas.onOpenLink = { [weak self] target, rect in
+            self?.open(target, from: rect)
+        }
+        canvas.onOpenProfile = { [weak self] userID, rect in
+            guard let self, let canvas = self.canvas else { return }
+            self.model.openProfile(userID, anchor: canvas.anchorInHostingRoot(rect))
+        }
+        canvas.onOpenEmoji = { [weak self] emoji, rect in
+            guard let self, let canvas = self.canvas else { return }
+            self.model.openExpressionInfo(
+                .emoji(emoji),
+                anchor: canvas.anchorInHostingRoot(rect)
+            )
+        }
+        canvas.onVote = { [weak self] messageID, answerID in
+            guard let self, let channelID = self.channelID else { return }
+            self.model.vote(for: answerID, on: messageID, in: channelID)
+        }
+        canvas.onOpenSticker = { [weak self] sticker, rect in
+            guard let self, let canvas = self.canvas else { return }
+            self.model.openExpressionInfo(
+                .sticker(sticker),
+                anchor: canvas.anchorInHostingRoot(rect)
+            )
+        }
+        canvas.onOpenAttachment = { [weak self] messageID, index, widths in
+            guard let self, let channelID = self.channelID else { return }
+            self.model.openMedia(
+                messageID: messageID,
+                in: channelID,
+                attachmentIndex: index,
+                posterWidths: widths
+            )
         }
 
         let document = TimelineDocumentView(frame: .zero)
@@ -134,6 +179,14 @@ final class TimelineCoordinator: NSObject {
         // occupies.
         scrollView.automaticallyAdjustsContentInsets = false
         scrollView.contentInsets = NSEdgeInsets()
+        // A wheel over a lightbox must not scroll the transcript underneath it.
+        // Read at event time rather than published as state: this is not
+        // something a view has to be invalidated for, and a `@State` mirror of a
+        // store property is a second copy that can disagree with the first.
+        scrollView.acceptsScrollInput = { [weak self] in
+            guard let self else { return true }
+            return self.model.mediaViewer == nil
+        }
 
         self.canvas = canvas
         self.documentView = document
@@ -205,6 +258,18 @@ final class TimelineCoordinator: NSObject {
         canvas?.onOpenLink = nil
         canvas?.onVisibleRangeChange = nil
         canvas?.onActivateMessage = nil
+        canvas?.onOpenProfile = nil
+        canvas?.onOpenEmoji = nil
+        canvas?.onOpenSticker = nil
+        canvas?.onOpenAttachment = nil
+        canvas?.onVote = nil
+        (scrollView as? TimelineScrollView)?.acceptsScrollInput = { true }
+        // The clock holds a closure over the canvas; a subscriber that outlives
+        // its transcript is a display link running for a channel nobody is
+        // looking at.
+        canvas?.stopStickerAnimation()
+        highlightTask?.cancel()
+        highlightTask = nil
         canvas = nil
         documentView = nil
         scrollView = nil
@@ -222,7 +287,7 @@ final class TimelineCoordinator: NSObject {
     // MARK: Updating
 
     func update(channelID: ChannelID, items: [TimelineItem], presentationRevision: UInt64,
-        bottomInset: CGFloat) {
+        bottomInset: CGFloat, jump: MessageJump?) {
         if let scrollView, abs(scrollView.contentInsets.bottom - bottomInset) > 0.5 {
             // Set on the SCROLL VIEW, not reserved in the canvas: an inset keeps
             // the content scrollable under the bar, where extra canvas padding
@@ -233,6 +298,10 @@ final class TimelineCoordinator: NSObject {
             scrollView.scrollerInsets = NSEdgeInsets(
                 top: 0, left: 0, bottom: max(0, bottomInset), right: 0
             )
+            // The scrollable range just changed by the delta. A reader sitting
+            // at the bottom has to stay there, or growing the composer by a line
+            // silently scrolls the newest message out from under them.
+            if isNearBottom, !isTornDown { scrollToBottom() }
         }
         guard !isTornDown else { return }
 
@@ -256,12 +325,81 @@ final class TimelineCoordinator: NSObject {
             rowCache.removeAll(keepingCapacity: true)
             layoutTask?.cancel()
             isNearBottom = true
+            // A jump aimed at the channel the reader has just left is stale.
+            // Cleared BEFORE the block below records a new one, so a jump that
+            // caused this very change is still honoured.
+            pendingJump = nil
         }
         self.channelID = channelID
 
-        guard channelChanged || items != self.items else { return }
-        self.items = items
-        runLayout(preservingPosition: !channelChanged)
+        if let jump, jump.channelID == channelID, jump.token != appliedJumpToken {
+            appliedJumpToken = jump.token
+            // Recorded before the layout below, so a jump asked for while the
+            // page it points at is still arriving is performed the moment that
+            // page lands rather than dropped.
+            pendingJump = jump
+        }
+
+        if channelChanged || items != self.items {
+            self.items = items
+            runLayout(preservingPosition: !channelChanged)
+        }
+        applyPendingJump()
+    }
+
+    // MARK: Jumping
+
+    /// Scrolls to the message a link asked for and lights it.
+    ///
+    /// **Nothing happens when the row is not laid out yet**, and that is the
+    /// common case: following a link into an unloaded part of a channel
+    /// re-anchors the transcript, and the page arrives one round trip after the
+    /// request. The jump is held and retried on the pass that installs the rows,
+    /// so the reader lands exactly once — on the frame the messages appear.
+    private func applyPendingJump() {
+        guard let jump = pendingJump, let canvas, let scrollView, !isTornDown else { return }
+        guard let index = canvas.rows.firstIndex(where: { $0.messageID == jump.messageID })
+        else { return }
+        pendingJump = nil
+
+        let rowFrame = canvas.rowFrame(at: index)
+        let viewport = scrollView.contentView.bounds
+        // A third of the way down rather than at the top: a message with nothing
+        // above it reads as the start of the channel, and the lines before it
+        // are most of what makes a quoted message make sense.
+        let target = rowFrame.minY - viewport.height / 3
+        let maximum = max(
+            0,
+            (documentView?.frame.height ?? 0) + scrollView.contentInsets.bottom - viewport.height
+        )
+        // Landing anywhere is a jump, so `isNearBottom` has to be recomputed
+        // from where the reader actually ends up — otherwise the next inbound
+        // message drags them back to the foot of a channel they just left.
+        isApplyingUpdate = true
+        scrollView.contentView.scroll(to: NSPoint(x: 0, y: min(maximum, max(0, target))))
+        scrollView.reflectScrolledClipView(scrollView.contentView)
+        isApplyingUpdate = false
+        isNearBottom = TimelineViewportPolicy.isNearBottom(
+            viewport: scrollView.contentView.bounds,
+            documentHeight: canvas.contentHeight,
+            wasNearBottom: false
+        )
+        positionCanvas()
+
+        canvas.highlight(jump.messageID)
+        highlightTask?.cancel()
+        highlightTask = Task { [weak self] in
+            try? await Task.sleep(for: MessageJump.highlightDuration)
+            guard !Task.isCancelled else { return }
+            await MainActor.run {
+                guard let self, !self.isTornDown else { return }
+                self.canvas?.highlight(nil)
+                // Cleared on the store too, so the value cannot re-fire a jump
+                // after an unrelated update — and so a second link to the same
+                // message is a fresh request rather than a no-op.
+                if self.model.pendingJump?.token == jump.token { self.model.pendingJump = nil }
+            }
+        }
     }
 
     private func relayout(forWidth width: CGFloat) {
@@ -395,9 +533,28 @@ final class TimelineCoordinator: NSObject {
         }
     }
 
+    /// Puts the newest message at the foot of the SCROLLABLE range, not at the
+    /// foot of the document.
+    ///
+    /// **The composer's content inset is part of that range and was missing
+    /// here.** The transcript deliberately extends underneath the composer and
+    /// pays for it with a bottom inset, so an `NSClipView` scrolled fully down
+    /// sits at `documentHeight + inset - viewportHeight`. Targeting
+    /// `documentHeight - viewportHeight` therefore stopped one composer-height
+    /// short of the end — and every new message landed in exactly the strip that
+    /// was left hidden behind the bar.
+    ///
+    /// It presented as the worst possible symptom: the transcript looked like it
+    /// had not moved at all when somebody wrote to you, because the row it
+    /// scrolled to reveal was the one under the composer.
     private func scrollToBottom() {
         guard let scrollView, let documentView else { return }
-        let target = max(0, documentView.frame.height - scrollView.contentView.bounds.height)
+        let target = max(
+            0,
+            documentView.frame.height
+                + scrollView.contentInsets.bottom
+                - scrollView.contentView.bounds.height
+        )
         scrollView.contentView.scroll(to: NSPoint(x: 0, y: target))
         scrollView.reflectScrolledClipView(scrollView.contentView)
     }
@@ -461,10 +618,19 @@ final class TimelineCoordinator: NSObject {
             await withTaskGroup(of: Bool.self) { group in
                 for request in urls {
                     group.addTask {
-                        await ImageStore.shared.image(
-                            for: request.key,
-                            bucket: request.bucket
-                        ) != nil
+                        switch request.source {
+                        case .still(let bucket):
+                            await ImageStore.shared.image(
+                                for: request.key, bucket: bucket
+                            ) != nil
+                        case .film:
+                            await AnimatedImageStore.shared.image(
+                                for: AnimatedImageStore.Key(
+                                    url: request.key.url,
+                                    maximumPixelSize: request.key.maximumPixelSize
+                                )
+                            ) != nil
+                        }
                     }
                 }
                 var landed = false
@@ -475,6 +641,10 @@ final class TimelineCoordinator: NSObject {
                     // One invalidation for the batch. Invalidating per image
                     // would repaint the viewport once per avatar.
                     self.canvas?.needsDisplay = true
+                    // Film that has just landed may be the first moving thing on
+                    // screen, and the canvas only subscribes to the clock when
+                    // there is one.
+                    self.canvas?.refreshStickerAnimation()
                 }
             }
         }
@@ -482,7 +652,15 @@ final class TimelineCoordinator: NSObject {
 
     private struct ImageRequest: Hashable {
         var key: ImageStore.Key
-        var bucket: ImageStore.Bucket
+        /// Which store answers. A Lottie sticker has no bitmap on the CDN at
+        /// all, so its poster is the first frame of a rasterised filmstrip and
+        /// lives in the other cache entirely.
+        var source: Source
+
+        enum Source: Hashable {
+            case still(ImageStore.Bucket)
+            case film
+        }
 
         static func == (lhs: ImageRequest, rhs: ImageRequest) -> Bool { lhs.key == rhs.key }
         func hash(into hasher: inout Hasher) { hasher.combine(key) }
@@ -502,7 +680,112 @@ final class TimelineCoordinator: NSObject {
                     maximumPixelSize: Int((Metrics.avatarMessage * scale).rounded(.up))
                 )
                 if seen.insert(key).inserted, ImageStore.shared.cached(key) == nil {
-                    requests.append(ImageRequest(key: key, bucket: .thumbnail))
+                    requests.append(ImageRequest(key: key, source: .still(.thumbnail)))
+                }
+            }
+
+            // Stickers. **The painter only ever peeks**, so an asset nobody
+            // prefetches is an asset that never arrives — which is the whole of
+            // "stickers render as blank space". The key has to match the
+            // painter's exactly, or the picture lands in a slot the draw never
+            // looks in.
+            for slot in row.stickers {
+                guard let url = slot.url else { continue }
+                let key = ImageStore.Key(
+                    url: url,
+                    maximumPixelSize: Int((slot.rect.width * scale).rounded(.up))
+                )
+                guard seen.insert(key).inserted else { continue }
+                // **A moving sticker needs its FILMSTRIP, not its first frame.**
+                // Asking for the still gave a picture that never changed, which
+                // is the whole of "stickers do not animate in the chat": every
+                // APNG and GIF sticker was decoded once, at frame zero, and
+                // there was nothing for the clock to advance through.
+                if slot.isAnimated {
+                    let film = AnimatedImageStore.Key(
+                        url: key.url, maximumPixelSize: key.maximumPixelSize
+                    )
+                    if AnimatedImageStore.shared.cached(film) == nil,
+                       !AnimatedImageStore.shared.isKnownStill(film)
+                    {
+                        requests.append(ImageRequest(key: key, source: .film))
+                    }
+                } else if ImageStore.shared.cached(key, bucket: .artwork) == nil {
+                    requests.append(ImageRequest(key: key, source: .still(.artwork)))
+                }
+            }
+
+            // An embed's own pictures: an author's mark, a thumbnail, the main
+            // image, a footer icon. The painter only peeks, so anything nobody
+            // prefetches never appears.
+            for image in row.embeds.lazy.flatMap(\.images) {
+                guard let url = image.url else { continue }
+                let bucket: ImageStore.Bucket = image.isArtwork ? .artwork : .thumbnail
+                let key = ImageStore.Key(
+                    url: url,
+                    maximumPixelSize: Int((image.decodeWidth * scale).rounded(.up))
+                )
+                if seen.insert(key).inserted, ImageStore.shared.cached(key, bucket: bucket) == nil {
+                    requests.append(ImageRequest(key: key, source: .still(bucket)))
+                }
+            }
+
+            // **Custom emoji inside an embed or a Components V2 card.** The
+            // painter only peeks, so an app's `<:sakura:123>` in a description
+            // is a blank gap until somebody asks for the bytes — and nothing
+            // else on this pass does.
+            for text in row.embeds.lazy.flatMap(\.texts) {
+                for entry in text.block.emojiRects {
+                    guard let id = entry.emoji.id,
+                          let url = CDN.emoji(
+                              id: id, animated: entry.emoji.isAnimated, side: entry.rect.width
+                          )
+                    else { continue }
+                    let key = ImageStore.Key(
+                        url: url,
+                        maximumPixelSize: Int((entry.rect.width * scale).rounded(.up))
+                    )
+                    if seen.insert(key).inserted, ImageStore.shared.cached(key) == nil {
+                        requests.append(ImageRequest(key: key, source: .still(.thumbnail)))
+                    }
+                }
+            }
+
+            // A poll's answer glyphs.
+            for answer in row.poll?.answers ?? [] {
+                guard let id = answer.emoji?.id,
+                      let url = CDN.emoji(
+                          id: id,
+                          animated: answer.emoji?.isAnimated ?? false,
+                          side: answer.emojiRect.width
+                      )
+                else { continue }
+                let key = ImageStore.Key(
+                    url: url,
+                    maximumPixelSize: Int((answer.emojiRect.width * scale).rounded(.up))
+                )
+                if seen.insert(key).inserted, ImageStore.shared.cached(key) == nil {
+                    requests.append(ImageRequest(key: key, source: .still(.thumbnail)))
+                }
+            }
+
+            // A button's emoji rides the ordinary inline-emoji rung.
+            for slot in row.components {
+                guard let id = slot.emoji?.id,
+                      let url = CDN.emoji(
+                          id: id,
+                          animated: slot.emoji?.isAnimated ?? false,
+                          side: TimelineMetrics.componentGlyphSide
+                      )
+                else { continue }
+                let key = ImageStore.Key(
+                    url: url,
+                    maximumPixelSize: Int(
+                        (TimelineMetrics.componentGlyphSide * scale).rounded(.up)
+                    )
+                )
+                if seen.insert(key).inserted, ImageStore.shared.cached(key) == nil {
+                    requests.append(ImageRequest(key: key, source: .still(.thumbnail)))
                 }
             }
 
@@ -515,7 +798,7 @@ final class TimelineCoordinator: NSObject {
                 if seen.insert(key).inserted,
                    ImageStore.shared.cached(key, bucket: .attachment) == nil
                 {
-                    requests.append(ImageRequest(key: key, bucket: .attachment))
+                    requests.append(ImageRequest(key: key, source: .still(.attachment)))
                 }
             }
 
@@ -533,7 +816,7 @@ final class TimelineCoordinator: NSObject {
                         maximumPixelSize: Int((entry.rect.width * scale).rounded(.up))
                     )
                     if seen.insert(key).inserted, ImageStore.shared.cached(key) == nil {
-                        requests.append(ImageRequest(key: key, bucket: .thumbnail))
+                        requests.append(ImageRequest(key: key, source: .still(.thumbnail)))
                     }
                 }
             }
@@ -543,9 +826,19 @@ final class TimelineCoordinator: NSObject {
 
     // MARK: Actions
 
-    private func open(_ target: MessageText.LinkTarget) {
+    private func open(_ target: MessageText.LinkTarget, from rect: CGRect) {
         switch target {
         case .url(let string):
+            // A Discord message link the RENDERER could not name is still a
+            // place in this account. The renderer only has the selected guild's
+            // channels plus the DMs, so a link into a third server arrives here
+            // as an ordinary URL — and handing that to a browser would ask the
+            // reader to sign in to a client they are not using. The opener has
+            // the whole index, so it can answer what the renderer could not.
+            if let link = MessageLink.parse(string), model.channelIndex[link.channelID] != nil {
+                model.openMessageLink(link)
+                return
+            }
             // The scheme was already checked by the parser, which refuses to
             // build a link node for anything but http(s) and discord://. This
             // second check is not redundant: it is the boundary that keeps a
@@ -556,7 +849,12 @@ final class TimelineCoordinator: NSObject {
             NSWorkspace.shared.open(url)
         case .channel(let channelID):
             model.selectChannel(channelID)
-        case .user, .role:
+        case .message(let link):
+            model.openMessageLink(link)
+        case .user(let userID):
+            guard let canvas else { return }
+            model.openProfile(userID, anchor: canvas.anchorInHostingRoot(rect))
+        case .role:
             break
         }
     }
@@ -577,7 +875,7 @@ final class TimelineScrollView: NSScrollView {
 }
 
 /// The link-scheme check, exposed so the opener can repeat it at the boundary.
-enum InlineScannerSchemeCheck {
+nonisolated enum InlineScannerSchemeCheck {
     static func isSafe(_ url: String) -> Bool {
         let lowered = url.lowercased()
         return lowered.hasPrefix("https://") || lowered.hasPrefix("http://")

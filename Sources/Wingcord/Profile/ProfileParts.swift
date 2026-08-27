@@ -174,6 +174,9 @@ struct MutualServersRow: View {
         .accessibilityHint("Show the servers you share")
         .popover(isPresented: $isOpen, arrowEdge: .trailing) {
             MutualServersList(servers: servers)
+                // The list carries the material; the popover must carry none,
+                // or two are stacked and the result reads as frost.
+                .presentationBackground(.clear)
         }
     }
 }
@@ -318,19 +321,25 @@ struct ConnectionChip: View {
 
 /// A small uppercase chip — the APP mark.
 ///
-/// Glass over the themed ground rather than a painted swatch, so it belongs to
-/// the chrome layer and takes its lightness from whatever the person's colours
-/// happen to be underneath it.
+/// **Tinted, and that is not a colour-rule exception.** The rule is that colour
+/// carries meaning; this mark's whole job is to say *this account is not a
+/// person*, which is the one thing on a profile a reader must not have to work
+/// out. The transcript already draws it in the accent — a clear-glass version
+/// here made the same mark read as a grey label on the surface where it matters
+/// most, and made the two disagree one click apart.
+///
+/// The tint is in the material rather than a fill behind it, so it still lenses
+/// the person's own ground: a fill under glass is what §4 rule 3 forbids.
 struct TagChip: View {
     var text: String
 
     var body: some View {
         Text(text)
             .font(.system(size: 9, weight: .bold))
-            .foregroundStyle(InkColor.primary)
+            .foregroundStyle(.white)
             .padding(.horizontal, 6)
             .padding(.vertical, 2)
-            .glassEffect(.clear, in: .rect(cornerRadius: 5))
+            .glassEffect(.regular.tint(Palette.accent), in: .rect(cornerRadius: 5))
     }
 }
 
@@ -344,12 +353,59 @@ struct TagChip: View {
 /// The badge is a tiny asset out of the same cache as every other picture, and
 /// the chip reserves its slot whether or not it has landed, so the tag does not
 /// reflow when it does.
+///
+/// **It opens the server behind it, in a popover of its own.** That is a nested
+/// popover — this chip is drawn inside the profile card, which is itself one —
+/// and it is the right control rather than a routed request: a card presented at
+/// the window root would have to be anchored to a rect in the root's space, and
+/// a view inside a popover has no such rect. Nested popovers were confirmed on
+/// screen rather than assumed; see `HANDOFF.md`.
+///
+/// One chip per profile surface, so this is a presentation modifier on a leaf
+/// and not on a list row — the rule it would otherwise break exists because a
+/// popover written into a row is evaluated by every row.
 struct GuildTagChip: View {
     var tag: GuildTag
+
+    @Environment(AppModel.self) private var model
+    @Environment(\.motion) private var motion
+    @State private var isOpen = false
+    @State private var isHovering = false
 
     private static let badgeSide: CGFloat = 12
 
     var body: some View {
+        Group {
+            if let guildID = tag.guildID {
+                Button {
+                    isOpen = true
+                    model.loadGuildProfile(guildID)
+                } label: { chip }
+                .buttonStyle(.plain)
+                .onHover { hovering in
+                    // A `@State` write of an equal value still invalidates.
+                    guard isHovering != hovering else { return }
+                    isHovering = hovering
+                }
+                .animation(motion.hover, value: isHovering)
+                .accessibilityHint("Show this server")
+                .popover(isPresented: $isOpen, arrowEdge: .bottom) {
+                    GuildProfileCard(
+                        profile: model.guildProfilePresentation(of: guildID, tag: tag.text),
+                        openGuild: { model.openGuild($0) }
+                    )
+                    // The card supplies its own ground, so the popover must
+                    // supply none — two materials in series read as frost.
+                    .presentationBackground(.clear)
+                }
+            } else {
+                chip
+            }
+        }
+        .accessibilityLabel(Text("Tag \(tag.text)"))
+    }
+
+    private var chip: some View {
         HStack(spacing: 3) {
             if let url = tag.badgeURL {
                 RemoteImage(url: url, side: Self.badgeSide) { Color.clear }
@@ -363,8 +419,13 @@ struct GuildTagChip: View {
         .padding(.leading, tag.badgeURL == nil ? 6 : 4)
         .padding(.trailing, 6)
         .padding(.vertical, 2)
-        .glassEffect(.clear, in: .capsule)
-        .accessibilityLabel(Text("Tag \(tag.text)"))
+        .glassEffect(
+            // Lit under the pointer rather than given a fill behind it: a fill
+            // under glass is what stops a surface lensing (§4 rule 3).
+            isHovering || isOpen ? .clear.tint(Palette.hoverFill) : .clear,
+            in: .capsule
+        )
+        .contentShape(.capsule)
     }
 }
 
@@ -572,9 +633,16 @@ struct ProfileAvatar: View {
     }
 
     /// How far a decoration is drawn outside the avatar's own bounds.
-    private var decorationOverhang: CGFloat {
-        side * (Metrics.decorationScale - 1) / 2
-    }
+    ///
+    /// **Static, and read by the surfaces that lay out around this.** A
+    /// decoration is drawn at 1.2x *outside* the avatar's bounds and therefore
+    /// contributes no size to layout at all — so a card that reserves the
+    /// avatar's own height alone puts the next line under a ring of clouds. The
+    /// number belongs to one place, and the places that must clear it read it.
+    static let decorationOverhang: CGFloat =
+        Metrics.avatarProfile * (Metrics.decorationScale - 1) / 2
+
+    private var decorationOverhang: CGFloat { Self.decorationOverhang }
 
     private var dotMask: some View {
         // **The rectangle has to cover the DECORATION, not just the avatar.** A

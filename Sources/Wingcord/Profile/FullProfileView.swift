@@ -23,6 +23,10 @@ import WingcordCore
 struct FullProfileView: View {
     var profile: ProfilePresentation
     var openDirectMessage: (ChannelID) -> Void
+    var openEmoji: ((EmojiRef) -> Void)?
+
+    /// See `MiniProfileCard.inspectedEmoji`.
+    @State private var inspectedEmoji: EmojiRef?
     var dismiss: () -> Void
 
     @Environment(\.motion) private var motion
@@ -77,6 +81,9 @@ struct FullProfileView: View {
         // The sheet supplies no material of its own, so the corners drawn above
         // are the corners on screen rather than a rounded rect inside a square.
         .presentationBackground(.clear)
+        // The card for an emoji somebody put in their bio. A nested popover,
+        // one per surface — see `ExpressionInfoPopover`.
+        .presentsExpressionInfo(for: $inspectedEmoji)
     }
 
     // MARK: The person
@@ -168,8 +175,26 @@ struct FullProfileView: View {
 
             // No target: this IS the full profile.
             ProfileAvatar(profile: profile, drop: avatarDrop, dotSide: 18)
+
+            if hasCustomStatus {
+                // The cluster places itself from the avatar's drop — see
+                // `CustomStatusBubble`. The banner, the avatar and the bubble
+                // are one arrangement, and a hand-tuned offset here would be
+                // right on one of the two profile surfaces at most.
+                CustomStatusBubble(
+                    text: profile.customStatus,
+                    emoji: profile.customStatusEmoji,
+                    avatarDrop: avatarDrop,
+                    cardWidth: Self.identityWidth
+                )
+            }
         }
-        .padding(.bottom, avatarDrop)
+        // The avatar's drop AND its decoration's overhang — see the card.
+        .padding(.bottom, avatarDrop + ProfileAvatar.decorationOverhang)
+    }
+
+    private var hasCustomStatus: Bool {
+        profile.customStatusEmoji != nil || profile.customStatus?.isEmpty == false
     }
 
     private var bannerPlate: some View {
@@ -225,15 +250,6 @@ struct FullProfileView: View {
                     .padding(.top, Spacing.tight)
             }
 
-            if let customStatus = profile.customStatus, !customStatus.isEmpty {
-                Text(customStatus)
-                    .font(.system(.subheadline))
-                    .foregroundStyle(InkColor.secondary)
-                    .lineLimit(3)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .padding(.top, Spacing.tight)
-            }
-
             if let channelID = profile.directMessageChannelID {
                 Button("Message", systemImage: "bubble.left.fill") {
                     openDirectMessage(channelID)
@@ -244,6 +260,7 @@ struct FullProfileView: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.horizontal, Spacing.margin)
+        .padding(.top, Spacing.base)
         .padding(.bottom, Spacing.snug)
     }
 
@@ -255,11 +272,14 @@ struct FullProfileView: View {
 
         if let bio = profile.bio, !bio.isEmpty {
             section("About Me") {
-                Text(bio)
-                    .font(.system(.subheadline))
-                    .foregroundStyle(InkColor.secondary)
-                    .textSelection(.enabled)
-                    .fixedSize(horizontal: false, vertical: true)
+                // Markdown, not a plain string — see the card.
+                ProseText(
+                    markdown: bio,
+                    font: .system(.subheadline),
+                    color: InkColor.secondary,
+                    emojiSide: 18,
+                    onEmoji: openEmoji ?? { inspectedEmoji = $0 }
+                )
             }
         }
 

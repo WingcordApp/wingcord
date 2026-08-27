@@ -212,6 +212,10 @@ struct WorkspacePresentation: Hashable, Sendable {
 
     enum Supplementary: Hashable, Sendable {
         case members
+        /// The other person, beside a direct message. A DM has no roster to
+        /// show and a guild channel has no single person, so the two are
+        /// different cases rather than one pane that switches contents.
+        case userProfile(UserID)
         case thread(ChannelID)
         case search
     }
@@ -230,4 +234,9 @@ struct ChannelChrome: Hashable, Sendable {
     var topic: String?
     var isMemberListShown: Bool
     var canShowMemberList: Bool
+    /// The DM profile pane's toggle. Its own pair rather than reusing the member
+    /// list's, because the two surfaces never coexist and sharing one flag would
+    /// mean hiding the roster in a server also hides the profile in every DM.
+    var isUserProfileShown: Bool
+    var canShowUserProfile: Bool
 }

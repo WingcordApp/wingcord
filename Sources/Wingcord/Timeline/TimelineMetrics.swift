@@ -86,6 +86,16 @@ nonisolated enum TimelineMetrics {
             + countWidth + reactionTrailingInset
     }
 
+    // A button an app attached. Layout and painter read the SAME constants —
+    // two halves of one geometry, and drifting them is invisible until it isn't.
+    static let componentHeight: CGFloat = 30
+    static let componentPadding: CGFloat = 12
+    static let componentGap: CGFloat = 6
+    static let componentGlyphSide: CGFloat = 16
+    static let componentGlyphGap: CGFloat = 5
+    /// The gutter glyph on a system row — a join, a boost, a pin.
+    static let systemGlyphSide: CGFloat = 16
+
     /// The quote rule's width and its distance from the text it marks.
     static let quoteRuleWidth: CGFloat = 3
     static let quoteRuleInset: CGFloat = 4

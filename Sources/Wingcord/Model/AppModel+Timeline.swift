@@ -120,6 +120,23 @@ extension AppModel {
                 context.channelNames[channelID] = channel.name
             }
         }
+
+        // The DMs as well, so a message link into a conversation can be named.
+        //
+        // **This table stays the selected guild's plus the DMs, deliberately.**
+        // A message link can point anywhere the account can reach, and naming
+        // every one of them would mean copying five thousand channel names into
+        // a value rebuilt whenever the channel tree, the roster or a role moves
+        // — proportional to the account rather than to the page, which is the
+        // exact shape this memo exists to avoid. A link into a third server
+        // therefore stays a URL rather than becoming a chip, and still navigates
+        // in-app when it is clicked: the opener has the whole index in hand and
+        // the renderer does not.
+        for channelID in channelIndex.privateChannelIDs() {
+            guard let channel = channelIndex[channelID] else { continue }
+            context.channelNames[channelID] = displayName(of: channel)
+            context.directMessageChannelIDs.insert(channelID)
+        }
         // **Every user in the session, and this is why it is memoized.**
         //
         // `runLayout` calls this, and `runLayout` runs on every inbound message.

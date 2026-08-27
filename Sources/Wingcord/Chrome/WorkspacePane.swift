@@ -16,6 +16,8 @@ import WingcordCore
 struct WorkspacePane: View {
     var presentation: WorkspacePresentation
 
+    @Environment(\.motion) private var motion
+
     var body: some View {
         HStack(spacing: 0) {
             PrimaryPane(content: presentation.primary)
@@ -23,9 +25,30 @@ struct WorkspacePane: View {
 
             if let supplementary = presentation.supplementary {
                 SupplementaryPane(content: supplementary)
+                    // **In and out along the same edge.** The column lives at
+                    // the trailing edge, so it arrives from there and leaves the
+                    // same way — a panel that slides in from the right and fades
+                    // out in place reads as two unrelated events. Spatial
+                    // symmetry, `INVARIANTS.md` §3.
+                    //
+                    // Paired with `.opacity` because the transcript widens
+                    // underneath it at the same time: a column travelling at
+                    // full opacity over content that is already reflowing reads
+                    // as two things moving past each other.
+                    .transition(.move(edge: .trailing).combined(with: .opacity))
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        // Declared HERE rather than at the toggle, so the column's travel and
+        // the transcript's reflow are one gesture. `INVARIANTS.md` §3 forbids
+        // wrapping the store write in `withAnimation`: that opens a global
+        // transaction and every view that re-lays-out while it runs animates.
+        //
+        // `reposition` is the class for larger travel that is not a gesture —
+        // critically damped, because a column that has arrived somewhere should
+        // not wobble about it.
+        .animation(motion.reposition, value: presentation.supplementary)
+        .clipped()
         // The reading surface is opaque, and only the reading surface.
         //
         // A translucent transcript is legible over a terminal and unreadable
@@ -71,6 +94,8 @@ private struct SupplementaryPane: View {
         case .members:
             MemberListContainer()
                 .frame(width: Proportions.memberColumnIdeal)
+        case .userProfile(let userID):
+            DirectMessageProfileContainer(userID: userID)
         case .thread(let channelID):
             PlaceholderPane(
                 symbol: "text.bubble",

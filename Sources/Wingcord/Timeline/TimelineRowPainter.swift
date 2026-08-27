@@ -25,6 +25,28 @@ nonisolated enum TimelineRowPainter {
         var showsGutterTimestamp = false
         var isHighlighted = false
         var revealedSpoilers: Set<Int> = []
+        /// Which of the row's attachments have had their spoiler lifted.
+        ///
+        /// **Its own set, keyed by the attachment's position.** A spoiler in the
+        /// body text and a spoilered picture are both identified by an index
+        /// into their own list, and sharing one set would have revealing the
+        /// first hidden word uncover the second photograph.
+        var revealedAttachments: Set<Int> = []
+        /// The origin of the button or poll answer under the pointer, in row
+        /// space.
+        ///
+        /// **Identified by its origin rather than by an index**, because the
+        /// pointer state is held per message and an index is only meaningful
+        /// next to the array it came from — which the canvas does not keep
+        /// between passes. One field for both, because at most one thing in a
+        /// row is under the pointer.
+        var hoveredComponent: CGPoint?
+        /// The shared animation clock's current time.
+        ///
+        /// Passed in rather than read here: the painter is `nonisolated` so a
+        /// render test can drive it, and reaching for a main-actor singleton
+        /// from inside a draw loop is exactly what that buys.
+        var animationTime: Double = 0
     }
 
     static func draw(
@@ -105,6 +127,23 @@ nonisolated enum TimelineRowPainter {
                 images: images,
                 scale: scale
             )
+        } else if let symbol = row.systemSymbol {
+            // A system event's mark, where a face would be. Tinted rather than
+            // achromatic: a join, a boost and a removal are three different
+            // things and the glyph is the only place the difference can live —
+            // the sentence beside it is one quiet line either way.
+            drawSymbol(
+                symbol,
+                tint: row.systemTint ?? style.tertiaryColor,
+                in: CGRect(
+                    x: rowFrame.minX + TimelineMetrics.horizontalMargin
+                        + (Metrics.avatarMessage - TimelineMetrics.systemGlyphSide),
+                    y: rowFrame.minY + row.textOrigin.y,
+                    width: TimelineMetrics.systemGlyphSide,
+                    height: TimelineMetrics.systemGlyphSide
+                ),
+                context: context
+            )
         } else if state.showsGutterTimestamp {
             // A continuation row reveals its time in the empty gutter rather
             // than reserving a column for a stamp almost nobody reads.
@@ -182,9 +221,66 @@ nonisolated enum TimelineRowPainter {
             )
         }
 
-        for slot in row.attachments {
+        for slot in row.stickers {
             let frame = slot.rect.offsetBy(dx: rowFrame.minX, dy: rowFrame.minY)
-            drawAttachment(slot, in: frame, context: context, style: style, images: images, scale: scale)
+            drawSticker(
+                slot,
+                in: frame,
+                context: context,
+                style: style,
+                images: images,
+                scale: scale,
+                time: state.animationTime
+            )
+        }
+
+        for (index, slot) in row.attachments.enumerated() {
+            let frame = slot.rect.offsetBy(dx: rowFrame.minX, dy: rowFrame.minY)
+            drawAttachment(
+                slot,
+                in: frame,
+                context: context,
+                style: style,
+                images: images,
+                scale: scale,
+                isRevealed: state.revealedAttachments.contains(index)
+            )
+        }
+
+        if let poll = row.poll {
+            drawPoll(
+                poll,
+                offset: CGPoint(x: rowFrame.minX, y: rowFrame.minY),
+                context: context,
+                style: style,
+                hovered: state.hoveredComponent,
+                images: images,
+                scale: scale
+            )
+        }
+
+        for slot in row.embeds {
+            drawEmbed(
+                slot,
+                offset: CGPoint(x: rowFrame.minX, y: rowFrame.minY),
+                context: context,
+                style: style,
+                images: images,
+                scale: scale
+            )
+        }
+
+        for slot in row.components {
+            let frame = slot.rect.offsetBy(dx: rowFrame.minX, dy: rowFrame.minY)
+            drawComponent(
+                slot,
+                in: frame,
+                context: context,
+                style: style,
+                isHovered: state.hoveredComponent == slot.rect.origin,
+                images: images,
+                scale: scale
+            )
         }
 
         for slot in row.reactions {
@@ -227,13 +323,29 @@ nonisolated enum TimelineRowPainter {
                 maximumPixelSize: Int((frame.width * scale).rounded(.up))
             )
             if let image = images.cached(key) {
-                context.draw(image, in: frame)
+                // **Flipped, like every other picture this file draws.** Core
+                // Graphics origins an image bottom-left and the canvas is
+                // top-left, so an unflipped `draw` puts every custom emoji in
+                // the transcript upside down — which is invisible on a symmetric
+                // one and unmissable on a face.
+                drawFlipped(image, in: frame, context: context)
             } else {
                 // A soft plate rather than nothing, so a line does not visibly
                 // reflow when the picture lands — the box was already reserved.
                 context.setFillColor(style.codeBackground.withAlphaComponent(0.5).cgColor)
                 context.fillEllipse(in: frame.insetBy(dx: 2, dy: 2))
             }
+        }
+
+        // Inline symbols, in the mention's own colour so the glyph and the
+        // name it leads read as one chip.
+        for entry in block.symbolRects {
+            drawSymbol(
+                entry.name,
+                tint: style.mentionColor,
+                in: entry.rect.offsetBy(dx: origin.x, dy: origin.y),
+                context: context
+            )
         }
 
         // Spoilers, concealed until revealed. The text underneath was laid out
@@ -353,12 +465,7 @@ nonisolated enum TimelineRowPainter {
                maximumPixelSize: Int((frame.width * scale).rounded(.up))
            ))
         {
-            // Core Graphics draws images bottom-up; flipping around the frame is
-            // cheaper than asking the image source for a flipped rendition.
-            context.translateBy(x: 0, y: frame.midY)
-            context.scaleBy(x: 1, y: -1)
-            context.translateBy(x: 0, y: -frame.midY)
-            context.draw(image, in: frame)
+            drawFlipped(image, in: frame, context: context)
         } else {
             context.setFillColor(NSColor(Palette.surfaceRaised).cgColor)
             context.fill(frame)
@@ -384,14 +491,20 @@ nonisolated enum TimelineRowPainter {
         context: CGContext,
         style: MessageTextStyle,
         images: ImageStore,
-        scale: CGFloat
+        scale: CGFloat,
+        isRevealed: Bool
     ) {
+        // A spoiler stays covered until it is clicked, and the click that
+        // uncovers it is not the click that opens it — a picture somebody hid
+        // deliberately must not be shown full-screen by the same press that
+        // reveals it.
+        let isHidden = slot.isSpoiler && !isRevealed
         let path = CGPath(roundedRect: frame, cornerWidth: 8, cornerHeight: 8, transform: nil)
         context.saveGState()
         context.addPath(path)
         context.clip()
 
-        if !slot.isSpoiler,
+        if !isHidden,
            let url = slot.url,
            let image = images.cached(
                ImageStore.Key(
@@ -401,17 +514,14 @@ nonisolated enum TimelineRowPainter {
                bucket: .attachment
            )
         {
-            context.translateBy(x: 0, y: frame.midY)
-            context.scaleBy(x: 1, y: -1)
-            context.translateBy(x: 0, y: -frame.midY)
-            context.draw(image, in: frame)
+            drawFlipped(image, in: frame, context: context)
         } else {
             context.setFillColor(NSColor(Palette.surfaceRaised).cgColor)
             context.fill(frame)
         }
         context.restoreGState()
 
-        if slot.isSpoiler {
+        if isHidden {
             drawChip(
                 "SPOILER",
                 in: CGRect(x: frame.midX - 38, y: frame.midY - 10, width: 76, height: 20),
@@ -422,7 +532,7 @@ nonisolated enum TimelineRowPainter {
             )
         }
 
-        if slot.isVideo {
+        if slot.isVideo, !isHidden {
             let badge = CGRect(x: frame.midX - 20, y: frame.midY - 20, width: 40, height: 40)
             context.setFillColor(NSColor.black.withAlphaComponent(0.55).cgColor)
             context.fillEllipse(in: badge)
@@ -478,12 +588,7 @@ nonisolated enum TimelineRowPainter {
                 url: url,
                 maximumPixelSize: Int((side * scale).rounded(.up))
             )) {
-                context.saveGState()
-                context.translateBy(x: 0, y: glyphRect.midY)
-                context.scaleBy(x: 1, y: -1)
-                context.translateBy(x: 0, y: -glyphRect.midY)
-                context.draw(image, in: glyphRect)
-                context.restoreGState()
+                drawFlipped(image, in: glyphRect, context: context)
             } else {
                 context.setFillColor(style.codeBackground.withAlphaComponent(0.5).cgColor)
                 context.fillEllipse(in: glyphRect.insetBy(dx: 2, dy: 2))
@@ -517,6 +622,129 @@ nonisolated enum TimelineRowPainter {
                     - TimelineMetrics.reactionTrailingInset
             ),
             context: context
+        )
+    }
+
+    /// Draws a bitmap the right way up.
+    ///
+    /// Core Graphics origins an image at the bottom-left and this canvas is
+    /// flipped, so every `draw(_:in:)` in this file goes through here. It used
+    /// to be four lines copied at each call site, and the one copy that was
+    /// missing is what drew every inline custom emoji upside down.
+    static func drawFlipped(_ image: CGImage, in frame: CGRect, context: CGContext) {
+        context.saveGState()
+        context.translateBy(x: 0, y: frame.midY)
+        context.scaleBy(x: 1, y: -1)
+        context.translateBy(x: 0, y: -frame.midY)
+        context.draw(image, in: frame)
+        context.restoreGState()
+    }
+
+    /// One sticker.
+    ///
+    /// **Aspect-fit inside its box and never cropped.** A sticker is authored
+    /// artwork with its own margins; filling a square box with a wide one cuts
+    /// the ends off the thing that identifies it.
+    ///
+    /// The picture comes from one of two caches and the format decides which:
+    /// a Lottie sticker has **no bitmap on the CDN at all** — measured, both its
+    /// `.png` and `.gif` endpoints answer 404 — so its poster is the first frame
+    /// of a rasterised filmstrip, while everything else is an ordinary decode.
+    /// Both are peeks; the coordinator is the only thing that starts a fetch.
+    private static func drawSticker(
+        _ slot: StickerSlot,
+        in frame: CGRect,
+        context: CGContext,
+        style: MessageTextStyle,
+        images: ImageStore,
+        scale: CGFloat,
+        time: Double
+    ) {
+        let pixels = Int((frame.width * scale).rounded(.up))
+        let image = stickerFrame(slot, pixels: pixels, images: images, time: time)
+
+        guard let image else {
+            // A quiet plate at the sticker's own size, so the row does not
+            // reflow when the artwork lands.
+            context.addPath(CGPath(
+                roundedRect: frame, cornerWidth: 12, cornerHeight: 12, transform: nil
+            ))
+            context.setFillColor(style.codeBackground.withAlphaComponent(0.5).cgColor)
+            context.fillPath()
+            return
+        }
+
+        let width = CGFloat(image.width)
+        let height = CGFloat(image.height)
+        guard width > 0, height > 0 else { return }
+        let factor = min(frame.width / width, frame.height / height)
+        let fitted = CGRect(
+            x: (frame.midX - width * factor / 2).rounded(),
+            y: (frame.midY - height * factor / 2).rounded(),
+            width: (width * factor).rounded(),
+            height: (height * factor).rounded()
+        )
+        drawFlipped(image, in: fitted, context: context)
+    }
+
+    /// One SF Symbol, tinted, fitted into a rect.
+    ///
+    /// The bitmap comes out of `SymbolCache`: resolving and rasterising a symbol
+    /// is a font lookup and a render, and a `#welcome` channel draws one per row
+    /// on every repaint of every scroll.
+    static func drawSymbol(
+        _ name: String,
+        tint: NSColor,
+        in frame: CGRect,
+        context: CGContext
+    ) {
+        guard let image = SymbolCache.shared.image(
+            name: name, pointSize: frame.height, tint: tint
+        ) else { return }
+
+        let width = CGFloat(image.width)
+        let height = CGFloat(image.height)
+        guard width > 0, height > 0 else { return }
+        let factor = min(frame.width / width, frame.height / height)
+        drawFlipped(
+            image,
+            in: CGRect(
+                x: frame.midX - width * factor / 2,
+                y: frame.midY - height * factor / 2,
+                width: width * factor,
+                height: height * factor
+            ),
+            context: context
+        )
+    }
+
+    /// The bitmap a sticker shows right now.
+    ///
+    /// **A moving sticker is a filmstrip and a still one is a bitmap**, and the
+    /// difference is the format rather than the caller: APNG, GIF and Lottie all
+    /// decode into the same strip, so one lookup covers all three. A still is
+    /// drawn while the strip is still decoding — every animated sticker except
+    /// Lottie also has a first frame in the ordinary cache, and showing it beats
+    /// showing a plate.
+    static func stickerFrame(
+        _ slot: StickerSlot,
+        pixels: Int,
+        images: ImageStore,
+        time: Double
+    ) -> CGImage? {
+        guard let url = slot.url else { return nil }
+        if slot.isAnimated {
+            let key = AnimatedImageStore.Key(url: url, maximumPixelSize: pixels)
+            if let film = AnimatedImageStore.shared.cached(key) {
+                return film.frames[film.index(at: time)]
+            }
+        }
+        // Lottie has no bitmap on the CDN at all — measured, both its `.png` and
+        // `.gif` endpoints answer 404 — so there is nothing to fall back to.
+        guard !slot.isVector else { return nil }
+        return images.cached(
+            ImageStore.Key(url: url, maximumPixelSize: pixels),
+            bucket: .artwork
         )
     }
 

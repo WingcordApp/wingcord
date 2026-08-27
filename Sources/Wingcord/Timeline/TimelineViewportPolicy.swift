@@ -19,15 +19,36 @@ nonisolated enum TimelineViewportPolicy {
     }
 
     static func geometry(
-        viewport: CGRect,
+        viewport rawViewport: CGRect,
         documentHeight: CGFloat,
         currentFrame: CGRect,
         overscan: CGFloat = TimelineMetrics.overscan,
         minimumBuffer: CGFloat = TimelineMetrics.minimumRetainedBuffer
     ) -> Geometry {
         let documentHeight = max(1, documentHeight)
-        let width = max(1, viewport.width)
-        let canvasHeight = min(documentHeight, max(1, viewport.height + overscan * 2))
+        let width = max(1, rawViewport.width)
+
+        // **Clipped to the document before anything is decided.** The transcript
+        // runs UNDER the composer and pays for it with a bottom content inset,
+        // so a clip view scrolled fully down reports a viewport whose foot is
+        // one composer past the end of the content. The canvas is clamped to the
+        // document and can never cover that strip — there is nothing there — so
+        // a covers-the-viewport test written against the raw rect is false for
+        // the whole of the bottom of every channel, and the canvas is then
+        // repositioned on *every scroll tick* in exactly the region people read
+        // in. That is the one thing this type exists to prevent.
+        let viewport = CGRect(
+            x: rawViewport.minX,
+            y: rawViewport.minY,
+            width: rawViewport.width,
+            height: max(0, min(rawViewport.maxY, documentHeight) - rawViewport.minY)
+        )
+        // Sized from the RAW viewport, which is the clip view's own height and
+        // does not change as the reader scrolls. Sizing it from the clipped rect
+        // would shrink the canvas near the foot of a channel — and a canvas that
+        // changes size is a canvas that is re-laid-out and repainted, which is
+        // the cost this whole type exists to avoid.
+        let canvasHeight = min(documentHeight, max(1, rawViewport.height + overscan * 2))
         let maximumOriginY = max(0, documentHeight - canvasHeight)
 
         let coversViewport =

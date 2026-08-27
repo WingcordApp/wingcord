@@ -60,6 +60,24 @@ nonisolated enum Palette {
     /// Affirmative call actions only (Accept).
     static let affirmative = Color.green
 
+    /// What a clear-glass flyout is tinted with.
+    ///
+    /// **Clear glass over near-black has nothing to refract and disappears** —
+    /// §4 — so a floating card that may land over an empty stretch of transcript
+    /// needs a value of its own to be seen at rest. Kept low: past about a tenth
+    /// the surface stops lensing what passes beneath and starts reading as a
+    /// painted panel, which is the thing it is being rescued from.
+    static let flyoutTint = Color.white.opacity(0.08)
+
+    /// The ground under a custom status bubble, and under its tail.
+    ///
+    /// **A fixed scrim rather than a material.** It sits over a banner the
+    /// reader did not choose and which may be animated, and §4 sends anything
+    /// over moving artwork to a scrim for exactly that reason: a sampled
+    /// material cannot promise the sentence on top of it stays legible frame to
+    /// frame. Near-opaque, so white text clears it over a white banner.
+    static let statusBubble = Color(hex: 0x14_14_17).opacity(0.92)
+
     /// Muted conversations render badges in this instead of `unreadBadge`, so a
     /// muted unread never competes with a live one.
     static let mutedBadge = Color(hex: 0x6E6E76)
@@ -282,6 +300,18 @@ nonisolated enum Proportions {
     static let memberColumnMin: CGFloat = 200
     static let memberColumnIdeal: CGFloat = 236
     static let memberColumnMax: CGFloat = 300
+
+    /// The profile column beside a direct message.
+    ///
+    /// The pane insets its rounded box by `Spacing.base` on every side, so the
+    /// column it occupies is this plus twice that — see
+    /// `DirectMessageProfilePane`.
+    ///
+    /// Wider than the member list because it holds one person rather than a
+    /// list of names: a banner, an avatar with its decoration, a bio and a role
+    /// flow all need room the roster's 236 does not have, and a profile squeezed
+    /// into a roster's width is a column of two-word lines.
+    static let profileColumnIdeal: CGFloat = 288
 
     /// The smallest window that still shows all three columns with a readable
     /// transcript between them. Handed to `.frame(minWidth:minHeight:)` at the

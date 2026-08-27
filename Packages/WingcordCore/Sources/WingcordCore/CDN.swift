@@ -170,6 +170,30 @@ public enum CDN {
         URL(string: "\(host)/badge-icons/\(hash).png?size=64")
     }
 
+    /// The header artwork on a server's tag profile.
+    ///
+    /// The route answers with two hashes: `banner_hash`, which is the ordinary
+    /// boost banner most servers do not have, and `custom_banner_hash`, which is
+    /// the one the tag profile actually shows. **Both are requested from the
+    /// same `/banners/` path, and the second of those is the one asset path in
+    /// this file that has not been confirmed against a live response** — a wrong
+    /// path 404s, and a 404 here falls back to the plate the header draws while
+    /// loading, which is the same picture a server with no banner gets.
+    public static func guildProfileBanner(
+        guildID: GuildID,
+        hash: String,
+        width: CGFloat,
+        scale: CGFloat = 2
+    ) -> URL? {
+        guildBanner(guildID: guildID, hash: hash, width: width, scale: scale)
+    }
+
+    /// An app's own icon. Always PNG and small — it is drawn at row size beside
+    /// an emoji it owns.
+    public static func applicationIcon(hash: String) -> URL? {
+        URL(string: "\(host)/app-icons/\(hash).png?size=64")
+    }
+
     /// The badge that rides inside a clan tag chip.
     ///
     /// Always PNG and always small: it is drawn at eleven points beside nine-point
@@ -215,6 +239,13 @@ public enum CDN {
     ) -> URL? {
         guard var components = URLComponents(string: proxyURL) else {
             return URL(string: proxyURL)
+        }
+        // **Only Discord's proxy resizes.** A query appended to anything else —
+        // a `file:` URL under `--demo`, an asset served from somewhere this
+        // client did not choose — is not a smaller picture, it is a URL that
+        // 404s, and the failure looks exactly like a missing attachment.
+        guard let scheme = components.scheme, scheme == "http" || scheme == "https" else {
+            return components.url
         }
         let pixels = Int((width * scale).rounded(.up))
         var items = components.queryItems ?? []

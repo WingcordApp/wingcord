@@ -17,6 +17,7 @@ import WingcordCore
 struct ChannelToolbar: ToolbarContent {
     var chrome: ChannelChrome
     var toggleMemberList: () -> Void = {}
+    var toggleUserProfile: () -> Void = {}
     var openChannelDetails: () -> Void = {}
 
     var body: some ToolbarContent {
@@ -35,6 +36,11 @@ struct ChannelToolbar: ToolbarContent {
         // leading edge instead of at the far end of the bar.
         ToolbarSpacer(.flexible)
 
+        // **One item, two surfaces, and they are mutually exclusive.** A guild
+        // channel has a roster and no single person; a direct message has a
+        // person and no roster. Declaring two items would leave a hole in the
+        // bar in both cases, and the bar closes holes by sliding its neighbours
+        // — which moves the sidebar toggle every time the reader opens a DM.
         ToolbarItem(placement: .primaryAction) {
             if chrome.canShowMemberList {
                 Button(action: toggleMemberList) {
@@ -44,6 +50,14 @@ struct ChannelToolbar: ToolbarContent {
                     )
                 }
                 .help(chrome.isMemberListShown ? "Hide member list" : "Show member list")
+            } else if chrome.canShowUserProfile {
+                Button(action: toggleUserProfile) {
+                    Label(
+                        chrome.isUserProfileShown ? "Hide User Profile" : "Show User Profile",
+                        systemImage: "person.crop.circle"
+                    )
+                }
+                .help(chrome.isUserProfileShown ? "Hide user profile" : "Show user profile")
             }
         }
     }

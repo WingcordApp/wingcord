@@ -46,6 +46,14 @@ nonisolated struct MessageTextStyle: @unchecked Sendable {
     var emojiAscent: CGFloat
     var emojiDescent: CGFloat
 
+    /// The box an inline SF Symbol reserves in a line.
+    ///
+    /// Derived from the body rather than fixed, so a symbol set in prose tracks
+    /// the reader's text size exactly as the words around it do. Slightly under
+    /// the cap height: a glyph matched to the ascender sits visibly larger than
+    /// the letters beside it.
+    var symbolSide: CGFloat { bodyFont.pointSize * 0.92 }
+
     var lineSpacing: CGFloat
     var paragraphSpacing: CGFloat
 
@@ -97,6 +105,38 @@ nonisolated struct MessageTextStyle: @unchecked Sendable {
             lineSpacing: 2,
             paragraphSpacing: 4
         )
+    }
+
+    /// How much larger a message made only of emoji is drawn.
+    ///
+    /// Discord's jumbo is 48px against a 22px inline emoji, which is a shade
+    /// over 2.2x — but that pair is measured on Discord's own 16px body, and
+    /// this app's body is the system's. Expressed as a multiple of the body font
+    /// rather than as a point size, so a reader who has raised their text size
+    /// gets a proportionally larger jumbo instead of the same 48 points.
+    static let jumboScale: CGFloat = 2.6
+
+    /// The same style with the emoji drawn large.
+    ///
+    /// **Both kinds have to grow together.** A Unicode emoji is text and takes
+    /// its size from the font; a custom one is a picture in a box the run
+    /// delegate reserves. Scaling only the font leaves `:blobcat:` at twenty
+    /// points beside a forty-point emoji in the same message, which is worse
+    /// than leaving both small.
+    ///
+    /// Derived rather than measured, so this can be built off the main actor
+    /// alongside the layout that asks for it.
+    var jumbo: MessageTextStyle {
+        var style = self
+        let font = NSFont.systemFont(ofSize: bodyFont.pointSize * Self.jumboScale)
+        style.bodyFont = font
+        style.emojiWidth = font.pointSize * 1.28
+        style.emojiAscent = font.ascender * 1.05
+        style.emojiDescent = abs(font.descender)
+        // A row of jumbo emoji that wraps needs room between the lines, and the
+        // body's two points was tuned for text a third the height.
+        style.lineSpacing = lineSpacing * Self.jumboScale
+        return style
     }
 
     // MARK: Attribute sets

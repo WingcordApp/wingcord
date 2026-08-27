@@ -56,11 +56,79 @@ xcrun actool "$ICON_STAGE/AppIcon.icon" \
     "$APP/Contents/Info.plist" 2>/dev/null \
     || /usr/libexec/PlistBuddy -c "Set :CFBundleIconName AppIcon" "$APP/Contents/Info.plist"
 
-# Ad-hoc signing with entitlements. Unsigned, the app cannot hold the microphone
-# or camera permissions it will eventually ask for, and macOS re-prompts for
+# ── Code signing ───────────────────────────────────────────────────────────
+# Signed with entitlements. Unsigned, the app cannot hold the microphone or
+# camera permissions it will eventually ask for, and macOS re-prompts for
 # network access on every rebuild.
-codesign --force --sign - \
+#
+# **Signed with an identity that carries a TEAM ID, and that is what keeps the
+# account signed in across a rebuild.** There are TWO independent gates on a
+# Keychain item and it is easy to fix only the first:
+#
+#   1. The trusted-application ACL. An ad-hoc signature's designated
+#      requirement is a literal `cdhash` of the binary, so a rebuild stops
+#      matching. A certificate-backed one names the identifier and the
+#      certificate, and survives. Any certificate fixes this half.
+#
+#   2. The **partition list** — a second gate added in macOS Sierra, stored as
+#      its own ACL entry. Its ids are `apple:`, `teamid:<TEAMID>`, or
+#      `cdhash:<hash>` for signed code with no team. **A self-signed
+#      certificate has no team id**, so it falls back to cdhash, which changes
+#      on every build — and the prompt comes back even though the ACL above
+#      matches perfectly. Read it with:
+#
+#        security dump-keychain -a ~/Library/Keychains/login.keychain-db
+#
+# So the identity has to be Apple-issued. **This does not mean a paid
+# membership**: a free Apple ID added in Xcode ▸ Settings ▸ Accounts issues an
+# "Apple Development" certificate with a personal team id, and that is enough.
+# The team id also survives certificate renewal, where a self-signed
+# replacement would not.
+#
+# A self-signed certificate is still better than ad-hoc — it fixes gate 1 and
+# leaves one prompt per build instead of a login screen — so it stays as the
+# fallback.
+#
+# On the first launch after switching, macOS asks once whether Wingcord may
+# read the item the previous build stored. Answer **Always Allow**; that adds
+# both the requirement and `teamid:` to the item, and neither moves again.
+#
+# **The lookup deliberately omits `-v`.** A self-signed root is untrusted by
+# definition, so `find-identity -v` reports `CSSMERR_TP_NOT_TRUSTED` and filters
+# out the exact identity the fallback is for. Trust governs verification, not
+# signing.
+# **Counted by certificate hash, not by matching lines.** `find-identity` prints
+# every identity twice — once under "Matching identities" and again under "Valid
+# identities only" — so a naive `grep -c` reports two for a single certificate
+# and every lookup looks ambiguous. Resolving to the SHA-1 and signing with that
+# also removes any chance of a substring matching the wrong identity.
+for CANDIDATE in "${WINGCORD_SIGN_IDENTITY:-}" "Apple Development" "Wingcord Dev"; do
+    [ -n "$CANDIDATE" ] || continue
+    HASHES=$(security find-identity -p codesigning 2>/dev/null \
+        | grep -F "$CANDIDATE" | awk '{ print $2 }' | sort -u)
+    COUNT=$(printf '%s' "$HASHES" | grep -c . || true)
+    if [ "$COUNT" -eq 1 ]; then
+        SIGN_IDENTITY="$HASHES"
+        SIGN_NAME="$CANDIDATE"
+        break
+    elif [ "$COUNT" -gt 1 ]; then
+        echo "note: '$CANDIDATE' matches $COUNT certificates; set WINGCORD_SIGN_IDENTITY" >&2
+        echo "      to the exact name or SHA-1 to disambiguate." >&2
+    fi
+done
+
+if [ -z "${SIGN_IDENTITY:-}" ]; then
+    echo "note: no code-signing identity found; falling back to ad-hoc." >&2
+    echo "      the app will ask you to sign in again after every build." >&2
+    SIGN_IDENTITY="-"
+elif [ "${SIGN_NAME:-}" = "Wingcord Dev" ]; then
+    echo "note: signing with a self-signed identity, which has no team id." >&2
+    echo "      expect one Keychain prompt per build. See the comment above." >&2
+fi
+
+codesign --force --sign "$SIGN_IDENTITY" \
     --entitlements "$ROOT/Packaging/Wingcord.entitlements" \
-    --timestamp=none "$APP" 2>/dev/null
+    --timestamp=none "$APP" \
+    || echo "warning: codesign failed with identity '$SIGN_IDENTITY'." >&2
 
 echo "App: $APP"

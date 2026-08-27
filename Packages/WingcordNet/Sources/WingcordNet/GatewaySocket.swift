@@ -431,6 +431,50 @@ public actor GatewaySocket {
         )))
     }
 
+    /// Publishes the reader's own status and custom status.
+    ///
+    /// **Op 3, over the socket, and there is no REST equivalent that works.**
+    /// The settings route stores a status but does not broadcast one, so an
+    /// account that changed status there stays green to everyone else until it
+    /// reconnects. This is the presence every other client sees.
+    ///
+    /// A custom status is an activity of kind 4 whose `state` is the text — the
+    /// same shape it arrives in. Sent as an empty list when there is none,
+    /// because omitting the key leaves the previous activity standing.
+    public func updatePresence(status: String, customStatus: String?, customEmoji: String?) {
+        struct Update: Encodable {
+            var op = 3
+            var d: Data
+
+            struct Data: Encodable {
+                var status: String
+                var since = 0
+                var afk = false
+                var activities: [Activity]
+            }
+
+            struct Activity: Encodable {
+                var name = "Custom Status"
+                var type = 4
+                var state: String?
+                var emoji: Emoji?
+            }
+
+            struct Emoji: Encodable {
+                var name: String
+            }
+        }
+
+        var activities: [Update.Activity] = []
+        if customStatus?.isEmpty == false || customEmoji?.isEmpty == false {
+            activities.append(Update.Activity(
+                state: customStatus.flatMap { $0.isEmpty ? nil : $0 },
+                emoji: customEmoji.flatMap { $0.isEmpty ? nil : Update.Emoji(name: $0) }
+            ))
+        }
+        send(Update(d: .init(status: status, activities: activities)))
+    }
+
     private func send(_ value: some Encodable) {
         guard let task, !isStopped else { return }
         do {

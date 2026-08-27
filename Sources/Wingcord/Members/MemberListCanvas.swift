@@ -209,55 +209,9 @@ final class MemberListCanvas: NSView {
         // beside that person rather than at the pointer — a card that follows
         // the click reads as a menu.
         //
-        // **The anchor must be expressed in the SwiftUI ROOT's coordinate
-        // space, which is the hosting view's — not the window's.**
-        //
-        // Three things were wrong here in turn, and each looked plausible:
-        // window coordinates are bottom-left, so the first version handed
-        // SwiftUI a vertically mirrored rect; the correction to subtract from
-        // the content view's height double-flipped it, because a SwiftUI
-        // window's content view IS an `NSHostingView` and therefore already
-        // flipped; and converting into the content view still answers in the
-        // wrong space when the hosting view does not start at the content
-        // view's origin, which is what left the card opening a row or two below
-        // the person clicked.
-        //
-        // Converting into the hosting view itself removes the whole class of
-        // error: it is the exact view the `.popover` modifier is attached
-        // within, so its coordinates are the ones the attachment anchor is
-        // interpreted in, whatever AppKit has done with the window around it.
-        let rowRect = rowFrame(at: index)
-        let host = Self.hostingAncestor(of: self) ?? window?.contentView
-        guard let host else {
-            onOpenProfile?(userID, convert(rowRect, to: nil))
-            return
-        }
-        let inHost = convert(rowRect, to: host)
-        let anchor = host.isFlipped
-            ? inHost
-            : CGRect(
-                x: inHost.minX,
-                y: host.bounds.height - inHost.maxY,
-                width: inHost.width,
-                height: inHost.height
-            )
-        onOpenProfile?(userID, anchor)
-    }
-
-    /// The outermost SwiftUI hosting view above this canvas.
-    ///
-    /// Walked to the TOP of the chain rather than stopping at the first match:
-    /// SwiftUI nests hosting views for representables, and the innermost one is
-    /// this canvas's own container, whose origin is the scroll view's — not the
-    /// window root's.
-    private static func hostingAncestor(of view: NSView) -> NSView? {
-        var found: NSView?
-        var candidate: NSView? = view.superview
-        while let current = candidate {
-            if String(describing: type(of: current)).contains("Hosting") { found = current }
-            candidate = current.superview
-        }
-        return found
+        // The anchor is expressed in the SwiftUI root's space, which is the
+        // hosting view's and not the window's — see `anchorInHostingRoot`.
+        onOpenProfile?(userID, anchorInHostingRoot(rowFrame(at: index)))
     }
 
     override func accessibilityChildren() -> [Any]? {

@@ -29,6 +29,15 @@ nonisolated struct MessageText: @unchecked Sendable {
     let attributed: NSAttributedString
     /// Custom emoji, by the character index of their placeholder.
     let inlineEmoji: [Int: EmojiRef]
+    /// SF Symbols set in a run of text, by the character index of their
+    /// placeholder.
+    ///
+    /// **The same run-delegate trick the emoji use, for the same reason.** A
+    /// symbol reserves its own box in the line and the painter fills it, so text
+    /// wraps around it correctly — where a literal character would be whatever
+    /// the font happened to have and a hosted view would be an `NSView` inside
+    /// every message that carries one.
+    let inlineSymbols: [Int: String]
     /// Link destinations, by character range.
     let links: [LinkRun]
     /// Spoiler ranges, concealed until revealed.
@@ -46,6 +55,35 @@ nonisolated struct MessageText: @unchecked Sendable {
         case user(UserID)
         case role(RoleID)
         case channel(ChannelID)
+        /// A link to one message, which is a **destination inside the app**
+        /// rather than a URL. Rendered as a chip and followed by scrolling
+        /// there, not by handing it to a browser that would ask the reader to
+        /// sign in again.
+        case message(MessageLink)
+    }
+}
+
+// `nonisolated` on the extension, not on the member: the app target defaults to
+// main-actor isolation, and an extension that inherits it puts an actor hop in
+// front of a value initialiser the layout engine calls dozens of times per
+// embed — off the main actor by construction. See `INVARIANTS.md` §5.
+nonisolated extension MessageText {
+    /// A run of already-styled text with no markdown behind it.
+    ///
+    /// The pieces of an embed — an author's name, a title, a footer — are plain
+    /// strings in known styles, and running them through the markdown builder
+    /// would be a parse per part per embed to discover there is nothing to
+    /// parse. They still become a `TimelineTextBlock`, so they wrap, measure and
+    /// hit-test exactly like a message body does.
+    static func plain(_ attributed: NSAttributedString, links: [LinkRun] = []) -> MessageText {
+        MessageText(
+            attributed: attributed,
+            inlineEmoji: [:],
+            inlineSymbols: [:],
+            links: links,
+            spoilers: [],
+            plainLabel: attributed.string
+        )
     }
 }
 
@@ -56,6 +94,13 @@ nonisolated struct MentionContext: Sendable {
     var roleNames: [RoleID: String] = [:]
     var roleColors: [RoleID: UInt32] = [:]
     var channelNames: [ChannelID: String] = [:]
+    /// Which of those channels are conversations rather than server channels.
+    ///
+    /// A message link into a DM is addressed to a **person**, so it reads `@ada`
+    /// where a server channel reads `#general`. The prefix is the only
+    /// difference and it is the one that decides whether the chip is a place or
+    /// a person.
+    var directMessageChannelIDs: Set<ChannelID> = []
     /// The reader's own ids, so a mention of them is drawn differently.
     var selfIDs: Set<UInt64> = []
 
@@ -90,6 +135,7 @@ nonisolated enum MessageTextBuilder {
         let style: MessageTextStyle
         var output = NSMutableAttributedString()
         var inlineEmoji: [Int: EmojiRef] = [:]
+        var inlineSymbols: [Int: String] = [:]
         var links: [MessageText.LinkRun] = []
         var spoilers: [NSRange] = []
 
@@ -157,6 +203,37 @@ nonisolated enum MessageTextBuilder {
                     ))
 
                 case .autoLink(let url):
+                    // A message link is a place in this account, not a page on
+                    // the web. Drawn as a chip naming the channel it points at,
+                    // and only when that channel can be named — an unresolvable
+                    // one stays a URL, because a chip reading "#channel" is a
+                    // destination the reader is told about and cannot reach.
+                    if let link = MessageLink.parse(url),
+                       let name = context.channelNames[link.channelID]
+                    {
+                        // **A message link is not a mention, and must not read
+                        // as one.** Both are blue chips carrying a name, so a
+                        // link into a DM came out as `@robinresting` —
+                        // character for character what a mention of that person
+                        // looks like, and the two go to completely different
+                        // places. The glyph is the whole difference.
+                        let start = output.length
+                        appendInlineSymbol("text.bubble.fill", base: attributes)
+                        appendMention(
+                            " " + (context.directMessageChannelIDs.contains(link.channelID)
+                                ? "@" : "#") + name,
+                            base: attributes,
+                            isSelf: false
+                        )
+                        // One link run over the glyph AND the name, so the whole
+                        // chip is one target rather than a word beside an
+                        // unclickable picture.
+                        links.append(.init(
+                            range: NSRange(location: start, length: output.length - start),
+                            target: .message(link)
+                        ))
+                        continue
+                    }
                     let start = output.length
                     appendRaw(url, attributes: style.link(base: attributes))
                     links.append(.init(
@@ -235,6 +312,30 @@ nonisolated enum MessageTextBuilder {
             }
         }
 
+        /// Inserts a symbol into the run, in the mention's own colour.
+        ///
+        /// The box is square and sized to the text, so the glyph grows with the
+        /// reader's text size instead of being pinned at a point value.
+        mutating func appendInlineSymbol(
+            _ name: String,
+            base: [NSAttributedString.Key: Any]
+        ) {
+            let index = output.length
+            inlineSymbols[index] = name
+
+            let side = style.symbolSide
+            let metrics = InlineBoxMetrics(
+                ascent: side * 0.86,
+                descent: side * 0.14,
+                width: side
+            )
+            var attributes = style.mention(base: base, isSelf: false)
+            if let delegate = InlineBoxMetrics.makeRunDelegate(metrics) {
+                attributes[kCTRunDelegateAttributeName as NSAttributedString.Key] = delegate
+            }
+            output.append(NSAttributedString(string: "\u{FFFC}", attributes: attributes))
+        }
+
         /// Inserts an object-replacement character carrying a run delegate that
         /// reserves the emoji's box.
         ///
@@ -268,6 +369,7 @@ nonisolated enum MessageTextBuilder {
                 // thread is already laying out.
                 attributed: NSAttributedString(attributedString: output),
                 inlineEmoji: inlineEmoji,
+                inlineSymbols: inlineSymbols,
                 links: links,
                 spoilers: spoilers,
                 plainLabel: plainLabel

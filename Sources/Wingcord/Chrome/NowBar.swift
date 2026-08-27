@@ -27,9 +27,12 @@ struct NowBar: View, Equatable {
     var toggleDeafen: () -> Void = {}
     var openSettings: () -> Void = {}
     var openSelfProfile: () -> Void = {}
+    var setStatus: (PresenceStatus) -> Void = { _ in }
+    var setCustomStatus: (String?) -> Void = { _ in }
     var disconnectVoice: () -> Void = {}
 
     @Environment(\.motion) private var motion
+    @State private var isMenuOpen = false
 
     var body: some View {
         VStack(spacing: Spacing.tight) {
@@ -69,8 +72,14 @@ struct NowBar: View, Equatable {
         .animation(motion.panel, value: presentation.voiceChannelName)
     }
 
+    /// The identity row, and the panel it opens.
+    ///
+    /// **One popover on one view**, which is what makes a presentation modifier
+    /// legitimate here: the rule it would otherwise break — never a `.popover`
+    /// on a row — exists because a popover written into a list row is evaluated
+    /// by every row on every pass. There is exactly one now bar.
     private var identity: some View {
-        Button(action: openSelfProfile) {
+        Button { isMenuOpen = true } label: {
             HStack(spacing: Spacing.base) {
                 AvatarView(
                     url: presentation.avatarURL,
@@ -102,6 +111,16 @@ struct NowBar: View, Equatable {
         .buttonStyle(.plain)
         .accessibilityLabel(Text(presentation.displayName))
         .accessibilityValue(Text(presentation.status.label))
+        .accessibilityHint("Change your status")
+        .popover(isPresented: $isMenuOpen, arrowEdge: .top) {
+            NowBarMenu(
+                presentation: presentation,
+                setStatus: setStatus,
+                setCustomStatus: setCustomStatus,
+                openSelfProfile: openSelfProfile,
+                dismiss: { isMenuOpen = false }
+            )
+        }
     }
 
     private var controls: some View {

@@ -15,6 +15,10 @@ struct TimelineContainer: View {
             rows: model.timelineRows(for: channelID),
             presentationRevision: presentation.value,
             bottomInset: bottomInset,
+            // Read narrowly: a jump for a different channel is not this
+            // transcript's business, and passing it would restart the
+            // coordinator's update for nothing.
+            jump: model.pendingJump.flatMap { $0.channelID == channelID ? $0 : nil },
             model: model
         )
     }

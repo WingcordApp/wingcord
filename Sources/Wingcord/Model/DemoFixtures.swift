@@ -273,14 +273,123 @@ enum DemoFixtures {
                 id: id,
                 channelID: channelID,
                 authorID: author,
-                content: bodies[index % bodies.count],
-                kind: index % 47 == 46 ? .userJoin : .default
+                content: content(at: index),
+                kind: index % 47 == 46 ? .userJoin : .default,
+                payload: payload(at: index)
             ))
         }
 
         box.messages = messages
         box.hasMoreHistory = true
         return box
+    }
+
+    /// What one fixture message says.
+    ///
+    /// **An emoji-only message every so often**, because the jumbo rule is a
+    /// layout branch and a branch nothing on screen exercises is a branch that
+    /// breaks silently.
+    private static func content(at index: Int) -> String {
+        switch index % 23 {
+        case 7: "🎉"
+        case 18: "😀 🎉 ✨"
+        default: bodies[index % bodies.count]
+        }
+    }
+
+    /// The rare parts of a message: an embed with a link button, and a sticker.
+    ///
+    /// Both are structures with real arithmetic behind them and neither can be
+    /// seen without an account otherwise — which is exactly the gap `--demo`
+    /// exists to close.
+    private static func payload(at index: Int) -> MessagePayload? {
+        switch index % 31 {
+        case 12:
+            MessagePayload(
+                embeds: [Embed(
+                    title: "Wingcord v0.4",
+                    description: "**Highlights**\n- Embeds, components and system rows\n"
+                        + "- Stickers in the transcript\n- `jumbo` emoji",
+                    url: "https://example.com/release",
+                    colorValue: 0x5865F2,
+                    author: Embed.Author(name: "Releases"),
+                    footer: Embed.Footer(text: "Nightly"),
+                    fields: [
+                        Embed.Field(name: "Build", value: "1204", isInline: true),
+                        Embed.Field(name: "Channel", value: "nightly", isInline: true),
+                    ]
+                )],
+                components: [ActionRow(components: [
+                    MessageComponent(
+                        id: "view",
+                        label: "View release",
+                        kind: .link("https://example.com/release"),
+                        style: .link
+                    ),
+                    MessageComponent(id: "retry", label: "Refresh", kind: .action, style: .secondary),
+                ])]
+            )
+        case 25:
+            MessagePayload(stickers: [
+                StickerRef(id: 749_054_660_769_218_631, name: "Wave", format: .png),
+            ])
+        case 8:
+            // Three real files, so the lightbox has something to open — a
+            // picture worth zooming into, a loop worth scrubbing and a clip
+            // worth scrubbing differently. See `DemoMedia`.
+            MessagePayload(attachments: DemoMedia.attachments())
+        case 21:
+            // And the same picture hidden, because reveal-then-open is a
+            // two-press path that nothing else here exercises.
+            DemoMedia.spoiler().map { MessagePayload(attachments: [$0]) }
+        case 19:
+            // A Components V2 body. It has no `content` and no embeds at all,
+            // which is exactly the shape that used to draw an author line over
+            // a blank row.
+            MessagePayload(
+                displayComponents: [
+                    .container(accent: 0xEC_4899, children: [
+                        .text("## Wingcord Roadmap"),
+                    ]),
+                    .container(accent: 0xEC_4899, children: [
+                        .text("**v0.5 — Read everything**\nEmbeds and components\n"
+                            + "Polls, stickers and system rows\nGroup conversations"),
+                        .separator(isDivider: true, isLarge: false),
+                        .text("-# Shipping when it is right"),
+                    ]),
+                    .row(ActionRow(components: [
+                        MessageComponent(
+                            id: "open",
+                            label: "Open roadmap",
+                            kind: .link("https://example.com/roadmap"),
+                            style: .link
+                        ),
+                    ])),
+                ]
+            )
+        case 3:
+            MessagePayload(poll: Poll(
+                question: "Should the nightly build ship broken features?",
+                answers: [
+                    Poll.Answer(
+                        id: 1,
+                        text: "Yes, let them break",
+                        emoji: EmojiRef(name: "🔥"),
+                        count: 10,
+                        isMine: true
+                    ),
+                    Poll.Answer(
+                        id: 2,
+                        text: "No, keep them polished",
+                        emoji: EmojiRef(name: "❌"),
+                        count: 2
+                    ),
+                ],
+                isFinalized: true
+            ))
+        default:
+            nil
+        }
     }
 
     private struct RoleSpec {
