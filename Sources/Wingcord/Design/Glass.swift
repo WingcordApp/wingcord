@@ -201,12 +201,18 @@ extension View {
     ///
     /// **`.soft` renders nothing when the bar carries no material of its own.**
     /// Measured, over a bar that is a floating capsule on an otherwise
-    /// transparent row — which is exactly what the settings toolbar is: content
-    /// passing underneath stays sharp and fully lit, because what `.soft` draws
-    /// is the bar's own material feathered downward, and there is no material to
-    /// feather. `.hard` synthesises the band instead, which is the whole reason
-    /// the two styles are not interchangeable. A bar that *does* carry a
-    /// material wants `.soft`.
+    /// transparent row: content passing underneath stays sharp and fully lit,
+    /// because what `.soft` draws is the bar's own material feathered downward,
+    /// and there is no material to feather. `.hard` synthesises the band
+    /// instead, which is the whole reason the two styles are not
+    /// interchangeable. A bar that *does* carry a material wants `.soft`.
+    ///
+    /// **Neither style samples the CONTENT.** Both take the window's backdrop,
+    /// so over a translucent window the band shows a blurred desktop and the
+    /// rows passing under it vanish rather than being veiled. The settings pane
+    /// therefore uses neither, and draws its own band — see
+    /// `SettingsDetailPane.scrollEdgeBand` and the write-up in
+    /// `docs/HANDOFF.md`.
     func hardScrollEdges(_ edges: Edge.Set) -> some View {
         scrollEdgeEffectStyle(.hard, for: edges)
     }

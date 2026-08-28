@@ -611,7 +611,25 @@ private struct AccessibilityPane: View {
 // MARK: - Shortcuts
 
 private struct ShortcutsPane: View {
+    @State private var settings = AppSettings.shared
+
     var body: some View {
+        // The one shortcut on this page that is not a menu item, and the only
+        // one the reader can change: it is registered with the whole machine,
+        // not with this app's responder chain, so it is a control rather than a
+        // line in the table below.
+        SettingsCard {
+            HotkeyRecorderRow(
+                title: "Show Wingcord",
+                help: "Brings Wingcord forward from any application, and sends it away again if it is already in front.",
+                hotkey: $settings.globalHotkey
+            )
+        }
+        SettingsFootnote(
+            "A global shortcut takes its combination away from every other application, which is why there is only one and why it can be cleared with ⌫ while recording.",
+            symbolName: "globe"
+        )
+
         // No `ForEach` over the groups with an index: each carries its own
         // heading, and a `SettingsGroup` per group is what gives the 20/16/10
         // rhythm the rest of the window has.

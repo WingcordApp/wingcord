@@ -97,6 +97,33 @@ final class AppSettings {
         didSet { defaults.set(showsMemberListByDefault, forKey: Key.showsMemberList) }
     }
 
+    /// The shortcut that brings Wingcord forward from anywhere on the machine.
+    ///
+    /// Optional, and nil is a real value: a global shortcut is registered with
+    /// the whole system, so a reader who does not want one must be able to give
+    /// the combination back to the other applications on the machine. `⌫` in the
+    /// recorder is how they do it.
+    ///
+    /// **The registration does not happen here during `init`.** Reaching for
+    /// another singleton from a `didSet` is the deadlock written up at the top of
+    /// this file — `isLoaded` is the guard, and `GlobalHotkey` is installed by
+    /// the app root once the store has finished loading.
+    var globalHotkey: Hotkey? = .default {
+        didSet {
+            guard globalHotkey != oldValue else { return }
+            defaults.set(globalHotkey?.storageValue ?? Self.noHotkey, forKey: Key.globalHotkey)
+            guard isLoaded else { return }
+            GlobalHotkey.shared.register(globalHotkey)
+        }
+    }
+
+    /// What a *deliberately cleared* hotkey looks like in defaults.
+    ///
+    /// A sentinel rather than removing the key, because absence already means
+    /// something else here: it means this install has never been asked, and that
+    /// one gets the default binding.
+    private static let noHotkey = -1
+
     // MARK: Startup
 
     /// Where the window opens.
@@ -238,6 +265,8 @@ final class AppSettings {
         storedTextScale = defaults.object(forKey: Key.textScale) as? Double ?? 1.0
         isCompactMode = defaults.object(forKey: Key.compactMode) as? Bool ?? false
         showsMemberListByDefault = defaults.object(forKey: Key.showsMemberList) as? Bool ?? true
+        globalHotkey = (defaults.object(forKey: Key.globalHotkey) as? Int)
+            .map { $0 == Self.noHotkey ? nil : Hotkey(storageValue: $0) } ?? Hotkey.default
         uses24HourTime = defaults.object(forKey: Key.use24Hour) as? Bool
             ?? Locale.current.usesTwentyFourHourClock
         showsEmbeds = defaults.object(forKey: Key.showsEmbeds) as? Bool ?? true
@@ -275,6 +304,7 @@ final class AppSettings {
         static let textScale = "appearance.textScale"
         static let compactMode = "appearance.compactMode"
         static let showsMemberList = "appearance.showsMemberList"
+        static let globalHotkey = "shortcuts.globalHotkey"
         static let use24Hour = "chat.use24HourTime"
         static let showsEmbeds = "chat.showsEmbeds"
         static let playsAnimated = "chat.playsAnimatedContent"

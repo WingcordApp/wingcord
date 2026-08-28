@@ -43,6 +43,7 @@ struct WingcordApp: App {
             // therefore goes above `.environment`, which stays outermost.
             RootView()
                 .mirrorsUnreadCountOnDock()
+                .installsGlobalHotkey()
                 .providesSettingsWindow()
                 .showsPerformanceInspector()
                 .presentsMedia()

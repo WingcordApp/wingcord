@@ -203,3 +203,65 @@ nonisolated enum SettingsType {
     /// The line under a hero.
     static let heroSubtitle = Font.callout
 }
+
+// MARK: - Where you have been
+
+/// The settings window's navigation history.
+///
+/// Every way into a section goes through `go(to:)` — the source list, a
+/// navigation row, the search results — so the back arrow is the inverse of
+/// whatever the reader just did, whichever of the three it was.
+///
+/// **Back and forward are the ONLY consumers of the two arrows**, and that is a
+/// correction rather than a refinement: the leading arrow used to toggle the
+/// source list and the trailing one did nothing at all, which is a control that
+/// lies twice in one capsule. The source list's toggle now appears only when
+/// the list is away, where it is the one thing a reader wants from a button in
+/// that position.
+///
+/// A class rather than a value in `@State`, because the panes reach it through
+/// the environment and a struct copied into a closure would push onto a stack
+/// nobody reads.
+@Observable
+@MainActor
+final class SettingsHistory {
+
+    private(set) var current: SettingsSection
+
+    /// Everything before `current`, oldest first, and everything after it.
+    private var behind: [SettingsSection] = []
+    private var ahead: [SettingsSection] = []
+
+    init(_ section: SettingsSection = .general) {
+        current = section
+    }
+
+    var canGoBack: Bool { !behind.isEmpty }
+    var canGoForward: Bool { !ahead.isEmpty }
+
+    /// Move to `section`, remembering where we were.
+    ///
+    /// Navigating to the section already showing is not a move: a source list
+    /// that pushed a duplicate on every click would need two presses of back to
+    /// undo one press of a row.
+    func go(to section: SettingsSection) {
+        guard section != current else { return }
+        behind.append(current)
+        // The forward stack belongs to a path that was just abandoned. Keeping
+        // it would offer a "forward" that goes somewhere the reader never was.
+        ahead.removeAll()
+        current = section
+    }
+
+    func goBack() {
+        guard let previous = behind.popLast() else { return }
+        ahead.append(current)
+        current = previous
+    }
+
+    func goForward() {
+        guard let next = ahead.popLast() else { return }
+        behind.append(current)
+        current = next
+    }
+}

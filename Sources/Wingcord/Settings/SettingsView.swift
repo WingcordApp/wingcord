@@ -20,7 +20,7 @@ import SwiftUI
 // same place does not.
 
 struct SettingsView: View {
-    @State private var section: SettingsSection = .general
+    @State private var history = SettingsHistory()
     @State private var query = ""
     @State private var sidebar = SidebarWidth()
     /// The column's width when the current drag began. Nil between drags.
@@ -29,18 +29,18 @@ struct SettingsView: View {
 
     var body: some View {
         HStack(spacing: 0) {
-            SettingsSidebar(selection: $section, query: $query)
+            SettingsSidebar(selection: sectionBinding, query: $query)
                 .frame(width: sidebar.current)
                 .opacity(sidebar.current < 1 ? 0 : 1)
 
             SettingsDetailPane(
-                section: section,
+                history: history,
                 isSidebarCollapsed: sidebar.isCollapsed,
                 toggleSidebar: { withAnimation(motion.reposition) { sidebar.toggle() } }
             )
         }
         .overlay(alignment: .leading) { divider }
-        .environment(\.settingsNavigate, SettingsNavigate { section = $0 })
+        .environment(\.settingsNavigate, SettingsNavigate { history.go(to: $0) })
         // The window is `fullSizeContentView`, so the titlebar is a transparent
         // strip over the content rather than a band above it — but SwiftUI still
         // insets the scene by its height. Taking the top safe area back is what
@@ -54,6 +54,12 @@ struct SettingsView: View {
         )
         .settingsWindowChrome()
         .toolbar(removing: .title)
+    }
+
+    /// The source list writes through the history rather than to a stored
+    /// section, so a click on a row is a move the back arrow can undo.
+    private var sectionBinding: Binding<SettingsSection> {
+        Binding(get: { history.current }, set: { history.go(to: $0) })
     }
 
     /// The grab handle between the columns.
@@ -157,13 +163,15 @@ struct SidebarWidth: Equatable, Sendable {
 /// inside it, never a branch in the caller, so macOS never re-resolves the
 /// column split on a selection change.
 private struct SettingsDetailPane: View {
-    var section: SettingsSection
+    var history: SettingsHistory
     var isSidebarCollapsed: Bool
     var toggleSidebar: () -> Void
 
     @Environment(\.motion) private var motion
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
     @State private var isScrolled = false
+
+    private var section: SettingsSection { history.current }
 
     var body: some View {
         ScrollView(.vertical) {
@@ -173,25 +181,40 @@ private struct SettingsDetailPane: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
         }
         .scrollBounceBehavior(.basedOnSize)
-        // The scrim goes HERE, on the scroll view, not outside the bar. The
-        // scroll-edge band is drawn from what is behind the scroll view, so a
-        // scrim applied outside leaves the band sampling the bare window
-        // material — and the band then reads *lighter* than the pane it is
-        // supposed to be part of. Measured: 43 against a pane of 39.
-        .background(SettingsSurface.pane(reducingTransparency: reduceTransparency))
         // `safeAreaBar`, never `safeAreaInset`: only the former registers as a
         // bar, and the registration is the entire reason content passing under
         // the toolbar is treated at all. The failure is invisible at rest —
         // scrolled to the top there is nothing behind the bar to blur.
         .floatingTopBar {
             SettingsToolbar(
-                section: section,
+                history: history,
                 title: isScrolled ? section.title : nil,
                 isSidebarCollapsed: isSidebarCollapsed,
                 toggleSidebar: toggleSidebar
             )
         }
-        .hardScrollEdges(.top)
+        // The system's own scroll edge cannot draw this band, and the reason is
+        // written up in `Glass.swift`: it samples the WINDOW's backdrop, not the
+        // content passing under the bar. Over a translucent settings window that
+        // means the band shows a blurred *desktop* — brighter than the pane it
+        // crosses, with the rows underneath hidden rather than veiled. The
+        // reference's band shows the rows themselves, blurred and darkened, and
+        // no scroll-edge style produces that here.
+        //
+        // So the band is drawn: one glass surface across the top of the pane,
+        // tinted, and masked by a gradient so it has no bottom edge at all. It
+        // is inside the pane's clip, which is what carries the darkening around
+        // the pane's two top corners the way the reference's does.
+        // The scrim goes OUTSIDE the bar, so it covers the bar's row too.
+        //
+        // It used to sit on the scroll view, inside the bar's inset, which left
+        // the 72 points under the toolbar showing the bare window — the desktop,
+        // brighter than the pane by half again. The bar was then given a scrim of
+        // its own to patch that, and a flat rectangle with a hard bottom edge is
+        // what the reader saw. One background across the whole pane has no seam
+        // to hide.
+        .background(SettingsSurface.pane(reducingTransparency: reduceTransparency))
+        .overlay(alignment: .top) { scrollEdgeBand }
         // Whether the page has moved at all. A threshold, not the offset: the
         // only reader is a title that is either there or not, and publishing a
         // scroll position per event would invalidate the whole pane on every
@@ -213,10 +236,54 @@ private struct SettingsDetailPane: View {
     }
 }
 
+
+extension SettingsDetailPane {
+
+    /// The band across the top of the pane.
+    ///
+    /// A gradient, and every number in it is measured off the reference by
+    /// sampling the pane's own left margin — a column that is background at
+    /// every scroll offset — at rest and scrolled six clicks:
+    ///
+    ///   - the darkening is a factor of 0.42 at the top edge, which is black at
+    ///     57%;
+    ///   - it holds full strength for the first 36% of the band — 26 points of
+    ///     72 — and then ramps;
+    ///   - and it is gone at the band's foot, with **no bottom edge at all**.
+    ///
+    /// That last point is the whole correction. What this window drew before was
+    /// the pane's own scrim painted flat across a 72-point row, which put a hard
+    /// horizontal seam a third of the way down the pane — visible at rest, with
+    /// nothing scrolled, and the thing that reads as "too tall".
+    ///
+    /// It is inside the pane's clip, which is what carries the darkening around
+    /// the pane's two top corners the way the reference's does.
+    ///
+    /// **Only while the page has moved.** At rest the reference's band is its
+    /// window's bare material and reads *lighter* than the pane, not darker — so
+    /// a darkening that were always on would be wrong in the one state the
+    /// reader sees most.
+    fileprivate var scrollEdgeBand: some View {
+        LinearGradient(
+            stops: [
+                .init(color: .black.opacity(SettingsSurface.scrollEdgeTint), location: 0),
+                .init(color: .black.opacity(SettingsSurface.scrollEdgeTint), location: 0.36),
+                .init(color: .clear, location: 1.0),
+            ],
+            startPoint: .top,
+            endPoint: .bottom
+        )
+        .frame(height: SettingsMetrics.toolbarBandHeight)
+        .opacity(isScrolled ? 1 : 0)
+        .animation(motion.fade, value: isScrolled)
+        .allowsHitTesting(false)
+    }
+}
+
 // MARK: - The toolbar
 
 private struct SettingsToolbar: View {
-    var section: SettingsSection
+    var history: SettingsHistory
     /// The pane's name, shown only once the page has moved — the reference's
     /// own behaviour, and the reason it works is that the name is already the
     /// selected row two inches to the left until the page scrolls away from it.
@@ -233,8 +300,15 @@ private struct SettingsToolbar: View {
             // the source list is away, because the leading end then belongs to
             // the window's own buttons and a control sitting under them reads as
             // theirs.
-            if isSidebarCollapsed { Spacer(minLength: 0) }
-            SettingsHistoryControl(showSidebar: toggleSidebar)
+            if isSidebarCollapsed {
+                Spacer(minLength: 0)
+                // Only when the list is away. A toggle that is present whether
+                // or not there is anything to bring back is a fourth control in
+                // a row that has three, and the reference has none at all —
+                // its source list cannot be collapsed.
+                SettingsSidebarButton(action: toggleSidebar)
+            }
+            SettingsHistoryControl(history: history)
             if let title {
                 Text(title)
                     .font(SettingsType.sectionHeader)
@@ -243,7 +317,7 @@ private struct SettingsToolbar: View {
                     .transition(.opacity)
             }
             if !isSidebarCollapsed { Spacer(minLength: 0) }
-            SettingsPaneAction(section: section)
+            SettingsPaneAction(section: history.current)
         }
         .animation(motion.fade, value: title)
         .padding(.leading, 14)
@@ -252,70 +326,110 @@ private struct SettingsToolbar: View {
         .padding(.top, 12)
         .padding(.bottom, SettingsMetrics.toolbarBandHeight - 12 - SettingsMetrics.toolbarItemHeight)
         .frame(maxWidth: .infinity)
-        // The SAME scrim the pane carries, and for the same reason.
+        // Not a scrim rectangle. The bar is a floating capsule on a row,
+        // and the band across the top of the pane is the SCROLL EDGE, not a
+        // rectangle drawn here.
         //
-        // The scroll-edge band is drawn from the window's material, not from the
-        // view behind the scroll view — so without this the band is the bare
-        // ground (measured: 24 against a pane of 16) and reads as a lighter
-        // strip across the top of the pane, at rest, with nothing scrolled. With
-        // it the band is the pane's own tone and the seam disappears, which is
-        // exactly what the reference does: its band and its pane measure within
-        // two of each other in both states.
-        //
-        // It is the bar's background rather than an overlay on the pane because
-        // the band IS the bar: the system decides the blur, the bar decides what
-        // colour it is.
-        .background(SettingsSurface.pane(reducingTransparency: reduceTransparency))
+        // A scrim on this view used to be the fix for a band that read lighter
+        // than the pane it crossed. That was the wrong reading of the reference:
+        // measured, the reference's own band is lighter than its pane by nearly
+        // two to one — 62 against 33 — because its band is the window's bare
+        // material with nothing but the scroll edge over it. Painting the pane's
+        // scrim here instead drew a flat 72-point rectangle with a hard bottom
+        // edge, which is the "too tall" band this window shipped with.
     }
 }
 
 /// Back and forward in one capsule, with a hairline between them.
 ///
 /// The pair is a single item rather than two, because two capsules of one glyph
-/// each read as two unrelated controls and the reference's do not. Wingcord has
-/// no history stack inside settings yet, so the leading half is wired to the
-/// thing a reader actually wants from a control in that position when the source
-/// list is gone: bring it back.
+/// each read as two unrelated controls and the reference's do not. Both halves
+/// move through `SettingsHistory`, which every way into a section already goes
+/// through — the source list, a navigation row and the search results alike.
+///
+/// **A half that leads nowhere is disabled, not hidden.** The reference keeps
+/// both glyphs at the same faint value whether or not they lead anywhere, and a
+/// capsule that changed width as the history filled would move the title beside
+/// it on every navigation.
 private struct SettingsHistoryControl: View {
-    var showSidebar: () -> Void
-
-    @Environment(\.motion) private var motion
-    @State private var isHovered = false
+    var history: SettingsHistory
 
     var body: some View {
         HStack(spacing: 0) {
-            Button(action: showSidebar) {
-                Image(systemName: "chevron.left")
-                    .font(.system(size: 13, weight: .medium))
-                    // Quiet at rest, like the reference's — both of whose glyphs
-                    // measure the same faint value whether or not they lead
-                    // anywhere. The affordance is carried by the hover, which
-                    // costs nothing until the pointer is on it.
-                    .foregroundStyle(isHovered ? Ink.primary : Ink.quaternary)
-                    .frame(width: SettingsMetrics.toolbarButtonSide,
-                           height: SettingsMetrics.toolbarItemHeight)
-                    .contentShape(.rect)
-            }
-            .buttonStyle(.plain)
-            .onHover { isHovered = $0 }
-            .animation(motion.hover, value: isHovered)
-            .accessibilityLabel("Show sections")
-
+            Half(
+                symbol: "chevron.left",
+                label: "Back",
+                isEnabled: history.canGoBack,
+                action: history.goBack
+            )
             Color.white.opacity(0.20)
                 .frame(width: SettingsMetrics.hairline, height: 12)
-
-            Image(systemName: "chevron.right")
-                .font(.system(size: 13, weight: .medium))
-                .foregroundStyle(Ink.quaternary)
-                .frame(width: SettingsMetrics.toolbarButtonSide,
-                       height: SettingsMetrics.toolbarItemHeight)
-                .accessibilityHidden(true)
+            Half(
+                symbol: "chevron.right",
+                label: "Forward",
+                isEnabled: history.canGoForward,
+                action: history.goForward
+            )
         }
         // The capsule is wider than the two hit targets inside it — measured at
         // 63 against buttons totalling 57 — which is what stops the glyphs
         // sitting on its rim.
         .padding(.horizontal, 3)
         .glassEffect(.regular, in: .capsule)
+    }
+
+    private struct Half: View {
+        var symbol: String
+        var label: String
+        var isEnabled: Bool
+        var action: () -> Void
+
+        @Environment(\.motion) private var motion
+        @State private var isHovered = false
+
+        var body: some View {
+            Button(action: action) {
+                Image(systemName: symbol)
+                    .font(.system(size: 13, weight: .medium))
+                    // Quiet at rest, like the reference's. The affordance is
+                    // carried by the hover, which costs nothing until the
+                    // pointer is on it — and a half with nowhere to go never
+                    // takes it.
+                    .foregroundStyle(isHovered && isEnabled ? Ink.primary : Ink.quaternary)
+                    .frame(width: SettingsMetrics.toolbarButtonSide,
+                           height: SettingsMetrics.toolbarItemHeight)
+                    .contentShape(.rect)
+            }
+            .buttonStyle(.plain)
+            .disabled(!isEnabled)
+            .onHover { isHovered = $0 }
+            .animation(motion.hover, value: isHovered)
+            .accessibilityLabel(label)
+        }
+    }
+}
+
+/// Brings the source list back. Shown only while it is away.
+private struct SettingsSidebarButton: View {
+    var action: () -> Void
+
+    @Environment(\.motion) private var motion
+    @State private var isHovered = false
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: "sidebar.left")
+                .font(.system(size: 13, weight: .medium))
+                .foregroundStyle(isHovered ? Ink.primary : Ink.quaternary)
+                .frame(width: SettingsMetrics.toolbarButtonSide + 6,
+                       height: SettingsMetrics.toolbarItemHeight)
+                .contentShape(.rect)
+        }
+        .buttonStyle(.plain)
+        .onHover { isHovered = $0 }
+        .animation(motion.hover, value: isHovered)
+        .glassEffect(.regular, in: .capsule)
+        .accessibilityLabel("Show sections")
     }
 }
 

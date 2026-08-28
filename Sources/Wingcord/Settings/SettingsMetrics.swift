@@ -201,6 +201,15 @@ nonisolated enum SettingsSurface {
     /// rather than on the card, and the trough is already a step up.
     static let controlHairline = Color.white.opacity(0.084)
 
+    /// What the scroll-edge band tints the content passing under it.
+    ///
+    /// Measured against the reference: the pane's left margin reads a factor of
+    /// 0.42 at the top of the band against the same column at rest, which is
+    /// black at 64.5% — solved against a render rather than read off the
+    /// reference directly, because the content under the two bands is not the
+    /// same content.
+    static let scrollEdgeTint: Double = 0.645
+
     /// The switch, when it is on.
     ///
     /// Neutral, not the accent — `Palette.accent` is spent on primary buttons,
