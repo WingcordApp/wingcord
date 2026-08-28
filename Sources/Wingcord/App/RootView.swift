@@ -42,6 +42,22 @@ struct RootView: View {
                 guard let channelID else { return }
                 model.channelDidOpen(channelID)
             }
+            // The server's own pages are gated on their routes having answered,
+            // so a server has to be asked before its rows can exist. Settled and
+            // cancellable inside the controller — see `guildDidOpen` — so
+            // stepping through the rail asks about nothing.
+            .onChange(of: model.selectedGuildID, initial: true) { _, guildID in
+                guard let guildID else { return }
+                model.sessionController.guildDidOpen(guildID)
+            }
+            // A previewed channel is a channel being read, so it takes the same
+            // path a selected one does — the history fetch and the roster
+            // subscription both live behind `openChannel`, and a preview that
+            // skipped them would draw "Loading messages…" for ever.
+            .onChange(of: model.previewedChannelID) { _, channelID in
+                guard let channelID else { return }
+                model.channelDidOpen(channelID)
+            }
             // **Where SwiftUI's root actually starts.** Every popover raised
             // from a drawn canvas is anchored to a rect in *this* view's space,
             // and this view is laid out below the titlebar strip while the

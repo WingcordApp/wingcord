@@ -113,9 +113,10 @@ private struct ChannelSidebarContainer: View {
     var body: some View {
         ChannelSidebar(
             presentation: model.sidebarPresentation,
-            selectedChannelID: model.selectedChannelID,
+            target: model.sidebarTarget,
             selectChannel: { model.selectChannel($0) },
             toggleCategory: { model.toggleCategory($0) },
+            openSurface: { model.openSurface($0) },
             openGuildMenu: {}
         )
         .equatable()

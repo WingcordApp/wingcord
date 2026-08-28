@@ -30,6 +30,21 @@ struct SidebarMemoKey: Hashable, Sendable {
     var roleRevision: UInt64
     var guildID: GuildID?
     var collapsedCategories: Set<ChannelID>
+    /// Moves when the reader follows or unfollows anything. The list is filtered
+    /// by it, so it cannot be left out.
+    var followRevision: UInt64
+    /// The selected channel, **but only when it would otherwise be hidden**.
+    ///
+    /// A channel opened from Browse Channels that the reader has opted out of is
+    /// still shown, so the list depends on the selection — but only in that one
+    /// case. Carrying the selection unconditionally would rebuild the whole
+    /// channel list on every click in it, for an answer that did not change.
+    var hiddenSelection: ChannelID?
+    /// The rows above the first category. In the KEY because they arrive on
+    /// their own routes after the list has already been built once — a memo
+    /// that did not carry them would keep answering with the list from before
+    /// the guide came back.
+    var surfaceRows: [GuildSurface]
 }
 
 // MARK: - Projections
@@ -85,7 +100,10 @@ extension AppModel {
             sidebarRevision: sidebarRevision,
             roleRevision: roleRevision,
             guildID: selectedGuildID,
-            collapsedCategories: collapsedCategoryIDs
+            collapsedCategories: collapsedCategoryIDs,
+            followRevision: followRevision,
+            hiddenSelection: hiddenSelectedChannelID,
+            surfaceRows: selectedGuildID.map(guildSurfaceRows(for:)) ?? []
         )
         let guildTable = guilds
         // Read before the early return, so a cache hit still registers the
@@ -137,6 +155,17 @@ extension AppModel {
     /// constant there is no swap to fire on. Anything added later becomes a case
     /// on `Primary`, never a branch in the view builder.
     var workspacePresentation: WorkspacePresentation {
+        // A server page takes the whole column: it is about the server, so
+        // there is no roster and no profile that belongs beside it.
+        if let openGuildSurface, let guildID = selectedGuildID {
+            return WorkspacePresentation(
+                primary: .guildSurface(guildID, openGuildSurface),
+                // The only thing that belongs beside a page about the server is
+                // a channel the page pointed at. There is no roster here — the
+                // page is not a conversation — and no profile.
+                supplementary: previewedChannelID.map { .channelPreview($0) }
+            )
+        }
         guard let channelID = selectedChannelID, let channel = channelIndex[channelID] else {
             return .empty
         }
@@ -176,11 +205,26 @@ extension AppModel {
 
     /// The toolbar's channel chrome.
     var channelChrome: ChannelChrome {
+        // The pill names whatever the column is showing, which on a server page
+        // is the page. Its own branch rather than a nil channel, so the bar has
+        // a title there instead of a hole its neighbours slide into.
+        if let openGuildSurface, selectedGuildID != nil {
+            return ChannelChrome(
+                channelID: nil,
+                name: openGuildSurface.title,
+                symbolName: openGuildSurface.symbolName,
+                topic: nil,
+                isMemberListShown: false,
+                canShowMemberList: false,
+                isUserProfileShown: false,
+                canShowUserProfile: false
+            )
+        }
         guard let channelID = selectedChannelID, let channel = channelIndex[channelID] else {
             return ChannelChrome(
                 channelID: nil,
                 name: "",
-                kind: .text,
+                symbolName: ChannelKind.text.symbolName,
                 topic: nil,
                 isMemberListShown: false,
                 canShowMemberList: false,
@@ -191,7 +235,7 @@ extension AppModel {
         return ChannelChrome(
             channelID: channelID,
             name: displayName(of: channel),
-            kind: channel.kind,
+            symbolName: channel.kind.symbolName,
             topic: channel.topic,
             isMemberListShown: isMemberListShown,
             canShowMemberList: channel.guildID != nil
@@ -328,12 +372,12 @@ extension AppModel {
 
     private func buildGuildSidebar(guild: Guild) -> SidebarPresentation {
         let channelIDs = channelIndex.channelIDs(inGuild: guild.id)
+        let filtersByFollow = hidesUnfollowedChannels(inGuild: guild.id)
         var rows: [SidebarRow] = []
         rows.reserveCapacity(channelIDs.count + 2)
 
-        if guild.features.contains("COMMUNITY") {
-            rows.append(.guildAction(SidebarAction(kind: .channelsAndRoles)))
-            rows.append(.guildAction(SidebarAction(kind: .serverGuide)))
+        for surface in guildSurfaceRows(for: guild.id) {
+            rows.append(.guildAction(surface))
         }
 
         // One pass. Categories in list order, each followed by its children —
@@ -360,6 +404,12 @@ extension AppModel {
                 categories.append(channel)
             } else if channel.kind.isConversation || channel.kind == .forum || channel.kind == .media {
                 guard permissionGate.canView(channel.id) else { continue }
+                // **The opt-in filter sits beside the permission one**, in the
+                // one place a channel can enter the list. Filtering later, at
+                // the row, would leave it in the navigation model where a
+                // keyboard shortcut could still reach a channel the reader has
+                // taken out of their sidebar.
+                guard isChannelInList(channel, filtered: filtersByFollow) else { continue }
                 byParent[channel.parentID, default: []].append(channel)
             }
         }
@@ -415,7 +465,10 @@ extension AppModel {
         )
     }
 
-    private func unreadState(of channel: Channel) -> (unread: Bool, mentions: Int, muted: Bool) {
+    /// Internal rather than private: the Channels & Roles page reads it too,
+    /// and a second copy of "is this channel unread" is a second place for the
+    /// mute rule to be forgotten.
+    func unreadState(of channel: Channel) -> (unread: Bool, mentions: Int, muted: Bool) {
         guard let state = readStates[channel.id] else {
             return (channel.lastMessageID != nil, 0, false)
         }
@@ -446,6 +499,7 @@ extension AppModel {
         // counts off still wants to know a server has something new — what they
         // turned off is the number, which on a busy account is a wall of digits.
         let countsBadges = AppSettings.shared.showsUnreadCounts
+        let filtersByFollow = hidesUnfollowedChannels(inGuild: guildID)
         var mentions = 0
         var unread = false
         for channelID in channelIndex.channelIDs(inGuild: guildID) {
@@ -454,8 +508,11 @@ extension AppModel {
             }
             // A channel the reader cannot see must not contribute a badge. A
             // rail tile marked unread for a channel that does not appear in the
-            // list is a dot nobody can ever clear.
+            // list is a dot nobody can ever clear — and a channel the reader has
+            // opted OUT of is exactly as absent from that list, so it is held to
+            // the same rule.
             guard permissionGate.canView(channelID) else { continue }
+            guard isChannelInList(channel, filtered: filtersByFollow) else { continue }
             let state = unreadState(of: channel)
             guard !state.muted else { continue }
             mentions += state.mentions
@@ -510,6 +567,10 @@ extension AppModel {
     func selectGuild(_ guildID: GuildID?) {
         guard selectedGuildID != guildID else { return }
         selectedGuildID = guildID
+        // A guide belongs to the server it describes, so it does not survive
+        // the trip to another one — and neither does anything it opened.
+        openGuildSurface = nil
+        previewedChannelID = nil
         // Return to where the reader was, not to the top of the list.
         if let guildID {
             selectedChannelID = lastChannelByGuild[guildID]
@@ -520,7 +581,13 @@ extension AppModel {
     }
 
     func selectChannel(_ channelID: ChannelID) {
-        guard selectedChannelID != channelID, canOpen(channelID) else { return }
+        guard canOpen(channelID) else { return }
+        // **Leaving the page is what picking a channel means**, and it has to
+        // happen even when that channel is already the selected one — otherwise
+        // clicking the row you came from leaves the page up and does nothing.
+        openGuildSurface = nil
+        previewedChannelID = nil
+        guard selectedChannelID != channelID else { return }
         selectedChannelID = channelID
         let guildID = channelIndex.guildID(of: channelID)
         if let guildID { lastChannelByGuild[guildID] = channelID }
@@ -530,9 +597,27 @@ extension AppModel {
     }
 
     private func firstReadableChannel(inGuild guildID: GuildID) -> ChannelID? {
-        channelIndex.channelIDs(inGuild: guildID).first {
-            (channelIndex[$0]?.kind.isConversation ?? false) && permissionGate.canView($0)
+        let filtersByFollow = hidesUnfollowedChannels(inGuild: guildID)
+        return channelIndex.channelIDs(inGuild: guildID).first {
+            guard let channel = channelIndex[$0], channel.kind.isConversation,
+                  permissionGate.canView($0)
+            else { return false }
+            // Landing on a channel the reader took out of their own list is the
+            // list disagreeing with itself on the first frame after a click.
+            return isChannelInList(channel, filtered: filtersByFollow)
         }
+    }
+
+    /// The selected channel, when it is one the follow filter would otherwise
+    /// remove. Nil in every other case, which is nearly always — see the note on
+    /// `SidebarMemoKey.hiddenSelection`.
+    private var hiddenSelectedChannelID: ChannelID? {
+        guard let selectedChannelID, let channel = channelIndex[selectedChannelID],
+              let guildID = channel.guildID,
+              hidesUnfollowedChannels(inGuild: guildID),
+              !isChannelFollowed(channel)
+        else { return nil }
+        return selectedChannelID
     }
 
     /// Whether a channel may be navigated to at all.

@@ -82,6 +82,23 @@ private struct PrimaryPane: View {
                 detail: "Voice channels are not built yet.",
                 channelID: channelID
             )
+        case .guildSurface(_, let surface):
+            // Three view types behind one `switch`, under a stable outer type.
+            // That is internal `_ConditionalContent`, not the structural detail
+            // swap §1 forbids — the split view has nothing to re-resolve.
+            //
+            // The guild is not passed down: each container reads the SELECTED
+            // guild, which is the only one that can be showing. Passing it as
+            // well would be a second source of truth for which server the page
+            // is about.
+            switch surface {
+            case .serverGuide:
+                ServerGuideContainer()
+            case .channelsAndRoles, .browseChannels:
+                ChannelsAndRolesContainer(surface: surface)
+            case .gameServers:
+                GameServersContainer()
+            }
         }
     }
 }
@@ -112,6 +129,8 @@ private struct SupplementaryPane: View {
                 channelID: nil
             )
             .frame(width: Proportions.memberColumnIdeal)
+        case .channelPreview(let channelID):
+            ChannelPreviewContainer(channelID: channelID)
         }
     }
 }

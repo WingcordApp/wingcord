@@ -24,7 +24,9 @@ import WingcordCore
 /// system's material morphs along with the geometry.
 struct ChannelPill: View {
     var name: String
-    var kind: ChannelKind
+    /// Resolved by the chrome, because the pill names channels and server
+    /// pages alike and only one of those has a `ChannelKind`.
+    var symbolName: String
     var action: () -> Void
 
     @Environment(\.motion) private var motion
@@ -32,7 +34,7 @@ struct ChannelPill: View {
     var body: some View {
         Button(action: action) {
             HStack(spacing: Spacing.tight) {
-                Image(systemName: kind.symbolName)
+                Image(systemName: symbolName)
                     .foregroundStyle(Ink.tertiary)
                 Text(name)
                     .fontWeight(.semibold)

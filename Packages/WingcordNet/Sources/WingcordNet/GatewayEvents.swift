@@ -184,6 +184,8 @@ struct GuildSettingsDTO: Decodable, Sendable {
         var channel_id: ChannelID?
         var muted: Bool?
         var message_notifications: Int?
+        /// The opt-in bit lives here — see `ChannelSettingsFlags`.
+        var flags: Int?
     }
 }
 

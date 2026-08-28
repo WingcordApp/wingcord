@@ -104,10 +104,10 @@ answer what font a run is in, per run, per frame, and it is **not** conditional
 on VoiceOver. `MarkdownDocument.plainText` folds the tree once so each row is one
 node with a plain `String` label.
 
-Measured on this build, `--demo`, 220 messages resident, release: **97–106 MB
+Measured on this build, `--demo`, 220 messages resident, release: **86–106 MB
 steady** (`footprint`, not RSS), settling downward across a run. The peak sits
-around 230 MB and is the fixture bootstrap, not the steady state. Its predecessor
-sat at 300–425 MB.
+around 200–230 MB and is the fixture bootstrap, not the steady state. Its
+predecessor sat at 300–425 MB.
 
 ---
 
@@ -134,14 +134,25 @@ sat at 300–425 MB.
   including the server behind an emoji or sticker from somewhere you are not in
 - Expression picker with Nitro gating, and a `:shortcode` completion
 - Typing receipts, a status panel on the now bar, and hover flyouts on the rail
+- The three pages a server offers beside its channels: a **Server Guide** with
+  the owner's welcome and the rooms worth reading, **Channels & Roles** with the
+  server's own questions — with your own profile beside them, updating as you
+  answer — and a searchable table of contents of every channel, each one you can
+  follow or unfollow — a channel you drop leaves your sidebar, and so does its
+  unread; and **Game Servers** with an address you can copy and the steps the
+  game needs
+- A resource opens *beside* the guide rather than instead of it — a preview
+  column with that channel's transcript in it
 - Settings with a live performance pane
 - Performance inspector and a crash reporter that survives signal context
 
 ## What is not
 
 Voice and video, threads, forums, search, notifications, attachments *outbound*,
-message-component interactions, and every Discord commerce surface. Each is a
-case on an existing enum rather than a new branch — see `docs/HANDOFF.md`.
+message-component interactions, and every Discord commerce surface — including
+buying or reconfiguring a game server, which is why that page offers an address
+and no lifecycle buttons. Each is a case on an existing enum rather than a new
+branch — see `docs/HANDOFF.md`.
 
 ---
 

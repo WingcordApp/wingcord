@@ -56,6 +56,18 @@ final class SessionController {
     /// consecutive rows; every one of them must share a single request.
     private var guildProfileFetches: Set<GuildID> = []
     private var expressionSourceFetches: Set<UInt64> = []
+    /// Connect-instruction fetches in flight, by SKU.
+    var gameServerProductFetches: Set<String> = []
+    /// Rules agreements in flight. Two presses on one button must send once —
+    /// this route creates a join request, and a second one is a second request.
+    var rulesSubmissions: Set<GuildID> = []
+    /// The settled pre-fetch for the open server. Replaced on every selection
+    /// change, which is what stops a sweep through the rail asking about ninety
+    /// servers nobody stopped on.
+    var guildPrefetchTask: Task<Void, Never>?
+    /// The last ballot the server confirmed, per guild. What an optimistic write
+    /// is rolled back to when the route refuses it.
+    var lastConfirmedOnboarding: [GuildID: Set<UInt64>] = [:]
     /// Channels whose transcript is being re-anchored around a linked message.
     private var jumpFetches: Set<ChannelID> = []
     /// When the reader was last reported as typing, per channel.
@@ -304,6 +316,7 @@ final class SessionController {
             readStates[channelID, default: ReadState()].isMuted = true
         }
 
+        model.followedChannelIDs = snapshot.followedChannelIDs
         model.currentUserID = snapshot.currentUser.id
         model.users = snapshot.users
         model.guilds = guilds
@@ -1122,4 +1135,303 @@ extension SessionController {
     func gifLanding() async throws -> GIFLanding { try await rest.gifLanding() }
     func trendingGIFs() async throws -> [GIF] { try await rest.trendingGIFs() }
     func searchGIFs(_ query: String) async throws -> [GIF] { try await rest.searchGIFs(query) }
+}
+
+// MARK: - The server's own pages
+//
+// Server Guide, Channels & Roles and Game Servers. Five routes, all per-guild
+// and all cached on the store for the life of the session: a guide, a set of
+// questions and a rented server change about as often as the server's name.
+//
+// TWO RULES DECIDE WHEN THEY FIRE, and both exist to keep a rail sweep from
+// becoming a burst of requests.
+//
+//  1. **The pre-fetch is settled and cancellable.** Arrow-keying through
+//     ninety-seven servers would otherwise ask three questions about each. One
+//     task, replaced on every selection change, waits out a short settle and the
+//     scroll gate before it asks anything — so only servers somebody actually
+//     stopped on are asked about.
+//  2. **Everything else is asked for on the click that needs it.** The rules,
+//     the role counts and a plan's connect steps are each one request made by
+//     one surface opening, and each is skipped entirely once it has an answer.
+
+extension SessionController {
+
+    /// What a server is asked when the reader opens it.
+    ///
+    /// Only the two that decide whether a **row** exists at all. Everything
+    /// else waits for the page itself to be opened, because a question asked
+    /// about a page nobody looked at is a request spent on nothing.
+    func guildDidOpen(_ guildID: GuildID) {
+        guildPrefetchTask?.cancel()
+        guildPrefetchTask = Task { [weak self] in
+            // Long enough that stepping through the rail asks about nothing,
+            // short enough that stopping on a server has its rows before the
+            // list's own entrance animation has finished.
+            try? await Task.sleep(for: .milliseconds(320))
+            await ScrollWorkGate.waitUntilInactive()
+            guard !Task.isCancelled, let self, model.selectedGuildID == guildID else { return }
+            loadServerGuide(guildID)
+            loadOnboarding(guildID)
+            loadGameServers(guildID)
+        }
+    }
+
+    /// The page a server shows a new arrival.
+    ///
+    /// **A 404 is stored as an empty guide**, not left absent. Absent means "not
+    /// asked", so a server without one would be asked again every time it was
+    /// opened — and the answer would be the same 404 every time.
+    func loadServerGuide(_ guildID: GuildID) {
+        let fetch = GuildSurfaceFetch(guildID: guildID, subject: .guide)
+        guard model.serverGuides[guildID] == nil,
+              model.loadingGuildSurfaces.insert(fetch).inserted
+        else { return }
+        Task { [weak self] in
+            guard let self else { return }
+            defer { model.loadingGuildSurfaces.remove(fetch) }
+            do {
+                model.serverGuides[guildID] = try await rest.serverGuide(of: guildID)
+            } catch {
+                model.serverGuides[guildID] = ServerGuide(guildID: guildID, isEnabled: false)
+                Self.trace("server guide \(guildID) failed: \(Self.describe(error))")
+            }
+        }
+    }
+
+    /// The questions a community server asks. Decides the channel-list row's
+    /// own name, which is why it is asked before anybody opens the page.
+    func loadOnboarding(_ guildID: GuildID) {
+        let fetch = GuildSurfaceFetch(guildID: guildID, subject: .onboarding)
+        guard model.guildOnboardings[guildID] == nil,
+              model.loadingGuildSurfaces.insert(fetch).inserted
+        else { return }
+        Task { [weak self] in
+            guard let self else { return }
+            defer { model.loadingGuildSurfaces.remove(fetch) }
+            do {
+                model.guildOnboardings[guildID] = try await rest.onboarding(of: guildID)
+            } catch {
+                model.guildOnboardings[guildID] = GuildOnboarding(
+                    guildID: guildID, isEnabled: false
+                )
+                Self.trace("onboarding \(guildID) failed: \(Self.describe(error))")
+            }
+        }
+    }
+
+    /// How many people hold each role, so an option can say how many chose it.
+    ///
+    /// Asked when the page opens rather than with the guild, because it is the
+    /// largest of the five answers — nearly two hundred entries on a big
+    /// server — and it is worth nothing to a reader who never opens the page.
+    func loadRoleMemberCounts(_ guildID: GuildID) {
+        let fetch = GuildSurfaceFetch(guildID: guildID, subject: .memberCounts)
+        guard model.roleMemberCounts[guildID] == nil,
+              model.loadingGuildSurfaces.insert(fetch).inserted
+        else { return }
+        Task { [weak self] in
+            guard let self else { return }
+            defer { model.loadingGuildSurfaces.remove(fetch) }
+            do {
+                model.roleMemberCounts[guildID] = try await rest.roleMemberCounts(inGuild: guildID)
+            } catch {
+                // An empty table is a real answer: the counts are an
+                // embellishment on a chip, and a page that refuses to draw
+                // without them would be a page held hostage by a footnote.
+                model.roleMemberCounts[guildID] = [:]
+                Self.trace("role counts \(guildID) failed: \(Self.describe(error))")
+            }
+        }
+    }
+
+    /// The rules a server makes people agree to.
+    func loadMemberVerification(_ guildID: GuildID) {
+        let fetch = GuildSurfaceFetch(guildID: guildID, subject: .rules)
+        guard model.memberVerifications[guildID] == nil,
+              model.loadingGuildSurfaces.insert(fetch).inserted
+        else { return }
+        Task { [weak self] in
+            guard let self else { return }
+            defer { model.loadingGuildSurfaces.remove(fetch) }
+            do {
+                model.memberVerifications[guildID] = try await rest.memberVerification(of: guildID)
+            } catch {
+                model.memberVerifications[guildID] = MemberVerification(guildID: guildID)
+                Self.trace("member verification \(guildID) failed: \(Self.describe(error))")
+            }
+        }
+    }
+
+    /// Follows or unfollows one channel or category.
+    ///
+    /// **The store moves first**, because a checkbox that waits for a round trip
+    /// reads as a control that did not take the click. The reply carries the
+    /// guild's complete follow set, which replaces this guild's share of the
+    /// local one — that is also how a change made on another client lands.
+    ///
+    /// A failure restores exactly what was flipped rather than the whole set: a
+    /// second row's write may have landed in between, and rolling back to a
+    /// snapshot taken before it would undo somebody else's success.
+    func setChannelFollowed(
+        _ isFollowed: Bool,
+        channelID: ChannelID,
+        inGuild guildID: GuildID
+    ) {
+        guard model.followsInFlight.insert(channelID).inserted else { return }
+        if isFollowed {
+            model.followedChannelIDs.insert(channelID)
+        } else {
+            model.followedChannelIDs.remove(channelID)
+        }
+        Task { [weak self] in
+            guard let self else { return }
+            defer { model.followsInFlight.remove(channelID) }
+            do {
+                let followed = try await rest.setChannelFollowed(
+                    isFollowed, channelID: channelID, inGuild: guildID
+                )
+                // Only this guild's entries are replaced. The set is flat and
+                // spans every server, so taking the reply wholesale would drop
+                // every other server's follows on one checkbox.
+                let guildChannels = Set(model.channelIndex.channelIDs(inGuild: guildID))
+                var next = model.followedChannelIDs.subtracting(guildChannels)
+                next.formUnion(followed)
+                guard model.followedChannelIDs != next else { return }
+                model.followedChannelIDs = next
+            } catch {
+                Self.trace("follow \(channelID) failed: \(Self.describe(error))")
+                if isFollowed {
+                    model.followedChannelIDs.remove(channelID)
+                } else {
+                    model.followedChannelIDs.insert(channelID)
+                }
+            }
+        }
+    }
+
+    /// Records the reader's agreement to a server's rules.
+    ///
+    /// **The optimistic write is the member's own pending flag**, and only on an
+    /// approval: the gateway's `GUILD_MEMBER_UPDATE` is the authority and lands a
+    /// beat later, but the sheet has to close on the click rather than on the
+    /// round trip. A request left pending a moderator clears nothing, because
+    /// nothing has changed yet.
+    func agreeToRules(_ verification: MemberVerification, inGuild guildID: GuildID) {
+        guard rulesSubmissions.insert(guildID).inserted else { return }
+        model.serverRulesSubmission = ServerRulesSubmission(guildID: guildID, state: .sending)
+        Task { [weak self] in
+            guard let self else { return }
+            defer { rulesSubmissions.remove(guildID) }
+            do {
+                let outcome = try await rest.agreeToRules(verification, inGuild: guildID)
+                switch outcome {
+                case .approved:
+                    if let userID = model.currentUserID {
+                        model.members[guildID]?[userID]?.isPending = false
+                        model.memberRevision &+= 1
+                    }
+                    model.serverRulesSubmission = nil
+                    model.serverRulesGuildID = nil
+                case .pending, .unknown:
+                    model.serverRulesSubmission = ServerRulesSubmission(
+                        guildID: guildID, state: .pending
+                    )
+                case .rejected(let reason):
+                    model.serverRulesSubmission = ServerRulesSubmission(
+                        guildID: guildID, state: .rejected(reason)
+                    )
+                }
+            } catch {
+                Self.trace("rules agreement \(guildID) failed: \(Self.describe(error))")
+                model.serverRulesSubmission = ServerRulesSubmission(
+                    guildID: guildID,
+                    // The reader's words, not the decoder's: they are being told
+                    // their agreement did not land, and "decoding(…)" tells them
+                    // nothing they can act on.
+                    state: .failed("That did not go through. Try again in a moment.")
+                )
+            }
+        }
+    }
+
+    /// The game servers a community has rented.
+    func loadGameServers(_ guildID: GuildID) {
+        let fetch = GuildSurfaceFetch(guildID: guildID, subject: .gameServers)
+        guard model.gameServers[guildID] == nil,
+              model.loadingGuildSurfaces.insert(fetch).inserted
+        else { return }
+        Task { [weak self] in
+            guard let self else { return }
+            defer { model.loadingGuildSurfaces.remove(fetch) }
+            do {
+                model.gameServers[guildID] = try await rest.gameServers(inGuild: guildID)
+            } catch {
+                // 403 and 404 both mean the same thing to the row that reads
+                // this: there is nothing to show, and nothing to ask again.
+                model.gameServers[guildID] = []
+                Self.trace("game servers \(guildID) failed: \(Self.describe(error))")
+            }
+        }
+    }
+
+    /// The steps a game needs to reach a rented server.
+    ///
+    /// By SKU, so two servers on one plan share an answer and a sheet opened
+    /// twice asks once.
+    func loadGameServerProduct(sku skuID: String) {
+        guard !skuID.isEmpty,
+              model.gameServerProducts[skuID] == nil,
+              gameServerProductFetches.insert(skuID).inserted
+        else { return }
+        Task { [weak self] in
+            guard let self else { return }
+            defer { gameServerProductFetches.remove(skuID) }
+            do {
+                model.gameServerProducts[skuID] = try await rest.gameServerProduct(sku: skuID)
+            } catch {
+                // The sheet's own reason to exist is the address, which it
+                // already has. An empty product is what makes it stop asking.
+                model.gameServerProducts[skuID] = GameServerProduct(skuID: skuID)
+                Self.trace("game server product \(skuID) failed: \(Self.describe(error))")
+            }
+        }
+    }
+
+    /// Writes the reader's answers back.
+    ///
+    /// **The store has already moved**, optimistically, so this exists to make
+    /// the server agree — and to correct the store when it does not. The reply
+    /// carries the ballot as the server now holds it, which is the only way an
+    /// option it refused comes back off the page.
+    ///
+    /// A failure restores what the server last confirmed rather than leaving the
+    /// optimistic set standing: a chip that stayed lit after the write failed is
+    /// a role the reader believes they have.
+    func saveOnboardingResponses(_ responses: Set<UInt64>, inGuild guildID: GuildID) {
+        guard let onboarding = model.guildOnboardings[guildID] else { return }
+        let prompts = onboarding.prompts
+        let confirmed = lastConfirmedOnboarding[guildID]
+        model.savingOnboardingGuilds.insert(guildID)
+        Task { [weak self] in
+            guard let self else { return }
+            defer { model.savingOnboardingGuilds.remove(guildID) }
+            do {
+                let applied = try await rest.setOnboardingResponses(
+                    responses, prompts: prompts, inGuild: guildID
+                )
+                lastConfirmedOnboarding[guildID] = applied
+                // Only if it differs. Assigning an equal value still publishes,
+                // and this lands while the page is on screen.
+                guard model.guildOnboardings[guildID]?.responses != applied else { return }
+                model.guildOnboardings[guildID]?.responses = applied
+            } catch {
+                Self.trace("onboarding responses \(guildID) failed: \(Self.describe(error))")
+                guard let confirmed,
+                      model.guildOnboardings[guildID]?.responses != confirmed
+                else { return }
+                model.guildOnboardings[guildID]?.responses = confirmed
+            }
+        }
+    }
 }

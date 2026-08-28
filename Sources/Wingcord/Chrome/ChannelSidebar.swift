@@ -17,14 +17,19 @@ import WingcordCore
 /// two stay in step because both are driven by the same measured offset.
 struct ChannelSidebar: View, Equatable {
     var presentation: SidebarPresentation
-    var selectedChannelID: ChannelID?
+    /// **One value, so two rows cannot both be lit.** A channel and a server
+    /// page are mutually exclusive destinations in this list, and holding them
+    /// as a channel id plus a flag is how the channel you came from keeps its
+    /// pill while Channels & Roles is open.
+    var target: SidebarTarget
 
     static func == (lhs: ChannelSidebar, rhs: ChannelSidebar) -> Bool {
-        lhs.presentation == rhs.presentation && lhs.selectedChannelID == rhs.selectedChannelID
+        lhs.presentation == rhs.presentation && lhs.target == rhs.target
     }
 
     var selectChannel: (ChannelID) -> Void = { _ in }
     var toggleCategory: (ChannelID) -> Void = { _ in }
+    var openSurface: (GuildSurface) -> Void = { _ in }
     var openGuildMenu: () -> Void = {}
 
     @Environment(\.motion) private var motion
@@ -190,8 +195,13 @@ struct ChannelSidebar: View, Equatable {
     @ViewBuilder
     private func row(_ row: SidebarRow) -> some View {
         switch row {
-        case .guildAction(let action):
-            SidebarActionRow(action: action)
+        case .guildAction(let surface):
+            SidebarActionRow(
+                surface: surface,
+                isSelected: target == .surface(surface),
+                namespace: selectionNamespace,
+                action: { openSurface(surface) }
+            )
         case .category(let category):
             // A category only reaches here if it has no section of its own,
             // which the grouping above does not produce. Rendered anyway rather
@@ -201,7 +211,7 @@ struct ChannelSidebar: View, Equatable {
         case .channel(let channel):
             SidebarChannelRow(
                 channel: channel,
-                isSelected: channel.id == selectedChannelID,
+                isSelected: target == .channel(channel.id),
                 namespace: selectionNamespace,
                 action: { selectChannel(channel.id) }
             )

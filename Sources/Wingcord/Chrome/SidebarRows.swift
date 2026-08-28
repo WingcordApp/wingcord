@@ -175,45 +175,70 @@ struct SidebarCategoryRow: View {
     }
 }
 
-/// Channels & Roles, Server Guide — the pair above the first category.
+/// Server Guide, Channels & Roles, Game Servers — the rows above the first
+/// category that go somewhere other than a transcript.
+///
+/// **It carries the same travelling pill as a channel row, in the same
+/// namespace.** They are destinations in one list, so the selection is one
+/// object that flows between them — a separate indicator here would make going
+/// from `#general` to Channels & Roles read as one pill vanishing and another
+/// appearing, which is the thing `glassEffectID` exists to prevent.
 struct SidebarActionRow: View {
-    var action: SidebarAction
+    var surface: GuildSurface
+    var isSelected: Bool
+    var namespace: Namespace.ID
+    var action: () -> Void
 
     @Environment(\.motion) private var motion
     @State private var isHovering = false
 
     var body: some View {
-        Button {} label: {
+        Button(action: action) {
             HStack(spacing: Spacing.base) {
-                Image(systemName: action.symbolName)
-                    .font(.system(.body))
-                    .foregroundStyle(Ink.secondary)
-                    .frame(width: 18)
-                Text(action.title)
-                    .font(Typeface.rowTitleUnread)
-                    .foregroundStyle(Ink.primary)
+                Image(systemName: surface.symbolName)
+                    .font(.system(.caption))
+                    .foregroundStyle(isSelected ? AnyShapeStyle(Ink.secondary) : AnyShapeStyle(Ink.tertiary))
+                    // The channel rows' glyph gutter, to the point: the two kinds
+                    // of row sit in one list and a name that starts two points
+                    // off is the thing that makes a list look hand-assembled.
+                    .frame(width: 16)
+                Text(surface.title)
+                    .font(Typeface.rowTitle)
+                    .foregroundStyle(isSelected ? AnyShapeStyle(Ink.primary) : AnyShapeStyle(Ink.secondary))
                     .lineLimit(1)
+                    .truncationMode(.tail)
                 Spacer(minLength: Spacing.tight)
-                Image(systemName: "chevron.right")
-                    .font(.system(.caption2, weight: .semibold))
-                    .foregroundStyle(Ink.quaternary)
             }
             .padding(.horizontal, Spacing.base)
-            .frame(minHeight: Metrics.rowMinHeight + 4)
+            .padding(.vertical, Spacing.tight)
+            .frame(minHeight: Metrics.rowMinHeight, alignment: .leading)
             .frame(maxWidth: .infinity, alignment: .leading)
             .contentShape(.rect(cornerRadius: Radius.row))
         }
         .buttonStyle(.plain)
         .background {
-            RoundedRectangle(cornerRadius: Radius.row, style: .continuous)
-                .fill(Palette.hoverFill)
-                .opacity(isHovering ? 1 : 0)
+            ZStack {
+                RoundedRectangle(cornerRadius: Radius.row, style: .continuous)
+                    .fill(Palette.hoverFill)
+                    .opacity(isHovering && !isSelected ? 1 : 0)
+
+                if isSelected {
+                    Color.clear
+                        .glassEffect(
+                            .regular.tint(Palette.selectionFill),
+                            in: .rect(cornerRadius: Radius.row)
+                        )
+                        .glassEffectID(SidebarSelection.id, in: namespace)
+                }
+            }
         }
         .onHover { hovering in
             guard isHovering != hovering else { return }
             isHovering = hovering
         }
         .animation(motion.fadeQuick, value: isHovering)
+        .accessibilityLabel(Text(surface.title))
+        .accessibilityAddTraits(isSelected ? [.isButton, .isSelected] : .isButton)
     }
 }
 

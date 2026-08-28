@@ -127,7 +127,9 @@ struct MutualServer: Equatable, Sendable, Identifiable {
     var nickname: String?
 }
 
-struct ProfileRole: Equatable, Sendable, Identifiable {
+/// `Hashable` as well as `Equatable`: the Channels & Roles page carries a list
+/// of these inside its own memoized, hashable value.
+struct ProfileRole: Hashable, Sendable, Identifiable {
     var id: RoleID
     var name: String
     var colorValue: UInt32?

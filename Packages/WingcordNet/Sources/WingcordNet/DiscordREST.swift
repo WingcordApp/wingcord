@@ -716,3 +716,220 @@ struct StickerPackDTO: Decodable, Sendable {
         )
     }
 }
+
+// MARK: - The three surfaces beside a server's channels
+//
+// Server Guide, Channels & Roles and Game Servers. All five routes below are
+// **per guild and stable for a session** — a guide, a set of questions and a
+// rented server change about as often as the server's name — so every caller
+// caches by guild id and none of them is on a refresh timer.
+//
+// Each is bucketed by ROUTE with the id templated out. A reader stepping through
+// ten servers must share one bucket per surface, or the limiter stops limiting
+// anything.
+
+extension DiscordREST {
+
+    /// The page a server shows somebody who has just arrived.
+    ///
+    /// Answers 404 for a server that has never configured one, which is the
+    /// ordinary case rather than an error — the caller reads that as "no guide"
+    /// and draws no row for it.
+    public func serverGuide(of guildID: GuildID) async throws -> ServerGuide {
+        try await get(
+            "/guilds/\(guildID.rawValue)/new-member-welcome",
+            route: "guilds/{id}/new-member-welcome",
+            as: NewMemberWelcomeDTO.self
+        ).domain(guildID: guildID)
+    }
+
+    /// The questions a community server asks, and what answering them unlocks.
+    public func onboarding(of guildID: GuildID) async throws -> GuildOnboarding {
+        try await get(
+            "/guilds/\(guildID.rawValue)/onboarding",
+            route: "guilds/{id}/onboarding",
+            as: OnboardingDTO.self
+        ).domain(guildID: guildID)
+    }
+
+    /// How many people hold each of a server's roles.
+    ///
+    /// One object of `role id -> count`, for **every** role in the server —
+    /// nearly two hundred entries on a large one. It is what lets an onboarding
+    /// option say how many people chose it, and it is the only route that
+    /// answers that at all.
+    ///
+    /// Keyed straight into `RoleID` at the boundary so no surface parses an id.
+    public func roleMemberCounts(inGuild guildID: GuildID) async throws -> [RoleID: Int] {
+        let raw = try await get(
+            "/guilds/\(guildID.rawValue)/roles/member-counts",
+            route: "guilds/{id}/roles/member-counts",
+            as: [String: Int].self
+        )
+        var counts: [RoleID: Int] = [:]
+        counts.reserveCapacity(raw.count)
+        for (key, value) in raw {
+            guard let id = UInt64(key) else { continue }
+            counts[RoleID(rawValue: id)] = value
+        }
+        return counts
+    }
+
+    /// Records the reader's answers, and returns the ballot as the server now
+    /// holds it.
+    ///
+    /// **The whole ballot, never a delta.** The route replaces a selection, so a
+    /// client that sent only the id just clicked would drop every previous
+    /// answer — the same shape as the poll route, and for the same reason.
+    ///
+    /// The answer is read back rather than assumed: the server can refuse an
+    /// option, and a client that kept its optimistic set would then disagree
+    /// with it about which roles it had just granted.
+    public func setOnboardingResponses(
+        _ optionIDs: Set<UInt64>,
+        prompts: [GuildOnboarding.Prompt],
+        inGuild guildID: GuildID
+    ) async throws -> Set<UInt64> {
+        let data = try await requestData(
+            method: "PUT",
+            path: "/guilds/\(guildID.rawValue)/onboarding-responses",
+            route: "guilds/{id}/onboarding-responses",
+            body: OnboardingResponsesBody(responses: optionIDs, prompts: prompts)
+        )
+        return (try? decoder.decode(OnboardingResponsesDTO.self, from: data))?.responses
+            ?? optionIDs
+    }
+
+    /// The rules a server makes people agree to.
+    ///
+    /// `with_guild=false` because the guild half of the response is a copy of
+    /// an object the store already holds, and asking for it doubles the payload
+    /// to learn nothing.
+    public func memberVerification(of guildID: GuildID) async throws -> MemberVerification {
+        try await get(
+            "/guilds/\(guildID.rawValue)/member-verification",
+            route: "guilds/{id}/member-verification",
+            query: [URLQueryItem(name: "with_guild", value: "false")],
+            as: MemberVerificationDTO.self
+        ).domain(guildID: guildID)
+    }
+
+    /// Follows or unfollows one channel — or one whole category.
+    ///
+    /// `PATCH /users/@me/guilds/settings` — note the **plural**: the route takes
+    /// every guild at once and is patched with a nested object naming just the
+    /// one that changed. That shape is the capture's, not a simplification of
+    /// it: `{"guilds": {"<guild>": {"channel_overrides": {"<channel>": {…}}}}}`.
+    ///
+    /// **A category is a channel here.** The Follow Category switch and a
+    /// channel's checkbox write the same override on the same key, which is why
+    /// there is one method rather than two — the only thing that differs is what
+    /// the reader is told it means.
+    ///
+    /// The answer is the guild's whole settings object, and **an unfollowed
+    /// channel comes back missing rather than zeroed**. So the reply is read as
+    /// the complete set of follows for that guild, not as a delta.
+    public func setChannelFollowed(
+        _ isFollowed: Bool,
+        channelID: ChannelID,
+        inGuild guildID: GuildID
+    ) async throws -> Set<ChannelID> {
+        struct Override: Encodable { var flags: Int }
+        struct GuildBody: Encodable { var channel_overrides: [String: Override] }
+        struct Body: Encodable { var guilds: [String: GuildBody] }
+
+        let data = try await requestData(
+            method: "PATCH",
+            path: "/users/@me/guilds/settings",
+            route: "users/@me/guilds/settings",
+            body: Body(guilds: [
+                String(guildID.rawValue): GuildBody(channel_overrides: [
+                    String(channelID.rawValue): Override(
+                        flags: isFollowed ? ChannelSettingsFlags.followed : 0
+                    )
+                ])
+            ])
+        )
+
+        let settings = (try? decoder.decode([GuildSettingsDTO].self, from: data)) ?? []
+        var followed: Set<ChannelID> = []
+        for entry in settings where entry.guild_id == guildID {
+            for override in entry.channel_overrides ?? [] {
+                guard let id = override.channel_id,
+                      (override.flags ?? 0) & ChannelSettingsFlags.followed != 0
+                else { continue }
+                followed.insert(id)
+            }
+        }
+        return followed
+    }
+
+    /// Records that the reader has read and agreed to a server's rules.
+    ///
+    /// `PUT /guilds/{id}/requests/@me` — the route behind the join flow's
+    /// **Finish**, and the only write on any of these pages besides the
+    /// onboarding ballot.
+    ///
+    /// **The whole form goes back, version string included, byte for byte.** The
+    /// agreement is recorded against that text; a client that re-serialised it
+    /// from a `Date` would record against a string the server does not have.
+    ///
+    /// The answer is a *join request*, not an acknowledgement: a rules-only gate
+    /// approves instantly, a server that also asks questions leaves it pending a
+    /// moderator, and one that has turned somebody away answers rejected. All
+    /// three are real, and the caller tells them apart.
+    public func agreeToRules(
+        _ verification: MemberVerification,
+        inGuild guildID: GuildID
+    ) async throws -> MemberVerificationOutcome {
+        guard let body = MemberVerificationSubmitBody(verification) else {
+            throw Failure.transport("no rules to agree to")
+        }
+        let data = try await requestData(
+            method: "PUT",
+            path: "/guilds/\(guildID.rawValue)/requests/@me",
+            route: "guilds/{id}/requests/@me",
+            body: body
+        )
+        return (try? decoder.decode(JoinRequestDTO.self, from: data))?.outcome
+            // A 2xx with a body this client cannot read is still a request the
+            // server accepted, and the gateway's member update is what settles
+            // it either way.
+            ?? .pending
+    }
+
+    /// The game servers a community has rented through Discord.
+    ///
+    /// Answers `[]` for the overwhelming majority of servers and 403/404 for one
+    /// the reader may not ask about. All three mean the same thing to the
+    /// caller — there is nothing to show — which is why the row only appears
+    /// once this has answered with something.
+    public func gameServers(inGuild guildID: GuildID) async throws -> [GameServer] {
+        try await get(
+            "/guilds/\(guildID.rawValue)/game-servers",
+            route: "guilds/{id}/game-servers",
+            as: [GameServerDTO].self
+        ).compactMap(\.domain)
+    }
+
+    /// The steps the game needs to connect to a rented server.
+    ///
+    /// **They belong to the product, not to the instance**, so this is cached by
+    /// SKU: two servers on the same plan share one answer, and a reader who
+    /// opens the connect sheet twice asks once.
+    ///
+    /// `country_code` and `payment_source_id` are on Discord's own request and
+    /// are **deliberately not sent**. Both describe a purchase, this client
+    /// makes none, and neither can change the four sentences that are the only
+    /// part of the response read here. If the route ever refuses without them,
+    /// the sheet degrades to the address and its copy button — which is the part
+    /// somebody actually needs — rather than failing.
+    public func gameServerProduct(sku skuID: String) async throws -> GameServerProduct {
+        try await get(
+            "/storefront/products/sku/\(skuID)",
+            route: "storefront/products/sku/{id}",
+            query: [URLQueryItem(name: "locale", value: "en-US")],
+            as: StorefrontProductDTO.self
+        ).domain(skuID: skuID)
+    }
+}

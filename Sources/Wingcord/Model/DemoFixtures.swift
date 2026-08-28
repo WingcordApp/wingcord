@@ -35,6 +35,19 @@ enum DemoFixtures {
             )
         }
         let me = userIDs[0]
+        users[me] = users[me].map { user in
+            User(
+                id: user.id,
+                username: user.username,
+                displayName: user.displayName,
+                discriminator: user.discriminator,
+                isBot: false,
+                decoration: UserDecoration(
+                    bio: "sometimes dev sometimes music, sometimes wasting time "
+                        + "playing games\n\nPrimarily Swift and C++"
+                )
+            )
+        }
         model.currentUserID = me
         model.mentionableIDs = [me.rawValue]
         model.users = users
@@ -130,6 +143,16 @@ enum DemoFixtures {
                 activities: activity.map { PresenceActivities(list: [$0]) }
             )
         }
+        // The reader holds two of the named roles and has written a bio, so the
+        // profile aside on Channels & Roles has something to draw. Without them
+        // that card can only be looked at empty, which is the half of it least
+        // worth checking.
+        guildMembers[me] = Member(
+            userID: me,
+            nickname: nil,
+            roleIDs: [hoistIDs[0], hoistIDs[3]],
+            joinedAt: Date.now.addingTimeInterval(-86_400 * 420)
+        )
         model.members[firstGuild] = guildMembers
         model.presences = presences
 
@@ -164,6 +187,283 @@ enum DemoFixtures {
         if let channelID = model.selectedChannelID {
             model.setMessages(transcript(in: channelID, users: users), in: channelID)
         }
+
+        // **The guide's first resource gets a transcript too**, so the preview
+        // column beside the guide has something in it. Without one the only
+        // thing that surface can be looked at showing is its failure state,
+        // which is the half of it least worth checking.
+        let resourceChannelID = index.channelIDs(inGuild: first)
+            .filter { index[$0]?.kind.isConversation == true }
+            .dropFirst(2)
+            .first
+        if let resourceChannelID {
+            model.setMessages(transcript(in: resourceChannelID, users: users), in: resourceChannelID)
+        }
+
+        // The guide's welcome is written by the owner, and the crown beside it
+        // says so — which is only true if the fixture's owner IS that person.
+        let guideAuthor = userIDs[1]
+        model.guilds[firstGuild]?.ownerID = guideAuthor
+        populateGuildSurfaces(model, guildRoles: guildRoles, owner: guideAuthor)
+    }
+
+    // MARK: The server's own pages
+    //
+    // Server Guide, Channels & Roles and Game Servers. Fixtures for all three,
+    // because each is gated on its route having ANSWERED — a demo launch has no
+    // socket, so without these the three rows would never appear at all and the
+    // one arrangement in the chrome with real arithmetic behind it could not be
+    // looked at without an account.
+    //
+    // Two servers, deliberately different: the first has everything, and the
+    // third has a guide and no questions — which is the case that decides
+    // whether the sidebar row says "Channels & Roles" or "Browse Channels".
+
+    private static func populateGuildSurfaces(
+        _ model: AppModel,
+        guildRoles: [RoleID: Role],
+        owner: UserID
+    ) {
+        let first = GuildID(rawValue: 1000)
+        let third = GuildID(rawValue: 1002)
+        let channels = model.channelIndex.channelIDs(inGuild: first).filter {
+            model.channelIndex[$0]?.kind.isConversation == true
+        }
+        guard channels.count >= 6 else { return }
+
+        model.serverGuides[first] = ServerGuide(
+            guildID: first,
+            isEnabled: true,
+            welcome: ServerGuide.Welcome(
+                authorIDs: [owner],
+                message: "Welcome to The Iris Project [@username]! This is where the "
+                    + "releases land and where everything gets argued about first. "
+                    + "Here is what to do while you are getting your bearings;"
+            ),
+            actions: [
+                ServerGuide.Action(
+                    id: 0,
+                    channelID: channels[0],
+                    kind: .read,
+                    title: "Read what this place is",
+                    emojiName: "wave"
+                ),
+                ServerGuide.Action(
+                    id: 1,
+                    channelID: channels[3],
+                    kind: .read,
+                    title: "See what shipped this month",
+                    emojiName: "sparkles"
+                ),
+                ServerGuide.Action(
+                    id: 2,
+                    channelID: channels[5],
+                    kind: .write,
+                    title: "Come say hello",
+                    emojiName: "speech_balloon"
+                ),
+            ],
+            resources: [
+                ServerGuide.Resource(
+                    id: 0,
+                    channelID: channels[2],
+                    title: "Rules & Roles",
+                    detail: "Pick roles here and read up on our guidelines"
+                ),
+                ServerGuide.Resource(
+                    id: 1,
+                    channelID: channels[1],
+                    title: "Frequently asked",
+                    detail: "The questions that come up every single week"
+                ),
+            ]
+        )
+
+        // A guide with no questions behind it, so the row that says "Browse
+        // Channels" is on screen somewhere too — and one action, so the guide
+        // has a row at all and its rules gate can be reached.
+        let thirdChannels = model.channelIndex.channelIDs(inGuild: third).filter {
+            model.channelIndex[$0]?.kind.isConversation == true
+        }
+        model.serverGuides[third] = ServerGuide(
+            guildID: third,
+            isEnabled: true,
+            welcome: nil,
+            actions: thirdChannels.first.map {
+                [ServerGuide.Action(id: 0, channelID: $0, kind: .read, title: "Start here")]
+            } ?? [],
+            resources: []
+        )
+
+        // The named roles only. `@everyone` is granted by joining, not by
+        // answering a question, and an option that claims to grant it is a
+        // sentence that is simply false.
+        let colouredRoles = guildRoles.values
+            .filter { $0.name != "@everyone" }
+            .sorted { $0.position > $1.position }
+            .map(\.id)
+        model.guildOnboardings[first] = GuildOnboarding(
+            guildID: first,
+            isEnabled: true,
+            prompts: [
+                GuildOnboarding.Prompt(
+                    id: 5001,
+                    title: "Where in the world are you?",
+                    options: [
+                        onboardingOption(1, "Europe", "earth_africa", colouredRoles, 0, channels),
+                        onboardingOption(2, "North America", "earth_americas", colouredRoles, 1, channels),
+                        onboardingOption(3, "Asia", "earth_asia", colouredRoles, 2, channels),
+                        onboardingOption(4, "Oceania", "ocean", colouredRoles, 3, channels),
+                    ],
+                    isSingleSelect: false,
+                    isRequired: true
+                ),
+                GuildOnboarding.Prompt(
+                    id: 5002,
+                    title: "What should we ping you about?",
+                    options: [
+                        onboardingOption(5, "Releases", "rocket", colouredRoles, 4, channels),
+                        onboardingOption(6, "Community events", "trophy", colouredRoles, 5, []),
+                        onboardingOption(7, "Nothing at all", "sleeping", [], 0, []),
+                    ],
+                    isSingleSelect: false,
+                    isRequired: false
+                ),
+            ],
+            defaultChannelIDs: Array(channels.prefix(4)),
+            responses: [1, 5]
+        )
+
+        var counts: [RoleID: Int] = [:]
+        for (offset, roleID) in colouredRoles.enumerated() {
+            counts[roleID] = [186_202, 76_308, 58_495, 12_407, 101_061, 2_768][offset % 6]
+        }
+        model.roleMemberCounts[first] = counts
+
+        // **Three follow states, because the browse page draws three**: a
+        // channel the reader chose, one they did not, and one whose tick belongs
+        // to the category above it and cannot be pressed. A fixture where
+        // everything is followed can only be looked at in one of them — and the
+        // channel list beside it filters on the same answer, so the two would
+        // agree vacuously.
+        //
+        // The first category is followed and carries its channels; the rest are
+        // not, and their channels answer for themselves. The last two channels
+        // in the server are followed by nobody, which is what takes them out of
+        // the sidebar.
+        let allChannels = model.channelIndex.channelIDs(inGuild: first)
+        let categories = allChannels.filter { model.channelIndex[$0]?.kind == .category }
+        var followed = Set(allChannels.filter { model.channelIndex[$0]?.kind != .category })
+        followed.subtract(allChannels.suffix(2))
+        if let carried = categories.first {
+            for channelID in allChannels
+            where model.channelIndex[channelID]?.parentID == carried {
+                followed.remove(channelID)
+            }
+            followed.insert(carried)
+        }
+        model.followedChannelIDs = followed
+
+        model.memberVerifications[first] = MemberVerification(
+            guildID: first,
+            detail: "Welcome to the most argued-about release channel on Discord.",
+            rules: [
+                "Be friendly, treat everyone with respect. No harassment, toxicity, "
+                    + "witch hunting, sexism, racism, or hate speech will be tolerated.",
+                "No spam or self-promotion — server invites, advertisements and the "
+                    + "rest. That includes DMing fellow members.",
+                "No NSFW, obscene, or discriminatory content.",
+                "Communicate in the text channels using English.",
+                "Do not ask for free stuff or attempt to scam anyone.",
+                "If you see something against the rules, or something that makes you "
+                    + "feel unsafe, let the staff know.",
+            ]
+        )
+
+        // **A second community server where the reader has NOT agreed.** The
+        // rules gate is a real state — join on a phone, never accept, open this
+        // — and it is the only state in which the banner and the Agree button
+        // exist at all, so without a fixture for it neither can be looked at.
+        model.guilds[third]?.rulesChannelID = model.channelIndex
+            .channelIDs(inGuild: third)
+            .first { model.channelIndex[$0]?.name.contains("rules") == true }
+        if let me = model.currentUserID {
+            model.members[third] = [
+                me: Member(userID: me, roleIDs: [], joinedAt: Date.now, isPending: true)
+            ]
+        }
+        model.memberVerifications[third] = MemberVerification(
+            guildID: third,
+            detail: "A small server with three rules and no patience for a fourth.",
+            rules: [
+                "Be decent to each other.",
+                "Keep it on topic in the numbered channels.",
+                "No self-promotion without asking first.",
+            ],
+            version: "2020-12-28T20:15:57.529000+00:00",
+            termsLabel: "Read and agree to the server rules"
+        )
+
+        model.gameServers[first] = [
+            GameServer(
+                id: 7_001,
+                skuID: "demo-pro-plan",
+                name: "Iris Test Server",
+                status: .online,
+                regionName: "France",
+                planName: "Pro Plan",
+                ip: "5.39.17.17",
+                port: "25372",
+                playersOnline: 4,
+                maxPlayers: 16,
+                gameName: "Counter-Strike 2",
+                gameVersion: "latest",
+                providerURL: URL(string: "https://example.invalid/server/demo")
+            ),
+            GameServer(
+                id: 7_002,
+                skuID: "demo-starter-plan",
+                name: "Weekend Scrims",
+                status: .offline,
+                regionName: "Germany",
+                planName: "Starter Plan",
+                ip: "5.39.17.18",
+                port: "27015",
+                playersOnline: 0,
+                maxPlayers: 10,
+                gameName: "Counter-Strike 2",
+                gameVersion: "latest",
+                scheduledAction: "start",
+                scheduledActionAt: Date.now.addingTimeInterval(3600 * 9)
+            ),
+        ]
+
+        model.gameServerProducts["demo-pro-plan"] = GameServerProduct(
+            skuID: "demo-pro-plan",
+            instructions: [
+                "In the Steam client, navigate to View > Game Servers.",
+                "Click **Favorites**, then click the + button.",
+                "Enter your server's IP & port then click **OK**.",
+                "Select your server, then click **Connect**.",
+            ]
+        )
+    }
+
+    private static func onboardingOption(
+        _ id: UInt64,
+        _ title: String,
+        _ emoji: String,
+        _ roles: [RoleID],
+        _ roleIndex: Int,
+        _ channels: [ChannelID]
+    ) -> GuildOnboarding.Option {
+        GuildOnboarding.Option(
+            id: id,
+            title: title,
+            emojiName: emoji,
+            roleIDs: roles.indices.contains(roleIndex) ? [roles[roleIndex]] : [],
+            channelIDs: Array(channels.prefix(id % 3 == 0 ? 2 : 0))
+        )
     }
 
     // MARK: Shapes
@@ -219,6 +519,22 @@ enum DemoFixtures {
                   categories: [("HOME", ["lobby"])]),
     ]
 
+    /// Now, in Discord's own units. Resolved once so every fixture channel is
+    /// dated against the same instant.
+    private static let recentMilliseconds = UInt64(Date.now.timeIntervalSince1970 * 1000)
+
+    /// Topics, so the browse list's two-line rows are exercised. Deliberately
+    /// uneven in length: a page whose every subtitle is the same width is a page
+    /// that has never met a real server.
+    private static let topics = [
+        "Everything that ships, and the arguments before it does.",
+        "",
+        "Ask here before opening an issue — most of it is answered already.",
+        "Screenshots, mockups and the occasional cursed render.",
+        "",
+        "Release notes land here automatically. Read-only.",
+    ]
+
     private static func channels(for guildID: GuildID, spec: GuildSpec) -> [Channel] {
         var result: [Channel] = []
         var position = 0
@@ -243,9 +559,18 @@ enum DemoFixtures {
                     kind: name.contains("vc") || name == "lobby" ? .voice : .text,
                     guildID: guildID,
                     name: name,
+                    topic: topics[Int(serial) % topics.count],
                     parentID: categoryID,
                     position: position,
-                    lastMessageID: MessageID(rawValue: 8_000_000 + serial)
+                    // **A real snowflake, not a small integer.** The high 42
+                    // bits are a millisecond timestamp, so `8_000_000` is
+                    // January 2015 and every channel in the browse list reads
+                    // "11 years ago" — which makes the one line on that page
+                    // with real arithmetic behind it impossible to judge.
+                    lastMessageID: MessageID(
+                        rawValue: (recentMilliseconds - UInt64(serial) * 5_400_000
+                            - Snowflake<MessageTag>.epochMilliseconds) << 22
+                    )
                 ))
                 position += 1
             }

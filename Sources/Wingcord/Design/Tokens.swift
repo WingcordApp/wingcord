@@ -313,6 +313,37 @@ nonisolated enum Proportions {
     /// into a roster's width is a column of two-word lines.
     static let profileColumnIdeal: CGFloat = 288
 
+    /// Channels & Roles, which is the one server page with something beside its
+    /// content: the reader's own profile as that server sees them.
+    ///
+    /// **Both of its tabs use it**, though only one has the aside. A measure
+    /// that changed between tabs would move the floating bar and the headings
+    /// under it every time somebody switched, which reads as the page being
+    /// rebuilt rather than as one page with two halves.
+    static let surfaceColumnWide: CGFloat = 940
+
+    /// The profile aside inside that measure. Narrow on purpose: it is a
+    /// summary of a person, not a profile card — the card is one click away on
+    /// the now bar and has room for the rest.
+    static let surfaceAsideWidth: CGFloat = 236
+
+    /// The channel preview beside a server's own page.
+    ///
+    /// Wider than the roster and narrower than a reading column: it holds a
+    /// transcript, which needs room for an avatar gutter and a line of prose,
+    /// and it is a *peek* — a preview that takes half the window has replaced
+    /// the page it was meant to sit beside.
+    static let previewColumnIdeal: CGFloat = 340
+
+    /// The widest a server's own page is drawn — the guide, the channel
+    /// browser, the game servers.
+    ///
+    /// **A measure, not the column's width.** These pages are read rather than
+    /// scanned, and at 1500 points a full-bleed paragraph is a line nobody can
+    /// track back to the start of. The column is centred in whatever the detail
+    /// column has, so a narrow window loses the margins rather than the text.
+    static let surfaceColumnMax: CGFloat = 680
+
     /// The smallest window that still shows all three columns with a readable
     /// transcript between them. Handed to `.frame(minWidth:minHeight:)` at the
     /// window root and nowhere else.

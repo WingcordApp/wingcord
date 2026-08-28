@@ -703,6 +703,9 @@ public struct ReadySnapshot: Sendable {
     public var settings: ClientSettings
     public var mutedGuildIDs: Set<GuildID>
     public var mutedChannelIDs: Set<ChannelID>
+    /// Channels and categories the reader has opted into — the checkboxes and
+    /// the Follow switches in Browse Channels. See `ChannelSettingsFlags`.
+    public var followedChannelIDs: Set<ChannelID>
 
     init(payload: ReadyPayload) {
         currentUser = payload.user.domain
@@ -788,19 +791,29 @@ public struct ReadySnapshot: Sendable {
 
         var mutedGuildIDs: Set<GuildID> = []
         var mutedChannelIDs: Set<ChannelID> = []
+        var followedChannelIDs: Set<ChannelID> = []
         for entry in payload.user_guild_settings?.entries ?? [] {
             if entry.muted == true, let guildID = entry.guild_id {
                 mutedGuildIDs.insert(guildID)
             }
             for override in entry.channel_overrides ?? [] {
-                guard override.muted == true, let channelID = override.channel_id else { continue }
-                mutedChannelIDs.insert(channelID)
-                readStates[channelID]?.isMuted = true
+                guard let channelID = override.channel_id else { continue }
+                // Two independent facts on one override, and a `guard` on the
+                // first used to drop the second: a muted channel is not the only
+                // kind that carries an opt-in bit.
+                if override.muted == true {
+                    mutedChannelIDs.insert(channelID)
+                    readStates[channelID]?.isMuted = true
+                }
+                if (override.flags ?? 0) & ChannelSettingsFlags.followed != 0 {
+                    followedChannelIDs.insert(channelID)
+                }
             }
         }
         self.readStates = readStates
         self.mutedGuildIDs = mutedGuildIDs
         self.mutedChannelIDs = mutedChannelIDs
+        self.followedChannelIDs = followedChannelIDs
         // The protobuf first, the JSON second, empty last.
         //
         // Discord moved the settings into `user_settings_proto` and stopped

@@ -49,6 +49,7 @@ struct WingcordApp: App {
                 .presentsMedia()
                 .presentsProfiles()
                 .presentsExpressionInfo()
+                .presentsGuildSurfaces()
                 .resolvesMotion()
                 .environment(model)
                 .frame(

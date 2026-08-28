@@ -22,10 +22,13 @@ struct ChannelToolbar: ToolbarContent {
 
     var body: some ToolbarContent {
         ToolbarItem(placement: .navigation) {
-            if chrome.channelID != nil {
+            // Named rather than tested for a channel id: a server page has no
+            // channel and still has a title, and an item that disappears there
+            // is a hole the bar closes by sliding its neighbours.
+            if !chrome.name.isEmpty {
                 ChannelPill(
                     name: chrome.name,
-                    kind: chrome.kind,
+                    symbolName: chrome.symbolName,
                     action: openChannelDetails
                 )
             }

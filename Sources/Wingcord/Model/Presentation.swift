@@ -80,16 +80,31 @@ struct SidebarHeader: Hashable, Sendable {
 enum SidebarRow: Hashable, Sendable, Identifiable {
     case category(SidebarCategory)
     case channel(SidebarChannel)
-    /// The Channels & Roles / Server Guide pair, above the first category.
-    case guildAction(SidebarAction)
+    /// Server Guide, Channels & Roles and Game Servers — the rows above the
+    /// first category that go somewhere other than a transcript.
+    case guildAction(GuildSurface)
 
     var id: UInt64 {
         switch self {
         case .category(let category): category.id.rawValue
         case .channel(let channel): channel.id.rawValue
-        case .guildAction(let action): action.kind.rawValue
+        // A surface's raw value is a small integer and a channel id is a
+        // snowflake, so the two spaces cannot collide inside one list.
+        case .guildAction(let surface): surface.rawValue
         }
     }
+}
+
+/// What the sidebar is currently pointing at.
+///
+/// **One value rather than a channel id plus a flag.** A guild surface and a
+/// channel are mutually exclusive destinations, and holding them as two
+/// properties is how a selected channel keeps its pill while Channels & Roles is
+/// open — two rows lit, one of them wrong.
+enum SidebarTarget: Hashable, Sendable {
+    case none
+    case channel(ChannelID)
+    case surface(GuildSurface)
 }
 
 struct SidebarCategory: Hashable, Sendable, Identifiable {
@@ -155,25 +170,39 @@ struct VoiceMemberChip: Hashable, Sendable, Identifiable {
     var isMuted: Bool
 }
 
-struct SidebarAction: Hashable, Sendable {
-    enum Kind: UInt64, Hashable, Sendable {
-        case channelsAndRoles = 1
-        case serverGuide = 2
-    }
-
-    var kind: Kind
+/// A destination a server offers that is not a channel.
+///
+/// The raw values are the sidebar row's identity and the `Hashable` key every
+/// per-guild cache is filed under, so they are **stable and never reordered** —
+/// a reshuffle would file a fetched guide under the game servers' key.
+///
+/// `channelsAndRoles` and `browseChannels` open the same pane. They are separate
+/// cases because they are separate *rows*: a community server asks questions and
+/// a plain one does not, and a row promising roles in a server that has none is
+/// a promise the page cannot keep.
+enum GuildSurface: UInt64, Hashable, Sendable {
+    case serverGuide = 1
+    case channelsAndRoles = 2
+    case browseChannels = 3
+    case gameServers = 4
 
     var title: String {
-        switch kind {
-        case .channelsAndRoles: "Channels & Roles"
+        switch self {
         case .serverGuide: "Server Guide"
+        case .channelsAndRoles: "Channels & Roles"
+        case .browseChannels: "Browse Channels"
+        case .gameServers: "Game Servers"
         }
     }
 
+    /// The glyph in the sidebar's gutter and in the toolbar's pill. Both draw
+    /// the same one, which is what makes the hand-off from the row to the
+    /// chrome read as the same destination.
     var symbolName: String {
-        switch kind {
-        case .channelsAndRoles: "person.2.badge.gearshape"
-        case .serverGuide: "book"
+        switch self {
+        case .serverGuide: "signpost.right.fill"
+        case .channelsAndRoles, .browseChannels: "square.grid.2x2"
+        case .gameServers: "gamecontroller.fill"
         }
     }
 }
@@ -208,6 +237,13 @@ struct WorkspacePresentation: Hashable, Sendable {
         case conversation(ChannelID)
         case forum(ChannelID)
         case voice(ChannelID)
+        /// A page about the server rather than about a conversation in it.
+        ///
+        /// **One case for all of them**, with the surface as a payload. The
+        /// three panes are three view types behind one `switch` inside
+        /// `WorkspacePane`, which is internal `_ConditionalContent` under a
+        /// stable outer type — not the structural swap §1 forbids.
+        case guildSurface(GuildID, GuildSurface)
     }
 
     enum Supplementary: Hashable, Sendable {
@@ -218,6 +254,13 @@ struct WorkspacePresentation: Hashable, Sendable {
         case userProfile(UserID)
         case thread(ChannelID)
         case search
+        /// A channel read beside one of the server's own pages.
+        ///
+        /// **A peek, not a destination.** A guide's resource is a
+        /// recommendation, and following one by replacing the page loses the
+        /// list of the other four — so the channel arrives in the column the
+        /// roster already lives in and the page keeps its place.
+        case channelPreview(ChannelID)
     }
 
     var primary: Primary
@@ -230,7 +273,13 @@ struct WorkspacePresentation: Hashable, Sendable {
 struct ChannelChrome: Hashable, Sendable {
     var channelID: ChannelID?
     var name: String
-    var kind: ChannelKind
+    /// The glyph in the pill.
+    ///
+    /// **A resolved symbol, not the kind.** The pill names whatever the detail
+    /// column is showing, and a guild surface has no `ChannelKind` — carrying
+    /// one anyway would mean picking a kind that is a lie and then special-casing
+    /// it at the one place that reads it.
+    var symbolName: String
     var topic: String?
     var isMemberListShown: Bool
     var canShowMemberList: Bool

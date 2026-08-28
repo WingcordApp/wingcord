@@ -68,6 +68,20 @@ final class AppModel {
 
     var selectedGuildID: GuildID?
     var selectedChannelID: ChannelID?
+    /// The server page the detail column is showing instead of a transcript.
+    ///
+    /// **Beside the channel rather than instead of it**, so leaving the page
+    /// returns to the conversation that was open rather than to the top of the
+    /// list. Cleared by selecting a channel and by switching servers — a guide
+    /// belongs to the server it describes.
+    var openGuildSurface: GuildSurface?
+    /// A channel being read beside one of those pages.
+    ///
+    /// Its own property rather than a second meaning for `selectedChannelID`:
+    /// the preview and the conversation the reader will return to are two
+    /// different channels, and one property holding both is how following a
+    /// resource loses the channel you came from.
+    var previewedChannelID: ChannelID?
     /// The last channel visited in each guild, so switching back returns where
     /// you were rather than to the top of the list.
     var lastChannelByGuild: [GuildID: ChannelID] = [:]
@@ -148,6 +162,47 @@ final class AppModel {
     /// ask for the same composition twenty times.
     var profileEffects: [String: ProfileEffect] = [:]
 
+    // MARK: The server's own pages
+    //
+    // Server Guide, Channels & Roles and Game Servers. All five tables are
+    // **keyed by guild and filled once per session**: a guide, a set of
+    // questions and a rented server change about as often as the server's name,
+    // so there is no refresh timer and no invalidation on any gateway event.
+    //
+    // An absent entry means "not asked yet" and an *empty* one means "asked, and
+    // there is nothing". Collapsing the two into one is what makes a page ask
+    // again on every appearance for a server that has no guide.
+
+    var serverGuides: [GuildID: ServerGuide] = [:]
+    var guildOnboardings: [GuildID: GuildOnboarding] = [:]
+    /// How many people hold each role, for the server whose questions are open.
+    var roleMemberCounts: [GuildID: [RoleID: Int]] = [:]
+    var memberVerifications: [GuildID: MemberVerification] = [:]
+    var gameServers: [GuildID: [GameServer]] = [:]
+    /// Connection instructions, by SKU rather than by instance: two servers on
+    /// one plan share an answer.
+    var gameServerProducts: [String: GameServerProduct] = [:]
+    /// Which of the above are in flight, as one set rather than five.
+    ///
+    /// A page asks "is my thing loading" once per body, so one lookup in one set
+    /// beats five sets that each have to be kept in step with a `defer`.
+    var loadingGuildSurfaces: Set<GuildSurfaceFetch> = []
+    /// Whose ballot is being written. Distinct from the loading set: a page
+    /// whose questions have arrived is not loading, and a click on it must still
+    /// be able to say it is working.
+    var savingOnboardingGuilds: Set<GuildID> = []
+    /// The connect sheet, presented once at the window root like every other
+    /// raised surface.
+    var gameServerConnect: GameServerConnectRequest?
+    /// The rules sheet, same.
+    var serverRulesGuildID: GuildID?
+    /// Whose agreement is being sent, and how the last one went.
+    ///
+    /// One value rather than a flag plus a result: "sending" and "rejected" are
+    /// states of the same act, and two properties is how a sheet ends up showing
+    /// a spinner beside a refusal.
+    var serverRulesSubmission: ServerRulesSubmission?
+
     // MARK: Revisions
     //
     // Memos key on these rather than on the tables themselves. A revision is one
@@ -217,6 +272,11 @@ final class AppModel {
     /// most often asked for, because the timeline rebuilds its layout input on
     /// every inbound message.
     @ObservationIgnored var mentionCache: (key: MentionMemoKey, value: MentionContext)?
+    /// The Channels & Roles page. Memoized because building it walks every
+    /// channel in the server through the permission gate, and the page is on
+    /// screen while the store publishes for reasons that cannot change it.
+    @ObservationIgnored
+    var channelsAndRolesCache: (key: GuildSurfaceMemoKey, value: ChannelsAndRolesPresentation)?
 
     /// Asks the session for a page of history above what is loaded.
     ///
@@ -245,6 +305,32 @@ final class AppModel {
 
     /// Guilds the account has muted. Their unread never reaches the rail.
     var mutedGuildIDs: Set<GuildID> = []
+
+    /// Channels and categories the reader has opted into, across every server.
+    ///
+    /// **One flat set, not a table per guild**, because that is the shape the
+    /// answer arrives in and the shape every read wants: a browse row asks
+    /// "is this one followed" and gets a hash lookup, where a nested table would
+    /// be two.
+    var followedChannelIDs: Set<ChannelID> = [] { didSet { followRevision &+= 1 } }
+    /// Follows being written. Keyed by channel so two rows can be in flight at
+    /// once and neither blocks the other.
+    var followsInFlight: Set<ChannelID> = [] { didSet { followRevision &+= 1 } }
+    /// Moves when either of the two sets above does.
+    ///
+    /// **A counter rather than the sets themselves in a memo key.** The channel
+    /// list keys on this, and it is read on every evaluation of the sidebar's
+    /// container — hashing a few hundred `ChannelID`s there is the cost a
+    /// revision exists to avoid.
+    ///
+    /// **Bumped by a `didSet` rather than by each writer.** A revision a caller
+    /// has to remember to move is the "memo keyed on the wrong counter" trap
+    /// with an extra step: the cache stays present, correct, and never invalid.
+    /// Assigning to a *different* property from a `didSet` is safe — the
+    /// recursion §5 warns about is assigning to the same one — and `AppModel`'s
+    /// `init` sets none of these, so the launch hazard `AppSettings` documents
+    /// cannot arise here.
+    var followRevision: UInt64 = 0
 
     init() {}
 
@@ -293,6 +379,11 @@ final class AppModel {
     ///    and the reducer answered `.loadingFirstPage` — which is the
     ///    "Loading messages..." that came back seconds after the messages did,
     ///    and why scrolling appeared to fix it: a scroll asks for history.
+    ///
+    /// The channel being **previewed** beside a server's page is protected for
+    /// exactly the same reason: it is on screen, and the only thing that
+    /// re-requests it is a change to `previewedChannelID` that has already
+    /// happened.
     private func touchBox(_ channelID: ChannelID) {
         guard messageBoxes[channelID]?.messages.isEmpty == false else {
             // Nothing to evict later, so nothing to hold a slot with.
@@ -305,7 +396,7 @@ final class AppModel {
         var index = 0
         while boxRecency.count > Self.residentChannelLimit, index < boxRecency.count {
             let candidate = boxRecency[index]
-            guard candidate != selectedChannelID else {
+            guard candidate != selectedChannelID, candidate != previewedChannelID else {
                 index += 1
                 continue
             }
@@ -336,11 +427,13 @@ final class AppModel {
     /// render, and the failure mode — a transcript of people called "Unknown" —
     /// is worse than the memory it would return.
     func relieveMemoryPressure() {
-        let keep = selectedChannelID
-        for channelID in messageBoxes.keys where channelID != keep {
+        // Both of what can be on screen: the conversation, and a channel being
+        // previewed beside a server's own page.
+        let keep: Set<ChannelID> = Set([selectedChannelID, previewedChannelID].compactMap { $0 })
+        for channelID in messageBoxes.keys where !keep.contains(channelID) {
             messageBoxes[channelID]?.evictTranscript()
         }
-        boxRecency = keep.map { [$0] } ?? []
+        boxRecency = boxRecency.filter(keep.contains)
 
         let keptGuild = selectedGuildID
         if members.count > 1 {
@@ -356,6 +449,7 @@ final class AppModel {
         railCache = nil
         sidebarCache = nil
         rosterCache = nil
+        channelsAndRolesCache = nil
         emojiCatalogCache = nil
         stickerCatalogCache = nil
         mentionCache = nil
