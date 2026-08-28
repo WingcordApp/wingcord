@@ -19,6 +19,11 @@ nonisolated enum TimelineMetrics {
     /// Above a run's first message. Runs are what the eye groups by, so the gap
     /// between them has to be clearly larger than the gap inside one.
     static let runSpacing: CGFloat = 10
+    /// The same gap under Compact. Still clearly larger than `lineSpacing`, or
+    /// the runs stop being the thing the eye groups by and the transcript
+    /// becomes one undifferentiated column — which is a denser page that is
+    /// harder to read, not a denser page that fits more.
+    static let compactRunSpacing: CGFloat = 5
     /// Between messages inside one run.
     static let lineSpacing: CGFloat = 2
     /// Below a run's last message.

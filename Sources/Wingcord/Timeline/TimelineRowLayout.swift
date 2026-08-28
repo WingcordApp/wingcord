@@ -190,6 +190,11 @@ nonisolated struct TimelineLayoutEngine: Sendable {
         /// this never touches the store.
         var authors: [UserID: AuthorInfo]
         var calendar: Calendar
+        /// What the reader's preferences contribute — density, whether embeds
+        /// are measured, and the date formatters. Resolved once per presentation
+        /// revision, never read from the store here: this type is `nonisolated`
+        /// and runs off the main actor.
+        var settings: TimelineSettings
     }
 
     struct AuthorInfo: Sendable {
@@ -233,7 +238,7 @@ nonisolated struct TimelineLayoutEngine: Sendable {
             case .daySeparator(let date):
                 rows.append(TimelineRow(
                     height: TimelineMetrics.daySeparatorHeight,
-                    kind: .daySeparator(label: Self.dayLabel(date, calendar: input.calendar))
+                    kind: .daySeparator(label: input.settings.dayLabel(date, calendar: input.calendar))
                 ))
 
             case .unreadDivider:
@@ -329,7 +334,7 @@ nonisolated struct TimelineLayoutEngine: Sendable {
         let contentX = TimelineMetrics.contentInset
         let contentWidth = max(80, input.width - contentX - TimelineMetrics.horizontalMargin)
 
-        var y: CGFloat = item.isRunHead ? TimelineMetrics.runSpacing : TimelineMetrics.lineSpacing
+        var y: CGFloat = item.isRunHead ? input.settings.runSpacing : TimelineMetrics.lineSpacing
         var avatarRect: CGRect?
         var authorRect = CGRect(x: contentX, y: y, width: 0, height: 0)
         var timestampRect = CGRect.zero
@@ -350,7 +355,7 @@ nonisolated struct TimelineLayoutEngine: Sendable {
                 height: TimelineMetrics.headerHeight
             )
             let stampWidth = Self.measure(
-                Self.timestampLabel(message.sentAt, calendar: input.calendar),
+                input.settings.timestampLabel(message.sentAt, calendar: input.calendar),
                 font: input.style.metadataFont
             )
             timestampRect = CGRect(
@@ -431,8 +436,12 @@ nonisolated struct TimelineLayoutEngine: Sendable {
         // Embeds. A link unfurl, a bot's status card, a release note — all the
         // same object with different subsets populated, which is why the layout
         // branches on what is present rather than on the `kind` string.
+        // Skipped WHOLESALE when the reader has turned unfurls off — not laid
+        // out and then hidden. An embed is a framesetting pass over a title, a
+        // markdown description and a field grid; measuring one nobody will see
+        // is the most expensive way to draw nothing.
         var embeds: [EmbedSlot] = []
-        for embed in message.embeds {
+        for embed in input.settings.showsEmbeds ? message.embeds : [] {
             y += TimelineMetrics.attachmentGap
             let slot = EmbedLayoutEngine.layout(
                 embed,
@@ -503,9 +512,9 @@ nonisolated struct TimelineLayoutEngine: Sendable {
             authorName: author?.name ?? "Unknown",
             authorColor: author?.colorValue.map { NSColor(Color(hex: $0)) },
             authorRect: authorRect,
-            timestampText: Self.timestampLabel(message.sentAt, calendar: input.calendar),
+            timestampText: input.settings.timestampLabel(message.sentAt, calendar: input.calendar),
             timestampRect: timestampRect,
-            gutterTimestampText: Self.compactTime(message.sentAt),
+            gutterTimestampText: input.settings.time(message.sentAt),
             isBot: author?.isBot ?? false,
             textBlock: textBlock,
             textOrigin: textOrigin,
@@ -517,7 +526,7 @@ nonisolated struct TimelineLayoutEngine: Sendable {
             reactions: reactions,
             accessibilityLabel: Self.accessibilityLabel(
                 author: author?.name ?? "Unknown",
-                time: Self.compactTime(message.sentAt),
+                time: input.settings.time(message.sentAt),
                 body: textBlock?.text.plainLabel ?? "",
                 attachments: message.attachments.count,
                 stickers: stickers.map(\.sticker.name),
@@ -548,13 +557,13 @@ nonisolated struct TimelineLayoutEngine: Sendable {
         let sentence = SystemMessageText.sentence(for: message, name: name)
         let contentX = TimelineMetrics.contentInset
         let contentWidth = max(80, input.width - contentX - TimelineMetrics.horizontalMargin)
-        let y = TimelineMetrics.runSpacing
+        let y = input.settings.runSpacing
 
         let text = Self.systemText(
             sentence,
             authorID: message.authorID,
             colorValue: author?.colorValue,
-            time: Self.timestampLabel(message.sentAt, calendar: input.calendar),
+            time: input.settings.timestampLabel(message.sentAt, calendar: input.calendar),
             style: input.style
         )
         let block = TimelineTextBlock(text: text, width: contentWidth, style: input.style)
@@ -843,29 +852,6 @@ nonisolated struct TimelineLayoutEngine: Sendable {
         let attributed = NSAttributedString(string: string, attributes: [.font: font])
         let line = CTLineCreateWithAttributedString(attributed)
         return ceil(CTLineGetTypographicBounds(line, nil, nil, nil))
-    }
-
-    static func dayLabel(_ date: Date, calendar: Calendar) -> String {
-        if calendar.isDateInToday(date) { return "Today" }
-        if calendar.isDateInYesterday(date) { return "Yesterday" }
-        return date.formatted(.dateTime.weekday(.wide).day().month(.wide).year())
-    }
-
-    static func timestampLabel(_ date: Date, calendar: Calendar) -> String {
-        if calendar.isDateInToday(date) {
-            return "Today at " + compactTime(date)
-        }
-        if calendar.isDateInYesterday(date) {
-            return "Yesterday at " + compactTime(date)
-        }
-        return date.formatted(.dateTime.day().month().year().hour().minute(.twoDigits))
-    }
-
-    /// `HH:mm`. Minute uses `.twoDigits` deliberately — the default-digits form
-    /// renders minute zero as a bare `0`, so every time on the hour comes out as
-    /// `22:0`.
-    static func compactTime(_ date: Date) -> String {
-        date.formatted(.dateTime.hour().minute(.twoDigits))
     }
 
     private static func accessibilityLabel(

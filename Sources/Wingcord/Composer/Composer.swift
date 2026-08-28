@@ -26,6 +26,9 @@ struct Composer: View {
 
     var send: () -> Void = {}
     var cancelReply: () -> Void = {}
+    /// Replies to the newest message. Returns false when there is nothing to
+    /// reply to, so Up falls through to the text view instead of dying.
+    var replyToLatest: () -> Bool = { false }
     var attach: () -> Void = {}
     /// The `:shortcode` completions for what is currently typed. Empty closes
     /// the list, which is the only thing that does.
@@ -107,7 +110,7 @@ struct Composer: View {
                 // hands them straight back when it is not. Returning `.ignored`
                 // is what lets Return still send and the arrows still move the
                 // caret the rest of the time.
-                .onKeyPress(.upArrow) { moveCompletion(-1) }
+                .onKeyPress(.upArrow) { pressedUp() }
                 .onKeyPress(.downArrow) { moveCompletion(1) }
                 .onKeyPress(.return) { commitSelectedCompletion() }
                 .onKeyPress(.tab) { commitSelectedCompletion() }
@@ -143,6 +146,19 @@ struct Composer: View {
     }
 
     private func dismissCompletions() { dismissedQuery = completionQuery }
+
+    /// Up has three meanings, in this order.
+    ///
+    /// The completion list owns it while it is open. Otherwise, in an EMPTY
+    /// composer it replies to the newest message — where every other chat client
+    /// puts it — and with a draft in progress it is handed back to the text view
+    /// so the caret still moves. Swallowing it in the third case would take the
+    /// arrow key away from anybody editing a multi-line message.
+    private func pressedUp() -> KeyPress.Result {
+        if !visibleCompletions.isEmpty { return moveCompletion(-1) }
+        guard text.isEmpty, replyToLatest() else { return .ignored }
+        return .handled
+    }
 
     private func moveCompletion(_ delta: Int) -> KeyPress.Result {
         guard !visibleCompletions.isEmpty else { return .ignored }

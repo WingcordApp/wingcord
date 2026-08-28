@@ -19,10 +19,33 @@ import Observation
 /// at launch, because `init` does not run `didSet`, and that kills the process
 /// on the first assignment instead. Where a value needs clamping, it is a
 /// computed facade over a private stored property.
+///
+/// **`didSet` RUNS DURING `init`, and reaching for another singleton from one
+/// deadlocks the process.** The same macro rewrite is why: an assignment in
+/// `init` goes through the generated setter, so every `didSet` here fires while
+/// `AppSettings.shared`'s one-time initialisation is still in flight. A `didSet`
+/// that then touches `PresentationRevision.shared` — whose own `init` reads
+/// `AppSettings.shared` back — waits on a `dispatch_once` token this very frame
+/// is holding, and the app hangs at launch with `EXC_BREAKPOINT` inside
+/// `_dispatch_once_wait`.
+///
+/// It is invisible until a stored value differs from its declared default,
+/// because the `guard newValue != oldValue` in each setter returns first. A
+/// reader who had once moved the text slider crashed on every subsequent launch;
+/// a reader who never touched it never saw it.
+///
+/// `isLoaded` is the guard. Nothing that escapes this type may happen until the
+/// initialiser has returned.
 @Observable
 @MainActor
 final class AppSettings {
     static let shared = AppSettings()
+
+    /// False until `init` has finished. See the note above.
+    ///
+    /// `@ObservationIgnored` because nothing observes it and a tracked read
+    /// inside every setter would register dependencies on it across the app.
+    @ObservationIgnored private var isLoaded = false
 
     // MARK: Appearance
 
@@ -42,7 +65,7 @@ final class AppSettings {
             // The drawn surfaces laid their rows out against the previous size,
             // and nothing about the messages changed — so this counter is the
             // only thing that can tell them to re-measure.
-            PresentationRevision.shared.textScaleDidChange()
+            notifyPresentation()
         }
     }
 
@@ -56,9 +79,17 @@ final class AppSettings {
         didSet { defaults.set(skinTone.rawValue, forKey: Key.skinTone) }
     }
 
-    /// Compact mode: tighter message rows, no run spacing.
+    /// Compact mode: tighter runs.
+    ///
+    /// Density, not size — the reader chose a text size and this must not quietly
+    /// override it. Halves the gap above a run and drops the padding below one,
+    /// which on a busy channel is about a screen and a half of recovered height.
     var isCompactMode = false {
-        didSet { defaults.set(isCompactMode, forKey: Key.compactMode) }
+        didSet {
+            guard isCompactMode != oldValue else { return }
+            defaults.set(isCompactMode, forKey: Key.compactMode)
+            notifyPresentation()
+        }
     }
 
     /// Whether the member list is shown by default in a new guild.
@@ -66,16 +97,74 @@ final class AppSettings {
         didSet { defaults.set(showsMemberListByDefault, forKey: Key.showsMemberList) }
     }
 
+    // MARK: Startup
+
+    /// Where the window opens.
+    ///
+    /// Stored as the case name rather than an ordinal, so reordering the enum
+    /// cannot silently change what an existing preference means.
+    var launchDestination: LaunchDestination = .lastChannel {
+        didSet { defaults.set(launchDestination.rawValue, forKey: Key.launchDestination) }
+    }
+
+    /// The conversation the window was showing when it last closed.
+    ///
+    /// Written on every selection and read once, at bootstrap, by
+    /// `restoreNavigation()`. Two scalars rather than a codable pair: they are
+    /// snowflakes, they are written on a navigation, and a JSON round trip per
+    /// click to store sixteen bytes would be the expensive way to do it.
+    private(set) var lastGuildID: UInt64?
+    private(set) var lastChannelID: UInt64?
+
+    /// Records where the reader is. Cheap enough to call on every navigation:
+    /// it writes only when the pair actually moved.
+    func rememberConversation(guildID: UInt64?, channelID: UInt64?) {
+        guard guildID != lastGuildID || channelID != lastChannelID else { return }
+        lastGuildID = guildID
+        lastChannelID = channelID
+        defaults.set(guildID.map(NSNumber.init(value:)), forKey: Key.lastGuild)
+        defaults.set(channelID.map(NSNumber.init(value:)), forKey: Key.lastChannel)
+    }
+
+    // MARK: Notifications
+
+    /// Whether the rail and the Dock carry unread counts.
+    ///
+    /// The DOT survives either way — a reader who turned counts off still wants
+    /// to know a server has something new. What they turned off is the number.
+    var showsUnreadCounts = true {
+        didSet {
+            guard showsUnreadCounts != oldValue else { return }
+            defaults.set(showsUnreadCounts, forKey: Key.showsUnreadCounts)
+        }
+    }
+
     // MARK: Chat
 
     /// 24-hour timestamps regardless of locale.
+    ///
+    /// Defaulted FROM the locale on first run rather than to `false`, so the
+    /// control starts where the reader's region already puts it and only means
+    /// something once they move it.
     var uses24HourTime = false {
-        didSet { defaults.set(uses24HourTime, forKey: Key.use24Hour) }
+        didSet {
+            guard uses24HourTime != oldValue else { return }
+            defaults.set(uses24HourTime, forKey: Key.use24Hour)
+            notifyPresentation()
+        }
     }
 
     /// Whether link previews unfurl.
+    ///
+    /// Off means an embed is never *measured*, not merely never drawn — see
+    /// `TimelineSettings`. A card laid out and then hidden costs its framesetting
+    /// for nothing.
     var showsEmbeds = true {
-        didSet { defaults.set(showsEmbeds, forKey: Key.showsEmbeds) }
+        didSet {
+            guard showsEmbeds != oldValue else { return }
+            defaults.set(showsEmbeds, forKey: Key.showsEmbeds)
+            notifyPresentation()
+        }
     }
 
     /// Whether animated emoji, avatars and stickers play.
@@ -130,6 +219,14 @@ final class AppSettings {
         didSet { defaults.set(showsPerformanceInspector, forKey: Key.showsInspector) }
     }
 
+    /// Tells the drawn surfaces to re-measure — unless the initialiser is still
+    /// running, in which case there is nothing laid out yet to invalidate and
+    /// the call would deadlock. See the note at the top.
+    private func notifyPresentation() {
+        guard isLoaded else { return }
+        PresentationRevision.shared.settingsDidChange()
+    }
+
     private let defaults: UserDefaults
 
     init(defaults: UserDefaults = .standard) {
@@ -141,7 +238,8 @@ final class AppSettings {
         storedTextScale = defaults.object(forKey: Key.textScale) as? Double ?? 1.0
         isCompactMode = defaults.object(forKey: Key.compactMode) as? Bool ?? false
         showsMemberListByDefault = defaults.object(forKey: Key.showsMemberList) as? Bool ?? true
-        uses24HourTime = defaults.object(forKey: Key.use24Hour) as? Bool ?? false
+        uses24HourTime = defaults.object(forKey: Key.use24Hour) as? Bool
+            ?? Locale.current.usesTwentyFourHourClock
         showsEmbeds = defaults.object(forKey: Key.showsEmbeds) as? Bool ?? true
         playsAnimatedContent = defaults.object(forKey: Key.playsAnimated) as? Bool ?? true
         loadsImagesAutomatically = defaults.object(forKey: Key.loadsImages) as? Bool ?? true
@@ -149,8 +247,28 @@ final class AppSettings {
         storedMediaVolume = defaults.object(forKey: Key.mediaVolume) as? Double ?? 1
         mutesMedia = defaults.object(forKey: Key.mutesMedia) as? Bool ?? false
         loopsVideo = defaults.object(forKey: Key.loopsVideo) as? Bool ?? false
+        lastGuildID = (defaults.object(forKey: Key.lastGuild) as? NSNumber)?.uint64Value
+        lastChannelID = (defaults.object(forKey: Key.lastChannel) as? NSNumber)?.uint64Value
+        showsUnreadCounts = defaults.object(forKey: Key.showsUnreadCounts) as? Bool ?? true
         skinTone = (defaults.object(forKey: Key.skinTone) as? Int)
             .flatMap(UnicodeEmoji.SkinTone.init(rawValue:)) ?? .default
+        launchDestination = (defaults.object(forKey: Key.launchDestination) as? String)
+            .flatMap(LaunchDestination.init(rawValue:)) ?? .lastChannel
+        // Last, and after every assignment above: from here on a setter may talk
+        // to the rest of the app.
+        isLoaded = true
+    }
+
+    /// Where a cold launch lands.
+    ///
+    /// Two cases, not three. A third — "ask" — would need a chooser at launch
+    /// that this app does not have, and a preference whose behaviour is missing
+    /// is worse than a preference that is not offered.
+    enum LaunchDestination: String, CaseIterable, Hashable, Sendable {
+        /// Back where you were, if it is still there and still readable.
+        case lastChannel
+        /// The direct-message list.
+        case home
     }
 
     private enum Key {
@@ -162,9 +280,27 @@ final class AppSettings {
         static let playsAnimated = "chat.playsAnimatedContent"
         static let loadsImages = "chat.loadsImagesAutomatically"
         static let showsInspector = "diagnostics.showsPerformanceInspector"
+        static let launchDestination = "startup.launchDestination"
+        static let lastGuild = "startup.lastGuildID"
+        static let lastChannel = "startup.lastChannelID"
+        static let showsUnreadCounts = "notifications.showsUnreadCounts"
         static let skinTone = "expressions.skinTone"
         static let mediaVolume = "media.volume"
         static let mutesMedia = "media.muted"
         static let loopsVideo = "media.loopsVideo"
+    }
+}
+
+extension Locale {
+    /// Whether this locale writes the time as `13:30` rather than `1:30 pm`.
+    ///
+    /// Read once, to seed `uses24HourTime` on first launch. `hourCycle` is the
+    /// locale's own answer; the two twelve-hour cycles differ only in whether
+    /// midnight is 0 or 12, which is not a distinction this app makes.
+    var usesTwentyFourHourClock: Bool {
+        switch hourCycle {
+        case .zeroToEleven, .oneToTwelve: false
+        default: true
+        }
     }
 }

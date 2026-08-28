@@ -108,6 +108,20 @@ nonisolated final class ImageStore: @unchecked Sendable {
     /// request rather than twelve.
     private let inflight = Mutex<[Key: Task<CGImage?, Never>]>([:])
 
+    /// `~/Library/Caches/<bundle id>/Images`, created on demand.
+    ///
+    /// Under the bundle identifier rather than a bare folder, so an app that is
+    /// later sandboxed finds the same path inside its container and a user
+    /// clearing caches by hand finds one directory rather than several.
+    nonisolated static var cacheDirectory: URL {
+        let base = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first
+            ?? URL.temporaryDirectory
+        let identifier = Bundle.main.bundleIdentifier ?? "dev.wingcord.Wingcord"
+        return base
+            .appending(path: identifier, directoryHint: .isDirectory)
+            .appending(path: "Images", directoryHint: .isDirectory)
+    }
+
     private init() {
         thumbnails.totalCostLimit = Budget.thumbnails
         attachments.totalCostLimit = Budget.attachments
@@ -117,10 +131,17 @@ nonisolated final class ImageStore: @unchecked Sendable {
         // A disk cache is what makes a relaunch cheap and a re-decode after an
         // eviction a decode rather than a download. It is deliberately outside
         // the resident budget above: the 512 MB disk half is not memory.
+        // **An explicit directory, not a `diskPath` name.** The `diskPath:`
+        // initialiser resolves a bare relative name against the process's
+        // WORKING DIRECTORY on macOS — so a half-gigabyte cache landed wherever
+        // the app happened to be launched from, which for a development build is
+        // the source tree. The symptom was 45 MB of `wingcord-images/` in the
+        // repository; the first fix was a `.gitignore` entry, which hid it
+        // without moving it. This is the cause.
         configuration.urlCache = URLCache(
             memoryCapacity: 8 * 1024 * 1024,
             diskCapacity: 512 * 1024 * 1024,
-            diskPath: "wingcord-images"
+            directory: Self.cacheDirectory
         )
         configuration.requestCachePolicy = .returnCacheDataElseLoad
         configuration.httpMaximumConnectionsPerHost = 8
@@ -302,6 +323,35 @@ nonisolated final class ImageStore: @unchecked Sendable {
             kCGImageSourceCreateThumbnailWithTransform: true,
         ]
         return CGImageSourceCreateThumbnailAtIndex(source, 0, thumbnailOptions as CFDictionary)
+    }
+
+    // MARK: Storage
+    //
+    // What the settings window can honestly report and act on.
+    //
+    // **The resident caches are deliberately NOT reported.** `NSCache` publishes
+    // its cost *limit* and never its current cost, and there is no supported way
+    // to ask. A figure derived by walking the keys would be a guess presented as
+    // a measurement, which is worse than the budget on its own — so the pane
+    // shows what each cache is allowed and what the process actually occupies,
+    // and says nothing it cannot know.
+
+    /// What that cache is allowed. The disk half is not memory — see `init`.
+    nonisolated var downloadCacheCapacity: Int {
+        session.configuration.urlCache?.diskCapacity ?? 0
+    }
+
+    /// Every decoded image the caches are allowed to hold at once.
+    nonisolated var residentBudget: Int { Budget.total }
+
+    /// Empties the on-disk half.
+    ///
+    /// Distinct from `purge()`, and the difference is what the two rows in the
+    /// settings pane are for: purging frees *memory* and costs a decode, while
+    /// this frees *disk* and costs a download. Someone reclaiming space wants
+    /// this one; someone whose Mac is under pressure wants the other.
+    nonisolated func clearDownloadCache() {
+        session.configuration.urlCache?.removeAllCachedResponses()
     }
 
     // MARK: Pressure

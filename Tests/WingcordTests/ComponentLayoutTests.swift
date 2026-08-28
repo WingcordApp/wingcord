@@ -45,7 +45,8 @@ struct ComponentLayoutTests {
                 mentions: MentionContext(),
                 channelName: "general",
                 authors: [:],
-                calendar: .current
+                calendar: .current,
+                settings: .comfortable
             ),
             cache: &cache
         )

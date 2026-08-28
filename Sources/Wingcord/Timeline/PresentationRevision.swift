@@ -39,11 +39,21 @@ final class PresentationRevision {
     /// answer.
     private(set) var style: MessageTextStyle
 
+    /// What the reader's preferences contribute to a laid-out row — density,
+    /// whether embeds are measured, and the three date formatters.
+    ///
+    /// Here for the same reason the style is: a `DateFormatter` is expensive to
+    /// configure and the transcript formats two or three timestamps per message,
+    /// so building them anywhere but once per revision is doing the work again
+    /// for an answer that cannot have changed.
+    private(set) var timeline: TimelineSettings
+
     private var observers: [NSObjectProtocol] = []
     private var appearanceObservation: NSKeyValueObservation?
 
     private init() {
         style = MessageTextStyle.current()
+        timeline = TimelineSettings.current()
 
         let center = NotificationCenter.default
         // The system text size. On macOS this is the accessibility text-size
@@ -76,15 +86,25 @@ final class PresentationRevision {
     /// single appearance change, and each bump discards every laid-out row in
     /// the app.
     func invalidate() {
-        let rebuilt = MessageTextStyle.current()
-        guard rebuilt != style || value == 0 else { return }
-        style = rebuilt
+        let rebuiltStyle = MessageTextStyle.current()
+        let rebuiltTimeline = TimelineSettings.current()
+        guard rebuiltStyle != style || rebuiltTimeline != timeline || value == 0 else { return }
+        style = rebuiltStyle
+        timeline = rebuiltTimeline
         value &+= 1
     }
 
-    /// Called when the app's own text scale changes.
-    func textScaleDidChange() {
+    /// Called when a setting the drawn surfaces were laid out against changes —
+    /// the app's text scale, message density, whether embeds are measured, the
+    /// clock.
+    ///
+    /// Unguarded, unlike `invalidate()`: it is called from a `didSet` that has
+    /// already established the value moved, and re-deriving both values only to
+    /// compare them would be doing the work twice to learn what the caller
+    /// already knew.
+    func settingsDidChange() {
         style = MessageTextStyle.current()
+        timeline = TimelineSettings.current()
         value &+= 1
     }
 }

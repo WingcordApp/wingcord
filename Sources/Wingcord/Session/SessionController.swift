@@ -408,6 +408,26 @@ final class SessionController {
 
     private func restoreNavigation() {
         guard model.selectedChannelID == nil else { return }
+
+        let settings = AppSettings.shared
+        // "Direct messages" is the ABSENCE of a guild selection, which is
+        // already the state this function was called in — so there is nothing to
+        // restore and nothing to pick.
+        guard settings.launchDestination == .lastChannel else { return }
+
+        // Back where the reader was, if it is still there and still readable.
+        // Both conditions matter: a channel can be deleted between launches, and
+        // a role can be taken away — and either one, unchecked, opens the window
+        // on a conversation that renders as an error.
+        if let channelRaw = settings.lastChannelID {
+            let channelID = ChannelID(rawValue: channelRaw)
+            if model.canOpen(channelID) {
+                model.selectedGuildID = settings.lastGuildID.map(GuildID.init(rawValue:))
+                model.selectChannel(channelID)
+                return
+            }
+        }
+
         // The first guild in rail order with a channel the reader can actually
         // open. Not simply the first guild: landing on a server whose every
         // channel is private shows an empty window on launch.

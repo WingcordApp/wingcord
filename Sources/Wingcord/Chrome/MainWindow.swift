@@ -151,3 +151,31 @@ private struct NowBarContainer: View {
         .equatable()
     }
 }
+
+// MARK: - The Dock badge
+
+/// Mirrors the rail's mention total onto the Dock icon.
+///
+/// A modifier on the window root rather than a subscription in the model: the
+/// count is a *projection*, and the only thing that can tell you it moved is a
+/// view that reads it. `onChange` fires when the memoized value actually
+/// differs, so a presence flush that moved nobody costs one integer comparison.
+///
+/// `nil`, not `""` — an empty string still draws the red oval.
+private struct DockBadgeModifier: ViewModifier {
+    @Environment(AppModel.self) private var model
+
+    func body(content: Content) -> some View {
+        content
+            .onChange(of: model.totalMentionCount, initial: true) { _, count in
+                NSApp.dockTile.badgeLabel = count > 0 ? String(count) : nil
+            }
+    }
+}
+
+extension View {
+    /// Applied once, at the window root.
+    func mirrorsUnreadCountOnDock() -> some View {
+        modifier(DockBadgeModifier())
+    }
+}

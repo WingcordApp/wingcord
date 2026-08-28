@@ -276,7 +276,8 @@ struct RowPainterRenderTests {
                         isBot: false
                     )
                 ],
-                calendar: .current
+                calendar: .current,
+                settings: .comfortable
             ),
             cache: &cache
         )
@@ -327,7 +328,8 @@ struct TimelineLayoutTests {
             mentions: MentionContext(),
             channelName: "general",
             authors: [:],
-            calendar: .current
+            calendar: .current,
+                settings: .comfortable
         )
         _ = engine.layout(input, cache: &cache)
         #expect(cache.count == 1)
@@ -360,7 +362,7 @@ struct TimelineLayoutTests {
                 TimelineLayoutEngine.Input(
                     items: items, width: width, style: style,
                     mentions: MentionContext(), channelName: "general",
-                    authors: [:], calendar: .current
+                    authors: [:], calendar: .current, settings: .comfortable
                 ),
                 cache: &cache
             )[0]

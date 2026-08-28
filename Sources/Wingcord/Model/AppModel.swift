@@ -71,7 +71,9 @@ final class AppModel {
     /// The last channel visited in each guild, so switching back returns where
     /// you were rather than to the top of the list.
     var lastChannelByGuild: [GuildID: ChannelID] = [:]
-    var isMemberListShown = true
+    /// Seeded from the reader's preference. A per-guild override still lives in
+    /// the toolbar toggle; this is only where a fresh window starts.
+    var isMemberListShown = AppSettings.shared.showsMemberListByDefault
     /// Whether a direct message shows the other person's profile beside it.
     ///
     /// Its own flag rather than sharing the member list's: a DM has no member

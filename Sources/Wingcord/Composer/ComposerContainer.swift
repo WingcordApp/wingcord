@@ -38,6 +38,7 @@ struct ComposerContainer: View {
             ),
             send: send,
             cancelReply: { model.mutateBox(channelID) { $0.replyingTo = nil } },
+            replyToLatest: { model.replyToLatestMessage() },
             attach: {},
             completions: completions,
             completionQuery: completionQuery ?? "",

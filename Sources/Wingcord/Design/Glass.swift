@@ -196,6 +196,20 @@ extension View {
     func softScrollEdgesHorizontal() -> some View {
         scrollEdgeEffectStyle(.soft, for: [.leading, .trailing])
     }
+
+    /// `.scrollEdgeEffectStyle(.hard, for: edges)`
+    ///
+    /// **`.soft` renders nothing when the bar carries no material of its own.**
+    /// Measured, over a bar that is a floating capsule on an otherwise
+    /// transparent row — which is exactly what the settings toolbar is: content
+    /// passing underneath stays sharp and fully lit, because what `.soft` draws
+    /// is the bar's own material feathered downward, and there is no material to
+    /// feather. `.hard` synthesises the band instead, which is the whole reason
+    /// the two styles are not interchangeable. A bar that *does* carry a
+    /// material wants `.soft`.
+    func hardScrollEdges(_ edges: Edge.Set) -> some View {
+        scrollEdgeEffectStyle(.hard, for: edges)
+    }
 }
 
 // MARK: - Floating bars

@@ -72,6 +72,9 @@ final class TimelineCoordinator: NSObject {
     private var items: [TimelineItem] = []
     private var layoutWidth: CGFloat = 0
     private var style: MessageTextStyle
+    /// The settings half of the presentation, refreshed with the style — they
+    /// move together and are invalidated by the same counter.
+    private var settings: TimelineSettings = PresentationRevision.shared.timeline
     private var presentationRevision: UInt64 = 0
 
     /// Laid-out message rows, reused across passes. Swept by the engine.
@@ -312,6 +315,7 @@ final class TimelineCoordinator: NSObject {
         if presentationRevision != self.presentationRevision {
             self.presentationRevision = presentationRevision
             style = PresentationRevision.shared.style
+            settings = PresentationRevision.shared.timeline
             canvas?.style = style
             rowCache.removeAll(keepingCapacity: true)
             if !items.isEmpty { runLayout(preservingPosition: true) }
@@ -434,7 +438,8 @@ final class TimelineCoordinator: NSObject {
             channelName: channelID.flatMap { model.channelIndex[$0] }
                 .map { model.displayName(of: $0) } ?? "",
             authors: model.authorInfo(for: items),
-            calendar: .current
+            calendar: .current,
+            settings: settings
         )
 
         isApplyingUpdate = true
@@ -668,6 +673,13 @@ final class TimelineCoordinator: NSObject {
 
     private func visibleImageRequests(canvas: TimelineCanvasView) -> [ImageRequest] {
         let scale = canvas.window?.backingScaleFactor ?? 2
+        // Avatars, emoji and stickers are structural — a transcript without them
+        // is unreadable rather than merely plainer — so the preference governs
+        // the two buckets that are actually expensive: a message's attachments
+        // and an embed's artwork. Stickers are exempt: a sticker IS the message,
+        // so suppressing it leaves a row that says nothing. Both still open at
+        // full size in the viewer, which keeps "off" a saving rather than a wall.
+        let loadsArtwork = AppSettings.shared.loadsImagesAutomatically
         var requests: [ImageRequest] = []
         var seen = Set<ImageStore.Key>()
 
@@ -719,7 +731,7 @@ final class TimelineCoordinator: NSObject {
             // image, a footer icon. The painter only peeks, so anything nobody
             // prefetches never appears.
             for image in row.embeds.lazy.flatMap(\.images) {
-                guard let url = image.url else { continue }
+                guard loadsArtwork, let url = image.url else { continue }
                 let bucket: ImageStore.Bucket = image.isArtwork ? .artwork : .thumbnail
                 let key = ImageStore.Key(
                     url: url,
@@ -790,7 +802,7 @@ final class TimelineCoordinator: NSObject {
             }
 
             for slot in row.attachments where !slot.isSpoiler {
-                guard let url = slot.url else { continue }
+                guard loadsArtwork, let url = slot.url else { continue }
                 let key = ImageStore.Key(
                     url: url,
                     maximumPixelSize: Int((slot.decodeWidth * scale).rounded(.up))

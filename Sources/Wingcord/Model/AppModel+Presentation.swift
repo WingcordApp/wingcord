@@ -10,6 +10,10 @@ struct RailMemoKey: Hashable, Sendable {
     var roleRevision: UInt64
     var selectedGuildID: GuildID?
     var expandedFolders: Set<UInt64>
+    /// Whether badges are drawn at all. In the KEY, not merely read in the
+    /// builder: a memo whose inputs it does not carry is a memo that keeps
+    /// answering with the badges the reader just turned off.
+    var showsUnreadCounts: Bool
 }
 
 struct SidebarMemoKey: Hashable, Sendable {
@@ -49,7 +53,8 @@ extension AppModel {
             revision: railRevision,
             roleRevision: roleRevision,
             selectedGuildID: selectedGuildID,
-            expandedFolders: expandedFolderIDs
+            expandedFolders: expandedFolderIDs,
+            showsUnreadCounts: AppSettings.shared.showsUnreadCounts
         )
         // Reading `guilds` and `folders` here — not inside the builder — is what
         // registers the dependency on a cache hit. Arrays and dictionaries are
@@ -421,7 +426,26 @@ extension AppModel {
         )
     }
 
+    /// Every mention the rail is currently showing, for the Dock icon.
+    ///
+    /// Summed over `railItems` rather than walked over every channel again: that
+    /// projection is memoized and already did the walk, so this is an add per
+    /// server. Zero when the reader has turned counts off, which is what makes
+    /// the Dock agree with the rail instead of contradicting it.
+    var totalMentionCount: Int {
+        railItems.reduce(0) { running, item in
+            switch item {
+            case .guild(let guild): running + guild.mentionCount
+            case .folder(let folder): running + folder.guilds.reduce(0) { $0 + $1.mentionCount }
+            }
+        }
+    }
+
     private func guildBadge(for guildID: GuildID) -> (mentions: Int, unread: Bool, muted: Bool) {
+        // The dot survives; only the COUNT is suppressed. A reader who turned
+        // counts off still wants to know a server has something new — what they
+        // turned off is the number, which on a busy account is a wall of digits.
+        let countsBadges = AppSettings.shared.showsUnreadCounts
         var mentions = 0
         var unread = false
         for channelID in channelIndex.channelIDs(inGuild: guildID) {
@@ -437,7 +461,7 @@ extension AppModel {
             mentions += state.mentions
             unread = unread || state.unread
         }
-        return (mentions, unread, false)
+        return (countsBadges ? mentions : 0, unread, false)
     }
 
     // MARK: Naming and assets
@@ -498,9 +522,11 @@ extension AppModel {
     func selectChannel(_ channelID: ChannelID) {
         guard selectedChannelID != channelID, canOpen(channelID) else { return }
         selectedChannelID = channelID
-        if let guildID = channelIndex.guildID(of: channelID) {
-            lastChannelByGuild[guildID] = channelID
-        }
+        let guildID = channelIndex.guildID(of: channelID)
+        if let guildID { lastChannelByGuild[guildID] = channelID }
+        AppSettings.shared.rememberConversation(
+            guildID: guildID?.rawValue, channelID: channelID.rawValue
+        )
     }
 
     private func firstReadableChannel(inGuild guildID: GuildID) -> ChannelID? {
