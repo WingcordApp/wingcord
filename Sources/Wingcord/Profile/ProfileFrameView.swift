@@ -33,6 +33,37 @@ import WingcordCore
 /// container promotes its glass above ordinary siblings and renders it itself —
 /// §4 rule 4 — so a frame joined to one would draw over the card's own controls
 /// instead of around them.
+/// Sizes one layer according to the edge it hangs from.
+///
+/// A branch is safe here where it usually is not: a layer's anchor comes from
+/// the payload and cannot change while the frame is on screen, so the two arms
+/// are never swapped for the same `id` and no image is ever torn down.
+private struct FrameLayerFit: ViewModifier {
+    var anchor: ProfileFrame.Anchor
+    var width: CGFloat
+
+    @ViewBuilder
+    func body(content: Content) -> some View {
+        if anchor == .center {
+            // **No aspect at all.** A border runs the whole height of a card
+            // whose height nothing here knows; its artwork is authored uniform
+            // along y precisely so it can be pulled to fit.
+            content
+                .frame(width: width)
+                .frame(maxHeight: .infinity)
+        } else {
+            // A staple is a cap and keeps its own aspect, hanging from the edge
+            // it names. The width is the card's, and the layer PNG's whole
+            // authored width maps onto it — 1200 + 56 + 56 = 1312, the pixel
+            // width of every layer captured so far.
+            content
+                .aspectRatio(contentMode: .fit)
+                .frame(width: width)
+                .frame(maxHeight: .infinity, alignment: anchor == .top ? .top : .bottom)
+        }
+    }
+}
+
 struct ProfileFrameView: View {
     var frame: ProfileFrame
     /// The card's width. The only input the layout needs.
@@ -56,16 +87,15 @@ struct ProfileFrameView: View {
                 RemoteImage(url: layer.url, side: layout.layerWidth, bucket: .artwork) {
                     Color.clear
                 }
-                // The artwork's own aspect decides the height. The width is
-                // the card's, and the layer PNG's whole authored width maps
-                // onto it — 1200 + 56 + 56 = 1312, which is the pixel width of
-                // both of Dark Roses' layers.
-                .aspectRatio(contentMode: .fit)
-                .frame(width: layout.layerWidth)
-                .frame(
-                    maxHeight: .infinity,
-                    alignment: layer.anchor == .top ? .top : .bottom
-                )
+                // **A centre-anchored layer stretches; the others keep their
+                // aspect.** A border runs the whole height of a card whose
+                // height nothing here knows, so its artwork is authored uniform
+                // along y and is meant to be pulled to fit. A staple is a cap
+                // and hangs from the edge it names at its own aspect — the
+                // width is the card's, and the layer PNG's whole authored width
+                // maps onto it: 1200 + 56 + 56 = 1312, the pixel width of every
+                // layer captured so far.
+                .modifier(FrameLayerFit(anchor: layer.anchor, width: layout.layerWidth))
             }
         }
         .padding(EdgeInsets(

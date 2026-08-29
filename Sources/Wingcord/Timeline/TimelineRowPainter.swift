@@ -162,15 +162,20 @@ nonisolated enum TimelineRowPainter {
         }
 
         if row.isRunHead {
+            // The face carries into the transcript; the colour does not — a
+            // role colour a server chose beats a colour its owner did. Drawn in
+            // the same face the layout measured, or the badge beside it lands
+            // in the wrong place.
             drawText(
                 row.authorName,
-                font: style.authorFont,
+                font: row.authorFace ?? style.authorFont,
                 color: row.authorColor ?? style.primaryColor,
                 at: CGPoint(
                     x: rowFrame.minX + row.authorRect.minX,
                     y: rowFrame.minY + row.authorRect.minY
                 ),
                 maxWidth: row.authorRect.width + 8,
+                tracking: row.authorTracking,
                 context: context
             )
 
@@ -383,6 +388,11 @@ nonisolated enum TimelineRowPainter {
     /// paragraph style went with it — allocating one per call, on every label of
     /// every row of every repaint, bought exactly nothing.
     @discardableResult
+    /// - Parameter tracking: extra letter spacing, in points. **Zero costs
+    ///   nothing** — the attribute is left off entirely rather than set to 0,
+    ///   because an attributed string with one more key is one more entry for
+    ///   Core Text to walk on every name in a five-hundred-row roster. Only the
+    ///   display-name faces that Discord tracks ever pass one.
     static func drawText(
         _ string: String,
         font: NSFont,
@@ -390,12 +400,15 @@ nonisolated enum TimelineRowPainter {
         at point: CGPoint,
         maxWidth: CGFloat,
         alignment: NSTextAlignment = .left,
+        tracking: CGFloat = 0,
         context: CGContext
     ) -> CGFloat {
         guard !string.isEmpty else { return 0 }
+        var attributes: [NSAttributedString.Key: Any] = [.font: font, .foregroundColor: color]
+        if tracking != 0 { attributes[.kern] = tracking }
         let line = CTLineCreateWithAttributedString(NSAttributedString(
             string: string,
-            attributes: [.font: font, .foregroundColor: color]
+            attributes: attributes
         ))
         var ascent: CGFloat = 0
         CTLineGetTypographicBounds(line, &ascent, nil, nil)

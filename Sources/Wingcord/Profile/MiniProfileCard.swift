@@ -76,16 +76,6 @@ struct MiniProfileCard: View {
     /// flyout has to know it in order not to reach past the card's edge.
     private var contentWidth: CGFloat { width - Spacing.margin * 2 }
 
-    /// The display name is **not** tinted by role, and that is a correction.
-    ///
-    /// Checked against Discord for the same member: their top coloured role is
-    /// a yellow "Admin", and Discord draws the name in the profile's own
-    /// treatment rather than in yellow. Colouring it by role also says the same
-    /// thing twice — the role chips are directly beneath, each with its own
-    /// swatch — and a saturated name over a themed ground is the pairing most
-    /// likely to be unreadable, because neither colour was chosen with the
-    /// other in mind.
-    private var nameStyle: AnyShapeStyle { AnyShapeStyle(InkColor.primary) }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -276,10 +266,12 @@ struct MiniProfileCard: View {
             // them off the handle underneath separates a person from the thing
             // they chose to be identified by.
             HStack(spacing: Spacing.tight) {
-                Text(profile.displayName)
-                    .font(.system(.title2, weight: .bold))
-                    .foregroundStyle(nameStyle)
-                    .lineLimit(1)
+                StyledDisplayName(
+                    text: profile.displayName,
+                    style: profile.displayNameStyle,
+                    textStyle: .title2,
+                    weight: .bold
+                )
                 if let tag = profile.guildTag {
                     GuildTagChip(tag: tag)
                 }

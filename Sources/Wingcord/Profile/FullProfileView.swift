@@ -230,10 +230,12 @@ struct FullProfileView: View {
     private var identity: some View {
         VStack(alignment: .leading, spacing: Spacing.tight) {
             HStack(spacing: Spacing.base) {
-                Text(profile.displayName)
-                    .font(.system(.title, weight: .bold))
-                    .foregroundStyle(InkColor.primary)
-                    .lineLimit(1)
+                StyledDisplayName(
+                    text: profile.displayName,
+                    style: profile.displayNameStyle,
+                    textStyle: .title,
+                    weight: .bold
+                )
                 // The marks are worn beside the name, the same as on the card
                 // and the same as in the member list.
                 if let tag = profile.guildTag {

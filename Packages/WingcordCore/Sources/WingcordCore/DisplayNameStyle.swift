@@ -1,0 +1,171 @@
+import CoreGraphics
+import Foundation
+
+/// The face a styled display name is set in.
+///
+/// **The raw values are Discord's font ids, and they are NOT the order the
+/// picker shows.** The picker leads with gg sans and Tempo; the ids run in the
+/// order the fonts shipped, and four of them — 2, 5, 9 and 11 — are unassigned.
+/// Twelve faces across a 1-16 range is why this is an enum with holes rather
+/// than an index into an array: a lookup by position draws the wrong face the
+/// day Discord fills one in, and one that force-unwraps crashes on it.
+///
+/// Each case names a **PostScript** name rather than a family. Six of the files
+/// carry the weight in their family string — `MuseoModerno SemiBold`,
+/// `Orbitron SemiBold` — so family matching misbehaves, and Medieval's family is
+/// `Néo-castel :-)`, non-ASCII with a smiley in it.
+public enum DisplayNameFont: Int, Hashable, Sendable, Codable, CaseIterable {
+    /// The app's own face. `font_id: 1` means "no custom font", not "bundle
+    /// Discord's" — gg sans is licensed to Discord and is not ours to ship.
+    case `default` = 1
+    case sakura = 3
+    case jellybean = 4
+    case modern = 6
+    case medieval = 7
+    case eightBit = 8
+    case vampyre = 10
+    case tempo = 12
+    case monkeyBars = 13
+    case mainframe = 14
+    case headbang = 15
+    case journal = 16
+
+    /// The PostScript name inside the bundled file. Nil for `.default`, which
+    /// resolves to the system face.
+    public var postScriptName: String? {
+        switch self {
+        case .default: nil
+        case .sakura: "CherryBombOne-Regular"
+        case .jellybean: "Chicle-Regular"
+        case .modern: "MuseoModerno-Medium"
+        case .medieval: "Neo-castel-:-"
+        case .eightBit: "PixelifySans-Regular"
+        case .vampyre: "Sinistre-Regular"
+        case .tempo: "ZillaSlab-SemiBold"
+        case .monkeyBars: "PlaypenSans-Bold"
+        case .mainframe: "Orbitron-Bold"
+        case .headbang: "NewRocker-Regular"
+        case .journal: "Kalam-Bold"
+        }
+    }
+
+    /// The file this face ships in, without its extension.
+    ///
+    /// Kept apart from `postScriptName` because they genuinely differ — the file
+    /// is `Neo-castel`, the PostScript name is `Neo-castel-:-` — and because
+    /// registration looks one up and lookup uses the other.
+    public var fileName: String? {
+        switch self {
+        case .default: nil
+        case .medieval: "Neo-castel"
+        default: postScriptName
+        }
+    }
+
+    /// Extra tracking Discord applies to this face, in ems.
+    ///
+    /// **Part of the design, not a nicety.** These are per-family corrections in
+    /// Discord's own stylesheet; a name set without them reads as too tight in
+    /// the display faces that carry one.
+    public var letterSpacing: CGFloat {
+        switch self {
+        case .sakura: 0.04
+        case .tempo, .mainframe: 0.03
+        case .medieval, .eightBit: 0.02
+        case .modern, .vampyre: 0.01
+        case .default, .jellybean, .monkeyBars, .headbang, .journal: 0
+        }
+    }
+
+    /// Whether this face sits a point low on a Core Text baseline.
+    ///
+    /// Discord nudges exactly these two by `translateY(-1px)` **under WebKit**,
+    /// and leaves them alone under Blink. macOS is the same text stack Safari
+    /// draws with, so the WebKit branch is the one that applies here — the
+    /// correction is for how Core Text places these faces, not for a browser.
+    public var liftsBaseline: Bool {
+        switch self {
+        case .sakura, .medieval: true
+        default: false
+        }
+    }
+}
+
+/// The effect a styled display name is painted with.
+///
+/// Raw values are Discord's effect ids, **1-indexed in the order the picker
+/// shows them** — which for effects is also the id order, unlike the fonts.
+public enum DisplayNameEffect: Int, Hashable, Sendable, Codable, CaseIterable {
+    case solid = 1
+    case gradient = 2
+    case neon = 3
+    case toon = 4
+    case pop = 5
+    case gummy = 6
+    case prism = 7
+
+    /// How many colours this effect is chosen with, confirmed against the wells
+    /// each picker draws.
+    ///
+    /// **Solid's answer is 1 and its payload may still be empty**, which is a
+    /// real state rather than a malformed one — see `DisplayNameStyle.colors`.
+    /// Everything else derives its whole palette from `colors[0]`.
+    public var colorCount: Int {
+        switch self {
+        case .solid, .neon, .toon, .pop: 1
+        case .gradient: 2
+        case .gummy: 4
+        case .prism: 5
+        }
+    }
+
+    /// Whether this effect moves at all. Solid and Gradient are static, and
+    /// knowing that up front is what lets the renderer skip building an
+    /// animation it would only add and never run.
+    public var isAnimated: Bool {
+        switch self {
+        case .solid, .gradient: false
+        case .neon, .toon, .pop, .gummy, .prism: true
+        }
+    }
+}
+
+/// How an account has chosen to have its display name drawn.
+///
+/// `user.display_name_styles` is `{font_id, effect_id, colors}`. All three parts
+/// are independent: a font with no effect, an effect in the default face, or
+/// both. **Nil is not the same as `.solid` with no colours** — nil means the
+/// account set nothing and the name is drawn by the ordinary label.
+public struct DisplayNameStyle: Hashable, Sendable, Codable {
+    public let font: DisplayNameFont
+    public let effect: DisplayNameEffect
+    /// The chosen colours, as 24-bit RGB, in the order the picker holds them.
+    ///
+    /// **Empty is a real state and must not be filled in.** Discord's own save
+    /// path writes `[]` when the effect is Solid and the chosen colour is the
+    /// default, meaning "styled font, default colour". A renderer that requires
+    /// `colors[0]` draws nothing at all for those accounts.
+    public let colors: [UInt32]
+
+    public init(font: DisplayNameFont, effect: DisplayNameEffect, colors: [UInt32]) {
+        self.font = font
+        self.effect = effect
+        self.colors = colors
+    }
+
+    /// Whether there is anything here worth drawing differently.
+    ///
+    /// The default face with a Solid effect and no colours is what an account
+    /// that has touched the picker and changed nothing looks like, and it is
+    /// indistinguishable from having no style at all. Answering that here keeps
+    /// every surface from having to know it.
+    public var isPlain: Bool {
+        font == .default && effect == .solid && colors.isEmpty
+    }
+
+    /// The palette every derived shade comes from, or nil when the account chose
+    /// no colour. Resolved once by the caller and never inside a draw.
+    public var palette: DisplayNamePalette? {
+        colors.first.map(DisplayNamePalette.init(main:))
+    }
+}

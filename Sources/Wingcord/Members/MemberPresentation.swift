@@ -33,6 +33,17 @@ struct MemberEntry: Hashable, Sendable, Identifiable {
     var avatarURL: URL?
     var monogram: String
     var decorationURL: URL?
+    /// The face this person's display name is set in, or nil for the app's own.
+    ///
+    /// **The face only, not the whole style.** A roster holds five hundred of
+    /// these and the effect's colours are needed for exactly one row at a time —
+    /// the hovered one — which the store can answer directly. Carrying the
+    /// palette here would put a heap array on every row to serve none of them.
+    ///
+    /// Discord's own dialog says colours and effects do not appear in servers,
+    /// and this is what that means in practice: the face carries over, the
+    /// colour stays the role's.
+    var displayNameFont: DisplayNameFont?
     var status: PresenceStatus
     var isOnMobile: Bool
     /// The activity or custom-status line beneath the name. Nil collapses the

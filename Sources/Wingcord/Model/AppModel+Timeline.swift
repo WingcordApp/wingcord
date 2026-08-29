@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import WingcordCore
 
@@ -42,7 +43,14 @@ extension AppModel {
     /// Resolved here, once per layout, rather than inside the engine — the
     /// engine is `nonisolated` and must never reach into the store, and doing
     /// the lookups once per page beats doing them once per row.
-    func authorInfo(for items: [TimelineItem]) -> [UserID: TimelineLayoutEngine.AuthorInfo] {
+    /// - Parameter authorFont: the face names are set in, so a styled one can be
+    ///   resolved at the same size. Taken rather than rebuilt, because there is
+    ///   exactly one right answer and `MessageTextStyle` already holds it.
+    func authorInfo(
+        for items: [TimelineItem],
+        authorFont: NSFont
+    ) -> [UserID: TimelineLayoutEngine.AuthorInfo] {
+        let authorPointSize = authorFont.pointSize
         // Hoisted for the reason the roster's is: an observable read per author
         // is a tracked access per row of the page, for a value that cannot move
         // while one is being laid out.
@@ -67,6 +75,10 @@ extension AppModel {
                 continue
             }
             let member = guildID.flatMap { members[$0]?[userID] }
+            let styleFont = user.decoration?.displayNameStyle?.font
+            let face = styleFont.flatMap {
+                DisplayNameFontRegistry.font($0, size: authorPointSize)
+            }
             result[userID] = TimelineLayoutEngine.AuthorInfo(
                 name: member?.resolvedName(user: user) ?? user.preferredName,
                 colorValue: member
@@ -80,7 +92,12 @@ extension AppModel {
                 monogram: user.monogram,
                 decorationURL: user.decoration?.avatarDecorationHash
                     .flatMap { CDN.avatarDecoration(hash: $0) },
-                isBot: user.isBot
+                isBot: user.isBot,
+                // Resolved here, on the main actor, and only for authors
+                // actually on screen — which is what keeps a face off the
+                // registry until somebody who wears it is visible.
+                nameFace: face,
+                nameTracking: face == nil ? 0 : (styleFont?.letterSpacing ?? 0) * authorPointSize
             )
         }
         return result

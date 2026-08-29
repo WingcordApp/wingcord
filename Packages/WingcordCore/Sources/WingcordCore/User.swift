@@ -228,6 +228,13 @@ public final class UserDecoration: Hashable, Sendable, Codable {
     /// The strip drawn behind a whole roster row, and the colour it grounds
     /// that row with.
     public let nameplate: Nameplate?
+    /// The face, effect and colours their display name is drawn with.
+    ///
+    /// Nil for nearly everyone, and nil is also what a style that asked for
+    /// nothing decodes to — see `DisplayNameStyle.isPlain`. Discord's own dialog
+    /// says colours and effects do not appear in servers, so this reaches the
+    /// profile surfaces and no roster row.
+    public let displayNameStyle: DisplayNameStyle?
     public let bannerHash: String?
     /// The profile accent, as Discord sends it: a 24-bit integer, or nil when
     /// unset. Nil and zero are different states and must not be collapsed —
@@ -272,6 +279,7 @@ public final class UserDecoration: Hashable, Sendable, Codable {
     public init(
         avatarDecorationHash: String? = nil,
         nameplate: Nameplate? = nil,
+        displayNameStyle: DisplayNameStyle? = nil,
         bannerHash: String? = nil,
         accentColor: UInt32? = nil,
         bio: String? = nil,
@@ -291,6 +299,7 @@ public final class UserDecoration: Hashable, Sendable, Codable {
     ) {
         self.avatarDecorationHash = avatarDecorationHash
         self.nameplate = nameplate
+        self.displayNameStyle = displayNameStyle
         self.bannerHash = bannerHash
         self.accentColor = accentColor
         self.bio = bio
@@ -325,6 +334,7 @@ public final class UserDecoration: Hashable, Sendable, Codable {
             avatarDecorationHash: incoming.avatarDecorationHash
                 ?? existing.avatarDecorationHash,
             nameplate: incoming.nameplate ?? existing.nameplate,
+            displayNameStyle: incoming.displayNameStyle ?? existing.displayNameStyle,
             bannerHash: incoming.bannerHash ?? existing.bannerHash,
             accentColor: incoming.accentColor ?? existing.accentColor,
             bio: incoming.bio ?? existing.bio,
@@ -364,7 +374,8 @@ public final class UserDecoration: Hashable, Sendable, Codable {
     /// unconditionally and attaches it to every user has undone the entire point
     /// of the type, so it asks this first.
     public var isEmpty: Bool {
-        avatarDecorationHash == nil && nameplate == nil && bannerHash == nil
+        avatarDecorationHash == nil && nameplate == nil && displayNameStyle == nil
+            && bannerHash == nil
             && accentColor == nil && bio == nil && primaryGuildTag == nil
             && (themeColorValues?.isEmpty ?? true) && badges.isEmpty
             && profileEffectSKU == nil && profileFrameSKU == nil && pronouns == nil
@@ -376,6 +387,7 @@ public final class UserDecoration: Hashable, Sendable, Codable {
         lhs === rhs
             || (lhs.avatarDecorationHash == rhs.avatarDecorationHash
                 && lhs.nameplate == rhs.nameplate
+                && lhs.displayNameStyle == rhs.displayNameStyle
                 && lhs.bannerHash == rhs.bannerHash
                 && lhs.accentColor == rhs.accentColor
                 && lhs.bio == rhs.bio
@@ -397,6 +409,7 @@ public final class UserDecoration: Hashable, Sendable, Codable {
     public func hash(into hasher: inout Hasher) {
         hasher.combine(avatarDecorationHash)
         hasher.combine(nameplate)
+        hasher.combine(displayNameStyle)
         hasher.combine(bannerHash)
         hasher.combine(accentColor)
         hasher.combine(themeColorValues)

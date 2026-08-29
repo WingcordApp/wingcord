@@ -35,6 +35,10 @@ struct ProfileRequest: Equatable, Identifiable {
 struct ProfilePresentation: Equatable, Sendable {
     var userID: UserID
     var displayName: String
+    /// The face, effect and colours the name is drawn with. Nil for nearly
+    /// everyone, and nil is what keeps them on the plain label — see
+    /// `StyledDisplayName`.
+    var displayNameStyle: DisplayNameStyle?
     var handle: String
     /// The per-guild nickname, when it differs from the display name. Shown as a
     /// second line rather than replacing the first: a nickname that silently

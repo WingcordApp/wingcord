@@ -83,13 +83,25 @@ public struct ProfileFrame: Hashable, Sendable {
     }
 
     /// **Strings, not integers.** The unofficial documentation types these as
-    /// enums with integer cases; the live payload sends `"top"`, `"bottom"`,
-    /// `"front"` and `"staple"` as strings. The capture wins, and both fall
-    /// back rather than failing the decode — an unrecognised anchor should cost
-    /// one misplaced picture, never the whole frame.
+    /// enums with integer cases; the live payload sends them as strings. The
+    /// capture wins, and an unrecognised value falls back rather than failing
+    /// the decode — it should cost one misplaced picture, never the whole frame.
     public enum Anchor: String, Hashable, Sendable {
         case top
         case bottom
+        /// Runs the whole height of the composition, **stretched**.
+        ///
+        /// Captured from Kawaii Cat, whose `type: "border"` layer is anchored
+        /// `center` and is 1312x2528 — far taller than any card, so it cannot be
+        /// fitted. Measured, the artwork is **uniform along its whole height**:
+        /// identical opaque pixel count and identical x-extent in every band
+        /// down all 2528 rows. It is two vertical rails and nothing else, so
+        /// stretching it distorts nothing — the corners and caps are the top and
+        /// bottom staples drawn over it.
+        ///
+        /// Fitting one instead is what drew two pale rails down the middle of a
+        /// card and past both its ends.
+        case center
     }
 
     public enum Order: String, Hashable, Sendable {

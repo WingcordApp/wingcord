@@ -134,6 +134,7 @@ extension AppModel {
                 monogram: user.monogram,
                 decorationURL: user.decoration?.avatarDecorationHash
                     .flatMap { CDN.avatarDecoration(hash: $0) },
+                displayNameFont: user.decoration?.displayNameStyle?.font,
                 status: status,
                 isOnMobile: presence?.isOnMobile ?? false,
                 subtitle: presence?.primaryActivity?.rowSubtitle
@@ -240,6 +241,7 @@ extension AppModel {
                 monogram: user.monogram,
                 decorationURL: user.decoration?.avatarDecorationHash
                     .flatMap { CDN.avatarDecoration(hash: $0) },
+                displayNameFont: user.decoration?.displayNameStyle?.font,
                 status: status,
                 isOnMobile: presence?.isOnMobile ?? false,
                 subtitle: presence?.primaryActivity?.rowSubtitle

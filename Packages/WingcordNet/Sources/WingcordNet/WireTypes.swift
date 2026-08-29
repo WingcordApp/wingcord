@@ -36,6 +36,7 @@ struct UserDTO: Decodable, Sendable {
     var bio: String?
     var avatar_decoration_data: AvatarDecorationDTO?
     var collectibles: CollectiblesDTO?
+    var display_name_styles: DisplayNameStylesDTO?
     var primary_guild: PrimaryGuildDTO?
     /// Which Nitro the account carries. **Present on `/users/@me` and on
     /// nobody else**, which is exactly where it is needed: Nitro is what decides
@@ -50,6 +51,7 @@ struct UserDTO: Decodable, Sendable {
         let decoration = UserDecoration(
             avatarDecorationHash: avatar_decoration_data?.asset,
             nameplate: collectibles?.nameplate?.domain,
+            displayNameStyle: display_name_styles?.domain,
             bannerHash: banner,
             accentColor: accent_color,
             bio: bio?.isEmpty == true ? nil : bio,
@@ -74,6 +76,39 @@ struct UserDTO: Decodable, Sendable {
 
 struct AvatarDecorationDTO: Decodable, Sendable {
     var asset: String?
+}
+
+/// `user.display_name_styles` — `{font_id, effect_id, colors}`.
+struct DisplayNameStylesDTO: Decodable, Sendable {
+    var font_id: Int?
+    var effect_id: Int?
+    /// Signed on the wire because JSON has one number type. Read through
+    /// `UInt32(exactly:)` so a value that could not be a colour is dropped
+    /// rather than trapping — this decodes on the READY path, where a throw
+    /// costs the whole user.
+    var colors: [Int]?
+
+    /// **Decoded leniently in both directions, and differently in each.**
+    ///
+    /// An unknown `font_id` costs the *face* and nothing else: Discord adds
+    /// fonts, four ids in its own range are already unassigned, and a name in
+    /// the default face is a smaller loss than no style at all.
+    ///
+    /// An unknown `effect_id` falls back to Solid rather than being dropped,
+    /// which keeps the colour its owner chose. Substituting some *other* effect
+    /// would be inventing a decision they did not make; painting their colour
+    /// flat is the honest half of the answer.
+    var domain: DisplayNameStyle? {
+        let style = DisplayNameStyle(
+            font: font_id.flatMap(DisplayNameFont.init(rawValue:)) ?? .default,
+            effect: effect_id.flatMap(DisplayNameEffect.init(rawValue:)) ?? .solid,
+            colors: colors?.compactMap { UInt32(exactly: $0) } ?? []
+        )
+        // The default face with no effect and no colour is what the ordinary
+        // label already draws, so it is stored as nothing rather than as a style
+        // that every surface then has to test for.
+        return style.isPlain ? nil : style
+    }
 }
 
 struct CollectiblesDTO: Decodable, Sendable {
@@ -824,6 +859,11 @@ struct UserProfileDTO: Decodable, Sendable {
         let decoration = UserDecoration(
             avatarDecorationHash: base.decoration?.avatarDecorationHash,
             nameplate: base.decoration?.nameplate,
+            // Off the nested user object, like the nameplate above — **this
+            // route is assigned WHOLE rather than merged**, so a cosmetic it
+            // does not carry forward is a cosmetic that disappears the moment
+            // the profile finishes loading, in front of the reader.
+            displayNameStyle: base.decoration?.displayNameStyle,
             bannerHash: pick(\.banner) ?? base.decoration?.bannerHash,
             accentColor: pick(\.accent_color) ?? base.decoration?.accentColor,
             bio: bio ?? base.decoration?.bio,

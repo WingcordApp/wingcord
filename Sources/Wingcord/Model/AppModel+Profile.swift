@@ -19,6 +19,7 @@ extension AppModel {
         return ProfilePresentation(
             userID: user.id,
             displayName: user.preferredName,
+            displayNameStyle: decoration?.displayNameStyle,
             handle: user.handle,
             nickname: member?.nickname,
             avatarURL: avatarURL(

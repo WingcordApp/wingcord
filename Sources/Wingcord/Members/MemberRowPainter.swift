@@ -39,6 +39,12 @@ nonisolated enum MemberRowPainter {
         )
     }
 
+    /// - Parameter nameFace: the styled face this person's name is set in,
+    ///   already resolved. **Resolved by the caller, not looked up here** — the
+    ///   registry is main-actor state and this painter is deliberately
+    ///   `nonisolated` so a draw cannot reach into the model, which is the rule
+    ///   `INVARIANTS.md` §4.5 is written around. Nil is the ordinary case and
+    ///   means the app's own face.
     static func drawMember(
         _ entry: MemberEntry,
         in rowFrame: CGRect,
@@ -46,7 +52,8 @@ nonisolated enum MemberRowPainter {
         style: MessageTextStyle,
         isHovered: Bool,
         images: ImageStore,
-        scale: CGFloat
+        scale: CGFloat,
+        nameFace: NSFont? = nil
     ) {
         let plate = MemberRowGeometry.plateRect(in: rowFrame)
         let plateShape = CGPath(
@@ -113,13 +120,20 @@ nonisolated enum MemberRowPainter {
         // the width it actually painted; measuring the full name and clamping it
         // to the available width instead places the chip at the end of the slot,
         // which is a visible gap on every truncated name and on nothing else.
+        // **The face carries into the roster; the colour does not.** Discord's
+        // own dialog says colours and effects do not appear in servers, and a
+        // role colour a server chose has to beat a colour its owner did — so a
+        // styled name here is the same ink as any other, set in their face.
+        // The effect itself plays on hover, over this row rather than in it.
+        let nameFont = nameFace ?? style.bodyFont
         let drawnName = TimelineRowPainter.drawText(
             entry.name,
-            font: style.bodyFont,
+            font: nameFont,
             color: entry.colorValue.map { NSColor(Color(hex: $0)) }
                 ?? (entry.status == .offline ? style.tertiaryColor : style.primaryColor),
             at: CGPoint(x: textX, y: nameY),
             maxWidth: nameWidth,
+            tracking: (entry.displayNameFont?.letterSpacing ?? 0) * style.bodyFont.pointSize,
             context: context
         )
 

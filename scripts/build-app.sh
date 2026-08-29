@@ -21,6 +21,22 @@ cp "$BIN" "$APP/Contents/MacOS/Wingcord"
 cp "$ROOT/Packaging/Info.plist" "$APP/Contents/Info.plist"
 printf 'APPL????' > "$APP/Contents/PkgInfo"
 
+# ── Resource bundle ────────────────────────────────────────────────────────
+# SwiftPM emits declared resources into a bundle beside the binary and
+# `Bundle.module` looks for it inside the app's Resources. Copying it is not
+# optional: without it every styled display name silently falls back to the
+# system face, which looks like a rendering bug rather than a missing file.
+#
+# A MISSING bundle fails the build. It is only absent when the target declares
+# no resources, and the target does — so its absence means the manifest changed
+# and something downstream is about to fail quietly.
+BUNDLE="$(dirname "$BIN")/Wingcord_Wingcord.bundle"
+if [ ! -d "$BUNDLE" ]; then
+    echo "error: $BUNDLE is missing — the app would ship without its fonts." >&2
+    exit 1
+fi
+cp -R "$BUNDLE" "$APP/Contents/Resources/"
+
 # ── App icon ───────────────────────────────────────────────────────────────
 # The icon is an Icon Composer document, not a pre-rendered .icns. `actool`
 # compiles it into an Assets.car carrying the light / dark / tinted / clear

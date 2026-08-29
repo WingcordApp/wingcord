@@ -36,7 +36,7 @@ nonisolated struct TimelineRow: Sendable {
 }
 
 /// A message row, laid out.
-nonisolated struct MessageRow: Sendable {
+nonisolated struct MessageRow: @unchecked Sendable {
     var id: MessageID
     var authorID: UserID
     var isRunHead: Bool
@@ -52,6 +52,10 @@ nonisolated struct MessageRow: Sendable {
     var decorationURL: URL?
 
     var authorName: String
+    /// The styled face and tracking the name was measured in, carried so the
+    /// painter draws in the same one.
+    var authorFace: NSFont?
+    var authorTracking: CGFloat = 0
     var authorColor: NSColor?
     var authorRect: CGRect
     var timestampText: String
@@ -197,13 +201,23 @@ nonisolated struct TimelineLayoutEngine: Sendable {
         var settings: TimelineSettings
     }
 
-    struct AuthorInfo: Sendable {
+    /// `@unchecked` for the same reason `MessageTextStyle` is: it carries a
+    /// resolved `NSFont`, which is immutable in practice but not marked
+    /// `Sendable`. **Resolved on the main actor where this is built**, because
+    /// the registry is main-actor state and the layout deliberately is not — and
+    /// because resolving here means only the faces actually on screen are ever
+    /// registered.
+    struct AuthorInfo: @unchecked Sendable {
         var name: String
         var colorValue: UInt32?
         var avatarURL: URL?
         var monogram: String
         var decorationURL: URL?
         var isBot: Bool
+        /// The styled face, already resolved. Nil is the ordinary case.
+        var nameFace: NSFont?
+        /// Discord's per-family tracking, in points.
+        var nameTracking: CGFloat = 0
     }
 
     /// Key for one message's laid-out form.
@@ -347,7 +361,14 @@ nonisolated struct TimelineLayoutEngine: Sendable {
                 height: Metrics.avatarMessage
             )
             let name = author?.name ?? "Unknown"
-            let nameWidth = Self.measure(name, font: input.style.authorFont)
+            // **Measured in the face it will be DRAWN in.** The bot badge and
+            // the timestamp are placed off this width, so measuring in the
+            // default face and drawing in another puts both in the wrong place.
+            let nameWidth = Self.measure(
+                name,
+                font: author?.nameFace ?? input.style.authorFont,
+                tracking: author?.nameTracking ?? 0
+            )
             authorRect = CGRect(
                 x: contentX,
                 y: y,
@@ -510,6 +531,8 @@ nonisolated struct TimelineLayoutEngine: Sendable {
             avatarMonogram: author?.monogram ?? "?",
             decorationURL: author?.decorationURL,
             authorName: author?.name ?? "Unknown",
+            authorFace: author?.nameFace,
+            authorTracking: author?.nameTracking ?? 0,
             authorColor: author?.colorValue.map { NSColor(Color(hex: $0)) },
             authorRect: authorRect,
             timestampText: input.settings.timestampLabel(message.sentAt, calendar: input.calendar),
@@ -847,9 +870,11 @@ nonisolated struct TimelineLayoutEngine: Sendable {
     /// `NSAttributedString.size()` builds a text container and a layout manager;
     /// `CTLineGetTypographicBounds` measures one line and nothing else, which is
     /// all a name or a timestamp ever is.
-    static func measure(_ string: String, font: NSFont) -> CGFloat {
+    static func measure(_ string: String, font: NSFont, tracking: CGFloat = 0) -> CGFloat {
         guard !string.isEmpty else { return 0 }
-        let attributed = NSAttributedString(string: string, attributes: [.font: font])
+        var attributes: [NSAttributedString.Key: Any] = [.font: font]
+        if tracking != 0 { attributes[.kern] = tracking }
+        let attributed = NSAttributedString(string: string, attributes: attributes)
         let line = CTLineCreateWithAttributedString(attributed)
         return ceil(CTLineGetTypographicBounds(line, nil, nil, nil))
     }

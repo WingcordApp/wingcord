@@ -284,3 +284,70 @@ struct CollectiblesProductTests {
         #expect(decoration.premiumTier == .nitro)
     }
 }
+
+/// Kawaii Cat, captured live — the frame that exposed the third anchor.
+///
+/// Its `type: "border"` layer is anchored `center` and is 1312x2528, far taller
+/// than any card. Falling that back to `.top` and fitting it drew two pale rails
+/// down the middle of the card and past both its ends.
+@Suite("Profile frame anchors")
+struct ProfileFrameAnchorTests {
+
+    private let kawaiiCat = """
+    {"sku_id":"1489396533643448380","name":"Kawaii Cat","type":3,
+     "items":[{"type":3,"sku_id":"1489396533643448380","label":"A soft pink border",
+       "layers":[
+         {"id":"1511832450052133044","type":"border","order":"front","anchor":"center","responsive":false},
+         {"id":"1511832453369827559","type":"staple","order":"front","anchor":"top","responsive":false},
+         {"id":"1511832456381071471","type":"staple","order":"front","anchor":"bottom","responsive":false}],
+       "inner_width":1200,"overflow_top":304,"overflow_bottom":135,"overflow_horizontal":56}]}
+    """
+
+    @Test("A centre-anchored border decodes as itself, not as a top staple")
+    func centerAnchorDecodes() throws {
+        let dto = try #require(
+            try? JSONDecoder().decode(CollectiblesProductDTO.self, from: Data(kawaiiCat.utf8))
+        )
+        guard case .frame(let frame)? = dto.domain else {
+            Issue.record("expected a frame"); return
+        }
+        #expect(frame.frontLayers.count == 3)
+        #expect(frame.frontLayers.map(\.anchor) == [.center, .top, .bottom])
+        #expect(frame.innerWidth == 1200)
+        #expect(frame.overflowTop == 304)
+        #expect(frame.overflowBottom == 135)
+        #expect(frame.overflowHorizontal == 56)
+    }
+
+    /// Every layer of every captured frame is authored at `inner_width` plus
+    /// both horizontal overflows, which is the one scale the whole composition
+    /// shares. Kawaii Cat's three PNGs are all 1312 wide, as Dark Roses' two are.
+    @Test("The layout puts every layer at the authored width")
+    func authoredWidth() throws {
+        let dto = try #require(
+            try? JSONDecoder().decode(CollectiblesProductDTO.self, from: Data(kawaiiCat.utf8))
+        )
+        guard case .frame(let frame)? = dto.domain else {
+            Issue.record("expected a frame"); return
+        }
+        let layout = frame.layout(cardWidth: 1200)
+        #expect(layout.scale == 1)
+        #expect(layout.layerWidth == 1312)
+        #expect(layout.top == 304)
+        #expect(layout.bottom == 135)
+    }
+
+    /// An anchor this build has never seen still has to draw something.
+    @Test("An unknown anchor falls back rather than failing the frame")
+    func unknownAnchorFallsBack() throws {
+        let json = kawaiiCat.replacingOccurrences(of: "\"center\"", with: "\"sideways\"")
+        let dto = try #require(
+            try? JSONDecoder().decode(CollectiblesProductDTO.self, from: Data(json.utf8))
+        )
+        guard case .frame(let frame)? = dto.domain else {
+            Issue.record("expected a frame"); return
+        }
+        #expect(frame.frontLayers.count == 3)
+        #expect(frame.frontLayers[0].anchor == .top)
+    }
+}

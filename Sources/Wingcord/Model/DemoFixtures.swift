@@ -115,6 +115,53 @@ enum DemoFixtures {
         }
         if let profileFrame { model.profileFrames[profileFrame.skuID] = profileFrame }
 
+        // Every effect and every face, spread across the roster, so `--demo`
+        // reaches all seven and all twelve without an account that owns them.
+        //
+        // **The colours are the ones captured off Discord's own pickers**, not
+        // invented. A palette Discord would never offer exercises the
+        // derivation with values it never has to produce, which is how a wrong
+        // multiplier survives a demo and fails on a real account.
+        let effectColors: [DisplayNameEffect: [UInt32]] = [
+            .solid: [0x58_65_F2],
+            .gradient: [0x2A_AE_A6, 0xFF_C4_90],
+            .neon: [0x99_65_F3],
+            .toon: [0xF4_20_98],
+            .pop: [0x23_A5_5A],
+            .gummy: [0xEA_A9_D5, 0xA9_DD_F0, 0xB9_A7_EE, 0xB9_EA_CB],
+            .prism: [0xFE_92_42, 0x35_ED_7E, 0xFF_E0_47, 0xFF_4C_D2, 0x58_65_F2],
+        ]
+        let effects = DisplayNameEffect.allCases
+        let faces = DisplayNameFont.allCases
+        for (offset, id) in userIDs.enumerated() where offset % 3 == 1 {
+            guard let user = users[id] else { continue }
+            let existing = user.decoration
+            let slot = offset / 3
+            let effect = effects[slot % effects.count]
+            users[id] = User(
+                id: user.id,
+                username: user.username,
+                displayName: user.displayName,
+                avatarHash: user.avatarHash,
+                discriminator: user.discriminator,
+                flags: user.flags,
+                isBot: user.isBot,
+                isSystem: user.isSystem,
+                decoration: UserDecoration(
+                    // Kept, so a plated row can also carry a styled name and the
+                    // two are seen together rather than one at a time.
+                    nameplate: existing?.nameplate,
+                    displayNameStyle: DisplayNameStyle(
+                        font: faces[slot % faces.count],
+                        effect: effect,
+                        colors: effectColors[effect] ?? []
+                    ),
+                    profileFrameSKU: existing?.profileFrameSKU
+                )
+            )
+        }
+
+
         let me = userIDs[0]
         users[me] = users[me].map { user in
             User(
@@ -127,6 +174,13 @@ enum DemoFixtures {
                     nameplate: Nameplate(
                         asset: nameplateAsset, palette: .cobalt,
                         label: "Blue roses with a butterfly."
+                    ),
+                    // The reader's own name is the one seen most often, so it
+                    // wears the effect with the most moving parts.
+                    displayNameStyle: DisplayNameStyle(
+                        font: .tempo,
+                        effect: .gummy,
+                        colors: [0xEA_A9_D5, 0xA9_DD_F0, 0xB9_A7_EE, 0xB9_EA_CB]
                     ),
                     bio: "sometimes dev sometimes music, sometimes wasting time "
                         + "playing games\n\nPrimarily Swift and C++",
@@ -188,6 +242,7 @@ enum DemoFixtures {
                 // the one card that shows them.
                 decoration: UserDecoration(
                     nameplate: user.decoration?.nameplate,
+                    displayNameStyle: user.decoration?.displayNameStyle,
                     bio: user.decoration?.bio,
                     profileFrameSKU: user.decoration?.profileFrameSKU,
                     premiumTier: .nitro

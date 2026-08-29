@@ -30,6 +30,16 @@ let package = Package(
                 "WingcordNet",
                 .product(name: "Lottie", package: "lottie-ios"),
             ],
+            // The eleven faces a styled display name can be set in. `.copy`
+            // rather than `.process`: these are opaque binaries with no build
+            // step, and the directory has to survive so registration can find
+            // one file by name without walking a flattened resource root.
+            //
+            // **They are registered lazily, one at a time, on first use** — see
+            // `DisplayNameFontRegistry`. Registering eleven at launch would
+            // spend the I/O and keep the faces resident for a feature that most
+            // sessions never draw once.
+            resources: [.copy("Resources/Fonts")],
             swiftSettings: [
                 .defaultIsolation(MainActor.self),
                 .swiftLanguageMode(.v6),

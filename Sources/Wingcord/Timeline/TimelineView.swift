@@ -437,7 +437,7 @@ final class TimelineCoordinator: NSObject {
             mentions: model.mentionContext(),
             channelName: channelID.flatMap { model.channelIndex[$0] }
                 .map { model.displayName(of: $0) } ?? "",
-            authors: model.authorInfo(for: items),
+            authors: model.authorInfo(for: items, authorFont: style.authorFont),
             calendar: .current,
             settings: settings
         )

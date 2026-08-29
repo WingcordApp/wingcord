@@ -157,7 +157,13 @@ final class MemberListCanvas: NSView {
                         style: style,
                         isHovered: hoveredRow == index && !isScrolling,
                         images: ImageStore.shared,
-                        scale: scale
+                        scale: scale,
+                        // Resolved here because the registry is main-actor
+                        // state; the lookup is a dictionary hit after the first
+                        // row that asks for a given face.
+                        nameFace: entry.displayNameFont.flatMap {
+                            DisplayNameFontRegistry.font($0, size: style.bodyFont.pointSize)
+                        }
                     )
                 }
             }
