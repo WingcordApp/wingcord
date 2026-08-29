@@ -51,7 +51,8 @@ final class SessionController {
     /// Profile fetches in flight, so opening the same card twice — or a hover
     /// and a click on the same row — asks once.
     private var profileFetches: Set<UserID> = []
-    private var effectFetches: Set<String> = []
+    private var collectibleFetches: Set<String> = []
+    private var paletteFetches: Set<URL> = []
     /// Server-tag fetches in flight. A busy channel can show one tag on twenty
     /// consecutive rows; every one of them must share a single request.
     private var guildProfileFetches: Set<GuildID> = []
@@ -821,13 +822,21 @@ final class SessionController {
                     model.users[userID] = user
                     model.identityRevision &+= 1
                 }
-                // The profile names the effect by SKU; the artwork is a second
-                // request, and only for a SKU nothing has resolved yet.
+                // The profile names each collectible by SKU; the artwork is a
+                // second request, and only for a SKU nothing has resolved yet.
                 if let sku = user.decoration?.profileEffectSKU,
                    model.profileEffects[sku] == nil
                 {
-                    loadEffect(sku: sku)
+                    loadCollectible(sku: sku)
                 }
+                // The frame is a separate purchase from the effect and an
+                // account can wear both, so this is an `if`, not an `else`.
+                if let sku = user.decoration?.profileFrameSKU,
+                   model.profileFrames[sku] == nil
+                {
+                    loadCollectible(sku: sku)
+                }
+                deriveTheme(of: user)
             } catch {
                 Self.trace("profile \(userID) failed: \(Self.describe(error))")
             }
@@ -1010,18 +1019,62 @@ final class SessionController {
         }
     }
 
-    /// Resolves one collectible SKU to its layered composition.
-    func loadEffect(sku: String) {
-        guard effectFetches.insert(sku).inserted else { return }
+    /// Resolves one collectible SKU to its artwork.
+    ///
+    /// **One route, two shapes.** A profile effect and a profile frame are both
+    /// named on a profile by SKU and both described by
+    /// `/collectibles-products/{sku}`, and the answer says which it is — see
+    /// `Collectible`. The dedupe set is shared because the *request* is shared:
+    /// keying it per kind would let a frame and an effect with the same SKU
+    /// both be in flight, which is one round trip too many for an answer that
+    /// can only be one of them.
+    func loadCollectible(sku: String) {
+        guard collectibleFetches.insert(sku).inserted else { return }
         Task { [weak self] in
             guard let self else { return }
-            defer { effectFetches.remove(sku) }
+            defer { collectibleFetches.remove(sku) }
             do {
-                guard let effect = try await rest.collectible(sku: sku) else { return }
-                model.profileEffects[sku] = effect
+                switch try await rest.collectible(sku: sku) {
+                case .effect(let effect): model.profileEffects[sku] = effect
+                case .frame(let frame): model.profileFrames[sku] = frame
+                case nil: break
+                }
             } catch {
-                Self.trace("effect \(sku) failed: \(Self.describe(error))")
+                Self.trace("collectible \(sku) failed: \(Self.describe(error))")
             }
+        }
+    }
+
+    /// Quantises somebody's artwork into the colours they never chose.
+    ///
+    /// **Only for a profile that has none**, and only once per picture —
+    /// `themeArtworkURL` answers nil for everybody else, so this costs a
+    /// dictionary lookup on the overwhelming majority of profiles and nothing
+    /// at all on a second look at the same person.
+    ///
+    /// The decode goes through the ordinary image cache, so a picture already
+    /// resident is not fetched again; the quantisation itself is handed off the
+    /// main actor, because it walks every sampled pixel and a profile card
+    /// opening is the worst possible moment to spend that on the main thread.
+    func deriveTheme(of user: User) {
+        guard let url = model.themeArtworkURL(of: user, user.decoration),
+              model.derivedPalettes[url] == nil,
+              paletteFetches.insert(url).inserted
+        else { return }
+        Task { [weak self] in
+            guard let self else { return }
+            defer { paletteFetches.remove(url) }
+            let key = ImageStore.Key(
+                url: url, maximumPixelSize: ProfileThemePalette.pixelSize
+            )
+            guard let image = await ImageStore.shared.image(for: key, bucket: .artwork)
+            else { return }
+            let palette = await Task.detached(priority: .utility) {
+                ProfileThemePalette.derive(from: image)
+            }.value
+            guard !palette.isEmpty else { return }
+            model.derivedPalettes[url] = palette
+            model.identityRevision &+= 1
         }
     }
 

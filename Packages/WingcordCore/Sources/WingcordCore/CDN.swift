@@ -147,6 +147,42 @@ public enum CDN {
         URL(string: "\(host)/avatar-decoration-presets/\(hash).png?size=160&passthrough=true")
     }
 
+    /// The strip drawn behind a roster row.
+    ///
+    /// **`asset` already ends in a slash** — Discord sends
+    /// `"nameplates/dark_roses/1526656194121568256/"` — so the file name is
+    /// appended rather than joined, and this takes the path exactly as sent.
+    ///
+    /// No size rung: the route serves one authored 672x126 PNG and ignores a
+    /// `size` query. Confirmed against a live asset, along with the file name —
+    /// `static.png` answers 200 and `asset.png`, `static.webp` and
+    /// `animated.gif` all 404.
+    ///
+    /// **The animated form is deliberately not offered.** It exists, at
+    /// `asset.webm`, and it is VP9-with-alpha in a WebM container — which
+    /// AVFoundation cannot demux on any Apple platform. Reaching it would mean
+    /// a hand-written demuxer plus a frame clock per visible roster row, and
+    /// the still is what this client draws.
+    public static func nameplate(asset: String) -> URL? {
+        guard !asset.isEmpty else { return nil }
+        return URL(string: "\(host)/assets/collectibles/\(asset)static.png")
+    }
+
+    /// One layer of a profile frame.
+    ///
+    /// **A different host path from every other collectible**, and not
+    /// guessable from them: nameplates and avatar decorations live under
+    /// `/assets/`, while a frame's layers are served from the shop's own media
+    /// route and are addressed by the *layer's* id under the *product's* SKU.
+    /// The payload carries no `src` for them at all, only the ids — so this is
+    /// the whole of how a frame becomes pictures.
+    ///
+    /// Always `static`: `animated`, `asset` and `preview` all 404 on a live
+    /// layer, which is why a frame needs no clock.
+    public static func profileFrameLayer(sku: String, layerID: String) -> URL? {
+        URL(string: "\(host)/media/v1/collectibles-shop/\(sku)/\(layerID)/static")
+    }
+
     /// A group DM's icon.
     public static func channelIcon(
         channelID: ChannelID,

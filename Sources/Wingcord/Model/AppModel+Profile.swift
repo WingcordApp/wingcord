@@ -33,7 +33,8 @@ extension AppModel {
                 CDN.userBanner(userID: user.id, hash: $0, width: 512)
             },
             accentColorValue: decoration?.accentColor,
-            themeColorValues: decoration?.themeColorValues ?? [],
+            themeColorValues: themeColorValues(of: user, decoration),
+            isThemeDerived: decoration?.themeColorValues?.isEmpty ?? true,
             status: presence?.status ?? .offline,
             customStatus: presence?.customStatus?.state,
             customStatusEmoji: presence?.customStatus?.emoji,
@@ -64,7 +65,10 @@ extension AppModel {
                 }
                 .sorted(by: Role.seniorityOrder)
                 .map {
-                    ProfileRole(id: $0.id, name: $0.name, colorValue: $0.displayColorValue)
+                    ProfileRole(
+                        id: $0.id, name: $0.name,
+                        colorValue: userColor($0.displayColorValue) ?? 0
+                    )
                 },
             memberSince: member?.joinedAt,
             // Derived from the snowflake rather than fetched: the id already
@@ -73,6 +77,7 @@ extension AppModel {
             isSelf: user.id == currentUserID,
             pronouns: decoration?.pronouns,
             effect: decoration?.profileEffectSKU.flatMap { profileEffects[$0] },
+            frame: decoration?.profileFrameSKU.flatMap { profileFrames[$0] },
             connections: decoration?.connectedAccounts ?? [],
             premiumTier: decoration?.premiumTier ?? .none,
             premiumSince: decoration?.premiumSince,
@@ -84,6 +89,73 @@ extension AppModel {
                 : directMessageChannel(with: user.id),
             isLoading: profilesLoading.contains(user.id)
         )
+    }
+
+    /// How much saturation colour that came from a person keeps.
+    ///
+    /// Read through the model rather than from `AppSettings` at each call site,
+    /// so every projection that carries a user colour reads the same value and
+    /// registers the same observation dependency.
+    var userColorSaturation: Double { AppSettings.shared.userColorSaturation }
+
+    /// `value` with the reader's saturation applied.
+    ///
+    /// **Applied where a colour enters a PROJECTION, never inside a draw.** The
+    /// member list and the transcript are painted canvases: a transform in
+    /// their draw loops would run per row per frame for an answer that changes
+    /// when a slider moves. Baked in here, the painters never learn this
+    /// setting exists — and the memo keys carry it so a cache hit cannot serve
+    /// the previous saturation.
+    func userColor(_ value: UInt32?) -> UInt32? {
+        guard let value else { return nil }
+        return UserColor.desaturated(value, by: userColorSaturation)
+    }
+
+    /// A profile's two colours, chosen or derived.
+    ///
+    /// **Discord themes a profile even when the account set no colours**, by
+    /// quantising their own artwork — so a client that reads `theme_colors` and
+    /// stops draws most Nitro profiles flat grey. What comes back here is the
+    /// same shape either way, which is the point: the surfaces cannot tell a
+    /// derived theme from a chosen one, and neither treatment can drift.
+    ///
+    /// Empty until the artwork resolves, and empty forever for an account with
+    /// none — both of which the card already draws as its neutral ground.
+    func themeColorValues(of user: User, _ decoration: UserDecoration?) -> [UInt32] {
+        let saturation = userColorSaturation
+        if let chosen = decoration?.themeColorValues, !chosen.isEmpty {
+            return chosen.map { UserColor.desaturated($0, by: saturation) }
+        }
+        guard let url = themeArtworkURL(of: user, decoration) else { return [] }
+        return (derivedPalettes[url] ?? []).map { UserColor.desaturated($0, by: saturation) }
+    }
+
+    /// The artwork those colours come out of, or nil where none are derived.
+    ///
+    /// **Banner first, avatar second.** Confirmed on two live profiles with no
+    /// banner, whose derived colour is directly measurable and matches their
+    /// avatar to within four units of 255. The banner branch is inferred from a
+    /// third whose avatar quantises to near-black while his card is emphatically
+    /// orange — his banner's colour, not his avatar's.
+    ///
+    /// **Gated on the tier, and not simply on having paid.** Nitro Basic is a
+    /// paid tier that does not get profile theming, so a gate written as
+    /// `!= .none` spends a fetch and a decode to colour a profile Discord
+    /// leaves grey — see `PremiumTier.derivesProfileTheme`.
+    ///
+    /// The size is `ProfileThemePalette.pixelSize`, and it is not a rendering
+    /// choice: quantise the same picture at a different size and a different
+    /// swatch wins. `rung(forSide:scale:)` rounds 64 at 2x to exactly that.
+    func themeArtworkURL(of user: User, _ decoration: UserDecoration?) -> URL? {
+        guard let decoration, decoration.premiumTier.derivesProfileTheme,
+              decoration.themeColorValues?.isEmpty ?? true
+        else { return nil }
+        let side = CGFloat(ProfileThemePalette.pixelSize) / 2
+        if let hash = decoration.bannerHash {
+            return CDN.userBanner(userID: user.id, hash: hash, width: side)
+        }
+        guard let hash = user.avatarHash else { return nil }
+        return CDN.avatar(userID: user.id, hash: hash, side: side)
     }
 
     /// The shared servers, resolved against the rail the reader already has.
@@ -158,5 +230,11 @@ extension AppModel {
             depth: depth
         )
         sessionController.loadProfile(of: userID, inGuild: selectedGuildID)
+        // **Started here as well as after the profile route answers**, so a
+        // derived theme resolves alongside that request rather than behind it.
+        // Both entry points are guarded on the palette already being known, so
+        // the second caller is a dictionary lookup — and this is the one that
+        // fires for a person whose profile is already resident.
+        if let user = users[userID] { sessionController.deriveTheme(of: user) }
     }
 }

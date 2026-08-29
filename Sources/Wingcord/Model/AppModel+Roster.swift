@@ -13,6 +13,11 @@ struct RosterMemoKey: Hashable, Sendable {
     /// carrying it costs a rebuild when somebody joins the group and never
     /// otherwise.
     var structureRevision: UInt64
+    /// **In the key, not merely read by the builder.** A memo whose key does not
+    /// carry a setting is present, correct and never invalidated — the roster
+    /// would keep serving the saturation it was built with until something else
+    /// happened to move a revision.
+    var colorSaturation: Double
 }
 
 extension AppModel {
@@ -59,7 +64,8 @@ extension AppModel {
             memberRevision: memberRevision,
             presenceRevision: presenceRevision,
             roleRevision: roleRevision,
-            structureRevision: channelIndex.structureRevision
+            structureRevision: channelIndex.structureRevision,
+            colorSaturation: userColorSaturation
         )
         // Read the observable inputs before the early return, so a cache hit
         // still registers the dependency the reader needs.
@@ -73,10 +79,15 @@ extension AppModel {
         return value
     }
 
+    /// **Read once per build, never per row.** `userColorSaturation` is an
+    /// observable property, so a read inside the loop is a tracked access per
+    /// member — five hundred of them on a large roster, for a value that cannot
+    /// change while the array is being built.
     private func buildRoster(
         members memberTable: [GuildID: [UserID: Member]],
         presences presenceTable: [UserID: Presence]
     ) -> [MemberSection] {
+        let saturation = userColorSaturation
         // A group conversation has a roster of its own — its recipients — and
         // no guild behind it, so it never reaches the table lookup below.
         if let channelID = selectedChannelID,
@@ -116,7 +127,9 @@ extension AppModel {
             let entry = MemberEntry(
                 userID: userID,
                 name: member.resolvedName(user: user),
-                colorValue: RoleResolver.nameColorValue(of: member.roleIDs, in: guildRoles),
+                colorValue: RoleResolver
+                    .nameColorValue(of: member.roleIDs, in: guildRoles)
+                    .map { UserColor.desaturated($0, by: saturation) },
                 avatarURL: avatarURL(forUserID: userID, inGuild: guildID, side: Metrics.avatarRow),
                 monogram: user.monogram,
                 decorationURL: user.decoration?.avatarDecorationHash
@@ -133,8 +146,8 @@ extension AppModel {
                     else { return nil }
                     return CDN.guildTagBadge(guildID: guildID, hash: hash)
                 },
-                // Reserved. See `MemberEntry.nameplateURL`.
-                nameplateURL: nil
+                nameplateURL: user.decoration?.nameplate?.artworkURL,
+                nameplatePalette: user.decoration?.nameplate?.palette ?? .none
             )
 
             if status == .offline {
@@ -157,7 +170,8 @@ extension AppModel {
                 roleID: role.id,
                 title: role.name,
                 count: entries.count,
-                colorValue: role.displayColorValue,
+                colorValue: role.displayColorValue
+                    .map { UserColor.desaturated($0, by: saturation) },
                 members: entries
             ))
         }
@@ -238,7 +252,8 @@ extension AppModel {
                     else { return nil }
                     return CDN.guildTagBadge(guildID: guildID, hash: hash)
                 },
-                nameplateURL: nil,
+                nameplateURL: user.decoration?.nameplate?.artworkURL,
+                nameplatePalette: user.decoration?.nameplate?.palette ?? .none,
                 isOwner: userID == channel.ownerID
             )
             if status == .offline { offline.append(entry) } else { online.append(entry) }

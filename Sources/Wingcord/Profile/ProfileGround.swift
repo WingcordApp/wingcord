@@ -12,7 +12,21 @@ import SwiftUI
 /// number derived from it, and only the theme is a decision they made about the
 /// card.
 ///
-/// So: themed profiles get their gradient; everyone else gets glass.
+/// So: themed profiles get their gradient; everyone else gets a neutral ground.
+///
+/// **Both are opaque, and the unthemed one used not to be.** It was
+/// `.glassEffect(.regular)` on the belief that a card supplies its own material
+/// and the presentation behind it supplies none. The second half was false — a
+/// popover and a sheet each paint a backdrop, and the card's glass had been
+/// compositing over it all along, which is why it read as a solid mid-grey panel
+/// rather than as the near-transparent material it actually was. Presenting the
+/// card as a layer in the window took that backdrop away and the transcript
+/// began reading straight through somebody's roles.
+///
+/// A profile card carries prose — a bio, roles, dates — so §1's rule wins over
+/// §4's: **a reading surface is opaque.** It is also cheaper, because a
+/// card-sized `.glassEffect` is a sampled backdrop blur recomputed for every
+/// frame the transcript scrolls behind it.
 ///
 /// **Shared by the card and the full profile**, because the two are the same
 /// person one click apart. Two copies of these opacities is how a profile comes
@@ -21,17 +35,39 @@ import SwiftUI
 enum ProfileGround: Equatable {
     /// The person themed themselves. Primary and secondary.
     case themed(Color, Color)
-    /// No theme. The surface is a floating material like every other panel.
-    case glass
+    /// No theme. A plain structural ground, like every other panel in the app.
+    case neutral
+    /// No theme of their own, so one was quantised out of their artwork.
+    ///
+    /// **One colour, not a pair, and that is the whole reason this is its own
+    /// case.** A chosen theme is two colours somebody picked to sit together; a
+    /// derived one is the first two boxes a median cut happened to produce, and
+    /// the second of those is very often the near-black *behind* the subject —
+    /// a photograph's background. Fed into the themed gradient as its foot, that
+    /// swatch inverts it: the surface gathers toward black where it should
+    /// gather toward colour, and the card comes out darker at the bottom than at
+    /// the top. Measured, before this case existed: 28 to 22 down the card,
+    /// where Discord runs 56 to 86.
+    ///
+    /// So the derived ground is a wash of the PRIMARY at two strengths, and the
+    /// second swatch is not drawn at all.
+    case derived(Color)
 
-    init(themeColorValues: [UInt32]) {
-        if themeColorValues.count >= 2 {
-            self = .themed(Color(hex: themeColorValues[0]), Color(hex: themeColorValues[1]))
-        } else if let only = themeColorValues.first {
-            // A single colour is still a deliberate theme, just a flat one.
-            self = .themed(Color(hex: only), Color(hex: only))
+    /// - Parameter isDerived: whether these colours were quantised out of the
+    ///   person's artwork rather than chosen by them. The two are drawn
+    ///   differently and cannot be told apart from the values alone.
+    init(themeColorValues: [UInt32], isDerived: Bool = false) {
+        guard let first = themeColorValues.first else {
+            self = .neutral
+            return
+        }
+        if isDerived {
+            self = .derived(Color(hex: first))
+        } else if themeColorValues.count >= 2 {
+            self = .themed(Color(hex: first), Color(hex: themeColorValues[1]))
         } else {
-            self = .glass
+            // A single colour is still a deliberate theme, just a flat one.
+            self = .themed(Color(hex: first), Color(hex: first))
         }
     }
 
@@ -55,25 +91,47 @@ enum ProfileGround: Equatable {
     /// other floating surface in the app uses.
     var borderStyle: AnyShapeStyle {
         switch self {
+        case .neutral:
+            AnyShapeStyle(Color.white.opacity(0.10))
+        case .derived(let primary):
+            // **Measured, and a third of the way is the whole answer.** Discord
+            // rims a derived card at #D8D7D6 where that person's colour is
+            // 139,137,129 — which is that colour mixed one third into white,
+            // predicting 216,215,213 against the 216,215,214 on screen. All
+            // three channels, within a unit.
+            //
+            // A rim this light on a dark card looks wrong written down and is
+            // right on screen, for the reason the themed rim already gives: an
+            // edge is the one part of a card allowed to be the brightest thing
+            // in it.
+            AnyShapeStyle(primary.mix(with: .white, by: 0.667))
         case .themed(let primary, let secondary):
             AnyShapeStyle(LinearGradient(
                 colors: [primary.opacity(0.95), secondary.opacity(0.8)],
                 startPoint: .top,
                 endPoint: .bottom
             ))
-        case .glass:
-            AnyShapeStyle(Color.white.opacity(0.10))
+        }
+    }
+
+    /// The two colours this ground lends its chrome, or nil where it has none.
+    ///
+    /// **A derived ground answers with its one colour twice.** Everything below
+    /// the body fill — the rim, the accent, a panel's wash — wants "the
+    /// person's colour" rather than a gradient's two ends, and collapsing the
+    /// distinction here is what keeps those treatments from growing a third
+    /// branch each.
+    private var pair: (primary: Color, secondary: Color)? {
+        switch self {
+        case .themed(let primary, let secondary): (primary, secondary)
+        case .derived(let primary): (primary, primary)
+        case .neutral: nil
         }
     }
 
     /// How heavy that edge is drawn. A themed rim is a light source and needs
     /// body; a neutral hairline is a separation and must stay a hairline.
-    var borderWidth: CGFloat {
-        switch self {
-        case .themed: 1.5
-        case .glass: 1
-        }
-    }
+    var borderWidth: CGFloat { pair == nil ? 1 : 1.5 }
 
     /// The colour this surface lends to its own chrome — a selected tab, the
     /// underline that travels between them, a symbol that should belong to the
@@ -83,12 +141,7 @@ enum ProfileGround: Equatable {
     /// no colour of its own, and the correct accent for it is the app's own
     /// hierarchy rather than a colour invented on its behalf. Every reader of
     /// this falls back to `Ink`, which is what the rest of the app uses.
-    var accent: Color? {
-        switch self {
-        case .themed(let primary, _): primary
-        case .glass: nil
-        }
-    }
+    var accent: Color? { pair?.primary }
 
     /// A grouped panel sitting on this ground — an activity card, a row that
     /// answers to the pointer.
@@ -98,12 +151,8 @@ enum ProfileGround: Equatable {
     /// On a themed profile it takes a wash of the theme so the panel reads as
     /// part of the person's surface rather than as a grey box dropped onto it.
     var panelFill: AnyShapeStyle {
-        switch self {
-        case .themed(let primary, _):
-            AnyShapeStyle(primary.opacity(0.16).blendMode(.plusLighter))
-        case .glass:
-            AnyShapeStyle(Palette.surfaceRaised)
-        }
+        guard let pair else { return AnyShapeStyle(Palette.surfaceRaised) }
+        return AnyShapeStyle(pair.primary.opacity(0.16).blendMode(.plusLighter))
     }
 
     /// What stands behind a banner while the artwork loads, and instead of it
@@ -114,11 +163,33 @@ enum ProfileGround: Equatable {
     /// for one — a person with no banner image gets their accent as a solid
     /// strip, which is what Discord draws too — and exactly wrong as a tint for
     /// the body underneath.
-    func plateSeed(accentColorValue: UInt32?) -> Color {
-        switch self {
-        case .themed(let primary, _): primary
-        case .glass: accentColorValue.map { Color(hex: $0) } ?? Palette.surfaceRaised
-        }
+    /// What stands behind a banner while the artwork loads, and instead of one
+    /// when there is none.
+    ///
+    /// **Flat for a derived ground, a gradient for everything else**, and that
+    /// is not a stylistic split. A derived colour IS what Discord paints in the
+    /// banner's slot — measured at 139,137,129 on an account with no banner,
+    /// flat across its whole width and identical in light and dark mode, and
+    /// this client quantises the same avatar to within three units of it. Fading
+    /// it across the strip throws that agreement away: sampled anywhere but the
+    /// first corner it read 120,119,113 against Discord's 139,137,129.
+    ///
+    /// The gradient stays where it earns its place — over `accent_color`, which
+    /// is a stand-in for artwork rather than a measured answer.
+    ///
+    /// One function rather than a seed each surface builds a gradient from,
+    /// because both surfaces drew that gradient and only one of them would have
+    /// been fixed.
+    func plateStyle(accentColorValue: UInt32?) -> AnyShapeStyle {
+        if case .derived(let primary) = self { return AnyShapeStyle(primary) }
+        let seed = pair?.primary
+            ?? accentColorValue.map { Color(hex: $0) }
+            ?? Palette.surfaceRaised
+        return AnyShapeStyle(LinearGradient(
+            colors: [seed, seed.opacity(0.6)],
+            startPoint: .topLeading,
+            endPoint: .bottomTrailing
+        ))
     }
 }
 
@@ -191,9 +262,39 @@ struct ProfileGroundFill: ViewModifier {
                 )
                 .background(Palette.canvas)
             }
-        case .glass:
-            // No fill behind it — §4 rule 3. The material is the surface.
-            content.glassEffect(.regular, in: .rect(cornerRadius: corner, style: .continuous))
+        case .derived(let primary):
+            // **Fitted against Discord's own DARK mode, which is the only fair
+            // reference for a dark app.** Measured on an account whose derived
+            // colour is 139,137,129: Discord runs its card body from 56,56,52
+            // at the head to 86,86,85 at the foot. Over this app's canvas at
+            // 10,10,12 those are that colour at 0.357 and 0.589 — so these two
+            // numbers are a solved equation rather than a preference, and the
+            // result lands within two units of Discord on every channel.
+            //
+            // The direction matters as much as the strength. Colour GATHERS
+            // downward here, where the pair the themed case is given would have
+            // run the other way — see `ProfileGround.derived`.
+            content.background {
+                LinearGradient(
+                    colors: [primary.opacity(0.36), primary.opacity(0.59)],
+                    startPoint: .top,
+                    endPoint: .bottom
+                )
+                .background(Palette.canvas)
+            }
+        case .neutral:
+            // **One opaque fill, and the same base the themed case sits on.**
+            // A themed card is `canvas` with a thin wash over it; an unthemed
+            // one is that base with no wash, which is what keeps the two reading
+            // as the same object with and without somebody's colours in it.
+            //
+            // `surface` rather than `canvas` so the card is one step off the
+            // transcript it floats over; the rest of the separation is the rim
+            // above and the shadow the surface already casts.
+            content.background(
+                Palette.surface,
+                in: .rect(cornerRadius: corner, style: .continuous)
+            )
         }
     }
 }

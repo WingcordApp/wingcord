@@ -43,7 +43,7 @@ struct FullProfileView: View {
     private var avatarDrop: CGFloat { Metrics.avatarProfile / 2 }
 
     private var ground: ProfileGround {
-        ProfileGround(themeColorValues: profile.themeColorValues)
+        ProfileGround(themeColorValues: profile.themeColorValues, isDerived: profile.isThemeDerived)
     }
 
     /// The tabs this client can actually fill.
@@ -78,6 +78,32 @@ struct FullProfileView: View {
                 .strokeBorder(ground.borderStyle, lineWidth: ground.borderWidth)
         }
         .clipShape(.rect(cornerRadius: Radius.card, style: .continuous))
+        .shadow(color: .black.opacity(0.5), radius: 32, y: 12)
+        // The frame, wrapping the IDENTITY COLUMN rather than the whole
+        // surface.
+        //
+        // **Which box a frame belongs to is the person's card, not the window
+        // holding it.** Measured against Discord's own rendering: the same
+        // frame is half again as large in the full profile as in the popout,
+        // and the ratio is the two identity measures — not the sheet's, which
+        // is twice as wide. So the column is what it scales to, and because
+        // that column is at the sheet's leading edge and runs its full height,
+        // three of its four overflows fall outside the sheet.
+        //
+        // Written out here rather than through `profileFrame(_:cardWidth:)`
+        // because the box it decorates is a REGION of this sheet rather than
+        // the sheet itself, so the overlay has to be given that region's width
+        // and pinned to the leading edge.
+        .overlay(alignment: .leading) {
+            if let frame = profile.frame, !frame.isEmpty {
+                ProfileFrameView(
+                    frame: frame,
+                    cardWidth: Self.identityWidth,
+                    order: .front
+                )
+                .frame(width: Self.identityWidth)
+            }
+        }
         // The sheet supplies no material of its own, so the corners drawn above
         // are the corners on screen rather than a rounded rect inside a square.
         .presentationBackground(.clear)
@@ -198,12 +224,7 @@ struct FullProfileView: View {
     }
 
     private var bannerPlate: some View {
-        let seed = ground.plateSeed(accentColorValue: profile.accentColorValue)
-        return LinearGradient(
-            colors: [seed, seed.opacity(0.6)],
-            startPoint: .topLeading,
-            endPoint: .bottomTrailing
-        )
+        Rectangle().fill(ground.plateStyle(accentColorValue: profile.accentColorValue))
     }
 
     private var identity: some View {

@@ -161,6 +161,17 @@ final class AppModel {
     /// twenty people in one server may share, and fetching it per wearer would
     /// ask for the same composition twenty times.
     var profileEffects: [String: ProfileEffect] = [:]
+    /// Profile frames, by SKU and for the same reason: a frame is a purchase,
+    /// and a server where twenty people wear Dark Roses resolves it once.
+    var profileFrames: [String: ProfileFrame] = [:]
+    /// Profile colours quantised out of somebody's artwork, keyed by that
+    /// artwork's URL.
+    ///
+    /// **By URL rather than by person**, which is Discord's own key and is the
+    /// one that cannot go stale: change your avatar and the key changes with
+    /// it, where a key on the account would keep serving the colours of a
+    /// picture nobody has any more.
+    var derivedPalettes: [URL: [UInt32]] = [:]
 
     // MARK: The server's own pages
     //

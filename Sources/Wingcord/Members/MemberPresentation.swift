@@ -18,13 +18,13 @@ struct MemberSection: Hashable, Sendable, Identifiable {
 
 /// One person in the member list.
 ///
-/// **`nameplateURL` is here from the first version even though nameplates are
-/// not fetched yet, and that is deliberate.** A nameplate is full-row artwork
-/// drawn *behind* the row, and retrofitting one into a row design that never
-/// reserved a background layer means changing the row's height, its insets and
-/// its text colours all at once — which is a redesign, not a feature. Reserving
-/// the slot now costs one optional URL and makes adding them later a painter
-/// change and nothing else.
+/// **The nameplate slot was reserved a version before anything filled it, and
+/// that is what made filling it cheap.** A nameplate is full-row artwork drawn
+/// *behind* the row, and retrofitting one into a row design that never reserved
+/// a background layer means changing the row's height, its insets and its text
+/// colours all at once — which is a redesign, not a feature. Because the plate
+/// rect, the paint order and the scrim were already there, turning them on cost
+/// two fields here, a URL builder, and no layout change at all.
 struct MemberEntry: Hashable, Sendable, Identifiable {
     var userID: UserID
     var name: String
@@ -46,6 +46,13 @@ struct MemberEntry: Hashable, Sendable, Identifiable {
     var tagBadgeURL: URL?
     /// Full-row artwork drawn behind everything else.
     var nameplateURL: URL?
+    /// The colour that artwork names itself with.
+    ///
+    /// Carried as the palette rather than as a resolved colour so the painter
+    /// can key its gradient cache on it — a raw colour value would have to be
+    /// turned into a `CGGradient` inside the draw, once per plated row per
+    /// repaint. `.none` is a real answer and means a plate with no wash.
+    var nameplatePalette: NameplatePalette = .none
     /// Whether this person owns the conversation.
     ///
     /// A group DM's creator, drawn with a crown after their name. **Only ever
@@ -132,6 +139,38 @@ nonisolated enum MemberRowGeometry {
     static func tagChipWidth(textWidth: CGFloat, hasBadge: Bool) -> CGFloat {
         tagChipPadding * 2 + textWidth
             + (hasBadge ? tagBadgeSide + tagBadgeGap : 0)
+    }
+
+    /// Where a nameplate's artwork lands inside its plate.
+    ///
+    /// **Fit to the plate's HEIGHT, anchored to its trailing edge**, and
+    /// overflowing the leading edge when that makes it wider than the plate.
+    ///
+    /// Established by measuring Discord's own roster rather than by choosing:
+    /// on a reference row whose plate is 540x87 device pixels, the roses begin
+    /// at x=345. Fitting the strip to the plate's *width* puts them at 311;
+    /// fitting to its height and hanging it off the trailing edge puts them at
+    /// 347. Two pixels, against a thirty-four pixel error.
+    ///
+    /// The rule matters because the plate's proportions are not the strip's.
+    /// A 672x126 strip is 5.33 wide; a two-line plate is about 5.0 and a
+    /// one-line plate about 6.1 — so the same naive aspect-*fill* fits to the
+    /// height on one row and to the width on the other, and the second of those
+    /// stretches the strip vertically. Roses come out as ellipses on exactly
+    /// half the roster, which is the kind of defect that is invisible on an
+    /// abstract gradient and unmissable on anything with a shape in it.
+    ///
+    /// Its own function because the painter and its test have to agree about a
+    /// rectangle neither can see.
+    static func nameplateArtRect(in plate: CGRect, imagePixelSize: CGSize) -> CGRect {
+        let aspect = imagePixelSize.width / max(imagePixelSize.height, 1)
+        let width = (plate.height * aspect).rounded()
+        return CGRect(
+            x: plate.maxX - width,
+            y: plate.minY,
+            width: width,
+            height: plate.height
+        )
     }
 
     /// The width nameplate art is fetched at.

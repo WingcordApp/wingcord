@@ -54,7 +54,10 @@ struct DirectMessageProfilePane: View {
     private static let width: CGFloat = Proportions.profileColumnIdeal
 
     private var ground: ProfileGround {
-        ProfileGround(themeColorValues: profile?.themeColorValues ?? [])
+        ProfileGround(
+            themeColorValues: profile?.themeColorValues ?? [],
+            isDerived: profile?.isThemeDerived ?? false
+        )
     }
 
     var body: some View {

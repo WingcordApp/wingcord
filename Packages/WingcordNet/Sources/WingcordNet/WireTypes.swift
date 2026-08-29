@@ -49,7 +49,7 @@ struct UserDTO: Decodable, Sendable {
         // majority who have none.
         let decoration = UserDecoration(
             avatarDecorationHash: avatar_decoration_data?.asset,
-            nameplateAsset: collectibles?.nameplate?.asset,
+            nameplate: collectibles?.nameplate?.domain,
             bannerHash: banner,
             accentColor: accent_color,
             bio: bio?.isEmpty == true ? nil : bio,
@@ -82,6 +82,19 @@ struct CollectiblesDTO: Decodable, Sendable {
     struct NameplateDTO: Decodable, Sendable {
         var asset: String?
         var label: String?
+        /// One of twelve named colours. **Decoded leniently**: Discord adds to
+        /// this list, and an unrecognised name has to cost the wash rather than
+        /// the plate.
+        var palette: String?
+
+        var domain: Nameplate? {
+            guard let asset, !asset.isEmpty else { return nil }
+            return Nameplate(
+                asset: asset,
+                palette: palette.flatMap(NameplatePalette.init(rawValue:)) ?? .none,
+                label: label
+            )
+        }
     }
 }
 
@@ -720,10 +733,28 @@ struct UserProfileDTO: Decodable, Sendable {
         var pronouns: String?
         /// A purchase, not an asset: `{ sku_id, expires_at }`.
         var profile_effect: EffectRef?
+        /// **Every** collectible worn on this layer, by type. The one field
+        /// that names a profile frame — `profile_effect` above describes only
+        /// the effect, so a client reading that alone never learns a frame is
+        /// being worn at all.
+        var collectibles: [CollectibleRef]?
     }
 
     struct EffectRef: Decodable, Sendable {
         var sku_id: String?
+    }
+
+    /// One worn collectible: which product, and which kind it is.
+    ///
+    /// Discord's type enum: `0` avatar decoration, `1` profile effect, `2`
+    /// nameplate, `3` profile frame. Only the frame is read from here — the
+    /// other three arrive by routes this client already has, and taking the
+    /// effect from both places would be two answers that can disagree.
+    struct CollectibleRef: Decodable, Sendable {
+        var sku_id: String?
+        var type: Int?
+
+        static let profileFrame = 3
     }
 
     struct BadgeDTO: Decodable, Sendable {
@@ -779,16 +810,27 @@ struct UserProfileDTO: Decodable, Sendable {
         }
         let bio = pick(\.bio).flatMap { $0.isEmpty ? nil : $0 }
         let theme = pick(\.theme_colors).flatMap { $0.isEmpty ? nil : $0 }
+        let effectSKU: String? = pick { $0.profile_effect?.sku_id }
+        // **Hoisted out of the initialiser, and not for tidiness.** This call
+        // is already one the type-checker gives up on when it grows — see
+        // `docs/HANDOFF.md` — and a closure argument inside it is exactly the
+        // kind of growth that tips it over.
+        let frameSKU: String? = pick { layer in
+            layer.collectibles?
+                .first { $0.type == CollectibleRef.profileFrame }?
+                .sku_id
+        }
 
         let decoration = UserDecoration(
             avatarDecorationHash: base.decoration?.avatarDecorationHash,
-            nameplateAsset: base.decoration?.nameplateAsset,
+            nameplate: base.decoration?.nameplate,
             bannerHash: pick(\.banner) ?? base.decoration?.bannerHash,
             accentColor: pick(\.accent_color) ?? base.decoration?.accentColor,
             bio: bio ?? base.decoration?.bio,
             themeColorValues: theme,
             badges: badges?.compactMap(\.domain) ?? [],
-            profileEffectSKU: pick { $0.profile_effect?.sku_id },
+            profileEffectSKU: effectSKU,
+            profileFrameSKU: frameSKU,
             pronouns: pick(\.pronouns).flatMap { $0.isEmpty ? nil : $0 },
             connectedAccounts: connected_accounts?.compactMap(\.domain) ?? [],
             premiumTier: premium_type.flatMap { PremiumTier(rawValue: $0) } ?? .none,
@@ -817,11 +859,17 @@ struct UserProfileDTO: Decodable, Sendable {
 
 /// `GET /collectibles-products/{sku_id}`.
 ///
-/// How a profile effect's `sku_id` becomes artwork. Captured from a live
-/// response: the payload is a store product whose `items` carry the actual
-/// composition, and the fields that matter are camelCase inside an otherwise
-/// snake_case API — which is worth writing down, because a decoder that assumes
-/// one convention silently drops the other.
+/// How a worn collectible's `sku_id` becomes artwork. Captured from two live
+/// responses — one profile effect, one profile frame — and they are different
+/// shapes under one route, which is why `domain` answers a `Collectible` rather
+/// than an effect.
+///
+/// Two things about the payload are worth writing down because a decoder gets
+/// them silently wrong. The effect timings are in **milliseconds**. And the
+/// keys are **camelCase inside an otherwise snake_case API** — but only on the
+/// effect side: a frame's `inner_width` and `overflow_top` are snake_case in
+/// the same object as the effect's `reducedMotionSrc`, so there is no single
+/// convention to assume and each field is spelled as captured.
 struct CollectiblesProductDTO: Decodable, Sendable {
     var sku_id: String?
     var name: String?
@@ -833,23 +881,73 @@ struct CollectiblesProductDTO: Decodable, Sendable {
         var accessibilityLabel: String?
         var reducedMotionSrc: String?
         var staticFrameSrc: String?
+        /// Profile effect: the animated timeline.
         var effects: [Effect]?
+
+        // A profile frame instead describes pieces anchored to a card's edges,
+        // and every number below is in ONE authored coordinate space — the one
+        // its layer artwork is drawn in. Verified against Dark Roses: the
+        // payload says `inner_width: 1200` and `overflow_horizontal: 56`, and
+        // both of its layer PNGs are exactly 1312 pixels wide.
+        var label: String?
+        var layers: [FrameLayer]?
+        var inner_width: Double?
+        var overflow_top: Double?
+        var overflow_bottom: Double?
+        var overflow_horizontal: Double?
     }
 
     struct Effect: Decodable, Sendable {
         var src: String?
-        /// Milliseconds, both of them.
+        /// Milliseconds, all three.
         var start: Double?
         var duration: Double?
+        var loopDelay: Double?
         var loop: Bool?
         var zIndex: Int?
         var width: Double?
         var height: Double?
+        // `position: {x, y}` is sent and is deliberately NOT read. Every
+        // capture so far is `{0, 0}`, so nothing here can say whether it is
+        // authored pixels or a fraction — and a decoder that guesses at a unit
+        // does not fail, it yields plausible nonsense. See `docs/HANDOFF.md`.
     }
 
-    var domain: ProfileEffect? {
+    /// One piece of a frame.
+    ///
+    /// **No `src`.** The payload names layers by id only; the artwork is at
+    /// `CDN.profileFrameLayer(sku:layerID:)`, under the *product's* SKU. That
+    /// is the whole of how a frame becomes pictures, and it is not derivable
+    /// from any other collectible's path.
+    ///
+    /// `type` (`"staple"`) and `responsive` are sent and not read: every
+    /// captured layer is a non-responsive staple, so there is no observation of
+    /// what either alternative does, and this file does not decode a field it
+    /// cannot place.
+    struct FrameLayer: Decodable, Sendable {
+        var id: String?
+        var order: String?
+        var anchor: String?
+    }
+
+    /// The product, as whichever kind of collectible it turned out to be.
+    ///
+    /// **Decided by SHAPE, not by the type integer.** The integer is present
+    /// and correct today, but a payload whose kind this client does not
+    /// recognise is still drawable when its shape is one of the two known
+    /// ones — whereas a switch on the integer turns every future type into
+    /// nothing at all.
+    var domain: Collectible? {
         guard let item = items?.first, let sku = sku_id ?? item.sku_id else { return nil }
-        let layers: [ProfileEffect.Layer] = (item.effects ?? []).compactMap { effect in
+        if let frame = item.frame(sku: sku) { return .frame(frame) }
+        if let effect = item.effect(sku: sku, productName: name) { return .effect(effect) }
+        return nil
+    }
+}
+
+extension CollectiblesProductDTO.Item {
+    func effect(sku: String, productName: String?) -> ProfileEffect? {
+        let layers: [ProfileEffect.Layer] = (effects ?? []).compactMap { effect in
             guard let source = effect.src, let url = URL(string: source) else { return nil }
             return ProfileEffect.Layer(
                 url: url,
@@ -858,6 +956,7 @@ struct CollectiblesProductDTO: Decodable, Sendable {
                 start: (effect.start ?? 0) / 1000,
                 duration: (effect.duration ?? 0) / 1000,
                 loops: effect.loop ?? false,
+                loopDelay: (effect.loopDelay ?? 0) / 1000,
                 zIndex: effect.zIndex ?? 0,
                 size: CGSize(width: effect.width ?? 450, height: effect.height ?? 880)
             )
@@ -865,11 +964,38 @@ struct CollectiblesProductDTO: Decodable, Sendable {
         guard !layers.isEmpty else { return nil }
         return ProfileEffect(
             skuID: sku,
-            title: item.title ?? name ?? "",
-            accessibilityLabel: item.accessibilityLabel,
-            reducedMotionURL: (item.reducedMotionSrc ?? item.staticFrameSrc)
-                .flatMap { URL(string: $0) },
+            title: title ?? productName ?? "",
+            accessibilityLabel: accessibilityLabel,
+            reducedMotionURL: (reducedMotionSrc ?? staticFrameSrc).flatMap { URL(string: $0) },
             layers: layers
+        )
+    }
+
+    func frame(sku: String) -> ProfileFrame? {
+        let pieces: [ProfileFrame.Layer] = (layers ?? []).compactMap { layer in
+            guard let id = layer.id,
+                  let url = CDN.profileFrameLayer(sku: sku, layerID: id)
+            else { return nil }
+            return ProfileFrame.Layer(
+                id: id,
+                url: url,
+                // An unrecognised anchor or order costs one misplaced picture,
+                // never the frame: `.top` and `.front` are what every captured
+                // layer says, and they are the safe reading of a value this
+                // client has not seen before.
+                anchor: layer.anchor.flatMap(ProfileFrame.Anchor.init(rawValue:)) ?? .top,
+                order: layer.order.flatMap(ProfileFrame.Order.init(rawValue:)) ?? .front
+            )
+        }
+        guard !pieces.isEmpty, let inner = inner_width, inner > 0 else { return nil }
+        return ProfileFrame(
+            skuID: sku,
+            label: label ?? accessibilityLabel,
+            innerWidth: inner,
+            overflowTop: overflow_top ?? 0,
+            overflowBottom: overflow_bottom ?? 0,
+            overflowHorizontal: overflow_horizontal ?? 0,
+            layers: pieces
         )
     }
 }

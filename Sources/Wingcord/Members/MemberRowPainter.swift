@@ -200,6 +200,64 @@ nonisolated enum MemberRowPainter {
 
     // MARK: Plate
 
+    // **Built once, never per row.** A `CGGradient` is an allocation plus a
+    // colour-space resolve, and a plate draws two of them; the scrim used to be
+    // constructed inside the draw, so a roster of forty plated rows repainting
+    // on every pointer move was building forty of it a frame for a value that
+    // cannot change.
+    //
+    // `nonisolated(unsafe)` for the same reason `MemberRowGeometry.tagChipFont`
+    // is: a `CGGradient` is immutable once created and neither of these is ever
+    // written after first use, while `static let` initialisation is itself
+    // thread-safe.
+
+    private nonisolated(unsafe) static let plateScrim: CGGradient? = CGGradient(
+        colorsSpace: CGColorSpaceCreateDeviceRGB(),
+        colors: [
+            NSColor.black.withAlphaComponent(0.72).cgColor,
+            NSColor.black.withAlphaComponent(0.30).cgColor,
+            NSColor.clear.cgColor,
+        ] as CFArray,
+        locations: [0, 0.45, 1]
+    )
+
+    /// One wash per palette, keyed so a draw is a dictionary lookup.
+    ///
+    /// Twelve at most, and only those with a colour — `.none` is a real answer
+    /// and gets no entry, so a plate that asked for no wash cannot be given one
+    /// by a fallback.
+    private nonisolated(unsafe) static let plateWashes: [NameplatePalette: CGGradient] = {
+        let space = CGColorSpace(name: CGColorSpace.sRGB) ?? CGColorSpaceCreateDeviceRGB()
+        var table: [NameplatePalette: CGGradient] = [:]
+        table.reserveCapacity(NameplatePalette.allCases.count)
+        for palette in NameplatePalette.allCases {
+            guard let value = palette.colorValue else { continue }
+            // Built as `CGColor` components rather than through
+            // `NSColor(Color(hex:))`: that bridge can hand back a catalog
+            // colour, and `withAlphaComponent` on one of those is not the
+            // straightforward operation it looks like.
+            let red = CGFloat((value >> 16) & 0xFF) / 255
+            let green = CGFloat((value >> 8) & 0xFF) / 255
+            let blue = CGFloat(value & 0xFF) / 255
+            func tint(_ alpha: CGFloat) -> CGColor {
+                CGColor(srgbRed: red, green: green, blue: blue, alpha: alpha)
+            }
+            guard let gradient = CGGradient(
+                colorsSpace: space,
+                // Clear at the leading edge, where the name is, and strongest
+                // under the artwork. Kept in the same register as
+                // `Palette.hoverFill` and `Palette.selectionFill` — a hue at
+                // low alpha over near-black reads far weaker than white does,
+                // which is why the far end is above the selection pill's 0.15
+                // and still reads as a wash rather than as paint.
+                colors: [tint(0), tint(0.08), tint(0.24)] as CFArray,
+                locations: [0, 0.5, 1]
+            ) else { continue }
+            table[palette] = gradient
+        }
+        return table
+    }()
+
     private static func drawPlate(
         _ entry: MemberEntry,
         shape: CGPath,
@@ -218,58 +276,67 @@ nonisolated enum MemberRowPainter {
                bucket: .artwork
            )
         {
+            // One clip for all three layers. The plate used to save, clip, draw
+            // and restore twice over, which is four state operations a row for
+            // the same region.
             context.saveGState()
             context.addPath(shape)
             context.clip()
 
-            // Aspect-fill, anchored to the TRAILING edge. A nameplate is
-            // authored with its subject on the right and empty space on the
-            // left, precisely so the name can sit over the empty half — filling
-            // from the leading edge crops the subject out and leaves the busy
-            // part under the text.
-            let imageAspect = CGFloat(image.width) / CGFloat(max(1, image.height))
-            let drawWidth = max(rect.width, rect.height * imageAspect)
-            let drawRect = CGRect(
-                x: rect.maxX - drawWidth,
-                y: rect.minY,
-                width: drawWidth,
-                height: rect.height
-            )
-            context.translateBy(x: 0, y: rect.midY)
-            context.scaleBy(x: 1, y: -1)
-            context.translateBy(x: 0, y: -rect.midY)
-            context.draw(image, in: drawRect)
-            context.restoreGState()
-
-            // The scrim. Opaque under the text, clear over the artwork — this is
-            // what makes a light plate survive a light name, and it is why the
-            // plate is a painter concern rather than a background image.
-            context.saveGState()
-            context.addPath(shape)
-            context.clip()
-            if let gradient = CGGradient(
-                colorsSpace: CGColorSpaceCreateDeviceRGB(),
-                colors: [
-                    NSColor.black.withAlphaComponent(0.72).cgColor,
-                    NSColor.black.withAlphaComponent(0.30).cgColor,
-                    NSColor.clear.cgColor,
-                ] as CFArray,
-                locations: [0, 0.45, 1]
-            ) {
+            // 1. The palette's wash, underneath everything.
+            //
+            // **A nameplate's artwork only covers its trailing third.**
+            // Measured on the real asset: Dark Roses is a 672x126 strip whose
+            // left two thirds are fully transparent. Drawn alone, that reads as
+            // a picture floating beside somebody's name rather than as a plate
+            // behind it, and the wash is what closes the gap between the
+            // scrim's fade-out and the artwork's first pixels.
+            if let wash = plateWashes[entry.nameplatePalette] {
                 context.drawLinearGradient(
-                    gradient,
+                    wash,
                     start: CGPoint(x: rect.minX, y: rect.midY),
                     end: CGPoint(x: rect.maxX, y: rect.midY),
                     options: []
                 )
             }
-            context.restoreGState()
+
+            // 2. The artwork: fit to the plate's height, hung off its trailing
+            // edge — see `MemberRowGeometry.nameplateArtRect`, which carries
+            // the measurement that settled the rule.
+            //
+            // **Not aspect-fill, which is what this was.** Fill takes whichever
+            // of the two fits is larger, so it lands on the height for a
+            // two-line plate and on the width for a one-line one — and the
+            // second stretches the strip vertically, because the drawn height
+            // is the plate's either way. Half the roster's roses came out as
+            // ellipses.
+            TimelineRowPainter.drawFlipped(
+                image,
+                in: MemberRowGeometry.nameplateArtRect(
+                    in: rect,
+                    imagePixelSize: CGSize(width: image.width, height: image.height)
+                ),
+                context: context
+            )
+
+            // 3. The scrim. Opaque under the text, clear over the artwork —
+            // this is what makes a light plate survive a light name, and it is
+            // why the plate is a painter concern rather than a background
+            // image.
+            if let scrim = plateScrim {
+                context.drawLinearGradient(
+                    scrim,
+                    start: CGPoint(x: rect.minX, y: rect.midY),
+                    end: CGPoint(x: rect.maxX, y: rect.midY),
+                    options: []
+                )
+            }
 
             if isHovered {
-                context.addPath(shape)
                 context.setFillColor(NSColor.white.withAlphaComponent(0.06).cgColor)
-                context.fillPath()
+                context.fill(rect)
             }
+            context.restoreGState()
             return
         }
 

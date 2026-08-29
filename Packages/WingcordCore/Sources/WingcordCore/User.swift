@@ -166,6 +166,25 @@ public enum PremiumTier: Int, Hashable, Sendable, Codable {
         case .basic: "Nitro Basic"
         }
     }
+
+    /// Whether Discord themes this account's profile from its own artwork when
+    /// it has set no `theme_colors`.
+    ///
+    /// **Not "has paid for something", which is the gate this replaced.**
+    /// `basic` is a paid tier and does not get it — so a test for `!= .none`
+    /// quantises an avatar, spends a fetch and a decode on it, and then themes
+    /// a profile Discord leaves grey. Confirmed against live accounts: `0` and
+    /// `3` are excluded, `1` and `2` are not.
+    ///
+    /// On the tier rather than at the call site because it is a fact about what
+    /// the tier buys, and because there is more than one surface that will want
+    /// to ask.
+    public var derivesProfileTheme: Bool {
+        switch self {
+        case .none, .basic: false
+        case .classic, .nitro: true
+        }
+    }
 }
 
 extension User {
@@ -206,8 +225,9 @@ public final class UserDecoration: Hashable, Sendable, Codable {
     /// Avatar decoration asset hash — the ring or frame drawn *around* the
     /// avatar, at 1.2x its diameter and outside its circular mask.
     public let avatarDecorationHash: String?
-    /// Nameplate asset path — the strip drawn behind a whole roster row.
-    public let nameplateAsset: String?
+    /// The strip drawn behind a whole roster row, and the colour it grounds
+    /// that row with.
+    public let nameplate: Nameplate?
     public let bannerHash: String?
     /// The profile accent, as Discord sends it: a 24-bit integer, or nil when
     /// unset. Nil and zero are different states and must not be collapsed —
@@ -226,6 +246,13 @@ public final class UserDecoration: Hashable, Sendable, Codable {
     /// The SKU of the profile effect, if they own one. Resolved to artwork
     /// separately — the profile route names the purchase, not the pictures.
     public let profileEffectSKU: String?
+    /// The SKU of the profile frame, if they own one.
+    ///
+    /// **A separate collectible from the effect, and an account can wear
+    /// both.** Discovered from `user_profile.collectibles`, which lists every
+    /// worn collectible by type; `profile_effect` names only the effect, so a
+    /// client reading that alone never learns the frame exists.
+    public let profileFrameSKU: String?
     /// Free text the account chose. Discord shows it beside the handle.
     public let pronouns: String?
     public let connectedAccounts: [ConnectedAccount]
@@ -244,13 +271,14 @@ public final class UserDecoration: Hashable, Sendable, Codable {
 
     public init(
         avatarDecorationHash: String? = nil,
-        nameplateAsset: String? = nil,
+        nameplate: Nameplate? = nil,
         bannerHash: String? = nil,
         accentColor: UInt32? = nil,
         bio: String? = nil,
         themeColorValues: [UInt32]? = nil,
         badges: [AccountBadge] = [],
         profileEffectSKU: String? = nil,
+        profileFrameSKU: String? = nil,
         pronouns: String? = nil,
         connectedAccounts: [ConnectedAccount] = [],
         premiumTier: PremiumTier = .none,
@@ -262,13 +290,14 @@ public final class UserDecoration: Hashable, Sendable, Codable {
         primaryGuildID: GuildID? = nil
     ) {
         self.avatarDecorationHash = avatarDecorationHash
-        self.nameplateAsset = nameplateAsset
+        self.nameplate = nameplate
         self.bannerHash = bannerHash
         self.accentColor = accentColor
         self.bio = bio
         self.themeColorValues = themeColorValues
         self.badges = badges
         self.profileEffectSKU = profileEffectSKU
+        self.profileFrameSKU = profileFrameSKU
         self.pronouns = pronouns
         self.connectedAccounts = connectedAccounts
         self.premiumTier = premiumTier
@@ -295,7 +324,7 @@ public final class UserDecoration: Hashable, Sendable, Codable {
         let merged = UserDecoration(
             avatarDecorationHash: incoming.avatarDecorationHash
                 ?? existing.avatarDecorationHash,
-            nameplateAsset: incoming.nameplateAsset ?? existing.nameplateAsset,
+            nameplate: incoming.nameplate ?? existing.nameplate,
             bannerHash: incoming.bannerHash ?? existing.bannerHash,
             accentColor: incoming.accentColor ?? existing.accentColor,
             bio: incoming.bio ?? existing.bio,
@@ -304,6 +333,7 @@ public final class UserDecoration: Hashable, Sendable, Codable {
                 : existing.themeColorValues,
             badges: incoming.badges.isEmpty ? existing.badges : incoming.badges,
             profileEffectSKU: incoming.profileEffectSKU ?? existing.profileEffectSKU,
+            profileFrameSKU: incoming.profileFrameSKU ?? existing.profileFrameSKU,
             pronouns: incoming.pronouns ?? existing.pronouns,
             connectedAccounts: incoming.connectedAccounts.isEmpty
                 ? existing.connectedAccounts
@@ -334,10 +364,10 @@ public final class UserDecoration: Hashable, Sendable, Codable {
     /// unconditionally and attaches it to every user has undone the entire point
     /// of the type, so it asks this first.
     public var isEmpty: Bool {
-        avatarDecorationHash == nil && nameplateAsset == nil && bannerHash == nil
+        avatarDecorationHash == nil && nameplate == nil && bannerHash == nil
             && accentColor == nil && bio == nil && primaryGuildTag == nil
             && (themeColorValues?.isEmpty ?? true) && badges.isEmpty
-            && profileEffectSKU == nil && pronouns == nil
+            && profileEffectSKU == nil && profileFrameSKU == nil && pronouns == nil
             && connectedAccounts.isEmpty && premiumTier == .none
             && legacyUsername == nil && mutualGuilds.isEmpty
     }
@@ -345,13 +375,14 @@ public final class UserDecoration: Hashable, Sendable, Codable {
     public static func == (lhs: UserDecoration, rhs: UserDecoration) -> Bool {
         lhs === rhs
             || (lhs.avatarDecorationHash == rhs.avatarDecorationHash
-                && lhs.nameplateAsset == rhs.nameplateAsset
+                && lhs.nameplate == rhs.nameplate
                 && lhs.bannerHash == rhs.bannerHash
                 && lhs.accentColor == rhs.accentColor
                 && lhs.bio == rhs.bio
                 && lhs.themeColorValues == rhs.themeColorValues
                 && lhs.badges == rhs.badges
                 && lhs.profileEffectSKU == rhs.profileEffectSKU
+                && lhs.profileFrameSKU == rhs.profileFrameSKU
                 && lhs.pronouns == rhs.pronouns
                 && lhs.connectedAccounts == rhs.connectedAccounts
                 && lhs.premiumTier == rhs.premiumTier
@@ -365,12 +396,13 @@ public final class UserDecoration: Hashable, Sendable, Codable {
 
     public func hash(into hasher: inout Hasher) {
         hasher.combine(avatarDecorationHash)
-        hasher.combine(nameplateAsset)
+        hasher.combine(nameplate)
         hasher.combine(bannerHash)
         hasher.combine(accentColor)
         hasher.combine(themeColorValues)
         hasher.combine(badges)
         hasher.combine(profileEffectSKU)
+        hasher.combine(profileFrameSKU)
         hasher.combine(primaryGuildTag)
     }
 }

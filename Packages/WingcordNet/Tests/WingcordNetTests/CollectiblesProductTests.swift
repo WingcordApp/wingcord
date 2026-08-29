@@ -3,17 +3,26 @@ import Testing
 import WingcordCore
 @testable import WingcordNet
 
-/// Decoding a collectible product into a playable effect.
+/// Decoding a collectible product into something drawable.
 ///
-/// The fixture is a **real response**, captured from
-/// `GET /collectibles-products/{sku}` for Kawaii Clouds and trimmed only of the
-/// store fields this client does not read. It is here verbatim because the two
-/// things most likely to be wrong about this payload are invisible to a
-/// hand-written fixture: the timing is in **milliseconds**, and the keys that
-/// matter are **camelCase** inside an otherwise snake_case API.
+/// **One route, two shapes, and that is the point of these tests.**
+/// `GET /collectibles-products/{sku}` answers for a profile effect and for a
+/// profile frame, and the two payloads share almost nothing: an effect carries
+/// an `effects` timeline with `src` URLs, a frame carries `layers` with ids and
+/// no URL at all. A decoder written for the first returns nothing for the
+/// second — not an error, just nothing — which is exactly how a frame somebody
+/// is wearing stays invisible while every request succeeds.
+///
+/// Both fixtures are **real responses**, captured live and trimmed only of the
+/// store fields this client does not read. They are here verbatim because the
+/// things most likely to be wrong about them are invisible to a hand-written
+/// fixture: the effect timings are in **milliseconds**, the effect keys are
+/// **camelCase inside an otherwise snake_case API**, and the frame's keys in
+/// that same object are snake_case again.
 struct CollectiblesProductTests {
 
-    private static let json = """
+    /// Kawaii Clouds: an intro that plays once, then a loop, back to back.
+    private static let effectJSON = """
     {
       "sku_id": "1402472280354116086",
       "name": "Kawaii Clouds",
@@ -27,25 +36,91 @@ struct CollectiblesProductTests {
         "reducedMotionSrc": "https://cdn.discordapp.com/assets/content/reduced",
         "effects": [
           {"src":"https://cdn.discordapp.com/assets/content/intro","loop":false,
-           "height":880,"width":450,"duration":3000,"start":0,"zIndex":100},
+           "height":880,"width":450,"duration":3000,"start":0,"loopDelay":0,
+           "position":{"x":0,"y":0},"zIndex":100,"randomizedSources":[]},
           {"src":"https://cdn.discordapp.com/assets/content/loop","loop":true,
-           "height":880,"width":450,"duration":3000,"start":3000,"zIndex":101}
+           "height":880,"width":450,"duration":3000,"start":3000,"loopDelay":0,
+           "position":{"x":0,"y":0},"zIndex":101,"randomizedSources":[]}
         ]
       }],
       "type": 1
     }
     """
 
-    private func decode() throws -> ProfileEffect {
+    /// Nevermore (White), which is the reason `loopDelay` is read at all: its
+    /// loop runs three seconds and then waits four, so its birds cross a card
+    /// every seven. Read without the delay they fly continuously.
+    private static let delayedEffectJSON = """
+    {
+      "sku_id": "1462116613775167569",
+      "name": "Nevermore (White)",
+      "items": [{
+        "type": 1,
+        "sku_id": "1462116613775167569",
+        "title": "Nevermore (White)",
+        "accessibilityLabel": "Gray birds fly across a misty background while feathers fall.",
+        "animationType": 2,
+        "reducedMotionSrc": "https://cdn.discordapp.com/assets/content/reduced",
+        "effects": [
+          {"src":"https://cdn.discordapp.com/assets/content/intro","loop":false,
+           "height":880,"width":450,"duration":3000,"start":0,"loopDelay":0,
+           "position":{"x":0,"y":0},"zIndex":100,"randomizedSources":[]},
+          {"src":"https://cdn.discordapp.com/assets/content/loop","loop":true,
+           "height":880,"width":450,"duration":3000,"start":4400,"loopDelay":4000,
+           "position":{"x":0,"y":0},"zIndex":101,"randomizedSources":[]}
+        ]
+      }],
+      "type": 1
+    }
+    """
+
+    /// Dark Roses (Blue): a frame, `type: 3`, with no `src` anywhere in it.
+    private static let frameJSON = """
+    {
+      "sku_id": "1515124557290410204",
+      "name": "Dark Roses (Blue)",
+      "summary": "Elevate and wrap your profile with a frame.",
+      "items": [{
+        "type": 3,
+        "sku_id": "1515124557290410204",
+        "label": "Blue roses sit on the top left and bottom right corners of the profile and climb up the sides",
+        "layers": [
+          {"id":"1515124885113012234","type":"staple","order":"front","anchor":"top","responsive":false},
+          {"id":"1515124888313266236","type":"staple","order":"front","anchor":"bottom","responsive":false}
+        ],
+        "inner_width": 1200,
+        "overflow_top": 211,
+        "overflow_bottom": 186,
+        "overflow_horizontal": 56
+      }],
+      "type": 3
+    }
+    """
+
+    private enum Shape: Error { case notAnEffect, notAFrame }
+
+    private func product(_ json: String) throws -> Collectible {
         let dto = try JSONDecoder().decode(
-            CollectiblesProductDTO.self, from: Data(Self.json.utf8)
+            CollectiblesProductDTO.self, from: Data(json.utf8)
         )
         return try #require(dto.domain)
     }
 
+    private func effect(_ json: String = effectJSON) throws -> ProfileEffect {
+        guard case .effect(let effect) = try product(json) else { throw Shape.notAnEffect }
+        return effect
+    }
+
+    private func frame() throws -> ProfileFrame {
+        guard case .frame(let frame) = try product(Self.frameJSON) else { throw Shape.notAFrame }
+        return frame
+    }
+
+    // MARK: Profile effects
+
     @Test("Both layers survive, in paint order")
     func decodesLayers() throws {
-        let effect = try decode()
+        let effect = try effect()
         #expect(effect.skuID == "1402472280354116086")
         #expect(effect.title == "Kawaii Clouds")
         #expect(effect.layers.count == 2)
@@ -56,7 +131,7 @@ struct CollectiblesProductTests {
     func convertsTiming() throws {
         // Read as seconds, each layer would last most of an hour and the loop
         // would not begin until the card had been open for fifty minutes.
-        let effect = try decode()
+        let effect = try effect()
         #expect(effect.layers[0].start == 0)
         #expect(effect.layers[0].duration == 3)
         #expect(effect.layers[1].start == 3)
@@ -65,26 +140,114 @@ struct CollectiblesProductTests {
 
     @Test("Loop flags are carried, not defaulted")
     func carriesLoopFlags() throws {
-        let effect = try decode()
+        let effect = try effect()
         #expect(effect.layers[0].loops == false)
         #expect(effect.layers[1].loops == true)
         #expect(effect.loopsForever)
     }
 
+    @Test("The gap between passes is carried, and in seconds")
+    func carriesLoopDelay() throws {
+        // Dropped, Nevermore's birds fly every three seconds instead of every
+        // seven — the loop restarting the instant it ends. The default is zero
+        // and most effects send zero, which is why this is invisible until an
+        // effect that uses it turns up.
+        let effect = try effect(Self.delayedEffectJSON)
+        #expect(effect.layers[1].loopDelay == 4)
+        #expect(effect.layers[1].start == 4.4)
+    }
+
     @Test("The reduced-motion still and the label are picked up")
     func carriesAccessibility() throws {
-        let effect = try decode()
+        let effect = try effect()
         #expect(effect.reducedMotionURL?.lastPathComponent == "reduced")
         #expect(effect.accessibilityLabel?.hasPrefix("Pink clouds") == true)
     }
 
-    @Test("A product with no effects is not an effect")
+    // MARK: Profile frames
+
+    @Test("A frame decodes as a frame, not as an empty effect")
+    func decodesFrame() throws {
+        let frame = try frame()
+        #expect(frame.skuID == "1515124557290410204")
+        #expect(frame.frontLayers.count == 2)
+        #expect(frame.backLayers.isEmpty)
+        #expect(frame.label?.hasPrefix("Blue roses") == true)
+    }
+
+    @Test("Each layer knows the edge it hangs from")
+    func carriesAnchors() throws {
+        let frame = try frame()
+        #expect(frame.frontLayers.map(\.anchor) == [.top, .bottom])
+        #expect(frame.frontLayers.allSatisfy { $0.order == .front })
+    }
+
+    @Test("Layer artwork is addressed by layer id under the product's SKU")
+    func buildsLayerURLs() throws {
+        // The payload carries no `src` for a frame at ALL — only ids — so this
+        // template is the whole of how a frame becomes pictures. Verified
+        // against the live CDN: `static` answers 200 and `animated`, `asset`
+        // and `preview` all 404, which is why a frame needs no clock.
+        let frame = try frame()
+        #expect(
+            frame.frontLayers[0].url.absoluteString
+                == "https://cdn.discordapp.com/media/v1/collectibles-shop/1515124557290410204/1515124885113012234/static"
+        )
+    }
+
+    @Test("The overflow numbers survive, and they describe the artwork's own width")
+    func carriesOverflow() throws {
+        let frame = try frame()
+        #expect(frame.innerWidth == 1200)
+        #expect(frame.overflowTop == 211)
+        #expect(frame.overflowBottom == 186)
+        #expect(frame.overflowHorizontal == 56)
+        // **The relationship the whole layout rests on.** Both of this frame's
+        // layer PNGs are exactly 1312 pixels wide, which is this sum — so the
+        // artwork is authored in the same coordinate space as these numbers and
+        // one scale factor places all of it. A payload where that did not hold
+        // would need the layer's own size, which the payload does not send.
+        #expect(frame.innerWidth + frame.overflowHorizontal * 2 == 1312)
+    }
+
+    @Test("A product with neither shape is nothing, rather than an empty one")
     func emptyProductIsNil() throws {
-        let empty = #"{"sku_id":"1","name":"x","items":[{"sku_id":"1","effects":[]}]}"#
+        let empty = #"{"sku_id":"1","name":"x","items":[{"sku_id":"1","effects":[],"layers":[]}]}"#
         let dto = try JSONDecoder().decode(
             CollectiblesProductDTO.self, from: Data(empty.utf8)
         )
         #expect(dto.domain == nil)
+    }
+
+    @Test("A frame with layers but no authored width is not drawable")
+    func frameWithoutInnerWidthIsNil() throws {
+        // Every number in a frame's layout is a fraction of `inner_width`.
+        // Without it there is no scale, and a frame drawn at an assumed one is
+        // a garland the wrong size on every card.
+        let json = #"""
+        {"sku_id":"1","name":"x","items":[{"sku_id":"1",
+         "layers":[{"id":"9","order":"front","anchor":"top"}]}]}
+        """#
+        let dto = try JSONDecoder().decode(
+            CollectiblesProductDTO.self, from: Data(json.utf8)
+        )
+        #expect(dto.domain == nil)
+    }
+
+    @Test("An unrecognised anchor or order costs one picture, not the frame")
+    func unknownVocabularyFallsBack() throws {
+        let json = #"""
+        {"sku_id":"1","name":"x","items":[{"sku_id":"1","inner_width":1200,
+         "layers":[{"id":"9","order":"sideways","anchor":"middle"}]}]}
+        """#
+        let dto = try JSONDecoder().decode(
+            CollectiblesProductDTO.self, from: Data(json.utf8)
+        )
+        guard case .frame(let frame) = try #require(dto.domain) else {
+            throw Shape.notAFrame
+        }
+        #expect(frame.frontLayers.count == 1)
+        #expect(frame.frontLayers[0].anchor == .top)
     }
 
     /// The mutual servers arrive as a list and are kept as one.

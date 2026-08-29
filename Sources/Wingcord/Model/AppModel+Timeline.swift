@@ -43,6 +43,10 @@ extension AppModel {
     /// engine is `nonisolated` and must never reach into the store, and doing
     /// the lookups once per page beats doing them once per row.
     func authorInfo(for items: [TimelineItem]) -> [UserID: TimelineLayoutEngine.AuthorInfo] {
+        // Hoisted for the reason the roster's is: an observable read per author
+        // is a tracked access per row of the page, for a value that cannot move
+        // while one is being laid out.
+        let saturation = userColorSaturation
         var result: [UserID: TimelineLayoutEngine.AuthorInfo] = [:]
         let guildID = selectedChannelID.flatMap { channelIndex.guildID(of: $0) }
         let guildRoles = guildID.flatMap { roles[$0] } ?? [:]
@@ -65,9 +69,9 @@ extension AppModel {
             let member = guildID.flatMap { members[$0]?[userID] }
             result[userID] = TimelineLayoutEngine.AuthorInfo(
                 name: member?.resolvedName(user: user) ?? user.preferredName,
-                colorValue: member.flatMap {
-                    RoleResolver.nameColorValue(of: $0.roleIDs, in: guildRoles)
-                },
+                colorValue: member
+                    .flatMap { RoleResolver.nameColorValue(of: $0.roleIDs, in: guildRoles) }
+                    .map { UserColor.desaturated($0, by: saturation) },
                 avatarURL: avatarURL(
                     forUserID: userID,
                     inGuild: guildID,

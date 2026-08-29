@@ -69,6 +69,38 @@ final class AppSettings {
         }
     }
 
+    /// How much of its saturation colour that came from a PERSON keeps.
+    ///
+    /// A role's colour, a profile's theme, a name tinted by seniority. The app's
+    /// own chrome is achromatic by design and is deliberately out of scope —
+    /// this turns down the part of the window nobody can art-direct.
+    ///
+    /// **An accessibility setting, not a taste one.** Saturated colour is
+    /// fatiguing or painful for readers with visual stress, migraine sensitivity
+    /// or some low-vision conditions, and a client cannot stop anyone choosing
+    /// neon magenta for a role. Discord ships the same multiplier; macOS has no
+    /// system signal for it, which is why this is a preference here rather than
+    /// something resolved from the system like Reduce Motion.
+    ///
+    /// 1 is off and is the default, and `UserColor` returns its input untouched
+    /// there — so the overwhelmingly common case costs no arithmetic at all.
+    var userColorSaturation: Double {
+        get { storedUserColorSaturation }
+        set { storedUserColorSaturation = min(1, max(0, newValue)) }
+    }
+
+    private var storedUserColorSaturation: Double = 1 {
+        didSet {
+            guard storedUserColorSaturation != oldValue else { return }
+            defaults.set(storedUserColorSaturation, forKey: Key.userColorSaturation)
+            // The transcript's author names are drawn, and their colours are
+            // baked into a laid-out row — so the canvas has to be told to
+            // re-measure. The roster reaches its own memo through
+            // `RosterMemoKey`, which carries this value for the same reason.
+            notifyPresentation()
+        }
+    }
+
     /// The skin tone the emoji picker applies to every emoji that takes one.
     ///
     /// Stored as the modifier's index rather than the glyph: the table is
@@ -263,6 +295,8 @@ final class AppSettings {
         // is indistinguishable from a deliberate `false` and silently overrides
         // every default that should be `true`.
         storedTextScale = defaults.object(forKey: Key.textScale) as? Double ?? 1.0
+        storedUserColorSaturation =
+            defaults.object(forKey: Key.userColorSaturation) as? Double ?? 1
         isCompactMode = defaults.object(forKey: Key.compactMode) as? Bool ?? false
         showsMemberListByDefault = defaults.object(forKey: Key.showsMemberList) as? Bool ?? true
         globalHotkey = (defaults.object(forKey: Key.globalHotkey) as? Int)
@@ -302,6 +336,7 @@ final class AppSettings {
 
     private enum Key {
         static let textScale = "appearance.textScale"
+        static let userColorSaturation = "accessibility.userColorSaturation"
         static let compactMode = "appearance.compactMode"
         static let showsMemberList = "appearance.showsMemberList"
         static let globalHotkey = "shortcuts.globalHotkey"

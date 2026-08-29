@@ -50,6 +50,10 @@ struct ProfilePresentation: Equatable, Sendable {
     /// The profile's own two-colour theme, primary first. Empty when unthemed —
     /// which is most people, and the card must look deliberate for them too.
     var themeColorValues: [UInt32] = []
+    /// Whether those colours were quantised out of the person's artwork rather
+    /// than chosen by them. **Not derivable from the values**, and the two are
+    /// drawn differently — see `ProfileGround.derived`.
+    var isThemeDerived: Bool = false
     var status: PresenceStatus
     var customStatus: String?
     /// The glyph beside it. Kept apart from the text because the wire keeps them
@@ -71,6 +75,12 @@ struct ProfilePresentation: Equatable, Sendable {
     var pronouns: String?
     /// The layered animation drawn over the card, once its SKU has resolved.
     var effect: ProfileEffect?
+    /// The artwork wrapping the card's edges, once its SKU has resolved.
+    ///
+    /// Separate from `effect` because they are separate purchases and an
+    /// account can wear both — torriel wears Nevermore and Dark Roses at once,
+    /// and folding one into the other would make each hide the other.
+    var frame: ProfileFrame?
     var connections: [ConnectedAccount]
     var premiumTier: PremiumTier
     var premiumSince: Date?

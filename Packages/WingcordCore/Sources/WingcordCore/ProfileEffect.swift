@@ -42,6 +42,14 @@ public struct ProfileEffect: Hashable, Sendable {
         public var duration: Double
         /// Whether it repeats after that pass.
         public var loops: Bool
+        /// The gap between one pass and the next, in seconds.
+        ///
+        /// **Zero for most effects and emphatically not for all of them.**
+        /// Nevermore (White) sends `duration: 3000` with `loopDelay: 4000`, so
+        /// its birds cross the card every seven seconds; a player that ignores
+        /// this runs them every three and turns an occasional flight into
+        /// constant traffic over somebody's name.
+        public var loopDelay: Double
         /// Paint order. Discord numbers these from 100 up, above the card.
         public var zIndex: Int
         /// The authored size, which sets the aspect the layer is drawn at.
@@ -52,6 +60,7 @@ public struct ProfileEffect: Hashable, Sendable {
             start: Double,
             duration: Double,
             loops: Bool,
+            loopDelay: Double = 0,
             zIndex: Int,
             size: CGSize
         ) {
@@ -59,6 +68,7 @@ public struct ProfileEffect: Hashable, Sendable {
             self.start = start
             self.duration = duration
             self.loops = loops
+            self.loopDelay = loopDelay
             self.zIndex = zIndex
             self.size = size
         }
@@ -75,7 +85,15 @@ public struct ProfileEffect: Hashable, Sendable {
             let local = time - start
             guard local >= 0 else { return nil }
             guard duration > 0 else { return 0 }
-            if loops { return local.truncatingRemainder(dividingBy: duration) }
+            if loops {
+                // One cycle is the pass plus the gap after it, and a layer
+                // sitting in that gap shows NOTHING rather than freezing on its
+                // last frame — which is the difference between birds that fly
+                // past every seven seconds and a bird parked over a name.
+                let cycle = duration + max(loopDelay, 0)
+                let position = local.truncatingRemainder(dividingBy: cycle)
+                return position < duration ? position : nil
+            }
             return local < duration ? local : nil
         }
 

@@ -167,6 +167,26 @@ private struct AppearancePane: View {
             )
         }
 
+        SettingsGroup("Colour") {
+            SettingsCard {
+                SettingsSliderRow(
+                    title: "User colour intensity",
+                    help: "Applies to colour that came from people — role colours, "
+                        + "profile themes — and never to Wingcord's own chrome.",
+                    value: $settings.userColorSaturation,
+                    range: 0...1,
+                    step: 0.05,
+                    format: { $0.formatted(.percent.precision(.fractionLength(0))) }
+                )
+            }
+            SettingsFootnote(
+                "Hue and brightness are left alone, so a dark role stays dark and two "
+                    + "colours you could tell apart still look different. At 0% every "
+                    + "user colour becomes the grey of its own brightness.",
+                symbolName: "paintpalette"
+            )
+        }
+
         SettingsGroup("Motion and transparency") {
             SettingsCard {
                 SettingsNavigationRow(

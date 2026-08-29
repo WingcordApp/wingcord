@@ -52,6 +52,39 @@ struct ProfileEffectTests {
         #expect(!layer.isFinished(at: 10_000))
     }
 
+    @Test("A loop with a delay shows nothing in the gap between passes")
+    func loopDelayLeavesAGap() {
+        // Nevermore (White)'s numbers, captured live: three seconds of birds,
+        // then four of nothing, from a cue at 4.4s. Ignoring the delay does not
+        // fail loudly — it just runs the loop back to back, which turns an
+        // occasional flight into constant traffic over somebody's name.
+        let layer = ProfileEffect.Layer(
+            url: URL(string: "https://cdn.discordapp.com/assets/content/loop")!,
+            start: 4.4, duration: 3, loops: true, loopDelay: 4, zIndex: 101,
+            size: CGSize(width: 450, height: 880)
+        )
+        #expect(layer.phase(at: 4.3) == nil)
+        #expect(layer.phase(at: 4.4) == 0)
+        #expect(layer.phase(at: 6.4) == 2)
+        // The pass ended at 7.4; the next begins at 11.4.
+        #expect(layer.phase(at: 8) == nil)
+        #expect(layer.phase(at: 11) == nil)
+        let second = try? #require(layer.phase(at: 12.4))
+        #expect(second == 1)
+        // Still a loop, however long the gap.
+        #expect(!layer.isFinished(at: 10_000))
+    }
+
+    @Test("With no delay a loop is continuous, exactly as before")
+    func zeroDelayIsUnchanged() {
+        // The delay defaults to zero and most effects send zero, so this is the
+        // path every existing effect takes and it must not have moved.
+        let layer = loop()
+        #expect(layer.phase(at: 3) == 0)
+        #expect(layer.phase(at: 5.999) != nil)
+        #expect(layer.phase(at: 6) == 0)
+    }
+
     @Test("Layers are held in paint order regardless of how they arrive")
     func layersSortByZIndex() {
         // Discord does not promise an order in the array; the zIndex is the

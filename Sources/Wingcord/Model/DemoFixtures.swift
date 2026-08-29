@@ -1,3 +1,4 @@
+import CoreGraphics
 import Foundation
 import WingcordCore
 
@@ -13,6 +14,46 @@ import WingcordCore
 /// count, and how a layout regression is reproduced without waiting for a real
 /// channel to look the same way twice.
 enum DemoFixtures {
+
+    /// Stands in for artwork on the one fixture with a derived theme. The CDN
+    /// answers 404 for it, which is the honest outcome for a fabricated account
+    /// and costs nothing: the palette is seeded, so nothing ever asks.
+    private static let derivedAvatarHash = "demoderivedprofileavatar0000000f"
+
+    /// The one nameplate path captured from a live account.
+    ///
+    /// Ends in a slash, as Discord sends it — `CDN.nameplate(asset:)` appends
+    /// the file name rather than joining a path.
+    private static let nameplateAsset = "nameplates/dark_roses/1526656194121568256/"
+
+    /// Dark Roses (Blue), exactly as `GET /collectibles-products/{sku}` sent it.
+    ///
+    /// Seeded straight onto the store because `--demo` makes no requests: the
+    /// artwork is fetched from the CDN like any other picture, but the payload
+    /// that says *where to put it* would otherwise never arrive.
+    private static let profileFrame: ProfileFrame? = {
+        let sku = "1515124557290410204"
+        let layers: [(String, ProfileFrame.Anchor)] = [
+            ("1515124885113012234", .top),
+            ("1515124888313266236", .bottom),
+        ]
+        let pieces = layers.compactMap { id, anchor in
+            CDN.profileFrameLayer(sku: sku, layerID: id).map {
+                ProfileFrame.Layer(id: id, url: $0, anchor: anchor, order: .front)
+            }
+        }
+        guard !pieces.isEmpty else { return nil }
+        return ProfileFrame(
+            skuID: sku,
+            label: "Blue roses sit on the top left and bottom right corners of "
+                + "the profile and climb up the sides",
+            innerWidth: 1200,
+            overflowTop: 211,
+            overflowBottom: 186,
+            overflowHorizontal: 56,
+            layers: pieces
+        )
+    }()
 
     static func populate(_ model: AppModel) {
         model.connectionState = .ready
@@ -34,6 +75,46 @@ enum DemoFixtures {
                 isBot: offset % 11 == 0 && offset > 0
             )
         }
+        // Collectibles on a handful of the roster.
+        //
+        // **Real assets, and for the reason the banner fixture already makes.**
+        // A nameplate is fitted to the plate rect by arithmetic and a frame is
+        // placed entirely by four numbers out of a payload; an arrangement like
+        // that which has never been on screen without an account is one nobody
+        // has checked. Both of these are public on the CDN — verified with an
+        // unauthenticated request — so `--demo` draws the same pictures a real
+        // session does.
+        //
+        // **One artwork across several palettes rather than several artworks.**
+        // Only one nameplate asset has been captured, and inventing sibling
+        // paths would 404 into a roster of empty plates. What varies is the
+        // palette, which is what exercises the wash table.
+        let palettes: [NameplatePalette] = [.cobalt, .crimson, .clover, .violet, .lemon]
+        for (offset, id) in userIDs.enumerated() where offset % 5 == 2 {
+            guard let user = users[id] else { continue }
+            users[id] = User(
+                id: user.id,
+                username: user.username,
+                displayName: user.displayName,
+                avatarHash: user.avatarHash,
+                discriminator: user.discriminator,
+                flags: user.flags,
+                isBot: user.isBot,
+                isSystem: user.isSystem,
+                decoration: UserDecoration(
+                    nameplate: Nameplate(
+                        asset: nameplateAsset,
+                        palette: palettes[(offset / 5) % palettes.count],
+                        label: "Blue roses with a butterfly."
+                    ),
+                    // Every other plated member also wears the frame, so a
+                    // roster click reaches a card with one and a card without.
+                    profileFrameSKU: offset % 10 == 2 ? profileFrame?.skuID : nil
+                )
+            )
+        }
+        if let profileFrame { model.profileFrames[profileFrame.skuID] = profileFrame }
+
         let me = userIDs[0]
         users[me] = users[me].map { user in
             User(
@@ -43,13 +124,82 @@ enum DemoFixtures {
                 discriminator: user.discriminator,
                 isBot: false,
                 decoration: UserDecoration(
+                    nameplate: Nameplate(
+                        asset: nameplateAsset, palette: .cobalt,
+                        label: "Blue roses with a butterfly."
+                    ),
                     bio: "sometimes dev sometimes music, sometimes wasting time "
-                        + "playing games\n\nPrimarily Swift and C++"
+                        + "playing games\n\nPrimarily Swift and C++",
+                    // A themed profile, so `--demo` exercises the coloured
+                    // ground and not only the neutral one. These are the pair a
+                    // real derived theme produced — the quantiser's own answer
+                    // for a grey-and-taupe avatar — rather than a colour picked
+                    // to look good, so what is on screen is what the algorithm
+                    // actually yields.
+                    // The reader wears one too, so the card the now bar opens
+                    // is the framed case rather than the bare one.
+                    profileFrameSKU: profileFrame?.skuID
                 )
             )
         }
         model.currentUserID = me
         model.mentionableIDs = [me.rawValue]
+
+        // A profile with a theme it CHOSE, so all three grounds are reachable
+        // in `--demo`: neutral on most of the roster, chosen here, derived
+        // below. The three are drawn differently and only the last two share a
+        // code path.
+        let chosenID = userIDs[6]
+        if let user = users[chosenID] {
+            users[chosenID] = User(
+                id: user.id,
+                username: user.username,
+                displayName: user.displayName,
+                avatarHash: user.avatarHash,
+                discriminator: user.discriminator,
+                isBot: false,
+                decoration: UserDecoration(
+                    themeColorValues: [0x46_1F_63, 0x7A_2A_5C],
+                    premiumTier: .nitro
+                )
+            )
+        }
+
+        // One profile themed the OTHER way, so `--demo` shows both grounds.
+        //
+        // A chosen theme is a pair somebody picked; a derived one is quantised
+        // out of their artwork and drawn differently — see `ProfileGround`. The
+        // palette is seeded rather than extracted because a fixture avatar has
+        // no artwork behind it, and seeding is also what keeps the guard in
+        // `deriveTheme` from ever reaching the network for one. The values are
+        // a real derived pair, measured from a live account.
+        let derivedID = userIDs[0]
+        if let user = users[derivedID] {
+            users[derivedID] = User(
+                id: user.id,
+                username: user.username,
+                displayName: user.displayName,
+                avatarHash: derivedAvatarHash,
+                discriminator: user.discriminator,
+                isBot: false,
+                // Merged, not replaced: this fixture is about the ground the
+                // card is painted on, and dropping the bio, the nameplate and
+                // the frame to demonstrate it would take three other things off
+                // the one card that shows them.
+                decoration: UserDecoration(
+                    nameplate: user.decoration?.nameplate,
+                    bio: user.decoration?.bio,
+                    profileFrameSKU: user.decoration?.profileFrameSKU,
+                    premiumTier: .nitro
+                )
+            )
+            if let url = CDN.avatar(
+                userID: derivedID, hash: derivedAvatarHash,
+                side: CGFloat(ProfileThemePalette.pixelSize) / 2
+            ) {
+                model.derivedPalettes[url] = [0xC9_9C_8A, 0x2B_35_39]
+            }
+        }
         model.users = users
 
         var guilds: [GuildID: Guild] = [:]

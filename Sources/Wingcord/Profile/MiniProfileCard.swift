@@ -70,7 +70,7 @@ struct MiniProfileCard: View {
     /// How far the avatar hangs below the banner.
     private var avatarDrop: CGFloat { Metrics.avatarProfile / 2 - 6 }
 
-    private var ground: ProfileGround { ProfileGround(themeColorValues: profile.themeColorValues) }
+    private var ground: ProfileGround { ProfileGround(themeColorValues: profile.themeColorValues, isDerived: profile.isThemeDerived) }
 
     /// What a section has to lay out inside. One definition, because the badge
     /// flyout has to know it in order not to reach past the card's edge.
@@ -146,6 +146,21 @@ struct MiniProfileCard: View {
         .clipShape(.rect(cornerRadius: corner, style: .continuous))
         // A column casts no shadow: it is not floating over anything.
         .shadow(color: .black.opacity(form == .card ? 0.45 : 0), radius: 28, y: 10)
+        // **A frame wraps a card's CORNERS, so a column never gets one.** That
+        // is the same distinction `Form` already draws and not a second one: a
+        // card ends where its content does and has four edges to hang artwork
+        // from, while a column is a region running the height of the pane whose
+        // foot is the window's. There is no bottom edge there to anchor to, and
+        // a garland pinned to the bottom of a sidebar is not what anybody
+        // bought.
+        //
+        // After the shadow, deliberately. Applied before it, the overhanging
+        // artwork would be shadowed too — a drop shadow under a rose hanging in
+        // free space, cast by nothing.
+        //
+        // After the shadow, deliberately: applied before it, the artwork would
+        // be shadowed along with the card.
+        .profileFrame(form == .card ? profile.frame : nil, cardWidth: width)
         // The card for an emoji somebody put in their bio. A nested popover,
         // one per surface — see `ExpressionInfoPopover`.
         .presentsExpressionInfo(for: $inspectedEmoji)
@@ -250,12 +265,7 @@ struct MiniProfileCard: View {
     /// strip, which is what Discord draws too — and exactly wrong as a tint for
     /// the body underneath.
     private var bannerPlate: some View {
-        let seed = ground.plateSeed(accentColorValue: profile.accentColorValue)
-        return LinearGradient(
-            colors: [seed, seed.opacity(0.6)],
-            startPoint: .topLeading,
-            endPoint: .bottomTrailing
-        )
+        Rectangle().fill(ground.plateStyle(accentColorValue: profile.accentColorValue))
     }
 
     private var identity: some View {

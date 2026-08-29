@@ -211,11 +211,12 @@ public actor DiscordREST {
 
     /// Resolves a collectible SKU to its artwork.
     ///
-    /// Profile effects are named on a profile by SKU and described here. Shared
-    /// across every account that owns one, so the caller caches by SKU rather
-    /// than by user — a server where twenty people wear the same effect fetches
-    /// it once.
-    public func collectible(sku: String) async throws -> ProfileEffect? {
+    /// Profile effects and profile frames are both named on a profile by SKU
+    /// and both described here, in different shapes — see `Collectible`.
+    /// Shared across every account that owns one, so the caller caches by SKU
+    /// rather than by user: a server where twenty people wear the same frame
+    /// fetches it once.
+    public func collectible(sku: String) async throws -> Collectible? {
         try await get(
             "/collectibles-products/\(sku)",
             route: "collectibles-products/{sku}",
