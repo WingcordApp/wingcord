@@ -136,26 +136,9 @@ extension AppModel {
                   let existing = box.messages[index].payload,
                   let poll = existing.poll
             else { return }
-            var message = box.messages[index]
             // The payload box is immutable and shared, so a change builds a new
             // one rather than mutating what other holders can see.
-            message.payload = MessagePayload(
-                attachments: existing.attachments,
-                embeds: existing.embeds,
-                reactions: existing.reactions,
-                stickers: existing.stickers,
-                components: existing.components,
-                displayComponents: existing.displayComponents,
-                poll: body(poll),
-                mentionedUserIDs: existing.mentionedUserIDs,
-                mentionedRoleIDs: existing.mentionedRoleIDs,
-                mentionsEveryone: existing.mentionsEveryone,
-                referencedMessageID: existing.referencedMessageID,
-                referencedChannelID: existing.referencedChannelID,
-                webhookID: existing.webhookID,
-                nonce: existing.nonce
-            )
-            box.messages[index] = message
+            box.messages[index].payload = existing.replacingPoll(body(poll))
         }
         messageContentRevision &+= 1
     }
@@ -199,21 +182,10 @@ extension AppModel {
             }
 
             // The payload box is immutable and shared, so a change builds a new
-            // one rather than mutating what other holders can see.
-            let existing = message.payload
-            message.payload = MessagePayload(
-                attachments: existing?.attachments ?? [],
-                embeds: existing?.embeds ?? [],
-                reactions: reactions,
-                stickers: existing?.stickers ?? [],
-                mentionedUserIDs: existing?.mentionedUserIDs ?? [],
-                mentionedRoleIDs: existing?.mentionedRoleIDs ?? [],
-                mentionsEveryone: existing?.mentionsEveryone ?? false,
-                referencedMessageID: existing?.referencedMessageID,
-                referencedChannelID: existing?.referencedChannelID,
-                webhookID: existing?.webhookID,
-                nonce: existing?.nonce
-            )
+            // one rather than mutating what other holders can see — through the
+            // copy helper, which is the one place that knows every field.
+            message.payload = (message.payload ?? MessagePayload())
+                .replacingReactions(reactions)
             box.messages[index] = message
         }
         messageContentRevision &+= 1

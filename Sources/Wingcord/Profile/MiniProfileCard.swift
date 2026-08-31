@@ -37,6 +37,8 @@ struct MiniProfileCard: View {
     /// The emoji whose card is open, if any. One popover per surface rather
     /// than one per picture in somebody's prose.
     @State private var inspectedEmoji: EmojiRef?
+    /// Whether the person menu is open.
+    @State private var isMenuOpen = false
     /// How wide the card is laid out.
     ///
     /// A parameter rather than a constant because the same card is the popover
@@ -100,7 +102,30 @@ struct MiniProfileCard: View {
                 }
             }
             if !profile.isLoading, !profile.roles.isEmpty {
-                section("Roles") { RoleChipFlow(roles: profile.roles) }
+                section("Roles") {
+                    // **Two rows, then a count.** A card is a summary that opens
+                    // beside a row; somebody holding forty-six roles would
+                    // otherwise open a card taller than the window, and the
+                    // roles are not why anybody clicked. The full profile shows
+                    // all of them.
+                    RoleChipFlow(
+                        roles: profile.roles,
+                        maximumRows: form == .card ? 2 : nil,
+                        width: contentWidth
+                    )
+                }
+            }
+            if !profile.isLoading {
+                connections
+                if !profile.isSelf {
+                    ProfileNoteField(
+                        userID: profile.userID,
+                        note: profile.note,
+                        width: contentWidth
+                    )
+                    .padding(.horizontal, Spacing.margin)
+                    .padding(.bottom, Spacing.snug)
+                }
             }
         }
         // **Pinned on the VStack itself, not only on whatever hosts the card.**
@@ -131,6 +156,23 @@ struct MiniProfileCard: View {
                 ProfileEffectView(effect: effect, width: width)
                     .allowsHitTesting(false)
                     .accessibilityLabel(Text(effect.accessibilityLabel ?? effect.title))
+            }
+        }
+        // **The one control on the card, and it is a glyph rather than a
+        // slab.** What this surface used to have was a filled accent button and
+        // a bordered one sitting on somebody's own palette — two more colours
+        // competing with the only ones that mean anything here. A quiet circle
+        // in the corner is a different object: it names no action until it is
+        // opened, so it cannot compete with the identity beside it.
+        .overlay(alignment: .topTrailing) {
+            if !profile.isSelf {
+                UserMenuButton(isOpen: $isMenuOpen)
+                    .padding(Spacing.base)
+                    .presentsUserMenu(
+                        for: profile.userID,
+                        inGuild: profile.guild?.id,
+                        isPresented: $isMenuOpen
+                    )
             }
         }
         .clipShape(.rect(cornerRadius: corner, style: .continuous))
@@ -294,6 +336,18 @@ struct MiniProfileCard: View {
                         .foregroundStyle(InkColor.secondary)
                         .lineLimit(1)
                 }
+                // **A label, never a filter.** The profile route says
+                // `private: true` and still hands over the mutual servers the
+                // reader can see for themselves; hiding them here would be
+                // inventing a restriction the server did not make, and dropping
+                // the flag would be losing something this person chose to say.
+                if profile.isProfilePrivate {
+                    Image(systemName: "lock.fill")
+                        .font(.system(size: 9))
+                        .foregroundStyle(InkColor.tertiary)
+                        .help("This profile is private")
+                        .accessibilityLabel(Text("Private profile"))
+                }
                 Spacer(minLength: 0)
             }
             .font(.system(.caption))
@@ -346,6 +400,21 @@ struct MiniProfileCard: View {
                 .padding(.bottom, Spacing.snug)
         }
 
+        if !profile.mutualFriends.isEmpty {
+            MutualFriendsRow(friends: profile.mutualFriends)
+                .padding(.horizontal, Spacing.margin)
+                .padding(.bottom, Spacing.snug)
+        }
+    }
+
+    /// The accounts they have linked.
+    ///
+    /// **Below the roles, not above the bio.** Connections are a footer: they
+    /// are where somebody goes *after* reading who this person is, and putting
+    /// them between the mutual servers and the bio pushed the one line the card
+    /// exists for below the fold on anybody with four linked accounts.
+    @ViewBuilder
+    private var connections: some View {
         if !profile.connections.isEmpty {
             section("Connections") {
                 FlowLayout(spacing: Spacing.tight) {

@@ -73,7 +73,7 @@ private struct GeneralPane: View {
             SettingsCard {
                 SettingsNavigationRow(
                     title: "Appearance",
-                    subtitle: "Text size, density and motion.",
+                    subtitle: "Themes, a background picture, text size and density.",
                     symbolName: SettingsSection.appearance.symbolName,
                     tint: SettingsSection.appearance.tint
                 ) { navigate(.appearance) }
@@ -97,6 +97,20 @@ private struct GeneralPane: View {
                     isOn: $settings.showsMemberListByDefault
                 )
             }
+        }
+
+        SettingsGroup("Advanced") {
+            SettingsCard {
+                SettingsToggle(
+                    title: "Developer mode",
+                    help: "Adds Copy Message ID and Copy User ID to the menus that have an id to copy. Nothing else changes.",
+                    isOn: $settings.developerMode
+                )
+            }
+            SettingsFootnote(
+                "The items are absent rather than greyed out when this is off — a menu a third longer for nobody's benefit is worse than a shorter one.",
+                symbolName: "number"
+            )
         }
 
         SettingsGroup("Language") {
@@ -126,8 +140,53 @@ private struct GeneralPane: View {
 
 private struct AppearancePane: View {
     @State private var settings = AppSettings.shared
+    @State private var theme = ThemeStore.shared
+    @Environment(\.motion) private var motion
 
     var body: some View {
+        SettingsGroup("Theme") {
+            ThemeGallery()
+            SettingsFootnote(
+                "A theme colours the ground the app is read on and the one accent it spends — "
+                    + "never a role, an avatar or anything else that came from a person. Every "
+                    + "one of them is built on the same three steps of lightness, so the "
+                    + "separation between the reading surface, a card on it and a row inside "
+                    + "that card is the same whichever you pick.",
+                symbolName: "circle.lefthalf.filled"
+            )
+        }
+
+        // Only while it is the theme in use. A picker for a blend nobody has
+        // selected is a control whose every move is invisible — and it is a
+        // hundred and fifty points of card standing between the gallery and the
+        // picture.
+        //
+        // The group is always in the tree and its *contents* come and go, which
+        // is what gives the animation something stable to run on: a conditional
+        // wrapped around the group itself would be a structural change to the
+        // pane, and the card would appear at full height with no transition at
+        // all.
+        SettingsGroup {
+            if theme.choice.isCustom {
+                PlumageCard()
+                    .padding(.top, SettingsMetrics.cardToHeader)
+                    .transition(.opacity)
+            }
+        }
+        .animation(motion.standard, value: theme.choice.isCustom)
+
+        SettingsGroup("Picture") {
+            BackdropCard()
+        }
+
+        SettingsGroup("Preview") {
+            SettingsMessagePreview()
+            SettingsFootnote(
+                "Drawn by the transcript's own painter, so it cannot disagree with the real thing.",
+                symbolName: "eye"
+            )
+        }
+
         SettingsCard {
             CardHeaderRow(
                 title: "Message density",
@@ -141,14 +200,7 @@ private struct AppearancePane: View {
                 ]
             )
         }
-
-        SettingsGroup("Preview") {
-            SettingsMessagePreview()
-            SettingsFootnote(
-                "Drawn by the transcript's own painter, so it cannot disagree with the real thing.",
-                symbolName: "eye"
-            )
-        }
+        .padding(.top, SettingsMetrics.cardToHeader)
 
         SettingsGroup("Text") {
             SettingsCard {

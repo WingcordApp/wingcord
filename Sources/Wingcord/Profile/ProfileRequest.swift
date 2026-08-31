@@ -96,6 +96,13 @@ struct ProfilePresentation: Equatable, Sendable {
     /// nothing behind it is a fact the reader then has to go and check
     /// somewhere else, and the profile route already sent the answer.
     var mutualServers: [MutualServer]
+    /// People both accounts know.
+    var mutualFriends: [MutualFriend]
+    /// Whether they have turned their profile private. A label, never a filter
+    /// — see `UserDecoration.isProfilePrivate`.
+    var isProfilePrivate: Bool
+    /// The reader's own private note about them.
+    var note: String
     /// The server the profile was opened in — its name and icon, so the
     /// "joined" line can say *which* server rather than showing a bare date
     /// beside an anonymous symbol. Nil in a DM.

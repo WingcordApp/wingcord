@@ -179,11 +179,38 @@ final class PermissionGate {
         permissions(in: channelID).contains(.manageMessages)
     }
 
+    /// Everything the reader may do to one message, in one value.
+    ///
+    /// **One resolution per message rather than a predicate per menu item.**
+    /// The hover pill, the menu, the reaction chips and the keyboard all ask
+    /// the same question about the same row; asking it eight times is eight
+    /// walks of the same bitfield for one answer that cannot differ between
+    /// them. `MessageActionPolicy` is the rules, this is the lookup that feeds
+    /// them — and the split is what makes the policy checkable against a table
+    /// of cases with no store in the picture.
+    func actions(for message: Message) -> MessageActions {
+        let channel = model.channelIndex[message.channelID]
+        let guildID = channel?.guildID
+        return MessageActionPolicy.resolve(
+            MessageActionPolicy.Input(
+                permissions: permissions(in: message.channelID),
+                canSend: canSend(in: message.channelID),
+                isAuthor: message.authorID == model.currentUserID,
+                isTimedOut: isTimedOut(in: guildID),
+                isSystemEvent: message.isSystemEvent,
+                hasText: !message.content.isEmpty,
+                isPinned: message.isPinned,
+                isDirectMessage: channel?.kind.isPrivate ?? false,
+                developerMode: AppSettings.shared.developerMode
+            )
+        )
+    }
+
     /// Whether the reader may delete one specific message: their own always,
-    /// anyone's with `manageMessages`.
+    /// anyone's with `manageMessages` — and never anybody else's in a direct
+    /// message, where there is no such permission to hold.
     func canDelete(_ message: Message) -> Bool {
-        message.authorID == model.currentUserID
-            || canManageMessages(in: message.channelID)
+        actions(for: message).contains(.delete)
     }
 
     /// Whether the reader may edit one specific message. Only ever their own —
@@ -191,7 +218,17 @@ final class PermissionGate {
     /// a client that offers Edit on someone else's message is offering an action
     /// the API will refuse.
     func canEdit(_ message: Message) -> Bool {
-        message.authorID == model.currentUserID && !message.isSystemEvent
+        actions(for: message).contains(.edit)
+    }
+
+    /// Whether the reader is serving a timeout in this guild.
+    ///
+    /// A timed-out member may not post, react or pin anywhere in the server,
+    /// whatever their roles say — so this is checked once and folded into every
+    /// answer rather than remembered at each call site.
+    private func isTimedOut(in guildID: GuildID?) -> Bool {
+        guard let guildID, let userID = model.currentUserID else { return false }
+        return model.members[guildID]?[userID]?.isTimedOut() == true
     }
 
     // MARK: Staleness

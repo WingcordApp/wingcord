@@ -24,13 +24,11 @@ struct SidebarBannerLayoutTests {
 
     private func layout(
         hasBanner: Bool = true,
-        stretch: CGFloat = 0,
         travel: CGFloat = 0
     ) -> SidebarBannerLayout {
         SidebarBannerLayout(
             hasBanner: hasBanner,
             chromeInset: chrome,
-            stretch: stretch,
             travel: travel
         )
     }
@@ -77,15 +75,16 @@ struct SidebarBannerLayoutTests {
         #expect(pillMoved == 40)
     }
 
-    @Test("A pull grows the artwork downward and carries the pill with it")
-    func stretchMovesBothTogether() {
+    /// The banner used to grow and zoom on overscroll. It does not any more —
+    /// see the note in `SidebarBannerLayout` — and this pins the height as a
+    /// constant so a future pull cannot quietly reintroduce it.
+    @Test("The drawn height is the resting height, whatever the list does")
+    func heightIsFixed() {
         let rest = layout()
-        let pulled = layout(stretch: 30)
-        let artworkGrew = pulled.bannerDrawnHeight - rest.bannerDrawnHeight
-        let pillMoved = pulled.pillTop - rest.pillTop
-        #expect(artworkGrew == 30)
-        #expect(pillMoved == 30)
-        #expect(pulled.bannerTop == rest.bannerTop)
+        let scrolled = layout(travel: 400)
+        #expect(rest.bannerDrawnHeight == rest.bannerRestingHeight)
+        #expect(scrolled.bannerDrawnHeight == rest.bannerRestingHeight)
+        #expect(scrolled.bannerTop == rest.bannerTop)
     }
 
     @Test("At rest the pill is solid and the toolbar carries nothing")
@@ -107,10 +106,10 @@ struct SidebarBannerLayoutTests {
         #expect(past.pillOpacity == 0)
     }
 
-    @Test("A hard pull cannot drive the opacity above one")
+    @Test("Nothing can drive the opacity above one")
     func opacityIsClamped() {
-        let pulled = layout(stretch: 400)
-        #expect(pulled.pillOpacity == 1)
+        #expect(layout().pillOpacity == 1)
+        #expect(layout(travel: -400).pillOpacity == 1)
     }
 
     /// The invariant the hand-off exists to keep: the server's name is on screen

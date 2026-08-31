@@ -19,6 +19,12 @@ struct ChannelToolbar: ToolbarContent {
     var toggleMemberList: () -> Void = {}
     var toggleUserProfile: () -> Void = {}
     var openChannelDetails: () -> Void = {}
+    var togglePins: () -> Void = {}
+    /// The pins popover's contents. A closure rather than the pane itself, so
+    /// the toolbar never builds it for a channel nobody has opened it in — a
+    /// popover's content closure is only called when it is presented, and this
+    /// keeps the store read out of the toolbar's own body.
+    var pinsContent: () -> AnyView = { AnyView(EmptyView()) }
 
     var body: some ToolbarContent {
         ToolbarItem(placement: .navigation) {
@@ -38,6 +44,24 @@ struct ChannelToolbar: ToolbarContent {
         // items, so the member toggle sat beside the channel pill at the
         // leading edge instead of at the far end of the bar.
         ToolbarSpacer(.flexible)
+
+        // **The one presentation attached inline in this app, and the exception
+        // is scoped.** §2 forbids a presentation modifier on a list ROW, because
+        // it is evaluated as part of every row's body on every pass. This is one
+        // toolbar item, evaluated once, and it is the only place a popover can
+        // point at the control that opened it — the alternative is a
+        // window-root presenter anchored to a rect the toolbar cannot report.
+        ToolbarItem(placement: .primaryAction) {
+            if chrome.canShowPins {
+                Button(action: togglePins) {
+                    Label("Pinned Messages", systemImage: "pin")
+                }
+                .help("Pinned messages")
+                .popover(isPresented: pinsBinding, arrowEdge: .bottom) {
+                    pinsContent()
+                }
+            }
+        }
 
         // **One item, two surfaces, and they are mutually exclusive.** A guild
         // channel has a roster and no single person; a direct message has a
@@ -63,5 +87,15 @@ struct ChannelToolbar: ToolbarContent {
                 .help(chrome.isUserProfileShown ? "Hide user profile" : "Show user profile")
             }
         }
+    }
+
+    /// **The setter may only clear when the store is still showing this one.**
+    /// Clearing unconditionally lets a dismissal that arrives while a second
+    /// channel's pane is opening take the new one down with it.
+    private var pinsBinding: Binding<Bool> {
+        Binding(
+            get: { chrome.arePinsShown },
+            set: { if !$0, chrome.arePinsShown { togglePins() } }
+        )
     }
 }

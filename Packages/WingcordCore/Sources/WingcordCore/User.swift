@@ -132,6 +132,100 @@ public struct ConnectedAccount: Hashable, Sendable, Codable, Identifiable {
         self.name = name
         self.isVerified = isVerified
     }
+
+    /// Where this account lives on the web, when it has a public page.
+    ///
+    /// **Nil is a real answer and the common one for half these services.** A
+    /// PlayStation gamertag, a Battle.net BattleTag and a Riot ID have no
+    /// address anybody can open; a chip that looked like a link and opened
+    /// nothing would be the inert control `INVARIANTS.md` §5.5 is about — so
+    /// those copy the name instead, which is the only useful thing to do with
+    /// one.
+    ///
+    /// **Built by service key, not by trusting a URL from the payload.** The
+    /// profile route carries no link for these, and inventing one from an
+    /// attacker-controllable name is how a client ends up navigating somewhere
+    /// a message told it to. The name is percent-encoded into a host this file
+    /// chose.
+    public var profileURL: URL? {
+        guard let template = Self.template(for: service) else { return nil }
+        let segment = template.usesID ? id : name
+        guard !segment.isEmpty,
+              let encoded = segment.addingPercentEncoding(
+                  withAllowedCharacters: .urlPathAllowed
+              )
+        else { return nil }
+        return URL(string: template.prefix + encoded)
+    }
+
+    private struct Template {
+        var prefix: String
+        /// Whether the address is built from the account's *id* rather than its
+        /// display name. Steam and Spotify are both — a Steam profile is a
+        /// 64-bit id and the visible name is not addressable at all.
+        var usesID: Bool
+    }
+
+    private static func template(for service: String) -> Template? {
+        switch service.lowercased() {
+        case "steam": Template(prefix: "https://steamcommunity.com/profiles/", usesID: true)
+        case "spotify": Template(prefix: "https://open.spotify.com/user/", usesID: true)
+        case "youtube": Template(prefix: "https://www.youtube.com/channel/", usesID: true)
+        case "twitch": Template(prefix: "https://www.twitch.tv/", usesID: false)
+        case "github": Template(prefix: "https://github.com/", usesID: false)
+        case "reddit": Template(prefix: "https://www.reddit.com/user/", usesID: false)
+        case "twitter", "x": Template(prefix: "https://x.com/", usesID: false)
+        case "instagram": Template(prefix: "https://www.instagram.com/", usesID: false)
+        case "tiktok": Template(prefix: "https://www.tiktok.com/@", usesID: false)
+        case "bluesky": Template(prefix: "https://bsky.app/profile/", usesID: false)
+        case "domain": Template(prefix: "https://", usesID: false)
+        case "ebay": Template(prefix: "https://www.ebay.com/usr/", usesID: false)
+        case "paypal": Template(prefix: "https://www.paypal.me/", usesID: false)
+        case "soundcloud": Template(prefix: "https://soundcloud.com/", usesID: false)
+        // Everything else — PlayStation, Xbox, Battle.net, Riot, Epic, Crunchyroll,
+        // Facebook, Roblox — has no address a client can build. They copy.
+        default: nil
+        }
+    }
+}
+
+/// Somebody the reader and the person being looked at both know.
+///
+/// **The list, for the reason `MutualGuild` is a list**: the count is derivable
+/// from it and not the other way round, and "3 Mutual Friends" that cannot say
+/// which three is a fact the reader has to go and look up somewhere else.
+public struct MutualFriend: Hashable, Sendable, Codable, Identifiable {
+    public let id: UserID
+    public let name: String
+    public let avatarHash: String?
+    public let monogram: String
+    /// The server tag they wear, if any — `clan` / `primary_guild` on the wire.
+    ///
+    /// **Carried on the row rather than resolved from the store**, because the
+    /// tag belongs to a server the *reader* very often is not in: the whole
+    /// point of a tag is that it travels with the person. Looking it up locally
+    /// would draw a blank mark for exactly the people whose tag is interesting.
+    public let tag: String?
+    public let tagBadgeHash: String?
+    public let tagGuildID: GuildID?
+
+    public init(
+        id: UserID,
+        name: String,
+        avatarHash: String?,
+        monogram: String,
+        tag: String? = nil,
+        tagBadgeHash: String? = nil,
+        tagGuildID: GuildID? = nil
+    ) {
+        self.id = id
+        self.name = name
+        self.avatarHash = avatarHash
+        self.monogram = monogram
+        self.tag = tag
+        self.tagBadgeHash = tagBadgeHash
+        self.tagGuildID = tagGuildID
+    }
 }
 
 /// A server the reader shares with someone.
@@ -271,6 +365,18 @@ public final class UserDecoration: Hashable, Sendable, Codable {
     /// The servers the reader shares with them, as the profile route listed
     /// them. Empty until that route has answered.
     public let mutualGuilds: [MutualGuild]
+    /// The people both accounts know. Only the profile route reports them, and
+    /// only when the reader asked with `with_mutual_friends`.
+    public let mutualFriends: [MutualFriend]
+    /// Whether the account has turned its profile private.
+    ///
+    /// **A fact the profile route reports, not one the client infers.** Discord
+    /// answers `private: true` and still returns the mutual servers the reader
+    /// can see for themselves — so this is a *label*, not a filter. A client
+    /// that used it to hide what the payload already gave would be inventing a
+    /// restriction the server did not make, and one that ignored it would be
+    /// silently dropping something the person chose to say.
+    public let isProfilePrivate: Bool
     /// The clan / guild tag shown beside the name.
     public let primaryGuildTag: String?
     public let primaryGuildBadgeHash: String?
@@ -293,6 +399,8 @@ public final class UserDecoration: Hashable, Sendable, Codable {
         premiumSince: Date? = nil,
         legacyUsername: String? = nil,
         mutualGuilds: [MutualGuild] = [],
+        mutualFriends: [MutualFriend] = [],
+        isProfilePrivate: Bool = false,
         primaryGuildTag: String? = nil,
         primaryGuildBadgeHash: String? = nil,
         primaryGuildID: GuildID? = nil
@@ -313,6 +421,8 @@ public final class UserDecoration: Hashable, Sendable, Codable {
         self.premiumSince = premiumSince
         self.legacyUsername = legacyUsername
         self.mutualGuilds = mutualGuilds
+        self.mutualFriends = mutualFriends
+        self.isProfilePrivate = isProfilePrivate
         self.primaryGuildTag = primaryGuildTag
         self.primaryGuildBadgeHash = primaryGuildBadgeHash
         self.primaryGuildID = primaryGuildID
@@ -356,6 +466,14 @@ public final class UserDecoration: Hashable, Sendable, Codable {
             mutualGuilds: incoming.mutualGuilds.isEmpty
                 ? existing.mutualGuilds
                 : incoming.mutualGuilds,
+            // Only the profile route reports this, and only it can clear it —
+            // so an OR would make the flag one-way and leave a lock on somebody
+            // who turned it off. The incoming answer wins where there is one,
+            // and a roster merge carries no answer at all.
+            mutualFriends: incoming.mutualFriends.isEmpty
+                ? existing.mutualFriends
+                : incoming.mutualFriends,
+            isProfilePrivate: incoming.isProfilePrivate || existing.isProfilePrivate,
             // The tag is one fact in three fields and they move together: an
             // account that took its tag off sends all three empty, and keeping
             // the old id beside a new nil badge would draw half a mark.
@@ -380,7 +498,8 @@ public final class UserDecoration: Hashable, Sendable, Codable {
             && (themeColorValues?.isEmpty ?? true) && badges.isEmpty
             && profileEffectSKU == nil && profileFrameSKU == nil && pronouns == nil
             && connectedAccounts.isEmpty && premiumTier == .none
-            && legacyUsername == nil && mutualGuilds.isEmpty
+            && legacyUsername == nil && mutualGuilds.isEmpty && mutualFriends.isEmpty
+            && !isProfilePrivate
     }
 
     public static func == (lhs: UserDecoration, rhs: UserDecoration) -> Bool {
@@ -401,6 +520,8 @@ public final class UserDecoration: Hashable, Sendable, Codable {
                 && lhs.premiumSince == rhs.premiumSince
                 && lhs.legacyUsername == rhs.legacyUsername
                 && lhs.mutualGuilds == rhs.mutualGuilds
+                && lhs.mutualFriends == rhs.mutualFriends
+                && lhs.isProfilePrivate == rhs.isProfilePrivate
                 && lhs.primaryGuildTag == rhs.primaryGuildTag
                 && lhs.primaryGuildBadgeHash == rhs.primaryGuildBadgeHash
                 && lhs.primaryGuildID == rhs.primaryGuildID)

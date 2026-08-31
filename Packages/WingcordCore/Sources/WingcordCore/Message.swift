@@ -26,6 +26,14 @@ public struct Message: Hashable, Sendable, Identifiable, Codable {
     public var editedAt: Date?
     public var kind: MessageKind
     public var flags: MessageFlags
+    /// Whether the channel is holding this message on its pinned list.
+    ///
+    /// **A stored `Bool` rather than a per-channel set of pinned ids.** It
+    /// costs nothing — it lands in the padding after `flags` — where a set
+    /// would be a second table to keep in step with the transcript, and the
+    /// pin state has to be right on a message the pins pane has never fetched.
+    /// Discord sends it on every message object, on history and on the socket.
+    public var isPinned: Bool
     /// Everything rare. Nil for a plain text message.
     public var payload: MessagePayload?
 
@@ -42,6 +50,7 @@ public struct Message: Hashable, Sendable, Identifiable, Codable {
         editedAt: Date? = nil,
         kind: MessageKind = .default,
         flags: MessageFlags = [],
+        isPinned: Bool = false,
         payload: MessagePayload? = nil
     ) {
         self.id = id
@@ -51,6 +60,7 @@ public struct Message: Hashable, Sendable, Identifiable, Codable {
         self.editedAt = editedAt
         self.kind = kind
         self.flags = flags
+        self.isPinned = isPinned
         self.payload = payload
     }
 
@@ -61,7 +71,11 @@ public struct Message: Hashable, Sendable, Identifiable, Codable {
     public var poll: Poll? { payload?.poll }
     public var stickers: [StickerRef] { payload?.stickers ?? [] }
     public var reactions: [Reaction] { payload?.reactions ?? [] }
-    public var referencedMessageID: MessageID? { payload?.referencedMessageID }
+    /// What a reply quotes. Nil for everything else.
+    public var reference: MessageReference? { payload?.reference }
+    public var referencedMessageID: MessageID? { payload?.reference?.messageID }
+    /// The message this one carries, when it is a forward.
+    public var forwarded: ForwardedMessage? { payload?.forwarded }
     public var mentionedUserIDs: [UserID] { payload?.mentionedUserIDs ?? [] }
     public var mentionsEveryone: Bool { payload?.mentionsEveryone ?? false }
     public var webhookID: UserID? { payload?.webhookID }
@@ -122,8 +136,13 @@ public final class MessagePayload: Hashable, Sendable, Codable {
     public let mentionedUserIDs: [UserID]
     public let mentionedRoleIDs: [RoleID]
     public let mentionsEveryone: Bool
-    public let referencedMessageID: MessageID?
-    public let referencedChannelID: ChannelID?
+    /// What a reply quotes: the target, and enough of it to draw the header
+    /// above this message without a second fetch.
+    public let reference: MessageReference?
+    /// What a forward carries. Discord sends the whole quoted message as a
+    /// *snapshot* rather than a pointer, deliberately — the original may be
+    /// somewhere the reader cannot reach, and a forward has to render anyway.
+    public let forwarded: ForwardedMessage?
     /// A webhook's author id belongs to no account. Kept distinct from
     /// `isBot` because webhooks set that too, and the difference decides whether
     /// asking the gateway for the author is a request that can ever be answered.
@@ -143,8 +162,8 @@ public final class MessagePayload: Hashable, Sendable, Codable {
         mentionedUserIDs: [UserID] = [],
         mentionedRoleIDs: [RoleID] = [],
         mentionsEveryone: Bool = false,
-        referencedMessageID: MessageID? = nil,
-        referencedChannelID: ChannelID? = nil,
+        reference: MessageReference? = nil,
+        forwarded: ForwardedMessage? = nil,
         webhookID: UserID? = nil,
         nonce: String? = nil
     ) {
@@ -158,10 +177,59 @@ public final class MessagePayload: Hashable, Sendable, Codable {
         self.mentionedUserIDs = mentionedUserIDs
         self.mentionedRoleIDs = mentionedRoleIDs
         self.mentionsEveryone = mentionsEveryone
-        self.referencedMessageID = referencedMessageID
-        self.referencedChannelID = referencedChannelID
+        self.reference = reference
+        self.forwarded = forwarded
         self.webhookID = webhookID
         self.nonce = nonce
+    }
+
+    /// The same box with one array replaced.
+    ///
+    /// **A copy helper rather than the constructor written out at each call
+    /// site.** The properties here are `let` so a shared box can never be
+    /// mutated out from under another holder, which means every change is a
+    /// full re-construction — and a re-construction written by hand is a
+    /// re-construction that silently drops whatever field was added last. Both
+    /// call sites in the app had done exactly that: a reaction arriving on a
+    /// message with a poll rebuilt the box without the poll, and the tally
+    /// vanished on the next thumbs-up.
+    public func replacingReactions(_ reactions: [Reaction]) -> MessagePayload {
+        MessagePayload(
+            attachments: attachments,
+            embeds: embeds,
+            reactions: reactions,
+            stickers: stickers,
+            components: components,
+            displayComponents: displayComponents,
+            poll: poll,
+            mentionedUserIDs: mentionedUserIDs,
+            mentionedRoleIDs: mentionedRoleIDs,
+            mentionsEveryone: mentionsEveryone,
+            reference: reference,
+            forwarded: forwarded,
+            webhookID: webhookID,
+            nonce: nonce
+        )
+    }
+
+    /// The same box with a different poll. See `replacingReactions`.
+    public func replacingPoll(_ poll: Poll?) -> MessagePayload {
+        MessagePayload(
+            attachments: attachments,
+            embeds: embeds,
+            reactions: reactions,
+            stickers: stickers,
+            components: components,
+            displayComponents: displayComponents,
+            poll: poll,
+            mentionedUserIDs: mentionedUserIDs,
+            mentionedRoleIDs: mentionedRoleIDs,
+            mentionsEveryone: mentionsEveryone,
+            reference: reference,
+            forwarded: forwarded,
+            webhookID: webhookID,
+            nonce: nonce
+        )
     }
 
     /// Whether the box is worth allocating. A decoder that builds one of these
@@ -171,7 +239,7 @@ public final class MessagePayload: Hashable, Sendable, Codable {
             && stickers.isEmpty && components.isEmpty && displayComponents.isEmpty
             && poll == nil && mentionedUserIDs.isEmpty
             && mentionedRoleIDs.isEmpty && !mentionsEveryone
-            && referencedMessageID == nil && webhookID == nil && nonce == nil
+            && reference == nil && forwarded == nil && webhookID == nil && nonce == nil
     }
 
     public static func == (lhs: MessagePayload, rhs: MessagePayload) -> Bool {
@@ -189,7 +257,8 @@ public final class MessagePayload: Hashable, Sendable, Codable {
                 && lhs.mentionedUserIDs == rhs.mentionedUserIDs
                 && lhs.mentionedRoleIDs == rhs.mentionedRoleIDs
                 && lhs.mentionsEveryone == rhs.mentionsEveryone
-                && lhs.referencedMessageID == rhs.referencedMessageID
+                && lhs.reference == rhs.reference
+                && lhs.forwarded == rhs.forwarded
                 && lhs.webhookID == rhs.webhookID)
     }
 
@@ -197,7 +266,7 @@ public final class MessagePayload: Hashable, Sendable, Codable {
         hasher.combine(attachments.count)
         hasher.combine(embeds.count)
         hasher.combine(reactions.count)
-        hasher.combine(referencedMessageID)
+        hasher.combine(reference?.messageID)
     }
 }
 
@@ -415,5 +484,137 @@ public struct StickerRef: Hashable, Sendable, Identifiable, Codable {
         self.id = id
         self.name = name
         self.format = format
+    }
+}
+
+/// What a reply quotes.
+///
+/// **A snapshot, not a pointer.** The target may be a thousand messages above
+/// what is loaded, in a channel that has been evicted, or deleted outright — and
+/// the header above the reply still has to draw. Discord sends the whole
+/// referenced message inline for exactly this reason, and everything the header
+/// needs is flattened here at decode: the author's id, one line of text, and
+/// whether there was a picture instead of words.
+///
+/// Flattening at decode rather than at layout is deliberate. The header is drawn
+/// by a canvas that runs off the main actor and cannot reach the store, and
+/// folding a markdown tree into a line per row per frame is the cost
+/// `MarkdownDocument.plainText` exists to pay once.
+public struct MessageReference: Hashable, Sendable, Codable {
+    public var messageID: MessageID?
+    public var channelID: ChannelID?
+    /// Nil when the reference arrived with no message behind it — deleted, or
+    /// out of reach. The header then says so rather than drawing a blank quote.
+    public var authorID: UserID?
+    public var isAuthorBot: Bool
+    /// The quoted line, already flattened.
+    public var excerpt: String
+    /// Whether the quoted message was a picture or a file rather than words.
+    public var hasAttachment: Bool
+
+    public init(
+        messageID: MessageID? = nil,
+        channelID: ChannelID? = nil,
+        authorID: UserID? = nil,
+        isAuthorBot: Bool = false,
+        excerpt: String = "",
+        hasAttachment: Bool = false
+    ) {
+        self.messageID = messageID
+        self.channelID = channelID
+        self.authorID = authorID
+        self.isAuthorBot = isAuthorBot
+        self.excerpt = excerpt
+        self.hasAttachment = hasAttachment
+    }
+
+    /// Whether Discord sent a reference with nothing behind it.
+    public var isUnavailable: Bool { authorID == nil }
+
+    /// One line of a quoted body: markdown folded, newlines collapsed, and cut
+    /// well past anything a header can show.
+    ///
+    /// **Folded once, at decode.** The header is drawn by a canvas that runs off
+    /// the main actor and cannot reach a parser cache; doing this per row per
+    /// frame is the cost `MarkdownDocument.plainText` exists to pay once.
+    ///
+    /// The cut is a *character* bound rather than a measured width, because this
+    /// runs with no font in hand. The painter truncates to the real width; this
+    /// only stops a ten-kilobyte code block being carried around in every copy
+    /// of the message that quotes it.
+    public static func excerpt(of content: String) -> String {
+        guard !content.isEmpty else { return "" }
+        let plain = MarkdownParser().parse(content).plainText
+        var line = ""
+        line.reserveCapacity(min(plain.count, excerptLimit))
+        var wasSpace = false
+        for character in plain {
+            if character.isNewline || character == "\t" || character == " " {
+                wasSpace = true
+                continue
+            }
+            if wasSpace, !line.isEmpty { line.append(" ") }
+            wasSpace = false
+            line.append(character)
+            if line.count >= excerptLimit { break }
+        }
+        return line
+    }
+
+    private static let excerptLimit = 180
+}
+
+/// The message a forward carries.
+///
+/// **A copy, and Discord means it as one.** A forward's snapshot has no author:
+/// the whole point of the shape is that the original's identity does not travel
+/// with it. A client that invents one — from the reference's channel, from the
+/// forwarder — is asserting something the payload deliberately does not say.
+public struct ForwardedMessage: Hashable, Sendable, Codable {
+    public var content: String
+    public var attachmentCount: Int
+    public var hasEmbed: Bool
+    /// Where it was forwarded from, when the reference named it. Only ever used
+    /// to say "from #channel"; never to attribute the message to anybody.
+    public var channelID: ChannelID?
+
+    public init(
+        content: String,
+        attachmentCount: Int = 0,
+        hasEmbed: Bool = false,
+        channelID: ChannelID? = nil
+    ) {
+        self.content = content
+        self.attachmentCount = attachmentCount
+        self.hasEmbed = hasEmbed
+        self.channelID = channelID
+    }
+}
+
+extension EmojiRef {
+    /// Reads `messageToken` back into a reference.
+    ///
+    /// The inverse of `messageToken`, and it exists because the expression
+    /// picker speaks in tokens — a pick is "what to type into a draft" — while
+    /// a reaction is addressed by name and id. Parsing the token back is one
+    /// scan of at most a few dozen bytes; the alternative is a second field on
+    /// every one of the two thousand items the picker builds.
+    ///
+    /// **Split by hand, not by a regex.** A Swift regex literal is re-parsed on
+    /// every call — `INVARIANTS.md` §2 — and this runs on a pick.
+    public init?(messageToken token: String) {
+        guard token.hasPrefix("<"), token.hasSuffix(">") else {
+            guard !token.isEmpty else { return nil }
+            self.init(name: token)
+            return
+        }
+        let body = token.dropFirst().dropLast()
+        let parts = body.split(separator: ":", omittingEmptySubsequences: false)
+        // `a:name:id` when animated, `:name:id` when not — the leading field is
+        // empty for a still emoji, which is why empty subsequences are kept.
+        guard parts.count == 3, let id = EmojiID(parts[2]), !parts[1].isEmpty else {
+            return nil
+        }
+        self.init(id: id, name: String(parts[1]), isAnimated: parts[0] == "a")
     }
 }

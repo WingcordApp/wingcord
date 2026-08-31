@@ -97,7 +97,7 @@ private final class PreviewView: NSView {
     }
 
     private func layout(style: MessageTextStyle, settings: TimelineSettings) -> [TimelineRow] {
-        var cache: [TimelineLayoutEngine.CacheKey: MessageRow] = [:]
+        var cache: [MessageID: TimelineLayoutEngine.CacheEntry] = [:]
         return TimelineLayoutEngine(presentationRevision: presentationRevision).layout(
             TimelineLayoutEngine.Input(
                 items: Self.items,

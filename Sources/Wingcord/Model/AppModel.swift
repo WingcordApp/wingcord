@@ -1,6 +1,7 @@
 import Foundation
 import Observation
 import WingcordCore
+import WingcordNet
 
 /// The session's state.
 ///
@@ -157,6 +158,89 @@ final class AppModel {
     /// Distinguishes two jumps to the same message. `@ObservationIgnored`
     /// because nothing reads it — it exists only to make `pendingJump` differ.
     @ObservationIgnored var jumpToken: UInt64 = 0
+
+    // MARK: What a message raises
+    //
+    // Each is written by a row and presented ONCE at the window root, with the
+    // rect that summoned it — the transcript is a drawn canvas and cannot host
+    // a presentation at all. See `MessageActionRequests`.
+
+    /// What the pointer is resting on in the transcript. Drives the hover pill
+    /// and nothing else, so a hover invalidates one small overlay.
+    var messageHover: MessageHover?
+    var messageMenu: MessageMenuRequest?
+    var reactionPicker: ReactionPickerRequest?
+    var forwardRequest: ForwardRequest?
+    /// Channels a forward is being written to. Keyed by target so two can be in
+    /// flight and neither blocks the other.
+    var forwardsInFlight: Set<ChannelID> = []
+    var deleteRequest: DeleteMessageRequest?
+    var reportRequest: ReportRequest?
+    var userMenu: UserMenuRequest?
+    /// The channel whose pinned messages are on screen.
+    var openPinsChannelID: ChannelID?
+
+    /// One channel's pins, newest first. Absent means "not asked"; empty means
+    /// "asked, and there are none" — collapsing the two makes the pane refetch
+    /// on every open for every channel that has never pinned anything.
+    var pinnedMessages: [ChannelID: [Message]] = [:]
+    var pinsLoading: Set<ChannelID> = []
+    /// Why the last pins fetch failed, in the reader's words.
+    var pinsFailure: [ChannelID: String] = [:]
+
+    /// Reactions being written, as `(message, emoji)`. Keyed so two chips on one
+    /// message can be pressed in either order without one cancelling the other.
+    var reactionsInFlight: Set<PendingReaction> = []
+
+    /// The report questionnaires, fetched once per kind per session.
+    ///
+    /// **A session cache and no refresh.** The taxonomy changes about as often
+    /// as Discord's own client ships, and re-fetching it per report would put a
+    /// round trip in front of the reader every time they open the flow.
+    var reportMenus: [ReportSubjectKind: ReportMenu] = [:]
+    var reportMenusLoading: Set<ReportSubjectKind> = []
+    /// How the last submission went, so the flow's last screen can say.
+    var reportSubmission: ReportSubmissionState?
+
+    /// People the account has blocked, and people it has ignored.
+    ///
+    /// **Two sets, because they are two independent facts** — you can ignore a
+    /// friend, and blocking somebody does not ignore them. Read from READY's
+    /// relationship list and kept current by the routes that write them.
+    var blockedUserIDs: Set<UserID> = []
+    var ignoredUserIDs: Set<UserID> = []
+    /// What the account is to each person it has a relationship with. An absent
+    /// entry is `.none`, which is what the table already says — storing every
+    /// stranger as `.none` would be a row per person the reader has ever seen.
+    var relationships: [UserID: Relationship] = [:]
+    /// The reader's private notes, straight off READY. Nobody else can see one,
+    /// and no route is needed to read one back.
+    var notes: [UserID: String] = [:]
+    /// Notes being written, so a field that is saving can say so and a second
+    /// save cannot race the first.
+    var notesInFlight: Set<UserID> = []
+    /// Relationship writes in flight, so a double press sends once.
+    var relationshipsInFlight: Set<UserID> = []
+
+    /// The channel whose read cursor the reader deliberately rewound.
+    ///
+    /// **A latch, and without it Mark Unread does nothing anybody can see.** The
+    /// reader is still standing in the channel, so the next inbound message
+    /// takes the "they are looking at it" path and acknowledges — undoing the
+    /// rewind a beat after it was asked for. Cleared by leaving the channel,
+    /// which is also exactly when the reader has stopped meaning it.
+    var suppressedAckChannelID: ChannelID?
+
+    /// The last act that did not land, in the reader's words.
+    ///
+    /// **One slot, not a queue.** These are transient notices for a click that
+    /// was just made; a second failure while the first is on screen replaces it,
+    /// because the reader is looking at the thing they just did and a backlog of
+    /// stale refusals is noise. Cleared by the notice's own timer.
+    var actionFailure: ActionFailure?
+    /// Distinguishes two identical refusals. `@ObservationIgnored` because
+    /// nothing reads it — it exists only to make `actionFailure` differ.
+    @ObservationIgnored var actionFailureToken: UInt64 = 0
     /// Profile effects, by SKU rather than by person: an effect is a purchase
     /// twenty people in one server may share, and fetching it per wearer would
     /// ask for the same composition twenty times.
@@ -288,6 +372,13 @@ final class AppModel {
     /// screen while the store publishes for reasons that cannot change it.
     @ObservationIgnored
     var channelsAndRolesCache: (key: GuildSurfaceMemoKey, value: ChannelsAndRolesPresentation)?
+    /// Everywhere a message can be forwarded to. **The most expensive snapshot
+    /// in the app after the expression catalog** — it walks every channel in
+    /// every server through the permission gate — and the search field it feeds
+    /// filters it per keystroke, which is why it is built once and filtered in
+    /// the view rather than rebuilt per query.
+    @ObservationIgnored
+    var forwardTargetCache: (key: ForwardTargetMemoKey, value: [ForwardTarget])?
 
     /// Asks the session for a page of history above what is loaded.
     ///
@@ -464,6 +555,10 @@ final class AppModel {
         emojiCatalogCache = nil
         stickerCatalogCache = nil
         mentionCache = nil
+        // Every channel in the account, walked through the permission gate. It
+        // is rebuilt the next time the forward sheet opens, which costs a pass
+        // nobody is waiting through.
+        forwardTargetCache = nil
         memberRevision &+= 1
         presenceRevision &+= 1
     }
@@ -491,6 +586,33 @@ final class AppModel {
     }
 }
 
+/// One reaction whose write has not come back.
+///
+/// A value rather than a pair in a dictionary: it is only ever asked "is this
+/// exact chip busy", which is one hash lookup either way, and a `Set` of these
+/// cannot grow a stale key the way a nested table can.
+struct PendingReaction: Hashable, Sendable {
+    var messageID: MessageID
+    var emoji: EmojiRef
+}
+
+/// An act that did not land.
+///
+/// The token is what makes two identical refusals two notices rather than one:
+/// a value equal to the one already on screen publishes nothing, so the second
+/// failure would show no notice at all and read as having quietly worked.
+struct ActionFailure: Hashable, Sendable, Identifiable {
+    var reason: String
+    var id: UInt64
+}
+
+/// How a report submission went.
+enum ReportSubmissionState: Hashable, Sendable {
+    case sending
+    case succeeded
+    case failed(String)
+}
+
 /// One channel's loaded transcript and the state that belongs with it.
 struct MessageBox: Sendable {
     /// Oldest first. Kept sorted by the store, never re-sorted per read — a
@@ -507,6 +629,9 @@ struct MessageBox: Sendable {
     var draft: String = ""
     /// A message being replied to. Survives eviction.
     var replyingTo: MessageID?
+    /// A message being edited, and its text so far. Survives eviction, and sits
+    /// *beside* the draft rather than over it — see `MessageEdit`.
+    var editing: MessageEdit?
     /// Who is typing, and when their indicator expires.
     var typing: [UserID: Date] = [:]
 

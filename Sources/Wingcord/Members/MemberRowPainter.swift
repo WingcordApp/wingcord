@@ -356,7 +356,7 @@ nonisolated enum MemberRowPainter {
 
         guard isHovered else { return }
         context.addPath(shape)
-        context.setFillColor(NSColor(Palette.hoverFill).cgColor)
+        context.setFillColor(ThemeInk.current.hoverFill)
         context.fillPath()
     }
 
@@ -385,7 +385,7 @@ nonisolated enum MemberRowPainter {
             context.draw(image, in: frame)
             context.restoreGState()
         } else {
-            context.setFillColor(NSColor(Palette.surfaceRaised).cgColor)
+            context.setFillColor(ThemeInk.current.surfaceRaised)
             context.fill(frame)
             context.restoreGState()
             let font = NSFont.systemFont(ofSize: frame.width * 0.42, weight: .semibold)

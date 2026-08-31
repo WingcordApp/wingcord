@@ -8,7 +8,13 @@ struct MemberListView: NSViewRepresentable {
     var sections: [MemberSection]
     /// See `TimelineView.presentationRevision`.
     var presentationRevision: UInt64 = 0
+    /// The window's chrome, measured by the pane above and paid for as a content
+    /// inset — so the roster runs under the toolbar the way the transcript does
+    /// and the strip across the window's top is one continuous treatment rather
+    /// than a band that stops at a column boundary.
+    var topInset: CGFloat = 0
     var openProfile: (UserID, CGRect) -> Void = { _, _ in }
+    var openMenu: (UserID, CGRect) -> Void = { _, _ in }
 
     func makeCoordinator() -> MemberListCoordinator {
         MemberListCoordinator()
@@ -20,9 +26,11 @@ struct MemberListView: NSViewRepresentable {
 
     func updateNSView(_ scrollView: NSScrollView, context: Context) {
         context.coordinator.openProfile = openProfile
+        context.coordinator.openMenu = openMenu
         context.coordinator.update(
             sections: sections,
-            presentationRevision: presentationRevision
+            presentationRevision: presentationRevision,
+            topInset: topInset
         )
     }
 
@@ -37,6 +45,8 @@ final class MemberListCoordinator: NSObject {
     private var scrollView: NSScrollView?
     private var documentView: TimelineDocumentView?
     private var canvas: MemberListCanvas?
+    /// The ground and the scroll-edge strip. See `CanvasChrome`.
+    private var chrome: CanvasChrome?
 
     private var sections: [MemberSection] = []
     private var boundsObserver: NSObjectProtocol?
@@ -50,11 +60,15 @@ final class MemberListCoordinator: NSObject {
     private var isTornDown = false
 
     var openProfile: (UserID, CGRect) -> Void = { _, _ in }
+    var openMenu: (UserID, CGRect) -> Void = { _, _ in }
 
     func makeScrollView() -> NSScrollView {
         let canvas = MemberListCanvas(style: MessageTextStyle.current())
         canvas.onOpenProfile = { [weak self] userID, frame in
             self?.openProfile(userID, frame)
+        }
+        canvas.onOpenMenu = { [weak self] userID, frame in
+            self?.openMenu(userID, frame)
         }
         canvas.onWidthChange = { [weak self] _ in
             self?.applyRows()
@@ -79,6 +93,20 @@ final class MemberListCoordinator: NSObject {
         self.canvas = canvas
         self.documentView = document
         self.scrollView = scrollView
+        // The same ground and the same strip the transcript has, lifted by the
+        // same hair of white the column is.
+        //
+        // **This one waits for the pointer.** A roster is glanced at rather than
+        // read, and its column is narrow enough that a permanent band across the
+        // top of it is most of what the reader sees of the treatment. Under the
+        // pointer it is a scroll edge; away from it, the column is simply the
+        // window's ground with names on it.
+        chrome = CanvasChrome(
+            installedIn: scrollView,
+            role: .reading,
+            lift: WorkspacePane.rosterLift,
+            trigger: .contentBehindAndPointer
+        )
         observe(scrollView)
         return scrollView
     }
@@ -138,8 +166,11 @@ final class MemberListCoordinator: NSObject {
         scrollBeganObserver = nil
         scrollEndedObserver = nil
         canvas?.onOpenProfile = nil
+        canvas?.onOpenMenu = nil
         canvas?.onWidthChange = nil
         canvas = nil
+        chrome?.tearDown()
+        chrome = nil
         documentView = nil
         scrollView = nil
         ScrollWorkGate.endIfOwned(by: ObjectIdentifier(self))
@@ -153,8 +184,14 @@ final class MemberListCoordinator: NSObject {
 
     private var presentationRevision: UInt64 = 0
 
-    func update(sections: [MemberSection], presentationRevision: UInt64) {
+    func update(sections: [MemberSection], presentationRevision: UInt64, topInset: CGFloat) {
         guard !isTornDown else { return }
+        if let scrollView, abs(scrollView.contentInsets.top - topInset) > 0.5 {
+            let insets = NSEdgeInsets(top: max(0, topInset), left: 0, bottom: 0, right: 0)
+            scrollView.contentInsets = insets
+            scrollView.scrollerInsets = insets
+            chrome?.chromeHeight = max(0, topInset)
+        }
         if presentationRevision != self.presentationRevision {
             self.presentationRevision = presentationRevision
             canvas?.style = PresentationRevision.shared.style
@@ -175,9 +212,18 @@ final class MemberListCoordinator: NSObject {
         let viewport = scrollView.contentView.bounds
         if viewport.width > 0 { layoutWidth = viewport.width }
         let height = canvas.apply(rows: sections.flattened())
+        chrome?.contentHeight = height
         let size = NSSize(
             width: max(1, viewport.width),
-            height: max(1, max(height, viewport.height))
+            // The readable band rather than the clip view: see
+            // `TimelineViewportPolicy.readableHeight`. A roster shorter than its
+            // column would otherwise carry a scroll range one toolbar deep and
+            // let its first section be dragged up behind the chrome.
+            height: max(1, max(height, TimelineViewportPolicy.readableHeight(
+                viewport: viewport.height,
+                topInset: scrollView.contentInsets.top,
+                bottomInset: scrollView.contentInsets.bottom
+            )))
         )
         if documentView?.frame.size != size { documentView?.setFrameSize(size) }
         positionCanvas()
@@ -186,6 +232,10 @@ final class MemberListCoordinator: NSObject {
 
     private func viewportDidChange() {
         guard !isTornDown, let scrollView, let canvas else { return }
+        // Before the early returns below, for the reason the transcript's copy
+        // documents: they are the first-layout path, and that is exactly when
+        // the ground and the strip have never been sized.
+        chrome?.viewportDidChange()
         let width = scrollView.contentView.bounds.width
         // The bootstrap case and the resize case are the same case: the width
         // the rows were laid out against is no longer the width on screen.

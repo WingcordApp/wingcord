@@ -22,9 +22,24 @@ struct ComposerContainer: View {
             channelName: model.channelIndex[channelID].map(model.displayName(of:)) ?? "",
             canSend: model.permissionGate.canSend(in: channelID),
             replyingToAuthor: replyingToAuthor,
+            isEditing: model.messages(in: channelID)?.editing != nil,
+            // **One field, two destinations.** An edit borrows the bar and must
+            // not eat the draft underneath it, so the binding routes by which
+            // state is live rather than by copying one into the other — a copy
+            // is what loses whichever the reader abandoned.
             text: Binding(
-                get: { model.messages(in: channelID)?.draft ?? "" },
+                get: {
+                    let box = model.messages(in: channelID)
+                    return box?.editing?.text ?? box?.draft ?? ""
+                },
                 set: { newValue in
+                    if model.messages(in: channelID)?.editing != nil {
+                        // An edit is not typing in the channel: nobody is
+                        // waiting on three dots for a message that already
+                        // arrived.
+                        model.mutateBox(channelID) { $0.editing?.text = newValue }
+                        return
+                    }
                     // Reported before the write, while the previous draft is
                     // still readable. **Only on growth**: deleting a mistake is
                     // not typing, and telling the channel it is keeps the
@@ -37,7 +52,8 @@ struct ComposerContainer: View {
                 }
             ),
             send: send,
-            cancelReply: { model.mutateBox(channelID) { $0.replyingTo = nil } },
+            cancelReply: { model.cancelReply(in: channelID) },
+            cancelEdit: { model.cancelEdit(in: channelID) },
             replyToLatest: { model.replyToLatestMessage() },
             attach: {},
             completions: completions,
@@ -55,7 +71,8 @@ struct ComposerContainer: View {
 
     /// The shortcode being typed, if any.
     private var completionQuery: String? {
-        EmojiAutocomplete.query(in: model.messages(in: channelID)?.draft ?? "")
+        let box = model.messages(in: channelID)
+        return EmojiAutocomplete.query(in: box?.editing?.text ?? box?.draft ?? "")
     }
 
     /// What to offer for it.
@@ -74,7 +91,14 @@ struct ComposerContainer: View {
     private func commit(_ item: ExpressionItem) {
         guard case .insert(let text) = item.pick else { return }
         model.mutateBox(channelID) { box in
-            box.draft = EmojiAutocomplete.applying(text, to: box.draft)
+            // Into whichever field the bar is showing, for the same reason the
+            // binding routes: completing a shortcode while editing must land in
+            // the edit and not in the draft behind it.
+            if let existing = box.editing?.text {
+                box.editing?.text = EmojiAutocomplete.applying(text, to: existing)
+            } else {
+                box.draft = EmojiAutocomplete.applying(text, to: box.draft)
+            }
         }
     }
 
@@ -87,6 +111,13 @@ struct ComposerContainer: View {
     }
 
     private func send() {
+        // Return commits whichever the bar is holding. One entry point, so the
+        // send control, the key press and the menu item cannot disagree about
+        // what pressing Send means while an edit is open.
+        if model.messages(in: channelID)?.editing != nil {
+            model.commitEdit(in: channelID)
+            return
+        }
         let draft = model.messages(in: channelID)?.draft ?? ""
         model.sendMessage(draft, in: channelID)
     }

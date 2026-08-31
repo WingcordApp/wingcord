@@ -1,0 +1,219 @@
+import SwiftUI
+import WingcordCore
+
+/// The pill that appears at a message's trailing edge while the pointer rests
+/// on it.
+///
+/// **Composed, not drawn, and it is the one thing over the transcript that
+/// is.** The rows are painted because there are hundreds of them; this is one
+/// surface at a time, it is glass, and Core Graphics cannot draw glass. What it
+/// costs is a handful of nodes that exist only while somebody is pointing at a
+/// row.
+///
+/// It is `.clear` glass, not `.regular`: what passes under it is avatars, emoji
+/// and somebody's message — content — and `.regular` frosts all of that into a
+/// grey slab. `INVARIANTS.md` §4.
+///
+/// **One glass body with regions inside it**, never a glass button each: a
+/// cluster of nine glass capsules over a scrolling transcript is nine sampled
+/// blurs, and §4 forbids stacking them anyway.
+struct MessageActionBar: View {
+    var items: [MessageActionKind]
+    var perform: (MessageActionKind) -> Void
+
+    @Environment(\.motion) private var motion
+    /// Which glyph the pointer is on. One piece of state for the whole row —
+    /// a `@State` per button would be a view per button that invalidates
+    /// independently.
+    @State private var hovered: MessageActionKind?
+
+    /// Shared with the overlay, which solves a button's box from them rather
+    /// than measuring it — see `MessageActionBarOverlay.anchor(of:in:)`.
+    static let glyphSide: CGFloat = 24
+    static let gap: CGFloat = 1
+    static let padding: CGFloat = 2
+
+    var body: some View {
+        HStack(spacing: Self.gap) {
+            ForEach(items) { kind in
+                Button { perform(kind) } label: {
+                    Image(systemName: kind.symbolName)
+                        .font(.system(size: 12.5, weight: .medium))
+                        .foregroundStyle(tint(of: kind))
+                        .frame(width: Self.glyphSide, height: Self.glyphSide)
+                        .background {
+                            // A region inside the pill's own material, not a
+                            // second material — §4 rule 2.
+                            if hovered == kind {
+                                Circle().fill(Palette.hoverFill)
+                            }
+                        }
+                        .contentShape(.circle)
+                }
+                .buttonStyle(.plain)
+                .onHover { isInside in
+                    // A `@State` write of an equal value still invalidates, and
+                    // a pointer crossing a 24-point target generates these at
+                    // event rate.
+                    let next = isInside ? kind : (hovered == kind ? nil : hovered)
+                    guard next != hovered else { return }
+                    hovered = next
+                }
+                .help(kind.title)
+                .accessibilityLabel(Text(kind.title))
+            }
+        }
+        .padding(Self.padding)
+        .frame(height: TimelineMetrics.actionBarHeight)
+        .glassEffect(.clear.tint(Palette.flyoutTint), in: .capsule)
+        // The hover fill is the only thing that moves here, and it is a fill —
+        // a spring would describe physics that are not happening.
+        .animation(motion.fadeQuick, value: hovered)
+    }
+
+    private func tint(of kind: MessageActionKind) -> AnyShapeStyle {
+        if kind.isDestructive, hovered == kind {
+            return AnyShapeStyle(Palette.destructive)
+        }
+        return AnyShapeStyle(hovered == kind ? Ink.primary : Ink.secondary)
+    }
+}
+
+/// Places the pill over the transcript, and decides which one is shown.
+///
+/// **Overlaid on the scroll view rather than drawn into the canvas.** The rect
+/// it is placed at comes from the canvas in the clip view's own space — see
+/// `TimelineCanvasView.publishHover` — so it travels with the viewport and never
+/// has to know how far down the transcript the row actually is.
+struct MessageActionBarOverlay: View {
+    var channelID: ChannelID
+
+    @Environment(AppModel.self) private var model
+    @Environment(\.motion) private var motion
+    /// Whether Shift is down, which swaps the pill's contents for the direct
+    /// actions. Read through the modifier-keys API rather than a local event
+    /// monitor: a monitor here is an object that outlives the view unless it is
+    /// removed by hand, for a value SwiftUI already publishes.
+    @State private var isShifted = false
+    /// Whether the pointer is on the pill itself.
+    ///
+    /// **The pill is a sibling view above the canvas**, so a pointer reaching it
+    /// may or may not leave the canvas's tracking area depending on how AppKit
+    /// resolves the overlap. Holding the last hover while the pill is under the
+    /// pointer makes the answer the same either way.
+    @State private var isPointerOnBar = false
+    @State private var held: MessageHover?
+    /// Where this overlay starts, in the SwiftUI root's space.
+    ///
+    /// **Recorded rather than measured per click.** Every surface the pill
+    /// raises anchors in the root — one titlebar and one sidebar away from here
+    /// — and `onGeometryChange` reads the value the layout already computed,
+    /// firing only when the pane actually moves.
+    @State private var originInRoot: CGPoint = .zero
+
+    var body: some View {
+        // Read first, so the dependency is registered whether or not there is a
+        // hover to draw. A memo that returns early registers nothing.
+        let hover = model.messageHover
+        let _ = model.roleRevision
+        let _ = model.messageContentRevision
+        let current = hover ?? (isPointerOnBar ? held : nil)
+        let actions = current.map { model.actions(for: $0.messageID, in: channelID) } ?? []
+        let items = actions.isEmpty ? [] : actions.barItems(shifted: isShifted)
+
+        // **A `GeometryReader`, because it is the one container that fills its
+        // proposal and lays its child out at the top-leading corner.** A
+        // `ZStack` with one child sizes to that child, so the pill would be
+        // placed relative to itself — which is a pill drawn at the top-left of
+        // the transcript, or not visibly drawn at all.
+        return GeometryReader { _ in
+            if let current, !items.isEmpty {
+                MessageActionBar(items: items) { kind in
+                    perform(kind, on: current.messageID, items: items)
+                }
+                .fixedSize()
+                .onHover { isPointerOnBar = $0 }
+                // **Right-aligned by a frame, not by arithmetic over a measured
+                // width.** `maxWidth: .infinity` with a trailing alignment puts
+                // the pill against the transcript's own margin without anything
+                // having to know how wide it is — and an empty frame hit-tests
+                // nothing, so the transcript underneath still answers the
+                // pointer everywhere the pill is not.
+                .frame(maxWidth: .infinity, alignment: .trailing)
+                .padding(.trailing, TimelineMetrics.actionBarTrailingInset)
+                .offset(y: current.rowFrame.minY - TimelineMetrics.actionBarRise)
+                .transition(.materialize(from: .trailing))
+            }
+        }
+        .animation(motion.hover, value: current?.messageID)
+        .onModifierKeysChanged(mask: .shift) { _, modifiers in
+            let shifted = modifiers.contains(.shift)
+            guard shifted != isShifted else { return }
+            isShifted = shifted
+        }
+        .onChange(of: hover) { _, newValue in
+            // Kept only while it exists, so a pointer released onto the pill has
+            // something to keep showing.
+            if let newValue { held = newValue }
+        }
+        .onGeometryChange(for: CGPoint.self) { proxy in
+            proxy.frame(in: .global).origin
+        } action: { origin in
+            let resolved = CGPoint(
+                x: origin.x - PresentationOrigin.value.x,
+                y: origin.y - PresentationOrigin.value.y
+            )
+            guard resolved != originInRoot else { return }
+            originInRoot = resolved
+        }
+    }
+
+    private func perform(
+        _ kind: MessageActionKind,
+        on messageID: MessageID,
+        items: [MessageActionKind]
+    ) {
+        MessageActionRouter.perform(
+            kind,
+            messageID: messageID,
+            channelID: channelID,
+            model: model,
+            anchor: anchor(of: kind, in: items)
+        )
+    }
+
+    /// Where a surface raised from one of the pill's buttons grows out of.
+    ///
+    /// **Solved, not measured.** The pill is right-aligned and every glyph is
+    /// the same width, so a button's box is arithmetic from its position in the
+    /// row — and arithmetic cannot go stale between the layout that placed it
+    /// and the click that reads it, which a stored measurement can.
+    private func anchor(of kind: MessageActionKind, in items: [MessageActionKind]) -> CGRect {
+        guard let hover = model.messageHover ?? held,
+              let index = items.firstIndex(of: kind)
+        else { return .zero }
+        let stride = MessageActionBar.glyphSide + MessageActionBar.gap
+        let fromTrailing = CGFloat(items.count - index - 1)
+        return CGRect(
+            x: originInRoot.x + rowTrailingEdge
+                - TimelineMetrics.actionBarTrailingInset
+                - MessageActionBar.padding
+                - MessageActionBar.glyphSide
+                - fromTrailing * stride,
+            y: originInRoot.y + hover.rowFrame.minY
+                - TimelineMetrics.actionBarRise
+                + MessageActionBar.padding,
+            width: MessageActionBar.glyphSide,
+            height: MessageActionBar.glyphSide
+        )
+    }
+
+    /// The overlay's own trailing edge, which is the transcript's.
+    ///
+    /// Taken from the hover's row rather than from a second geometry read: the
+    /// canvas laid the row out to the full transcript width, so its trailing
+    /// edge *is* the viewport's.
+    private var rowTrailingEdge: CGFloat {
+        (model.messageHover ?? held)?.rowFrame.maxX ?? 0
+    }
+}

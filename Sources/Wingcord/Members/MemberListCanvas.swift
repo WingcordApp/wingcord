@@ -32,6 +32,8 @@ final class MemberListCanvas: NSView {
     }
 
     var onOpenProfile: ((UserID, CGRect) -> Void)?
+    /// A right-click on a person. Raises the actions rather than the card.
+    var onOpenMenu: ((UserID, CGRect) -> Void)?
     var onWidthChange: ((CGFloat) -> Void)?
 
     var contentHeight: CGFloat { offsets[offsets.count - 1] }
@@ -218,6 +220,24 @@ final class MemberListCanvas: NSView {
         // The anchor is expressed in the SwiftUI root's space, which is the
         // hosting view's and not the window's — see `anchorInHostingRoot`.
         onOpenProfile?(userID, anchorInHostingRoot(rowFrame(at: index)))
+    }
+
+    /// The person menu, at the row.
+    ///
+    /// **`rightMouseDown` rather than `menu(for:)`**, for the reason the
+    /// transcript's is: AppKit's own path expects an `NSMenu`, and this app's is
+    /// a glass surface presented at the window root — a drawn canvas cannot host
+    /// a presentation at all.
+    override func rightMouseDown(with event: NSEvent) {
+        let point = convert(event.locationInWindow, from: nil)
+        guard let index = rowIndex(at: point.y),
+              rows.indices.contains(index),
+              let userID = rows[index].userID
+        else {
+            super.rightMouseDown(with: event)
+            return
+        }
+        onOpenMenu?(userID, anchorInHostingRoot(rowFrame(at: index)))
     }
 
     override func accessibilityChildren() -> [Any]? {

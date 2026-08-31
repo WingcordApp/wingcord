@@ -120,9 +120,18 @@ nonisolated enum Motion {
     // physics that are not happening.
 
     /// A hover highlight appearing or leaving, where a spring would be overkill.
-    static let fadeQuick: Animation = .easeOut(duration: 0.10)
+    static let fadeQuick: Animation = .easeOut(duration: fadeQuickDuration)
     /// The house cross-fade.
-    static let fade: Animation = .easeOut(duration: 0.14)
+    static let fade: Animation = .easeOut(duration: fadeDuration)
+
+    /// The same two fades as plain durations.
+    ///
+    /// The drawn canvases are AppKit and cross-fade through
+    /// `NSAnimationContext`, which takes a `TimeInterval` and cannot be handed a
+    /// SwiftUI `Animation`. Declared here rather than as a number at the call
+    /// site so the scroll-edge strip and a SwiftUI hover cannot drift apart.
+    static let fadeQuickDuration: TimeInterval = 0.10
+    static let fadeDuration: TimeInterval = 0.14
 
     // MARK: Shared constants
 

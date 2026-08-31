@@ -54,27 +54,6 @@ struct ChannelSidebar: View, Equatable {
     /// only thing in this view that does — every other number stays in the
     /// column's own space. See `chromeInsetProbe`.
     @State private var topInset: CGFloat = 0
-    /// How far the list is pulled past its top, as the BANNER should see it.
-    ///
-    /// Deliberately not `max(0, -scrollOffset)`. A trackpad delivers a pull as a
-    /// burst of discrete scroll events, and `NSScrollView` springs its elastic
-    /// offset back to zero in the gaps between them — so artwork mapped straight
-    /// onto that offset rises and collapses once per flick while the reader is
-    /// still pulling. Measured from a 30fps capture: four complete rise-and-
-    /// collapse cycles inside one gesture, each returning to exactly the resting
-    /// height.
-    ///
-    /// So the two directions are separated. Growing follows the pull exactly —
-    /// anything else feels like lag against the fingers. Returning is a spring
-    /// this view owns, which outlives the gap between flicks, so consecutive
-    /// pulls accumulate into one continuous stretch instead of fighting each
-    /// other.
-    @State private var pull: CGFloat = 0
-    /// Whether `pull` last moved outward. Decides whether the change animates.
-    @State private var isPullGrowing = false
-    /// Whether a scroll gesture is still in progress. While it is, the stretch
-    /// holds rather than tracking the elastic offset back to zero.
-    @State private var isScrollActive = false
     /// How wide this column is. Measured for one reason only: an over-wide
     /// toolbar item is dropped rather than truncated, so the title has to know
     /// what it may occupy. See `SidebarBannerLayout.toolbarTitleWidth`.
@@ -94,33 +73,15 @@ struct ChannelSidebar: View, Equatable {
         SidebarBannerLayout(
             hasBanner: hasBanner,
             chromeInset: topInset,
-            stretch: pull,
             travel: max(0, scrollOffset),
             columnWidth: columnWidth
         )
-    }
-
-    /// How the banner answers a pull. The pill takes the **same** animation:
-    /// they are one object drawn in two layers, and giving only one of them a
-    /// spring is what makes the pill arrive at the new height before the artwork
-    /// does.
-    ///
-    /// Out tracks the gesture, back is a critically damped return this view
-    /// drives. `liveTracking` rather than `nil` on the way out: a flick arriving
-    /// while the previous one is still easing back would otherwise jump the
-    /// height straight to the new value from wherever the decay had reached,
-    /// which is a visible snap *downward* in the middle of a pull. An
-    /// interactive spring re-targets from the presented value instead, so an
-    /// interrupted return blends into the new pull rather than cutting to it.
-    private var bannerSpring: Animation {
-        isPullGrowing ? Motion.liveTracking : motion.reposition
     }
 
     var body: some View {
         ZStack(alignment: .top) {
             if hasBanner, let header = presentation.header {
                 SidebarBanner(header: header, layout: layout)
-                    .animation(bannerSpring, value: pull)
                     // Up to the window's top edge, under the toolbar, so the
                     // sidebar toggle sits on the artwork instead of on a bare
                     // strip above it. It is also what makes the banner's frame
@@ -150,7 +111,6 @@ struct ChannelSidebar: View, Equatable {
                     // A pill faded to nothing must not still be taking clicks
                     // out of the strip it has slid into.
                     .allowsHitTesting(layout.pillOpacity > 0)
-                    .animation(bannerSpring, value: pull)
             }
         }
         // The other half of the name, and the half that is REACHABLE — see
@@ -373,63 +333,13 @@ struct ChannelSidebar: View, Equatable {
         // transition then cascades them in or out rather than cutting.
         .animation(motion.standard, value: presentation.rows.count)
         .scrollIndicators(.never)
-        // **Bounce even when the list fits.** A scroll view's default policy
-        // only rubber-bands once the content exceeds the viewport, so on a
-        // server with few channels there is no elastic overscroll at all — and
-        // the banner, which is driven by that overscroll, simply never stretched
-        // there. That is the whole of "it works on one server and not another".
-        .scrollBounceBehavior(.always, axes: .vertical)
-        // One read, feeding both the banner's stretch and the pill's travel.
+        // One read, carrying the banner and the pill up together.
         .onScrollGeometryChange(for: CGFloat.self) { geometry in
             geometry.contentOffset.y + geometry.contentInsets.top
         } action: { _, offset in
             // A `@State` write of an equal value still invalidates, and this one
             // fires on every scroll tick.
             if abs(scrollOffset - offset) > 0.5 { scrollOffset = offset }
-
-            // Resisted rather than linear: a hard fling would otherwise drive
-            // the artwork to any height at all, and a boundary with no
-            // resistance reads as broken rather than as elastic.
-            //
-            // Reduce Motion removes the effect rather than shortening it. A
-            // stretch IS the motion here — there is no quieter version of it —
-            // and the system preference is read once at the root, never asked
-            // of the OS by hand.
-            let pulled = motion.reduceMotion
-                ? 0
-                : Motion.rubberBand(offset: max(0, -offset), limit: SidebarBannerLayout.bannerHeight * 0.75)
-            guard abs(pulled - pull) > 0.5 else { return }
-
-            // **Growing follows the gesture; shrinking waits for it to end.**
-            //
-            // A trackpad delivers a pull as a burst of discrete scroll events,
-            // and the scroll view springs its elastic offset back to zero in the
-            // gaps between them. Following that offset down means the artwork
-            // collapses once per flick while the reader is still pulling —
-            // measured from a 30fps capture: four complete rise-and-collapse
-            // cycles inside one gesture, each returning to exactly the resting
-            // height. Slowing the return does not fix it, because the TARGET is
-            // what keeps returning to zero.
-            //
-            // So while a scroll is still live and the list is still at its top,
-            // the stretch HOLDS at its high-water mark. It is released when the
-            // gesture ends, or the moment the reader actually scrolls down into
-            // the content — which is the one case where holding would be wrong.
-            let hasScrolledIntoContent = offset > 0.5
-            if pulled > pull || !isScrollActive || hasScrolledIntoContent {
-                isPullGrowing = pulled > pull
-                pull = pulled
-            }
-        }
-        .onScrollPhaseChange { _, phase in
-            let active = phase != .idle
-            guard isScrollActive != active else { return }
-            isScrollActive = active
-            // The gesture is over: let whatever was being held ease back.
-            if !active, pull != 0 {
-                isPullGrowing = false
-                pull = 0
-            }
         }
         .softScrollEdgesVertical()
     }

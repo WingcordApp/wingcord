@@ -66,6 +66,7 @@ final class TimelineCanvasView: NSView {
                 hoveredRow = nil
                 hoveredComponent = nil
                 invalidateRow(previous)
+                publishHover()
             } else if !isScrolling {
                 updateHover(at: currentPointerLocation())
             }
@@ -97,6 +98,16 @@ final class TimelineCanvasView: NSView {
     var onOpenAttachment: ((MessageID, Int, [CGFloat]) -> Void)?
     /// A poll answer was chosen.
     var onVote: ((MessageID, Int) -> Void)?
+    /// A reaction chip was clicked. The reader's own reaction is toggled.
+    var onToggleReaction: ((MessageID, EmojiRef) -> Void)?
+    /// A reply's quoted line was clicked: go to what it quotes.
+    var onOpenReplyTarget: ((MessageID) -> Void)?
+    /// The pointer moved onto, or off, a message row. The rect is in the CLIP
+    /// VIEW's space, because what reads it is a floating pill overlaid on the
+    /// scroll view rather than anything in document coordinates.
+    var onHoverMessage: ((MessageID?, CGRect) -> Void)?
+    /// The full menu was asked for — a right-click, or the pill's own button.
+    var onOpenMenu: ((MessageID, CGRect) -> Void)?
 
     private var trackingArea: NSTrackingArea?
 
@@ -161,6 +172,9 @@ final class TimelineCanvasView: NSView {
         }
         // Clear any hover that referred to a row index that no longer exists.
         if let hoveredRow, hoveredRow >= rows.count { self.hoveredRow = nil }
+        // An index survives a rows change; the message at it may not. Republish
+        // so the pill cannot end up offering another message's actions.
+        if hoveredRow != nil { publishHover() }
         needsDisplay = true
         refreshStickerAnimation()
         return running
@@ -408,6 +422,7 @@ final class TimelineCanvasView: NSView {
         let previous = hoveredRow
         hoveredRow = nil
         invalidateRow(previous)
+        publishHover()
     }
 
     override func mouseDown(with event: NSEvent) {
@@ -445,9 +460,35 @@ final class TimelineCanvasView: NSView {
             if let url { onOpenLink?(.url(url), .zero) }
         case .pollAnswer(let answerID, _):
             if let answerID { onVote?(row.id, answerID) }
+        case .reaction(let emoji, _):
+            onToggleReaction?(row.id, emoji)
+        case .replyHeader(let target):
+            // A strip with nothing behind it still swallows the click: falling
+            // through would open the profile of whoever is underneath.
+            if let target { onOpenReplyTarget?(target) }
         case nil:
             if event.clickCount == 2 { onActivateMessage?(row.id) }
         }
+    }
+
+    /// The full menu, at the pointer.
+    ///
+    /// **`rightMouseDown` rather than `menu(for:)`.** AppKit's own path expects
+    /// an `NSMenu`, and this app's menu is a glass surface presented at the
+    /// window root — the transcript is a drawn canvas and cannot host a
+    /// presentation at all. What it hands up is the rect to anchor to, which is
+    /// a one-point box at the pointer so the menu grows out of where the reader
+    /// clicked.
+    override func rightMouseDown(with event: NSEvent) {
+        let point = convert(event.locationInWindow, from: nil)
+        guard let index = rowIndex(at: point.y),
+              rows.indices.contains(index),
+              case .message(let row) = rows[index].kind
+        else {
+            super.rightMouseDown(with: event)
+            return
+        }
+        onOpenMenu?(row.id, CGRect(origin: point, size: CGSize(width: 1, height: 1)))
     }
 
     // MARK: Hit testing
@@ -476,11 +517,28 @@ final class TimelineCanvasView: NSView {
         /// voted in — the row still swallows the click rather than letting it
         /// fall through to whatever is beneath.
         case pollAnswer(answerID: Int?, origin: CGPoint)
+        /// A reaction chip. Clicking it adds or removes the reader's own.
+        /// Carries its origin in row space so the painter can light the one
+        /// under the pointer — identified by origin, not index, for the reason
+        /// `hoveredComponent` is.
+        case reaction(EmojiRef, origin: CGPoint)
+        /// The quoted line above a reply. Carries where to go, or nil when the
+        /// quoted message is gone — which still swallows the click, because a
+        /// strip that says "original message was deleted" is not a hole in the
+        /// row.
+        case replyHeader(MessageID?)
     }
 
     private func target(in row: MessageRow, at point: CGPoint, rowIndex index: Int) -> Target? {
         let frame = rowFrame(at: index)
         let local = CGPoint(x: point.x - frame.minX, y: point.y - frame.minY)
+
+        // The quoted line sits above the author line and overlaps nothing, so
+        // it is tested first and costs one rect containment on a reply and a
+        // nil check on everything else.
+        if let header = row.replyHeader, header.rect.contains(local) {
+            return .replyHeader(header.targetID)
+        }
 
         // A spoiler beats everything under it: the reveal has to happen before
         // the thing underneath can be reached, or a masked link inside a spoiler
@@ -562,6 +620,10 @@ final class TimelineCanvasView: NSView {
             )
         }
 
+        for slot in row.reactions where slot.rect.contains(local) {
+            return .reaction(slot.emoji, origin: slot.rect.origin)
+        }
+
         // The face, then the name. Both open the same card, and both are things
         // a reader points at when they want to know who somebody is.
         if let avatarRect = row.avatarRect, avatarRect.contains(local) {
@@ -597,8 +659,28 @@ final class TimelineCanvasView: NSView {
         return convert(window.mouseLocationOutsideOfEventStream, from: nil)
     }
 
+    /// Which row the pointer belongs to.
+    ///
+    /// **Sticky for the row already hovered, and only for that one.** The action
+    /// pill floats over the row's top edge and overhangs the row above it by a
+    /// few points, so a pointer travelling up into the pill would otherwise be
+    /// read as having left the row the pill belongs to — the pill would vanish
+    /// under the cursor on its way to being clicked. Applying the region to the
+    /// current row alone means a *fresh* hover can never be mis-assigned.
+    private func hoveredIndex(at point: CGPoint) -> Int? {
+        guard bounds.contains(point) else { return nil }
+        let index = rowIndex(at: point.y)
+        if let current = hoveredRow, current != index, rows.indices.contains(current),
+           rows[current].isSelectable,
+           TimelineMetrics.actionBarRegion(inRow: rowFrame(at: current)).contains(point)
+        {
+            return current
+        }
+        return index
+    }
+
     private func updateHover(at point: CGPoint) {
-        let index: Int? = bounds.contains(point) ? rowIndex(at: point.y) : nil
+        let index = hoveredIndex(at: point)
 
         // The pointing hand and the lit button, resolved from the same function
         // the click uses. Bounded work: one row's rectangles, and only while
@@ -613,6 +695,13 @@ final class TimelineCanvasView: NSView {
             case .pollAnswer(let answerID, let origin):
                 component = origin
                 cursor = answerID == nil ? nil : .pointingHand
+            case .reaction(_, let origin):
+                component = origin
+                cursor = .pointingHand
+            case .replyHeader(let target):
+                // A quote with nothing behind it swallows the click and goes
+                // nowhere, so it must not offer a hand that says it does.
+                cursor = target == nil ? nil : .pointingHand
             case .some:
                 cursor = .pointingHand
             case nil:
@@ -631,6 +720,26 @@ final class TimelineCanvasView: NSView {
         hoveredComponent = component
         if rowChanged { invalidateRow(previous) }
         invalidateRow(index)
+        if rowChanged { publishHover() }
+    }
+
+    /// Tells the window which row the pointer is on, and where that row is.
+    ///
+    /// **In the clip view's space, not the document's.** What reads this is a
+    /// glass pill overlaid on the scroll view, which is laid out in the
+    /// viewport — publishing document coordinates would put the pill wherever
+    /// the row happens to be in the whole transcript, which for a channel
+    /// scrolled a thousand messages back is somewhere off the screen entirely.
+    private func publishHover() {
+        guard let onHoverMessage else { return }
+        guard let index = hoveredRow, rows.indices.contains(index),
+              case .message(let row) = rows[index].kind
+        else {
+            onHoverMessage(nil, .zero)
+            return
+        }
+        let origin = enclosingScrollView?.contentView.bounds.origin ?? .zero
+        onHoverMessage(row.id, rowFrame(at: index).offsetBy(dx: -origin.x, dy: -origin.y))
     }
 
     // MARK: Highlight

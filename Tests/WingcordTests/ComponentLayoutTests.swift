@@ -36,7 +36,7 @@ struct ComponentLayoutTests {
             flags: [.head, .tail]
         ))]
         let engine = TimelineLayoutEngine(presentationRevision: 1)
-        var cache: [TimelineLayoutEngine.CacheKey: MessageRow] = [:]
+        var cache: [MessageID: TimelineLayoutEngine.CacheEntry] = [:]
         let laid = engine.layout(
             TimelineLayoutEngine.Input(
                 items: items,

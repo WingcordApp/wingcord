@@ -217,7 +217,9 @@ extension AppModel {
                 isMemberListShown: false,
                 canShowMemberList: false,
                 isUserProfileShown: false,
-                canShowUserProfile: false
+                canShowUserProfile: false,
+                canShowPins: false,
+                arePinsShown: false
             )
         }
         guard let channelID = selectedChannelID, let channel = channelIndex[channelID] else {
@@ -229,7 +231,9 @@ extension AppModel {
                 isMemberListShown: false,
                 canShowMemberList: false,
                 isUserProfileShown: false,
-                canShowUserProfile: false
+                canShowUserProfile: false,
+                canShowPins: false,
+                arePinsShown: false
             )
         }
         return ChannelChrome(
@@ -241,7 +245,12 @@ extension AppModel {
             canShowMemberList: channel.guildID != nil
                 || channel.kind == .groupDirectMessage,
             isUserProfileShown: isDirectMessageProfileShown,
-            canShowUserProfile: channel.guildID == nil && channel.kind == .directMessage
+            canShowUserProfile: channel.guildID == nil && channel.kind == .directMessage,
+            // A channel whose history the reader cannot load has pins they
+            // cannot read either — the route answers 403, and a control that
+            // opens onto a refusal is the inert control §5.5 is about.
+            canShowPins: permissionGate.canReadHistory(channelID),
+            arePinsShown: openPinsChannelID == channelID
         )
     }
 

@@ -115,6 +115,20 @@ nonisolated enum TimelineRowPainter {
             context.fill(rowFrame)
         }
 
+        // The quoted line, and the elbow tying it to the face below. Drawn
+        // first so the connector passes *under* the avatar rather than across
+        // it — one save/restore, and only on a reply.
+        if let header = row.replyHeader {
+            drawReplyHeader(
+                header,
+                offset: CGPoint(x: rowFrame.minX, y: rowFrame.minY),
+                context: context,
+                style: style,
+                images: images,
+                scale: scale
+            )
+        }
+
         // Avatar, or the monogram plate behind it.
         if let avatarRect = row.avatarRect {
             let frame = avatarRect.offsetBy(dx: rowFrame.minX, dy: rowFrame.minY)
@@ -290,7 +304,15 @@ nonisolated enum TimelineRowPainter {
 
         for slot in row.reactions {
             let frame = slot.rect.offsetBy(dx: rowFrame.minX, dy: rowFrame.minY)
-            drawReaction(slot, in: frame, context: context, style: style, images: images, scale: scale)
+            drawReaction(
+                slot,
+                in: frame,
+                context: context,
+                style: style,
+                isHovered: state.hoveredComponent == slot.rect.origin,
+                images: images,
+                scale: scale
+            )
         }
     }
 
@@ -459,6 +481,91 @@ nonisolated enum TimelineRowPainter {
 
     // MARK: Pieces
 
+    /// The quoted line above a reply: an elbow out of the avatar gutter, the
+    /// quoted author's face and name, and one line of what they said.
+    ///
+    /// **The elbow is stroked in one path, not two lines and an arc.** A corner
+    /// assembled from three primitives joins at the miter and leaves a notch on
+    /// the inside of the turn at any stroke wider than a point, which at 1.5 is
+    /// visible as a nick in the only curve on the row.
+    private static func drawReplyHeader(
+        _ header: ReplyHeaderSlot,
+        offset: CGPoint,
+        context: CGContext,
+        style: MessageTextStyle,
+        images: ImageStore,
+        scale: CGFloat
+    ) {
+        let midY = offset.y + header.rect.midY
+        let radius = TimelineMetrics.replyElbowRadius
+        let x = offset.x + TimelineMetrics.replyElbowX
+
+        context.saveGState()
+        context.setStrokeColor(style.quoteRuleColor.cgColor)
+        context.setLineWidth(TimelineMetrics.replyElbowWidth)
+        context.setLineCap(.round)
+        context.beginPath()
+        context.move(to: CGPoint(x: x, y: offset.y + header.elbowBottom))
+        context.addArc(
+            tangent1End: CGPoint(x: x, y: midY),
+            tangent2End: CGPoint(x: offset.x + TimelineMetrics.replyElbowEndX, y: midY),
+            radius: radius
+        )
+        context.addLine(to: CGPoint(x: offset.x + TimelineMetrics.replyElbowEndX, y: midY))
+        context.strokePath()
+        context.restoreGState()
+
+        if header.avatarRect != .zero {
+            drawAvatar(
+                url: header.avatarURL,
+                monogram: header.monogram,
+                in: header.avatarRect.offsetBy(dx: offset.x, dy: offset.y),
+                context: context,
+                style: style,
+                images: images,
+                scale: scale,
+                // The transcript already asked for this face at the message
+                // avatar's size, and that is the slot the picture is in.
+                peekSide: Metrics.avatarMessage
+            )
+        }
+
+        let font = style.metadataFont
+        if !header.name.isEmpty {
+            drawText(
+                header.name,
+                font: header.nameFace ?? font,
+                color: header.nameColor ?? style.secondaryColor,
+                at: CGPoint(
+                    x: offset.x + header.nameRect.minX,
+                    y: capCenteredY(of: header.nameFace ?? font, in: header.nameRect)
+                        + offset.y
+                ),
+                maxWidth: header.nameRect.width + 4,
+                tracking: header.nameTracking,
+                context: context
+            )
+        }
+        if !header.excerpt.isEmpty {
+            drawText(
+                header.excerpt,
+                font: font,
+                color: style.tertiaryColor,
+                at: CGPoint(
+                    x: offset.x + header.excerptRect.minX,
+                    y: capCenteredY(of: font, in: header.excerptRect) + offset.y
+                ),
+                maxWidth: header.excerptRect.width,
+                context: context
+            )
+        }
+    }
+
+    /// - Parameter peekSide: the point size the picture was *requested* at, when
+    ///   that differs from the box it is drawn in. The cache is keyed on pixel
+    ///   size, so a reply header drawing a 16-point face has to look in the slot
+    ///   the 38-point prefetch filled — peeking with its own box's size looks in
+    ///   a slot nothing was ever put in, and the face is a permanent monogram.
     private static func drawAvatar(
         url: URL?,
         monogram: String,
@@ -466,7 +573,8 @@ nonisolated enum TimelineRowPainter {
         context: CGContext,
         style: MessageTextStyle,
         images: ImageStore,
-        scale: CGFloat
+        scale: CGFloat,
+        peekSide: CGFloat? = nil
     ) {
         context.saveGState()
         context.addEllipse(in: frame)
@@ -475,12 +583,12 @@ nonisolated enum TimelineRowPainter {
         if let url,
            let image = images.cached(ImageStore.Key(
                url: url,
-               maximumPixelSize: Int((frame.width * scale).rounded(.up))
+               maximumPixelSize: Int(((peekSide ?? frame.width) * scale).rounded(.up))
            ))
         {
             drawFlipped(image, in: frame, context: context)
         } else {
-            context.setFillColor(NSColor(Palette.surfaceRaised).cgColor)
+            context.setFillColor(ThemeInk.current.surfaceRaised)
             context.fill(frame)
             context.restoreGState()
             let font = NSFont.systemFont(ofSize: frame.width * 0.4, weight: .semibold)
@@ -529,7 +637,7 @@ nonisolated enum TimelineRowPainter {
         {
             drawFlipped(image, in: frame, context: context)
         } else {
-            context.setFillColor(NSColor(Palette.surfaceRaised).cgColor)
+            context.setFillColor(ThemeInk.current.surfaceRaised)
             context.fill(frame)
         }
         context.restoreGState()
@@ -569,6 +677,7 @@ nonisolated enum TimelineRowPainter {
         in frame: CGRect,
         context: CGContext,
         style: MessageTextStyle,
+        isHovered: Bool,
         images: ImageStore,
         scale: CGFloat
     ) {
@@ -579,12 +688,28 @@ nonisolated enum TimelineRowPainter {
             transform: nil
         )
         context.addPath(path)
+        // A chip is a control, so it answers the pointer. The reader's own is
+        // already accent-tinted; hovering lifts whichever it is by the same
+        // step, so the two states stay distinguishable in both directions.
+        let base: CGFloat = slot.isMine ? 0.22 : 0.07
         context.setFillColor(
             slot.isMine
-                ? NSColor.controlAccentColor.withAlphaComponent(0.22).cgColor
-                : NSColor.white.withAlphaComponent(0.07).cgColor
+                ? NSColor.controlAccentColor.withAlphaComponent(base + (isHovered ? 0.12 : 0)).cgColor
+                : NSColor.white.withAlphaComponent(base + (isHovered ? 0.06 : 0)).cgColor
         )
         context.fillPath()
+
+        // The reader's own chip carries an outline as well as a tint: on a busy
+        // row the fill alone is one step of lightness against four other chips,
+        // and "did my reaction land" is the only question the control answers.
+        if slot.isMine {
+            context.addPath(path)
+            context.setStrokeColor(
+                NSColor.controlAccentColor.withAlphaComponent(0.75).cgColor
+            )
+            context.setLineWidth(1)
+            context.strokePath()
+        }
 
         let side = TimelineMetrics.reactionGlyphSide
         let glyphRect = CGRect(

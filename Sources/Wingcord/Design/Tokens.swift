@@ -3,35 +3,49 @@ import WingcordCore
 
 // MARK: - Palette
 //
-// One theme: True Black. There is deliberately no theme system, no alternate
-// palettes and no protocol to swap them. If a second palette is ever wanted it
-// is a new decision, not a slot waiting to be filled.
+// The chrome's three grounds and its one accent, plus the fills that are defined
+// *relative* to them. Everything else in this app that carries colour carries it
+// because a person chose it — an avatar, a banner, a role, a piece of media.
 //
-// Every pixel of *colour* in Wingcord comes from user content — avatars,
-// banners, role colours, media, server icons. The chrome is achromatic glass
-// over near-black, and accent is spent sparingly.
+// THIS USED TO SAY there was deliberately no theme system, and that a second
+// palette would be a new decision rather than a slot waiting to be filled. It is
+// now that decision, and it is scoped exactly as narrowly as that note asked
+// for: a theme moves `canvas`, `surface`, `surfaceRaised` and `accent`, and
+// touches nothing else in this file. The reasoning, the ramp and the ten themes
+// are in `Theme.swift`; how a value written on the main actor reaches a painter
+// running off it is in `ThemeRuntime.swift`.
+//
+// **The relative fills stay relative.** A hover is white at 7%, a selection
+// white at 15%, a flyout tint white at 8% — the surface *plus light*, which is
+// the only definition that survives the system glass-intensity setting, Reduce
+// Transparency, and a wallpaper showing through the sidebar column. Baking a
+// theme colour into any of them breaks all three, and would also make them wrong
+// over a backdrop picture, which is a ground this app does not choose.
 //
 // THE ONE MACOS DIFFERENCE, and it decides where these may be used:
 // `NavigationSplitView`'s sidebar column is painted by AppKit with behind-window
 // vibrancy. That vibrancy IS the bleed — the wallpaper and the menu-bar accent
 // coming through the leading columns. Painting `canvas` over the sidebar throws
 // it away. So `canvas` belongs to the DETAIL column and to floating panels; the
-// rail and the channel list get no background at all.
+// rail and the channel list get `sidebarGround()`, which paints nothing until a
+// theme or a picture gives it something to paint.
 
 nonisolated enum Palette {
-    /// The reading surface. #0A0A0C — near-black, deliberately not pure black,
-    /// because Liquid Glass needs something behind it to lens and refract. Pure
-    /// #000 makes every glass surface read as a flat grey panel.
+    /// The reading surface. #0A0A0C untouched, and near-black rather than pure
+    /// black on purpose: Liquid Glass needs something behind it to lens and
+    /// refract, and #000 makes every glass surface read as a flat grey panel.
+    /// Every derived theme keeps that property — the ramp's darkest rung is
+    /// Oklab L 0.10, which is not black either.
     ///
     /// Applied to the detail column only. See the note above.
-    static let canvas = Color(hex: 0x0A0A0C)
+    static var canvas: Color { Color(hex: ThemeAccess.colors.canvas) }
 
     /// Structural, non-floating surfaces: panel grounds, grouped row
     /// backgrounds, the opaque layer that scrolls *underneath* glass.
-    static let surface = Color(hex: 0x141417)
+    static var surface: Color { Color(hex: ThemeAccess.colors.surface) }
 
     /// A slightly lifted structural surface, for a grouped row inside `surface`.
-    static let surfaceRaised = Color(hex: 0x1C1C20)
+    static var surfaceRaised: Color { Color(hex: ThemeAccess.colors.surfaceRaised) }
 
     /// The selected channel's pill, and the travelling selection indicator, at
     /// rest.
@@ -49,10 +63,19 @@ nonisolated enum Palette {
     /// weight: a hover must be legible as *not yet chosen*.
     static let hoverFill = Color.white.opacity(0.07)
 
-    /// The single accent. System blue, so it tracks the user's chosen accent
-    /// colour in System Settings and Increase Contrast. Used only for: primary
-    /// buttons, the send arrow, focus rings. Nothing else in the chrome.
-    static let accent = Color.accentColor
+    /// The single accent. Used only for: primary buttons, the send arrow, focus
+    /// rings. Nothing else in the chrome.
+    ///
+    /// **The house theme has none of its own and tracks the system's**, which is
+    /// what makes Wingcord's blue agree with every other app on the Mac and what
+    /// carries Increase Contrast for free. A theme that states a hue is opting
+    /// out of that deliberately — it is the one saturated thing in a themed
+    /// window, and it would be strange for a green room to send with a blue
+    /// arrow.
+    static var accent: Color {
+        guard let value = ThemeAccess.colors.accent else { return Color.accentColor }
+        return Color(hex: value)
+    }
 
     /// Destructive actions only — Delete, Block, Leave, Disconnect.
     static let destructive = Color.red
@@ -76,7 +99,11 @@ nonisolated enum Palette {
     /// over moving artwork to a scrim for exactly that reason: a sampled
     /// material cannot promise the sentence on top of it stays legible frame to
     /// frame. Near-opaque, so white text clears it over a white banner.
-    static let statusBubble = Color(hex: 0x14_14_17).opacity(0.92)
+    ///
+    /// Themed, because it is a *surface* rather than a relative fill — it is
+    /// `surface` with a hole punched in it, and a grey bubble on a green card
+    /// would read as a piece of another app.
+    static var statusBubble: Color { surface.opacity(0.92) }
 
     /// Muted conversations render badges in this instead of `unreadBadge`, so a
     /// muted unread never competes with a live one.

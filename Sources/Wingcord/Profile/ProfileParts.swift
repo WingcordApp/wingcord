@@ -1,3 +1,5 @@
+import AppKit
+import CoreText
 import SwiftUI
 import WingcordCore
 
@@ -297,25 +299,221 @@ struct ConnectionChip: View {
             ?? connection.service.capitalized
     }
 
+    @Environment(\.openURL) private var openURL
+    @Environment(\.motion) private var motion
+    @State private var isHovering = false
+    /// Shown for a beat after a copy, because the pasteboard gives no feedback
+    /// of its own and a chip that does nothing visible reads as a dead control.
+    @State private var didCopy = false
+    @State private var copyReset: Task<Void, Never>?
+
+    /// Where it goes, or nil for a service with no public page.
+    private var url: URL? { connection.profileURL }
+
     var body: some View {
-        HStack(spacing: 5) {
-            ConnectionMark(service: connection.service, side: 15)
-            Text(connection.name)
-                .font(.system(.caption2))
-                .foregroundStyle(InkColor.primary)
-                .lineLimit(1)
-            if connection.isVerified {
-                Image(systemName: "checkmark.seal.fill")
-                    .font(.system(size: 8))
-                    .foregroundStyle(Palette.affirmative)
+        Button(action: act) {
+            HStack(spacing: 5) {
+                ConnectionMark(service: connection.service, side: 15)
+                Text(connection.name)
+                    .font(.system(.caption2))
+                    .foregroundStyle(InkColor.primary)
+                    .lineLimit(1)
+                if connection.isVerified {
+                    Image(systemName: "checkmark.seal.fill")
+                        .font(.system(size: 8))
+                        .foregroundStyle(Palette.affirmative)
+                }
+                // **The affordance says which of two things pressing it does.**
+                // Half these services have no address a client can build — a
+                // PlayStation tag, a BattleTag, a Riot ID — and a chip that
+                // looked like a link and opened nothing is the inert control
+                // §5.5 is about. An arrow means "this leaves the app"; a
+                // document means "this goes on the pasteboard".
+                Image(systemName: affordance)
+                    .font(.system(size: 7.5, weight: .bold))
+                    .foregroundStyle(InkColor.tertiary)
+                    .opacity(isHovering ? 1 : 0.5)
             }
+            .padding(.leading, 4)
+            .padding(.trailing, 7)
+            .padding(.vertical, 3)
+            .glassEffect(.clear, in: .rect(cornerRadius: 9))
+            .contentShape(.rect)
         }
-        .padding(.leading, 4)
-        .padding(.trailing, 7)
-        .padding(.vertical, 3)
-        .glassEffect(.clear, in: .rect(cornerRadius: 9))
-        .help(serviceName)
+        .buttonStyle(.plain)
+        .onHover { hovering in
+            guard isHovering != hovering else { return }
+            isHovering = hovering
+        }
+        .animation(motion.hover, value: isHovering)
+        .animation(motion.standard, value: didCopy)
+        .help(helpText)
         .accessibilityLabel(Text("\(serviceName), \(connection.name)"))
+        .accessibilityHint(url == nil ? "Copy the name" : "Open in your browser")
+        .onDisappear { copyReset?.cancel() }
+    }
+
+    private var affordance: String {
+        if didCopy { return "checkmark" }
+        return url == nil ? "doc.on.doc" : "arrow.up.forward"
+    }
+
+    private var helpText: String {
+        if didCopy { return "Copied" }
+        return url == nil ? "Copy \(serviceName) name" : "Open on \(serviceName)"
+    }
+
+    private func act() {
+        if let url {
+            openURL(url)
+            return
+        }
+        AppModel.copy(connection.name)
+        didCopy = true
+        // A cancelled task rather than a timer: the chip can be torn down with
+        // the card at any point, and a timer outlives what it was drawn for.
+        copyReset?.cancel()
+        copyReset = Task {
+            try? await Task.sleep(for: .seconds(1.4))
+            guard !Task.isCancelled else { return }
+            didCopy = false
+        }
+    }
+}
+
+/// The people both accounts know.
+///
+/// The same control the mutual-servers row is, and deliberately: they answer
+/// the same shape of question one line apart, and two arrangements for one
+/// shape is two places for the chevron to drift.
+struct MutualFriendsRow: View {
+    var friends: [MutualFriend]
+
+    @Environment(\.motion) private var motion
+    @State private var isOpen = false
+    @State private var isHovering = false
+
+    private var label: String {
+        friends.count == 1 ? "1 Mutual Friend" : "\(friends.count) Mutual Friends"
+    }
+
+    var body: some View {
+        Button { isOpen = true } label: {
+            HStack(spacing: Spacing.base) {
+                Image(systemName: "person.crop.circle.badge.checkmark")
+                    .font(.system(.caption2))
+                    .foregroundStyle(InkColor.tertiary)
+                    .frame(width: 14)
+                Text(label)
+                    .font(.system(.caption))
+                    .foregroundStyle(InkColor.secondary)
+                    .lineLimit(1)
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 8, weight: .bold))
+                    .foregroundStyle(InkColor.tertiary)
+                    .opacity(isHovering || isOpen ? 1 : 0.45)
+            }
+            .background {
+                RoundedRectangle(cornerRadius: Radius.row, style: .continuous)
+                    .fill(Palette.hoverFill)
+                    .opacity(isHovering || isOpen ? 1 : 0)
+                    .padding(.horizontal, -5)
+                    .padding(.vertical, -3)
+            }
+            .contentShape(.rect)
+        }
+        .buttonStyle(.plain)
+        .onHover { hovering in
+            guard isHovering != hovering else { return }
+            isHovering = hovering
+        }
+        .animation(motion.hover, value: isHovering)
+        .accessibilityLabel(Text(label))
+        .accessibilityHint("Show the people you both know")
+        .popover(isPresented: $isOpen, arrowEdge: .trailing) {
+            MutualFriendsList(friends: friends)
+                .presentationBackground(.clear)
+        }
+    }
+}
+
+/// The friends themselves, each with the server tag they wear.
+struct MutualFriendsList: View {
+    var friends: [MutualFriend]
+
+    @Environment(AppModel.self) private var model
+
+    private static let rowHeight: CGFloat = 34
+    private static let visibleRows = 8
+    private static let width: CGFloat = 250
+    private static let badgeSide: CGFloat = 11
+
+    private var height: CGFloat {
+        min(CGFloat(friends.count), CGFloat(Self.visibleRows)) * Self.rowHeight
+    }
+
+    var body: some View {
+        ScrollView {
+            LazyVStack(alignment: .leading, spacing: 0) {
+                ForEach(friends) { friend in
+                    Button {
+                        // Opens their card in place of this one. The anchor is
+                        // zero because a popover row has no rect in the window
+                        // root's space — the presenter centres what it cannot
+                        // place, which is the honest answer here.
+                        model.openProfile(friend.id, anchor: .zero, depth: .full)
+                    } label: {
+                        row(friend)
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            .padding(.vertical, Spacing.tight)
+        }
+        .frame(width: Self.width, height: height + Spacing.tight * 2)
+        .scrollBounceBehavior(.basedOnSize)
+        .glassEffect(.clear.tint(Palette.flyoutTint), in: .rect(cornerRadius: Radius.glass))
+    }
+
+    private func row(_ friend: MutualFriend) -> some View {
+        HStack(spacing: Spacing.base) {
+            AvatarView(
+                url: friend.avatarHash.flatMap {
+                    CDN.avatar(userID: friend.id, hash: $0, side: Metrics.avatarRow)
+                },
+                monogram: friend.monogram,
+                side: Metrics.avatarRow
+            )
+            Text(friend.name)
+                .font(Typeface.rowTitle)
+                .foregroundStyle(Ink.primary)
+                .lineLimit(1)
+            // The server tag they wear. Drawn here rather than resolved from
+            // the store, because the reader is very often in none of the
+            // servers a mutual friend is in — see `MutualFriend.tag`.
+            if let tag = friend.tag {
+                HStack(spacing: 3) {
+                    if let guildID = friend.tagGuildID, let hash = friend.tagBadgeHash,
+                       let url = CDN.guildTagBadge(guildID: guildID, hash: hash)
+                    {
+                        RemoteImage(url: url, side: Self.badgeSide) { Color.clear }
+                            .frame(width: Self.badgeSide, height: Self.badgeSide)
+                    }
+                    Text(tag)
+                        .font(.system(size: 10, weight: .bold))
+                        .foregroundStyle(InkColor.secondary)
+                        .lineLimit(1)
+                }
+                .padding(.horizontal, 5)
+                .padding(.vertical, 2)
+                .glassEffect(.clear, in: .rect(cornerRadius: 6))
+                .accessibilityLabel(Text("Tag \(tag)"))
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, Spacing.snug)
+        .frame(height: Self.rowHeight)
+        .contentShape(.rect)
     }
 }
 
@@ -437,26 +635,164 @@ struct GuildTagChip: View {
 /// a state write during layout is a relayout.
 struct RoleChipFlow: View {
     var roles: [ProfileRole]
+    /// How many rows the flow may take before the rest become a count.
+    ///
+    /// **Nil on the full profile and two on the card**, which is the reference's
+    /// own split and the right one: a card is a summary that opens beside a row
+    /// and must not grow taller than the window on somebody holding forty-six
+    /// roles, while the full profile is the page you opened *to see them*.
+    var maximumRows: Int?
+    /// What the flow has to fit in. The card's is a constant it already owns,
+    /// so this is handed down rather than measured — a `GeometryReader` here
+    /// would cost a pass and publish a number that outlives the card.
+    var width: CGFloat = 0
+
+    private var visibleCount: Int {
+        guard let maximumRows, width > 0 else { return roles.count }
+        return RoleChipFit.visibleCount(
+            names: roles.map(\.name),
+            total: roles.count,
+            width: width,
+            rows: maximumRows
+        )
+    }
 
     var body: some View {
+        let shown = visibleCount
         FlowLayout(spacing: Spacing.tight) {
-            ForEach(roles) { role in
-                HStack(spacing: 4) {
-                    Circle()
-                        .fill(role.colorValue.map { Color(hex: $0) } ?? Palette.presenceOffline)
-                        .frame(width: 8, height: 8)
-                    Text(role.name)
-                        .font(.system(.caption2))
-                        .foregroundStyle(InkColor.primary)
-                        .lineLimit(1)
-                }
-                .padding(.horizontal, 7)
-                .padding(.vertical, 3)
-                // Clear glass, because the ground behind it is the person's own
-                // colour and a `.regular` material would blur it into grey.
-                .glassEffect(.clear, in: .rect(cornerRadius: 7))
+            ForEach(roles.prefix(shown)) { role in
+                chip(role)
+            }
+            if shown < roles.count {
+                RoleOverflowChip(count: roles.count - shown)
             }
         }
+    }
+
+    private func chip(_ role: ProfileRole) -> some View {
+        HStack(spacing: RoleChipFit.dotGap) {
+            Circle()
+                .fill(role.colorValue.map { Color(hex: $0) } ?? Palette.presenceOffline)
+                .frame(width: RoleChipFit.dotSide, height: RoleChipFit.dotSide)
+            Text(role.name)
+                .font(.system(.caption2))
+                .foregroundStyle(InkColor.primary)
+                .lineLimit(1)
+        }
+        .padding(.horizontal, RoleChipFit.horizontalPadding)
+        .padding(.vertical, 3)
+        // Clear glass, because the ground behind it is the person's own
+        // colour and a `.regular` material would blur it into grey.
+        .glassEffect(.clear, in: .rect(cornerRadius: 7))
+    }
+}
+
+/// The chip that stands for the roles a capped flow could not show.
+struct RoleOverflowChip: View {
+    var count: Int
+
+    var body: some View {
+        Text("+\(count)")
+            .font(.system(.caption2, weight: .medium))
+            .foregroundStyle(InkColor.secondary)
+            // A count that ticks must not change width as it does.
+            .monospacedDigit()
+            .padding(.horizontal, RoleChipFit.horizontalPadding)
+            .padding(.vertical, 3)
+            .glassEffect(.clear, in: .rect(cornerRadius: 7))
+    }
+}
+
+/// How many role chips fit in a capped flow.
+///
+/// **Solved before the layout runs, not by it.** A `Layout` knows exactly which
+/// subviews fit — it has every size and the proposal — and cannot change the
+/// one that says `+43`, because the number depends on how many it decided to
+/// drop. Doing the arithmetic here means the label and the placement come from
+/// the same answer.
+///
+/// **A pure function over strings and one width**, so every awkward case — one
+/// role wider than the card, a cap of zero, an overflow chip that does not
+/// itself fit — is checkable without running the app. The measurement it needs
+/// is a `CTLine` per role, which is microseconds for the fifty a heavy profile
+/// carries and happens when a card opens rather than per frame.
+enum RoleChipFit {
+    static let dotSide: CGFloat = 8
+    static let dotGap: CGFloat = 4
+    static let horizontalPadding: CGFloat = 7
+    static let spacing = Spacing.tight
+
+    /// The greatest number of chips that leaves room for the `+N` standing for
+    /// the rest, inside `rows` rows of `width`.
+    static func visibleCount(
+        names: [String],
+        total: Int,
+        width: CGFloat,
+        rows: Int
+    ) -> Int {
+        guard rows > 0, width > 0 else { return 0 }
+        let widths = names.map(chipWidth)
+        if fits(widths, width: width, rows: rows) { return names.count }
+
+        // Monotonic in `shown` — dropping a chip can never need more rows — so
+        // the largest that fits is a binary search rather than a walk.
+        var low = 0
+        var high = names.count - 1
+        while low < high {
+            let middle = (low + high + 1) / 2
+            var candidate = Array(widths.prefix(middle))
+            candidate.append(overflowWidth(total - middle))
+            if fits(candidate, width: width, rows: rows) {
+                low = middle
+            } else {
+                high = middle - 1
+            }
+        }
+        return low
+    }
+
+    /// Whether these widths wrap into at most `rows` rows.
+    private static func fits(_ widths: [CGFloat], width: CGFloat, rows: Int) -> Bool {
+        var used = 1
+        var x: CGFloat = 0
+        for itemWidth in widths {
+            if x > 0, x + spacing + itemWidth > width {
+                used += 1
+                if used > rows { return false }
+                x = itemWidth
+            } else {
+                x += x > 0 ? spacing + itemWidth : itemWidth
+            }
+        }
+        return used <= rows
+    }
+
+    static func chipWidth(of name: String) -> CGFloat {
+        dotSide + dotGap + measure(name, font: chipFont) + horizontalPadding * 2
+    }
+
+    static func overflowWidth(_ count: Int) -> CGFloat {
+        measure("+\(count)", font: overflowFont) + horizontalPadding * 2
+    }
+
+    /// The faces the two chips are set in.
+    ///
+    /// `preferredFont(forTextStyle:)` rather than a fixed size, so the split
+    /// follows the reader's own text size the way the chips themselves do.
+    private static var chipFont: NSFont { .preferredFont(forTextStyle: .caption2) }
+    private static var overflowFont: NSFont {
+        NSFont.systemFont(
+            ofSize: NSFont.preferredFont(forTextStyle: .caption2).pointSize,
+            weight: .medium
+        )
+    }
+
+    private static func measure(_ string: String, font: NSFont) -> CGFloat {
+        guard !string.isEmpty else { return 0 }
+        let line = CTLineCreateWithAttributedString(
+            NSAttributedString(string: string, attributes: [.font: font])
+        )
+        return ceil(CTLineGetTypographicBounds(line, nil, nil, nil))
     }
 }
 
@@ -472,19 +808,58 @@ struct RoleChipFlow: View {
 /// a text-measurement call — so the uncached version measured a fifty-role
 /// profile a hundred times per layout pass, and again on every width change.
 /// The `Layout` protocol's cache exists for exactly this and costs one array.
+///
+/// **A subview wider than the row is re-measured AT the row's width, and the
+/// flow never reports wider than it was proposed.** Both halves are one fix and
+/// it is the whole of a defect that survived several sessions: a bio containing
+/// a long URL, or a sentence of Chinese with no spaces anywhere in it, is one
+/// unbreakable segment whose ideal width is six hundred points. Reported
+/// upward, that made the profile card's content wider than the card — so the
+/// card was laid out around a box it did not have, drifted left, and left a
+/// blank strip down its right-hand side. Measured at the width it is actually
+/// getting, the same `Text` wraps by character and the row simply becomes
+/// taller, which is what a long word in a narrow column is supposed to do.
 struct FlowLayout: Layout {
     var spacing: CGFloat = 4
 
     struct Cache {
+        /// What each subview wants, measured once.
+        var ideal: [CGSize]
+        /// What each subview gets at `resolvedWidth`. Equal to `ideal` for
+        /// everything that fits, which is nearly everything.
         var sizes: [CGSize]
+        /// The container width `sizes` was solved for. `nan` until the first
+        /// proposal, so the first `sizeThatFits` always resolves.
+        var resolvedWidth: CGFloat = .nan
     }
 
     func makeCache(subviews: Subviews) -> Cache {
-        Cache(sizes: subviews.map { $0.sizeThatFits(.unspecified) })
+        let ideal = subviews.map { $0.sizeThatFits(.unspecified) }
+        return Cache(ideal: ideal, sizes: ideal)
     }
 
     func updateCache(_ cache: inout Cache, subviews: Subviews) {
-        cache.sizes = subviews.map { $0.sizeThatFits(.unspecified) }
+        cache.ideal = subviews.map { $0.sizeThatFits(.unspecified) }
+        cache.sizes = cache.ideal
+        cache.resolvedWidth = .nan
+    }
+
+    /// Re-measures anything too wide for the container, once per width.
+    ///
+    /// Guarded on the width having changed *and* on something actually being
+    /// too wide, so the common case — every chip narrower than the column —
+    /// costs one comparison per subview and no measurement at all.
+    private func resolve(_ cache: inout Cache, subviews: Subviews, width: CGFloat) {
+        guard cache.resolvedWidth != width else { return }
+        cache.resolvedWidth = width
+        guard width.isFinite, cache.ideal.contains(where: { $0.width > width }) else {
+            cache.sizes = cache.ideal
+            return
+        }
+        cache.sizes = zip(subviews, cache.ideal).map { subview, ideal in
+            guard ideal.width > width else { return ideal }
+            return subview.sizeThatFits(ProposedViewSize(width: width, height: nil))
+        }
     }
 
     func sizeThatFits(
@@ -493,6 +868,8 @@ struct FlowLayout: Layout {
         cache: inout Cache
     ) -> CGSize {
         let width = proposal.width ?? .infinity
+        resolve(&cache, subviews: subviews, width: width)
+
         var rowWidth: CGFloat = 0
         var rowHeight: CGFloat = 0
         var total = CGSize.zero
@@ -510,6 +887,11 @@ struct FlowLayout: Layout {
         }
         total.width = max(total.width, rowWidth)
         total.height += rowHeight
+        // **Never wider than the proposal.** A subview that still overflows
+        // after being re-measured — a single glyph in a column narrower than
+        // one — must cost this flow's *parent* nothing: the child clips, and
+        // the column keeps the width it was given.
+        if width.isFinite { total.width = min(total.width, width) }
         return total
     }
 
@@ -519,6 +901,8 @@ struct FlowLayout: Layout {
         subviews: Subviews,
         cache: inout Cache
     ) {
+        resolve(&cache, subviews: subviews, width: bounds.width)
+
         var x = bounds.minX
         var y = bounds.minY
         var rowHeight: CGFloat = 0
@@ -530,6 +914,9 @@ struct FlowLayout: Layout {
                 y += rowHeight + spacing
                 rowHeight = 0
             }
+            // Proposed the size it was measured at, which for an over-wide
+            // child is the container's width rather than its own ideal — the
+            // proposal is what makes it wrap instead of running off the edge.
             subview.place(at: CGPoint(x: x, y: y), proposal: ProposedViewSize(size))
             x += size.width + spacing
             rowHeight = max(rowHeight, size.height)

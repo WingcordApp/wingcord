@@ -38,9 +38,6 @@ nonisolated struct SidebarBannerLayout: Equatable {
     /// How much room the window's chrome takes above the column. Measured; see
     /// the note above for what makes this the fragile one.
     var chromeInset: CGFloat
-    /// How far the list has been pulled past its top. Grows the artwork downward
-    /// from a fixed top, and carries the pill with it.
-    var stretch: CGFloat = 0
     /// How far the list has been scrolled down. Moves the artwork and the pill
     /// up together, one point for one point.
     var travel: CGFloat = 0
@@ -85,7 +82,16 @@ nonisolated struct SidebarBannerLayout: Equatable {
     var bannerRestingHeight: CGFloat { chromeInset + Self.bannerHeight }
 
     /// The height the banner view is laid out at, pull included.
-    var bannerDrawnHeight: CGFloat { bannerRestingHeight + stretch }
+    var bannerDrawnHeight: CGFloat { bannerRestingHeight }
+
+    // There used to be a `stretch` term here, and a matching spring in
+    // `ChannelSidebar`, that grew and zoomed the artwork when the list was
+    // pulled past its top. It is gone on purpose: the effect had to be driven
+    // from `NSScrollView`'s elastic offset, which springs back to zero between
+    // trackpad flicks, so it needed a held high-water mark, a scroll-phase
+    // observer and a second animation curve just to stop collapsing mid-gesture
+    // — and it still deformed the column's geometry under everything else drawn
+    // there. The banner is a fixed height now.
 
     /// Where the banner's frame starts, in the column's own space: above it, by
     /// exactly the chrome it runs under.

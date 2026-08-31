@@ -706,6 +706,21 @@ public struct ReadySnapshot: Sendable {
     /// Channels and categories the reader has opted into — the checkboxes and
     /// the Follow switches in Browse Channels. See `ChannelSettingsFlags`.
     public var followedChannelIDs: Set<ChannelID>
+    /// People the account has blocked, and people it has ignored.
+    ///
+    /// **Two independent facts on one list.** A relationship's `type` says
+    /// blocked; `is_spam_request` and the ignore flag are separate — and one is
+    /// not implied by the other, because ignoring a friend is a real state. A
+    /// reader that took `type == 2` as covering both would silently un-ignore
+    /// everybody on every launch.
+    public var blockedUserIDs: Set<UserID>
+    public var ignoredUserIDs: Set<UserID>
+    /// What the account is to each person it has any relationship with.
+    /// Absent means `.none`, which is what an empty table already says.
+    public var relationships: [UserID: Relationship]
+    /// The account's private notes about people. READY carries the whole set,
+    /// which is why the profile card never has to fetch one.
+    public var notes: [UserID: String]
 
     init(payload: ReadyPayload) {
         currentUser = payload.user.domain
@@ -774,9 +789,31 @@ public struct ReadySnapshot: Sendable {
         self.privateChannels = privateChannels
 
         for userDTO in payload.users ?? [] { users[userDTO.id] = userDTO.domain }
+        var blockedUserIDs: Set<UserID> = []
+        var ignoredUserIDs: Set<UserID> = []
+        var relationships: [UserID: Relationship] = [:]
         for relationship in payload.relationships ?? [] {
             if let userDTO = relationship.user { users[userDTO.id] = userDTO.domain }
+            let kind = Relationship(rawValue: relationship.type ?? 0)
+            if kind != .none { relationships[relationship.id] = kind }
+            // Blocked is a relationship *type*; ignoring is a flag beside it.
+            // Reading either as the other is how a friend gets hidden or an
+            // ignore is silently lifted on every launch.
+            if kind == .blocked { blockedUserIDs.insert(relationship.id) }
+            if relationship.is_ignored == true { ignoredUserIDs.insert(relationship.id) }
         }
+        self.blockedUserIDs = blockedUserIDs
+        self.ignoredUserIDs = ignoredUserIDs
+        self.relationships = relationships
+        // **A dictionary of ids to strings, straight off READY.** There is no
+        // route this client needs for reading one: the whole set arrives with
+        // the bootstrap, so a profile card opens with the note already in it.
+        var notes: [UserID: String] = [:]
+        for (key, note) in payload.notes ?? [:] {
+            guard let userID = UserID(key), !note.isEmpty else { continue }
+            notes[userID] = note
+        }
+        self.notes = notes
         self.users = users
         self.presences = presences
 
@@ -829,7 +866,13 @@ public struct ReadySnapshot: Sendable {
 
 /// A live update, converted to domain values.
 public enum GatewayUpdate: Sendable {
-    case messageCreated(Message, author: User, member: Member?, guildID: GuildID?)
+    /// - Parameter quotedAuthor: whoever the message quotes, when it is a reply
+    ///   and the payload carried them. The reply header names and pictures that
+    ///   person, and a live message is very often the first time this client
+    ///   hears of them — see `MessageDTO.QuotedDTO`.
+    case messageCreated(
+        Message, author: User, quotedAuthor: User?, member: Member?, guildID: GuildID?
+    )
     case messageUpdated(Message)
     case messageDeleted(MessageID, channelID: ChannelID)
     case reactionAdded(MessageID, channelID: ChannelID, emoji: EmojiRef, userID: UserID)
@@ -858,6 +901,11 @@ public enum GatewayUpdate: Sendable {
     case memberListUpdated(GuildID, members: [UserID: Member], users: [UserID: User], presences: [UserID: Presence])
     case channelAcknowledged(ChannelID, messageID: MessageID?, mentionCount: Int)
     case currentUserUpdated(User)
+    /// A relationship arrived or went. `kind` is `.none` for a removal, which is
+    /// the same thing the table says by not holding an entry.
+    case relationshipChanged(
+        UserID, kind: Relationship, isIgnored: Bool, user: User?
+    )
 
     init?(_ payload: GatewayFrame.Payload) {
         switch payload {
@@ -866,6 +914,7 @@ public enum GatewayUpdate: Sendable {
             self = .messageCreated(
                 dto.domain,
                 author: authorDTO.domain,
+                quotedAuthor: dto.quotedAuthor?.domain,
                 member: nil,
                 guildID: nil
             )
@@ -1000,6 +1049,20 @@ public enum GatewayUpdate: Sendable {
             )
         case .userUpdate(let dto):
             self = .currentUserUpdated(dto.domain)
+        case .relationshipAdd(let dto):
+            self = .relationshipChanged(
+                dto.id,
+                kind: Relationship(rawValue: dto.type ?? 0),
+                isIgnored: dto.is_ignored ?? false,
+                user: dto.user?.domain
+            )
+        case .relationshipRemove(let dto):
+            // A removal carries the type that *was*, not one to apply — so the
+            // event is normalised to `.none` here rather than at the store,
+            // where the distinction would have to be remembered.
+            self = .relationshipChanged(
+                dto.id, kind: .none, isIgnored: false, user: nil
+            )
         default:
             return nil
         }

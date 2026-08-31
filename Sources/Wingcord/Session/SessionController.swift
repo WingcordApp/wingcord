@@ -24,9 +24,14 @@ final class SessionController {
         DiagnosticLog.trace("session", message())
     }
 
-    private unowned let model: AppModel
+    /// The store, and the connection.
+    ///
+    /// `internal` rather than `private` so a group of routes can live in an
+    /// extension in another file. The controller is one object with one owner;
+    /// what the visibility buys is that its 1,500 lines are not also one file.
+    unowned let model: AppModel
     private let metadata = ClientMetadata()
-    private let rest: DiscordREST
+    let rest: DiscordREST
     private var socket: GatewaySocket?
     private var eventTask: Task<Void, Never>?
     private var isTornDown = false
@@ -241,10 +246,35 @@ final class SessionController {
         model.selectedChannelID = nil
         model.lastChannelByGuild = [:]
         model.clearAllMessages()
+        // Everything a message action or a person's row holds. **Per-account,
+        // every one of them** — a note, a block and a channel's pins all answer
+        // for the account that fetched them, and a switch keeps the process.
+        model.pinnedMessages = [:]
+        model.pinsLoading = []
+        model.pinsFailure = [:]
+        model.openPinsChannelID = nil
+        model.reactionsInFlight = []
+        model.blockedUserIDs = []
+        model.ignoredUserIDs = []
+        model.relationships = [:]
+        model.notes = [:]
+        model.notesInFlight = []
+        model.relationshipsInFlight = []
+        model.suppressedAckChannelID = nil
+        model.dismissMessageSurfaces()
+        model.messageHover = nil
+        model.forwardRequest = nil
+        model.forwardsInFlight = []
+        model.deleteRequest = nil
+        model.dismissReport()
+        // The report trees are the ONE thing here that is not per-account: the
+        // taxonomy is Discord's and is the same for everybody. Kept, so a
+        // switch does not re-fetch it.
         model.railCache = nil
         model.sidebarCache = nil
         model.timelineCache = nil
         model.rosterCache = nil
+        model.forwardTargetCache = nil
         model.permissionGate.invalidate()
         model.connectionState = .signedOut
         ImageStore.shared.purge()
@@ -318,6 +348,10 @@ final class SessionController {
         }
 
         model.followedChannelIDs = snapshot.followedChannelIDs
+        model.blockedUserIDs = snapshot.blockedUserIDs
+        model.ignoredUserIDs = snapshot.ignoredUserIDs
+        model.relationships = snapshot.relationships
+        model.notes = snapshot.notes
         model.currentUserID = snapshot.currentUser.id
         model.users = snapshot.users
         model.guilds = guilds
@@ -467,10 +501,17 @@ final class SessionController {
 
     private func apply(_ update: GatewayUpdate) {
         switch update {
-        case .messageCreated(let message, let author, _, _):
+        case .messageCreated(let message, let author, let quotedAuthor, _, _):
             let merged = author.merged(over: model.users[author.id])
             if model.users[author.id] != merged {
                 model.users[author.id] = merged
+                model.identityRevision &+= 1
+            }
+            // Whoever the message quotes, if this is the first the client has
+            // heard of them. Merged rather than written over: a quoted user
+            // object is as thin as a roster one and would wipe a fetched card.
+            if let quotedAuthor, model.users[quotedAuthor.id] == nil {
+                model.users[quotedAuthor.id] = quotedAuthor
                 model.identityRevision &+= 1
             }
             model.mutateBox(message.channelID) { $0.upsert(message) }
@@ -619,6 +660,31 @@ final class SessionController {
         case .currentUserUpdated(let user):
             model.users[user.id] = user.merged(over: model.users[user.id])
             model.identityRevision &+= 1
+
+        case .relationshipChanged(let userID, let kind, let isIgnored, let user):
+            // **Applied whatever the client did.** These arrive for the reader's
+            // own acts as well as for somebody else's, so the optimistic write
+            // and the echo settle on the same answer — and a request accepted
+            // on a phone reaches this window without a refetch.
+            if let user, model.users[userID] == nil { model.users[userID] = user }
+            if kind == .none {
+                model.relationships[userID] = nil
+                model.blockedUserIDs.remove(userID)
+                model.ignoredUserIDs.remove(userID)
+            } else {
+                model.relationships[userID] = kind
+                if kind == .blocked {
+                    model.blockedUserIDs.insert(userID)
+                } else {
+                    model.blockedUserIDs.remove(userID)
+                }
+                if isIgnored {
+                    model.ignoredUserIDs.insert(userID)
+                } else {
+                    model.ignoredUserIDs.remove(userID)
+                }
+            }
+            model.identityRevision &+= 1
         }
     }
 
@@ -747,6 +813,9 @@ final class SessionController {
 
     /// Loads the newest page when a channel is opened.
     func openChannel(_ channelID: ChannelID) {
+        // Arriving anywhere ends a deliberate rewind: the reader has stopped
+        // meaning "leave this unread" the moment they navigate.
+        if model.suppressedAckChannelID != channelID { model.suppressedAckChannelID = nil }
         let permissions = model.permissionGate.permissions(in: channelID)
         guard model.permissionGate.canReadHistory(channelID) else {
             Self.trace(
@@ -1079,6 +1148,11 @@ final class SessionController {
     }
 
     func acknowledge(_ messageID: MessageID, in channelID: ChannelID) {
+        // **The reader asked for this channel to stay unread.** Marking unread
+        // while standing in the channel is only meaningful if the client stops
+        // acknowledging it — otherwise the next inbound message quietly undoes
+        // it. The latch is cleared by leaving.
+        guard model.suppressedAckChannelID != channelID else { return }
         var state = model.readStates[channelID] ?? ReadState()
         guard state.lastAcknowledgedID != messageID else { return }
         state.lastAcknowledgedID = messageID

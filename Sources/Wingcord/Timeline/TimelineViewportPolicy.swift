@@ -18,6 +18,51 @@ nonisolated enum TimelineViewportPolicy {
         var bounds: CGRect
     }
 
+    /// The smallest document that still scrolls to nothing: the band between
+    /// the chrome and the bar, rather than the whole clip view.
+    ///
+    /// **A content inset does not shrink the clip view.** It moves the
+    /// scrollable range — the minimum to `-top`, the maximum to
+    /// `document + bottom - viewport` — while the clip view keeps the surface's
+    /// full height, which is the entire reason content passes *under* the
+    /// chrome and the composer at all.
+    ///
+    /// So padding a short document out to the viewport's own height leaves a
+    /// range of `top + bottom` points that should not exist: a channel with
+    /// three messages in it scrolls, and lands with its first message behind the
+    /// toolbar. Padding it to the readable band instead makes the maximum equal
+    /// the minimum, and the surface stays where it belongs.
+    static func readableHeight(
+        viewport: CGFloat,
+        topInset: CGFloat,
+        bottomInset: CGFloat
+    ) -> CGFloat {
+        max(0, viewport - max(0, topInset) - max(0, bottomInset))
+    }
+
+    /// How many points of drawn content are currently passing under the chrome.
+    ///
+    /// What gates `ScrollEdgeBlur`: a treatment over a surface with nothing
+    /// beneath it is a slab, whatever it is made of.
+    ///
+    /// A top content inset moves the clip view's *minimum* to `-topInset`, so
+    /// `scrollTop` is how far the reader has gone past the very top and the
+    /// chrome's foot falls at `scrollTop + chromeHeight` in document space.
+    /// Content occupies `0 ..< contentHeight` there, so the answer is the
+    /// intersection of those two ranges.
+    ///
+    /// **Measured against the content, never against the document.** The
+    /// document view is padded out to the readable band, so an empty channel
+    /// still has a document — and a version of this written against that height
+    /// lit the strip over a transcript with nothing in it at all.
+    static func chromeOverlap(
+        scrollTop: CGFloat,
+        chromeHeight: CGFloat,
+        contentHeight: CGFloat
+    ) -> CGFloat {
+        min(contentHeight, scrollTop + chromeHeight) - max(0, scrollTop)
+    }
+
     static func geometry(
         viewport rawViewport: CGRect,
         documentHeight: CGFloat,

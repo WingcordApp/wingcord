@@ -107,7 +107,11 @@ public actor DiscordREST {
     ) async throws -> User {
         var query = [
             URLQueryItem(name: "with_mutual_guilds", value: "true"),
-            URLQueryItem(name: "with_mutual_friends", value: "false"),
+            // **Asked for, because the answer is people the store has never
+            // heard of.** A mutual friend is very often in none of the reader's
+            // servers, so there is no second route that could name them — the
+            // list arrives with whole user objects or it does not exist.
+            URLQueryItem(name: "with_mutual_friends", value: "true"),
         ]
         if let guildID {
             query.append(URLQueryItem(name: "guild_id", value: String(guildID.rawValue)))
@@ -260,8 +264,15 @@ public actor DiscordREST {
         // transcript reading "Unknown" over a "?" avatar.
         var authors: [UserID: User] = [:]
         for dto in page {
-            guard let author = dto.author else { continue }
-            authors[author.id] = author.domain
+            if let author = dto.author { authors[author.id] = author.domain }
+            // **And whoever each reply quotes.** The quoted author is often on
+            // no page the reader loaded and in no roster the guild sent, and
+            // without them the reply header draws "Unknown" over a grey circle.
+            // Never *over* a real author record — a quoted user object is as
+            // thin as a roster one.
+            if let quoted = dto.quotedAuthor, authors[quoted.id] == nil {
+                authors[quoted.id] = quoted.domain
+            }
         }
 
         // Discord returns newest first; the store keeps oldest first, and
@@ -408,8 +419,13 @@ public actor DiscordREST {
     }
 
     // MARK: Plumbing
+    //
+    // `internal` rather than `private` so a route can live in an extension in
+    // another file. The routes are grouped by what they are *for* — a message,
+    // a relationship, a report — and one file holding every path this client
+    // knows is a file nobody reads. Nothing outside the package can reach these.
 
-    private func get<T: Decodable>(
+    func get<T: Decodable>(
         _ path: String,
         route: String,
         query: [URLQueryItem] = [],
@@ -425,7 +441,7 @@ public actor DiscordREST {
         )
     }
 
-    private func post<Body: Encodable, T: Decodable>(
+    func post<Body: Encodable, T: Decodable>(
         _ path: String,
         route: String,
         body: Body,
@@ -434,7 +450,7 @@ public actor DiscordREST {
         try await request(method: "POST", path: path, route: route, body: body, as: type)
     }
 
-    private func request<Body: Encodable, T: Decodable>(
+    func request<Body: Encodable, T: Decodable>(
         method: String,
         path: String,
         route: String,
@@ -460,7 +476,7 @@ public actor DiscordREST {
         }
     }
 
-    private func requestData<Body: Encodable>(
+    func requestData<Body: Encodable>(
         method: String,
         path: String,
         route: String,

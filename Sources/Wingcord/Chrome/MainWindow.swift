@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 import WingcordCore
 
@@ -42,11 +43,29 @@ struct MainWindow: View {
                         chrome: model.channelChrome,
                         toggleMemberList: { model.isMemberListShown.toggle() },
                         toggleUserProfile: { model.isDirectMessageProfileShown.toggle() },
-                        openChannelDetails: {}
+                        openChannelDetails: {},
+                        togglePins: {
+                            guard let channelID = model.selectedChannelID else { return }
+                            model.togglePinsPane(for: channelID)
+                        },
+                        pinsContent: {
+                            // Built only when the popover is presented, which is
+                            // what keeps the pins read out of the toolbar's own
+                            // body — the bar is evaluated on every navigation
+                            // and the pane is opened a few times a session.
+                            AnyView(
+                                Group {
+                                    if let channelID = model.openPinsChannelID {
+                                        PinnedMessagesPane(channelID: channelID)
+                                    }
+                                }
+                            )
+                        }
                     )
                 }
         }
         .navigationSplitViewStyle(.balanced)
+        .clearsTitlebarMaterial()
         // The title is drawn by the toolbar, not by the window's own title bar.
         .toolbar(removing: .title)
         .capsWindowMinimumSize()
@@ -57,10 +76,38 @@ struct MainWindow: View {
 ///
 /// Its own view so the split view's sidebar builder holds one child, and so the
 /// two containers below can be invalidated independently.
+///
+/// **`sidebarGround()` is not a background**, and the distinction is the whole
+/// of §1's rule: with the house theme and no picture it paints *nothing at all*,
+/// so AppKit's behind-window vibrancy — the wallpaper and the menu-bar accent
+/// coming through this column — is untouched. A theme that carries a hue veils
+/// it thinly enough that the bleed survives tinted, and a backdrop replaces it
+/// with the reader's own picture. All three cases are in `ThemeGround.swift`.
 private struct SidebarColumn: View {
     @Environment(AppModel.self) private var model
 
     var body: some View {
+        // **The ground is a sibling that ignores the safe area, not a
+        // background on the columns.**
+        //
+        // A `.background` is laid out inside the modified view's safe area, and
+        // `.ignoresSafeArea()` on the background's own content did not get it
+        // past the titlebar here: measured, the rail's strip came out at
+        // #1D1B1E and the channel column's at #4C4C4F — the desktop through
+        // AppKit's vibrancy — while the detail column beside them reached the
+        // top of the window. A sibling in a `ZStack` has no safe area to be
+        // laid out inside, so it fills the column and the ground is *its*
+        // background.
+        ZStack {
+            Color.clear
+                .sidebarGround()
+                .ignoresSafeArea()
+
+            columns
+        }
+    }
+
+    private var columns: some View {
         HStack(spacing: 0) {
             GuildRailContainer()
 
@@ -73,9 +120,69 @@ private struct SidebarColumn: View {
             // window's foot the way it runs to its top.
             ChannelSidebarContainer()
                 .safeAreaBar(edge: .bottom, spacing: 0) {
+                    // The bar paints a fill of its own that no modifier can
+                    // suppress, and under a theme it is a slab across the foot
+                    // of the column with a hard edge. Handing it the same ground
+                    // the column has puts the theme back over it — see
+                    // `barGround`.
                     NowBarContainer()
+                        .barGround(.sidebar)
                 }
         }
+    }
+}
+
+// MARK: - The titlebar's own material
+
+/// Makes the titlebar strip transparent, so the window's ground runs through it.
+///
+/// **`INVARIANTS.md` §1 says the `Window` scene takes no `NSWindow`
+/// configuration, and this is the one exception it now has.** The rule is about
+/// the switches that change what the *window* is — `isOpaque`, a hand-rolled
+/// vibrancy, a background colour of its own — because each of those puts the app
+/// in the business of painting what the system was already painting. This takes
+/// a mark away and paints nothing.
+///
+/// It is here because SwiftUI could not do it.
+/// `toolbarBackgroundVisibility(.hidden, for: .windowToolbar)` is the modifier
+/// for exactly this and it did not remove the slab, on the split view or on the
+/// view owning the toolbar. What settled it was a red probe painted over the
+/// ground: the ground reaches the full height of the strip and is simply covered
+/// there, so what is on top belongs to `NSTitlebarView` rather than to anything
+/// this app draws. The settings window has made the same call since it was
+/// built, for the same reason and in the same one place.
+///
+/// The workspace window stays **opaque** — that half of §1 is untouched, and it
+/// is the half that keeps a transcript readable over a photograph.
+private struct TitlebarMaterialClearer: NSViewRepresentable {
+    func makeNSView(context: Context) -> NSView { Probe() }
+    func updateNSView(_ view: NSView, context: Context) {}
+
+    private final class Probe: NSView {
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            guard let window else { return }
+            // **Both, and each removes a different slab.**
+            //
+            // `titlebarAppearsTransparent` is what stops `NSTitlebarView`
+            // painting its own material: without it AppKit draws an
+            // `NSTitlebarBackgroundView` per split column across the top 52
+            // points — over the ground, over the reader's picture, and over the
+            // edge treatment this window draws for itself. It reads as a dark
+            // shadow ruled along the window's top edge.
+            //
+            // `fullSizeContentView` is what stops the strip being a hole
+            // instead: transparent with the content still starting below it,
+            // the app trades a slab for the desktop.
+            window.titlebarAppearsTransparent = true
+            window.styleMask.insert(.fullSizeContentView)
+        }
+    }
+}
+
+extension View {
+    fileprivate func clearsTitlebarMaterial() -> some View {
+        background(TitlebarMaterialClearer().frame(width: 0, height: 0))
     }
 }
 

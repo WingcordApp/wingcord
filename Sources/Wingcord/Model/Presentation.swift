@@ -288,4 +288,8 @@ struct ChannelChrome: Hashable, Sendable {
     /// mean hiding the roster in a server also hides the profile in every DM.
     var isUserProfileShown: Bool
     var canShowUserProfile: Bool
+    /// Whether the pins control is offered. Every conversation has pins, so the
+    /// only thing that removes it is there being no conversation.
+    var canShowPins: Bool
+    var arePinsShown: Bool
 }

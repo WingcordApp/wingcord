@@ -61,8 +61,22 @@ extension AppModel {
 
         for item in items {
             guard case .message(let message) = item else { continue }
-            let userID = message.message.authorID
-            guard result[userID] == nil else { continue }
+            // **Both the author and whoever the message quotes.** The reply
+            // header draws a name, a face and a role colour, and it resolves
+            // them from this table — a quoted author left out of it draws
+            // "Unknown" over a grey circle on a person the store already knows.
+            resolve(message.message.authorID, into: &result)
+            if let quoted = message.message.reference?.authorID {
+                resolve(quoted, into: &result)
+            }
+        }
+        return result
+
+        func resolve(
+            _ userID: UserID,
+            into result: inout [UserID: TimelineLayoutEngine.AuthorInfo]
+        ) {
+            guard result[userID] == nil else { return }
             guard let user = users[userID] else {
                 result[userID] = TimelineLayoutEngine.AuthorInfo(
                     name: "Unknown",
@@ -72,7 +86,7 @@ extension AppModel {
                     decorationURL: nil,
                     isBot: false
                 )
-                continue
+                return
             }
             let member = guildID.flatMap { members[$0]?[userID] }
             let styleFont = user.decoration?.displayNameStyle?.font
@@ -100,7 +114,6 @@ extension AppModel {
                 nameTracking: face == nil ? 0 : (styleFont?.letterSpacing ?? 0) * authorPointSize
             )
         }
-        return result
     }
 
     /// What the text builder needs to turn a mention into a name.

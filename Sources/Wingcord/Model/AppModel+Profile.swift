@@ -84,6 +84,9 @@ extension AppModel {
             premiumSince: decoration?.premiumSince,
             legacyUsername: decoration?.legacyUsername,
             mutualServers: mutualServers(of: decoration),
+            mutualFriends: decoration?.mutualFriends ?? [],
+            isProfilePrivate: decoration?.isProfilePrivate ?? false,
+            note: notes[user.id] ?? "",
             guild: guildID.flatMap(mutualServer(for:)),
             directMessageChannelID: user.id == currentUserID
                 ? nil

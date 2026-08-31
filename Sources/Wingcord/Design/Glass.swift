@@ -252,17 +252,11 @@ extension View {
 }
 
 // MARK: - The reading surface
-
-extension View {
-    /// The True Black ground the *detail* column sits on. Content is opaque and
-    /// scrolls underneath glass; this is that opaque layer.
-    ///
-    /// **Never apply this to the sidebar column.** AppKit paints that column
-    /// with behind-window vibrancy, and that vibrancy is the bleed — the
-    /// wallpaper and the menu-bar accent coming through the rail and the channel
-    /// list. Painting over it is how an app ends up hand-rolling the effect the
-    /// system was already giving it for free.
-    func readingSurface() -> some View {
-        background(Palette.canvas)
-    }
-}
+//
+// `readingSurface()` and its sidebar counterpart live in `ThemeGround.swift`.
+// They used to be one line here — `background(Palette.canvas)` — and they moved
+// when a ground stopped being a single colour: the detail column is now the
+// theme's canvas *or* the reader's own picture with the theme drawn back over
+// it, and the sidebar column is nothing, a veil, or the same picture offset to
+// its own place in the window. The rule they enforce has not changed, and it is
+// restated at the top of that file.

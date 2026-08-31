@@ -20,6 +20,14 @@ struct WingcordApp: App {
             }
         }
         DiagnosticLog.trace("app", "launched")
+        // The theme, before anything can paint with it.
+        //
+        // `Palette` would build this store lazily on its first read anyway, but
+        // the first read is not guaranteed to be on the main thread — a drawn
+        // canvas laying out a fixture would reach `ThemeRuntime` instead and get
+        // the house palette, and the window would come up in True Black for one
+        // frame before correcting itself.
+        _ = ThemeStore.shared
         let model = AppModel()
         if LaunchOptions.current.usesDemoFixtures {
             DemoFixtures.populate(model)
@@ -42,12 +50,18 @@ struct WingcordApp: App {
             // value it needs does not exist. Every modifier that reads the store
             // therefore goes above `.environment`, which stays outermost.
             RootView()
+                // Above every ground, and above nothing else: the two columns
+                // read their own place in this space to draw one picture across
+                // both of them. See `ThemeGround.swift`.
+                .backdropSpace()
                 .mirrorsUnreadCountOnDock()
                 .installsGlobalHotkey()
                 .providesSettingsWindow()
                 .showsPerformanceInspector()
                 .presentsMedia()
+                .presentsMessageActions()
                 .presentsProfiles()
+                .presentsUserMenu()
                 .presentsExpressionInfo()
                 .presentsGuildSurfaces()
                 .resolvesMotion()

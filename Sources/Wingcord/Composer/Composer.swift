@@ -22,10 +22,15 @@ struct Composer: View {
     var channelName: String
     var canSend: Bool
     var replyingToAuthor: String?
+    /// Whether the bar is holding an edit rather than a new message. It changes
+    /// three things at once — the banner, the placeholder and what Return does
+    /// — so it is one flag rather than three parameters that can disagree.
+    var isEditing: Bool = false
     @Binding var text: String
 
     var send: () -> Void = {}
     var cancelReply: () -> Void = {}
+    var cancelEdit: () -> Void = {}
     /// Replies to the newest message. Returns false when there is nothing to
     /// reply to, so Up falls through to the text view instead of dying.
     var replyToLatest: () -> Bool = { false }
@@ -65,9 +70,26 @@ struct Composer: View {
                 .transition(.materialize(from: .bottom))
             }
 
-            if let replyingToAuthor {
-                ReplyBanner(author: replyingToAuthor, cancel: cancelReply)
-                    .transition(.materialize(from: .bottom))
+            // **One banner, never two.** An edit and a reply are mutually
+            // exclusive at the store — starting either cancels the other — so
+            // the bar shows whichever is live and the reader never has to work
+            // out what Return will do.
+            if isEditing {
+                ComposerBanner(
+                    symbolName: "pencil",
+                    text: "Editing message — Escape to cancel",
+                    cancelLabel: "Cancel edit",
+                    cancel: cancelEdit
+                )
+                .transition(.materialize(from: .bottom))
+            } else if let replyingToAuthor {
+                ComposerBanner(
+                    symbolName: "arrowshape.turn.up.left.fill",
+                    text: "Replying to \(replyingToAuthor)",
+                    cancelLabel: "Cancel reply",
+                    cancel: cancelReply
+                )
+                .transition(.materialize(from: .bottom))
             }
 
             if canSend {
@@ -79,6 +101,7 @@ struct Composer: View {
         .padding(.horizontal, Spacing.margin)
         .padding(.bottom, Spacing.snug)
         .animation(motion.panel, value: replyingToAuthor)
+        .animation(motion.panel, value: isEditing)
         .animation(motion.standard, value: canSend)
         .animation(motion.fadeQuick, value: visibleCompletions.isEmpty)
         // A new set of matches starts at the top. Keeping the index across a
@@ -93,7 +116,7 @@ struct Composer: View {
 
             HStack(alignment: .bottom, spacing: Spacing.base) {
                 TextField(
-                    "Message #\(channelName)",
+                    isEditing ? "Edit this message" : "Message #\(channelName)",
                     text: $text,
                     axis: .vertical
                 )
@@ -115,8 +138,16 @@ struct Composer: View {
                 .onKeyPress(.return) { commitSelectedCompletion() }
                 .onKeyPress(.tab) { commitSelectedCompletion() }
                 .onKeyPress(.escape) {
-                    guard !visibleCompletions.isEmpty else { return .ignored }
-                    dismissCompletions()
+                    // The completion list owns Escape while it is open; an edit
+                    // owns it the rest of the time. Ordered, because dismissing
+                    // the list and abandoning the edit in one press would throw
+                    // away work the reader did not mean to lose.
+                    if !visibleCompletions.isEmpty {
+                        dismissCompletions()
+                        return .handled
+                    }
+                    guard isEditing else { return .ignored }
+                    cancelEdit()
                     return .handled
                 }
                 .frame(minHeight: Metrics.composerFieldMinHeight)
@@ -156,7 +187,9 @@ struct Composer: View {
     /// arrow key away from anybody editing a multi-line message.
     private func pressedUp() -> KeyPress.Result {
         if !visibleCompletions.isEmpty { return moveCompletion(-1) }
-        guard text.isEmpty, replyToLatest() else { return .ignored }
+        // An edit already has the composer; Up there is the caret, not a reply
+        // to something else.
+        guard !isEditing, text.isEmpty, replyToLatest() else { return .ignored }
         return .handled
     }
 
@@ -295,16 +328,23 @@ private struct SendControl: View {
     }
 }
 
-private struct ReplyBanner: View {
-    var author: String
+/// The strip above the composer that says what the bar is holding.
+///
+/// One type for both states rather than one per state: they are the same shape,
+/// the same glass and the same dismiss control, and two copies is two places for
+/// the corner radius to drift.
+private struct ComposerBanner: View {
+    var symbolName: String
+    var text: String
+    var cancelLabel: String
     var cancel: () -> Void
 
     var body: some View {
         HStack(spacing: Spacing.base) {
-            Image(systemName: "arrowshape.turn.up.left.fill")
+            Image(systemName: symbolName)
                 .font(.system(.caption))
                 .foregroundStyle(Ink.tertiary)
-            Text("Replying to \(author)")
+            Text(text)
                 .font(.system(.caption))
                 .foregroundStyle(Ink.secondary)
                 .lineLimit(1)
@@ -317,7 +357,7 @@ private struct ReplyBanner: View {
                     .contentShape(.circle)
             }
             .buttonStyle(.plain)
-            .accessibilityLabel(Text("Cancel reply"))
+            .accessibilityLabel(Text(cancelLabel))
         }
         .padding(.horizontal, Spacing.snug)
         .padding(.vertical, Spacing.base)

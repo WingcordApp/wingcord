@@ -3,32 +3,20 @@ import WingcordCore
 
 /// The server's banner: artwork behind the channel list, rounded like a card.
 ///
-/// It grows **and zooms** when the list is pulled past the top. The zoom is the
-/// half that is easy to leave out and that gives the effect away: growing the
-/// box alone stretches the picture vertically, which reads as a rendering fault
-/// rather than as a gesture. Scaling both axes by the same factor and clipping
-/// is what makes the picture crop inward.
-///
-/// Both states come from one measured offset and neither needs to measure
-/// anything itself: a pull is a negative offset, so grow downward from a fixed
-/// top; a scroll is a positive one, so translate up at natural size. Only one is
-/// ever non-zero.
+/// **A fixed height that travels with the list, and nothing else.** It used to
+/// grow and zoom when the list was pulled past its top, driven by the scroll
+/// view's elastic offset — an effect that needed a held high-water mark, a
+/// scroll-phase observer and a second animation curve to stop it collapsing
+/// between trackpad flicks, and that deformed the column's geometry under
+/// everything else drawn there. It is one rectangle now.
 struct SidebarBanner: View {
     var header: SidebarHeader
-    /// Every number this view draws from — the chrome overhang it runs under,
-    /// the pull that grows it, and the scroll that carries it up.
+    /// The chrome overhang this runs under, and the scroll that carries it up.
     ///
     /// **The same value the name pill is placed from.** They are one object
     /// drawn in two layers, and handing each of them its own copy of the
     /// arithmetic is how the pill ended up sitting in a band of empty column
     /// below the artwork rather than in its corner.
-    ///
-    /// The pull is **not** derived from the scroll offset here, and that
-    /// separation is the fix: AppKit's elastic overscroll returns to zero
-    /// between trackpad flicks, so artwork that follows the raw offset both ways
-    /// collapses to rest in the gap between one flick and the next — measured at
-    /// 30fps, four full rises and collapses inside a single continuous gesture.
-    /// The caller owns the asymmetry; this view is handed numbers and draws them.
     var layout: SidebarBannerLayout
 
     // MARK: What the two layers are fetched at
@@ -62,16 +50,8 @@ struct SidebarBanner: View {
     private static let filmBudget = 20 * 1024 * 1024
 
     var body: some View {
-        let base = layout.bannerRestingHeight
-        let height = layout.bannerDrawnHeight
-        let zoom = base > 0 ? height / base : 1
-
         artwork
-            .frame(height: base)
-            .scaleEffect(zoom, anchor: .center)
-            .frame(height: height)
-            // Outside the scaled artwork, so the block's bottom treatment stays
-            // put instead of zooming away with the picture.
+            .frame(height: layout.bannerRestingHeight)
             .overlay(alignment: .bottom) { bottomScrim }
             // **Rounded on the leading side, square on the trailing one.**
             //

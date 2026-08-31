@@ -143,13 +143,24 @@ predecessor sat at 300–425 MB.
   game needs
 - A resource opens *beside* the guide rather than instead of it — a preview
   column with that channel's transcript in it
-- Settings with a live performance pane
+- **What a reader can do to a message**: react, reply — with the quoted header
+  above it — forward, edit, delete, pin, view a channel's pins, mark unread,
+  copy the text, the link or the id, and Discord's own report flow walked off
+  the tree it serves. Offered from a hover pill, a right-click menu, or the
+  reaction chips themselves, and every one of them gated by the same permission
+  answer the store re-checks before it acts
+- **What a reader can do about a person**: block, ignore, add a friend, invite
+  them to a server, report their profile, copy their id, and keep a private note
+  — from the profile card or a right-click in the roster
+- Settings with a live performance pane, and a developer-mode toggle that adds
+  the two Copy ID items and nothing else
 - Performance inspector and a crash reporter that survives signal context
 
 ## What is not
 
 Voice and video, threads, forums, search, notifications, attachments *outbound*,
-message-component interactions, and every Discord commerce surface — including
+message-component interactions, super reactions, and every Discord commerce
+surface — including
 buying or reconfiguring a game server, which is why that page offers an address
 and no lifecycle buttons. Each is a case on an existing enum rather than a new
 branch — see `docs/HANDOFF.md`.

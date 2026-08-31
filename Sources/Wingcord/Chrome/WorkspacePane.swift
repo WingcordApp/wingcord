@@ -16,15 +16,48 @@ import WingcordCore
 struct WorkspacePane: View {
     var presentation: WorkspacePresentation
 
+    /// How far the supplementary column is lifted off the shared field.
+    static let rosterLift: Double = 0.055
+
     @Environment(\.motion) private var motion
 
+    /// The window's chrome above this column.
+    ///
+    /// **Read on a view that RESPECTS the safe area**, which is why it is taken
+    /// on the outer stack and handed down rather than measured inside the
+    /// roster: a reader that ignores an inset has already been handed the region
+    /// the inset describes and reports zero — §2's rule, paid for three times in
+    /// this app now.
+    @State private var chromeHeight: CGFloat = 0
+
     var body: some View {
+        columns
+            .onGeometryChange(for: CGFloat.self) { $0.safeAreaInsets.top } action: { chromeHeight = $0 }
+    }
+
+    private var columns: some View {
         HStack(spacing: 0) {
             PrimaryPane(content: presentation.primary)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
 
             if let supplementary = presentation.supplementary {
-                SupplementaryPane(content: supplementary)
+                SupplementaryPane(content: supplementary, chromeHeight: chromeHeight)
+                    // **A lifted panel, not a second ground.**
+                    //
+                    // The roster shares the window's one field — it has to, or
+                    // it is a second exposure of the same photograph with the
+                    // split between them, which is exactly the fault the
+                    // sidebar had. What separates it is *light*: a hair of white
+                    // over the field, which over a picture reads as more of the
+                    // picture coming through and over a flat theme reads as a
+                    // panel a step above the page. Relative, so it survives the
+                    // system glass-intensity setting and Reduce Transparency —
+                    // the same reasoning every fill in `Palette` is built on.
+                    //
+                    // It is the mirror of `ThemeColors.sidebarRecess`: contents
+                    // on the left sit a step behind the page, people on the
+                    // right a step in front of it.
+                    .background(Color.white.opacity(Self.rosterLift))
                     // **In and out along the same edge.** The column lives at
                     // the trailing edge, so it arrives from there and leaves the
                     // same way — a panel that slides in from the right and fades
@@ -48,7 +81,6 @@ struct WorkspacePane: View {
         // critically damped, because a column that has arrived somewhere should
         // not wobble about it.
         .animation(motion.reposition, value: presentation.supplementary)
-        .clipped()
         // The reading surface is opaque, and only the reading surface.
         //
         // A translucent transcript is legible over a terminal and unreadable
@@ -105,12 +137,20 @@ private struct PrimaryPane: View {
 
 private struct SupplementaryPane: View {
     var content: WorkspacePresentation.Supplementary
+    /// See `WorkspacePane.chromeHeight`.
+    var chromeHeight: CGFloat = 0
 
     var body: some View {
         switch content {
         case .members:
-            MemberListContainer()
+            // **Under the chrome, and paid for as a content inset.** Left inside
+            // the safe area the roster stopped at the toolbar's foot, so the
+            // strip across the window's top was treated over the transcript and
+            // bare over the people beside it — one row of chrome with a hard
+            // vertical seam in it.
+            MemberListContainer(topInset: chromeHeight)
                 .frame(width: Proportions.memberColumnIdeal)
+                .ignoresSafeArea(.container, edges: .top)
         case .userProfile(let userID):
             DirectMessageProfileContainer(userID: userID)
         case .thread(let channelID):

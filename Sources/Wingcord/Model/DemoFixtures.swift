@@ -255,6 +255,43 @@ enum DemoFixtures {
                 model.derivedPalettes[url] = [0xC9_9C_8A, 0x2B_35_39]
             }
         }
+        // **A bio that cannot be broken at a space**, because that is the whole
+        // of a defect that survived several sessions: `ProseSegment` splits on
+        // spaces and nothing else, so a long URL or a sentence of Chinese
+        // reaches the flow layout as one segment six hundred points wide. The
+        // layout used to report that upward and the card was then placed around
+        // a box it did not have — drifting left, with a blank strip down its
+        // right-hand side. A branch nothing on screen exercises is a branch that
+        // breaks silently, so one fixture profile carries both shapes.
+        let unbreakableID = userIDs[3]
+        if let user = users[unbreakableID] {
+            users[unbreakableID] = User(
+                id: user.id,
+                username: user.username,
+                displayName: user.displayName,
+                avatarHash: user.avatarHash,
+                discriminator: user.discriminator,
+                isBot: false,
+                decoration: UserDecoration(
+                    bio: "trades here: "
+                        + "https://steamcommunity.com/tradeoffer/new/?partner=1249542580&token=aBcDeFgH\n"
+                        + "\u{4EBA}\u{8A00}\u{53EF}\u{754F}\u{FF0C}\u{4F17}\u{53E3}\u{94C4}\u{91D1}\u{3002}"
+                        + "\u{4EBA}\u{8A00}\u{53EF}\u{754F}\u{FF0C}\u{4F17}\u{53E3}\u{94C4}\u{91D1}\u{3002}",
+                    connectedAccounts: [
+                        // One with a page and one without, so both halves of the
+                        // chip's affordance are on screen.
+                        ConnectedAccount(
+                            id: "76561198000000000", service: "steam",
+                            name: "wingcord", isVerified: true
+                        ),
+                        ConnectedAccount(
+                            id: "1", service: "playstation",
+                            name: "wingcord_psn", isVerified: true
+                        ),
+                    ]
+                )
+            )
+        }
         model.users = users
 
         var guilds: [GuildID: Guild] = [:]
@@ -799,13 +836,27 @@ enum DemoFixtures {
             let milliseconds = UInt64(moment.timeIntervalSince1970 * 1000)
                 - Snowflake<MessageTag>.epochMilliseconds
             let id = MessageID(rawValue: (milliseconds << 22) | UInt64(index + 1))
+            let isSystem = index % 47 == 46
+            // **A reply quotes a message that is actually above it.** A
+            // reference to an id nothing owns draws the "deleted" strip, which
+            // is a state worth seeing but not the one that exercises the header
+            // — so one of the two is deliberate and the other points at a real
+            // row four back.
+            let reference = Self.reference(at: index, in: messages, users: users)
             messages.append(Message(
                 id: id,
                 channelID: channelID,
                 authorID: author,
                 content: content(at: index),
-                kind: index % 47 == 46 ? .userJoin : .default,
-                payload: payload(at: index)
+                kind: isSystem ? .userJoin : (reference == nil ? .default : .reply),
+                // Two pins per channel, so the pane and the transcript's own
+                // pin state have something to disagree about if they ever do.
+                isPinned: index == 34 || index == 187,
+                payload: Self.payload(
+                    at: index,
+                    reference: reference,
+                    reactions: Self.reactions(at: index)
+                )
             ))
         }
 
@@ -832,6 +883,83 @@ enum DemoFixtures {
     /// Both are structures with real arithmetic behind them and neither can be
     /// seen without an account otherwise — which is exactly the gap `--demo`
     /// exists to close.
+    /// Everything rare about one fixture message, folded into one box.
+    ///
+    /// The box is built only when there is something to put in it — a decoder
+    /// that allocates one for every plain message has undone the point of the
+    /// type, and the fixtures have to model that as faithfully as the wire does.
+    private static func payload(
+        at index: Int,
+        reference: MessageReference?,
+        reactions: [Reaction]
+    ) -> MessagePayload? {
+        let rare = payload(at: index)
+        guard reference != nil || !reactions.isEmpty else { return rare }
+        return MessagePayload(
+            attachments: rare?.attachments ?? [],
+            embeds: rare?.embeds ?? [],
+            reactions: reactions,
+            stickers: rare?.stickers ?? [],
+            components: rare?.components ?? [],
+            displayComponents: rare?.displayComponents ?? [],
+            poll: rare?.poll,
+            reference: reference
+        )
+    }
+
+    /// What a reply at this index quotes.
+    ///
+    /// One in eleven, pointing four rows back — far enough that the target is a
+    /// different author and the header has a face and a name that are not the
+    /// replier's. One of them deliberately quotes nothing, which is the
+    /// "original message was deleted" strip.
+    private static func reference(
+        at index: Int,
+        in messages: [Message],
+        users: [UserID: User]
+    ) -> MessageReference? {
+        guard index % 11 == 5, index >= 4 else { return nil }
+        guard index != 60 else {
+            // The one whose target is gone. A reference with no author is
+            // exactly what Discord sends for a deleted message.
+            return MessageReference(messageID: MessageID(rawValue: 1))
+        }
+        let target = messages[index - 4]
+        return MessageReference(
+            messageID: target.id,
+            channelID: target.channelID,
+            authorID: target.authorID,
+            isAuthorBot: users[target.authorID]?.isBot ?? false,
+            excerpt: MessageReference.excerpt(of: target.content),
+            hasAttachment: !target.attachments.isEmpty
+        )
+    }
+
+    /// The chips under a message.
+    ///
+    /// Three shapes, because they draw differently: one the reader has joined,
+    /// one they have not, and a row of several so the wrap is exercised.
+    private static func reactions(at index: Int) -> [Reaction] {
+        switch index % 17 {
+        case 4:
+            [Reaction(emoji: EmojiRef(name: "👍"), count: 3, isMine: true)]
+        case 9:
+            [
+                Reaction(emoji: EmojiRef(name: "🔥"), count: 12, isMine: false),
+                Reaction(emoji: EmojiRef(name: "😀"), count: 2, isMine: false),
+            ]
+        case 13:
+            [
+                Reaction(emoji: EmojiRef(name: "✅"), count: 1, isMine: true),
+                Reaction(emoji: EmojiRef(name: "🎉"), count: 8, isMine: false),
+                Reaction(emoji: EmojiRef(name: "😢"), count: 4, isMine: false),
+                Reaction(emoji: EmojiRef(name: "❤️"), count: 21, isMine: false),
+            ]
+        default:
+            []
+        }
+    }
+
     private static func payload(at index: Int) -> MessagePayload? {
         switch index % 31 {
         case 12:

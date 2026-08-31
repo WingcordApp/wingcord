@@ -358,6 +358,25 @@ struct FullProfileView: View {
                 }
             }
         }
+
+        // **The full profile shows every role**, where the card caps at two
+        // rows and counts the rest: this is the page somebody opened *to see
+        // them*, and it scrolls.
+        if !profile.mutualFriends.isEmpty {
+            section("Mutual Friends") {
+                MutualFriendsRow(friends: profile.mutualFriends)
+            }
+        }
+
+        if !profile.isSelf {
+            ProfileNoteField(
+                userID: profile.userID,
+                note: profile.note,
+                width: Self.identityWidth - Spacing.group * 2
+            )
+            .padding(.horizontal, Spacing.group)
+            .padding(.bottom, Spacing.margin)
+        }
     }
 
     private func joinRow(

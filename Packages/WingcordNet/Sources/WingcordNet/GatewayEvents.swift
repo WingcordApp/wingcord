@@ -46,6 +46,8 @@ struct GatewayFrame: Decodable, Sendable {
         case guildMemberListUpdate(MemberListUpdatePayload)
         case messageAck(MessageAckPayload)
         case userUpdate(UserDTO)
+        case relationshipAdd(RelationshipDTO)
+        case relationshipRemove(RelationshipDTO)
         /// Anything this client does not act on. `d` is never decoded.
         case unhandled(name: String?)
     }
@@ -120,6 +122,12 @@ struct GatewayFrame: Decodable, Sendable {
             payload = .guildMemberListUpdate(try decode(MemberListUpdatePayload.self))
         case "MESSAGE_ACK": payload = .messageAck(try decode(MessageAckPayload.self))
         case "USER_UPDATE": payload = .userUpdate(try decode(UserDTO.self))
+        // A friend request sent, accepted, declined or withdrawn — and a block
+        // put on or taken off. All four arrive as these two events, which is
+        // why the client does not have to re-fetch anything after acting.
+        case "RELATIONSHIP_ADD": payload = .relationshipAdd(try decode(RelationshipDTO.self))
+        case "RELATIONSHIP_REMOVE":
+            payload = .relationshipRemove(try decode(RelationshipDTO.self))
         default: payload = .unhandled(name: name)
         }
     }
@@ -141,6 +149,9 @@ struct ReadyPayload: Decodable, Sendable {
     var user_guild_settings: GuildSettingsEnvelope?
     var users: [UserDTO]?
     var relationships: [RelationshipDTO]?
+    /// `{ "<user id>": "note" }`. Keyed by string because JSON objects are, and
+    /// parsed to snowflakes on the way into the snapshot.
+    var notes: [String: String]?
 
     /// Discord wrapped several READY arrays in `{ entries, partial, version }`
     /// envelopes and left others bare, in the same payload. Both shapes decode.
@@ -191,7 +202,11 @@ struct GuildSettingsDTO: Decodable, Sendable {
 
 struct RelationshipDTO: Decodable, Sendable {
     var id: UserID
+    /// 2 is BLOCKED. Ignoring is not a type — see `is_ignored`.
     var type: Int?
+    /// Orthogonal to `type`: a friend can be ignored, and a block does not
+    /// imply one.
+    var is_ignored: Bool?
     var user: UserDTO?
 }
 

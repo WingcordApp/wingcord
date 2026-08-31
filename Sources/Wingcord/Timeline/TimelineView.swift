@@ -22,6 +22,7 @@ struct TimelineView: NSViewRepresentable {
     /// pass beneath its glass and it has something to refract — a floating bar
     /// over an opaque surface is just a panel. The inset is what keeps the
     /// newest message reachable rather than parked behind the bar.
+    var topInset: CGFloat
     var bottomInset: CGFloat
     /// The message the transcript has been asked to go to, if any. An INPUT
     /// rather than a call, so a jump raised from anywhere in the app — a link, a
@@ -42,6 +43,7 @@ struct TimelineView: NSViewRepresentable {
             channelID: channelID,
             items: rows,
             presentationRevision: presentationRevision,
+            topInset: topInset,
             bottomInset: bottomInset,
             jump: jump
         )
@@ -65,6 +67,8 @@ final class TimelineCoordinator: NSObject {
     private unowned let model: AppModel
 
     private var scrollView: NSScrollView?
+    /// The ground and the scroll-edge strip. See `CanvasChrome`.
+    private var chrome: CanvasChrome?
     private var documentView: TimelineDocumentView?
     private var canvas: TimelineCanvasView?
 
@@ -78,7 +82,7 @@ final class TimelineCoordinator: NSObject {
     private var presentationRevision: UInt64 = 0
 
     /// Laid-out message rows, reused across passes. Swept by the engine.
-    private var rowCache: [TimelineLayoutEngine.CacheKey: MessageRow] = [:]
+    private var rowCache: [MessageID: TimelineLayoutEngine.CacheEntry] = [:]
 
     private var layoutTask: Task<Void, Never>?
     private var prefetchTask: Task<Void, Never>?
@@ -148,6 +152,34 @@ final class TimelineCoordinator: NSObject {
                 anchor: canvas.anchorInHostingRoot(rect)
             )
         }
+        canvas.onToggleReaction = { [weak self] messageID, emoji in
+            guard let self, let channelID = self.channelID else { return }
+            self.model.toggleReaction(emoji, on: messageID, in: channelID)
+        }
+        canvas.onOpenReplyTarget = { [weak self] messageID in
+            guard let self, let channelID = self.channelID else { return }
+            // The same jump a message link takes, so a quote and a link land
+            // the reader in one place with one flash rather than two.
+            self.model.sessionController.jumpToMessage(messageID, in: channelID)
+        }
+        canvas.onHoverMessage = { [weak self] messageID, rowFrame in
+            guard let self else { return }
+            let hover = messageID.map { MessageHover(messageID: $0, rowFrame: rowFrame) }
+            // A write of an equal value still publishes, and the pointer
+            // generates these at the pace a person moves a mouse.
+            guard self.model.messageHover != hover else { return }
+            self.model.messageHover = hover
+        }
+        canvas.onOpenMenu = { [weak self] messageID, rect in
+            guard let self, let channelID = self.channelID, let canvas = self.canvas else {
+                return
+            }
+            self.model.openMessageMenu(
+                for: messageID,
+                in: channelID,
+                anchor: canvas.anchorInHostingRoot(rect)
+            )
+        }
         canvas.onOpenAttachment = { [weak self] messageID, index, widths in
             guard let self, let channelID = self.channelID else { return }
             self.model.openMedia(
@@ -194,6 +226,15 @@ final class TimelineCoordinator: NSObject {
         self.canvas = canvas
         self.documentView = document
         self.scrollView = scrollView
+        // The reading surface's ground, and the strip where rows pass under the
+        // window's chrome. The transcript's strip needs no pointer: a reader
+        // looking at a channel is looking at exactly the content going under
+        // the bar, and the treatment is what tells them it continues up there.
+        chrome = CanvasChrome(
+            installedIn: scrollView,
+            role: .reading,
+            trigger: .contentBehind
+        )
 
         observe(scrollView)
         return scrollView
@@ -274,6 +315,8 @@ final class TimelineCoordinator: NSObject {
         highlightTask?.cancel()
         highlightTask = nil
         canvas = nil
+        chrome?.tearDown()
+        chrome = nil
         documentView = nil
         scrollView = nil
         ScrollWorkGate.endIfOwned(by: ObjectIdentifier(self))
@@ -290,17 +333,35 @@ final class TimelineCoordinator: NSObject {
     // MARK: Updating
 
     func update(channelID: ChannelID, items: [TimelineItem], presentationRevision: UInt64,
-        bottomInset: CGFloat, jump: MessageJump?) {
-        if let scrollView, abs(scrollView.contentInsets.bottom - bottomInset) > 0.5 {
+        topInset: CGFloat, bottomInset: CGFloat, jump: MessageJump?) {
+        if let scrollView,
+           abs(scrollView.contentInsets.bottom - bottomInset) > 0.5
+            || abs(scrollView.contentInsets.top - topInset) > 0.5 {
             // Set on the SCROLL VIEW, not reserved in the canvas: an inset keeps
             // the content scrollable under the bar, where extra canvas padding
             // would leave dead space that can never hold a message.
+            //
+            // **The top one is what gives the toolbar something to treat.** The
+            // transcript used to stop at the toolbar's foot, so the strip across
+            // the top of the window had nothing behind it but the ground and
+            // read as a painted slab. Running underneath and paying for it with
+            // an inset is the same trade the composer's end already makes, and
+            // it is the whole of what a scroll-edge effect needs to exist.
+            //
+            // The bottom arithmetic elsewhere in this file is unaffected: an
+            // `NSClipView` scrolled fully down still sits at
+            // `documentHeight + insets.bottom - viewportHeight`, and a top inset
+            // moves the *minimum* to `-insets.top` rather than the maximum.
             scrollView.contentInsets = NSEdgeInsets(
-                top: 0, left: 0, bottom: max(0, bottomInset), right: 0
+                top: max(0, topInset), left: 0, bottom: max(0, bottomInset), right: 0
             )
             scrollView.scrollerInsets = NSEdgeInsets(
-                top: 0, left: 0, bottom: max(0, bottomInset), right: 0
+                top: max(0, topInset), left: 0, bottom: max(0, bottomInset), right: 0
             )
+            // The treatment is the chrome's height, so it is told the same
+            // number the inset is — not a constant of its own that can drift
+            // from it.
+            chrome?.chromeHeight = max(0, topInset)
             // The scrollable range just changed by the delta. A reader sitting
             // at the bottom has to stay there, or growing the composer by a line
             // silently scrolls the newest message out from under them.
@@ -383,6 +444,9 @@ final class TimelineCoordinator: NSObject {
         scrollView.contentView.scroll(to: NSPoint(x: 0, y: min(maximum, max(0, target))))
         scrollView.reflectScrolledClipView(scrollView.contentView)
         isApplyingUpdate = false
+        // The scroll that just happened raised its bounds notification inside
+        // the suppression window above, so the strip has not been told.
+        chrome?.refreshEngagement()
         isNearBottom = TimelineViewportPolicy.isNearBottom(
             viewport: scrollView.contentView.bounds,
             documentHeight: canvas.contentHeight,
@@ -453,6 +517,7 @@ final class TimelineCoordinator: NSObject {
             restore(anchor)
         }
         isApplyingUpdate = false
+        chrome?.refreshEngagement()
 
         positionCanvas()
         schedulePrefetch()
@@ -460,13 +525,21 @@ final class TimelineCoordinator: NSObject {
 
     private func resizeDocument(to height: CGFloat) {
         guard let documentView, let scrollView else { return }
+        // The strip is gated on how much content is under the chrome, which the
+        // document's own height cannot answer — it is padded out to the
+        // viewport below. See `CanvasChrome.overlap(in:)`.
+        chrome?.contentHeight = height
         let viewport = scrollView.contentView.bounds
         let size = NSSize(
             // The document is pinned to the viewport's width. A transient wider
             // backing during a resize would otherwise become a real horizontal
             // scroll range.
             width: max(1, viewport.width),
-            height: max(1, max(height, viewport.height))
+            height: max(1, max(height, TimelineViewportPolicy.readableHeight(
+                viewport: viewport.height,
+                topInset: scrollView.contentInsets.top,
+                bottomInset: scrollView.contentInsets.bottom
+            )))
         )
         if documentView.frame.size != size {
             documentView.setFrameSize(size)
@@ -477,6 +550,11 @@ final class TimelineCoordinator: NSObject {
 
     private func viewportDidChange() {
         guard !isTornDown, !isApplyingUpdate, let scrollView, let canvas else { return }
+        // **Before the early returns below.** Both of them are the first-layout
+        // path, which is exactly when the ground and the strip have never been
+        // sized — and a strip that misses it stays at zero width for the life of
+        // the window.
+        chrome?.viewportDidChange()
         let viewport = scrollView.contentView.bounds
 
         // The bootstrap case, and the resize case, are the same case: the width
@@ -554,8 +632,14 @@ final class TimelineCoordinator: NSObject {
     /// scrolled to reveal was the one under the composer.
     private func scrollToBottom() {
         guard let scrollView, let documentView else { return }
+        // **Floored at `-contentInsets.top`, which is where the top IS.** A top
+        // inset moves the clip view's minimum below zero, so a channel with less
+        // in it than one screenful — whose foot is already above the composer —
+        // was clamped to zero and left sitting one inset down from its own
+        // first message, with that message scrolled up behind the toolbar and no
+        // way to be told apart from a channel with history above it.
         let target = max(
-            0,
+            -scrollView.contentInsets.top,
             documentView.frame.height
                 + scrollView.contentInsets.bottom
                 - scrollView.contentView.bounds.height
@@ -687,6 +771,20 @@ final class TimelineCoordinator: NSObject {
             guard case .message(let row) = canvas.rows[index].kind else { continue }
 
             if let url = row.avatarURL {
+                let key = ImageStore.Key(
+                    url: url,
+                    maximumPixelSize: Int((Metrics.avatarMessage * scale).rounded(.up))
+                )
+                if seen.insert(key).inserted, ImageStore.shared.cached(key) == nil {
+                    requests.append(ImageRequest(key: key, source: .still(.thumbnail)))
+                }
+            }
+
+            // The quoted face above a reply. **Requested at the message
+            // avatar's size and drawn at sixteen points**, so a reply to
+            // somebody already on screen costs nothing at all — the painter
+            // peeks the same slot with the same key. See `drawReplyHeader`.
+            if let url = row.replyHeader?.avatarURL {
                 let key = ImageStore.Key(
                     url: url,
                     maximumPixelSize: Int((Metrics.avatarMessage * scale).rounded(.up))

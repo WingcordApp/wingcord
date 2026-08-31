@@ -96,7 +96,7 @@ enum SettingsSection: String, CaseIterable, Identifiable, Hashable, Sendable {
     var summary: String {
         switch self {
         case .general: "Where Wingcord opens, and what the window shows"
-        case .appearance: "Text size, density and the system settings it follows"
+        case .appearance: "Themes, a picture behind them, and the size of everything"
         case .accessibility: "What Wingcord follows, and where to change it"
         case .messages: "How a conversation is written out"
         case .expressions: "Emoji, stickers and the tone they are drawn in"
@@ -116,8 +116,8 @@ enum SettingsSection: String, CaseIterable, Identifiable, Hashable, Sendable {
     /// *contains*, so "gif" finds Expressions and "battery" finds Media.
     var keywords: String {
         switch self {
-        case .general: "startup launch window sidebar language"
-        case .appearance: "theme text size compact density font"
+        case .general: "startup launch window sidebar language developer mode id"
+        case .appearance: "theme themes colour color palette plumage custom background image picture wallpaper backdrop blur dark accent text size compact density font"
         case .accessibility: "voiceover motion transparency contrast colour blind"
         case .messages: "timestamps embeds links previews replies"
         case .expressions: "emoji stickers gif skin tone reactions"

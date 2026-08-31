@@ -247,4 +247,57 @@ struct TimelineScrollDecisionTests {
             viewport: near, hasMore: false, isLoading: false
         ))
     }
+
+    // MARK: The readable band, and what passes under the chrome
+
+    @Test("A document is padded to the band between the bars, not to the whole view")
+    func readableHeightExcludesBothInsets() {
+        // A content inset does not shrink the clip view — it moves the
+        // scrollable range. Padding a short document to the clip view's own
+        // height is what gave a three-message channel a scroll range one
+        // toolbar deep, and landed its first message behind the toolbar.
+        #expect(TimelineViewportPolicy.readableHeight(
+            viewport: 800, topInset: 52, bottomInset: 68
+        ) == 680)
+        // Never negative: a window dragged shorter than its own chrome would
+        // otherwise ask for a document of a negative height.
+        #expect(TimelineViewportPolicy.readableHeight(
+            viewport: 40, topInset: 52, bottomInset: 68
+        ) == 0)
+    }
+
+    @Test("Nothing is under the chrome at rest, whatever the insets are")
+    func noOverlapAtTheTop() {
+        // Scrolled fully up, the clip view sits at `-topInset`.
+        #expect(TimelineViewportPolicy.chromeOverlap(
+            scrollTop: -52, chromeHeight: 52, contentHeight: 20_000
+        ) == 0)
+    }
+
+    @Test("Scrolling puts exactly the chrome's height under it, and no more")
+    func overlapSaturatesAtTheChrome() {
+        #expect(TimelineViewportPolicy.chromeOverlap(
+            scrollTop: 10, chromeHeight: 52, contentHeight: 20_000
+        ) == 52)
+        #expect(TimelineViewportPolicy.chromeOverlap(
+            scrollTop: 9_000, chromeHeight: 52, contentHeight: 20_000
+        ) == 52)
+    }
+
+    @Test("An empty surface never lights the strip")
+    func emptyContentNeverOverlaps() {
+        // The document is padded, so an empty channel still reports a scroll
+        // position. Measured against the document rather than the content, this
+        // came back positive and drew a band over nothing at all.
+        #expect(TimelineViewportPolicy.chromeOverlap(
+            scrollTop: 68, chromeHeight: 52, contentHeight: 0
+        ) < 0)
+    }
+
+    @Test("Content shorter than the chrome contributes only what it has")
+    func shortContentOverlapsPartially() {
+        #expect(TimelineViewportPolicy.chromeOverlap(
+            scrollTop: 10, chromeHeight: 52, contentHeight: 40
+        ) == 30)
+    }
 }

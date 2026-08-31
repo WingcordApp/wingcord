@@ -51,6 +51,11 @@ nonisolated struct MessageRow: @unchecked Sendable {
     var avatarMonogram: String
     var decorationURL: URL?
 
+    /// The quoted line above a reply. Nil for everything else, which is nearly
+    /// every message — so it costs one optional word on a row that already has
+    /// a dozen.
+    var replyHeader: ReplyHeaderSlot?
+
     var authorName: String
     /// The styled face and tracking the name was measured in, carried so the
     /// painter draws in the same one.
@@ -164,6 +169,38 @@ nonisolated struct ComponentSlot: Sendable {
     var isMenu: Bool
 }
 
+/// The quoted line above a reply, laid out.
+///
+/// **Everything in it is resolved here, once.** The painter has no store and no
+/// main actor: the quoted author's name, face, colour and one line of their
+/// message are all measured at layout time, and the row's cache key means a
+/// reply that has not moved is not measured again.
+nonisolated struct ReplyHeaderSlot: @unchecked Sendable {
+    /// The whole clickable strip, in row space. Runs from the elbow's leading
+    /// edge to the end of the quote, so the target is the line the reader sees
+    /// rather than a word inside it.
+    var rect: CGRect
+    /// Where the elbow's horizontal leg lands, so the painter and the hit test
+    /// agree about the strip's own foot.
+    var elbowBottom: CGFloat
+    var avatarRect: CGRect
+    var avatarURL: URL?
+    var monogram: String
+    /// `@name`, already prefixed.
+    var name: String
+    var nameRect: CGRect
+    /// The styled face at the quote's own size, or nil for the plain one.
+    var nameFace: NSFont?
+    var nameTracking: CGFloat
+    var nameColor: NSColor?
+    var excerpt: String
+    var excerptRect: CGRect
+    var isBot: Bool
+    /// Where a click goes. Nil when the quoted message is gone, which is also
+    /// when the strip says so instead of quoting anything.
+    var targetID: MessageID?
+}
+
 nonisolated struct ReactionSlot: Sendable {
     var rect: CGRect
     var emoji: EmojiRef
@@ -220,14 +257,47 @@ nonisolated struct TimelineLayoutEngine: Sendable {
         var nameTracking: CGFloat = 0
     }
 
-    /// Key for one message's laid-out form.
-    struct CacheKey: Hashable, Sendable {
-        var messageID: MessageID
-        /// Width, rounded to a whole point. A drag resizes by fractions and a
-        /// key that carries them never hits.
+    /// One message's laid-out form, and everything it was laid out against.
+    ///
+    /// **Keyed by id, matched on the message itself — not keyed on a tuple of
+    /// scalars.** The scalar key that this replaces carried the id, the width,
+    /// the presentation revision and the run flag, and nothing about the
+    /// message's *content*: a reaction arriving, a body being edited or an
+    /// embed unfurling all hit the cache and served the previous layout, for
+    /// ever. That is invisible until something in the app can actually change a
+    /// message, which is exactly what the action menu added.
+    ///
+    /// Comparing the whole `Message` is cheap and settles in a pointer compare
+    /// in the common case: the string is the same buffer, and `MessagePayload`'s
+    /// `==` opens with `lhs === rhs`. A *hash* of the message would not do —
+    /// `MessagePayload.hash` folds counts rather than values, so a reaction
+    /// going from 12 to 13 hashes identically and the collision would be a
+    /// stale row rather than a slow one.
+    struct CacheEntry: Sendable {
+        /// Width, rounded to a whole point. A drag resizes by fractions and an
+        /// entry that carries them never matches.
         var width: Int
         var presentationRevision: UInt64
+        /// What the mention table was at, which is also what a name, a nickname
+        /// and a role colour move with — all three are drawn into the row.
+        var identityToken: UInt64
         var isRunHead: Bool
+        var message: Message
+        var row: MessageRow
+
+        func matches(
+            _ message: Message,
+            width: Int,
+            presentationRevision: UInt64,
+            identityToken: UInt64,
+            isRunHead: Bool
+        ) -> Bool {
+            self.width == width
+                && self.presentationRevision == presentationRevision
+                && self.identityToken == identityToken
+                && self.isRunHead == isRunHead
+                && self.message == message
+        }
     }
 
     var presentationRevision: UInt64
@@ -239,13 +309,14 @@ nonisolated struct TimelineLayoutEngine: Sendable {
     /// for a leak to hide.
     func layout(
         _ input: Input,
-        cache: inout [CacheKey: MessageRow],
+        cache: inout [MessageID: CacheEntry],
         parser: MarkdownParser = MarkdownParser()
     ) -> [TimelineRow] {
         var rows: [TimelineRow] = []
         rows.reserveCapacity(input.items.count)
-        var used = Set<CacheKey>()
+        var used = Set<MessageID>()
         used.reserveCapacity(input.items.count)
+        let width = Int(input.width.rounded())
 
         for item in input.items {
             switch item {
@@ -286,21 +357,32 @@ nonisolated struct TimelineLayoutEngine: Sendable {
                 ))
 
             case .message(let message):
-                let key = CacheKey(
-                    messageID: message.id,
-                    width: Int(input.width.rounded()),
-                    presentationRevision: presentationRevision,
-                    isRunHead: message.isRunHead
-                )
-                used.insert(key)
-                if let cached = cache[key] {
-                    rows.append(TimelineRow(height: rowHeight(of: cached), kind: .message(cached)))
+                used.insert(message.message.id)
+                if let cached = cache[message.message.id],
+                   cached.matches(
+                       message.message,
+                       width: width,
+                       presentationRevision: presentationRevision,
+                       identityToken: input.mentions.token,
+                       isRunHead: message.isRunHead
+                   )
+                {
+                    rows.append(
+                        TimelineRow(height: rowHeight(of: cached.row), kind: .message(cached.row))
+                    )
                     continue
                 }
                 let row = message.message.isSystemEvent
                     ? buildSystemMessage(message, input: input)
                     : buildMessage(message, input: input, parser: parser)
-                cache[key] = row
+                cache[message.message.id] = CacheEntry(
+                    width: width,
+                    presentationRevision: presentationRevision,
+                    identityToken: input.mentions.token,
+                    isRunHead: message.isRunHead,
+                    message: message.message,
+                    row: row
+                )
                 rows.append(TimelineRow(height: rowHeight(of: row), kind: .message(row)))
             }
         }
@@ -320,10 +402,17 @@ nonisolated struct TimelineLayoutEngine: Sendable {
     /// Some slack is worth keeping: a width drag produces a burst of misses and
     /// then settles back, and sweeping on every pass would throw away the
     /// entries the settle is about to want again.
-    static let cacheSlack = 400
+    ///
+    /// **Smaller than it was, because an entry is bigger than it was.** Keyed by
+    /// id, a miss now *replaces* its entry rather than adding a second one
+    /// beside it — so the only stale entries left are messages that have
+    /// scrolled out of the page, and four hundred of those is four hundred
+    /// laid-out rows nobody is looking at.
+    static let cacheSlack = 200
 
     private func rowHeight(of row: MessageRow) -> CGFloat {
         var bottom: CGFloat = 0
+        if let header = row.replyHeader { bottom = max(bottom, header.rect.maxY) }
         if let avatarRect = row.avatarRect { bottom = max(bottom, avatarRect.maxY) }
         bottom = max(bottom, row.authorRect.maxY)
         if let block = row.textBlock {
@@ -352,6 +441,22 @@ nonisolated struct TimelineLayoutEngine: Sendable {
         var avatarRect: CGRect?
         var authorRect = CGRect(x: contentX, y: y, width: 0, height: 0)
         var timestampRect = CGRect.zero
+
+        // The quoted line, above everything. A reply always breaks its run — see
+        // `TimelineReducer` — so the header and the author line below it are
+        // always drawn together and the elbow always has a face to rise out of.
+        var replyHeader: ReplyHeaderSlot?
+        if let reference = message.reference {
+            let slot = Self.layoutReplyHeader(
+                reference,
+                y: y,
+                width: input.width,
+                style: input.style,
+                author: reference.authorID.flatMap { input.authors[$0] }
+            )
+            replyHeader = slot
+            y = slot.rect.maxY + TimelineMetrics.replyGap
+        }
 
         if item.isRunHead {
             avatarRect = CGRect(
@@ -530,6 +635,7 @@ nonisolated struct TimelineLayoutEngine: Sendable {
             avatarURL: author?.avatarURL,
             avatarMonogram: author?.monogram ?? "?",
             decorationURL: author?.decorationURL,
+            replyHeader: replyHeader,
             authorName: author?.name ?? "Unknown",
             authorFace: author?.nameFace,
             authorTracking: author?.nameTracking ?? 0,
@@ -697,6 +803,108 @@ nonisolated struct TimelineLayoutEngine: Sendable {
     ///
     /// Returns the y the next thing starts at, unchanged when there is nothing
     /// to lay out.
+    /// The quoted line above a reply.
+    ///
+    /// **One line, measured and then clipped rather than wrapped.** A quote is
+    /// a pointer to a message, not a copy of it: a header that wrapped would
+    /// push the reply down the page by an amount decided by somebody else's
+    /// typing, and the row it belongs to would move whenever that message was
+    /// edited. The painter truncates with a tail; this reserves the strip.
+    ///
+    /// The name is drawn in the quoted author's own face at the quote's size —
+    /// resized from the resolved face rather than looked up again, because the
+    /// registry is main-actor state and this runs off it.
+    private static func layoutReplyHeader(
+        _ reference: MessageReference,
+        y: CGFloat,
+        width: CGFloat,
+        style: MessageTextStyle,
+        author: AuthorInfo?
+    ) -> ReplyHeaderSlot {
+        let height = TimelineMetrics.replyHeight
+        let avatarRect = CGRect(
+            x: TimelineMetrics.contentInset,
+            y: y + (height - TimelineMetrics.replyAvatarSide) / 2,
+            width: TimelineMetrics.replyAvatarSide,
+            height: TimelineMetrics.replyAvatarSide
+        )
+
+        let quoteFont = style.metadataFont
+        let isUnavailable = reference.isUnavailable
+        let name = isUnavailable ? "" : "@" + (author?.name ?? "Unknown")
+        // Resized from the face already resolved for this person, which costs a
+        // descriptor lookup rather than a registration.
+        let face = author?.nameFace.map {
+            NSFont(descriptor: $0.fontDescriptor, size: quoteFont.pointSize) ?? quoteFont
+        }
+        let tracking = face == nil
+            ? 0
+            : (author?.nameTracking ?? 0) * (quoteFont.pointSize / max(1, style.authorFont.pointSize))
+        let nameWidth = measure(name, font: face ?? quoteFont, tracking: tracking)
+        let nameRect = CGRect(
+            x: avatarRect.maxX + TimelineMetrics.replyItemGap,
+            y: y,
+            width: nameWidth,
+            height: height
+        )
+
+        // What the quote says. A message that was only a picture still has to
+        // be quotable, and a reference with nothing behind it says so in words
+        // rather than leaving a blank strip nobody can read.
+        let quote: String
+        if isUnavailable {
+            quote = "Original message was deleted"
+        } else if !reference.excerpt.isEmpty {
+            quote = reference.excerpt
+        } else if reference.hasAttachment {
+            quote = "Click to see attachment"
+        } else {
+            quote = ""
+        }
+        let excerptX = isUnavailable
+            ? avatarRect.maxX + TimelineMetrics.replyItemGap
+            : nameRect.maxX + TimelineMetrics.replyItemGap
+        let trailing = width - TimelineMetrics.horizontalMargin
+        let excerptRect = CGRect(
+            x: excerptX,
+            y: y,
+            width: max(0, trailing - excerptX),
+            height: height
+        )
+
+        // The strip's own bounds: from the elbow to wherever the quote ends, so
+        // a click anywhere along the line it draws lands on it.
+        let quoteWidth = quote.isEmpty
+            ? 0
+            : min(excerptRect.width, measure(quote, font: quoteFont))
+        let rect = CGRect(
+            x: TimelineMetrics.replyElbowX,
+            y: y,
+            width: max(0, excerptX + quoteWidth - TimelineMetrics.replyElbowX),
+            height: height
+        )
+
+        return ReplyHeaderSlot(
+            rect: rect,
+            // The elbow's leg drops to the top of the avatar under it, which is
+            // where the author line begins — the connector then reads as coming
+            // out of the face rather than as a bracket floating beside it.
+            elbowBottom: y + height + TimelineMetrics.replyGap,
+            avatarRect: isUnavailable ? .zero : avatarRect,
+            avatarURL: author?.avatarURL,
+            monogram: author?.monogram ?? "?",
+            name: name,
+            nameRect: nameRect,
+            nameFace: face,
+            nameTracking: tracking,
+            nameColor: author?.colorValue.map { NSColor(Color(hex: $0)) },
+            excerpt: quote,
+            excerptRect: excerptRect,
+            isBot: reference.isAuthorBot,
+            targetID: isUnavailable ? nil : reference.messageID
+        )
+    }
+
     private static func layoutReactions(
         _ reactions: [Reaction],
         contentX: CGFloat,

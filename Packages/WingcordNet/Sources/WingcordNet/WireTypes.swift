@@ -74,6 +74,27 @@ struct UserDTO: Decodable, Sendable {
     }
 }
 
+extension UserDTO {
+    /// The narrow row a mutual-friends list draws.
+    ///
+    /// **Not the whole `domain` user.** A mutual-friends list is up to a
+    /// hundred entries and each `domain` allocates a decoration box; the row
+    /// needs a name, a face and a tag, and building forty fields to draw three
+    /// is the allocation this type exists to avoid.
+    var mutualFriend: MutualFriend {
+        let name = global_name?.isEmpty == false ? global_name! : username
+        return MutualFriend(
+            id: id,
+            name: name,
+            avatarHash: avatar,
+            monogram: String(name.prefix(1)).uppercased(),
+            tag: primary_guild?.tag,
+            tagBadgeHash: primary_guild?.badge,
+            tagGuildID: primary_guild?.identity_guild_id
+        )
+    }
+}
+
 struct AvatarDecorationDTO: Decodable, Sendable {
     var asset: String?
 }
@@ -517,12 +538,67 @@ struct MessageDTO: Decodable, Sendable {
     var mention_roles: [RoleID]?
     var mention_everyone: Bool?
     var message_reference: ReferenceDTO?
+    /// The message a reply quotes, sent inline. Absent when the target was
+    /// deleted, which is a real state the header has to draw.
+    ///
+    /// **A narrow type, not another `MessageDTO`.** Two reasons and both are
+    /// load-bearing: a message may quote a message that quotes a message, which
+    /// no struct can hold, and the header needs four fields out of the forty a
+    /// full decode would build — embeds, component trees and polls included —
+    /// only to throw them away, once per reply on every page of history.
+    var referenced_message: QuotedDTO?
+    /// What a forward carries. An array in the payload and always of one, so it
+    /// is read as one.
+    var message_snapshots: [SnapshotDTO]?
+    var pinned: Bool?
     var webhook_id: UserID?
     var nonce: NonceDTO?
 
     struct ReferenceDTO: Decodable, Sendable {
+        /// 0 is a reply, 1 is a forward. Absent means 0 — the field postdates
+        /// replies by years.
+        var type: Int?
         var message_id: MessageID?
         var channel_id: ChannelID?
+    }
+
+    /// Only what the reply header draws.
+    ///
+    /// The **author is a whole `UserDTO`**, deliberately, where the rest is
+    /// narrowed to nothing: a quoted message is very often the only place this
+    /// client ever learns who that person is. Somebody who wrote once, three
+    /// hundred messages back, is in no roster and on no page of history the
+    /// reader loaded — and a header naming them "Unknown" over a grey circle is
+    /// the whole feature failing on the case it exists for.
+    struct QuotedDTO: Decodable, Sendable {
+        var author: UserDTO?
+        var content: String?
+        var attachments: [Anything]?
+        var sticker_items: [Anything]?
+
+        /// A stand-in for an element whose only interesting property is that it
+        /// exists. Decoding the real shape here would parse every attachment of
+        /// every quoted message to answer one `Bool`.
+        struct Anything: Decodable, Sendable {
+            init(from decoder: any Decoder) throws {}
+        }
+    }
+
+    /// The person a reply quotes, when the payload carried them.
+    ///
+    /// Harvested beside the page's own authors — see `DiscordREST.messages` —
+    /// so the header can name and picture them with no second request.
+    var quotedAuthor: UserDTO? { referenced_message?.author }
+
+    /// One forwarded message. Deliberately authorless — see `ForwardedMessage`.
+    struct SnapshotDTO: Decodable, Sendable {
+        var message: Body?
+
+        struct Body: Decodable, Sendable {
+            var content: String?
+            var attachments: [AttachmentDTO]?
+            var embeds: [EmbedDTO]?
+        }
     }
 
     /// Discord echoes back whatever nonce was sent, and clients send both
@@ -562,8 +638,8 @@ struct MessageDTO: Decodable, Sendable {
             mentionedUserIDs: mentions?.map(\.id) ?? [],
             mentionedRoleIDs: mention_roles ?? [],
             mentionsEveryone: mention_everyone ?? false,
-            referencedMessageID: message_reference?.message_id,
-            referencedChannelID: message_reference?.channel_id,
+            reference: replyReference,
+            forwarded: forwardedMessage,
             webhookID: webhook_id,
             nonce: nonce?.text
         )
@@ -575,9 +651,45 @@ struct MessageDTO: Decodable, Sendable {
             editedAt: edited_timestamp,
             kind: MessageKind(rawValue: type ?? 0),
             flags: MessageFlags(rawValue: flags ?? 0),
+            isPinned: pinned ?? false,
             payload: payload.isEmpty ? nil : payload
         )
     }
+
+    /// The reply header's inputs, or nil for anything that is not a reply.
+    ///
+    /// A forward also carries a `message_reference`, and reading one as a reply
+    /// is what would draw a quote header over a message that has no target the
+    /// reader can reach.
+    private var replyReference: MessageReference? {
+        guard let message_reference, (message_reference.type ?? 0) == 0 else { return nil }
+        let quoted = referenced_message
+        return MessageReference(
+            messageID: message_reference.message_id,
+            channelID: message_reference.channel_id,
+            authorID: quoted?.author?.id,
+            isAuthorBot: quoted?.author?.bot ?? false,
+            // Flattened here, once, rather than per row per frame. A quoted
+            // body is one line in the header, so its markdown is folded away
+            // and its newlines with it — a header that wrapped would push the
+            // message it belongs to down the page.
+            excerpt: MessageReference.excerpt(of: quoted?.content ?? ""),
+            hasAttachment: !(quoted?.attachments?.isEmpty ?? true)
+                || !(quoted?.sticker_items?.isEmpty ?? true)
+        )
+    }
+
+    private var forwardedMessage: ForwardedMessage? {
+        guard let body = message_snapshots?.first?.message else { return nil }
+        return ForwardedMessage(
+            content: body.content ?? "",
+            attachmentCount: body.attachments?.count ?? 0,
+            hasEmbed: !(body.embeds?.isEmpty ?? true),
+            channelID: message_reference?.channel_id
+        )
+    }
+
+
 }
 
 struct PresenceDTO: Decodable, Sendable {
@@ -740,10 +852,20 @@ struct UserProfileDTO: Decodable, Sendable {
     var guild_member_profile: ProfileLayer?
     var badges: [BadgeDTO]?
     var mutual_guilds: [MutualGuildDTO]?
+    /// Whole user objects, which is what makes the row drawable without a
+    /// second request — the reader is very often in none of the servers these
+    /// people are in, so the store has never heard of them.
+    var mutual_friends: [UserDTO]?
     var premium_since: String?
     var premium_type: Int?
     var legacy_username: String?
     var connected_accounts: [ConnectionDTO]?
+    /// Whether the account has turned its profile private.
+    ///
+    /// **A label, not a filter.** The same response still carries the mutual
+    /// servers the reader can see for themselves, so a client that used this to
+    /// hide them would be inventing a restriction the server did not make.
+    var `private`: Bool?
 
     struct ConnectionDTO: Decodable, Sendable {
         var id: String?
@@ -877,6 +999,8 @@ struct UserProfileDTO: Decodable, Sendable {
             premiumSince: premium_since.flatMap(Self.date(from:)),
             legacyUsername: legacy_username,
             mutualGuilds: mutual_guilds?.compactMap(\.domain) ?? [],
+            mutualFriends: mutual_friends?.map(\.mutualFriend) ?? [],
+            isProfilePrivate: `private` ?? false,
             primaryGuildTag: base.decoration?.primaryGuildTag,
             primaryGuildBadgeHash: base.decoration?.primaryGuildBadgeHash,
             primaryGuildID: base.decoration?.primaryGuildID

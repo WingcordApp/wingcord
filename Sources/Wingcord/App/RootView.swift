@@ -23,6 +23,11 @@ struct RootView: View {
             .overlay(alignment: .top) {
                 ConnectionBanner(state: model.connectionState)
             }
+            .overlay(alignment: .top) {
+                ActionFailureNotice(failure: model.actionFailure) {
+                    model.actionFailure = nil
+                }
+            }
             // No chrome before there is anything to be chrome FOR.
             //
             // The split view is always in the tree — it is held at opacity 0 so
@@ -104,6 +109,55 @@ extension AppModel {
         DiagnosticLog.trace("app", "stored accounts: \(accounts.count)")
         guard accounts.count == 1, let account = accounts.first else { return }
         resumeSession(for: account)
+    }
+}
+
+/// What an act that did not land says.
+///
+/// **Transient, and one at a time.** A refused pin, delete or block is a click
+/// that visibly did something and then visibly undid it, which reads as the app
+/// being broken rather than as the server saying no. It is not an alert: nothing
+/// here needs a decision, and a modal for "that did not work" interrupts the
+/// thing the reader was doing to tell them it failed.
+private struct ActionFailureNotice: View {
+    var failure: ActionFailure?
+    var dismiss: () -> Void
+
+    @Environment(\.motion) private var motion
+
+    /// Long enough to read a sentence, short enough not to sit over the
+    /// transcript while somebody carries on.
+    private static let dwell = Duration.seconds(4)
+
+    var body: some View {
+        Group {
+            if let failure {
+                HStack(spacing: Spacing.base) {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .font(.system(.caption))
+                        .foregroundStyle(Palette.destructive)
+                    Text(failure.reason)
+                        .font(.system(.caption, weight: .medium))
+                        .foregroundStyle(Ink.primary)
+                        .lineLimit(2)
+                }
+                .padding(.horizontal, Spacing.snug)
+                .padding(.vertical, Spacing.base)
+                .frame(maxWidth: 420)
+                .glassEffect(.regular, in: .capsule)
+                .padding(.top, Spacing.base)
+                .transition(.materialize(from: .top))
+                // Keyed on the failure's own token, so a second refusal while
+                // the first is up restarts the clock rather than inheriting it.
+                .task(id: failure.id) {
+                    try? await Task.sleep(for: Self.dwell)
+                    guard !Task.isCancelled else { return }
+                    dismiss()
+                }
+            }
+        }
+        .animation(motion.panel, value: failure)
+        .allowsHitTesting(false)
     }
 }
 

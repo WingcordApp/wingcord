@@ -47,7 +47,7 @@ nonisolated extension TimelineRowPainter {
                 roundedRect: frame, cornerWidth: corner, cornerHeight: corner, transform: nil
             ))
             context.clip()
-            context.setFillColor(NSColor(Palette.surfaceRaised).withAlphaComponent(0.85).cgColor)
+            context.setFillColor(ThemeInk.current.cardFill)
             context.fill(frame)
             if let accent = slot.accent {
                 context.setFillColor(accent.cgColor)
@@ -336,7 +336,7 @@ nonisolated extension TimelineRowPainter {
             cornerHeight: EmbedLayoutEngine.corner,
             transform: nil
         ))
-        context.setFillColor(NSColor(Palette.surfaceRaised).withAlphaComponent(0.85).cgColor)
+        context.setFillColor(ThemeInk.current.cardFill)
         context.fillPath()
 
         drawTextFrame(

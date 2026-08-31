@@ -34,6 +34,35 @@ nonisolated enum TimelineMetrics {
     /// Between the header and the first line of text.
     static let headerGap: CGFloat = 1
 
+    // MARK: The reply header
+    //
+    // The quoted line above a reply, and the elbow that ties it to the message
+    // underneath. Layout and painter share every number here for the reason the
+    // reaction chip's parts are shared: the elbow's corner has to land exactly
+    // on the strip's leading edge, and a radius kept in two places drifts into
+    // a connector that misses its own row by a point.
+
+    /// The quoted strip's own height. One line, always — a header that wrapped
+    /// would push the message it belongs to down the page by an amount that
+    /// depends on somebody else's typing.
+    static let replyHeight: CGFloat = 17
+    /// Between the strip and the author line under it.
+    static let replyGap: CGFloat = 2
+    /// The quoted author's face.
+    static let replyAvatarSide: CGFloat = 16
+    /// Between the face and the name, and between the name and the quote.
+    static let replyItemGap: CGFloat = 6
+    /// The elbow's corner radius and its stroke.
+    static let replyElbowRadius: CGFloat = 7
+    static let replyElbowWidth: CGFloat = 1.5
+    /// Where the elbow's vertical leg sits: the centre of the avatar gutter, so
+    /// it rises out of the face the message belongs to.
+    static var replyElbowX: CGFloat { horizontalMargin + Metrics.avatarMessage / 2 }
+    /// Where its horizontal leg stops — just short of the quoted face.
+    static var replyElbowEndX: CGFloat { contentInset - replyItemGap }
+    /// The quoted text is drawn a step down from the body.
+    static let replyFontScale: CGFloat = 0.92
+
     static let daySeparatorHeight: CGFloat = 34
     static let unreadDividerHeight: CGFloat = 26
 
@@ -104,6 +133,37 @@ nonisolated enum TimelineMetrics {
     /// The quote rule's width and its distance from the text it marks.
     static let quoteRuleWidth: CGFloat = 3
     static let quoteRuleInset: CGFloat = 4
+
+    // MARK: The hover pill
+    //
+    // The pill is a SwiftUI glass surface overlaid on the scroll view — the
+    // canvas cannot draw glass and a floating control is one surface at a time,
+    // so composing it is right where the rows are not. What the canvas needs is
+    // the same geometry, for one reason: the pill floats over the row's top
+    // edge and can overhang the rows either side by a few points, so a pointer
+    // reaching for it must not be read as having left the row it belongs to.
+
+    /// The pill's own height.
+    static let actionBarHeight: CGFloat = 28
+    /// Between the pill and the transcript's trailing edge.
+    static let actionBarTrailingInset: CGFloat = 12
+    /// How far the pill sits above the row's own top edge.
+    static let actionBarRise: CGFloat = 6
+    /// The widest the pill can be, used only to reserve the region the pointer
+    /// may travel through on its way to it. Over-reserving is safe because the
+    /// region is only consulted for the row **already** hovered — see
+    /// `TimelineCanvasView.hoveredIndex`.
+    static let actionBarMaxWidth: CGFloat = 220
+
+    /// Where the pill sits for a row, in the same space the row frame is in.
+    static func actionBarRegion(inRow rowFrame: CGRect) -> CGRect {
+        CGRect(
+            x: rowFrame.maxX - actionBarMaxWidth,
+            y: rowFrame.minY - actionBarRise,
+            width: actionBarMaxWidth,
+            height: actionBarHeight
+        )
+    }
 
     /// How far above and below the viewport the canvas keeps painted content.
     ///

@@ -271,6 +271,19 @@ final class AppSettings {
         didSet { defaults.set(loopsVideo, forKey: Key.loopsVideo) }
     }
 
+    // MARK: Advanced
+
+    /// Whether ids are offered on the surfaces that have one.
+    ///
+    /// **A toggle, not a build flag.** Copying a snowflake is what anybody
+    /// writing a bot or filing a bug needs and what nobody else ever wants, so
+    /// the items are absent rather than disabled — a menu whose last third is
+    /// greyed out for every reader who is not a developer is a menu a third
+    /// longer for no one's benefit.
+    var developerMode = false {
+        didSet { defaults.set(developerMode, forKey: Key.developerMode) }
+    }
+
     // MARK: Diagnostics
 
     /// Shows the performance inspector overlay.
@@ -307,6 +320,7 @@ final class AppSettings {
         playsAnimatedContent = defaults.object(forKey: Key.playsAnimated) as? Bool ?? true
         loadsImagesAutomatically = defaults.object(forKey: Key.loadsImages) as? Bool ?? true
         showsPerformanceInspector = defaults.object(forKey: Key.showsInspector) as? Bool ?? false
+        developerMode = defaults.object(forKey: Key.developerMode) as? Bool ?? false
         storedMediaVolume = defaults.object(forKey: Key.mediaVolume) as? Double ?? 1
         mutesMedia = defaults.object(forKey: Key.mutesMedia) as? Bool ?? false
         loopsVideo = defaults.object(forKey: Key.loopsVideo) as? Bool ?? false
@@ -345,6 +359,7 @@ final class AppSettings {
         static let playsAnimated = "chat.playsAnimatedContent"
         static let loadsImages = "chat.loadsImagesAutomatically"
         static let showsInspector = "diagnostics.showsPerformanceInspector"
+        static let developerMode = "advanced.developerMode"
         static let launchDestination = "startup.launchDestination"
         static let lastGuild = "startup.lastGuildID"
         static let lastChannel = "startup.lastChannelID"

@@ -258,7 +258,7 @@ struct RowPainterRenderTests {
             .message(TimelineMessage(message: message, flags: [.head, .tail]))
         ]
         let engine = TimelineLayoutEngine(presentationRevision: 0)
-        var cache: [TimelineLayoutEngine.CacheKey: MessageRow] = [:]
+        var cache: [MessageID: TimelineLayoutEngine.CacheEntry] = [:]
         let rows = engine.layout(
             TimelineLayoutEngine.Input(
                 items: items,
@@ -320,7 +320,7 @@ struct TimelineLayoutTests {
             .message(TimelineMessage(message: message, flags: [.head, .tail]))
         ]
         let engine = TimelineLayoutEngine(presentationRevision: 0)
-        var cache: [TimelineLayoutEngine.CacheKey: MessageRow] = [:]
+        var cache: [MessageID: TimelineLayoutEngine.CacheEntry] = [:]
         let input = TimelineLayoutEngine.Input(
             items: items,
             width: 480,
@@ -336,10 +336,10 @@ struct TimelineLayoutTests {
 
         // The same text block instance comes back, which is what makes an
         // incremental relayout a pointer copy rather than a re-framesetting.
-        let firstBlock = cache.values.first?.textBlock
+        let firstBlock = cache.values.first?.row.textBlock
         _ = engine.layout(input, cache: &cache)
         #expect(cache.count == 1)
-        #expect(cache.values.first?.textBlock === firstBlock)
+        #expect(cache.values.first?.row.textBlock === firstBlock)
     }
 
     @Test("A width change is a miss, because wrapping changes")
@@ -355,7 +355,7 @@ struct TimelineLayoutTests {
             .message(TimelineMessage(message: message, flags: [.head, .tail]))
         ]
         let engine = TimelineLayoutEngine(presentationRevision: 0)
-        var cache: [TimelineLayoutEngine.CacheKey: MessageRow] = [:]
+        var cache: [MessageID: TimelineLayoutEngine.CacheEntry] = [:]
 
         func layout(width: CGFloat) -> TimelineRow {
             engine.layout(
