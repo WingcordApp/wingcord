@@ -89,12 +89,6 @@ final class VoiceTestRig {
         level = 0
     }
 
-    func applyVolumes() {
-        let settings = AppSettings.shared
-        engine.inputVolume = Float(settings.voiceInputVolume)
-        engine.outputVolume = Float(settings.voiceOutputVolume)
-    }
-
     /// Plays a short chime through the **chosen** output device.
     ///
     /// Synthesised and pushed through this engine rather than handed to

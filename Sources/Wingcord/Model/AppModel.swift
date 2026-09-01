@@ -378,8 +378,6 @@ final class AppModel {
     var railRevision: UInt64 = 0
     /// Moves when the selected guild's channel tree or its read state changes.
     var sidebarRevision: UInt64 = 0
-    /// Moves when the roster of the selected channel changes.
-    var rosterRevision: UInt64 = 0
     /// Moves when any server's emoji or sticker set changes — a server becoming
     /// available, or one of the two catalog events.
     ///

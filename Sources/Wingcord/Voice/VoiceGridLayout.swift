@@ -27,8 +27,6 @@ struct VoiceGridLayout: Equatable, Sendable {
     /// grid that reflows for a reason nobody asked for.
     static let aspect: CGFloat = 16.0 / 9.0
     static let spacing: CGFloat = Spacing.snug
-    /// Below this a tile shows a face and a name and nothing else fits.
-    static let minimumTileWidth: CGFloat = 120
 
     static func solve(count: Int, in size: CGSize) -> VoiceGridLayout {
         guard count > 0, size.width > 0, size.height > 0 else {

@@ -166,19 +166,6 @@ final class PermissionGate {
         return resolved.contains(.sendMessages)
     }
 
-    func canAddReactions(in channelID: ChannelID) -> Bool {
-        let resolved = permissions(in: channelID)
-        return resolved.contains(.viewChannel) && resolved.contains(.addReactions)
-    }
-
-    func canAttachFiles(in channelID: ChannelID) -> Bool {
-        permissions(in: channelID).contains(.attachFiles)
-    }
-
-    func canManageMessages(in channelID: ChannelID) -> Bool {
-        permissions(in: channelID).contains(.manageMessages)
-    }
-
     /// Everything the reader may do to one message, in one value.
     ///
     /// **One resolution per message rather than a predicate per menu item.**
@@ -204,21 +191,6 @@ final class PermissionGate {
                 developerMode: AppSettings.shared.developerMode
             )
         )
-    }
-
-    /// Whether the reader may delete one specific message: their own always,
-    /// anyone's with `manageMessages` — and never anybody else's in a direct
-    /// message, where there is no such permission to hold.
-    func canDelete(_ message: Message) -> Bool {
-        actions(for: message).contains(.delete)
-    }
-
-    /// Whether the reader may edit one specific message. Only ever their own —
-    /// `manageMessages` allows deleting other people's, never editing them, and
-    /// a client that offers Edit on someone else's message is offering an action
-    /// the API will refuse.
-    func canEdit(_ message: Message) -> Bool {
-        actions(for: message).contains(.edit)
     }
 
     /// Whether the reader is serving a timeout in this guild.

@@ -323,10 +323,7 @@ nonisolated enum Proportions {
     static var sidebarIdeal: CGFloat { railWidth + channelColumnIdeal }
     static var sidebarMax: CGFloat { railWidth + channelColumnMax }
 
-    /// The member inspector.
-    static let memberColumnMin: CGFloat = 200
     static let memberColumnIdeal: CGFloat = 236
-    static let memberColumnMax: CGFloat = 300
 
     /// The profile column beside a direct message.
     ///
@@ -397,8 +394,6 @@ nonisolated enum Typeface {
     static let messageBody = Font.system(.body)
     /// A message author's name.
     static let messageAuthor = Font.system(.body, weight: .semibold)
-    /// The server-name pill, and any page title in a floating capsule.
-    static let pageTitle = Font.system(.headline, weight: .semibold)
     /// Glyphs inside circular glass controls.
     static let controlGlyph = Font.system(.body, weight: .medium)
     /// Section headers in the member list and in settings.

@@ -46,9 +46,6 @@ nonisolated enum HotkeyMetrics {
     static let borderTopOpacity: Double = 0.30
     static let borderSideOpacity: Double = 0.098
     static let borderBottomOpacity: Double = 0.20
-    /// How far down the gradient has reached the sides' value. One corner
-    /// radius, which is where the rim stops being horizontal.
-    static let borderRamp: Double = Double(cornerRadius / bodyHeight)
 
     // MARK: The tail
 

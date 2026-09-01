@@ -120,13 +120,6 @@ extension View {
         background(.ultraThinMaterial, in: shape)
     }
 
-    /// Grouped settings rows and other quiet containers.
-    ///
-    /// `.background(.regularMaterial, in: shape)`
-    func groupedSurface(in shape: some Shape = .rect(cornerRadius: Radius.glass)) -> some View {
-        background(.regularMaterial, in: shape)
-    }
-
     // MARK: Specular
 
     /// A fixed sheen along a surface's upper edge, for surfaces that sit still.
@@ -181,41 +174,12 @@ extension View {
 // behind the bar to blur. Check it scrolled.
 
 extension View {
-    /// `.scrollEdgeEffectStyle(.soft, for: edges)`
-    func softScrollEdges(_ edges: Edge.Set) -> some View {
-        scrollEdgeEffectStyle(.soft, for: edges)
-    }
-
     /// The default for a vertical list sitting under a header and above a
     /// floating bar — which is nearly every list in this app.
     func softScrollEdgesVertical() -> some View {
         scrollEdgeEffectStyle(.soft, for: [.top, .bottom])
     }
 
-    /// Horizontal scrollers that run edge to edge.
-    func softScrollEdgesHorizontal() -> some View {
-        scrollEdgeEffectStyle(.soft, for: [.leading, .trailing])
-    }
-
-    /// `.scrollEdgeEffectStyle(.hard, for: edges)`
-    ///
-    /// **`.soft` renders nothing when the bar carries no material of its own.**
-    /// Measured, over a bar that is a floating capsule on an otherwise
-    /// transparent row: content passing underneath stays sharp and fully lit,
-    /// because what `.soft` draws is the bar's own material feathered downward,
-    /// and there is no material to feather. `.hard` synthesises the band
-    /// instead, which is the whole reason the two styles are not
-    /// interchangeable. A bar that *does* carry a material wants `.soft`.
-    ///
-    /// **Neither style samples the CONTENT.** Both take the window's backdrop,
-    /// so over a translucent window the band shows a blurred desktop and the
-    /// rows passing under it vanish rather than being veiled. The settings pane
-    /// therefore uses neither, and draws its own band — see
-    /// `SettingsDetailPane.scrollEdgeBand` and the write-up in
-    /// `docs/HANDOFF.md`.
-    func hardScrollEdges(_ edges: Edge.Set) -> some View {
-        scrollEdgeEffectStyle(.hard, for: edges)
-    }
 }
 
 // MARK: - Floating bars
@@ -234,14 +198,6 @@ extension View {
 // grows.
 
 extension View {
-    /// The floating composer, and any other bar along the bottom edge.
-    func floatingBottomBar(
-        spacing: CGFloat = 0,
-        @ViewBuilder _ bar: () -> some View
-    ) -> some View {
-        safeAreaBar(edge: .bottom, spacing: spacing, content: bar)
-    }
-
     /// A floating header along the top edge, same treatment.
     func floatingTopBar(
         spacing: CGFloat = 0,

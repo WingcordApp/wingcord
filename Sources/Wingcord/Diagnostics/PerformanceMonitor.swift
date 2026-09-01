@@ -141,25 +141,6 @@ final class PerformanceMonitor {
         return snapshot
     }
 
-    /// Writes the current snapshot to the unified log.
-    ///
-    /// One line, and every number in it. A diagnostic split across several lines
-    /// is one that cannot be correlated after the fact, because the interesting
-    /// case is always the one where something else was logging in between.
-    func logSnapshot(_ label: String) {
-        let snapshot = snapshot()
-        Self.log.notice("""
-            \(label, privacy: .public) \
-            footprint=\(snapshot.footprint / 1_048_576)MB \
-            lastFrame=\(snapshot.lastFrameMilliseconds, format: .fixed(precision: 1))ms \
-            worstFrame=\(snapshot.worstFrameMilliseconds, format: .fixed(precision: 1))ms \
-            slow=\(snapshot.slowFrames) \
-            hz=\(snapshot.displayHertz, format: .fixed(precision: 0)) \
-            channels=\(snapshot.residentChannels) \
-            messages=\(snapshot.residentMessages)
-            """)
-    }
-
     /// The process's physical footprint.
     ///
     /// `nonisolated` so a crash handler or a background task can read it.

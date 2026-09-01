@@ -165,28 +165,6 @@ nonisolated enum Motion {
         current + (velocity / 1000) * rate / (1 - rate)
     }
 
-    /// Commit-vs-cancel, decided by where the gesture is *going* rather than
-    /// where the pointer happened to be released.
-    static func shouldCommit(
-        translation: CGFloat,
-        velocity: CGFloat,
-        threshold: CGFloat
-    ) -> Bool {
-        abs(projectedPosition(from: translation, velocity: velocity)) >= abs(threshold)
-            && (translation.sign == threshold.sign || translation == 0)
-    }
-
-    /// The snap target a flick is headed for, out of a set of candidates.
-    static func snapTarget(
-        from current: CGFloat,
-        velocity: CGFloat,
-        candidates: [CGFloat]
-    ) -> CGFloat? {
-        guard !candidates.isEmpty else { return nil }
-        let projected = projectedPosition(from: current, velocity: velocity)
-        return candidates.min { abs($0 - projected) < abs($1 - projected) }
-    }
-
     // MARK: Rubber-banding
 
     /// Progressive resistance past a boundary — list ends, panel edges, zoom
@@ -328,13 +306,4 @@ extension Transition where Self == MaterializeTransition {
 // MARK: - Press response
 
 extension View {
-    /// For custom controls that are *not* glass with `.interactive()`. Dips on
-    /// press-down, not on release.
-    ///
-    /// Glass built with `interactiveChrome` already responds natively and must
-    /// not also be scaled.
-    func respondsOnPress(_ isPressed: Bool) -> some View {
-        scaleEffect(isPressed ? Motion.pressScale : 1)
-            .animation(Motion.hover.animation, value: isPressed)
-    }
 }

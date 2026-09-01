@@ -78,10 +78,6 @@ extension AppModel {
         spotlightUserID = userID
     }
 
-    func setVoiceVolume(_ volume: Float, forUser userID: UserID) {
-        voice.setVolume(volume, forUser: userID)
-    }
-
     /// Re-applies the settings window's choices to a call already running.
     func voicePreferencesChanged() { voice.applyPreferences() }
 

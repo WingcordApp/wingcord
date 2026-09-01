@@ -12,6 +12,34 @@ struct WingcordApp: App {
         // while the process is healthy precisely so the signal handler never has
         // to allocate.
         CrashReporter.install()
+        // **And taken down again on a clean exit.** The report file is created
+        // at launch so the signal handler never has to allocate, which means a
+        // normal quit leaves a header-only file behind — indistinguishable from
+        // a crash on the next launch. `finishCleanly` removes it, and without
+        // this call every ordinary quit reported a crash that never happened.
+        NotificationCenter.default.addObserver(
+            forName: NSApplication.willTerminateNotification,
+            object: nil,
+            queue: .main
+        ) { _ in CrashReporter.finishCleanly() }
+        // **Memory the app is holding for a window nobody is looking at.**
+        // `PerformanceMonitor` already knows how to shed the large decoded
+        // images twenty seconds after the window goes away, and to cancel that
+        // the moment it comes back — it was simply never told when either
+        // happened, so the shed never ran and a hidden window cost as much as a
+        // visible one.
+        NotificationCenter.default.addObserver(
+            forName: NSWindow.didMiniaturizeNotification, object: nil, queue: .main
+        ) { _ in MainActor.assumeIsolated { MemoryPressureWatcher.shared.windowDidHide() } }
+        NotificationCenter.default.addObserver(
+            forName: NSApplication.didHideNotification, object: nil, queue: .main
+        ) { _ in MainActor.assumeIsolated { MemoryPressureWatcher.shared.windowDidHide() } }
+        NotificationCenter.default.addObserver(
+            forName: NSWindow.didDeminiaturizeNotification, object: nil, queue: .main
+        ) { _ in MainActor.assumeIsolated { MemoryPressureWatcher.shared.windowDidShow() } }
+        NotificationCenter.default.addObserver(
+            forName: NSApplication.didUnhideNotification, object: nil, queue: .main
+        ) { _ in MainActor.assumeIsolated { MemoryPressureWatcher.shared.windowDidShow() } }
         if DiagnosticLog.isEnabled {
             GatewaySocket.traceSink = { message in
                 DiagnosticLog.trace("gateway", message)

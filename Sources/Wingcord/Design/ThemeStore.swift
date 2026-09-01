@@ -63,21 +63,6 @@ final class ThemeStore {
 
     // MARK: Reading
 
-    /// The seed behind whatever is selected. What the picker opens on.
-    var activeSeed: ThemeSeed {
-        switch choice {
-        case .preset(let preset): preset.seed
-        case .custom: customSeed
-        }
-    }
-
-    var activeFollowsSystemAccent: Bool {
-        switch choice {
-        case .preset(let preset): preset.followsSystemAccent
-        case .custom: customFollowsSystemAccent
-        }
-    }
-
     /// The colours a choice would produce, without selecting it. The gallery's
     /// tiles are drawn from this.
     static func colors(for choice: ThemeChoice, customSeed: ThemeSeed, systemAccent: Bool) -> ThemeColors {

@@ -60,8 +60,6 @@ nonisolated enum TimelineMetrics {
     static var replyElbowX: CGFloat { horizontalMargin + Metrics.avatarMessage / 2 }
     /// Where its horizontal leg stops — just short of the quoted face.
     static var replyElbowEndX: CGFloat { contentInset - replyItemGap }
-    /// The quoted text is drawn a step down from the body.
-    static let replyFontScale: CGFloat = 0.92
 
     static let daySeparatorHeight: CGFloat = 34
     static let unreadDividerHeight: CGFloat = 26
@@ -130,9 +128,6 @@ nonisolated enum TimelineMetrics {
     /// The gutter glyph on a system row — a join, a boost, a pin.
     static let systemGlyphSide: CGFloat = 16
 
-    /// The quote rule's width and its distance from the text it marks.
-    static let quoteRuleWidth: CGFloat = 3
-    static let quoteRuleInset: CGFloat = 4
 
     // MARK: The hover pill
     //
