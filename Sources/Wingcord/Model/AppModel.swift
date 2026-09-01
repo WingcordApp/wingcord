@@ -108,6 +108,70 @@ final class AppModel {
     var isSelfDeafened = false
     var connectedVoiceChannelID: ChannelID?
 
+    // MARK: Voice
+    //
+    // Facts about calls. **Nothing here moves at the frame rate** — the audio
+    // level, the packet counters and the per-frame speaking energy live in the
+    // engine and arrive only when the answer changes. A store property carrying
+    // somebody's live level would invalidate every tile fifty times a second.
+
+    /// Who is in which voice channel, across the whole account.
+    ///
+    /// One flat table rather than one per guild, for the same reason the
+    /// channels are flat: a person is in exactly one voice channel anywhere, so
+    /// the guild is a property of the row and "am I in a call" is one lookup
+    /// instead of a sweep.
+    var voiceStates: [UserID: VoiceState] = [:]
+    /// Bumped when a voice state moves. Every voice memo keys on this and on
+    /// nothing that a message can move.
+    var voiceRevision: UInt64 = 0
+    /// Who is talking **now**, as the engine hears it. A few changes a
+    /// sentence, not fifty a second.
+    var speakingUserIDs: Set<UserID> = []
+    /// Whether our own gate is open. Separate from the set above because there
+    /// is no loopback: nothing we send comes back to us, so a self tile driven
+    /// by the received-audio set would never light.
+    var isSelfSpeaking = false
+    /// Whose video has actually arrived. Distinct from their camera *flag*: a
+    /// tile that reserves a picture on the flag shows a black rectangle until
+    /// the first keyframe, which is up to two seconds.
+    var liveVideoUserIDs: Set<UserID> = []
+    var isCameraOn = false
+    var isScreenSharing = false
+    /// Who the reader pinned to the stage. A share fills it by itself.
+    var spotlightUserID: UserID?
+    var voiceQuality: VoiceQuality = .idle
+    /// Our own microphone level, for the meter and for nothing else.
+    var selfInputLevel: Float = 0
+    /// True while the voice processor is hearing speech through a muted input.
+    var isTalkingWhileMuted = false
+    /// Direct-message calls, by conversation. A call exists here before anybody
+    /// has joined it — that is what ringing is.
+    var directCalls: [ChannelID: DirectCall] = [:]
+    /// A call this client did not start, ringing right now.
+    var incomingCallChannelID: ChannelID?
+    /// Whether the voice channel's own text chat is showing beside the stage.
+    var isVoiceChatShown = false
+    /// The screen picker.
+    ///
+    /// A window-level flag because it is a *sheet*: it anchors to nothing, it
+    /// is modal, and it is raised from two control clusters that are never both
+    /// on screen. The soundboard is the opposite case and is deliberately not
+    /// here — it is a popover that has to point at the button that opened it,
+    /// so it lives on that button.
+    var isScreenSharePickerOpen = false
+
+    // MARK: The soundboard
+
+    /// Discord's own six. Fetched once per session — the set is global and
+    /// changes about once a year.
+    var defaultSoundboardSounds: [SoundboardSound] = []
+    var guildSoundboardSounds: [GuildID: [SoundboardSound]] = [:]
+    var soundboardRevision: UInt64 = 0
+    /// The sound somebody just pressed, and who pressed it. Drawn as a chip
+    /// over their tile for a beat, then cleared.
+    var soundboardEffects: [UserID: String] = [:]
+
     // MARK: Connection
 
     enum ConnectionState: Equatable, Sendable {
@@ -367,6 +431,10 @@ final class AppModel {
     /// most often asked for, because the timeline rebuilds its layout input on
     /// every inbound message.
     @ObservationIgnored var mentionCache: (key: MentionMemoKey, value: MentionContext)?
+    @ObservationIgnored
+    var voicePresentationCache: (key: VoiceMemoKey, value: VoicePresentation?)?
+    @ObservationIgnored
+    var soundboardCache: (key: SoundboardMemoKey, value: SoundboardPresentation)?
     /// The Channels & Roles page. Memoized because building it walks every
     /// channel in the server through the permission gate, and the page is on
     /// screen while the store publishes for reasons that cannot change it.

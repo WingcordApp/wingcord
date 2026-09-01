@@ -1,6 +1,7 @@
 import Foundation
-import WingcordCore
 import Observation
+import WingcordCore
+import WingcordVoice
 
 /// The user's own preferences.
 ///
@@ -271,6 +272,151 @@ final class AppSettings {
         didSet { defaults.set(loopsVideo, forKey: Key.loopsVideo) }
     }
 
+    // MARK: Voice and video
+    //
+    // Devices are stored by their **manufacturer id**, never by the numeric
+    // `AudioDeviceID`. The number is assigned at enumeration time and changes
+    // when a device is unplugged, when the machine reboots, and when an
+    // aggregate device is rebuilt — so a preference stored as a number points
+    // at a different microphone by the following Tuesday.
+    //
+    // Nil in all three cases means "whatever the system is using", which is
+    // what somebody who has never opened this pane wants and what a reader whose
+    // headset has gone away must fall back to.
+
+    var voiceInputDeviceID: String? {
+        didSet {
+            guard voiceInputDeviceID != oldValue else { return }
+            defaults.set(voiceInputDeviceID, forKey: Key.voiceInput)
+        }
+    }
+
+    var voiceOutputDeviceID: String? {
+        didSet {
+            guard voiceOutputDeviceID != oldValue else { return }
+            defaults.set(voiceOutputDeviceID, forKey: Key.voiceOutput)
+        }
+    }
+
+    var cameraDeviceID: String? {
+        didSet {
+            guard cameraDeviceID != oldValue else { return }
+            defaults.set(cameraDeviceID, forKey: Key.camera)
+        }
+    }
+
+    /// 0…2, applied to the captured signal before it is encoded. Above 1 is
+    /// real gain rather than a label: a quiet lavalier needs it, and the voice
+    /// processor's own AGC cannot lift a signal that never reaches it.
+    var voiceInputVolume: Double {
+        get { storedVoiceInputVolume }
+        set { storedVoiceInputVolume = min(2, max(0, newValue)) }
+    }
+
+    private var storedVoiceInputVolume: Double = 1 {
+        didSet {
+            guard storedVoiceInputVolume != oldValue else { return }
+            defaults.set(storedVoiceInputVolume, forKey: Key.voiceInputVolume)
+        }
+    }
+
+    var voiceOutputVolume: Double {
+        get { storedVoiceOutputVolume }
+        set { storedVoiceOutputVolume = min(2, max(0, newValue)) }
+    }
+
+    private var storedVoiceOutputVolume: Double = 1 {
+        didSet {
+            guard storedVoiceOutputVolume != oldValue else { return }
+            defaults.set(storedVoiceOutputVolume, forKey: Key.voiceOutputVolume)
+        }
+    }
+
+    /// How the microphone is gated.
+    var inputMode: VoiceInputMode = .voiceActivity {
+        didSet {
+            guard inputMode != oldValue else { return }
+            defaults.set(inputMode.rawValue, forKey: Key.inputMode)
+        }
+    }
+
+    /// Where voice activity opens the gate, 0…1.
+    ///
+    /// **Not "sensitivity", which is the same number said backwards.** The meter
+    /// beside it draws the level and the threshold on one scale, so the control
+    /// reads as a line the level has to cross rather than as an abstract
+    /// percentage.
+    var voiceActivityThreshold: Double {
+        get { storedVoiceThreshold }
+        set { storedVoiceThreshold = min(0.5, max(0, newValue)) }
+    }
+
+    private var storedVoiceThreshold: Double = 0.03 {
+        didSet {
+            guard storedVoiceThreshold != oldValue else { return }
+            defaults.set(storedVoiceThreshold, forKey: Key.voiceThreshold)
+        }
+    }
+
+    /// The key held to talk. Nil means push-to-talk has never been bound, and
+    /// the mode falls back to voice activity rather than to a microphone that
+    /// can never open.
+    var pushToTalkKey: Hotkey? {
+        didSet {
+            guard pushToTalkKey != oldValue else { return }
+            defaults.set(pushToTalkKey?.storageValue ?? Self.noHotkey, forKey: Key.pushToTalk)
+        }
+    }
+
+    /// What the camera sends. 720p at 30 is the shape a channel's bitrate
+    /// actually supports; the pane offers 480 and 1080 either side of it.
+    var videoQuality: VideoQuality = .high {
+        didSet {
+            guard videoQuality != oldValue else { return }
+            defaults.set(videoQuality.rawValue, forKey: Key.videoQuality)
+        }
+    }
+
+    var videoWidth: Int { videoQuality.width }
+    var videoHeight: Int { videoQuality.height }
+    var videoFramerate: Int { videoQuality.framerate }
+
+    /// Whether a call makes a sound when something happens in it.
+    ///
+    /// **One switch, not fourteen.** Discord offers a row per sound and it is a
+    /// pane of toggles nobody reads; the honest question is "do you want the
+    /// app to make noises", and somebody who wants only *some* of them wants
+    /// something this app cannot spell in a settings window either way.
+    var playsCallSounds = true {
+        didSet {
+            guard playsCallSounds != oldValue else { return }
+            defaults.set(playsCallSounds, forKey: Key.callSounds)
+        }
+    }
+
+    /// Whether a screen share carries the shared application's sound.
+    var sharesSystemAudio = true {
+        didSet {
+            guard sharesSystemAudio != oldValue else { return }
+            defaults.set(sharesSystemAudio, forKey: Key.sharesAudio)
+        }
+    }
+
+    /// The input mode as the engine wants it, with the threshold folded in.
+    ///
+    /// One place, because the two halves have to agree: a push-to-talk mode with
+    /// no key bound is a microphone that can never open, and resolving that here
+    /// means no caller has to remember it.
+    var resolvedInputMode: VoiceEngine.InputMode {
+        switch inputMode {
+        case .voiceActivity: .voiceActivity(threshold: Float(voiceActivityThreshold))
+        case .pushToTalk:
+            pushToTalkKey == nil
+                ? .voiceActivity(threshold: Float(voiceActivityThreshold))
+                : .pushToTalk
+        }
+    }
+
     // MARK: Advanced
 
     /// Whether ids are offered on the surfaces that have one.
@@ -322,6 +468,20 @@ final class AppSettings {
         showsPerformanceInspector = defaults.object(forKey: Key.showsInspector) as? Bool ?? false
         developerMode = defaults.object(forKey: Key.developerMode) as? Bool ?? false
         storedMediaVolume = defaults.object(forKey: Key.mediaVolume) as? Double ?? 1
+        voiceInputDeviceID = defaults.object(forKey: Key.voiceInput) as? String
+        voiceOutputDeviceID = defaults.object(forKey: Key.voiceOutput) as? String
+        cameraDeviceID = defaults.object(forKey: Key.camera) as? String
+        storedVoiceInputVolume = defaults.object(forKey: Key.voiceInputVolume) as? Double ?? 1
+        storedVoiceOutputVolume = defaults.object(forKey: Key.voiceOutputVolume) as? Double ?? 1
+        storedVoiceThreshold = defaults.object(forKey: Key.voiceThreshold) as? Double ?? 0.03
+        inputMode = (defaults.object(forKey: Key.inputMode) as? String)
+            .flatMap(VoiceInputMode.init(rawValue:)) ?? .voiceActivity
+        pushToTalkKey = (defaults.object(forKey: Key.pushToTalk) as? Int)
+            .flatMap { $0 == Self.noHotkey ? nil : Hotkey(storageValue: $0) }
+        videoQuality = (defaults.object(forKey: Key.videoQuality) as? String)
+            .flatMap(VideoQuality.init(rawValue:)) ?? .high
+        sharesSystemAudio = defaults.object(forKey: Key.sharesAudio) as? Bool ?? true
+        playsCallSounds = defaults.object(forKey: Key.callSounds) as? Bool ?? true
         mutesMedia = defaults.object(forKey: Key.mutesMedia) as? Bool ?? false
         loopsVideo = defaults.object(forKey: Key.loopsVideo) as? Bool ?? false
         lastGuildID = (defaults.object(forKey: Key.lastGuild) as? NSNumber)?.uint64Value
@@ -334,6 +494,57 @@ final class AppSettings {
         // Last, and after every assignment above: from here on a setter may talk
         // to the rest of the app.
         isLoaded = true
+    }
+
+    /// How the microphone is gated.
+    enum VoiceInputMode: String, CaseIterable, Hashable, Sendable {
+        case voiceActivity
+        case pushToTalk
+    }
+
+    /// What the camera sends.
+    ///
+    /// Three rungs rather than a free resolution: the encoder's dimensions are
+    /// fixed at session creation, so every distinct pair is a session that has
+    /// to be rebuilt, and a slider over them would rebuild it per pixel.
+    enum VideoQuality: String, CaseIterable, Hashable, Sendable {
+        case standard
+        case high
+        case full
+
+        var width: Int {
+            switch self {
+            case .standard: 854
+            case .high: 1_280
+            case .full: 1_920
+            }
+        }
+
+        var height: Int {
+            switch self {
+            case .standard: 480
+            case .high: 720
+            case .full: 1_080
+            }
+        }
+
+        /// **1080 drops to 15.** A channel's video budget is a few megabits;
+        /// spending it on twice the pixels at thirty frames leaves neither
+        /// sharp, and the reference clients make exactly the same trade.
+        var framerate: Int {
+            switch self {
+            case .standard, .high: 30
+            case .full: 15
+            }
+        }
+
+        var label: String {
+            switch self {
+            case .standard: "480p"
+            case .high: "720p"
+            case .full: "1080p"
+            }
+        }
     }
 
     /// Where a cold launch lands.
@@ -368,6 +579,17 @@ final class AppSettings {
         static let mediaVolume = "media.volume"
         static let mutesMedia = "media.muted"
         static let loopsVideo = "media.loopsVideo"
+        static let voiceInput = "voice.inputDevice"
+        static let voiceOutput = "voice.outputDevice"
+        static let camera = "voice.cameraDevice"
+        static let voiceInputVolume = "voice.inputVolume"
+        static let voiceOutputVolume = "voice.outputVolume"
+        static let inputMode = "voice.inputMode"
+        static let voiceThreshold = "voice.activityThreshold"
+        static let pushToTalk = "voice.pushToTalkKey"
+        static let videoQuality = "voice.videoQuality"
+        static let sharesAudio = "voice.sharesSystemAudio"
+        static let callSounds = "voice.playsCallSounds"
     }
 }
 

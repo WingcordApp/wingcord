@@ -108,12 +108,7 @@ private struct PrimaryPane: View {
                 channelID: channelID
             )
         case .voice(let channelID):
-            PlaceholderPane(
-                symbol: "speaker.wave.2.fill",
-                title: "Voice",
-                detail: "Voice channels are not built yet.",
-                channelID: channelID
-            )
+            VoiceChannelPane(channelID: channelID)
         case .guildSurface(_, let surface):
             // Three view types behind one `switch`, under a stable outer type.
             // That is internal `_ConditionalContent`, not the structural detail
@@ -169,6 +164,8 @@ private struct SupplementaryPane: View {
                 channelID: nil
             )
             .frame(width: Proportions.memberColumnIdeal)
+        case .voiceChat(let channelID):
+            VoiceChatContainer(channelID: channelID)
         case .channelPreview(let channelID):
             ChannelPreviewContainer(channelID: channelID)
         }

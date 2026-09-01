@@ -1,6 +1,7 @@
 import AppKit
 import SwiftUI
 import WingcordNet
+import WingcordVoice
 
 @main
 struct WingcordApp: App {
@@ -17,6 +18,13 @@ struct WingcordApp: App {
             }
             DiscordREST.traceSink = { message in
                 DiagnosticLog.trace("rest", message)
+            }
+            // **The voice handshake is four steps, DAVE's is nine more, and
+            // every way either fails is silent**, so the whole stack gets a
+            // sink. Without this a call that never comes up produces exactly
+            // as much evidence as one that does: none.
+            VoiceTrace.sink = { message in
+                DiagnosticLog.trace("voice", message)
             }
         }
         DiagnosticLog.trace("app", "launched")
@@ -64,6 +72,8 @@ struct WingcordApp: App {
                 .presentsUserMenu()
                 .presentsExpressionInfo()
                 .presentsGuildSurfaces()
+                .presentsVoiceSurfaces()
+                .watchesPushToTalk()
                 .resolvesMotion()
                 .environment(model)
                 .frame(

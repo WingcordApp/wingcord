@@ -19,6 +19,8 @@ struct ChannelToolbar: ToolbarContent {
     var toggleMemberList: () -> Void = {}
     var toggleUserProfile: () -> Void = {}
     var openChannelDetails: () -> Void = {}
+    var toggleCall: () -> Void = {}
+    var toggleVoiceChat: () -> Void = {}
     var togglePins: () -> Void = {}
     /// The pins popover's contents. A closure rather than the pane itself, so
     /// the toolbar never builds it for a channel nobody has opened it in — a
@@ -44,6 +46,31 @@ struct ChannelToolbar: ToolbarContent {
         // items, so the member toggle sat beside the channel pill at the
         // leading edge instead of at the far end of the bar.
         ToolbarSpacer(.flexible)
+
+        // **One control, two states.** Starting a call and hanging one up are
+        // one bit resolved two ways — §5.5 — and declaring two items would leave
+        // a hole in the bar in whichever state is not showing, which the bar
+        // closes by sliding its neighbours.
+        ToolbarItem(placement: .primaryAction) {
+            if chrome.canStartCall {
+                Button(action: toggleCall) {
+                    Label(
+                        chrome.isInCall ? "Leave the Call" : "Start a Call",
+                        systemImage: chrome.isInCall ? "phone.down.fill" : "phone.fill"
+                    )
+                }
+                .help(chrome.isInCall ? "Leave the call" : "Start a call")
+                .tint(chrome.isInCall ? Palette.destructive : nil)
+            } else if chrome.canShowVoiceChat {
+                Button(action: toggleVoiceChat) {
+                    Label(
+                        chrome.isVoiceChatShown ? "Hide the Chat" : "Show the Chat",
+                        systemImage: "bubble.left.and.text.bubble.right"
+                    )
+                }
+                .help(chrome.isVoiceChatShown ? "Hide the chat" : "Show the chat")
+            }
+        }
 
         // **The one presentation attached inline in this app, and the exception
         // is scoped.** §2 forbids a presentation modifier on a list ROW, because

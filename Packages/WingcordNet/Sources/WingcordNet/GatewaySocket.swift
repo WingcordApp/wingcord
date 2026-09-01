@@ -431,6 +431,75 @@ public actor GatewaySocket {
         )))
     }
 
+    /// Joins, moves between, or leaves a voice channel.
+    ///
+    /// **Op 4 over the socket, and there is no REST route for it.** This is the
+    /// whole of joining a call: the server answers with our own
+    /// `VOICE_STATE_UPDATE` — carrying the session id the media handshake
+    /// identifies with — and a `VOICE_SERVER_UPDATE` carrying the endpoint and
+    /// the token. The two arrive in **either order**.
+    ///
+    /// - Parameters:
+    ///   - guildID: nil for a direct-message call, where the channel is the
+    ///     whole address.
+    ///   - channelID: nil to **leave**. Discord has no leave op; a null channel
+    ///     is it.
+    ///   - selfVideo: whether the camera is on. Sent with the join rather than
+    ///     afterwards where possible — the media session is negotiated for
+    ///     video or not at identify time.
+    public func updateVoiceState(
+        guildID: GuildID?,
+        channelID: ChannelID?,
+        selfMute: Bool,
+        selfDeaf: Bool,
+        selfVideo: Bool = false
+    ) {
+        struct Update: Encodable {
+            var op = 4
+            var d: Data
+
+            /// **Five keys, and both ids are written even when they are
+            /// absent.** Swift omits a nil optional, and this payload needs
+            /// `guild_id: null` on the wire rather than no `guild_id` at all —
+            /// that is how a direct-message call is distinguished from a
+            /// malformed one, and how leaving is distinguished from a payload
+            /// that forgot to say where.
+            ///
+            /// Nothing else is sent. An earlier version added `flags` and
+            /// `preferred_region` with a justification nobody had captured;
+            /// they are gone, because a field invented for a wire protocol is a
+            /// field the server may refuse the whole frame over.
+            struct Data: Encodable {
+                var guild_id: String?
+                var channel_id: String?
+                var self_mute: Bool
+                var self_deaf: Bool
+                var self_video: Bool
+
+                enum CodingKeys: String, CodingKey {
+                    case guild_id, channel_id, self_mute, self_deaf, self_video
+                }
+
+                func encode(to encoder: any Encoder) throws {
+                    var container = encoder.container(keyedBy: CodingKeys.self)
+                    try container.encode(guild_id, forKey: .guild_id)
+                    try container.encode(channel_id, forKey: .channel_id)
+                    try container.encode(self_mute, forKey: .self_mute)
+                    try container.encode(self_deaf, forKey: .self_deaf)
+                    try container.encode(self_video, forKey: .self_video)
+                }
+            }
+        }
+        Self.trace("voice state -> guild=\(guildID?.description ?? "-") channel=\(channelID?.description ?? "-")")
+        send(Update(d: .init(
+            guild_id: guildID.map { String($0.rawValue) },
+            channel_id: channelID.map { String($0.rawValue) },
+            self_mute: selfMute,
+            self_deaf: selfDeaf,
+            self_video: selfVideo
+        )))
+    }
+
     /// Publishes the reader's own status and custom status.
     ///
     /// **Op 3, over the socket, and there is no REST equivalent that works.**
@@ -721,6 +790,14 @@ public struct ReadySnapshot: Sendable {
     /// The account's private notes about people. READY carries the whole set,
     /// which is why the profile card never has to fetch one.
     public var notes: [UserID: String]
+    /// Each server's soundboard, where READY carried one.
+    public var soundboardsByGuild: [GuildID: [SoundboardSound]]
+    /// Who is already in a voice channel, keyed by the person. One flat table
+    /// rather than one per guild: a person can be in exactly one voice channel
+    /// across the whole account, so the guild is a property of the row rather
+    /// than a partition of it — and "am I in a call" is then one lookup instead
+    /// of a sweep over ninety servers.
+    public var voiceStates: [UserID: VoiceState]
 
     init(payload: ReadyPayload) {
         currentUser = payload.user.domain
@@ -733,6 +810,8 @@ public struct ReadySnapshot: Sendable {
         var membersByGuild: [GuildID: [UserID: Member]] = [:]
         var users: [UserID: User] = [:]
         var presences: [UserID: Presence] = [:]
+        var voiceStates: [UserID: VoiceState] = [:]
+        var soundboardsByGuild: [GuildID: [SoundboardSound]] = [:]
 
         users[currentUser.id] = currentUser
 
@@ -742,6 +821,17 @@ public struct ReadySnapshot: Sendable {
 
             if let channels = guildDTO.channels {
                 channelsByGuild[guild.id] = channels.map { $0.domain(guildID: guild.id) }
+            }
+            if let sounds = guildDTO.soundboard_sounds, !sounds.isEmpty {
+                soundboardsByGuild[guild.id] = sounds.map(\.domain)
+            }
+            for stateDTO in guildDTO.voice_states ?? [] {
+                guard var state = stateDTO.domain, state.channelID != nil else { continue }
+                // READY's per-guild states omit the guild id, because the guild
+                // they are nested in is the answer. Filling it here is what
+                // stops every one of them looking like a direct-message call.
+                state.guildID = state.guildID ?? guild.id
+                voiceStates[state.userID] = state
             }
             if let roles = guildDTO.roles {
                 var table: [RoleID: Role] = [:]
@@ -814,6 +904,8 @@ public struct ReadySnapshot: Sendable {
             notes[userID] = note
         }
         self.notes = notes
+        self.voiceStates = voiceStates
+        self.soundboardsByGuild = soundboardsByGuild
         self.users = users
         self.presences = presences
 
@@ -906,6 +998,19 @@ public enum GatewayUpdate: Sendable {
     case relationshipChanged(
         UserID, kind: Relationship, isIgnored: Bool, user: User?
     )
+    /// Somebody moved in, out of, or between voice channels. A state whose
+    /// `channelID` is nil **is** the departure.
+    case voiceStateChanged(VoiceState, member: Member?, user: User?)
+    /// Where our media session lives. Half a credential — see `VoiceServer`.
+    case voiceServerChanged(VoiceServer)
+    case voiceEffect(VoiceChannelEffect)
+    case callChanged(DirectCall)
+    case callEnded(ChannelID)
+    case soundboardSoundsChanged(GuildID?, sounds: [SoundboardSound])
+    /// Who is watching one person's screen share. `viewers` is the whole set,
+    /// never a delta — the caller diffs it against what it held.
+    case streamViewersChanged(owner: UserID, channelID: ChannelID?, viewers: Set<UserID>)
+    case streamEnded(owner: UserID)
 
     init?(_ payload: GatewayFrame.Payload) {
         switch payload {
@@ -1056,6 +1161,35 @@ public enum GatewayUpdate: Sendable {
                 isIgnored: dto.is_ignored ?? false,
                 user: dto.user?.domain
             )
+        case .voiceStateUpdate(let dto):
+            guard let state = dto.domain else { return nil }
+            let user = dto.member?.user?.domain
+            let member = dto.member.flatMap { entry -> Member? in
+                guard let id = entry.user?.id else { return nil }
+                return entry.domain(userID: id)
+            }
+            self = .voiceStateChanged(state, member: member, user: user)
+        case .voiceServerUpdate(let dto):
+            guard let server = dto.domain else { return nil }
+            self = .voiceServerChanged(server)
+        case .voiceChannelEffect(let dto):
+            self = .voiceEffect(dto.domain)
+        case .callCreate(let dto), .callUpdate(let dto):
+            self = .callChanged(dto.domain)
+        case .callDelete(let dto):
+            self = .callEnded(dto.channel_id)
+        case .guildSoundboardSounds(let payload):
+            self = .soundboardSoundsChanged(payload.guild_id, sounds: payload.catalog)
+        case .streamUpsert(let dto):
+            guard let owner = dto.ownerID else { return nil }
+            self = .streamViewersChanged(
+                owner: owner,
+                channelID: dto.channelID,
+                viewers: Set(dto.viewer_ids ?? [])
+            )
+        case .streamDelete(let dto):
+            guard let owner = dto.ownerID else { return nil }
+            self = .streamEnded(owner: owner)
         case .relationshipRemove(let dto):
             // A removal carries the type that *was*, not one to apply — so the
             // event is normalised to `.none` here rather than at the store,

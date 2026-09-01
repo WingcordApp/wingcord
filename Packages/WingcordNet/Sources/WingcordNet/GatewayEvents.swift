@@ -48,6 +48,24 @@ struct GatewayFrame: Decodable, Sendable {
         case userUpdate(UserDTO)
         case relationshipAdd(RelationshipDTO)
         case relationshipRemove(RelationshipDTO)
+        /// Somebody joined, left or changed a switch in a voice channel. **A
+        /// null `channel_id` is the leave** — Discord sends no departure event.
+        case voiceStateUpdate(VoiceStateDTO)
+        /// Where our own media session lives. Arrives beside our own
+        /// `VOICE_STATE_UPDATE` and in **either order** relative to it.
+        case voiceServerUpdate(VoiceServerUpdateDTO)
+        /// A soundboard press, or a reaction thrown into a voice channel.
+        case voiceChannelEffect(VoiceChannelEffectDTO)
+        /// A direct-message call started, changed who it is ringing, or ended.
+        case callCreate(CallDTO)
+        case callUpdate(CallDTO)
+        case callDelete(CallDeleteDTO)
+        /// A server's soundboard set changed. The whole set, not a delta.
+        case guildSoundboardSounds(GuildSoundboardPayload)
+        /// Somebody's screen share started, changed who is watching it, or
+        /// ended. The **only** signal for "somebody is watching me".
+        case streamUpsert(StreamEventDTO)
+        case streamDelete(StreamEventDTO)
         /// Anything this client does not act on. `d` is never decoded.
         case unhandled(name: String?)
     }
@@ -128,6 +146,20 @@ struct GatewayFrame: Decodable, Sendable {
         case "RELATIONSHIP_ADD": payload = .relationshipAdd(try decode(RelationshipDTO.self))
         case "RELATIONSHIP_REMOVE":
             payload = .relationshipRemove(try decode(RelationshipDTO.self))
+        case "VOICE_STATE_UPDATE": payload = .voiceStateUpdate(try decode(VoiceStateDTO.self))
+        case "VOICE_SERVER_UPDATE":
+            payload = .voiceServerUpdate(try decode(VoiceServerUpdateDTO.self))
+        case "VOICE_CHANNEL_EFFECT_SEND":
+            payload = .voiceChannelEffect(try decode(VoiceChannelEffectDTO.self))
+        case "CALL_CREATE": payload = .callCreate(try decode(CallDTO.self))
+        case "CALL_UPDATE": payload = .callUpdate(try decode(CallDTO.self))
+        case "CALL_DELETE": payload = .callDelete(try decode(CallDeleteDTO.self))
+        case "GUILD_SOUNDBOARD_SOUNDS_UPDATE", "SOUNDBOARD_SOUNDS":
+            payload = .guildSoundboardSounds(try decode(GuildSoundboardPayload.self))
+        case "STREAM_CREATE", "STREAM_UPDATE":
+            payload = .streamUpsert(try decode(StreamEventDTO.self))
+        case "STREAM_DELETE":
+            payload = .streamDelete(try decode(StreamEventDTO.self))
         default: payload = .unhandled(name: name)
         }
     }
@@ -315,4 +347,15 @@ public struct GuildStickersPayload: Decodable, Sendable {
     var stickers: [StickerDTO]?
 
     public var catalog: [StickerRef] { stickers?.compactMap(\.catalogEntry) ?? [] }
+}
+
+/// `GUILD_SOUNDBOARD_SOUNDS_UPDATE`, and the `SOUNDBOARD_SOUNDS` reply to the
+/// op-31 request. The same shape answers both.
+public struct GuildSoundboardPayload: Decodable, Sendable {
+    public var guild_id: GuildID?
+    var soundboard_sounds: [SoundboardSoundDTO]?
+
+    public var catalog: [SoundboardSound] {
+        (soundboard_sounds ?? []).map(\.domain)
+    }
 }

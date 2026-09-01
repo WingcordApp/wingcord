@@ -447,6 +447,91 @@ enum DemoFixtures {
         let guideAuthor = userIDs[1]
         model.guilds[firstGuild]?.ownerID = guideAuthor
         populateGuildSurfaces(model, guildRoles: guildRoles, owner: guideAuthor)
+        populateVoice(model, index: index, guildID: first, me: me, others: userIDs)
+    }
+
+    // MARK: A call in progress
+    //
+    // **A demo launch has no socket, so a call has to be assembled by hand or
+    // the whole surface can only ever be looked at empty.** Everything below is
+    // a fact a real session receives as a `VOICE_STATE_UPDATE`: the same shape,
+    // written straight into the same table.
+    //
+    // The reader is put IN the call rather than beside it, because the two
+    // states of that pane — the room seen from outside and the room you are in —
+    // are one click apart and the second is the one with every piece of the
+    // layout in it: the grid, the pills, the marks, the control cluster, the
+    // HUD in the sidebar.
+    private static func populateVoice(
+        _ model: AppModel,
+        index: ChannelIndex,
+        guildID: GuildID,
+        me: UserID,
+        others: [UserID]
+    ) {
+        guard let voiceChannelID = index.channelIDs(inGuild: guildID).first(where: {
+            index[$0]?.kind == .voice
+        }) else { return }
+
+        var states: [UserID: VoiceState] = [:]
+        states[me] = VoiceState(
+            userID: me,
+            channelID: voiceChannelID,
+            guildID: guildID,
+            sessionID: "demo"
+        )
+        // Four other people, each in a different state, so every mark on a tile
+        // is on screen at once: somebody talking, somebody muted, somebody
+        // deafened, and somebody sharing a screen.
+        let cast: [(UserID, Bool, Bool, Bool)] = zip(
+            others.filter { $0 != me }.prefix(4),
+            [(false, false, false), (true, false, false), (true, true, false), (false, false, true)]
+        ).map { ($0, $1.0, $1.1, $1.2) }
+
+        for (userID, muted, deafened, streaming) in cast {
+            states[userID] = VoiceState(
+                userID: userID,
+                channelID: voiceChannelID,
+                guildID: guildID,
+                sessionID: "demo",
+                isSelfMuted: muted,
+                isSelfDeafened: deafened,
+                isStreaming: streaming
+            )
+        }
+        model.voiceStates = states
+        model.connectedVoiceChannelID = voiceChannelID
+        model.isVoiceChatShown = true
+        // Two people talking at once, which is what makes the speaking ring and
+        // the tile's own lit edge visible together rather than one at a time.
+        model.speakingUserIDs = Set(cast.prefix(1).map(\.0))
+        model.voiceQuality = VoiceQuality(
+            lossPercent: 0, jitterMilliseconds: 8, isConnected: true,
+            // A real epoch authenticator's shape: thirty digits, which is what
+            // the call's shield reads out when somebody asks what it protects.
+            encryption: .endToEnd(verificationCode: "090606058512110636351516066685")
+        )
+        model.voiceRevision &+= 1
+
+        // Discord's own six, verbatim from `GET /soundboard-default-sounds`, so
+        // the picker's free half is real rather than invented.
+        model.defaultSoundboardSounds = [
+            SoundboardSound(id: "1", name: "quack", emojiName: "🦆"),
+            SoundboardSound(id: "2", name: "airhorn", emojiName: "🔊"),
+            SoundboardSound(id: "3", name: "cricket", emojiName: "🦗"),
+            SoundboardSound(id: "4", name: "golf clap", emojiName: "👏"),
+            SoundboardSound(id: "5", name: "sad horn", emojiName: "🎺"),
+            SoundboardSound(id: "7", name: "ba dum tss", emojiName: "🥁"),
+        ]
+        // A server's own set, which is the half behind the gate — and the demo
+        // account carries no Nitro, so the picker draws it locked.
+        model.guildSoundboardSounds[guildID] = [
+            SoundboardSound(id: "1000", name: "bonk", emojiName: "🔨", guildID: guildID),
+            SoundboardSound(id: "1001", name: "fire in the hole", emojiName: "💣", guildID: guildID),
+            SoundboardSound(id: "1002", name: "wow", emojiName: "😮", guildID: guildID),
+            SoundboardSound(id: "1003", name: "nice", emojiName: "😎", guildID: guildID),
+        ]
+        model.soundboardRevision &+= 1
     }
 
     // MARK: The server's own pages

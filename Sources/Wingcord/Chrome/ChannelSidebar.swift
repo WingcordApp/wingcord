@@ -23,11 +23,20 @@ struct ChannelSidebar: View, Equatable {
     /// pill while Channels & Roles is open.
     var target: SidebarTarget
 
+    /// The call the reader is in, if it is in this server. Part of `==` because
+    /// it changes a row's glyph — a row that could not see it would keep
+    /// offering "join" to a channel you are already in.
+    var connectedVoiceChannelID: ChannelID?
+
     static func == (lhs: ChannelSidebar, rhs: ChannelSidebar) -> Bool {
-        lhs.presentation == rhs.presentation && lhs.target == rhs.target
+        lhs.presentation == rhs.presentation
+            && lhs.target == rhs.target
+            && lhs.connectedVoiceChannelID == rhs.connectedVoiceChannelID
     }
 
     var selectChannel: (ChannelID) -> Void = { _ in }
+    var joinVoice: (ChannelID) -> Void = { _ in }
+    var openVoiceChat: (ChannelID) -> Void = { _ in }
     var toggleCategory: (ChannelID) -> Void = { _ in }
     var openSurface: (GuildSurface) -> Void = { _ in }
     var openGuildMenu: () -> Void = {}
@@ -172,8 +181,18 @@ struct ChannelSidebar: View, Equatable {
             SidebarChannelRow(
                 channel: channel,
                 isSelected: target == .channel(channel.id),
+                isConnected: connectedVoiceChannelID == channel.id,
                 namespace: selectionNamespace,
-                action: { selectChannel(channel.id) }
+                action: { selectChannel(channel.id) },
+                // Nil for anything that is not a voice channel, which is what
+                // removes the accessories from every text row rather than
+                // drawing them disabled — §5.5.
+                join: channel.kind == .voice || channel.kind == .stage
+                    ? { joinVoice(channel.id) }
+                    : nil,
+                openChat: channel.kind == .voice || channel.kind == .stage
+                    ? { openVoiceChat(channel.id) }
+                    : nil
             )
         }
     }

@@ -16,6 +16,7 @@ enum SettingsSection: String, CaseIterable, Identifiable, Hashable, Sendable {
     case messages
     case expressions
     case media
+    case voiceVideo
     case notifications
     case shortcuts
     // Who you are.
@@ -37,6 +38,7 @@ enum SettingsSection: String, CaseIterable, Identifiable, Hashable, Sendable {
         case .messages: "Messages"
         case .expressions: "Expressions"
         case .media: "Media"
+        case .voiceVideo: "Voice & Video"
         case .notifications: "Notifications"
         case .shortcuts: "Shortcuts"
         case .account: "Account"
@@ -56,6 +58,7 @@ enum SettingsSection: String, CaseIterable, Identifiable, Hashable, Sendable {
         case .messages: "bubble.left.and.text.bubble.right.fill"
         case .expressions: "face.smiling.inverse"
         case .media: "photo.fill"
+        case .voiceVideo: "mic.fill"
         case .notifications: "bell.fill"
         case .shortcuts: "keyboard.fill"
         case .account: "person.crop.circle.fill"
@@ -79,6 +82,7 @@ enum SettingsSection: String, CaseIterable, Identifiable, Hashable, Sendable {
         case .messages: Color(hex: 0x0A84FF)
         case .expressions: Color(hex: 0xFFB340)
         case .media: Color(hex: 0x64D2FF)
+        case .voiceVideo: Color(hex: 0x34C759)
         case .notifications: Color(hex: 0xFF453A)
         case .shortcuts: Color(hex: 0xA2845E)
         case .account: Color(hex: 0x5E5CE6)
@@ -101,6 +105,7 @@ enum SettingsSection: String, CaseIterable, Identifiable, Hashable, Sendable {
         case .messages: "How a conversation is written out"
         case .expressions: "Emoji, stickers and the tone they are drawn in"
         case .media: "Pictures, video and what plays by itself"
+        case .voiceVideo: "Microphone, camera, and how a call sounds"
         case .notifications: "Unread counts, and what is not built yet"
         case .shortcuts: "Every key the app answers to"
         case .account: "Who you are signed in as, on this Mac"
@@ -122,6 +127,7 @@ enum SettingsSection: String, CaseIterable, Identifiable, Hashable, Sendable {
         case .messages: "timestamps embeds links previews replies"
         case .expressions: "emoji stickers gif skin tone reactions"
         case .media: "images video volume mute loop battery animation"
+        case .voiceVideo: "voice video call microphone mic camera input output device speaker headphones push to talk ptt soundboard screen share echo noise sensitivity webcam"
         case .notifications: "sounds badges alerts mentions"
         case .shortcuts: "keyboard keys bindings navigation"
         case .account: "sign in out switch token keychain"
@@ -138,7 +144,7 @@ enum SettingsSection: String, CaseIterable, Identifiable, Hashable, Sendable {
     /// cover every case in the tests.
     static let groups: [[SettingsSection]] = [
         [.general, .appearance, .accessibility],
-        [.messages, .expressions, .media, .notifications, .shortcuts],
+        [.messages, .expressions, .media, .voiceVideo, .notifications, .shortcuts],
         [.account, .privacy],
         [.performance, .storage, .diagnostics, .about],
     ]

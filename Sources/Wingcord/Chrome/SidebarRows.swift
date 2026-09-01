@@ -14,8 +14,14 @@ import WingcordCore
 struct SidebarChannelRow: View {
     var channel: SidebarChannel
     var isSelected: Bool
+    /// Whether the reader is in this channel's call.
+    var isConnected = false
     var namespace: Namespace.ID
     var action: () -> Void
+    /// Voice channels only. Nil elsewhere, which is what removes the hover
+    /// accessories from every text row rather than drawing them disabled.
+    var join: (() -> Void)?
+    var openChat: (() -> Void)?
 
     @Environment(\.motion) private var motion
     @State private var isHovering = false
@@ -34,7 +40,13 @@ struct SidebarChannelRow: View {
 
                     Spacer(minLength: Spacing.tight)
 
-                    if channel.mentionCount > 0 {
+                    // **Revealed on hover, and the modifier is guarded rather
+                    // than the closure.** §2: writing the accessories
+                    // unconditionally and returning early inside still builds
+                    // them for every row in the list on every pass.
+                    if isHovering, join != nil {
+                        voiceAccessories
+                    } else if channel.mentionCount > 0 {
                         UnreadBadge(count: channel.mentionCount, isMuted: channel.isMuted)
                     }
                 }
@@ -80,6 +92,39 @@ struct SidebarChannelRow: View {
         .animation(motion.fadeQuick, value: isHovering)
         .accessibilityLabel(Text(channel.name))
         .accessibilityAddTraits(isSelected ? [.isButton, .isSelected] : .isButton)
+        .accessibilityActions {
+            if let join {
+                Button(isConnected ? "Leave the call" : "Join the call", action: join)
+            }
+            if let openChat { Button("Open the chat", action: openChat) }
+        }
+    }
+
+    /// The two things a voice row offers beyond opening.
+    ///
+    /// **Opening a voice channel does not join it**, which is the whole reason
+    /// these exist: a click in a list is navigation everywhere else in this app,
+    /// and a click that puts your microphone into a room full of people is not
+    /// something to do by accident. The row selects; this joins.
+    private var voiceAccessories: some View {
+        HStack(spacing: 2) {
+            if let openChat {
+                RowAccessory(
+                    systemImage: "bubble.left.fill",
+                    label: "Open the chat",
+                    action: openChat
+                )
+            }
+            if let join {
+                RowAccessory(
+                    systemImage: isConnected ? "phone.down.fill" : "phone.fill",
+                    label: isConnected ? "Leave the call" : "Join the call",
+                    tint: isConnected ? Palette.destructive : Palette.presenceOnline,
+                    action: join
+                )
+            }
+        }
+        .transition(.opacity.combined(with: .offset(x: 6)))
     }
 
     private var nameStyle: AnyShapeStyle {
@@ -239,6 +284,40 @@ struct SidebarActionRow: View {
         .animation(motion.fadeQuick, value: isHovering)
         .accessibilityLabel(Text(surface.title))
         .accessibilityAddTraits(isSelected ? [.isButton, .isSelected] : .isButton)
+    }
+}
+
+/// A small glyph button revealed on a row's hover.
+///
+/// A region rather than a glass body: it lives inside the row's own selection
+/// pill, and §4 forbids stacking a second material on the first — the container
+/// would promote it above its siblings and every one of them would draw at once.
+private struct RowAccessory: View {
+    var systemImage: String
+    var label: String
+    var tint: Color = Palette.accent
+    var action: () -> Void
+
+    @Environment(\.motion) private var motion
+    @State private var isHovering = false
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: systemImage)
+                .font(.system(size: 9, weight: .semibold))
+                .foregroundStyle(isHovering ? AnyShapeStyle(tint) : AnyShapeStyle(Ink.secondary))
+                .frame(width: 18, height: 18)
+                .background { Circle().fill(Color.white.opacity(isHovering ? 0.14 : 0)) }
+                .contentShape(.circle)
+        }
+        .buttonStyle(.plain)
+        .onHover { hovering in
+            guard isHovering != hovering else { return }
+            isHovering = hovering
+        }
+        .animation(motion.hover, value: isHovering)
+        .help(label)
+        .accessibilityLabel(Text(label))
     }
 }
 

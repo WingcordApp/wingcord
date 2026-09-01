@@ -44,6 +44,15 @@ struct MainWindow: View {
                         toggleMemberList: { model.isMemberListShown.toggle() },
                         toggleUserProfile: { model.isDirectMessageProfileShown.toggle() },
                         openChannelDetails: {},
+                        toggleCall: {
+                            guard let channelID = model.selectedChannelID else { return }
+                            if model.connectedVoiceChannelID == channelID {
+                                model.leaveVoice()
+                            } else {
+                                model.startCall(in: channelID)
+                            }
+                        },
+                        toggleVoiceChat: { model.isVoiceChatShown.toggle() },
                         togglePins: {
                             guard let channelID = model.selectedChannelID else { return }
                             model.togglePinsPane(for: channelID)
@@ -125,8 +134,16 @@ private struct SidebarColumn: View {
                     // of the column with a hard edge. Handing it the same ground
                     // the column has puts the theme back over it — see
                     // `barGround`.
-                    NowBarContainer()
-                        .barGround(.sidebar)
+                    //
+                    // **The call sits above the identity, in a panel of its
+                    // own.** It used to be a line inside the now bar, which made
+                    // the bar change height whenever somebody joined a channel
+                    // and re-laid out the whole list under it.
+                    VStack(spacing: Spacing.base) {
+                        VoiceHUDContainer()
+                        NowBarContainer()
+                    }
+                    .barGround(.sidebar)
                 }
         }
     }
@@ -221,7 +238,23 @@ private struct ChannelSidebarContainer: View {
         ChannelSidebar(
             presentation: model.sidebarPresentation,
             target: model.sidebarTarget,
+            connectedVoiceChannelID: model.connectedVoiceChannelID,
             selectChannel: { model.selectChannel($0) },
+            joinVoice: { channelID in
+                // The same control leaves the call it is already in. Pin and
+                // Unpin are one bit resolved two ways, and so is this — two rows
+                // that can both be offered is how a "join" ends up disconnecting
+                // somebody.
+                if model.connectedVoiceChannelID == channelID {
+                    model.leaveVoice()
+                } else {
+                    model.joinVoice(channelID)
+                }
+            },
+            openVoiceChat: { channelID in
+                model.selectChannel(channelID)
+                model.isVoiceChatShown = true
+            },
             toggleCategory: { model.toggleCategory($0) },
             openSurface: { model.openSurface($0) },
             openGuildMenu: {}
@@ -236,15 +269,11 @@ private struct NowBarContainer: View {
     var body: some View {
         NowBar(
             presentation: model.nowBarPresentation,
-            toggleMute: { model.isSelfMuted.toggle() },
-            toggleDeafen: {
-                model.isSelfDeafened.toggle()
-                // Deafening implies muting, and undeafening does not imply
-                // unmuting — someone who was muted before they deafened stays
-                // muted, which is what every voice client does and what people
-                // expect.
-                if model.isSelfDeafened { model.isSelfMuted = true }
-            },
+            // Through the controller, so the switch reaches the media engine
+            // AND is republished over the socket — a mute that only moves a
+            // local flag is a mute nobody else can see.
+            toggleMute: { model.toggleVoiceMute() },
+            toggleDeafen: { model.toggleVoiceDeafen() },
             openSettings: { SettingsWindow.open() },
             openSelfProfile: {
                 guard let userID = model.currentUserID else { return }
@@ -253,8 +282,7 @@ private struct NowBarContainer: View {
                 model.openProfile(userID, anchor: .zero, depth: .full)
             },
             setStatus: { model.updateSelfStatus($0) },
-            setCustomStatus: { model.updateSelfCustomStatus($0) },
-            disconnectVoice: { model.connectedVoiceChannelID = nil }
+            setCustomStatus: { model.updateSelfCustomStatus($0) }
         )
         .equatable()
     }

@@ -266,6 +266,10 @@ struct ChannelDTO: Decodable, Sendable {
     var icon: String?
     var owner_id: UserID?
     var message_count: Int?
+    /// Voice channels only. The encoder is configured from it — see
+    /// `Channel.bitrate`.
+    var bitrate: Int?
+    var user_limit: Int?
 
     func domain(guildID: GuildID? = nil) -> Channel {
         Channel(
@@ -283,7 +287,9 @@ struct ChannelDTO: Decodable, Sendable {
             recipientIDs: recipients?.map(\.id) ?? recipient_ids ?? [],
             iconHash: icon,
             ownerID: owner_id,
-            messageCount: message_count
+            messageCount: message_count,
+            bitrate: bitrate,
+            userLimit: user_limit
         )
     }
 }
@@ -310,6 +316,19 @@ struct GuildDTO: Decodable, Sendable {
     var channels: [ChannelDTO]?
     var members: [MemberDTO]?
     var presences: [PresenceDTO]?
+    /// A server's soundboard, when the payload carries one.
+    ///
+    /// **Free where it is present and harmless where it is not.** Reading an
+    /// optional field costs nothing, and it is the only way to fill the
+    /// picker's other sections without sending an opcode nobody has captured —
+    /// which is a frame the gateway may close the socket over.
+    var soundboard_sounds: [SoundboardSoundDTO]?
+    /// Who is already in a voice channel, at the moment READY was built.
+    ///
+    /// **The only source for this at launch.** Voice states arrive as events
+    /// afterwards, so a client that ignores them here shows every voice channel
+    /// empty until somebody moves — which on a quiet server is for ever.
+    var voice_states: [VoiceStateDTO]?
     /// Present on the READY payload's guild objects, absent on a plain fetch.
     var properties: GuildProperties?
 

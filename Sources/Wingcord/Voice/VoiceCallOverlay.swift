@@ -1,0 +1,277 @@
+import AVFoundation
+import CoreMedia
+import SwiftUI
+import WingcordCore
+
+// MARK: - A call inside a conversation
+//
+// A panel over the top of a direct message's transcript, holding the same tiles
+// and the same controls the channel stage does — and resizable, because a call
+// in a conversation is something people want *smaller* while they type and
+// bigger while they watch.
+//
+// **`.clear` glass, not `.regular`, and that is §4 rather than taste.** What
+// passes under this panel is the transcript: faces, emoji, somebody's message.
+// `.regular` frosts all of it into a grey slab, which is the one thing glass
+// exists not to be. The tint is what stops it disappearing over an empty stretch
+// of near-black.
+//
+// **The transcript is inset by the panel's height rather than covered by it.**
+// A call that hides the last four messages is a call people close to read, which
+// defeats the point of having it in the conversation at all.
+struct VoiceCallOverlay: View {
+    var presentation: VoicePresentation
+    var effects: [UserID: String]
+    var cameraSession: AVCaptureSession?
+    var selfUserID: UserID?
+    var attachVideo: (UserID, (@Sendable (CMSampleBuffer) -> Void)?) -> Void
+    var spotlight: (UserID?) -> Void
+
+    var toggleMute: () -> Void = {}
+    var toggleDeafen: () -> Void = {}
+    var toggleCamera: () -> Void = {}
+    var toggleScreenShare: () -> Void = {}
+    var leave: () -> Void = {}
+    /// Reports the outside height, so the transcript can inset itself by it.
+    var heightChanged: (CGFloat) -> Void = { _ in }
+
+    /// The panel's height, at rest.
+    ///
+    /// **Bounded on purpose, and not by much.** The user asked for resizable and
+    /// not *very* resizable, which is the right instinct: past about half the
+    /// window a call in a conversation has stopped being a panel and should be
+    /// the channel stage instead, and below the floor the tiles are smaller than
+    /// the faces in them.
+    @State private var height: CGFloat = VoiceCallOverlay.restingHeight
+    /// Live drag offset, applied on top of `height` and 1:1 with the pointer.
+    @State private var drag: CGFloat = 0
+    @State private var isFullHeight = false
+    @State private var isGrabberHovering = false
+
+    @Environment(\.motion) private var motion
+
+    static let minimumHeight: CGFloat = 168
+    static let maximumHeight: CGFloat = 460
+    static let restingHeight: CGFloat = 244
+
+    var body: some View {
+        GeometryReader { proxy in
+            let ceiling = min(Self.maximumHeight, max(Self.minimumHeight, proxy.size.height * 0.62))
+            let resolved = resolvedHeight(ceiling: ceiling)
+
+            panel
+                .frame(height: isFullHeight ? proxy.size.height - Spacing.margin : resolved)
+                .frame(maxWidth: .infinity, alignment: .top)
+                .padding(.horizontal, Spacing.base)
+                .padding(.top, Spacing.base)
+                .onChange(of: isFullHeight ? proxy.size.height : resolved, initial: true) { _, value in
+                    heightChanged(value + Spacing.base * 2)
+                }
+        }
+        // The panel arrives from the edge it lives on and leaves the same way —
+        // spatial symmetry, §3 — and materialises rather than fading, because
+        // it is glass.
+        .transition(
+            .move(edge: .top)
+                .combined(with: .materialize(from: .top))
+        )
+    }
+
+    private func resolvedHeight(ceiling: CGFloat) -> CGFloat {
+        // Rubber-banded outside the bounds and 1:1 inside them. A hard stop at
+        // the limit reads as frozen; continuous resistance reads as responsive
+        // with nothing more to give.
+        Motion.clampWithResistance(
+            height + drag,
+            to: Self.minimumHeight...ceiling,
+            limit: ceiling
+        )
+    }
+
+    // MARK: The panel
+
+    private var panel: some View {
+        VStack(spacing: 0) {
+            tiles
+            controls
+            grabber
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        // Layout first, glass last — and one body for the whole panel, so
+        // nothing inside it is a second material.
+        .glassEffect(
+            .clear.tint(Palette.flyoutTint),
+            in: .rect(cornerRadius: Radius.card)
+        )
+        .overlay(alignment: .bottomTrailing) { expandButton }
+        .animation(motion.reposition, value: isFullHeight)
+    }
+
+    private var tiles: some View {
+        VoiceTileGrid(
+            participants: presentation.participants,
+            spotlightUserID: presentation.spotlightUserID,
+            effects: effects,
+            cameraSession: cameraSession,
+            selfUserID: selfUserID,
+            attachVideo: attachVideo,
+            spotlight: spotlight
+        )
+        .padding(.horizontal, Spacing.snug)
+        .padding(.top, Spacing.snug)
+        .frame(maxHeight: .infinity)
+    }
+
+    private var controls: some View {
+        VoiceControlBar(
+            presentation: presentation,
+            isCompact: true,
+            toggleMute: toggleMute,
+            toggleDeafen: toggleDeafen,
+            toggleCamera: toggleCamera,
+            toggleScreenShare: toggleScreenShare,
+            leave: leave
+        )
+        .padding(.vertical, Spacing.snug)
+    }
+
+    /// The handle at the foot of the panel.
+    ///
+    /// A pill rather than a hit area with nothing in it: an edge that can be
+    /// dragged has to say so, and a cursor change alone is a discovery nobody
+    /// makes. It brightens on hover, which is the macOS class of motion —
+    /// `hover`, fast enough that running the pointer past it leaves no trail.
+    private var grabber: some View {
+        Capsule()
+            .fill(Color.white.opacity(isGrabberHovering ? 0.42 : 0.22))
+            .frame(width: 44, height: 4)
+            .padding(.bottom, Spacing.base)
+            .padding(.top, Spacing.tight)
+            .frame(maxWidth: .infinity)
+            .contentShape(.rect)
+            .onHover { hovering in
+                guard isGrabberHovering != hovering else { return }
+                isGrabberHovering = hovering
+                // The resize cursor is the other half of saying so, and it has
+                // to be pushed and popped rather than set — a cursor set on
+                // hover-in and never restored leaks into the whole window.
+                if hovering { NSCursor.resizeUpDown.push() } else { NSCursor.pop() }
+            }
+            .gesture(resize)
+            .animation(motion.hover, value: isGrabberHovering)
+            .accessibilityLabel(Text("Resize the call"))
+            .accessibilityValue(Text("\(Int(height)) points tall"))
+            .accessibilityAdjustableAction { direction in
+                // Full Keyboard Access and VoiceOver get the same range the
+                // pointer does. A drag handle with no adjustable action is a
+                // control that only exists for a mouse.
+                let step: CGFloat = direction == .increment ? 32 : -32
+                height = min(Self.maximumHeight, max(Self.minimumHeight, height + step))
+            }
+    }
+
+    private var resize: some Gesture {
+        DragGesture(minimumDistance: 1)
+            .onChanged { value in
+                guard !isFullHeight else { return }
+                drag = value.translation.height
+            }
+            .onEnded { value in
+                guard !isFullHeight else { return }
+                let target = min(
+                    Self.maximumHeight,
+                    max(Self.minimumHeight, height + value.translation.height)
+                )
+                let settled = height + drag
+                height = settled
+                drag = 0
+                // **Velocity handoff.** The spring starts at the pointer's exact
+                // release speed, so there is no seam between the drag and the
+                // settle — `momentum` without it puts back the join the whole
+                // vocabulary exists to remove.
+                withAnimation(
+                    motion.handoff(
+                        velocity: value.velocity.height,
+                        over: target - settled
+                    )
+                ) {
+                    height = target
+                }
+            }
+    }
+
+    /// Fills the pane, and comes back.
+    private var expandButton: some View {
+        Button {
+            isFullHeight.toggle()
+        } label: {
+            Image(systemName: isFullHeight
+                ? "arrow.down.right.and.arrow.up.left"
+                : "arrow.up.left.and.arrow.down.right")
+                .font(.system(.footnote, weight: .semibold))
+                .foregroundStyle(Ink.primary)
+                .frame(width: Metrics.compactControl, height: Metrics.compactControl)
+                .contentShape(.circle)
+        }
+        .buttonStyle(.plain)
+        .background { Circle().fill(Palette.selectionFill) }
+        .padding(Spacing.snug)
+        .help(isFullHeight ? "Shrink the call" : "Fill the conversation")
+        .accessibilityLabel(Text(isFullHeight ? "Shrink the call" : "Fill the conversation"))
+    }
+}
+
+/// Reads the store and shows the panel only for the conversation it belongs to.
+///
+/// **Guarded on the channel, not just on there being a call.** A reader in a
+/// server's voice channel who then opens a direct message must not find the
+/// server's call floating over that conversation — the panel belongs to the
+/// conversation whose call it is.
+struct VoiceCallOverlayContainer: View {
+    var channelID: ChannelID
+    var heightChanged: (CGFloat) -> Void
+
+    @Environment(AppModel.self) private var model
+    @Environment(\.motion) private var motion
+    @State private var cameraSession: AVCaptureSession?
+
+    var body: some View {
+        Group {
+            if let presentation = model.voicePresentation,
+               presentation.isDirect,
+               presentation.channelID == channelID {
+                VoiceCallOverlay(
+                    presentation: presentation,
+                    effects: effectNames,
+                    cameraSession: cameraSession,
+                    selfUserID: model.currentUserID,
+                    attachVideo: model.attachVideo,
+                    spotlight: model.spotlight,
+                    toggleMute: model.toggleVoiceMute,
+                    toggleDeafen: model.toggleVoiceDeafen,
+                    toggleCamera: model.toggleCamera,
+                    toggleScreenShare: model.toggleScreenShare,
+                        leave: model.leaveVoice,
+                    heightChanged: heightChanged
+                )
+            }
+        }
+        .animation(motion.panel, value: model.connectedVoiceChannelID)
+        .onChange(of: model.connectedVoiceChannelID) { _, connected in
+            // The transcript's inset has to come back with the panel, and a
+            // panel that has left reports no height of its own.
+            if connected != channelID { heightChanged(0) }
+        }
+        .task(id: model.isCameraOn) {
+            cameraSession = model.isCameraOn ? await model.cameraSession() : nil
+        }
+    }
+
+    private var effectNames: [UserID: String] {
+        var names: [UserID: String] = [:]
+        for (userID, soundID) in model.soundboardEffects {
+            names[userID] = model.soundboardSound(id: soundID)?.name ?? "sound"
+        }
+        return names
+    }
+}

@@ -29,30 +29,23 @@ struct NowBar: View, Equatable {
     var openSelfProfile: () -> Void = {}
     var setStatus: (PresenceStatus) -> Void = { _ in }
     var setCustomStatus: (String?) -> Void = { _ in }
-    var disconnectVoice: () -> Void = {}
 
     @Environment(\.motion) private var motion
     @State private var isMenuOpen = false
 
     var body: some View {
-        VStack(spacing: Spacing.tight) {
-            if let channelName = presentation.voiceChannelName {
-                VoiceConnectionRow(
-                    channelName: channelName,
-                    guildName: presentation.voiceGuildName,
-                    disconnect: disconnectVoice
-                )
-                .transition(.materialize(from: .bottom))
-            }
-
-            HStack(spacing: Spacing.base) {
-                identity
-                Spacer(minLength: Spacing.tight)
-                controls
-            }
-            .padding(.horizontal, Spacing.base)
-            .frame(height: Metrics.nowBarHeight)
+        // **The call is not drawn here any more.** It used to be a line above
+        // the identity row, which meant the bar changed height whenever
+        // somebody joined a channel and the whole channel list re-laid out under
+        // it. The call is its own floating panel — `VoiceHUD` — stacked above
+        // this one, so the identity capsule is one fixed object again.
+        HStack(spacing: Spacing.base) {
+            identity
+            Spacer(minLength: Spacing.tight)
+            controls
         }
+        .padding(.horizontal, Spacing.base)
+        .frame(height: Metrics.nowBarHeight)
         // One capsule for the whole bar. The controls above are regions inside
         // it, never bodies on top of it.
         //
@@ -69,7 +62,6 @@ struct NowBar: View, Equatable {
         )
         .padding(.horizontal, Spacing.base)
         .padding(.bottom, Spacing.base)
-        .animation(motion.panel, value: presentation.voiceChannelName)
     }
 
     /// The identity row, and the panel it opens.
@@ -187,45 +179,6 @@ private struct NowBarControl: View {
         .animation(motion.standard, value: isActive)
         .help(label)
         .accessibilityLabel(Text(label))
-    }
-}
-
-/// The line above the identity row when connected to voice.
-private struct VoiceConnectionRow: View {
-    var channelName: String
-    var guildName: String?
-    var disconnect: () -> Void
-
-    var body: some View {
-        HStack(spacing: Spacing.base) {
-            Image(systemName: "wifi")
-                .font(.system(.caption, weight: .bold))
-                .foregroundStyle(Palette.presenceOnline)
-
-            VStack(alignment: .leading, spacing: 0) {
-                Text("Voice Connected")
-                    .font(.system(.caption, weight: .semibold))
-                    .foregroundStyle(Palette.presenceOnline)
-                Text(guildName.map { "\(channelName) / \($0)" } ?? channelName)
-                    .font(Typeface.rowSubtitle)
-                    .foregroundStyle(Ink.secondary)
-                    .lineLimit(1)
-            }
-
-            Spacer(minLength: Spacing.tight)
-
-            Button(action: disconnect) {
-                Image(systemName: "phone.down.fill")
-                    .font(.system(.caption, weight: .medium))
-                    .foregroundStyle(Palette.destructive)
-                    .frame(width: Metrics.compactControl, height: Metrics.compactControl)
-                    .contentShape(.circle)
-            }
-            .buttonStyle(.plain)
-            .help("Disconnect")
-        }
-        .padding(.horizontal, Spacing.base)
-        .padding(.top, Spacing.base)
     }
 }
 

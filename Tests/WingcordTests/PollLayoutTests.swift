@@ -87,14 +87,15 @@ struct PollLayoutTests {
     /// The tally is reserved before the label is laid out, so a long answer
     /// wraps around it rather than running underneath.
     @Test("A long answer leaves the tally room")
-    func labelLeavesRoomForTheTally() {
+    func labelLeavesRoomForTheTally() throws {
         var value = poll(counts: [10, 2], mine: 1)
         value.answers[0].text = String(repeating: "a very long answer ", count: 6)
         let slot = layout(value)
         let answer = slot.answers[0]
-        let tally = try? #require(answer.tally)
-        guard let tally else { return }
         #expect(answer.labelOrigin.x + answer.label.size.width <= answer.tallyOrigin.x + 1)
+        // A voted poll always lays out a tally, so its absence is a failure of
+        // the layout rather than a case to skip past.
+        let tally = try #require(answer.tally)
         #expect(answer.tallyOrigin.x + tally.size.width <= answer.rect.maxX)
     }
 

@@ -14,6 +14,12 @@ let package = Package(
     dependencies: [
         .package(path: "Packages/WingcordCore"),
         .package(path: "Packages/WingcordNet"),
+        // The voice stack: the voice gateway, the UDP transport under it, Opus,
+        // VideoToolbox and ScreenCaptureKit. Its own package because none of it
+        // may be main-actor isolated — an audio render callback and a video
+        // encoder callback are threads with deadlines, and the app target
+        // inverts Swift's default to put everything on the main actor.
+        .package(path: "Packages/WingcordVoice"),
         // The one third-party dependency in the app, and it earns its place:
         // eight of Discord's fourteen standard sticker packs are Lottie, and a
         // Lottie sticker has no bitmap on the CDN at all — both the `.png` and
@@ -28,6 +34,7 @@ let package = Package(
             dependencies: [
                 "WingcordCore",
                 "WingcordNet",
+                "WingcordVoice",
                 .product(name: "Lottie", package: "lottie-ios"),
             ],
             // The eleven faces a styled display name can be set in. `.copy`
@@ -39,7 +46,16 @@ let package = Package(
             // `DisplayNameFontRegistry`. Registering eleven at launch would
             // spend the I/O and keep the faces resident for a feature that most
             // sessions never draw once.
-            resources: [.copy("Resources/Fonts")],
+            // `.copy` rather than `.process` for both: these are opaque
+            // binaries with no build step, and each directory has to survive so
+            // a lookup by name works without walking a flattened resource root.
+            //
+            // The sounds are 96 kbps AAC rather than the 320 kbps MP3 they
+            // arrived as — half-second blips through a mixer that re-encodes at
+            // 64 kbit, so the difference is inaudible and the bundle is a third
+            // the size. They are decoded lazily, on the first event that plays
+            // one; a session that never joins a call decodes none of them.
+            resources: [.copy("Resources/Fonts"), .copy("Resources/Sounds")],
             swiftSettings: [
                 .defaultIsolation(MainActor.self),
                 .swiftLanguageMode(.v6),

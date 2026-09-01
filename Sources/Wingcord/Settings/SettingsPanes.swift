@@ -33,6 +33,7 @@ struct SettingsPaneContent: View {
             case .messages: MessagesPane()
             case .expressions: ExpressionsPane()
             case .media: MediaPane()
+            case .voiceVideo: VoiceVideoPane()
             case .notifications: NotificationsPane()
             case .account: AccountPane()
             case .privacy: PrivacyPane()
@@ -957,7 +958,7 @@ private struct DiagnosticsPane: View {
                 }
             }
             SettingsFootnote(
-                "The trace records the ORDER of the six events a connection goes through. Reading that order is how a connection that never comes up gets diagnosed — the lines alone do not say where the time went.",
+                "The trace records the ORDER of the events a connection goes through — the gateway's handshake, and the nine messages a call's encryption is negotiated in. Reading that order is how a connection that never comes up gets diagnosed; the lines alone do not say where the time went.",
                 symbolName: "waveform.path.ecg"
             )
         }

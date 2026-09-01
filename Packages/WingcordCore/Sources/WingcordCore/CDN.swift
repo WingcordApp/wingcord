@@ -202,6 +202,16 @@ public enum CDN {
     /// can stand in for, and the profile route names them by hash. Always PNG:
     /// they carry alpha and are drawn at sixteen points, so a larger rung buys
     /// nothing.
+    /// A soundboard clip.
+    ///
+    /// **No extension and no size.** The route serves the uploaded audio
+    /// directly — Ogg Opus for most, MP3 for some of Discord's own — and the
+    /// decoder is told what it is by the bytes rather than by the URL. Appending
+    /// a format here 404s.
+    public static func soundboardSound(id: String) -> URL? {
+        URL(string: "\(host)/soundboard-sounds/\(id)")
+    }
+
     public static func accountBadge(hash: String) -> URL? {
         URL(string: "\(host)/badge-icons/\(hash).png?size=64")
     }

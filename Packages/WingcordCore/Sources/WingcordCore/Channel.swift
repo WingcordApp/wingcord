@@ -121,6 +121,15 @@ public struct Channel: Hashable, Sendable, Identifiable, Codable {
     /// Threads only: the parent conversation's id is `parentID`, and this is the
     /// message count Discord reports.
     public var messageCount: Int?
+    /// A voice channel's audio ceiling, in bits per second.
+    ///
+    /// **The encoder is configured from this, not from a constant.** Discord's
+    /// mixer drops anything over the channel's own limit rather than
+    /// transcoding it, so a client that always encodes at 96k is a client that
+    /// is silent in every unboosted server — which is most of them.
+    public var bitrate: Int?
+    /// How many people a voice channel holds. Zero, and nil, both mean no limit.
+    public var userLimit: Int?
 
     public init(
         id: ChannelID,
@@ -137,7 +146,9 @@ public struct Channel: Hashable, Sendable, Identifiable, Codable {
         recipientIDs: [UserID] = [],
         iconHash: String? = nil,
         ownerID: UserID? = nil,
-        messageCount: Int? = nil
+        messageCount: Int? = nil,
+        bitrate: Int? = nil,
+        userLimit: Int? = nil
     ) {
         self.id = id
         self.kind = kind
@@ -154,6 +165,8 @@ public struct Channel: Hashable, Sendable, Identifiable, Codable {
         self.iconHash = iconHash
         self.ownerID = ownerID
         self.messageCount = messageCount
+        self.bitrate = bitrate
+        self.userLimit = userLimit
     }
 
     /// Sort order inside a guild.

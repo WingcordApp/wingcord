@@ -19,15 +19,34 @@ struct ConversationPane: View {
     /// inset has been handed the region the inset describes and reports *zero*.
     @State private var chromeHeight: CGFloat = 0
 
+    /// The call panel's outside height, when there is one.
+    ///
+    /// **The transcript is inset by it rather than covered by it.** A call that
+    /// hides the last four messages is a call people close in order to read,
+    /// which defeats the point of having it in the conversation. Measured for
+    /// the same reason the composer's height is: the panel is resizable, so any
+    /// constant here is wrong the moment somebody drags it.
+    @State private var callHeight: CGFloat = 0
+
     var body: some View {
-        ZStack { transcript }
-            .onGeometryChange(for: CGFloat.self) { $0.safeAreaInsets.top } action: { chromeHeight = $0 }
+        ZStack(alignment: .top) {
+            transcript
+            VoiceCallOverlayContainer(channelID: channelID) { height in
+                guard abs(callHeight - height) > 0.5 else { return }
+                // A measured value: written with animations off, or the
+                // transcript lurches on every frame of a resize drag. §3.
+                var transaction = Transaction()
+                transaction.disablesAnimations = true
+                withTransaction(transaction) { callHeight = height }
+            }
+        }
+        .onGeometryChange(for: CGFloat.self) { $0.safeAreaInsets.top } action: { chromeHeight = $0 }
     }
 
     private var transcript: some View {
         TimelineContainer(
             channelID: channelID,
-            topInset: chromeHeight,
+            topInset: chromeHeight + callHeight,
             bottomInset: composerHeight
         )
             // **The one composed thing over the drawn transcript.** It is glass,

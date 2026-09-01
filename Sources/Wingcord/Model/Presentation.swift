@@ -218,11 +218,6 @@ struct NowBarPresentation: Hashable, Sendable {
     var customStatus: String?
     var isMuted: Bool
     var isDeafened: Bool
-    /// The voice channel the reader is in, if any. Drawn as a line above the
-    /// identity row rather than as a separate bar, so the sidebar's foot stays
-    /// one object.
-    var voiceChannelName: String?
-    var voiceGuildName: String?
 }
 
 /// Everything the detail column needs to decide what it is showing.
@@ -254,6 +249,13 @@ struct WorkspacePresentation: Hashable, Sendable {
         case userProfile(UserID)
         case thread(ChannelID)
         case search
+        /// A voice channel's own text chat, beside its tiles.
+        ///
+        /// **The same channel id as the call.** Discord gives a voice channel
+        /// one id for both halves, so this is the ordinary timeline pointed at
+        /// the channel the tiles are for — a second case rather than a second
+        /// kind of conversation.
+        case voiceChat(ChannelID)
         /// A channel read beside one of the server's own pages.
         ///
         /// **A peek, not a destination.** A guide's resource is a
@@ -292,4 +294,14 @@ struct ChannelChrome: Hashable, Sendable {
     /// only thing that removes it is there being no conversation.
     var canShowPins: Bool
     var arePinsShown: Bool
+    /// Whether a call can be started here. Direct messages and group
+    /// conversations only — a guild's voice channel is joined from its own
+    /// pane, and a text channel has no call at all.
+    var canStartCall: Bool
+    /// Whether the reader is already in this conversation's call, so the one
+    /// control can say "hang up" instead of offering a second call.
+    var isInCall: Bool
+    /// Whether this is a voice channel with a chat to show beside it.
+    var canShowVoiceChat: Bool
+    var isVoiceChatShown: Bool
 }

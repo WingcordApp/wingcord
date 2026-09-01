@@ -33,6 +33,14 @@ struct SidebarMemoKey: Hashable, Sendable {
     /// Moves when the reader follows or unfollows anything. The list is filtered
     /// by it, so it cannot be left out.
     var followRevision: UInt64
+    /// Moves when somebody joins or leaves a voice channel. Voice channel rows
+    /// draw who is in them, so the list depends on it — and it is a counter of
+    /// its own rather than `railRevision`, which moves on every inbound message
+    /// in the account and would rebuild the whole tree several times a second.
+    var voiceRevision: UInt64
+    /// Who is talking, which lights a chip under a row. Part of the key for the
+    /// same reason the follow set is: the answer is drawn.
+    var speakingIDs: Set<UserID>
     /// The selected channel, **but only when it would otherwise be hidden**.
     ///
     /// A channel opened from Browse Channels that the reader has opted out of is
@@ -102,6 +110,8 @@ extension AppModel {
             guildID: selectedGuildID,
             collapsedCategories: collapsedCategoryIDs,
             followRevision: followRevision,
+            voiceRevision: voiceRevision,
+            speakingIDs: speakingUserIDs,
             hiddenSelection: hiddenSelectedChannelID,
             surfaceRows: selectedGuildID.map(guildSurfaceRows(for:)) ?? []
         )
@@ -130,8 +140,6 @@ extension AppModel {
     /// a memo over it would cost more in key comparison than the build.
     var nowBarPresentation: NowBarPresentation {
         let user = currentUserID.flatMap { users[$0] }
-        let voiceChannel = connectedVoiceChannelID.flatMap { channelIndex[$0] }
-        let voiceGuild = voiceChannel?.guildID.flatMap { guilds[$0] }
         return NowBarPresentation(
             userID: currentUserID ?? UserID(rawValue: 0),
             displayName: user?.preferredName ?? "Not signed in",
@@ -141,9 +149,7 @@ extension AppModel {
             status: selfStatus,
             customStatus: selfCustomStatus,
             isMuted: isSelfMuted,
-            isDeafened: isSelfDeafened,
-            voiceChannelName: voiceChannel?.name,
-            voiceGuildName: voiceGuild?.name
+            isDeafened: isSelfDeafened
         )
     }
 
@@ -187,6 +193,13 @@ extension AppModel {
     /// people and no roster route, and a pane showing one of them would be
     /// arbitrary.
     private func supplementary(for channel: Channel) -> WorkspacePresentation.Supplementary? {
+        // A voice channel's own chat takes the column ahead of the roster:
+        // you are looking at the people already, in tiles the size of faces,
+        // and the thing you cannot see is what anybody wrote.
+        if channel.kind == .voice || channel.kind == .stage {
+            if isVoiceChatShown { return .voiceChat(channel.id) }
+            return isMemberListShown ? .members : nil
+        }
         if channel.guildID != nil {
             return isMemberListShown ? .members : nil
         }
@@ -219,7 +232,11 @@ extension AppModel {
                 isUserProfileShown: false,
                 canShowUserProfile: false,
                 canShowPins: false,
-                arePinsShown: false
+                arePinsShown: false,
+                canStartCall: false,
+                isInCall: false,
+                canShowVoiceChat: false,
+                isVoiceChatShown: false
             )
         }
         guard let channelID = selectedChannelID, let channel = channelIndex[channelID] else {
@@ -233,7 +250,11 @@ extension AppModel {
                 isUserProfileShown: false,
                 canShowUserProfile: false,
                 canShowPins: false,
-                arePinsShown: false
+                arePinsShown: false,
+                canStartCall: false,
+                isInCall: false,
+                canShowVoiceChat: false,
+                isVoiceChatShown: false
             )
         }
         return ChannelChrome(
@@ -250,7 +271,13 @@ extension AppModel {
             // cannot read either — the route answers 403, and a control that
             // opens onto a refusal is the inert control §5.5 is about.
             canShowPins: permissionGate.canReadHistory(channelID),
-            arePinsShown: openPinsChannelID == channelID
+            arePinsShown: openPinsChannelID == channelID,
+            // A conversation, not a channel: a guild's voice channel is joined
+            // from its own pane, and a text channel has no call to start.
+            canStartCall: channel.kind.isPrivate,
+            isInCall: connectedVoiceChannelID == channelID,
+            canShowVoiceChat: channel.kind == .voice || channel.kind == .stage,
+            isVoiceChatShown: isVoiceChatShown
         )
     }
 
@@ -470,7 +497,13 @@ extension AppModel {
             isUnread: state.unread,
             mentionCount: state.mentions,
             isMuted: state.muted,
-            voiceMembers: []
+            // **Only for a voice channel**, and the guard is not decoration: the
+            // lookup is a filter over every voice state in the account, and
+            // running it for each of a server's five hundred text channels is
+            // five hundred passes for five hundred empty arrays.
+            voiceMembers: channel.kind == .voice || channel.kind == .stage
+                ? voiceChips(in: channel.id)
+                : []
         )
     }
 

@@ -138,8 +138,7 @@ struct AnimatedImageTests {
         let budget = 48
         let indices = AnimatedImage.sampleIndices(count: count, budget: budget)
         let stride = count / budget
-        let last = try? #require(indices.last)
-        #expect((last ?? 0) >= count - stride - 1)
+        #expect((indices.last ?? 0) >= count - stride - 1)
     }
 
     @Test("A short asset is kept whole")

@@ -88,9 +88,18 @@ final class SessionController {
     private var presenceFlushTask: Task<Void, Never>?
     private static let presenceFlushInterval = Duration.milliseconds(200)
 
+    /// The call, and everything that follows from being in one.
+    ///
+    /// Its own object rather than a fifth extension on this one: it owns a
+    /// media engine with four threads in it, and the thing that owns that must
+    /// be constructible, testable and tearable-down on its own.
+    let voice: VoiceController
+
     init(model: AppModel) {
         self.model = model
-        rest = DiscordREST(metadata: metadata)
+        let rest = DiscordREST(metadata: metadata)
+        self.rest = rest
+        voice = VoiceController(model: model, rest: rest)
     }
 
     // MARK: Lifecycle
@@ -202,6 +211,7 @@ final class SessionController {
         isTornDown = false
         let socket = GatewaySocket(metadata: metadata)
         self.socket = socket
+        voice.attach(socket: socket)
         model.historyLoader = { [weak self] channelID, before in
             self?.loadHistory(in: channelID, before: before)
         }
@@ -261,6 +271,16 @@ final class SessionController {
         model.notesInFlight = []
         model.relationshipsInFlight = []
         model.suppressedAckChannelID = nil
+        // A call does not survive a sign-out: the media session belongs to the
+        // account whose token opened it.
+        voice.leave()
+        model.voiceStates = [:]
+        model.directCalls = [:]
+        model.defaultSoundboardSounds = []
+        model.guildSoundboardSounds = [:]
+        model.soundboardEffects = [:]
+        model.voicePresentationCache = nil
+        model.soundboardCache = nil
         model.dismissMessageSurfaces()
         model.messageHover = nil
         model.forwardRequest = nil
@@ -306,6 +326,9 @@ final class SessionController {
             applyReady(snapshot)
         case .resumed:
             model.connectionState = .ready
+            // A call that was up when the socket blipped has to ask again —
+            // see `VoiceController.gatewayDidReconnect`.
+            voice.gatewayDidReconnect()
         case .update(let update):
             apply(update)
         case .disconnected(let reason, let willRetry):
@@ -352,6 +375,10 @@ final class SessionController {
         model.ignoredUserIDs = snapshot.ignoredUserIDs
         model.relationships = snapshot.relationships
         model.notes = snapshot.notes
+        voice.applyReady(
+            voiceStates: snapshot.voiceStates,
+            soundboards: snapshot.soundboardsByGuild
+        )
         model.currentUserID = snapshot.currentUser.id
         model.users = snapshot.users
         model.guilds = guilds
@@ -394,6 +421,7 @@ final class SessionController {
         model.presenceRevision &+= 1
         model.identityRevision &+= 1
         model.connectionState = .ready
+        voice.gatewayDidReconnect()
 
         restoreNavigation()
     }
@@ -539,6 +567,30 @@ final class SessionController {
         case .messageDeleted(let messageID, let channelID):
             model.mutateBox(channelID) { $0.remove(messageID) }
             model.messageContentRevision &+= 1
+
+        case .voiceStateChanged(let state, let member, let user):
+            voice.apply(state: state, member: member, user: user)
+
+        case .voiceServerChanged(let server):
+            voice.apply(server: server)
+
+        case .voiceEffect(let effect):
+            voice.apply(effect: effect)
+
+        case .callChanged(let call):
+            voice.apply(call: call)
+
+        case .callEnded(let channelID):
+            voice.applyCallEnded(channelID)
+
+        case .soundboardSoundsChanged(let guildID, let sounds):
+            voice.applySoundboard(guildID: guildID, sounds: sounds)
+
+        case .streamViewersChanged(let owner, _, let viewers):
+            voice.applyStreamViewers(owner: owner, viewers: viewers)
+
+        case .streamEnded(let owner):
+            voice.applyStreamEnded(owner: owner)
 
         case .reactionAdded(let messageID, let channelID, let emoji, let userID):
             model.applyReaction(
