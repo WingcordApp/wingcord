@@ -324,7 +324,6 @@ final class VideoSendPath: Sendable {
         } }
     }
 
-    func requestKeyframe() { state.withLock { $0.needsKeyframe = true } }
 
     func takeKeyframeRequest() -> Bool {
         state.withLock { state in

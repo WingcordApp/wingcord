@@ -469,10 +469,11 @@ public actor VoiceGateway {
             // reference client decodes on every platform it ships. Offering VP8
             // ahead of it would land a software encoder on the CPU for no gain.
             codecs: [
-                .init(name: "opus", type: "audio", priority: 1_000, payload_type: 120,
-                      rtx_payload_type: nil),
-                .init(name: "H264", type: "video", priority: 1_000, payload_type: 101,
-                      rtx_payload_type: 102),
+                .init(name: "opus", type: "audio", priority: 1_000,
+                      payload_type: Int(RTP.PayloadType.opus), rtx_payload_type: nil),
+                .init(name: "H264", type: "video", priority: 1_000,
+                      payload_type: Int(RTP.PayloadType.h264),
+                      rtx_payload_type: Int(RTP.PayloadType.h264RTX)),
             ]
         )))
     }
@@ -749,9 +750,6 @@ struct SpeakingFlags: OptionSet, Sendable {
     init(rawValue: Int) { self.rawValue = rawValue }
 
     static let microphone = SpeakingFlags(rawValue: 1 << 0)
-    /// Audio shared from an application rather than spoken. Set on the stream
-    /// that carries a screen share's sound.
-    static let soundshare = SpeakingFlags(rawValue: 1 << 1)
     static let priority = SpeakingFlags(rawValue: 1 << 2)
     static let none = SpeakingFlags([])
 }

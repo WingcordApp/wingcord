@@ -75,7 +75,6 @@ public actor VoiceEngine {
         public var lossPercent = 0
         public var jitterMilliseconds: Double = 0
         public var outgoingBitrate = 0
-        public var incomingVideoBitrate = 0
 
         public init() {}
     }

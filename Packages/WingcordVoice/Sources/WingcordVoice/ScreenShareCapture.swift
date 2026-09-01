@@ -105,11 +105,6 @@ public final class ScreenShareCapture: NSObject, @unchecked Sendable {
         return targets
     }
 
-    /// Whether the permission is there, without raising the prompt twice.
-    public static func hasPermission() async -> Bool {
-        (try? await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true))
-            != nil
-    }
 
     // MARK: Running
 

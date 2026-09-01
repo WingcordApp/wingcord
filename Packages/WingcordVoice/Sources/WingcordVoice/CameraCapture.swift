@@ -91,14 +91,6 @@ public final class CameraCapture: NSObject, @unchecked Sendable {
         }
     }
 
-    /// Whether the user has already granted the camera.
-    ///
-    /// Asked rather than assumed, because the failure to ask is invisible:
-    /// starting a session without authorisation produces a session that runs and
-    /// delivers black frames.
-    public static var isAuthorized: Bool {
-        AVCaptureDevice.authorizationStatus(for: .video) == .authorized
-    }
 
     public static func requestAccess() async -> Bool {
         await AVCaptureDevice.requestAccess(for: .video)

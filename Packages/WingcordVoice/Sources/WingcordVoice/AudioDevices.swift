@@ -37,10 +37,6 @@ public enum AudioDeviceCatalog {
         devices(input: input).first { $0.uniqueID == uniqueID }
     }
 
-    public static func systemDefault(input: Bool) -> AudioDevice? {
-        devices(input: input).first { $0.isDefault }
-    }
-
     private static func devices(input: Bool) -> [AudioDevice] {
         var address = AudioObjectPropertyAddress(
             mSelector: kAudioHardwarePropertyDevices,
