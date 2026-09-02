@@ -234,10 +234,12 @@ public enum CDN {
         guildBanner(guildID: guildID, hash: hash, width: width, scale: scale)
     }
 
-    /// An app's own icon. Always PNG and small — it is drawn at row size beside
-    /// an emoji it owns.
-    public static func applicationIcon(hash: String) -> URL? {
-        URL(string: "\(host)/app-icons/\(hash).png?size=64")
+    /// An app's own icon.
+    ///
+    /// **Two path segments, not one** — `/app-icons/{application_id}/{hash}`.
+    /// Confirmed against the CDN reference; a hash alone 404s.
+    public static func applicationIcon(id: ApplicationID, hash: String) -> URL? {
+        URL(string: "\(host)/app-icons/\(id.rawValue)/\(hash).png?size=64")
     }
 
     /// The badge that rides inside a clan tag chip.

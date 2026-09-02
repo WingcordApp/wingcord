@@ -64,6 +64,13 @@ final class SessionController {
     private var expressionSourceFetches: Set<UInt64> = []
     /// Connect-instruction fetches in flight, by SKU.
     var gameServerProductFetches: Set<String> = []
+    /// The two connected-apps lists in flight, so a pane appearing twice in one
+    /// beat cannot fire the same fetch twice. Not `private`: read from
+    /// `SessionController+ConnectedApps`, the same way `rulesSubmissions` is
+    /// from `+Actions`.
+    var connectedAppsFetches: Set<ConnectedAppsFetch> = []
+    /// Not `private`: read from `SessionController+Account`.
+    var accountStandingFetchInFlight = false
     /// Rules agreements in flight. Two presses on one button must send once —
     /// this route creates a join request, and a second one is a second request.
     var rulesSubmissions: Set<GuildID> = []
@@ -586,11 +593,15 @@ final class SessionController {
         case .soundboardSoundsChanged(let guildID, let sounds):
             voice.applySoundboard(guildID: guildID, sounds: sounds)
 
-        case .streamViewersChanged(let owner, _, let viewers):
+        case .streamChanged(let owner, _, let key, let session, let viewers):
             voice.applyStreamViewers(owner: owner, viewers: viewers)
+            voice.applyStreamCreated(owner: owner, key: key, session: session)
 
         case .streamEnded(let owner):
             voice.applyStreamEnded(owner: owner)
+
+        case .streamServerChanged(let server):
+            voice.apply(streamServer: server)
 
         case .reactionAdded(let messageID, let channelID, let emoji, let userID):
             model.applyReaction(

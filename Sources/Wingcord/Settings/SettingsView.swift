@@ -449,6 +449,10 @@ private struct SettingsPaneAction: View {
             action("Reveal Logs", symbolName: "folder") {
                 NSWorkspace.shared.activateFileViewerSelecting([CrashReporter.reportDirectory])
             }
+        case .connectedApps:
+            action("Refresh", symbolName: "arrow.clockwise") {
+                model.sessionController.refreshConnectedApps()
+            }
         case .about:
             action("Release Notes", symbolName: "doc.text") {
                 if let url = URL(string: "https://github.com/wingcord/wingcord/releases") {

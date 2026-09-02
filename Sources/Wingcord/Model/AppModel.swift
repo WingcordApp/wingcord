@@ -138,6 +138,12 @@ final class AppModel {
     var liveVideoUserIDs: Set<UserID> = []
     var isCameraOn = false
     var isScreenSharing = false
+    /// Whose screen share the reader has opened, if any.
+    ///
+    /// **One at a time, and it is a media session.** Watching is not a view
+    /// state: it opens a second socket, joins a second MLS group and costs a
+    /// decode, so it lasts exactly as long as somebody is looking at it.
+    var watchedStreamUserID: UserID?
     /// Who the reader pinned to the stage. A share fills it by itself.
     var spotlightUserID: UserID?
     var voiceQuality: VoiceQuality = .idle
@@ -355,6 +361,31 @@ final class AppModel {
     var gameServerConnect: GameServerConnectRequest?
     /// The rules sheet, same.
     var serverRulesGuildID: GuildID?
+
+    // MARK: Connected Apps
+    //
+    // `GET /users/@me/connections` and `GET /oauth2/tokens` — neither is on
+    // READY. Absent means "not asked yet"; empty means "asked, and there is
+    // nothing", exactly like the guild surfaces above — see
+    // `SessionController+ConnectedApps`.
+
+    var connections: [AccountConnection]?
+    var authorizedApps: [AuthorizedApp]?
+    /// Which connection ids have a toggle or an unlink in flight, so a second
+    /// click on the same row while the first is still out cannot race it.
+    var connectionMutationsInFlight: Set<String> = []
+    var authorizedAppRevocationsInFlight: Set<OAuthGrantID> = []
+    /// The "Connect your Domain" sheet — `nil` when it is not up. Its own
+    /// flow, not a mutation-in-flight set: a domain has to be typed before
+    /// there is anything to submit, and its answer is a proof to read rather
+    /// than a row to flip back on failure.
+    var domainConnectionSheet: DomainConnectionSheet?
+
+    /// `GET /safety-hub/@me`. `nil` until it answers — there is no honest
+    /// empty state for this one the way a list has: every account has a real
+    /// standing, so a failure leaves this absent rather than guessing "all
+    /// good", which is the one wrong guess this pane could make.
+    var accountStanding: AccountStanding?
     /// Whose agreement is being sent, and how the last one went.
     ///
     /// One value rather than a flag plus a result: "sending" and "rejected" are

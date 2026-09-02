@@ -21,6 +21,7 @@ enum SettingsSection: String, CaseIterable, Identifiable, Hashable, Sendable {
     case shortcuts
     // Who you are.
     case account
+    case connectedApps
     case privacy
     // What it costs.
     case performance
@@ -42,6 +43,7 @@ enum SettingsSection: String, CaseIterable, Identifiable, Hashable, Sendable {
         case .notifications: "Notifications"
         case .shortcuts: "Shortcuts"
         case .account: "Account"
+        case .connectedApps: "Connected Apps"
         case .privacy: "Privacy"
         case .performance: "Performance"
         case .storage: "Storage"
@@ -62,6 +64,7 @@ enum SettingsSection: String, CaseIterable, Identifiable, Hashable, Sendable {
         case .notifications: "bell.fill"
         case .shortcuts: "keyboard.fill"
         case .account: "person.crop.circle.fill"
+        case .connectedApps: "link"
         case .privacy: "hand.raised.fill"
         case .performance: "speedometer"
         case .storage: "internaldrive.fill"
@@ -86,6 +89,7 @@ enum SettingsSection: String, CaseIterable, Identifiable, Hashable, Sendable {
         case .notifications: Color(hex: 0xFF453A)
         case .shortcuts: Color(hex: 0xA2845E)
         case .account: Color(hex: 0x5E5CE6)
+        case .connectedApps: Color(hex: 0x1D_B9_54)
         case .privacy: Color(hex: 0x30D158)
         case .performance: Color(hex: 0xFF9F0A)
         case .storage: Color(hex: 0x00C7BE)
@@ -109,6 +113,7 @@ enum SettingsSection: String, CaseIterable, Identifiable, Hashable, Sendable {
         case .notifications: "Unread counts, and what is not built yet"
         case .shortcuts: "Every key the app answers to"
         case .account: "Who you are signed in as, on this Mac"
+        case .connectedApps: "Linked accounts, and what you've authorized"
         case .privacy: "What leaves this machine, which is nothing"
         case .performance: "What the app is costing you right now"
         case .storage: "What Wingcord keeps on this Mac, and how to reclaim it"
@@ -131,6 +136,7 @@ enum SettingsSection: String, CaseIterable, Identifiable, Hashable, Sendable {
         case .notifications: "sounds badges alerts mentions"
         case .shortcuts: "keyboard keys bindings navigation"
         case .account: "sign in out switch token keychain"
+        case .connectedApps: "connections spotify steam xbox playstation github twitch authorized apps oauth deauthorize unlink"
         case .privacy: "data telemetry crash reports"
         case .performance: "memory cache inspector frames"
         case .storage: "disk space cache clear reclaim downloads images"
@@ -145,7 +151,7 @@ enum SettingsSection: String, CaseIterable, Identifiable, Hashable, Sendable {
     static let groups: [[SettingsSection]] = [
         [.general, .appearance, .accessibility],
         [.messages, .expressions, .media, .voiceVideo, .notifications, .shortcuts],
-        [.account, .privacy],
+        [.account, .connectedApps, .privacy],
         [.performance, .storage, .diagnostics, .about],
     ]
 }

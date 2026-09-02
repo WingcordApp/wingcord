@@ -121,11 +121,15 @@ extension AppModel {
     /// A source the reader is **not** in, resolved from the fetched answer.
     private static func foreignSource(_ source: ExpressionSource) -> ExpressionInfo.Source? {
         switch source {
-        case .application(let name, let iconHash):
+        case .application(let name, _):
             return ExpressionInfo.Source(
                 guildID: nil,
                 name: name,
-                iconURL: iconHash.flatMap { CDN.applicationIcon(hash: $0) },
+                // No icon: an app-owned emoji's source route decodes a hash but
+                // never the application's own id, and the CDN path needs both —
+                // building a URL from the hash alone is exactly the guess that
+                // 404s. The monogram carries this card until that id is captured.
+                iconURL: nil,
                 monogram: AppModel.monogram(of: name),
                 isJoined: false
             )

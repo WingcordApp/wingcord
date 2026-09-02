@@ -36,6 +36,7 @@ struct SettingsPaneContent: View {
             case .voiceVideo: VoiceVideoPane()
             case .notifications: NotificationsPane()
             case .account: AccountPane()
+            case .connectedApps: ConnectedAppsPane()
             case .privacy: PrivacyPane()
             case .performance: PerformancePane()
             case .accessibility: AccessibilityPane()
@@ -433,6 +434,11 @@ private struct AccountPane: View {
                 )
             }
         }
+
+        SettingsGroup("Standing") {
+            AccountStandingCard(standing: model.accountStanding)
+        }
+        .task { model.sessionController.loadAccountStanding() }
 
         SettingsGroup("Other accounts on this Mac") {
             SettingsCard {

@@ -108,6 +108,20 @@ public enum RoleTag: Sendable {}
 public enum EmojiTag: Sendable {}
 public enum ApplicationTag: Sendable {}
 public enum AttachmentTag: Sendable {}
+/// The RTC server a Go Live stream is allocated on.
+///
+/// Snowflake-shaped and snowflake-encoded — a decimal integer arriving as a
+/// JSON string — but **it is not a snowflake**: nothing mints it from a clock,
+/// so `timestamp` on one means nothing. It is tagged separately so it cannot be
+/// passed where a channel or a guild is wanted, and because the id a stream's
+/// MLS group is keyed on is derived from it rather than equal to it — see
+/// its `rtc_channel_id`, which the same frame carries.
+public enum RTCServerTag: Sendable {}
+/// An OAuth2 grant — `GET /oauth2/tokens`'s own `id`, not the application's.
+/// A genuine snowflake: `DELETE /oauth2/tokens/{id}` takes it, and its
+/// `timestamp` is the only place "authorized on" comes from — the response
+/// carries no date field of its own.
+public enum OAuthGrantTag: Sendable {}
 
 public typealias GuildID = Snowflake<GuildTag>
 public typealias ChannelID = Snowflake<ChannelTag>
@@ -117,3 +131,5 @@ public typealias RoleID = Snowflake<RoleTag>
 public typealias EmojiID = Snowflake<EmojiTag>
 public typealias ApplicationID = Snowflake<ApplicationTag>
 public typealias AttachmentID = Snowflake<AttachmentTag>
+public typealias RTCServerID = Snowflake<RTCServerTag>
+public typealias OAuthGrantID = Snowflake<OAuthGrantTag>

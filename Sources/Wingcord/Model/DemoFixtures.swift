@@ -58,6 +58,7 @@ enum DemoFixtures {
     static func populate(_ model: AppModel) {
         model.connectionState = .ready
         model.selfStatus = .online
+        model.accountStanding = AccountStanding(state: .allGood)
 
         var users: [UserID: User] = [:]
         var userIDs: [UserID] = []
@@ -447,7 +448,19 @@ enum DemoFixtures {
         let guideAuthor = userIDs[1]
         model.guilds[firstGuild]?.ownerID = guideAuthor
         populateGuildSurfaces(model, guildRoles: guildRoles, owner: guideAuthor)
-        populateVoice(model, index: index, guildID: first, me: me, others: userIDs)
+        populateConnectedApps(model)
+        // **The guild that actually HAS a voice channel, not the first one.**
+        // This passed `first` and guarded on finding a voice channel in it, so
+        // when no fixture guild but the last one had a `lobby`, the guard took
+        // the early return and the demo has never once shown a call. That is
+        // why `HANDOFF.md` §0.3 says nobody has ever looked at the encryption
+        // indicator: `--demo` could not draw the surface it lives on.
+        let voiceGuildID = model.guilds.keys.first { guildID in
+            index.channelIDs(inGuild: guildID).contains { index[$0]?.kind == .voice }
+        }
+        populateVoice(
+            model, index: index, guildID: voiceGuildID ?? first, me: me, others: userIDs
+        )
     }
 
     // MARK: A call in progress
@@ -774,6 +787,78 @@ enum DemoFixtures {
                 "Select your server, then click **Connect**.",
             ]
         )
+    }
+
+    // MARK: Connected Apps
+
+    /// Three linked accounts and three authorized apps — fictional, not the
+    /// account this pane was built by reading a capture of. Real snowflakes
+    /// again, spread out enough that "Authorized" reads as three different
+    /// moments instead of three identical ones.
+    private static func populateConnectedApps(_ model: AppModel) {
+        func grantID(_ monthsAgo: UInt64) -> OAuthGrantID {
+            OAuthGrantID(
+                rawValue: (recentMilliseconds - monthsAgo * 2_592_000_000
+                    - Snowflake<OAuthGrantTag>.epochMilliseconds) << 22
+            )
+        }
+        func applicationID(_ seed: UInt64) -> ApplicationID {
+            ApplicationID(rawValue: 700_000_000_000_000_000 + seed * 4_194_304)
+        }
+
+        model.connections = [
+            AccountConnection(
+                id: "demo-spotify-1", type: "spotify", name: "iris.tracklist",
+                isVerified: true, showsActivity: true, isVisibleOnProfile: true,
+                isFriendSyncEnabled: false, isRevoked: false
+            ),
+            AccountConnection(
+                id: "demo-github-1", type: "github", name: "iris-dev",
+                isVerified: true, showsActivity: false, isVisibleOnProfile: true,
+                isFriendSyncEnabled: false, isRevoked: false
+            ),
+            AccountConnection(
+                id: "demo-steam-1", type: "steam", name: "iris",
+                isVerified: true, showsActivity: true, isVisibleOnProfile: false,
+                isFriendSyncEnabled: false, isRevoked: false
+            ),
+        ]
+
+        model.authorizedApps = [
+            AuthorizedApp(
+                id: grantID(1),
+                applicationID: applicationID(1),
+                name: "Watch Together",
+                iconHash: nil,
+                description: "Create and watch shared playlists of YouTube videos with your friends. Your choice to share the remote or not.",
+                isVerified: true,
+                scopes: ["identify", "guilds", "guilds.members.read", "applications.commands", "rpc.activities.write"],
+                termsOfServiceURL: URL(string: "https://discord.com/terms"),
+                privacyPolicyURL: URL(string: "https://discord.com/privacy")
+            ),
+            AuthorizedApp(
+                id: grantID(5),
+                applicationID: applicationID(2),
+                name: "Poker Night",
+                iconHash: nil,
+                description: "A Texas hold 'em style card game with your server.",
+                isVerified: true,
+                scopes: ["identify", "applications.commands", "guilds.members.read", "rpc.voice.read"],
+                termsOfServiceURL: nil,
+                privacyPolicyURL: nil
+            ),
+            AuthorizedApp(
+                id: grantID(14),
+                applicationID: applicationID(3),
+                name: "iris-dashboard.app",
+                iconHash: nil,
+                description: "",
+                isVerified: false,
+                scopes: ["identify", "email", "guilds"],
+                termsOfServiceURL: nil,
+                privacyPolicyURL: nil
+            ),
+        ]
     }
 
     private static func onboardingOption(

@@ -549,7 +549,46 @@ public actor DiscordREST {
         }
     }
 
-    private static func apiFailure(status: Int, data: Data) -> Failure {
+    /// Like `requestData`, but returns the response verbatim — body and
+    /// status both — instead of throwing outside 200..<300.
+    ///
+    /// For the one route whose error envelope carries data the caller still
+    /// needs: `POST /users/@me/connections/domain/{id}` answers "not verified
+    /// yet" with a 4xx that still carries the token the reader has to go
+    /// publish, and `requestData` throwing that body away would throw away
+    /// the only reason to have called it. No 429 retry here — a second
+    /// identical write for one reader-initiated click is not worth the extra
+    /// path, unlike the read-heavy routes above.
+    func requestRaw<Body: Encodable>(
+        method: String,
+        path: String,
+        route: String,
+        body: Body?
+    ) async throws -> (data: Data, statusCode: Int) {
+        await limiter.acquire(route: route)
+        var request = URLRequest(url: metadata.apiBase.appending(path: path))
+        request.httpMethod = method
+        metadata.apply(to: &request, token: token)
+        if let body {
+            request.httpBody = try JSONEncoder().encode(body)
+            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        }
+
+        let data: Data
+        let response: URLResponse
+        do {
+            (data, response) = try await session.data(for: request)
+        } catch {
+            throw Failure.transport(error.localizedDescription)
+        }
+        guard let http = response as? HTTPURLResponse else {
+            throw Failure.transport("no HTTP response")
+        }
+        await limiter.update(route: route, headers: http.allHeaderFields, statusCode: http.statusCode)
+        return (data, http.statusCode)
+    }
+
+    static func apiFailure(status: Int, data: Data) -> Failure {
         struct ErrorEnvelope: Decodable {
             var code: Int?
             var message: String?
