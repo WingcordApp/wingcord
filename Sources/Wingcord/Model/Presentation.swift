@@ -301,6 +301,15 @@ struct ChannelChrome: Hashable, Sendable {
     /// Whether the reader is already in this conversation's call, so the one
     /// control can say "hang up" instead of offering a second call.
     var isInCall: Bool
+    /// Whether somebody else is in this conversation's call right now and the
+    /// reader is not.
+    ///
+    /// **The third state, and leaving out is what made a call unrejoinable.**
+    /// The control was one bit — start or hang up — so after hanging up it
+    /// offered to *start* a call that was already running, which rings a person
+    /// who is sitting in it. Discord says "Join the call" here, and so does
+    /// this: joining an ongoing call must not ring anybody.
+    var isCallOngoing: Bool
     /// Whether this is a voice channel with a chat to show beside it.
     var canShowVoiceChat: Bool
     var isVoiceChatShown: Bool

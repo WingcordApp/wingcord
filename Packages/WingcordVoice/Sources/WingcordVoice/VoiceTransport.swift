@@ -96,12 +96,39 @@ public final class VoiceTransport: @unchecked Sendable {
         }
     }
 
+    /// Datagrams the stack refused, and the first reason it gave.
+    ///
+    /// **`out=` counts calls to this, not packets that left**, and the two are
+    /// not the same number. A session can hand this three thousand datagrams
+    /// and have every one of them dropped by the stack — too large, no route,
+    /// a socket in a state that no longer accepts writes — and report a
+    /// perfectly healthy send count while nothing crosses the wire. That is one
+    /// of the four ways a black screen share looks identical from this end, and
+    /// it was the only one with no counter at all.
+    private let failures = SendFailures()
+
+    /// Built once and reused. `.contentProcessed` costs a completion per
+    /// datagram where `.idempotent` costs none, which on a path carrying a
+    /// hundred and fifty packets a second is worth caring about — but not
+    /// nearly as much as knowing whether they left.
+    private lazy var completion: NWConnection.SendCompletion = .contentProcessed {
+        [failures] error in
+        guard let error else { return }
+        failures.note(error)
+    }
+
+    /// How many datagrams the stack refused since the last call, and why the
+    /// first of them was refused.
+    public func drainSendFailures() -> (count: Int, reason: String?) {
+        failures.drain()
+    }
+
     public func send(_ datagram: Data) {
-        connection.send(content: datagram, completion: .idempotent)
+        connection.send(content: datagram, completion: completion)
     }
 
     public func send(_ datagram: [UInt8]) {
-        connection.send(content: Data(datagram), completion: .idempotent)
+        connection.send(content: Data(datagram), completion: completion)
     }
 
     /// Waits for the flow to come up, or gives up.
@@ -272,5 +299,32 @@ private final class Inbox: Sendable {
             }
             if let ready { continuation.resume(returning: ready) }
         }
+    }
+}
+
+// MARK: - What the stack refused
+
+/// A reference type holding the counter, for the reason `RTCPListener` is one:
+/// `Atomic` and `Mutex` are non-copyable, so a `@Sendable` completion handler
+/// cannot capture one out of an enclosing type without consuming it.
+private final class SendFailures: Sendable {
+    private let count = Atomic<Int>(0)
+    private let reason = Mutex<String?>(nil)
+
+    /// Called on the socket's own queue, once per refused datagram.
+    func note(_ error: NWError) {
+        count.add(1, ordering: .relaxed)
+        reason.withLock { slot in
+            guard slot == nil else { return }
+            slot = error.localizedDescription
+            // The first one, to the unified log as well: by the time anybody
+            // reads a trace the run is over, and this is the shape of failure
+            // that leaves every other number healthy.
+            VoiceTrace.fault("udp send refused: \(error.localizedDescription)")
+        }
+    }
+
+    func drain() -> (count: Int, reason: String?) {
+        (count.exchange(0, ordering: .relaxed), reason.withLock { $0 })
     }
 }

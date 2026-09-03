@@ -119,6 +119,15 @@ public enum VoiceTrace {
     ///
     /// Silent when nothing was dropped, so a healthy call adds no lines at all
     /// and the ones it does add stay worth reading.
+    ///
+    /// **The counts cover every session at once, and the line says so.** These
+    /// are static atomics read from the real-time threads, where a per-session
+    /// lookup would be a cost on the one path that cannot afford one — so a
+    /// call, a share it publishes and a share it watches all add into the same
+    /// numbers, and two of them race to flush. A reader who takes `dropped 10
+    /// ours unkeyed` for the session whose line it happens to sit under will
+    /// diagnose the wrong one; naming it is cheaper than either the lie or the
+    /// refactor.
     static func flushDrops() {
         guard isOn else { return }
         let unkeyed = sendUnkeyed.exchange(0, ordering: .relaxed)
@@ -140,6 +149,6 @@ public enum VoiceTrace {
         if refused > 0 { parts.append("\(refused) theirs refused") }
         if unparsed > 0 { parts.append("\(unparsed) not RTP") }
         if unopenable > 0 { parts.append("\(unopenable) transport would not open") }
-        write("dropped " + parts.joined(separator: ", "))
+        write("dropped, across every session: " + parts.joined(separator: ", "))
     }
 }

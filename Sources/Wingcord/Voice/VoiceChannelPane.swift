@@ -49,6 +49,7 @@ struct VoiceChannelPane: View {
             cameraSession: cameraSession,
             selfUserID: model.currentUserID,
             attachVideo: model.attachVideo,
+            watch: model.toggleWatchingStream,
             spotlight: model.spotlight
         )
         .padding(Spacing.margin)

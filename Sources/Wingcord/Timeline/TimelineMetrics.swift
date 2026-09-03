@@ -9,6 +9,13 @@ import Foundation
 /// produces a transcript that looks *almost* right, which is the hardest kind of
 /// defect to see and the easiest to introduce by keeping two copies of a number.
 nonisolated enum TimelineMetrics {
+    /// The chip a command's name is drawn in, on an interaction header.
+    ///
+    /// Shorter than the line it sits on: it is a token inside a sentence, and a
+    /// chip as tall as its row reads as a button rather than as a word.
+    static let interactionChipHeight: CGFloat = 17
+    static let interactionChipPadding: CGFloat = 5
+
     /// Leading and trailing margin of the transcript.
     static let horizontalMargin: CGFloat = 16
     /// Between the avatar and the text column.

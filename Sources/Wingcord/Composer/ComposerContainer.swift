@@ -65,7 +65,8 @@ struct ComposerContainer: View {
                 // back into an embed. Straight out rather than into the draft:
                 // picking one is the whole message.
                 model.sendMessage(gif.url.absoluteString, in: channelID)
-            }
+            },
+            activityChannelID: channelID
         )
     }
 

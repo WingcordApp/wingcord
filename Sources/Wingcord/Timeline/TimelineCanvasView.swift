@@ -53,6 +53,19 @@ final class TimelineCanvasView: NSView {
     /// Which spoilered attachments have been uncovered, keyed the same way and
     /// deliberately in a separate table — see `TimelineRowPainter.State`.
     private var revealedAttachments: [MessageID: Set<Int>] = [:]
+    /// An application id → the colour its invitation card is ruled with.
+    ///
+    /// Pushed in rather than read from the store: the painter is `nonisolated`
+    /// so a render test can drive it, and a draw loop must not reach for a
+    /// main-actor singleton.
+    private var activityAccents: [ApplicationID: CGColor] = [:]
+    /// What `activityAccents` was built from, kept so the comparison above can
+    /// be an equality rather than a count.
+    private var packedActivityAccents: [ApplicationID: UInt32] = [:]
+    /// The live line each invitation draws, by application, and whether the
+    /// reader is in it. Pushed in and redrawn — never laid out. See
+    /// `ActivityInviteSlot.statusOrigin`.
+    private var activityInviteStatuses: [ApplicationID: ActivityInviteStatus] = [:]
     /// Suppressed while a scroll is running. `.onContinuousHover`-shaped work is
     /// worst exactly during a scroll: a trackpad flick moves no pointer at all
     /// yet drags every row in the list underneath a stationary one, so the
@@ -96,6 +109,8 @@ final class TimelineCanvasView: NSView {
     /// was drawn at — a peek built from any other number looks in a slot nothing
     /// was ever put in.
     var onOpenAttachment: ((MessageID, Int, [CGFloat]) -> Void)?
+    /// The Play button on an activity invitation was pressed.
+    var onPlayActivity: ((MessageID) -> Void)?
     /// A poll answer was chosen.
     var onVote: ((MessageID, Int) -> Void)?
     /// A reaction chip was clicked. The reader's own reaction is toggled.
@@ -153,6 +168,41 @@ final class TimelineCanvasView: NSView {
     override var acceptsFirstResponder: Bool { true }
 
     // MARK: Rows
+
+    /// The invitation colours, when they change.
+    ///
+    /// **Its own entry point, and it only redraws.** The colour is quantised
+    /// from an app's icon asynchronously and arrives after the row is laid out
+    /// and cached — pushing it through `apply(rows:)` would re-lay-out the whole
+    /// transcript for something that changes no geometry at all.
+    /// The invitation lines, when presence moves.
+    ///
+    /// **A redraw, not a re-layout.** The status turns on presence — the most
+    /// frequent event in the app — and the card's height does not depend on it,
+    /// so re-measuring the transcript for it would be the most expensive way to
+    /// change two words. Without this the line was frozen until the reader
+    /// switched channels, which is what made it look broken.
+    func apply(activityInviteStatuses statuses: [ApplicationID: ActivityInviteStatus]) {
+        guard statuses != activityInviteStatuses else { return }
+        activityInviteStatuses = statuses
+        setNeedsDisplay(visibleRect)
+    }
+
+    func apply(activityAccents accents: [ApplicationID: UInt32]) {
+        // Compared as packed values, which are `Equatable`; a `CGColor`
+        // dictionary is not, and this runs on every update.
+        guard accents != packedActivityAccents else { return }
+        packedActivityAccents = accents
+        activityAccents = accents.mapValues {
+            CGColor(
+                srgbRed: CGFloat(($0 >> 16) & 0xFF) / 255,
+                green: CGFloat(($0 >> 8) & 0xFF) / 255,
+                blue: CGFloat($0 & 0xFF) / 255,
+                alpha: 1
+            )
+        }
+        setNeedsDisplay(visibleRect)
+    }
 
     /// Installs a new row list and recomputes the offset table.
     ///
@@ -370,6 +420,14 @@ final class TimelineCanvasView: NSView {
                     state.revealedAttachments = revealedAttachments[messageID] ?? []
                     if hoveredRow == index { state.hoveredComponent = hoveredComponent }
                 }
+                if case .message(let message) = row.kind,
+                   let invite = message.activityInvite {
+                    let application = invite.source.applicationID
+                    state.activityAccent = activityAccents[application]
+                    state.activityInviteStatus = activityInviteStatuses[application]?.line
+                    state.activityInviteIsJoined =
+                        activityInviteStatuses[application]?.isJoined ?? false
+                }
                 TimelineRowPainter.draw(
                     row: row,
                     in: frame,
@@ -460,6 +518,9 @@ final class TimelineCanvasView: NSView {
             if let url { onOpenLink?(.url(url), .zero) }
         case .pollAnswer(let answerID, _):
             if let answerID { onVote?(row.id, answerID) }
+        case .activityInvite(let origin):
+            // `.zero` means the click landed on the card but not on the button.
+            if origin != .zero { onPlayActivity?(row.id) }
         case .reaction(let emoji, _):
             onToggleReaction?(row.id, emoji)
         case .replyHeader(let target):
@@ -517,6 +578,10 @@ final class TimelineCanvasView: NSView {
         /// voted in — the row still swallows the click rather than letting it
         /// fall through to whatever is beneath.
         case pollAnswer(answerID: Int?, origin: CGPoint)
+        /// The Play button on an activity invitation. Carries its origin in row
+        /// space so the painter can light it, exactly as a component button
+        /// does.
+        case activityInvite(origin: CGPoint)
         /// A reaction chip. Clicking it adds or removes the reader's own.
         /// Carries its origin in row space so the painter can light the one
         /// under the pointer — identified by origin, not index, for the reason
@@ -596,6 +661,15 @@ final class TimelineCanvasView: NSView {
         // the click rather than letting it fall through to whatever is beneath.
         for slot in row.components where slot.rect.contains(local) {
             return .component(url: slot.url, origin: slot.rect.origin)
+        }
+
+        // The whole card is a hit, not only the button: a click anywhere on it
+        // must not fall through to the row beneath, and the button is the only
+        // part of it that does anything.
+        if let invite = row.activityInvite, invite.rect.contains(local) {
+            return .activityInvite(
+                origin: invite.buttonRect.contains(local) ? invite.buttonRect.origin : .zero
+            )
         }
 
         if let poll = row.poll, poll.rect.contains(local) {
@@ -695,6 +769,9 @@ final class TimelineCanvasView: NSView {
             case .pollAnswer(let answerID, let origin):
                 component = origin
                 cursor = answerID == nil ? nil : .pointingHand
+            case .activityInvite(let origin):
+                component = origin
+                cursor = origin == .zero ? nil : .pointingHand
             case .reaction(_, let origin):
                 component = origin
                 cursor = .pointingHand

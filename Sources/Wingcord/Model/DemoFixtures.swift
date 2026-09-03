@@ -449,6 +449,7 @@ enum DemoFixtures {
         model.guilds[firstGuild]?.ownerID = guideAuthor
         populateGuildSurfaces(model, guildRoles: guildRoles, owner: guideAuthor)
         populateConnectedApps(model)
+        populateActivities(model)
         // **The guild that actually HAS a voice channel, not the first one.**
         // This passed `first` and guarded on finding a voice channel in it, so
         // when no fixture guild but the last one had a `lobby`, the guard took
@@ -1030,10 +1031,58 @@ enum DemoFixtures {
             ))
         }
 
+        // Two activity invitations at the foot of the transcript. **Two, from
+        // different apps**, because the card's rule and its button are tinted
+        // from the app's own icon — one card proves the path works and two
+        // prove the colour is actually derived rather than a constant.
+        for (offset, invite) in Self.activityInvites.enumerated() {
+            moment.addTimeInterval(90)
+            let milliseconds = UInt64(moment.timeIntervalSince1970 * 1000)
+                - Snowflake<MessageTag>.epochMilliseconds
+            messages.append(Message(
+                id: MessageID(rawValue: (milliseconds << 22) | UInt64(900 + offset)),
+                channelID: channelID,
+                // The app posts it through its own webhook, so the author is
+                // the application rather than whoever pressed Launch.
+                authorID: UserID(rawValue: invite.applicationID.rawValue),
+                kind: .contextMenuCommand,
+                payload: MessagePayload(
+                    activityInvite: invite,
+                    // The header names whoever pressed Launch, which is the
+                    // reader — not the app that posted the row.
+                    interaction: MessageInteraction(
+                        userID: userIDs[0], name: "launch", commandType: 4
+                    )
+                )
+            ))
+        }
+
         box.messages = messages
         box.hasMoreHistory = true
         return box
     }
+
+    /// The bot avatars behind those apps, where a capture recorded one.
+    private static let activityBotAvatars: [ApplicationID: String] = [
+        ApplicationID(rawValue: 880_218_394_199_220_334): "fe2b7fa334817b0346d57416ad75e93b",
+    ]
+
+    /// Real application ids and icon hashes, so the card draws real artwork and
+    /// the quantiser has a real picture to derive a colour from.
+    private static let activityInvites: [ActivityInvite] = [
+        ActivityInvite(
+            applicationID: ApplicationID(rawValue: 880_218_394_199_220_334),
+            name: "Watch Together",
+            iconHash: "ec48acbad4c32efab4275cb9f3ca3a58",
+            instanceID: "i-1544745440824660141-pc-1424759145021837325"
+        ),
+        ActivityInvite(
+            applicationID: ApplicationID(rawValue: 1_211_781_489_931_452_447),
+            name: "Wordle",
+            iconHash: "8904fec86de9bb7a71b2ae1e71a1adbc",
+            instanceID: "i-1544745440824660142-pc-1424759145021837325"
+        ),
+    ]
 
     /// What one fixture message says.
     ///

@@ -572,6 +572,39 @@ struct MessageDTO: Decodable, Sendable {
     var pinned: Bool?
     var webhook_id: UserID?
     var nonce: NonceDTO?
+    /// The app behind an activity invitation. Only ever present on a message
+    /// an application posted, and the invitation card's only source for the
+    /// name and icon it draws — the message itself carries no content, no
+    /// embed and no components.
+    var application: InviteApplicationDTO?
+    /// `{"id": "i-{interaction}-pc-{channel}"}`. Its presence is what makes a
+    /// `type: 23` message an activity invitation rather than an ordinary
+    /// context-menu command.
+    var activity_instance: InstanceDTO?
+    /// **The newer of the two, and the one to prefer.** Discord sends both on a
+    /// launch and has been removing `interaction`; a client reading only the
+    /// old key loses the header when it goes.
+    var interaction_metadata: InteractionDTO?
+    var interaction: InteractionDTO?
+
+    struct InviteApplicationDTO: Decodable, Sendable {
+        var id: ApplicationID?
+        var name: String?
+        var icon: String?
+    }
+
+    struct InstanceDTO: Decodable, Sendable {
+        var id: String?
+    }
+
+    /// `interaction_metadata`, and the older `interaction` beside it.
+    struct InteractionDTO: Decodable, Sendable {
+        var name: String?
+        var user: UserDTO?
+        /// Only on `interaction_metadata`; the legacy object has `type`
+        /// instead, which means something else.
+        var command_type: Int?
+    }
 
     struct ReferenceDTO: Decodable, Sendable {
         /// 0 is a reply, 1 is a forward. Absent means 0 — the field postdates
@@ -660,7 +693,9 @@ struct MessageDTO: Decodable, Sendable {
             reference: replyReference,
             forwarded: forwardedMessage,
             webhookID: webhook_id,
-            nonce: nonce?.text
+            nonce: nonce?.text,
+            activityInvite: activityInvite,
+            interaction: messageInteraction
         )
         return Message(
             id: id,
@@ -695,6 +730,39 @@ struct MessageDTO: Decodable, Sendable {
             excerpt: MessageReference.excerpt(of: quoted?.content ?? ""),
             hasAttachment: !(quoted?.attachments?.isEmpty ?? true)
                 || !(quoted?.sticker_items?.isEmpty ?? true)
+        )
+    }
+
+    /// The invitation card's inputs, or nil for every message that is not one.
+    ///
+    /// **Gated on `activity_instance`, not on the message type.** A `type: 23`
+    /// is a context-menu command — an app's reply to somebody right-clicking a
+    /// message — and the overwhelming majority of them are not activities. The
+    /// instance is the thing that says a launch happened, and the card cannot
+    /// draw without it anyway.
+    private var activityInvite: ActivityInvite? {
+        guard let activity_instance, let application,
+              let applicationID = application.id,
+              let name = application.name, !name.isEmpty
+        else { return nil }
+        return ActivityInvite(
+            applicationID: applicationID,
+            name: name,
+            iconHash: application.icon,
+            instanceID: activity_instance.id
+        )
+    }
+
+    /// Who ran the command this message answers.
+    private var messageInteraction: MessageInteraction? {
+        guard let source = interaction_metadata ?? interaction,
+              let name = source.name, !name.isEmpty,
+              let userID = source.user?.id
+        else { return nil }
+        return MessageInteraction(
+            userID: userID,
+            name: name,
+            commandType: source.command_type ?? 1
         )
     }
 
@@ -751,6 +819,15 @@ struct ActivityDTO: Decodable, Sendable {
     var assets: Assets?
     var emoji: EmojiDTO?
     var timestamps: Timestamps?
+    var party: PartyDTO?
+
+    /// `size` is `[current, maximum]`. The id is carried but not read: apps
+    /// spell it however they like — Watch Together sends the instance reversed
+    /// and comma-joined — so it is not a key this client can match on.
+    struct PartyDTO: Decodable, Sendable {
+        var id: String?
+        var size: [Int]?
+    }
 
     struct Assets: Decodable, Sendable {
         var large_image: String?
@@ -775,7 +852,8 @@ struct ActivityDTO: Decodable, Sendable {
             emoji: emoji?.domain,
             // Discord sends milliseconds; a client that reads them as seconds
             // dates every activity to 1970 and every "elapsed" reads as decades.
-            startedAt: timestamps?.start.map { Date(timeIntervalSince1970: $0 / 1000) }
+            startedAt: timestamps?.start.map { Date(timeIntervalSince1970: $0 / 1000) },
+            partySize: party?.size.map { Array($0.prefix(2)) }
         )
     }
 }

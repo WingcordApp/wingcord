@@ -21,6 +21,8 @@ struct VoiceTileGrid: View {
     var cameraSession: AVCaptureSession?
     var selfUserID: UserID?
     var attachVideo: (UserID, (@Sendable (CMSampleBuffer) -> Void)?) -> Void
+    /// Opens or closes somebody's screen share. Nil where watching cannot work.
+    var watch: ((UserID) -> Void)?
     var spotlight: (UserID?) -> Void
 
     @Environment(\.motion) private var motion
@@ -111,6 +113,7 @@ struct VoiceTileGrid: View {
             effectName: effects[participant.id],
             cameraSession: participant.id == selfUserID ? cameraSession : nil,
             attachVideo: attachVideo,
+            watch: watch,
             isCompact: isCompact
         )
         // The whole of the travel. Keyed on the person, so a tile moving from
@@ -118,9 +121,17 @@ struct VoiceTileGrid: View {
         // continuous movement rather than one view leaving and another arriving.
         .matchedGeometryEffect(id: participant.id, in: tiles)
         // Spatial symmetry: a tile grows out of nothing at its own place and
-        // shrinks back into it. `materialize` scales and blurs together, which
-        // is how a surface reads as condensing rather than being cross-faded on.
-        .transition(.materialize(from: .center))
+        // shrinks back into it.
+        //
+        // **Without the blur, and that is not a taste decision.** `materialize`
+        // normally scales and blurs together, and a blur forces an offscreen
+        // pass — inside which this tile's `.ultraThinMaterial` ground has no
+        // backdrop to sample and paints black, at the layer's own square bounds
+        // rather than the rounded clip. That is a dark, hard-cornered rectangle
+        // inset by the 0.90 scale, sitting inside the rounded tile: exactly
+        // what a photograph of the running app showed. §4, and the rule that
+        // anything rasterising glass destroys it.
+        .transition(.materialize(from: .center, blurring: false))
         .onTapGesture(count: 2) {
             // Double-click to fill the stage, and again to let go of it. A
             // single click would fight the pointer's own hover, and a button

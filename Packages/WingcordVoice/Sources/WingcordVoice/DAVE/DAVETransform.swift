@@ -356,7 +356,125 @@ final class DAVEDecryptor: Sendable {
         }
     }
 
-    private static func hex(_ bytes: some Sequence<UInt8>) -> String {
+    /// Whether some candidate slice of a packet would have opened under a key
+    /// this decryptor holds.
+    ///
+    /// **For `DAVEProbe` and nothing else.** It touches no counter, no replay
+    /// window and no one-shot report, because the real path must never get a
+    /// second chance at a frame: a receiver that retries is a receiver whose
+    /// replay window means nothing. Everything here is a read.
+    func canOpen(_ frame: [UInt8]) -> Bool {
+        guard let parsed = InboundFrame(parsing: frame) else { return false }
+        let generation = DAVE.generation(of: parsed.truncatedNonce)
+        let nonce = DAVE.fullNonce(from: parsed.truncatedNonce)
+        return state.withLock { state in
+            for window in state.windows.reversed() {
+                let wrapped = DAVE.wrappedGeneration(
+                    oldest: window.oldestGeneration, generation: generation
+                )
+                guard let key = window.key(for: wrapped, now: Date()),
+                      DAVECipher.open(
+                          ciphertext: parsed.ciphertext,
+                          tag: parsed.tag,
+                          key: key,
+                          nonce: nonce,
+                          authenticating: parsed.authenticated
+                      ) != nil
+                else { continue }
+                return true
+            }
+            return false
+        }
+    }
+
+    static func hex(_ bytes: some Sequence<UInt8>) -> String {
         bytes.map { String(format: "%02x", $0) }.joined()
+    }
+}
+
+// MARK: - Why the first refused frame refused
+
+/// A one-shot post-mortem on the first frame of a call that parses as a DAVE
+/// frame and then will not open.
+///
+/// **The key derivation is not the suspect any more.** Every step of it is
+/// pinned line by line against `libdave`'s `session.cpp`, `mls_key_ratchet.cpp`
+/// and `mlspp`'s `key_schedule.cpp`, and the epoch secret underneath it is
+/// proved by the welcome's confirmation tag verifying — a MAC under a sibling
+/// of the very secret the media keys are exported from. What is left that can
+/// be wrong is **which bytes** were handed to the transform: the transport
+/// hands over a decrypted payload that still carries the RTP extension elements
+/// at the front and, sometimes, padding at the back, and the frame is what is
+/// left when both are taken off.
+///
+/// So this tries the boundaries either side of the one that was chosen and says
+/// which — if any — opens. A win names the fix exactly. A clean sweep is worth
+/// as much: it rules the boundary out, and the hex below is then the whole
+/// frame, in one line, for reading by hand.
+///
+/// **Once per call, and only while tracing is on.** Sixteen parses and at most
+/// thirty-two AES calls, on a path that is otherwise handling fifty frames a
+/// second, is affordable exactly once.
+enum DAVEProbe {
+    /// - Parameters:
+    ///   - payload: the transport's plaintext, before anything was trimmed.
+    ///   - head: how many bytes were taken off the front — the extension body.
+    ///   - tail: how many were taken off the back — the RTP padding.
+    /// - Returns: the boundary that opened the frame, or `nil` if none did.
+    ///   Returned as well as traced so a test can prove this finds a boundary
+    ///   it was given wrong — a post-mortem that cannot detect its own subject
+    ///   is worse than none, because it reads as an answer.
+    @discardableResult
+    static func explain(
+        payload: [UInt8],
+        head: Int,
+        tail: Int,
+        with decryptor: DAVEDecryptor
+    ) -> (head: Int, tail: Int)? {
+        // Every plausible front boundary: none at all, the one that was chosen,
+        // and each whole extension word either side of it — RFC 8285 counts the
+        // body in 32-bit words, so a boundary that is wrong is wrong by four.
+        let heads = Self.candidates(
+            [0, head, head - 4, head + 4, head - 8, head + 8] + stride(from: 4, through: 16, by: 4),
+            limit: payload.count
+        )
+        // And every plausible back one: as read, not trimmed at all, and
+        // trimmed by whatever the final octet claims. **That last is not the
+        // same as `tail`.** A padded payload arriving with the P bit clear
+        // reads as `tail == 0` and is the one case the trim cannot see, and it
+        // is exactly the shape a receiver would never notice: the footer still
+        // parses, because the footer is read from the end either way.
+        let tails = Self.candidates(
+            [tail, 0, payload.last.map(Int.init) ?? 0], limit: payload.count
+        )
+
+        for candidateHead in heads {
+            for candidateTail in tails {
+                let end = payload.count - candidateTail
+                guard candidateHead < end else { continue }
+                guard decryptor.canOpen(Array(payload[candidateHead..<end])) else { continue }
+                VoiceTrace.fault(
+                    "dave probe: the frame opens at head=\(candidateHead) tail=\(candidateTail), "
+                    + "not head=\(head) tail=\(tail)"
+                )
+                return (candidateHead, candidateTail)
+            }
+        }
+        // **A clean sweep is worth as much as a win.** It rules the boundary
+        // out, and then the only thing left to do is read the bytes — so they
+        // are here, whole, in one line, once.
+        VoiceTrace.fault(
+            "dave probe: no boundary in \(heads.count) × \(tails.count) opens it; "
+            + "payload head=\(head) tail=\(tail) len=\(payload.count) "
+            + DAVEDecryptor.hex(payload)
+        )
+        return nil
+    }
+
+    /// The offsets worth trying, in the order given, without repeats and
+    /// without any that fall outside the payload.
+    private static func candidates(_ offsets: some Sequence<Int>, limit: Int) -> [Int] {
+        var seen: Set<Int> = []
+        return offsets.filter { $0 >= 0 && $0 < limit && seen.insert($0).inserted }
     }
 }

@@ -30,9 +30,14 @@ final class SessionController {
     /// extension in another file. The controller is one object with one owner;
     /// what the visibility buys is that its 1,500 lines are not also one file.
     unowned let model: AppModel
-    private let metadata = ClientMetadata()
+    /// `internal` alongside `rest` and `socket`: the directory routes are
+    /// locale-scoped, and the locale lives here.
+    let metadata = ClientMetadata()
     let rest: DiscordREST
-    private var socket: GatewaySocket?
+    /// `internal` for the same reason `rest` and `model` are: a group of
+    /// routes lives in an extension in another file. The launch needs the
+    /// gateway's session id, and an interaction without one is refused.
+    var socket: GatewaySocket?
     private var eventTask: Task<Void, Never>?
     private var isTornDown = false
 
@@ -58,6 +63,12 @@ final class SessionController {
     private var profileFetches: Set<UserID> = []
     private var collectibleFetches: Set<String> = []
     private var paletteFetches: Set<URL> = []
+    /// The same guard for an activity's icon. Keyed by application rather than
+    /// by URL because an app has one icon and the card asks for it once.
+    var activityAccentFetches: Set<ApplicationID> = []
+    /// A launch whose instance id has not arrived yet. See
+    /// `awaitActivityInstance`; at most one, because a launch is a click.
+    var pendingActivityLaunch: PendingActivityLaunch?
     /// Server-tag fetches in flight. A busy channel can show one tag on twenty
     /// consecutive rows; every one of them must share a single request.
     private var guildProfileFetches: Set<GuildID> = []
@@ -536,6 +547,13 @@ final class SessionController {
 
     private func apply(_ update: GatewayUpdate) {
         switch update {
+        case .interactionAcknowledged(let id, let nonce):
+            // A launch this client is waiting on. This arrives for **every**
+            // entry point — including the `handler: 1` kind that posts no
+            // invitation message at all — and about four hundred milliseconds
+            // after the interaction rather than whenever a message lands.
+            resolveActivityLaunch(interaction: id, nonce: nonce)
+
         case .messageCreated(let message, let author, let quotedAuthor, _, _):
             let merged = author.merged(over: model.users[author.id])
             if model.users[author.id] != merged {
@@ -553,6 +571,10 @@ final class SessionController {
             model.channelIndex.patchLastMessage(message.id, in: message.channelID)
             model.messageContentRevision &+= 1
             bumpUnread(for: message)
+            // A launch this client is still waiting on: the invitation message
+            // is the only thing that carries the instance Discord actually
+            // minted. See `awaitActivityInstance`.
+            resolveActivityLaunch(with: message)
 
         case .messageUpdated(let message):
             // An edit arrives as a PARTIAL message: only the fields that changed
@@ -1146,8 +1168,17 @@ final class SessionController {
         let status = model.selfStatus.rawValue
         let text = model.selfCustomStatus
         let emoji = model.selfCustomStatusEmoji
+        // **The activity rides along.** `activities` is one array and the write
+        // replaces all of it, so publishing a status without the running
+        // activity would erase it from everybody's roster.
+        let activity = model.publishedActivity
         Task {
-            await socket.updatePresence(status: status, customStatus: text, customEmoji: emoji)
+            await socket.updatePresence(
+                status: status,
+                customStatus: text,
+                customEmoji: emoji,
+                activity: activity
+            )
         }
     }
 

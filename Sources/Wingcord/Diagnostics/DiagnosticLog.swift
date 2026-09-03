@@ -15,6 +15,7 @@ import Foundation
 /// tail -f ~/Library/Application\ Support/Wingcord/Diagnostics/session.log
 /// ```
 nonisolated enum DiagnosticLog {
+
     /// Enabled by the defaults key or by the environment variable, so it can be
     /// turned on for a Finder launch *or* a terminal one.
     static let isEnabled: Bool =

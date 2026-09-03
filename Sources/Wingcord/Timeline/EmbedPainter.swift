@@ -320,6 +320,202 @@ nonisolated extension TimelineRowPainter {
 /// life.
 nonisolated extension TimelineRowPainter {
 
+    /// An activity invitation.
+    ///
+    /// **A coloured rule, not a flood.** The reference client fills the whole
+    /// card with a gradient of the app's colour; an embed in this app already
+    /// says "this belongs to somebody" with a bar down its leading edge, and
+    /// one vocabulary for one idea beats a resemblance. It also stays legible
+    /// on every theme, which a full-bleed fill of an arbitrary app's colour
+    /// does not.
+    static func drawActivityInvite(
+        _ slot: ActivityInviteSlot,
+        offset: CGPoint,
+        context: CGContext,
+        style: MessageTextStyle,
+        accent: CGColor?,
+        status: String?,
+        isJoined: Bool,
+        hovered: CGPoint?,
+        images: ImageStore,
+        scale: CGFloat
+    ) {
+        let ink = ThemeInk.current
+        let frame = slot.rect.offsetBy(dx: offset.x, dy: offset.y)
+        let corner = EmbedLayoutEngine.corner
+
+        context.saveGState()
+        context.addPath(CGPath(
+            roundedRect: frame, cornerWidth: corner, cornerHeight: corner, transform: nil
+        ))
+        context.setFillColor(ink.cardFill)
+        context.fillPath()
+
+        // The rule is clipped to the card's own rounded path, so its top and
+        // bottom follow the corner rather than squaring it off.
+        context.addPath(CGPath(
+            roundedRect: frame, cornerWidth: corner, cornerHeight: corner, transform: nil
+        ))
+        context.clip()
+        context.setFillColor(accent ?? ink.accent)
+        context.fill(CGRect(
+            x: frame.minX,
+            y: frame.minY,
+            width: ActivityInviteLayoutEngine.rule,
+            height: frame.height
+        ))
+        context.restoreGState()
+
+        // The icon, with the monogram behind it until it lands.
+        let iconRect = slot.iconRect.offsetBy(dx: offset.x, dy: offset.y)
+        context.saveGState()
+        context.addPath(CGPath(
+            roundedRect: iconRect,
+            cornerWidth: ActivityInviteLayoutEngine.iconCorner,
+            cornerHeight: ActivityInviteLayoutEngine.iconCorner,
+            transform: nil
+        ))
+        context.clip()
+        context.setFillColor(ink.surfaceRaised)
+        context.fill(iconRect)
+        if let url = slot.iconURL,
+           let image = images.cached(
+               ImageStore.Key(
+                   url: url,
+                   maximumPixelSize: Int(ActivityInviteLayoutEngine.iconSide * scale)
+               ),
+               bucket: .thumbnail
+           ) {
+            // **Through the one flip.** Core Graphics origins an image at the
+            // bottom-left and this canvas is flipped, so a bare `draw(_:in:)`
+            // comes out upside down — invisible on a symmetric mark and
+            // unmissable on a strawberry. `INVARIANTS.md` §4.5.
+            TimelineRowPainter.drawFlipped(image, in: iconRect, context: context)
+        } else {
+            drawTextFrame(
+                slot.monogram,
+                at: CGPoint(
+                    x: offset.x + slot.monogramOrigin.x,
+                    y: offset.y + slot.monogramOrigin.y
+                ),
+                context: context,
+                images: images,
+                scale: scale
+            )
+        }
+        context.restoreGState()
+
+        drawTextFrame(
+            slot.title,
+            at: CGPoint(x: offset.x + slot.titleOrigin.x, y: offset.y + slot.titleOrigin.y),
+            context: context,
+            images: images,
+            scale: scale
+        )
+        // The live line, painted rather than laid out — see `statusOrigin`.
+        if let status, !status.isEmpty {
+            drawLine(
+                status,
+                font: style.metadataFont,
+                color: style.secondaryColor,
+                at: CGPoint(x: offset.x + slot.statusOrigin.x, y: offset.y + slot.statusOrigin.y),
+                maxWidth: slot.statusWidth,
+                style: style,
+                context: context,
+                images: images,
+                scale: scale
+            )
+        }
+        // The button. Tinted with the app's own colour at a low alpha rather
+        // than filled with it: the label has to stay readable against whatever
+        // an arbitrary developer's icon happens to be.
+        let buttonRect = slot.buttonRect.offsetBy(dx: offset.x, dy: offset.y)
+        let isHovered = hovered == slot.buttonRect.origin
+        context.addPath(CGPath(
+            roundedRect: buttonRect,
+            cornerWidth: ActivityInviteLayoutEngine.buttonCorner,
+            cornerHeight: ActivityInviteLayoutEngine.buttonCorner,
+            transform: nil
+        ))
+        let tint = accent ?? ink.accent
+        context.setFillColor(tint.copy(alpha: isHovered ? 0.42 : 0.28) ?? tint)
+        context.fillPath()
+
+        if isJoined {
+            // "Joined" rather than "Play": a button offering what somebody
+            // already has is a control that cannot do anything. Painted for the
+            // same reason the status line is — it turns on presence.
+            drawLine(
+                "Joined",
+                font: NSFont.systemFont(
+                    ofSize: style.bodyFont.pointSize, weight: .semibold
+                ),
+                color: style.primaryColor,
+                at: CGPoint(
+                    x: offset.x + slot.buttonRect.minX,
+                    y: offset.y + slot.buttonLabelOrigin.y
+                ),
+                maxWidth: slot.buttonRect.width,
+                centred: true,
+                style: style,
+                context: context,
+                images: images,
+                scale: scale
+            )
+        } else {
+            drawTextFrame(
+                slot.buttonLabel,
+                at: CGPoint(
+                    x: offset.x + slot.buttonLabelOrigin.x,
+                    y: offset.y + slot.buttonLabelOrigin.y
+                ),
+                context: context,
+                images: images,
+                scale: scale
+            )
+        }
+    }
+
+    /// One line of plain text, laid out at paint time.
+    ///
+    /// **For text whose CONTENT changes without the geometry changing.** A
+    /// block built during layout is frozen there, which is right for a message
+    /// body and wrong for a line that turns on presence — the invitation card's
+    /// status and its Joined/Play word both do.
+    ///
+    /// **It builds a real `TimelineTextBlock` rather than driving CoreText by
+    /// hand.** The first attempt did the latter and drew nothing at all: a
+    /// `CTFrame` whose path is exactly one line tall drops the line, because
+    /// the leading does not fit. Reusing the path every other run of text in
+    /// this file goes through is both correct and one line of code.
+    ///
+    /// The cost is one measurement per draw, and only on rows that carry an
+    /// invitation — which are rare, and none of them is in a scroll loop.
+    private static func drawLine(
+        _ text: String,
+        font: NSFont,
+        color: NSColor,
+        at origin: CGPoint,
+        maxWidth: CGFloat,
+        centred: Bool = false,
+        style: MessageTextStyle,
+        context: CGContext,
+        images: ImageStore,
+        scale: CGFloat
+    ) {
+        let paragraph = NSMutableParagraphStyle()
+        paragraph.alignment = centred ? .center : .natural
+        paragraph.lineBreakMode = .byTruncatingTail
+        let block = TimelineTextBlock(
+            text: .plain(NSAttributedString(string: text, attributes: [
+                .font: font, .foregroundColor: color, .paragraphStyle: paragraph,
+            ])),
+            width: maxWidth,
+            style: style
+        )
+        drawTextFrame(block, at: origin, context: context, images: images, scale: scale)
+    }
+
     static func drawPoll(
         _ slot: PollSlot,
         offset: CGPoint,

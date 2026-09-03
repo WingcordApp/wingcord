@@ -81,6 +81,14 @@ struct MessageActionPresenter: ViewModifier {
                 ReportSheet(request: request)
                     .environment(model)
             }
+            // Raised by a running activity asking for a grant, not by anything
+            // in this file — it lives here because this is where the window's
+            // sheets are presented from, and a second presenter would be a
+            // second place for two sheets to fight over the window.
+            .sheet(item: $model.activityConsent) { request in
+                ActivityConsentSheet(request: request)
+                    .environment(model)
+            }
             .alert(
                 deletion?.isOwn == true ? "Delete your message?" : "Delete this message?",
                 isPresented: Binding(

@@ -538,6 +538,21 @@ final class AppSettings {
             }
         }
 
+        /// What the encoder is given and what op 12 announces.
+        ///
+        /// **It was never set, and the engine's 2 Mbit default stood for every
+        /// quality.** 480p at two megabits is twice what it needs and 1080p is
+        /// half, so one setting was overspending and another was starving —
+        /// neither visibly, because a bitrate is not something a reader can see
+        /// being wrong.
+        var bitrate: Int {
+            switch self {
+            case .standard: 1_000_000
+            case .high: 2_500_000
+            case .full: 4_000_000
+            }
+        }
+
         var label: String {
             switch self {
             case .standard: "480p"

@@ -15,6 +15,14 @@ struct TimelineContainer: View {
             channelID: channelID,
             rows: model.timelineRows(for: channelID),
             presentationRevision: presentation.value,
+            // Read here so the container is what observes it: a colour landing
+            // has to re-evaluate *something* SwiftUI owns, or the drawn canvas
+            // is never told. See `AppModel.activityAccents`.
+            activityAccents: model.activityAccents,
+            // Read here so the container observes `presences`: the status turns
+            // on presence, and a drawn canvas is only told what SwiftUI
+            // re-evaluates.
+            activityInviteStatuses: model.activityInviteStatuses(in: channelID),
             topInset: topInset,
             bottomInset: bottomInset,
             // Read narrowly: a jump for a different channel is not this

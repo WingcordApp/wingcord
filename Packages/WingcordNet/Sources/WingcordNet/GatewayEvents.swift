@@ -15,6 +15,13 @@ import WingcordCore
 struct GatewayFrame: Decodable, Sendable {
     var opcode: Int
     var sequence: Int?
+    /// The dispatch's `t`, kept so a trace line can name what arrived.
+    ///
+    /// **A log of `op=0 seq=205 bytes=692` says nothing.** Four hundred of
+    /// those lines cannot answer "did `STREAM_CREATE` ever arrive", which is
+    /// the one question a Go Live session needs them for. The string is already
+    /// decoded to pick the payload case; storing it costs a retain.
+    var name: String?
     var payload: Payload
 
     enum Payload: Sendable {
@@ -25,6 +32,16 @@ struct GatewayFrame: Decodable, Sendable {
         case ready(ReadyPayload)
         case resumed
         case messageCreate(MessageDTO)
+        /// The server acknowledging an interaction this client sent.
+        ///
+        /// **`id` is the interaction's own snowflake, and for an activity
+        /// launch that IS the instance.** `POST /interactions` answers `204`
+        /// with no body, so this dispatch is the only thing that names it —
+        /// and unlike the invitation message it arrives for *every* entry
+        /// point, including the `handler: 1` kind that posts no message at all.
+        /// `nonce` echoes what the launch sent, which is how a client tells its
+        /// own interaction from anybody else's.
+        case interactionSuccess(InteractionAckPayload)
         case messageUpdate(MessageDTO)
         case messageDelete(MessageDeletePayload)
         case messageReactionAdd(ReactionEventPayload)
@@ -66,6 +83,10 @@ struct GatewayFrame: Decodable, Sendable {
         /// ended. The **only** signal for "somebody is watching me".
         case streamUpsert(StreamEventDTO)
         case streamDelete(StreamEventDTO)
+        /// Where **a Go Live stream's own media session** lives. A stream is a
+        /// separate session from the call carrying it, with its own endpoint
+        /// and token, and this is the only frame that names them.
+        case streamServerUpdate(StreamServerUpdateDTO)
         /// Anything this client does not act on. `d` is never decoded.
         case unhandled(name: String?)
     }
@@ -83,6 +104,7 @@ struct GatewayFrame: Decodable, Sendable {
         opcode = try container.decode(Int.self, forKey: .op)
         sequence = try container.decodeIfPresent(Int.self, forKey: .s)
         let name = try container.decodeIfPresent(String.self, forKey: .t)
+        self.name = name
 
         switch opcode {
         case 10:
@@ -116,6 +138,8 @@ struct GatewayFrame: Decodable, Sendable {
         case "READY": payload = .ready(try decode(ReadyPayload.self))
         case "RESUMED": payload = .resumed
         case "MESSAGE_CREATE": payload = .messageCreate(try decode(MessageDTO.self))
+        case "INTERACTION_SUCCESS":
+            payload = .interactionSuccess(try decode(InteractionAckPayload.self))
         case "MESSAGE_UPDATE": payload = .messageUpdate(try decode(MessageDTO.self))
         case "MESSAGE_DELETE": payload = .messageDelete(try decode(MessageDeletePayload.self))
         case "MESSAGE_REACTION_ADD":
@@ -160,6 +184,8 @@ struct GatewayFrame: Decodable, Sendable {
             payload = .streamUpsert(try decode(StreamEventDTO.self))
         case "STREAM_DELETE":
             payload = .streamDelete(try decode(StreamEventDTO.self))
+        case "STREAM_SERVER_UPDATE":
+            payload = .streamServerUpdate(try decode(StreamServerUpdateDTO.self))
         default: payload = .unhandled(name: name)
         }
     }
@@ -358,4 +384,12 @@ public struct GuildSoundboardPayload: Decodable, Sendable {
     public var catalog: [SoundboardSound] {
         (soundboard_sounds ?? []).map(\.domain)
     }
+}
+
+
+/// `INTERACTION_SUCCESS`. Captured as 98 bytes on the wire —
+/// `{"nonce":"…","id":"…"}` and nothing else.
+public struct InteractionAckPayload: Decodable, Sendable {
+    public var id: String?
+    public var nonce: String?
 }

@@ -66,6 +66,11 @@ extension AppModel {
             // them from this table — a quoted author left out of it draws
             // "Unknown" over a grey circle on a person the store already knows.
             resolve(message.message.authorID, into: &result)
+            // Whoever ran the command, for the "alex used launch" header —
+            // which is a *different* person from the app that posted the row.
+            if let invoker = message.message.interaction?.userID {
+                resolve(invoker, into: &result)
+            }
             if let quoted = message.message.reference?.authorID {
                 resolve(quoted, into: &result)
             }

@@ -26,6 +26,9 @@ struct VoiceTile: View {
     /// Nil unless this is the reader's own tile with a camera on.
     var cameraSession: AVCaptureSession?
     var attachVideo: (UserID, (@Sendable (CMSampleBuffer) -> Void)?) -> Void
+    /// Opens or closes this person's screen share. Nil where watching cannot
+    /// work at all — §5.5: a control that cannot work must not be drawn.
+    var watch: ((UserID) -> Void)?
     /// How big the face is drawn, as a fraction of the tile's short side.
     var isCompact = false
 
@@ -47,16 +50,100 @@ struct VoiceTile: View {
             .overlay(alignment: .bottomLeading) { namePill }
             .overlay(alignment: .topTrailing) { marks }
             .overlay(alignment: .top) { effectChip }
+            .overlay { watchAction }
         }
         .onHover { hovering in
             guard isHovering != hovering else { return }
             isHovering = hovering
         }
-        .animation(motion.hover, value: isHovering)
+        // **The hover animation is scoped to the edge, which is the only thing
+        // that reads it.** Applied here it animated the whole tile — the
+        // `.ultraThinMaterial` ground included — and a material inside an
+        // animated, rasterized subtree has no backdrop to sample and paints
+        // **black**. §4: glass is composited against what is behind it, so
+        // anything that forces it offscreen turns it into a black rectangle.
+        // It was also invalidation nobody asked for: one bool that moves a
+        // stroke from 0.08 to 0.16 opacity, re-running a tile carrying video.
         .animation(motion.standard, value: participant.isSpeaking)
         .animation(motion.standard, value: participant.showsVideo)
+        .animation(motion.standard, value: participant.isWatched)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(Text(accessibilityLabel))
+        // **The button inside is invisible to VoiceOver**, because this tile
+        // takes its children's place. The action is what makes the share
+        // reachable without a pointer, and it carries the same words the
+        // control does.
+        .accessibilityActions {
+            if let watch, participant.canWatch {
+                Button(watchLabel) { watch(participant.id) }
+            }
+        }
+    }
+
+    // MARK: Opening a share
+
+    /// Shown between asking for somebody's share and its first frame.
+    @ViewBuilder
+    private var watchProgress: some View {
+        if participant.isWatched, !participant.showsVideo {
+            HStack(spacing: Spacing.tight) {
+                ProgressView().controlSize(.small)
+                Text("Opening share…")
+                    .font(.system(isCompact ? .caption2 : .subheadline, weight: .medium))
+                    .foregroundStyle(Ink.secondary)
+            }
+            .padding(.horizontal, Spacing.base)
+            .padding(.vertical, Spacing.tight + 1)
+            .background { Capsule().fill(Palette.selectionFill) }
+            .padding(.bottom, isCompact ? Spacing.tight : Spacing.snug)
+            .transition(.materialize(from: .bottom, blurring: false))
+            .accessibilityHidden(true)
+        }
+    }
+
+    private var watchLabel: String {
+        participant.isWatched ? "Stop Watching" : "Watch Stream"
+    }
+
+    /// The control that opens somebody's screen share.
+    ///
+    /// **On hover, and a button rather than the tile itself.** Watching opens a
+    /// second socket, joins a second MLS group and starts a decode — §1.5's
+    /// "opening a voice channel does not join it", one surface over: a cost
+    /// like that is not something to incur by clicking near something. The tile
+    /// keeps its double-click for the stage.
+    ///
+    /// **A capsule, not a second glass body.** In the call overlay this tile
+    /// already sits inside the panel's one `glassEffect`, and §4's rule is one
+    /// body per surface — glass on glass has nothing left to lens. `marks` next
+    /// to it makes the same choice for the same reason.
+    @ViewBuilder
+    private var watchAction: some View {
+        if let watch, participant.canWatch, isHovering {
+            Button {
+                watch(participant.id)
+            } label: {
+                Label(watchLabel, systemImage: participant.isWatched
+                    ? "eye.slash.fill" : "play.rectangle.fill")
+                    .font(.system(isCompact ? .caption2 : .subheadline, weight: .semibold))
+                    .foregroundStyle(InkColor.primary)
+                    .padding(.horizontal, isCompact ? Spacing.tight + 2 : Spacing.base)
+                    .padding(.vertical, isCompact ? 2 : Spacing.tight + 1)
+                    .background {
+                        // Over a picture the ground is a fixed scrim, because a
+                        // sampled material over moving frames re-blurs every one
+                        // of them and cannot promise the label stays legible.
+                        Capsule().fill(
+                            participant.showsVideo
+                                ? AnyShapeStyle(Color.black.opacity(0.55))
+                                : AnyShapeStyle(Palette.selectionFill)
+                        )
+                    }
+            }
+            .buttonStyle(.plain)
+            .labelStyle(.titleAndIcon)
+            .transition(.materialize(from: .center, blurring: false))
+        }
     }
 
     private var radius: CGFloat { isCompact ? Radius.row + 2 : Radius.glass }
@@ -93,6 +180,7 @@ struct VoiceTile: View {
                 lineWidth: participant.isSpeaking ? speakingWidth : 1
             )
             .allowsHitTesting(false)
+            .animation(motion.hover, value: isHovering)
             .task(id: participant.isSpeaking) {
                 guard participant.isSpeaking else {
                     isBreathing = false
@@ -129,6 +217,14 @@ struct VoiceTile: View {
                 side: max(28, min(side, Metrics.avatarProfile))
             )
             .frame(maxWidth: .infinity, maxHeight: .infinity)
+            // **A watch that has been asked for and has no picture yet is
+            // status, and status has to be shown.** Opening somebody's share is
+            // a socket, an MLS group and a keyframe away — the better part of a
+            // second — and a tile that looks identical throughout reads as a
+            // button that did nothing. Measured: the control was pressed, then
+            // pressed again 700 ms later, which cancelled the connection three
+            // hundred milliseconds before it would have completed.
+            .overlay(alignment: .bottom) { watchProgress }
         }
     }
 

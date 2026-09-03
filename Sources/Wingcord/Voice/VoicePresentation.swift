@@ -33,9 +33,26 @@ struct VoiceParticipant: Hashable, Sendable, Identifiable {
     /// slot on the *flag* shows a black rectangle for as long as the camera
     /// takes to produce its first keyframe, which is up to two seconds.
     var hasLiveVideo: Bool
+    /// Whether the reader has this person's share open.
+    ///
+    /// **Watching is a media session, not a view state** — a second socket, a
+    /// second MLS group and a decode — so it is a fact about the call rather
+    /// than about the tile drawing it.
+    var isWatched: Bool
 
     /// Whether anything is stopping them being heard.
     var isSilenced: Bool { isSelfMuted || isServerMuted }
+    /// Whether there is a share here the reader could open.
+    ///
+    /// Our own share is excluded: the self tile already draws it from the
+    /// capture, and asking the server to forward us our own screen would be a
+    /// second encode of a picture already on this machine.
+    ///
+    /// **And it cannot be lifted for a diagnostic either.** Watching our own
+    /// stream would need a second voice websocket on the same `session_id`, and
+    /// Discord closes one of the pair with `4006 Session is no longer valid` —
+    /// measured, taking the published share down with it.
+    var canWatch: Bool { isStreaming && !isSelf }
     /// Whether the tile draws a picture rather than a face.
     var showsVideo: Bool { hasLiveVideo && (isCameraOn || isStreaming) }
 }

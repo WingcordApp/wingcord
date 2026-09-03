@@ -43,10 +43,21 @@ struct Composer: View {
     /// The picker, opened from the controls at the composer's trailing end.
     var onPick: (ExpressionItem) -> Void = { _ in }
     var onPickGIF: (GIF) -> Void = { _ in }
+    /// The channel an activity would be launched into.
+    ///
+    /// **Nil hides the control rather than disabling it.** A composer with no
+    /// channel behind it — the one a preview draws — has nothing to launch
+    /// into, and a greyed-out button implies a permission that could be gained.
+    /// `INVARIANTS.md` §5.5.
+    var activityChannelID: ChannelID?
 
     @Environment(\.motion) private var motion
     @FocusState private var isFocused: Bool
     @State private var openTab: ExpressionMode?
+    /// The launcher's own presentation. **Not folded into `openTab`**: that
+    /// enum is the expression picker's three modes, and a fourth case would
+    /// make every `switch` over it carry a branch that cannot draw a grid.
+    @State private var isShowingApps = false
     @State private var completionSelection = 0
     /// The query Escape was pressed on. The list is derived from the draft, so
     /// dismissing it cannot mean clearing a list — it means remembering the one
@@ -235,6 +246,41 @@ struct Composer: View {
             control(.emoji) {
                 Image(systemName: "face.smiling")
                     .font(Typeface.controlGlyph)
+            }
+            if activityChannelID != nil { appsControl }
+        }
+    }
+
+    /// Apps and activities.
+    ///
+    /// Its own control rather than a fourth `ExpressionMode`, and its own
+    /// popover for the reason the three beside it each have one: a popover
+    /// points at what opened it, and a shared presentation leaves the arrow
+    /// under whichever control the group happened to centre on.
+    @ViewBuilder
+    private var appsControl: some View {
+        if let channelID = activityChannelID {
+            Button {
+                isShowingApps.toggle()
+            } label: {
+                // Four rounded pips. The mark Discord uses for this is a
+                // four-dot cluster and it is the one thing about the surface
+                // worth keeping — an app grid is what the icon means anywhere
+                // it appears, and inventing a different glyph for a familiar
+                // idea is the "familiarity" principle spent for nothing.
+                Image(systemName: "circle.grid.2x2.fill")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(
+                        isShowingApps ? AnyShapeStyle(Palette.accent) : AnyShapeStyle(Ink.secondary)
+                    )
+                    .frame(width: Metrics.compactControl, height: Metrics.compactControl)
+                    .contentShape(.rect)
+            }
+            .buttonStyle(.plain)
+            .help("Apps")
+            .accessibilityLabel("Apps")
+            .popover(isPresented: $isShowingApps, arrowEdge: .top) {
+                ActivityLauncher(channelID: channelID)
             }
         }
     }

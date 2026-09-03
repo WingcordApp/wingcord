@@ -26,8 +26,11 @@ public actor DiscordREST {
         case decoding(String)
     }
 
-    private let session: URLSession
-    private let metadata: ClientMetadata
+    let session: URLSession
+    /// `internal` alongside `session` and `decoder`: one route builds its own
+    /// request, because it is made with an activity's bearer token rather than
+    /// the account's. See `oauthIdentity(bearer:)`.
+    let metadata: ClientMetadata
     private let limiter = RateLimiter()
     private var token: String?
 
@@ -36,7 +39,7 @@ public actor DiscordREST {
     /// `JSONDecoder` is not cheap to construct — it builds a date strategy and a
     /// key strategy each time — and a history page decode that allocates one per
     /// call pays for it on every page.
-    private let decoder: JSONDecoder = {
+    let decoder: JSONDecoder = {
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .custom { decoder in
             let container = try decoder.singleValueContainer()

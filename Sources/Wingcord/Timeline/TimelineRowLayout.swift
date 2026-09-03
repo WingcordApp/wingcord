@@ -55,6 +55,8 @@ nonisolated struct MessageRow: @unchecked Sendable {
     /// every message — so it costs one optional word on a row that already has
     /// a dozen.
     var replyHeader: ReplyHeaderSlot?
+    /// The "somebody used *command*" line, when the message answers one.
+    var interactionHeader: InteractionHeaderSlot?
 
     var authorName: String
     /// The styled face and tracking the name was measured in, carried so the
@@ -81,6 +83,9 @@ nonisolated struct MessageRow: @unchecked Sendable {
     var components: [ComponentSlot]
     /// The poll, when the message is one.
     var poll: PollSlot?
+    /// The activity invitation, when the message is one. Like a poll, this IS
+    /// the message — the launch carries no body at all.
+    var activityInvite: ActivityInviteSlot?
     var reactions: [ReactionSlot]
 
     /// A system event's gutter glyph — a join, a boost, a pin.
@@ -199,6 +204,33 @@ nonisolated struct ReplyHeaderSlot: @unchecked Sendable {
     /// Where a click goes. Nil when the quoted message is gone, which is also
     /// when the strip says so instead of quoting anything.
     var targetID: MessageID?
+}
+
+/// "alex used **launch**", above a message an app posted in answer.
+///
+/// **Shaped after the reply header, and drawn with the same elbow**, because it
+/// is the same idea: a line above a message saying what it is a response to.
+/// One is a quote and the other is a command; sharing the connector is what
+/// makes them read as one vocabulary rather than two.
+nonisolated struct InteractionHeaderSlot: @unchecked Sendable {
+    var rect: CGRect
+    /// Where the elbow's horizontal leg lands. See `ReplyHeaderSlot`.
+    var elbowBottom: CGFloat
+    var avatarRect: CGRect
+    var avatarURL: URL?
+    var monogram: String
+    /// "alex used", already joined — the verb belongs to the sentence rather
+    /// than to the chip beside it.
+    var lead: String
+    var leadRect: CGRect
+    var leadFace: NSFont?
+    var leadTracking: CGFloat
+    var leadColor: NSColor?
+    /// The command's name, drawn in a chip.
+    var command: String
+    var commandRect: CGRect
+    /// The chip's own box: the text's rect grown by its padding.
+    var chipRect: CGRect
 }
 
 nonisolated struct ReactionSlot: Sendable {
@@ -413,6 +445,7 @@ nonisolated struct TimelineLayoutEngine: Sendable {
     private func rowHeight(of row: MessageRow) -> CGFloat {
         var bottom: CGFloat = 0
         if let header = row.replyHeader { bottom = max(bottom, header.rect.maxY) }
+        if let header = row.interactionHeader { bottom = max(bottom, header.rect.maxY) }
         if let avatarRect = row.avatarRect { bottom = max(bottom, avatarRect.maxY) }
         bottom = max(bottom, row.authorRect.maxY)
         if let block = row.textBlock {
@@ -423,6 +456,7 @@ nonisolated struct TimelineLayoutEngine: Sendable {
         for slot in row.embeds { bottom = max(bottom, slot.rect.maxY) }
         for slot in row.components { bottom = max(bottom, slot.rect.maxY) }
         if let poll = row.poll { bottom = max(bottom, poll.rect.maxY) }
+        if let invite = row.activityInvite { bottom = max(bottom, invite.rect.maxY) }
         for slot in row.reactions { bottom = max(bottom, slot.rect.maxY) }
         return ceil(bottom + TimelineMetrics.runBottomPadding)
     }
@@ -455,6 +489,22 @@ nonisolated struct TimelineLayoutEngine: Sendable {
                 author: reference.authorID.flatMap { input.authors[$0] }
             )
             replyHeader = slot
+            y = slot.rect.maxY + TimelineMetrics.replyGap
+        }
+
+        // **Only on the run head.** A run of three answers from one app draws
+        // the line once, exactly as the author line is drawn once — repeating
+        // "alex used launch" above each is three statements of one fact.
+        var interactionHeader: InteractionHeaderSlot?
+        if item.isRunHead, let interaction = message.interaction {
+            let slot = Self.layoutInteractionHeader(
+                interaction,
+                y: y,
+                width: input.width,
+                style: input.style,
+                author: input.authors[interaction.userID]
+            )
+            interactionHeader = slot
             y = slot.rect.maxY + TimelineMetrics.replyGap
         }
 
@@ -559,6 +609,23 @@ nonisolated struct TimelineLayoutEngine: Sendable {
             y = slot.rect.maxY
         }
 
+        // An activity invitation, for the same reason a poll is here: the
+        // launch message has no content, no embed and no component, so a
+        // renderer that does not know about one draws an author line over a
+        // blank row.
+        var activityInvite: ActivityInviteSlot?
+        if let value = message.activityInvite {
+            y += TimelineMetrics.attachmentGap
+            let slot = ActivityInviteLayoutEngine.layout(
+                value,
+                origin: CGPoint(x: contentX, y: y),
+                availableWidth: contentWidth,
+                style: input.style
+            )
+            activityInvite = slot
+            y = slot.rect.maxY
+        }
+
         // Embeds. A link unfurl, a bot's status card, a release note — all the
         // same object with different subsets populated, which is why the layout
         // branches on what is present rather than on the `kind` string.
@@ -636,6 +703,7 @@ nonisolated struct TimelineLayoutEngine: Sendable {
             avatarMonogram: author?.monogram ?? "?",
             decorationURL: author?.decorationURL,
             replyHeader: replyHeader,
+            interactionHeader: interactionHeader,
             authorName: author?.name ?? "Unknown",
             authorFace: author?.nameFace,
             authorTracking: author?.nameTracking ?? 0,
@@ -652,6 +720,7 @@ nonisolated struct TimelineLayoutEngine: Sendable {
             embeds: embeds,
             components: components,
             poll: poll,
+            activityInvite: activityInvite,
             reactions: reactions,
             accessibilityLabel: Self.accessibilityLabel(
                 author: author?.name ?? "Unknown",
@@ -734,6 +803,7 @@ nonisolated struct TimelineLayoutEngine: Sendable {
             embeds: [],
             components: [],
             poll: nil,
+            activityInvite: nil,
             reactions: reactions,
             systemSymbol: sentence?.symbolName ?? "circle",
             systemTint: Self.tintColor(sentence?.tint),
@@ -1022,6 +1092,9 @@ nonisolated struct TimelineLayoutEngine: Sendable {
             let text = node.plainText
             if !text.isEmpty { parts.append(text) }
         }
+        if let invite = message.activityInvite {
+            parts.append("Activity invitation. \(invite.name). Play.")
+        }
         if let poll = message.poll {
             parts.append("Poll. \(poll.question)")
             for answer in poll.answers {
@@ -1110,5 +1183,84 @@ nonisolated struct TimelineLayoutEngine: Sendable {
             label += attachments == 1 ? ". 1 attachment" : ". \(attachments) attachments"
         }
         return label
+    }
+}
+
+// MARK: - The interaction header
+
+nonisolated extension TimelineLayoutEngine {
+    /// "alex used **launch**".
+    ///
+    /// Laid out against the reply header's own metrics so the two lines sit at
+    /// the same height with the same elbow — see `InteractionHeaderSlot`.
+    static func layoutInteractionHeader(
+        _ interaction: MessageInteraction,
+        y: CGFloat,
+        width: CGFloat,
+        style: MessageTextStyle,
+        author: AuthorInfo?
+    ) -> InteractionHeaderSlot {
+        let height = TimelineMetrics.replyHeight
+        let avatarRect = CGRect(
+            x: TimelineMetrics.contentInset,
+            y: y + (height - TimelineMetrics.replyAvatarSide) / 2,
+            width: TimelineMetrics.replyAvatarSide,
+            height: TimelineMetrics.replyAvatarSide
+        )
+
+        let font = style.metadataFont
+        // **The name without an `@`.** A reply quotes somebody, so it reads
+        // `@name`; this is a sentence about them, and "@alex used launch" is
+        // not one.
+        let name = author?.name ?? "Unknown"
+        let lead = "\(name) used"
+        let face = author?.nameFace.map {
+            NSFont(descriptor: $0.fontDescriptor, size: font.pointSize) ?? font
+        }
+        let tracking = face == nil
+            ? 0
+            : (author?.nameTracking ?? 0) * (font.pointSize / max(1, style.authorFont.pointSize))
+        let leadWidth = measure(lead, font: face ?? font, tracking: tracking)
+        let leadRect = CGRect(
+            x: avatarRect.maxX + TimelineMetrics.replyItemGap,
+            y: y,
+            width: leadWidth,
+            height: height
+        )
+
+        let commandWidth = measure(interaction.name, font: font, tracking: 0)
+        let chipRect = CGRect(
+            x: leadRect.maxX + TimelineMetrics.replyItemGap,
+            y: y + (height - TimelineMetrics.interactionChipHeight) / 2,
+            width: commandWidth + TimelineMetrics.interactionChipPadding * 2,
+            height: TimelineMetrics.interactionChipHeight
+        )
+        let commandRect = CGRect(
+            x: chipRect.minX + TimelineMetrics.interactionChipPadding,
+            y: y,
+            width: commandWidth,
+            height: height
+        )
+
+        return InteractionHeaderSlot(
+            rect: CGRect(
+                x: TimelineMetrics.replyElbowX,
+                y: y,
+                width: max(0, min(chipRect.maxX, width) - TimelineMetrics.replyElbowX),
+                height: height
+            ),
+            elbowBottom: y + height,
+            avatarRect: avatarRect,
+            avatarURL: author?.avatarURL,
+            monogram: author?.monogram ?? "?",
+            lead: lead,
+            leadRect: leadRect,
+            leadFace: face,
+            leadTracking: tracking,
+            leadColor: author?.colorValue.map { NSColor(Color(hex: $0)) },
+            command: interaction.name,
+            commandRect: commandRect,
+            chipRect: chipRect
+        )
     }
 }

@@ -59,14 +59,23 @@ public final class H264Encoder: @unchecked Sendable {
     private func open() throws {
         teardownLocked()
 
+        // **No low-latency rate controller.** It was here to hold the bitrate
+        // tightly frame to frame, and it costs two things that matter far more.
+        //
+        // It declares a **five frame reference buffer** in the SPS —
+        // `max_num_ref_frames = 5`, with a VUI carrying
+        // `max_dec_frame_buffering = 5` — which tells a receiver to hold five
+        // frames before it may show anything. And it **drops half the frames**:
+        // measured, ninety submitted and forty-seven emitted, at any data rate
+        // ceiling. A thirty frame stream arriving at fifteen.
+        //
+        // Without it the encoder emits `max_num_ref_frames = 1`, no VUI, and
+        // every frame it is given — which is what the reference client whose
+        // video renders produces. `EncoderConformanceTests` pins the first of
+        // those; the frame count is visible in the trace as `frames=` beside
+        // `video=`.
         let specification: [CFString: Any] = [
             kVTVideoEncoderSpecification_EnableHardwareAcceleratedVideoEncoder: true,
-            // The low-latency rate controller. It holds the bitrate far more
-            // tightly frame to frame than the default, which matters here
-            // because the far end's estimator reads a burst as congestion and
-            // asks for less — a stream that overshoots on every keyframe talks
-            // itself down to nothing over a minute.
-            kVTVideoEncoderSpecification_EnableLowLatencyRateControl: true,
         ]
 
         var session: VTCompressionSession?
@@ -85,8 +94,22 @@ public final class H264Encoder: @unchecked Sendable {
         guard status == noErr, let session else { throw Failure.session(status) }
         self.session = session
 
+        applyCommonProperties()
+        VTCompressionSessionPrepareToEncodeFrames(session)
+    }
+
+    /// Everything a realtime H.264 stream has to be told, in one place.
+    private func applyCommonProperties() {
         apply(kVTCompressionPropertyKey_RealTime, true)
         apply(kVTCompressionPropertyKey_ProfileLevel, kVTProfileLevel_H264_ConstrainedBaseline_AutoLevel)
+        // No entropy coding a baseline decoder cannot read. Constrained
+        // baseline forbids CABAC anyway; naming it means a profile change
+        // cannot quietly introduce it.
+        apply(kVTCompressionPropertyKey_H264EntropyMode, kVTH264EntropyMode_CAVLC)
+        // Emit each frame as it finishes rather than holding any back. With
+        // reordering already off this should be implied; it is one more way for
+        // a frame to arrive late and it costs nothing to close.
+        apply(kVTCompressionPropertyKey_MaxFrameDelayCount, 0)
         // No B-frames. They cost a frame of latency to gain a few per cent of
         // bitrate, and constrained baseline has none anyway — naming it means a
         // profile change cannot quietly add one.
@@ -99,12 +122,19 @@ public final class H264Encoder: @unchecked Sendable {
         // free to spend a whole second's budget on one keyframe, and a keyframe
         // that needs forty packets in one frame interval is a keyframe the path
         // drops half of.
+        //
+        // **Twice the average, not a quarter over it.** A ceiling this close to
+        // the target does not shape the bitrate, it makes the encoder drop
+        // frames to stay under it: measured, ninety frames submitted and
+        // **forty-seven** emitted, at 1.25×. Twice is what the reference client
+        // uses and it leaves room for the keyframe this exists to bound.
         apply(
             kVTCompressionPropertyKey_DataRateLimits,
-            [configuration.bitrate / 8 * 5 / 4, 1] as CFArray
+            [configuration.bitrate / 8 * 2, 1] as CFArray
         )
-        VTCompressionSessionPrepareToEncodeFrames(session)
     }
+
+
 
     /// Re-opens the session for a new size or rate.
     ///

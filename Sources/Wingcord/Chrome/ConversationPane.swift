@@ -28,6 +28,11 @@ struct ConversationPane: View {
     /// constant here is wrong the moment somebody drags it.
     @State private var callHeight: CGFloat = 0
 
+    /// The activity stage's outside height, when one is running here. Measured
+    /// for the same reason the call panel's is, and added to the same inset —
+    /// see `ActivityStageContainer`.
+    @State private var activityHeight: CGFloat = 0
+
     var body: some View {
         ZStack(alignment: .top) {
             transcript
@@ -39,6 +44,13 @@ struct ConversationPane: View {
                 transaction.disablesAnimations = true
                 withTransaction(transaction) { callHeight = height }
             }
+            ActivityStageContainer(channelID: channelID) { height in
+                guard abs(activityHeight - height) > 0.5 else { return }
+                var transaction = Transaction()
+                transaction.disablesAnimations = true
+                withTransaction(transaction) { activityHeight = height }
+            }
+            .padding(.top, callHeight)
         }
         .onGeometryChange(for: CGFloat.self) { $0.safeAreaInsets.top } action: { chromeHeight = $0 }
     }
@@ -46,7 +58,7 @@ struct ConversationPane: View {
     private var transcript: some View {
         TimelineContainer(
             channelID: channelID,
-            topInset: chromeHeight + callHeight,
+            topInset: chromeHeight + callHeight + activityHeight,
             bottomInset: composerHeight
         )
             // **The one composed thing over the drawn transcript.** It is glass,

@@ -298,8 +298,16 @@ extension Transition where Self == MaterializeTransition {
     static var materialize: MaterializeTransition { MaterializeTransition() }
 
     /// Anchored to whatever summoned the surface.
-    static func materialize(from anchor: UnitPoint) -> MaterializeTransition {
-        MaterializeTransition(anchor: anchor)
+    ///
+    /// - Parameter blurring: pass `false` for a surface whose own ground is a
+    ///   **material**. A blur forces an offscreen pass, and glass inside one has
+    ///   no backdrop to sample: it paints black, at the layer's square bounds
+    ///   rather than any rounded clip over it. Scale and opacity alone read
+    ///   almost identically and cannot destroy it.
+    static func materialize(
+        from anchor: UnitPoint, blurring: Bool = true
+    ) -> MaterializeTransition {
+        MaterializeTransition(blur: blurring ? 12 : 0, anchor: anchor)
     }
 }
 

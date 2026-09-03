@@ -47,6 +47,21 @@ nonisolated enum TimelineRowPainter {
         /// render test can drive it, and reaching for a main-actor singleton
         /// from inside a draw loop is exactly what that buys.
         var animationTime: Double = 0
+        /// An activity invitation's colour, quantised from the app's icon.
+        ///
+        /// **On the paint state rather than in the slot**, because it resolves
+        /// asynchronously and the layout is cached: a colour taken at measure
+        /// time arrives after the row is already laid out and never reaches the
+        /// card. Here it costs a redraw, which is all a colour change is.
+        var activityAccent: CGColor?
+        /// "00:08 · Adding videos · 1 playing", when the instance is live.
+        ///
+        /// **On the paint state, like the accent and for the same reason.** It
+        /// comes from presence and changes far more often than the transcript
+        /// is measured; laid out, it froze at whatever it said when the reader
+        /// last switched channels.
+        var activityInviteStatus: String?
+        var activityInviteIsJoined = false
     }
 
     static func draw(
@@ -118,6 +133,17 @@ nonisolated enum TimelineRowPainter {
         // The quoted line, and the elbow tying it to the face below. Drawn
         // first so the connector passes *under* the avatar rather than across
         // it — one save/restore, and only on a reply.
+        if let header = row.interactionHeader {
+            drawInteractionHeader(
+                header,
+                offset: CGPoint(x: rowFrame.minX, y: rowFrame.minY),
+                context: context,
+                style: style,
+                images: images,
+                scale: scale
+            )
+        }
+
         if let header = row.replyHeader {
             drawReplyHeader(
                 header,
@@ -263,6 +289,21 @@ nonisolated enum TimelineRowPainter {
                 images: images,
                 scale: scale,
                 isRevealed: state.revealedAttachments.contains(index)
+            )
+        }
+
+        if let invite = row.activityInvite {
+            drawActivityInvite(
+                invite,
+                offset: CGPoint(x: rowFrame.minX, y: rowFrame.minY),
+                context: context,
+                style: style,
+                accent: state.activityAccent,
+                status: state.activityInviteStatus,
+                isJoined: state.activityInviteIsJoined,
+                hovered: state.hoveredComponent,
+                images: images,
+                scale: scale
             )
         }
 
@@ -488,6 +529,84 @@ nonisolated enum TimelineRowPainter {
     /// assembled from three primitives joins at the miter and leaves a notch on
     /// the inside of the turn at any stroke wider than a point, which at 1.5 is
     /// visible as a nick in the only curve on the row.
+    /// "alex used **launch**".
+    ///
+    /// Shares the reply header's elbow deliberately: both are a line above a
+    /// message saying what it answers, and one connector for one idea is what
+    /// keeps them reading as a single vocabulary.
+    private static func drawInteractionHeader(
+        _ header: InteractionHeaderSlot,
+        offset: CGPoint,
+        context: CGContext,
+        style: MessageTextStyle,
+        images: ImageStore,
+        scale: CGFloat
+    ) {
+        let midY = offset.y + header.rect.midY
+        let x = offset.x + TimelineMetrics.replyElbowX
+
+        context.saveGState()
+        context.setStrokeColor(style.quoteRuleColor.cgColor)
+        context.setLineWidth(TimelineMetrics.replyElbowWidth)
+        context.setLineCap(.round)
+        context.beginPath()
+        context.move(to: CGPoint(x: x, y: offset.y + header.elbowBottom))
+        context.addArc(
+            tangent1End: CGPoint(x: x, y: midY),
+            tangent2End: CGPoint(x: offset.x + TimelineMetrics.replyElbowEndX, y: midY),
+            radius: TimelineMetrics.replyElbowRadius
+        )
+        context.addLine(to: CGPoint(x: offset.x + TimelineMetrics.replyElbowEndX, y: midY))
+        context.strokePath()
+        context.restoreGState()
+
+        drawAvatar(
+            url: header.avatarURL,
+            monogram: header.monogram,
+            in: header.avatarRect.offsetBy(dx: offset.x, dy: offset.y),
+            context: context,
+            style: style,
+            images: images,
+            scale: scale,
+            peekSide: Metrics.avatarMessage
+        )
+
+        let font = style.metadataFont
+        _ = drawText(
+            header.lead,
+            font: header.leadFace ?? font,
+            color: header.leadColor ?? style.secondaryColor,
+            at: CGPoint(x: offset.x + header.leadRect.minX, y: offset.y + header.leadRect.minY),
+            maxWidth: header.leadRect.width,
+            tracking: header.leadTracking,
+            context: context
+        )
+
+        // The chip. Filled rather than outlined: the command's name is a token
+        // the app owns, and a border would make it read as a control.
+        let chip = header.chipRect.offsetBy(dx: offset.x, dy: offset.y)
+        context.addPath(CGPath(
+            roundedRect: chip,
+            cornerWidth: chip.height / 2,
+            cornerHeight: chip.height / 2,
+            transform: nil
+        ))
+        context.setFillColor(ThemeInk.current.accent.copy(alpha: 0.28) ?? ThemeInk.current.accent)
+        context.fillPath()
+
+        _ = drawText(
+            header.command,
+            font: font,
+            color: style.primaryColor,
+            at: CGPoint(
+                x: offset.x + header.commandRect.minX,
+                y: offset.y + header.commandRect.minY
+            ),
+            maxWidth: header.commandRect.width,
+            context: context
+        )
+    }
+
     private static func drawReplyHeader(
         _ header: ReplyHeaderSlot,
         offset: CGPoint,

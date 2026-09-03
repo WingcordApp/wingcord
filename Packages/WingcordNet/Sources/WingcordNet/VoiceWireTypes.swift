@@ -199,6 +199,34 @@ struct StreamEventDTO: Decodable, Sendable {
     var stream_key: String
     var viewer_ids: [UserID]?
     var paused: Bool?
+    /// The RTC server the stream's **own media session** was allocated on.
+    ///
+    /// Present on `STREAM_CREATE` and the reason this event matters to the
+    /// media stack rather than only to the viewer count: a Go Live stream is a
+    /// second media session with its own MLS group, and that group is keyed on
+    /// the media session id — **one less than this** — rather than on the
+    /// channel. `rtc_channel_id`, beside this, is that id.
+    ///
+    /// Optional because `STREAM_UPDATE` and `STREAM_DELETE` carry no such
+    /// thing, and because it is decoded from other people's stream events too,
+    /// where it may not be sent at all.
+    var rtc_server_id: RTCServerID?
+    /// The stream's **own RTC channel** — the media session its group is keyed
+    /// on, and the identifier that is not the DM channel or the guild.
+    ///
+    /// **Read, never derived.** The documentation says the media session id is
+    /// one less than `rtc_server_id`, and in the first frame ever captured it
+    /// is: `…905` beside `…906`. It is also *sent*, in this field, so nothing
+    /// here computes it — §"READY describes the stream the server already made"
+    /// is the same rule, and an arithmetic relationship that holds in one
+    /// capture is not a contract.
+    ///
+    /// **It is also what the stream's IDENTIFY names as `server_id`.**
+    /// Identifying with the DM channel instead was answered `4006 Session is no
+    /// longer valid.` twenty milliseconds later, on a stream Discord had just
+    /// created for us.
+    var rtc_channel_id: RTCServerID?
+    var region: String?
 
     /// Whose stream this is.
     var ownerID: UserID? {
@@ -214,5 +242,43 @@ struct StreamEventDTO: Decodable, Sendable {
         guard parts.count >= 3 else { return nil }
         let raw = parts[0] == "guild" ? parts[2] : parts[1]
         return UInt64(raw).map(ChannelID.init(rawValue:))
+    }
+}
+
+/// `STREAM_SERVER_UPDATE` — where a Go Live stream's media session lives.
+///
+/// **The exact counterpart of `VOICE_SERVER_UPDATE`, one session over.** A
+/// stream is not carried on the call's media session: it gets its own endpoint
+/// and its own token, and this is the frame that names them. The two halves
+/// arrive separately again — `STREAM_CREATE` carries the key and the RTC
+/// server, this carries the endpoint and the token — so the same latch the call
+/// needs, the stream needs.
+struct StreamServerUpdateDTO: Decodable, Sendable {
+    var stream_key: String
+    var token: String
+    var endpoint: String?
+    var guild_id: GuildID?
+
+    /// Whose stream this is, read out of the key exactly as `StreamEventDTO`
+    /// reads it — the payload does not say.
+    var ownerID: UserID? {
+        stream_key.split(separator: ":").last
+            .flatMap { UInt64($0) }
+            .map(UserID.init(rawValue:))
+    }
+
+    var domain: GoLiveServer? {
+        // A null endpoint is the region being reassigned — the same thing
+        // `VOICE_SERVER_UPDATE` does, and the same answer: wait for another.
+        guard let endpoint, !endpoint.isEmpty else { return nil }
+        // A guild stream identifies with the guild; a call stream has no
+        // `guild_id` and identifies with the DM channel, which the key carries
+        // as its second field.
+        let serverID = guild_id.map { String($0.rawValue) }
+            ?? stream_key.split(separator: ":").dropFirst().first.map(String.init)
+        guard let serverID else { return nil }
+        return GoLiveServer(
+            streamKey: stream_key, serverID: serverID, token: token, endpoint: endpoint
+        )
     }
 }

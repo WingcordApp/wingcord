@@ -48,6 +48,9 @@ struct MainWindow: View {
                             guard let channelID = model.selectedChannelID else { return }
                             if model.connectedVoiceChannelID == channelID {
                                 model.leaveVoice()
+                            } else if model.channelChrome.isCallOngoing {
+                                // Already running: join it, and ring nobody.
+                                model.joinCall(in: channelID)
                             } else {
                                 model.startCall(in: channelID)
                             }

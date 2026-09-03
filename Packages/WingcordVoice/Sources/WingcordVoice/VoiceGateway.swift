@@ -59,7 +59,10 @@ public actor VoiceGateway {
         case clientsConnected([UInt64])
         case clientDisconnected(userID: UInt64)
         case resumed
-        case closed(reason: String, canResume: Bool)
+        /// - Parameter code: the websocket close code. §"Never log a close code
+        ///   without its reason" is about the reader; a caller that recovers
+        ///   from one refusal and not another needs the number too.
+        case closed(code: Int, reason: String, canResume: Bool)
     }
 
     struct VoiceReady: Sendable {
@@ -72,6 +75,36 @@ public actor VoiceGateway {
         /// `RTPExtension` for why sending them wrong is worse than not sending
         /// them.
         var headerExtensions: [String: UInt8]
+        /// The simulcast layer id the server allocated for our video, echoed
+        /// back verbatim in opcode 12.
+        ///
+        /// **Read from the server rather than chosen.** READY describes the
+        /// stream it has already made — `{"type":"video","ssrc":…,"rid":"",…}` —
+        /// and a value it *names* is the value to use. An **empty** one is the
+        /// absence of a layer name rather than a name, and is supplied instead:
+        /// see `VoiceGateway.baseSimulcastLayer`.
+        var videoRID: String
+
+        /// The ids the server named, and **only** the ones it named.
+        ///
+        /// **No fallback here, deliberately.** Discord names none of these, so
+        /// a default belongs to whichever session has a capture of what a
+        /// working client sends *on that kind of session* — and those are two
+        /// different answers until both have been read off the wire. A default
+        /// on this type is one applied to every session at once, which is how
+        /// ids captured from a Go Live stream ended up on a call that had never
+        /// been measured. See `RTPExtension.DefaultID`.
+        var sendTimeExtensionID: UInt8? {
+            headerExtensions[RTPExtension.URI.absoluteSendTime]
+        }
+
+        var transportSequenceExtensionID: UInt8? {
+            headerExtensions[RTPExtension.URI.transportSequence]
+        }
+
+        var audioLevelExtensionID: UInt8? {
+            headerExtensions[RTPExtension.URI.audioLevel]
+        }
     }
 
     // MARK: Connection state
@@ -99,13 +132,32 @@ public actor VoiceGateway {
     private var continuation: AsyncStream<Event>.Continuation?
     private(set) var events: AsyncStream<Event>!
 
+    /// Which of a call's sessions this gateway belongs to.
+    ///
+    /// **Three of these run at once and every line they wrote looked the
+    /// same.** A call, a share it publishes and a share it watches each own a
+    /// gateway, a socket, SSRCs and an MLS group, and the trace interleaved all
+    /// three under one `voice:` prefix — so `op=12 seq=3` and `dave epoch=1`
+    /// could belong to any of them, and reading which cost real time on every
+    /// diagnosis. The statistics lines were already named apart; nothing else
+    /// was.
+    enum Role: String, Sendable {
+        case call
+        case stream
+        case watch
+    }
+
+    private let role: Role
+
     init(
+        role: Role,
         endpoint: String,
         serverID: String,
         userID: String,
         sessionID: String,
         token: String
     ) {
+        self.role = role
         self.endpoint = Self.authority(from: endpoint)
         self.serverID = serverID
         self.userID = userID
@@ -230,32 +282,66 @@ public actor VoiceGateway {
             return
         }
         if let sequence = frame.seq { lastSequence = sequence }
-        VoiceTrace.write("op=\(frame.op) seq=\(frame.seq.map(String.init) ?? "-")")
+        VoiceTrace.write("\(role) op=\(frame.op) seq=\(frame.seq.map(String.init) ?? "-")")
 
         switch frame.op {
         case 2:
             guard let payload = decode(ReadyPayload.self, from: data) else { return }
             VoiceTrace.write("ready: ssrc=\(payload.d.ssrc) \(payload.d.ip):\(payload.d.port)")
+            // **The frame as it arrived, once.** This client reads five fields
+            // out of READY and assumed the rest were not there; the RTP header
+            // extension ids turned out to be among the ones it could not find,
+            // and a video stream sent without them is one the far end's
+            // estimator has nothing to measure. Carries no key material — the
+            // secret arrives on opcode 4 — so it is safe to write down.
+            VoiceTrace.write(
+                "ready raw: " + (String(data: data, encoding: .utf8) ?? "<not text>")
+            )
             canResume = true
             var extensions: [String: UInt8] = [:]
             for entry in payload.d.header_extensions ?? [] {
                 extensions[entry.uri] = entry.id
+            }
+            // **Every extension the server negotiated, not only the two this
+            // client writes.** An extension the server expects and nobody
+            // sends is silently fatal in the way the whole voice stack fails:
+            // an SFU that routes a simulcast layer by its RID cannot place
+            // packets that carry no RID, and forwards them to nobody.
+            if !extensions.isEmpty {
+                VoiceTrace.write(
+                    "ready: header extensions "
+                    + extensions.sorted { $0.value < $1.value }
+                        .map { "\($0.value)=\($0.key)" }
+                        .joined(separator: " ")
+                )
             }
             continuation?.yield(.ready(VoiceReady(
                 ssrc: payload.d.ssrc,
                 ip: payload.d.ip,
                 port: payload.d.port,
                 modes: payload.d.modes ?? [],
-                headerExtensions: extensions
+                headerExtensions: extensions,
+                videoRID: payload.d.streams?
+                    .first { $0.type == "video" }?.rid ?? ""
             )))
 
         case 4:
             guard let payload = decode(SessionDescriptionPayload.self, from: data) else { return }
             let dave = payload.d.dave_protocol_version ?? 0
-            VoiceTrace.write("keyed with \(payload.d.mode) dave=\(dave)")
+            // **The video codec is named here and nowhere else.** This client
+            // sends H.264 on payload type 101 because that is what it offered;
+            // nothing has ever checked what the server picked, and a stream on
+            // a payload type the server did not choose is forwarded to nobody —
+            // which is indistinguishable from every other way video fails.
+            VoiceTrace.write(
+                "keyed with \(payload.d.mode) dave=\(dave) "
+                + "video=\(payload.d.video_codec ?? "unnamed")"
+            )
             guard let cipher = VoiceCipher(rawValue: payload.d.mode) else {
                 VoiceTrace.fault("server chose an unknown mode: \(payload.d.mode)")
-                continuation?.yield(.closed(reason: "unsupported encryption mode", canResume: false))
+                continuation?.yield(.closed(
+                    code: 4016, reason: "unsupported encryption mode", canResume: false
+                ))
                 return
             }
             continuation?.yield(.sessionDescription(
@@ -296,7 +382,33 @@ public actor VoiceGateway {
             guard let payload = decode(ClientsConnectPayload.self, from: data) else { return }
             continuation?.yield(.clientsConnected(payload.d.user_ids.compactMap(UInt64.init)))
 
+        case 18:
+            // **One client connecting, and the server sometimes sends only
+            // this.** Opcode 11 is the bulk form and 18 is the per-client one;
+            // a client that reads only the first is told about a participant it
+            // then refuses to admit to the MLS group.
+            //
+            // Measured: a call where the other end was announced by 18 and 20
+            // alone — no 11 at all — and every welcome the gateway sent was
+            // refused with "user … is not in this call". No group, no key,
+            // nothing transmitted in either direction for the whole call, with
+            // a healthy socket and `out=0`.
+            guard let payload = decode(ClientConnectPayload.self, from: data),
+                  let userID = UInt64(payload.d.user_id)
+            else { return }
+            continuation?.yield(.clientsConnected([userID]))
+
         case 12:
+            // **The frame as it arrived, every time.** This is the only place
+            // the server says which SSRC somebody's picture will be on, and a
+            // client that reads two fields out of it has no way to notice that
+            // the one it wanted was named somewhere else — the failure is a
+            // routing table that disagrees with the wire, which drops every
+            // packet at a `guard` and counts nothing. There are a handful of
+            // these per call and they carry no key material.
+            VoiceTrace.write(
+                "video raw: " + (String(data: data, encoding: .utf8) ?? "<not text>")
+            )
             guard let payload = decode(VideoPayload.self, from: data),
                   let userID = UInt64(payload.d.user_id ?? "") else { return }
             continuation?.yield(.videoStreams(
@@ -331,6 +443,16 @@ public actor VoiceGateway {
         default:
             break
         }
+
+        // **An opcode nobody acts on is a fact nobody has read.**
+        //
+        // Four of these arrive on every session — 15, 18, 20 and whatever the
+        // server adds next — and the trace has never said more than their
+        // number. Opcode 15 is the one that matters most: it is the server
+        // telling a *publisher* what its subscribers want, and a client that
+        // never reads it cannot know it is being asked for something it is not
+        // sending. A few of each, once, because they repeat.
+        noteUnhandled(frame.op, data)
     }
 
     /// A binary DAVE frame.
@@ -397,6 +519,31 @@ public actor VoiceGateway {
                 /// which presents as a camera button that works locally and
                 /// shows nobody anything.
                 var video = true
+                /// **The simulcast layer this session may publish, declared at
+                /// IDENTIFY.**
+                ///
+                /// `video: true` above says the session is capable; this says
+                /// what it will send, and the server registers the layer from
+                /// it. Without it the SFU has a video-capable client with no
+                /// video layer — and answers opcode 15 with
+                /// `pixelCounts: {<our video ssrc>: 0}` on a stream and
+                /// `{"any": 0}` on a call, which is the server saying it wants
+                /// no pixels from us and never revising it however many people
+                /// subscribe. Measured on both paths, for hours: keys up,
+                /// twenty thousand packets out, `UNSENT=0`, a decodable
+                /// bitstream, and a black tile at the far end.
+                ///
+                /// Opcode 12 later names the SSRCs for this layer; it does not
+                /// create it. The `rid` matches the one announced there — see
+                /// `VoiceGateway.baseSimulcastLayer`.
+                var streams = [Stream(rid: VoiceGateway.baseSimulcastLayer)]
+
+                struct Stream: Encodable {
+                    var type = "video"
+                    var rid: String
+                    var quality = 100
+                }
+
                 /// The highest DAVE protocol version this client implements.
                 ///
                 /// **One, and it has to be true.** Discord refuses every voice
@@ -409,6 +556,20 @@ public actor VoiceGateway {
                 var max_dave_protocol_version = 1
             }
         }
+        // **The identify, field by field, less the token.** Two sessions of one
+        // call send this payload and they must differ in three of its fields;
+        // a byte count cannot show that, and the call's and the stream's came
+        // out the same length. A 4006 twenty milliseconds later says the server
+        // could not find the session this names — which is unreadable without
+        // knowing what was named.
+        //
+        // The token is a media credential in the clear, so only its length goes
+        // in: §"the payload is never logged", and a trace line is a file, a
+        // screen share and a sysdiagnose.
+        VoiceTrace.write(
+            "identify server_id=\(serverID) user_id=\(userID) "
+            + "session_id=\(sessionID) token=<\(token.count) chars>"
+        )
         send(Identify(d: .init(
             server_id: serverID,
             user_id: userID,
@@ -488,6 +649,7 @@ public actor VoiceGateway {
         audioSSRC: UInt32,
         videoSSRC: UInt32,
         rtxSSRC: UInt32,
+        rid: String,
         isActive: Bool,
         width: Int,
         height: Int,
@@ -504,11 +666,29 @@ public actor VoiceGateway {
                 var streams: [Stream]
                 struct Stream: Encodable {
                     var type = "video"
-                    /// The simulcast layer's id. One layer, so it is always the
-                    /// base — a client that offers three and encodes one has
-                    /// told the server about two streams that never arrive, and
-                    /// the estimator then reads permanent loss on both.
-                    var rid = "100"
+                    /// The simulcast layer's id — **`"100"`, which is what a
+                    /// real Discord client announces**, captured from one.
+                    ///
+                    /// This has now been both. It was `"100"` on a guess, then
+                    /// `""` on the reasoning that READY describes the stream
+                    /// the server already made — `{"type":"video","ssrc":9240,
+                    /// "rtx_ssrc":9241,"rid":"","quality":0,"active":false}` —
+                    /// so echoing it back was the safe thing.
+                    ///
+                    /// The reasoning was wrong, and the wire says so. The
+                    /// server relayed somebody else's Go Live stream to us as
+                    /// `{"ssrc":15502,"rtx_ssrc":15503,"rid":"100",
+                    /// "quality":100,"max_resolution":{"width":1280,
+                    /// "type":"fixed","height":720},"max_framerate":30,
+                    /// "active":true}` — from a Discord client whose READY
+                    /// said `""` exactly as ours does. **A client names its
+                    /// layer; READY's empty rid is the absence of one, not a
+                    /// value to echo.** See §"Wire facts are captured, never
+                    /// assumed": this one now is.
+                    ///
+                    /// READY's value still wins when it has one, because a
+                    /// server that does name a layer is naming the layer.
+                    var rid: String
                     var ssrc: UInt32
                     var active: Bool
                     var quality: Int
@@ -529,6 +709,7 @@ public actor VoiceGateway {
             video_ssrc: isActive ? videoSSRC : 0,
             rtx_ssrc: isActive ? rtxSSRC : 0,
             streams: [.init(
+                rid: rid.isEmpty ? Self.baseSimulcastLayer : rid,
                 ssrc: isActive ? videoSSRC : 0,
                 active: isActive,
                 quality: isActive ? 100 : 0,
@@ -539,6 +720,10 @@ public actor VoiceGateway {
             )]
         )))
     }
+
+    /// The layer id a client names when the server has not named one. See
+    /// `announceStreams`.
+    static let baseSimulcastLayer = "100"
 
     /// Announces that we are — or have stopped — talking.
     ///
@@ -623,14 +808,61 @@ public actor VoiceGateway {
         guard let socket, !isStopped else { return }
         guard let data = try? JSONEncoder().encode(value),
               let text = String(data: data, encoding: .utf8) else { return }
-        // The opcode, never the payload: an IDENTIFY carries the voice token,
-        // and a log line is a file, a screen share and a sysdiagnose.
-        VoiceTrace.write("send op=\(Self.opcode(of: data)) \(data.count) bytes")
+        // The opcode, and for the two that describe what we transmit, the
+        // payload with it.
+        //
+        // **Never for the rest**: an IDENTIFY carries the voice token, and a
+        // log line is a file, a screen share and a sysdiagnose. Opcodes 5 and
+        // 12 carry SSRCs and a resolution and nothing else, and they are the
+        // whole of what this client tells a server about the media it is about
+        // to send — the difference between a stream that is forwarded and one
+        // that is accepted and dropped is somewhere in those two payloads, and
+        // until now the trace said only how many bytes long they were.
+        let opcode = Self.opcode(of: data)
+        if opcode == "5" || opcode == "12" {
+            VoiceTrace.write("\(role) send op=\(opcode) \(text)")
+        } else {
+            VoiceTrace.write("\(role) send op=\(opcode) \(data.count) bytes")
+        }
         socket.send(.string(text)) { error in
             guard let error else { return }
             VoiceTrace.write("send failed: \(error.localizedDescription)")
         }
     }
+
+    /// Opcodes this client takes no action on, printed a few times each.
+    ///
+    /// Bounded per opcode rather than overall: one chatty opcode would
+    /// otherwise use up the budget for the one that matters.
+    private var unhandledSeen: [Int: Int] = [:]
+
+    private func noteUnhandled(_ opcode: Int, _ data: Data) {
+        guard VoiceTrace.isOn, Self.handledOpcodes.contains(opcode) == false else { return }
+        // **Opcode 15 is never capped.** It is the server saying, by SSRC, how
+        // many pixels its subscribers want from us — measured as
+        // `{"pixelCounts":{"91568":0},"any":100}` on a share nobody could see,
+        // where 91568 was our own video SSRC. It is a handful of messages per
+        // call and it changes over the life of one, and *when* it changes is
+        // the reading: the call's went 100 → 0 → 100 while the stream's was
+        // sent once and never revised, not even when a viewer arrived.
+        if opcode != 15 {
+            let seen = unhandledSeen[opcode, default: 0]
+            guard seen < 3 else { return }
+            unhandledSeen[opcode] = seen + 1
+        }
+        VoiceTrace.write(
+            "\(role) op=\(opcode) unhandled: "
+            + (String(data: data, encoding: .utf8) ?? "<not text>")
+        )
+    }
+
+    /// Everything the switch above has a case for. Listed rather than derived,
+    /// because a case that is added without adding it here starts printing
+    /// itself, which is the harmless direction.
+    private static let handledOpcodes: Set<Int> = [
+        2, 4, 5, 6, 8, 9, 11, 12, 13, 18, 21, 22, 24,
+        25, 26, 27, 28, 29, 30, 31,
+    ]
 
     /// The `op` of a frame we just built, for the trace. Reading it back out of
     /// the encoded bytes is cheaper than threading it through every caller, and
@@ -694,14 +926,14 @@ public actor VoiceGateway {
         let fatal: Set<Int> = [4004, 4006, 4009, 4011, 4012, 4014, 4016]
         if fatal.contains(code) {
             continuation?.yield(.closed(
-                reason: Self.describe(code: code, reason: reason), canResume: false
+                code: code, reason: Self.describe(code: code, reason: reason), canResume: false
             ))
             stop()
             return
         }
         guard canResume else {
             continuation?.yield(.closed(
-                reason: Self.describe(code: code, reason: reason), canResume: false
+                code: code, reason: Self.describe(code: code, reason: reason), canResume: false
             ))
             stop()
             return
@@ -774,9 +1006,16 @@ private struct ReadyPayload: Decodable {
         var port: UInt16
         var modes: [String]?
         var header_extensions: [Extension]?
+        var streams: [Stream]?
         struct Extension: Decodable {
             var uri: String
             var id: UInt8
+        }
+        /// The stream the server has already allocated for us. Its shape is
+        /// what opcode 12 has to describe back.
+        struct Stream: Decodable {
+            var type: String?
+            var rid: String?
         }
     }
 }
@@ -826,6 +1065,17 @@ private struct ClientsConnectPayload: Decodable {
 private struct ClientDisconnectPayload: Decodable {
     var d: Body
     struct Body: Decodable { var user_id: String }
+}
+
+/// Opcode 18: one client connecting. The bulk form is `ClientsConnectPayload`.
+private struct ClientConnectPayload: Decodable {
+    var d: Body
+    struct Body: Decodable {
+        var user_id: String
+        /// What they are transmitting. Read for the trace, acted on nowhere:
+        /// what a client transmits is said by opcodes 5 and 12.
+        var flags: Int?
+    }
 }
 
 private struct VideoPayload: Decodable {

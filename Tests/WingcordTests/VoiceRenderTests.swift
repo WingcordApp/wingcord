@@ -60,8 +60,24 @@ struct VoiceRenderTests {
             isCameraOn: false,
             isStreaming: streaming,
             isSelf: isSelf,
-            hasLiveVideo: false
+            hasLiveVideo: false,
+            isWatched: false
         )
+    }
+
+    /// **A control that cannot work must not be drawn** — §5.5 — and watching
+    /// is the newest thing that can only sometimes work.
+    ///
+    /// Two cases have to stay false or the tile offers a picture it cannot
+    /// fetch: somebody who is not sharing at all, and **ourselves**. Our own
+    /// share is already on this machine, and asking the server to forward it
+    /// back would be a second decode of a picture the capture is handing us
+    /// directly.
+    @Test("Only somebody else's live share offers a watch control")
+    func onlyOtherPeoplesSharesAreWatchable() {
+        #expect(!Self.participant(10, name: "Quiet").canWatch)
+        #expect(Self.participant(11, name: "Sharer", streaming: true).canWatch)
+        #expect(!Self.participant(12, name: "Us", streaming: true, isSelf: true).canWatch)
     }
 
     private static let cast: [VoiceParticipant] = [
@@ -304,6 +320,7 @@ struct VoiceRenderTests {
                 cameraSession: nil,
                 selfUserID: Self.cast[0].id,
                 attachVideo: { _, _ in },
+                watch: { _ in },
                 spotlight: { _ in },
                 heightChanged: { reported.value = $0 }
             )

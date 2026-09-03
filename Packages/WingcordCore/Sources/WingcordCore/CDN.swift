@@ -238,8 +238,71 @@ public enum CDN {
     ///
     /// **Two path segments, not one** — `/app-icons/{application_id}/{hash}`.
     /// Confirmed against the CDN reference; a hash alone 404s.
-    public static func applicationIcon(id: ApplicationID, hash: String) -> URL? {
-        URL(string: "\(host)/app-icons/\(id.rawValue)/\(hash).png?size=64")
+    /// `side` is points, as everywhere else here; the default is the 32pt slot
+    /// the profile card's app chip draws into, which resolves to the `size=64`
+    /// this took before it was given a size at all.
+    public static func applicationIcon(
+        id: ApplicationID,
+        hash: String,
+        side: CGFloat = 32,
+        scale: CGFloat = 2
+    ) -> URL? {
+        URL(
+            string: "\(host)/app-icons/\(id.rawValue)/\(hash).png"
+                + "?size=\(rung(forSide: side, scale: scale))"
+        )
+    }
+
+    /// The wide artwork above an app's detail page, and behind its tile in the
+    /// launcher's featured row.
+    ///
+    /// **`/app-icons/`, not `/app-assets/`** — the surprising part, and the
+    /// reason this is a function rather than a call site building a string.
+    /// `cover_image` is a different picture from `icon` and it is a different
+    /// shape, but it hangs off the same path; probed live against Watch
+    /// Together's `3cc9446876ae9eec6e06ff565703c292`,
+    /// `/app-assets/{id}/store/{hash}.png` answers 404 and this answers 200.
+    public static func applicationCover(
+        id: ApplicationID,
+        hash: String,
+        width: CGFloat,
+        scale: CGFloat = 2
+    ) -> URL? {
+        URL(
+            string: "\(host)/app-icons/\(id.rawValue)/\(hash).png"
+                + "?size=\(rung(forSide: width, scale: scale))"
+        )
+    }
+
+    /// One of an application's registered assets, by id.
+    ///
+    /// The shelf's `assets` map answers `{id, type, name}` per application and
+    /// every entry in a captured response is `type: 1` — an image. A caller
+    /// that finds another type must not route it here.
+    public static func applicationAsset(
+        id: ApplicationID,
+        assetID: String,
+        side: CGFloat,
+        scale: CGFloat = 2
+    ) -> URL? {
+        URL(
+            string: "\(host)/app-assets/\(id.rawValue)/\(assetID).png"
+                + "?size=\(rung(forSide: side, scale: scale))"
+        )
+    }
+
+    /// The looping preview on an activity's detail page.
+    ///
+    /// **`/store/` in the middle, and `.mp4`.** `activity_preview_video_asset_id`
+    /// is an asset id that appears in no `assets` map — those hold images only
+    /// — so its path cannot be inferred from a neighbouring one. Probed live:
+    /// `/app-assets/{id}/{asset}.mp4` 404s, `.webm` answers 400,
+    /// `/activity-preview-videos/…` 403s, and this answers 200.
+    ///
+    /// No `size` rung: it is a video, and the query the image paths take is
+    /// meaningless on one.
+    public static func activityPreviewVideo(id: ApplicationID, assetID: String) -> URL? {
+        URL(string: "\(host)/app-assets/\(id.rawValue)/store/\(assetID).mp4")
     }
 
     /// The badge that rides inside a clan tag chip.

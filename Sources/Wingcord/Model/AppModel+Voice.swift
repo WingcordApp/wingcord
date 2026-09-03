@@ -87,6 +87,68 @@ extension AppModel {
         connectedVoiceChannelID == channelID
     }
 
+    /// One person's tile, from their voice state.
+    ///
+    /// **One builder, used by the call and by the lobby somebody watches before
+    /// they join it.** The two surfaces show the same faces with the same rings
+    /// and the same badges; building them twice would let them drift, and the
+    /// whole point of the lobby is that joining is a continuation of what is
+    /// already on screen rather than a different thing appearing.
+    private func participant(
+        from state: VoiceState, inGuild guildID: GuildID?, users: [UserID: User]
+    ) -> VoiceParticipant {
+        let user = users[state.userID]
+        let isSelf = state.userID == currentUserID
+        return VoiceParticipant(
+            id: state.userID,
+            displayName: voiceName(of: state.userID, inGuild: guildID),
+            avatarURL: user.flatMap { avatarURL(for: $0, side: Metrics.avatarProfile) },
+            monogram: user?.monogram ?? "?",
+            nameColor: voiceNameColor(of: state.userID, inGuild: guildID),
+            // Our own tile lights from the engine's gate, not from a packet we
+            // sent to ourselves — there is no loopback, so a self tile driven
+            // by `speakingUserIDs` never lights at all.
+            isSpeaking: isSelf ? isSelfSpeaking : speakingUserIDs.contains(state.userID),
+            isSelfMuted: isSelf ? isSelfMuted : state.isSelfMuted,
+            isServerMuted: state.isServerMuted,
+            isDeafened: isSelf ? isSelfDeafened : state.isSelfDeafened,
+            isCameraOn: isSelf ? isCameraOn : state.isCameraOn,
+            isStreaming: isSelf ? isScreenSharing : state.isStreaming,
+            isSelf: isSelf,
+            // Our own picture is the capture preview, which is live the moment
+            // the camera is on — it never goes through the network.
+            hasLiveVideo: isSelf
+                ? (isCameraOn || isScreenSharing)
+                : liveVideoUserIDs.contains(state.userID),
+            isWatched: watchedStreamUserID == state.userID
+        )
+    }
+
+    // MARK: A call happening without you
+
+    /// Who is sitting in this conversation's call, when the reader is not.
+    ///
+    /// **Empty means there is nothing to join**, which is not the same as there
+    /// being no `directCalls` entry: that survives the last person leaving, and
+    /// a panel offering to join an empty room is worse than no panel.
+    ///
+    /// Video is deliberately **not** carried. Nothing is subscribed to their
+    /// streams until the reader joins — a lobby that decoded everybody's camera
+    /// would spend a call's worth of CPU on a panel nobody has stepped into.
+    func callLobby(for channelID: ChannelID) -> [VoiceParticipant] {
+        guard connectedVoiceChannelID != channelID else { return [] }
+        let guildID = channelIndex[channelID]?.guildID
+        let users = self.users
+        return voiceStates.values
+            .filter { $0.channelID == channelID && $0.userID != currentUserID }
+            .sorted { $0.userID.rawValue < $1.userID.rawValue }
+            .map { state in
+                var tile = participant(from: state, inGuild: guildID, users: users)
+                tile.hasLiveVideo = false
+                return tile
+            }
+    }
+
     // MARK: The call, as one value
 
     /// Nil when there is no call. Memoized: the tile grid, the HUD and the
@@ -126,30 +188,7 @@ extension AppModel {
 
         for state in states.values.sorted(by: { $0.userID.rawValue < $1.userID.rawValue })
         where state.channelID == channelID {
-            let user = userTable[state.userID]
-            let isSelf = state.userID == currentUserID
-            participants.append(VoiceParticipant(
-                id: state.userID,
-                displayName: voiceName(of: state.userID, inGuild: channel.guildID),
-                avatarURL: user.flatMap { avatarURL(for: $0, side: Metrics.avatarProfile) },
-                monogram: user?.monogram ?? "?",
-                nameColor: voiceNameColor(of: state.userID, inGuild: channel.guildID),
-                // Our own tile lights from the engine's gate, not from a packet
-                // we sent to ourselves — there is no loopback, so a self tile
-                // driven by `speakingUserIDs` never lights at all.
-                isSpeaking: isSelf ? isSelfSpeaking : speakingUserIDs.contains(state.userID),
-                isSelfMuted: isSelf ? isSelfMuted : state.isSelfMuted,
-                isServerMuted: state.isServerMuted,
-                isDeafened: isSelf ? isSelfDeafened : state.isSelfDeafened,
-                isCameraOn: isSelf ? isCameraOn : state.isCameraOn,
-                isStreaming: isSelf ? isScreenSharing : state.isStreaming,
-                isSelf: isSelf,
-                // Our own picture is the capture preview, which is live the
-                // moment the camera is on — it never goes through the network.
-                hasLiveVideo: isSelf
-                    ? (isCameraOn || isScreenSharing)
-                    : liveVideoUserIDs.contains(state.userID)
-            ))
+            participants.append(participant(from: state, inGuild: channel.guildID, users: userTable))
         }
 
         let value = VoicePresentation(

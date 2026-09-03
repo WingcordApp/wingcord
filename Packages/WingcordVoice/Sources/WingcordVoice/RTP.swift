@@ -1,4 +1,5 @@
 import Foundation
+import Synchronization
 
 // MARK: - RTP
 //
@@ -142,6 +143,21 @@ public struct RTPWriter: Sendable {
         timestamp = UInt32.random(in: 0...UInt32.max)
     }
 
+    /// Moves the clock on **without** emitting a packet.
+    ///
+    /// **This is how an access unit gets one timestamp.** `next` writes the
+    /// clock it holds and advances afterwards, which is right for audio — one
+    /// packet is one frame — and wrong for video, where a frame is several
+    /// packets that must all carry the same value. Advancing inside the loop
+    /// put the first packet of every frame on the *previous* frame's timestamp,
+    /// and a receiver groups packets by timestamp: the leading NAL — the
+    /// parameter set on a keyframe — went into the frame before it, so no
+    /// keyframe ever assembled and the far end sat on a spinner until it gave
+    /// up. So the clock moves once, here, before the frame's first packet.
+    public mutating func advanceClock(by samples: UInt32) {
+        timestamp &+= samples
+    }
+
     /// The next header, advancing the sequence by one and the clock by
     /// `samples`.
     ///
@@ -205,6 +221,42 @@ public struct RTPWriter: Sendable {
 /// stream sent without abs-send-time is a stream the far end never raises the
 /// quality of, because it has nothing to measure the path with.
 public enum RTPExtension {
+
+    /// The URIs the server names ids for, when it names any.
+    public enum URI {
+        public static let audioLevel = "urn:ietf:params:rtp-hdrext:ssrc-audio-level"
+        public static let absoluteSendTime =
+            "http://www.webrtc.org/experiments/rtp-hdrext/abs-send-time"
+        public static let transportSequence =
+            "http://www.ietf.org/id/draft-holmer-rmcat-transport-wide-cc-extensions-01"
+    }
+
+    /// The ids to use when READY names none — **read off a stream that
+    /// renders**, not chosen.
+    ///
+    /// Discord's READY carries no `header_extensions` at all: measured on a
+    /// call and on a Go Live session, three sessions running. So the code that
+    /// writes extensions had nothing to key on and wrote none, and this client
+    /// has been sending video packets with no extension block while every
+    /// packet of a Go Live stream that Discord draws carries two:
+    ///
+    /// ```
+    /// video ssrc=1596 seq=2826 … ext=[3:bcbbac 5:0047]
+    /// video ssrc=1596 seq=2827 … ext=[3:bcbbb1 5:0048]
+    /// video ssrc=1596 seq=2828 … ext=[3:bcbbb5 5:0049]
+    /// ```
+    ///
+    /// Three bytes on id 3 climbing with the clock is the absolute send time;
+    /// two bytes on id 5 climbing by exactly one per packet is the
+    /// transport-wide sequence number. Both are what an SFU measures a
+    /// publisher's path with, and neither was being sent.
+    ///
+    /// A named id still wins — see §"An empty field in READY is an absence".
+    public enum DefaultID {
+        public static let absoluteSendTime: UInt8 = 3
+        public static let transportSequence: UInt8 = 5
+    }
+
     /// `urn:ietf:params:rtp-hdrext:ssrc-audio-level` — RFC 6464.
     ///
     /// One byte: the voice-activity bit, then the level as **positive dBov**,
@@ -229,28 +281,72 @@ public enum RTPExtension {
         ]
     }
 
-    /// Reads one element out of an extension block. Used to recover a speaker's
-    /// level from an incoming packet, which is what lights their tile without
-    /// waiting for the gateway's own speaking event.
-    public static func firstElement(id wanted: UInt8, in packet: [UInt8]) -> [UInt8]? {
-        guard packet.count > RTP.headerLength, packet[0] & 0x10 != 0 else { return nil }
-        var index = RTP.headerLength + Int(packet[0] & 0x0F) * 4
-        guard packet.count >= index + 4 else { return nil }
-        guard packet[index] == 0xBE, packet[index + 1] == 0xDE else { return nil }
-        let words = Int(packet[index + 2]) << 8 | Int(packet[index + 3])
-        let end = index + 4 + words * 4
-        guard packet.count >= end else { return nil }
-        index += 4
-
-        while index < end {
-            let byte = packet[index]
-            if byte == 0 { index += 1; continue }   // padding
+    /// Every element in an RFC 8285 one-byte block, as `id:value` in hex.
+    ///
+    /// **The ids on this connection are not negotiated anywhere this client can
+    /// read them.** Discord's READY carries no `header_extensions` on a call or
+    /// on a stream — measured, twice — so the only description of what the
+    /// server expects is what a working client puts on the wire. A stream that
+    /// arrives and decodes is that description, and this is how it is read.
+    ///
+    /// Text rather than a parse into named elements, because naming them would
+    /// mean deciding what they are, which is the assumption this exists to
+    /// avoid making.
+    public static func describe(_ block: ArraySlice<UInt8>) -> String {
+        var parts: [String] = []
+        var index = block.startIndex
+        while index < block.endIndex {
+            let byte = block[index]
+            // Zero is RFC 8285's no-op, written to pad to a word boundary.
+            if byte == 0 { index += 1; continue }
             let id = byte >> 4
             let length = Int(byte & 0x0F) + 1
-            guard index + 1 + length <= end else { return nil }
-            if id == wanted { return Array(packet[(index + 1)..<(index + 1 + length)]) }
+            guard index + 1 + length <= block.endIndex else {
+                parts.append("truncated")
+                break
+            }
+            let value = block[(index + 1)..<(index + 1 + length)]
+                .map { String(format: "%02x", $0) }
+                .joined()
+            parts.append("\(id):\(value)")
             index += 1 + length
         }
-        return nil
+        return parts.joined(separator: " ")
+    }
+
+    /// `http://www.ietf.org/id/draft-holmer-rmcat-transport-wide-cc-extensions-01`.
+    ///
+    /// Two bytes: a counter that advances **once per packet across every stream
+    /// on the connection**, which is what makes it transport-wide. A per-stream
+    /// counter looks to the receiver like a path losing every other packet, so
+    /// the sequence is owned by the session and shared by the audio and video
+    /// paths — see `TransportSequence`.
+    public static func transportSequence(id: UInt8, sequence: UInt16) -> [UInt8] {
+        [
+            id << 4 | 1,
+            UInt8(truncatingIfNeeded: sequence >> 8),
+            UInt8(truncatingIfNeeded: sequence),
+        ]
+    }
+
+}
+
+// MARK: - The connection's packet counter
+
+/// The transport-wide sequence number, shared by every stream on one socket.
+///
+/// A reference type holding the atomic, for the reason `VoiceAudioEngine.Levels`
+/// is one: `Atomic` is non-copyable, so a `@Sendable` closure cannot capture one
+/// out of an enclosing type without consuming it. Read from the microphone's
+/// thread and the encoder's callback thread, which is why it is atomic rather
+/// than a plain counter.
+public final class TransportSequence: Sendable {
+    private let value = Atomic<UInt32>(0)
+
+    public init() {}
+
+    /// The next number, wrapping at sixteen bits as the extension does.
+    public func next() -> UInt16 {
+        UInt16(truncatingIfNeeded: value.add(1, ordering: .relaxed).oldValue)
     }
 }

@@ -25,6 +25,8 @@ struct VoiceCallOverlay: View {
     var cameraSession: AVCaptureSession?
     var selfUserID: UserID?
     var attachVideo: (UserID, (@Sendable (CMSampleBuffer) -> Void)?) -> Void
+    /// Opens or closes somebody's screen share.
+    var watch: (UserID) -> Void
     var spotlight: (UserID?) -> Void
 
     var toggleMute: () -> Void = {}
@@ -115,6 +117,7 @@ struct VoiceCallOverlay: View {
             cameraSession: cameraSession,
             selfUserID: selfUserID,
             attachVideo: attachVideo,
+            watch: watch,
             spotlight: spotlight
         )
         .padding(.horizontal, Spacing.snug)
@@ -234,8 +237,57 @@ struct VoiceCallOverlayContainer: View {
     @Environment(AppModel.self) private var model
     @Environment(\.motion) private var motion
     @State private var cameraSession: AVCaptureSession?
+    /// Shared by the lobby and the call, so the glass **morphs** between them
+    /// rather than one surface leaving and another arriving. Joining is
+    /// stepping into a call that is visibly already there; a swap would say the
+    /// opposite. §4, and why `Motion.glassMorph` exists.
+    @Namespace private var callSurface
 
     var body: some View {
+        // **Read once per evaluation.** This is a walk of every voice state the
+        // client knows about, and this container is in the conversation pane's
+        // body — asking for it again to feed an animation's value would double
+        // that for a number that is already in hand.
+        let waiting = model.callLobby(for: channelID)
+        let lobby = waiting.isEmpty ? nil : waiting
+
+        // **Whether this container is showing anything at all**, which is the
+        // only thing the transcript's inset may follow.
+        let isShowing = lobby != nil || model.voicePresentation.map {
+            $0.isDirect && $0.channelID == channelID
+        } ?? false
+
+        return GlassEffectContainer {
+            content(lobby: lobby)
+        }
+        .animation(motion.glassMorph, value: model.connectedVoiceChannelID)
+        .animation(motion.glassMorph, value: waiting.map(\.id))
+        .onChange(of: isShowing) { _, showing in
+            // **A panel that has left reports no height of its own**, so the
+            // inset it reserved has to be given back here or the transcript
+            // stays pushed down for the rest of the session.
+            //
+            // This used to watch `connectedVoiceChannelID` alone, which misses
+            // the exit that actually happens: hang up while the other person is
+            // still in the call and the **lobby** takes over — correctly, with
+            // a height of its own — and then *they* leave. The channel id has
+            // not changed since the first step, so nothing fires, the lobby
+            // goes, and a band of empty canvas the size of the panel is left
+            // behind with nothing in it. Measured, and it persists until the
+            // window is rebuilt.
+            //
+            // Following "is anything on screen" covers both exits, because it
+            // is the question the inset was always asking.
+            guard !showing else { return }
+            heightChanged(0)
+        }
+        .task(id: model.isCameraOn) {
+            cameraSession = model.isCameraOn ? await model.cameraSession() : nil
+        }
+    }
+
+    @ViewBuilder
+    private func content(lobby: [VoiceParticipant]?) -> some View {
         Group {
             if let presentation = model.voicePresentation,
                presentation.isDirect,
@@ -246,6 +298,7 @@ struct VoiceCallOverlayContainer: View {
                     cameraSession: cameraSession,
                     selfUserID: model.currentUserID,
                     attachVideo: model.attachVideo,
+                    watch: model.toggleWatchingStream,
                     spotlight: model.spotlight,
                     toggleMute: model.toggleVoiceMute,
                     toggleDeafen: model.toggleVoiceDeafen,
@@ -254,18 +307,25 @@ struct VoiceCallOverlayContainer: View {
                         leave: model.leaveVoice,
                     heightChanged: heightChanged
                 )
+                .glassEffectID(Self.surfaceID, in: callSurface)
+            } else if let lobby {
+                VoiceCallLobby(participants: lobby) { model.joinCall(in: channelID) }
+                    .frame(height: VoiceCallLobby.height)
+                    .frame(maxWidth: .infinity, alignment: .top)
+                    .padding(.horizontal, Spacing.base)
+                    .padding(.top, Spacing.base)
+                    .glassEffectID(Self.surfaceID, in: callSurface)
+                    // The panel arrives from the edge it lives on and leaves the
+                    // same way — §3 — and materialises rather than fading,
+                    // because it is glass.
+                    .transition(.move(edge: .top).combined(with: .materialize(from: .top)))
+                    .onAppear { heightChanged(VoiceCallLobby.height + Spacing.base * 2) }
             }
         }
-        .animation(motion.panel, value: model.connectedVoiceChannelID)
-        .onChange(of: model.connectedVoiceChannelID) { _, connected in
-            // The transcript's inset has to come back with the panel, and a
-            // panel that has left reports no height of its own.
-            if connected != channelID { heightChanged(0) }
-        }
-        .task(id: model.isCameraOn) {
-            cameraSession = model.isCameraOn ? await model.cameraSession() : nil
-        }
     }
+
+    /// One id for both states of one surface.
+    private static let surfaceID = "call-surface"
 
     private var effectNames: [UserID: String] {
         var names: [UserID: String] = [:]

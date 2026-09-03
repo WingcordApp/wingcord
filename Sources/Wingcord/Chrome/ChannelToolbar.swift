@@ -28,6 +28,20 @@ struct ChannelToolbar: ToolbarContent {
     /// keeps the store read out of the toolbar's own body.
     var pinsContent: () -> AnyView = { AnyView(EmptyView()) }
 
+    private var callTitle: String {
+        if chrome.isInCall { return "Leave the Call" }
+        return chrome.isCallOngoing ? "Join the Call" : "Start a Call"
+    }
+
+    private var callSymbol: String {
+        if chrome.isInCall { return "phone.down.fill" }
+        // A phone with its connection arcs for a call already in progress,
+        // against the plain handset for one that does not exist yet: the two
+        // acts have to be told apart at a glance, because only one of them
+        // rings somebody.
+        return chrome.isCallOngoing ? "phone.connection.fill" : "phone.fill"
+    }
+
     var body: some ToolbarContent {
         ToolbarItem(placement: .navigation) {
             // Named rather than tested for a channel id: a server page has no
@@ -53,13 +67,14 @@ struct ChannelToolbar: ToolbarContent {
         // closes by sliding its neighbours.
         ToolbarItem(placement: .primaryAction) {
             if chrome.canStartCall {
+                // **One control, three states**, because the third one is a
+                // different act: joining a call that is already running must
+                // not ring the person sitting in it, and offering to "start"
+                // one that exists is how a call became unrejoinable.
                 Button(action: toggleCall) {
-                    Label(
-                        chrome.isInCall ? "Leave the Call" : "Start a Call",
-                        systemImage: chrome.isInCall ? "phone.down.fill" : "phone.fill"
-                    )
+                    Label(callTitle, systemImage: callSymbol)
                 }
-                .help(chrome.isInCall ? "Leave the call" : "Start a call")
+                .help(callTitle)
                 .tint(chrome.isInCall ? Palette.destructive : nil)
             } else if chrome.canShowVoiceChat {
                 Button(action: toggleVoiceChat) {

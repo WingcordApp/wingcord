@@ -62,6 +62,17 @@ public actor GatewaySocket {
     private var sequence: Int?
     private var sessionID: String?
     private var resumeURL: String?
+
+    /// The session READY named, for the one caller outside this socket that
+    /// needs it.
+    ///
+    /// **An interaction names the session that will receive its response**, so
+    /// launching an activity is impossible without this. Read rather than
+    /// stored elsewhere because it changes on every resume that fails, and a
+    /// copy kept by a view model is a copy that goes stale exactly when the
+    /// socket reconnects. Nil between a disconnect and the next READY, which is
+    /// a real state a launch has to refuse rather than paper over.
+    public var currentSessionID: String? { sessionID }
     private var lastHeartbeatAcknowledged = true
     private var reconnectAttempt = 0
     /// How many times to retry before saying so. Ten attempts with the back-off
@@ -239,13 +250,18 @@ public actor GatewaySocket {
 
         do {
             let frame = try decoder.decode(GatewayFrame.self, from: data)
-            Self.trace("op=\(frame.opcode) seq=\(frame.sequence.map(String.init) ?? "-") bytes=\(data.count)")
+            Self.trace(
+                "op=\(frame.opcode) \(frame.name ?? "-") "
+                + "seq=\(frame.sequence.map(String.init) ?? "-") bytes=\(data.count)"
+            )
             // READY only, once per connection: name the keys Discord actually
             // sent. Discord has moved these before — `user_settings` for one —
             // and a missing key is silent, because every non-structural field
             // here is optional by design. Reading the key list off the wire is
             // the difference between knowing and guessing.
             if case .ready = frame.payload { Self.traceReadyShape(data) }
+            // Every Go Live frame, verbatim. See `traceStreamFrame`.
+            if let name = Self.streamEventName(of: frame) { Self.traceStreamFrame(name, data) }
             if let sequence = frame.sequence { self.sequence = sequence }
             process(frame)
         } catch {
@@ -292,6 +308,73 @@ public actor GatewaySocket {
         if let proto = body["user_settings_proto"] as? String {
             trace("READY user_settings_proto: \(proto.count) base64 chars")
         }
+        // **The main gateway's session id, to compare against the voice one.**
+        // Every voice IDENTIFY this client sends uses the session id off our
+        // own `VOICE_STATE_UPDATE`, on the belief that it is this same string.
+        // A Go Live stream identifying with it is refused `4006 Session is no
+        // longer valid.`, and "the two are not the same string" is the first
+        // thing that has to be ruled out — it cannot be, without both in one
+        // log. It is already beside the voice one in the identify line.
+        if let session = body["session_id"] as? String {
+            trace("READY session_id: \(session)")
+        }
+    }
+
+    /// The event name, for a frame this client wants written down whole.
+    ///
+    /// Read off the decoded payload rather than off the envelope, so the cost
+    /// is a switch on an enum the frame already built rather than a second
+    /// parse of every frame that arrives.
+    nonisolated private static func streamEventName(of frame: GatewayFrame) -> String? {
+        // Read off the name rather than the payload case, so an event this
+        // client does not decode is written down too — the set of Go Live
+        // events is not settled here, and a name in the trace is how the next
+        // one gets found.
+        guard let name = frame.name, name.hasPrefix("STREAM_") else { return nil }
+        return name
+    }
+
+    /// Writes a Go Live frame's payload down **verbatim**, less the token.
+    ///
+    /// **Every wire fact this client has about Go Live is documentation rather
+    /// than a capture**, and that is the one shape of knowledge this project
+    /// has repeatedly found to be wrong — a stream's `rtc_server_id`, the key's
+    /// grammar, which of these frames carries what. §"Print the frame, do not
+    /// infer it": one raw READY line killed two hypotheses about the camera
+    /// after three sessions of reading the code, and it had been arriving all
+    /// along.
+    ///
+    /// These frames are small, there are four of them per share, and one of
+    /// them arrives whenever anybody else in the channel starts sharing — so a
+    /// capture costs nothing and does not need us to be the one sharing.
+    ///
+    /// **The token is replaced by its length.** `STREAM_SERVER_UPDATE` carries
+    /// a media credential in the clear, and a trace line is a file, a screen
+    /// share and a sysdiagnose. The key is kept: it is an identifier, it is how
+    /// whose stream this is gets read, and its grammar is one of the things
+    /// being captured.
+    nonisolated private static func traceStreamFrame(_ name: String, _ data: Data) {
+        guard traceSink != nil else { return }
+        guard
+            let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+            var body = root["d"] as? [String: Any]
+        else {
+            trace("\(name): payload is not an object")
+            return
+        }
+        if let token = body["token"] as? String {
+            body["token"] = "<\(token.count) chars>"
+        }
+        guard
+            let redacted = try? JSONSerialization.data(
+                withJSONObject: body, options: [.sortedKeys]
+            ),
+            let text = String(data: redacted, encoding: .utf8)
+        else {
+            trace("\(name) keys: \(body.keys.sorted().joined(separator: ","))")
+            return
+        }
+        trace("\(name) \(text)")
     }
 
     private func inflate(_ frame: Data) -> Data? {
@@ -500,6 +583,127 @@ public actor GatewaySocket {
         )))
     }
 
+    /// Opens a Go Live stream, and asks the server for a media session to
+    /// carry it.
+    ///
+    /// **Op 18, and it is not the camera.** Turning a camera on is a switch on
+    /// the call's own media session — `self_video` at op 4. A screen share is a
+    /// *second* media session with its own RTC server, its own endpoint, its
+    /// own token and its own MLS group, and this is what asks for one. The
+    /// server answers in two frames that arrive in **either order**, exactly as
+    /// a call's credential does:
+    ///
+    /// - `STREAM_CREATE` — the stream key and the `rtc_server_id`
+    /// - `STREAM_SERVER_UPDATE` — the endpoint and the token
+    ///
+    /// **This payload is documentation, not a capture.** Everything else this
+    /// client sends was read off a wire first; these three fields were not, and
+    /// §"Wire facts are captured, never assumed" says that is a difference
+    /// worth writing down rather than leaving for a reader to assume. What the
+    /// server sends back *is* captured — `traceStreamFrame` writes every Go
+    /// Live frame down verbatim.
+    ///
+    /// - Parameters:
+    ///   - guildID: nil for a direct-message call, which makes this a stream of
+    ///     type `call` rather than `guild`. The two produce the two different
+    ///     stream-key grammars — see `StreamEventDTO`.
+    ///   - preferredRegion: the region the call is already in. Sent so the
+    ///     stream's own server is allocated beside the call's rather than
+    ///     across the world from it.
+    public func createStream(
+        guildID: GuildID?,
+        channelID: ChannelID,
+        preferredRegion: String?
+    ) {
+        struct Create: Encodable {
+            var op = 18
+            var d: Body
+
+            /// **`guild_id` is written even when it is absent**, exactly as
+            /// `updateVoiceState`'s body writes it. Swift omits a nil optional,
+            /// and this payload needs `guild_id: null` on the wire rather than
+            /// no `guild_id` at all — the same distinction that tells a
+            /// direct-message call from a malformed one, one opcode over.
+            struct Body: Encodable {
+                var type: String
+                var guild_id: String?
+                var channel_id: String
+                var preferred_region: String?
+
+                enum CodingKeys: String, CodingKey {
+                    case type, guild_id, channel_id, preferred_region
+                }
+
+                func encode(to encoder: any Encoder) throws {
+                    var container = encoder.container(keyedBy: CodingKeys.self)
+                    try container.encode(type, forKey: .type)
+                    try container.encode(guild_id, forKey: .guild_id)
+                    try container.encode(channel_id, forKey: .channel_id)
+                    // Omitted when absent rather than sent null: nothing has
+                    // captured what the server does with an explicit null here,
+                    // and the key is optional in every description of it.
+                    try container.encodeIfPresent(
+                        preferred_region, forKey: .preferred_region
+                    )
+                }
+            }
+        }
+        Self.trace(
+            "stream create -> guild=\(guildID?.description ?? "-") channel=\(channelID) "
+            + "region=\(preferredRegion ?? "-")"
+        )
+        send(Create(d: .init(
+            type: guildID == nil ? "call" : "guild",
+            guild_id: guildID.map { String($0.rawValue) },
+            channel_id: String(channelID.rawValue),
+            preferred_region: preferredRegion
+        )))
+    }
+
+    /// Asks to watch somebody else's Go Live stream.
+    ///
+    /// **Op 20, and it is what turns a badge into a picture.** A stream is a
+    /// media session of its own: knowing that somebody is live — which comes
+    /// from `self_stream` on their voice state, not from a stream event —
+    /// carries no address, no key and no token. This asks for them, and the
+    /// server answers with the same two frames a stream's owner gets:
+    /// `STREAM_CREATE` with the RTC ids, and `STREAM_SERVER_UPDATE` with the
+    /// endpoint and token, in **either order**.
+    ///
+    /// **The key is built, not received.** Nothing dispatches a stream event to
+    /// somebody who is not already watching, so a viewer never sees the owner's
+    /// `stream_key` before asking for it. Its grammar is captured — see
+    /// `StreamEventDTO` — and `GoLiveKey` is the one place it is assembled.
+    ///
+    /// Like opcode 18, this payload is **documentation rather than capture**:
+    /// what comes back is written down verbatim by `traceStreamFrame`, and that
+    /// is what will correct it.
+    public func watchStream(streamKey: String) {
+        struct Watch: Encodable {
+            var op = 20
+            var d: Body
+            struct Body: Encodable { var stream_key: String }
+        }
+        Self.trace("stream watch -> \(streamKey)")
+        send(Watch(d: .init(stream_key: streamKey)))
+    }
+
+    /// Ends a Go Live stream.
+    ///
+    /// **Op 19, and it is addressed by key rather than by channel.** One
+    /// account can hold a stream in more than one place, so the key is the only
+    /// thing that names which — and it is the server's own string, echoed back
+    /// exactly as `STREAM_CREATE` sent it rather than rebuilt from its parts.
+    public func deleteStream(streamKey: String) {
+        struct Delete: Encodable {
+            var op = 19
+            var d: Body
+            struct Body: Encodable { var stream_key: String }
+        }
+        Self.trace("stream delete -> \(streamKey)")
+        send(Delete(d: .init(stream_key: streamKey)))
+    }
+
     /// Publishes the reader's own status and custom status.
     ///
     /// **Op 3, over the socket, and there is no REST equivalent that works.**
@@ -510,7 +714,18 @@ public actor GatewaySocket {
     /// A custom status is an activity of kind 4 whose `state` is the text — the
     /// same shape it arrives in. Sent as an empty list when there is none,
     /// because omitting the key leaves the previous activity standing.
-    public func updatePresence(status: String, customStatus: String?, customEmoji: String?) {
+    /// Publishes the reader's presence.
+    ///
+    /// **`activities` is an ARRAY and the whole array is replaced.** A custom
+    /// status is one entry (type 4) and a rich presence is another; sending
+    /// either alone erases the other, which is why both cross here together
+    /// rather than through two calls that would fight.
+    public func updatePresence(
+        status: String,
+        customStatus: String?,
+        customEmoji: String?,
+        activity: RichPresenceActivity? = nil
+    ) {
         struct Update: Encodable {
             var op = 3
             var d: Data
@@ -522,23 +737,88 @@ public actor GatewaySocket {
                 var activities: [Activity]
             }
 
+            /// One entry. A custom status fills `state` and `emoji`; a rich
+            /// presence fills the rest. **Every nil field is omitted** — the
+            /// encoder drops them — because an explicit null is not the same as
+            /// an absent key to the gateway.
             struct Activity: Encodable {
-                var name = "Custom Status"
-                var type = 4
+                var name: String
+                var type: Int
                 var state: String?
+                var details: String?
                 var emoji: Emoji?
+                var assets: Assets?
+                var timestamps: Timestamps?
+                var party: Party?
+                var buttons: [String]?
+                var application_id: String?
             }
 
-            struct Emoji: Encodable {
-                var name: String
+            struct Emoji: Encodable { var name: String }
+
+            struct Assets: Encodable {
+                var large_image: String?
+                var large_text: String?
+                var large_url: String?
+                var small_image: String?
+                var small_text: String?
+                var small_url: String?
+            }
+
+            /// **Milliseconds.** Seconds would date the activity to 1970 and
+            /// every elapsed clock would read as decades.
+            struct Timestamps: Encodable {
+                var start: Int?
+                var end: Int?
+            }
+
+            struct Party: Encodable {
+                var id: String?
+                var size: [Int]?
             }
         }
 
         var activities: [Update.Activity] = []
         if customStatus?.isEmpty == false || customEmoji?.isEmpty == false {
             activities.append(Update.Activity(
+                name: "Custom Status",
+                type: 4,
                 state: customStatus.flatMap { $0.isEmpty ? nil : $0 },
                 emoji: customEmoji.flatMap { $0.isEmpty ? nil : Update.Emoji(name: $0) }
+            ))
+        }
+        if let activity {
+            activities.append(Update.Activity(
+                name: activity.name,
+                type: activity.type,
+                state: activity.state,
+                details: activity.details,
+                assets: activity.assets.map {
+                    Update.Assets(
+                        large_image: $0.largeImage,
+                        large_text: $0.largeText,
+                        large_url: $0.largeURL?.absoluteString,
+                        small_image: $0.smallImage,
+                        small_text: $0.smallText,
+                        small_url: $0.smallURL?.absoluteString
+                    )
+                },
+                timestamps: activity.timestamps.map {
+                    Update.Timestamps(start: $0.start, end: $0.end)
+                },
+                // **An empty object is not the same as an absent one.** An
+                // app that sends a party with nothing in it — Watch Together
+                // sends only an id, and a non-string one is dropped — would
+                // otherwise put `"party":{}` on the wire, which is a claim
+                // about a party rather than silence about one.
+                party: activity.party.flatMap {
+                    $0.id == nil && $0.size == nil
+                        ? nil : Update.Party(id: $0.id, size: $0.size)
+                },
+                // Empty is omitted, not sent as `[]`: an empty array is a claim
+                // that there are no buttons, and Discord is happier with silence.
+                buttons: activity.buttons.isEmpty ? nil : Array(activity.buttons.prefix(2)),
+                application_id: activity.applicationID?.description
             ))
         }
         send(Update(d: .init(status: status, activities: activities)))
@@ -962,6 +1242,9 @@ public enum GatewayUpdate: Sendable {
     ///   and the payload carried them. The reply header names and pictures that
     ///   person, and a live message is very often the first time this client
     ///   hears of them — see `MessageDTO.QuotedDTO`.
+    /// An interaction this client sent was accepted. `id` is the interaction's
+    /// snowflake; for an activity launch it is the instance.
+    case interactionAcknowledged(id: String, nonce: String?)
     case messageCreated(
         Message, author: User, quotedAuthor: User?, member: Member?, guildID: GuildID?
     )
@@ -1007,13 +1290,33 @@ public enum GatewayUpdate: Sendable {
     case callChanged(DirectCall)
     case callEnded(ChannelID)
     case soundboardSoundsChanged(GuildID?, sounds: [SoundboardSound])
-    /// Who is watching one person's screen share. `viewers` is the whole set,
-    /// never a delta — the caller diffs it against what it held.
-    case streamViewersChanged(owner: UserID, channelID: ChannelID?, viewers: Set<UserID>)
+    /// Who is watching one person's screen share, and — on the `STREAM_CREATE`
+    /// that opens it — where its media session lives.
+    ///
+    /// `viewers` is the whole set, never a delta: the caller diffs it against
+    /// what it held. `rtcServerID` is present only on the create, and only for
+    /// **our own** stream; it is what a Go Live session's MLS group is keyed
+    /// from, and it is `rtc_channel_id` rather than anything derived.
+    case streamChanged(
+        owner: UserID,
+        channelID: ChannelID?,
+        key: String,
+        /// Present only on the `STREAM_CREATE` that opens a stream, and only
+        /// for our own. `nil` on every viewer-count update.
+        session: GoLiveSession?,
+        viewers: Set<UserID>
+    )
     case streamEnded(owner: UserID)
+    /// The other half of a Go Live credential. Arrives in **either order**
+    /// relative to `streamChanged`, exactly as a call's two halves do.
+    case streamServerChanged(GoLiveServer)
 
     init?(_ payload: GatewayFrame.Payload) {
         switch payload {
+        case .interactionSuccess(let ack):
+            guard let id = ack.id else { return nil }
+            self = .interactionAcknowledged(id: id, nonce: ack.nonce)
+
         case .messageCreate(let dto):
             guard let authorDTO = dto.author else { return nil }
             self = .messageCreated(
@@ -1182,14 +1485,31 @@ public enum GatewayUpdate: Sendable {
             self = .soundboardSoundsChanged(payload.guild_id, sounds: payload.catalog)
         case .streamUpsert(let dto):
             guard let owner = dto.ownerID else { return nil }
-            self = .streamViewersChanged(
+            // Both ids or neither: a session named by only one of them is one
+            // this client cannot open, and half of it is not worth carrying.
+            let session: GoLiveSession? =
+                if let server = dto.rtc_server_id, let channel = dto.rtc_channel_id {
+                    GoLiveSession(
+                        streamKey: dto.stream_key,
+                        rtcServerID: server.rawValue,
+                        rtcChannelID: channel.rawValue
+                    )
+                } else {
+                    nil
+                }
+            self = .streamChanged(
                 owner: owner,
                 channelID: dto.channelID,
+                key: dto.stream_key,
+                session: session,
                 viewers: Set(dto.viewer_ids ?? [])
             )
         case .streamDelete(let dto):
             guard let owner = dto.ownerID else { return nil }
             self = .streamEnded(owner: owner)
+        case .streamServerUpdate(let dto):
+            guard let server = dto.domain else { return nil }
+            self = .streamServerChanged(server)
         case .relationshipRemove(let dto):
             // A removal carries the type that *was*, not one to apply — so the
             // event is normalised to `.none` here rather than at the store,

@@ -129,6 +129,13 @@ struct ProtobufReader {
         return nil
     }
 
+    /// The next varint in a *packed* field's body, where there are no keys —
+    /// only values back to back. Nil at the end, and nil on a malformed byte.
+    mutating func nextVarint() -> UInt64? {
+        guard index < end else { return nil }
+        return varint()
+    }
+
     // MARK: Primitives
 
     private mutating func varint() -> UInt64? {

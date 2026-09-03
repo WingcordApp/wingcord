@@ -110,6 +110,10 @@ public struct Activity: Hashable, Sendable {
     /// A custom status' emoji.
     public var emoji: EmojiRef?
     public var startedAt: Date?
+    /// `[current, maximum]`. **This is where "1 Playing" comes from** on an
+    /// activity invitation, and it is the only count on the wire — an app that
+    /// sends no party is one this client cannot count for.
+    public var partySize: [Int]?
 
     public init(
         kind: Kind,
@@ -120,8 +124,10 @@ public struct Activity: Hashable, Sendable {
         largeImageKey: String? = nil,
         smallImageKey: String? = nil,
         emoji: EmojiRef? = nil,
-        startedAt: Date? = nil
+        startedAt: Date? = nil,
+        partySize: [Int]? = nil
     ) {
+        self.partySize = partySize
         self.kind = kind
         self.name = name
         self.state = state

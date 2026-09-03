@@ -27,6 +27,16 @@ extension AppModel {
         voice.startDirectCall(channelID: channelID)
     }
 
+    /// Joins a direct-message call that is already running.
+    ///
+    /// **The same act as answering, and deliberately not the same as starting.**
+    /// Ringing somebody who is already sitting in the call is a phone going off
+    /// in their ear for a call they are on — so this joins and rings nobody,
+    /// exactly as `answerCall` does.
+    func joinCall(in channelID: ChannelID) {
+        voice.join(channelID: channelID, guildID: nil)
+    }
+
     func leaveVoice() { voice.leave() }
 
     func declineCall(in channelID: ChannelID) { voice.decline(channelID: channelID) }
@@ -44,9 +54,12 @@ extension AppModel {
     func toggleVoiceDeafen() { voice.setDeafened(!isSelfDeafened) }
 
     func toggleCamera() {
-        // A camera and a screen share are one video stream on this protocol, so
-        // turning one on turns the other off rather than failing silently.
-        if isScreenSharing { voice.stopScreenShare() }
+        // **A camera and a share are two media sessions now, so they coexist.**
+        // This used to stop the share, because both went down the call's one
+        // video track and the second to start would have overwritten the first.
+        // A Go Live stream has its own session, its own SSRCs and its own MLS
+        // group — which is what Discord's own client does, and why it lets you
+        // be on camera while sharing.
         voice.setCameraOn(!isCameraOn)
     }
 
@@ -61,7 +74,6 @@ extension AppModel {
 
     func startScreenShare(target: ShareableTarget) {
         isScreenSharePickerOpen = false
-        if isCameraOn { voice.setCameraOn(false) }
         var quality = ScreenShareCapture.Quality.standard
         let settings = AppSettings.shared
         quality.width = settings.videoWidth
@@ -69,6 +81,20 @@ extension AppModel {
         quality.framerate = settings.videoFramerate
         quality.capturesAudio = settings.sharesSystemAudio
         voice.startScreenShare(target: target, quality: quality)
+    }
+
+    /// Opens somebody's screen share, or closes the one that is open.
+    ///
+    /// **One at a time.** Watching costs a socket, an MLS group and a decode
+    /// per stream; two at once is twice that for a picture nobody is looking at
+    /// — and the tile that would draw the second is behind the first.
+    func toggleWatchingStream(_ userID: UserID) {
+        if watchedStreamUserID == userID {
+            voice.stopWatchingStream()
+        } else {
+            if watchedStreamUserID != nil { voice.stopWatchingStream() }
+            voice.watchStream(owner: userID)
+        }
     }
 
     func setPushToTalkHeld(_ held: Bool) { voice.setPushToTalkHeld(held) }

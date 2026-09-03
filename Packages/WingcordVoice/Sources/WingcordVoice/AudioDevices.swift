@@ -57,6 +57,7 @@ public enum AudioDeviceCatalog {
         let defaultID = defaultDeviceID(input: input)
         return ids.compactMap { id in
             guard channelCount(of: id, input: input) > 0 else { return nil }
+            guard !isSystemPrivate(id) else { return nil }
             guard let name = stringProperty(kAudioObjectPropertyName, of: id) else { return nil }
             return AudioDevice(
                 id: id,
@@ -67,6 +68,57 @@ public enum AudioDeviceCatalog {
                 isDefault: id == defaultID
             )
         }
+    }
+
+    /// Whether this device belongs to the system rather than to the reader.
+    ///
+    /// **The voice processing unit builds its own aggregate device, and it is
+    /// in this list.** `CADefaultDeviceAggregate-<pid>-<n>` appears the moment
+    /// `setVoiceProcessingEnabled(true)` succeeds, wrapping the real input and
+    /// output — which is also where the phantom seven- and nine-channel buses
+    /// come from. Offering it in a picker is worse than untidy: its unique id
+    /// carries the process id, so a reader who chooses it has stored a
+    /// preference that **cannot resolve again after a relaunch**, and every
+    /// device row afterwards reads "Not connected". Measured, on this machine,
+    /// the first time the processor ever came up.
+    ///
+    /// There are **two** of them and they are named differently:
+    /// `CADefaultDeviceAggregate-<pid>-<n>`, which wraps the default devices,
+    /// and `VPAUAggregateAudioDevice-<address>`, which is the voice processing
+    /// audio unit's own. Both were seen in one session on one machine, so a
+    /// filter that knows about only one of them is not a filter.
+    ///
+    /// Three signals, because none is enough alone. `kAudioDevicePropertyIsHidden`
+    /// is the documented "do not show this to a person" flag and not everything
+    /// sets it; the two names are what the system actually generates. An
+    /// aggregate the reader built themselves in Audio MIDI Setup matches none
+    /// of them and stays, because taking that away would remove a real choice.
+    private static func isSystemPrivate(_ id: AudioDeviceID) -> Bool {
+        if integerProperty(kAudioDevicePropertyIsHidden, of: id) ?? 0 != 0 { return true }
+        let uid = stringProperty(kAudioDevicePropertyDeviceUID, of: id) ?? ""
+        return systemAggregatePrefixes.contains { uid.hasPrefix($0) }
+    }
+
+    private static let systemAggregatePrefixes = [
+        "CADefaultDeviceAggregate",
+        "VPAUAggregateAudioDevice",
+    ]
+
+    private static func integerProperty(
+        _ selector: AudioObjectPropertySelector,
+        of id: AudioDeviceID
+    ) -> UInt32? {
+        var address = AudioObjectPropertyAddress(
+            mSelector: selector,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
+        )
+        var value: UInt32 = 0
+        var size = UInt32(MemoryLayout<UInt32>.size)
+        guard AudioObjectGetPropertyData(id, &address, 0, nil, &size, &value) == noErr else {
+            return nil
+        }
+        return value
     }
 
     private static func defaultDeviceID(input: Bool) -> AudioDeviceID {

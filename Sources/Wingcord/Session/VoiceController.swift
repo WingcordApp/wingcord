@@ -35,6 +35,53 @@ final class VoiceController {
     private var joiningChannelID: ChannelID?
     private var joiningGuildID: GuildID?
 
+    // MARK: The Go Live stream
+    //
+    // **A second media session, with a second two-half credential.** A stream
+    // is not the call: `STREAM_CREATE` carries its key and its `rtc_server_id`,
+    // `STREAM_SERVER_UPDATE` carries its endpoint and token, and — exactly as
+    // `VOICE_STATE_UPDATE` and `VOICE_SERVER_UPDATE` do — the two arrive in no
+    // guaranteed order. These are that latch.
+
+    private var stream: StreamSession?
+    private var streamTask: Task<Void, Never>?
+    /// What the reader asked to share, held from the moment opcode 18 goes out
+    /// until both halves have arrived and the session can be built.
+    private var pendingShare: (target: ShareableTarget, quality: ScreenShareCapture.Quality)?
+    private var pendingStreamKey: String?
+    private var pendingStreamSession: GoLiveSession?
+    private var pendingStreamServer: GoLiveServer?
+    /// The self tile's sink, kept because the tile attaches before the stream
+    /// session exists — a share started after the tile is on screen would
+    /// otherwise have nowhere to draw.
+    private var streamPreviewSink: (@Sendable (CMSampleBuffer) -> Void)?
+
+    // MARK: Watching somebody else's stream
+    //
+    // The receive mirror of the block above, with the same two-half latch — a
+    // viewer is told about the stream it asked for in exactly the frames its
+    // owner was.
+
+    private var watch: StreamViewSession?
+    private var watchTask: Task<Void, Never>?
+    /// Whose stream opcode 20 has been sent for, and under which key. Held from
+    /// the moment we ask until both halves have arrived.
+    private var pendingWatch: (owner: UserID, key: String)?
+    private var pendingWatchSession: GoLiveSession?
+    private var pendingWatchServer: GoLiveServer?
+    /// The watched tile's sink, kept for the same reason the self tile's is.
+    private var watchSink: (@Sendable (CMSampleBuffer) -> Void)?
+    /// Credentials already received, by whose stream they are for.
+    ///
+    /// **Discord answers opcode 20 once.** A second request for a stream this
+    /// account is already registered as a viewer of is accepted and answered
+    /// with nothing — measured, as two `stream watch ->` lines against one
+    /// `STREAM_CREATE`/`STREAM_SERVER_UPDATE` pair — so a client that discards
+    /// the first credential can never reconnect to that stream again. Stopping
+    /// and starting a watch is an ordinary thing to do, and without this it
+    /// works exactly once per stream.
+    private var watchCredentials: [UserID: (session: GoLiveSession, server: GoLiveServer)] = [:]
+
     /// Soundboards being fetched, so a picker opened twice asks once.
     private var soundboardFetches: Set<GuildID> = []
     /// Clips already fetched, by sound id. A soundboard press is a download,
@@ -411,7 +458,16 @@ final class VoiceController {
         let previous = streamViewerIDs
         streamViewerIDs = next
         guard previous != next else { return }
-        if !next.subtracting(previous).isEmpty { sounds.play(.viewerJoin) }
+        if !next.subtracting(previous).isEmpty {
+            sounds.play(.viewerJoin)
+            // **A new viewer needs a keyframe, and this is the only notice we
+            // get that there is one.** They arrive with no parameter sets and
+            // no reference frame, so everything sent until the encoder's next
+            // keyframe — up to two seconds — is undecodable to them. This
+            // client answers no retransmission requests either, so one they
+            // miss is one they never get.
+            Task { [stream] in await stream?.requestKeyframe() }
+        }
         if !previous.subtracting(next).isEmpty { sounds.play(.viewerLeave) }
     }
 
@@ -586,10 +642,6 @@ final class VoiceController {
                 self?.model.isTalkingWhileMuted = false
             }
 
-        case .screenShareStopped:
-            model.isScreenSharing = false
-            model.voiceRevision &+= 1
-
         case .encryption(let state):
             let encryption: VoiceQuality.Encryption = switch state {
             case .endToEnd(let code): .endToEnd(verificationCode: code)
@@ -630,7 +682,14 @@ final class VoiceController {
         // The call's mixer is going away, so the blips go back to their own
         // engine rather than into a sink nothing is draining.
         sounds.callSink = nil
-        streamViewerIDs = []
+        // The share and anything being watched go with the call they belong to.
+        // Silent here: the caller has already played the one sound this event
+        // gets.
+        teardownStream()
+        stopWatchingStream()
+        // A stream's credential is only good for the media session it was
+        // issued in, and that session goes with the call.
+        watchCredentials.removeAll()
         guard let engine else { return }
         self.engine = nil
         Task { await engine.disconnect() }
@@ -704,6 +763,7 @@ final class VoiceController {
         video.framerate = settings.videoFramerate
         video.width = settings.videoWidth
         video.height = settings.videoHeight
+        video.bitrate = settings.videoQuality.bitrate
         Task { [weak self] in
             let ok = await engine.setCameraOn(on, preferences: video)
             guard let self else { return }
@@ -717,25 +777,281 @@ final class VoiceController {
         }
     }
 
+    /// Asks Discord for a stream, and waits for the two halves of its
+    /// credential.
+    ///
+    /// **Nothing is captured yet.** The screen is not read until there is a
+    /// media session to send it to — a capture running against no session is
+    /// somebody's screen being read for nothing, which is the one thing a share
+    /// must not do speculatively.
     func startScreenShare(target: ShareableTarget, quality: ScreenShareCapture.Quality) {
-        guard let engine else { return }
-        Task { [weak self] in
-            let ok = await engine.startScreenShare(target: target, quality: quality)
-            guard let self else { return }
-            if ok { sounds.play(.streamStart) }
-            model.isScreenSharing = ok
-            model.voiceRevision &+= 1
+        guard engine != nil, stream == nil, let channelID = joiningChannelID else { return }
+        pendingShare = (target, quality)
+        pendingStreamKey = nil
+        pendingStreamSession = nil
+        pendingStreamServer = nil
+        // **No preferred region.** Discord's own client sends the region the
+        // call is already in; nothing here holds that value, and §"a field
+        // invented for a wire protocol is a field the server may refuse the
+        // whole frame over" says to omit it rather than guess. The key is
+        // omitted entirely when nil, so the server picks.
+        Task { [socket, joiningGuildID] in
+            await socket?.createStream(
+                guildID: joiningGuildID, channelID: channelID, preferredRegion: nil
+            )
         }
     }
 
     func stopScreenShare() {
-        Task { [engine, weak self] in
-            await engine?.stopScreenShare()
-            guard let self else { return }
-            if model.isScreenSharing { sounds.play(.streamEnd) }
-            model.isScreenSharing = false
-            streamViewerIDs = []
+        let wasSharing = model.isScreenSharing
+        teardownStream()
+        if wasSharing { sounds.play(.streamEnd) }
+        model.isScreenSharing = false
+        model.voiceRevision &+= 1
+    }
+
+    /// Ends the stream session and tells the server, without touching the model
+    /// or making a sound.
+    ///
+    /// **Separate from `stopScreenShare` because leaving a call must do this
+    /// too.** A share left running after the call it belonged to is a second
+    /// websocket, a second UDP socket, and — the part that actually matters —
+    /// **somebody's screen still being read** with nothing on screen saying so.
+    private func teardownStream() {
+        let key = pendingStreamKey
+        pendingShare = nil
+        pendingStreamKey = nil
+        pendingStreamSession = nil
+        pendingStreamServer = nil
+        streamViewerIDs = []
+        streamTask?.cancel(); streamTask = nil
+        guard let session = stream else { return }
+        stream = nil
+        // Told to the server: a stream torn down without opcode 19 stays in the
+        // channel's state until it times out, and the far end keeps being
+        // offered something to watch that no longer exists.
+        if let key { Task { [socket] in await socket?.deleteStream(streamKey: key) } }
+        Task { await session.stop() }
+    }
+
+    /// `STREAM_CREATE` — the key and the RTC ids.
+    ///
+    /// **Two streams can be pending at once and they are told apart by owner.**
+    /// Ours is the share we asked to publish; somebody else's is the one we
+    /// asked to watch. Nothing else about the frame distinguishes them.
+    func applyStreamCreated(owner: UserID, key: String, session: GoLiveSession?) {
+        if owner == model.currentUserID {
+            guard pendingShare != nil else { return }
+            pendingStreamKey = key
+            if let session { pendingStreamSession = session }
+            startStreamIfReady()
+        } else {
+            guard pendingWatch?.owner == owner else { return }
+            if let session { pendingWatchSession = session }
+            rememberWatchCredential(for: owner)
+            startWatchIfReady()
+        }
+    }
+
+    /// `STREAM_SERVER_UPDATE` — the endpoint and the token.
+    ///
+    /// Routed by **key**, because this frame does not say whose stream it
+    /// describes beyond that.
+    func apply(streamServer server: GoLiveServer) {
+        if let pending = pendingWatch, pending.key == server.streamKey {
+            pendingWatchServer = server
+            rememberWatchCredential(for: pending.owner)
+            startWatchIfReady()
+            return
+        }
+        guard pendingShare != nil else { return }
+        pendingStreamServer = server
+        pendingStreamKey = server.streamKey
+        startStreamIfReady()
+    }
+
+    /// Asks to watch somebody's screen share.
+    ///
+    /// **The key is built rather than received.** Nothing dispatches a stream
+    /// event to somebody who is not already watching, so a viewer never learns
+    /// the owner's key before asking for it — see `GoLiveKey`.
+    func watchStream(owner: UserID) {
+        guard watch == nil, pendingWatch == nil,
+              let channelID = joiningChannelID,
+              owner != model.currentUserID
+        else { return }
+        let key = GoLiveKey.make(
+            guildID: joiningGuildID, channelID: channelID, userID: owner
+        )
+        pendingWatch = (owner, key)
+        model.watchedStreamUserID = owner
+        model.voiceRevision &+= 1
+
+        // Already asked once this call: reconnect on what we were given rather
+        // than on a second request the server will not answer.
+        if let held = watchCredentials[owner] {
+            pendingWatchSession = held.session
+            pendingWatchServer = held.server
+            startWatchIfReady()
+            return
+        }
+        pendingWatchSession = nil
+        pendingWatchServer = nil
+        Task { [socket] in await socket?.watchStream(streamKey: key) }
+    }
+
+    func stopWatchingStream() {
+        pendingWatch = nil
+        pendingWatchSession = nil
+        pendingWatchServer = nil
+        watchTask?.cancel(); watchTask = nil
+        let session = watch
+        watch = nil
+        // **The credentials outlive this, on purpose** — see
+        // `watchCredentials`. They are cleared with the call, in `teardownEngine`.
+        model.watchedStreamUserID = nil
+        model.liveVideoUserIDs = model.liveVideoUserIDs.filter { $0 != model.currentUserID }
+        model.voiceRevision &+= 1
+        if session != nil { Task { await session?.stop() } }
+    }
+
+    private func rememberWatchCredential(for owner: UserID) {
+        guard let session = pendingWatchSession, let server = pendingWatchServer else { return }
+        watchCredentials[owner] = (session, server)
+    }
+
+    private func startWatchIfReady() {
+        guard let pending = pendingWatch,
+              let created = pendingWatchSession,
+              let server = pendingWatchServer,
+              let userID = model.currentUserID,
+              let sessionID = pendingSession,
+              watch == nil
+        else { return }
+
+        let session = StreamViewSession(
+            connection: StreamViewSession.Connection(
+                endpoint: server.endpoint,
+                token: server.token,
+                // The same pairing a stream we publish uses: the RTC server
+                // identifies the session, the RTC channel keys its group.
+                serverID: String(created.rtcServerID),
+                mediaSessionID: created.rtcChannelID,
+                userID: userID.rawValue,
+                sessionID: sessionID,
+                ownerID: pending.owner.rawValue
+            )
+        )
+        watch = session
+        session.setVideoSink(watchSink)
+
+        watchTask = Task { [weak self] in
+            await session.start()
+            guard let stream = await session.events else { return }
+            for await event in stream {
+                guard let self else { return }
+                self.apply(watchEvent: event, owner: pending.owner)
+            }
+        }
+    }
+
+    private func apply(watchEvent event: StreamViewSession.Event, owner: UserID) {
+        switch event {
+        case .pictureArrived:
+            // **Announced is not arriving.** The tile switches to video on the
+            // first frame that actually decoded, never on the connection.
+            guard !model.liveVideoUserIDs.contains(owner) else { return }
+            model.liveVideoUserIDs.insert(owner)
             model.voiceRevision &+= 1
+
+        case .state(.failed(let reason)):
+            SessionController.trace("stream watch failed: \(reason)")
+            model.reportActionFailure(reason)
+            stopWatchingStream()
+
+        case .state(.connecting), .state(.watching):
+            break
+        }
+    }
+
+    private func startStreamIfReady() {
+        guard let share = pendingShare,
+              let server = pendingStreamServer,
+              let created = pendingStreamSession,
+              let userID = model.currentUserID,
+              let sessionID = pendingSession,
+              stream == nil
+        else {
+            SessionController.trace(
+                "stream not ready: share=\(pendingShare != nil) "
+                + "server=\(pendingStreamServer != nil) create=\(pendingStreamSession != nil)"
+            )
+            return
+        }
+
+        // **The RTC server identifies it; the RTC channel keys its group.**
+        // Measured — the DM channel and the RTC channel are each refused 4006 —
+        // and the two fields turn out to be named for exactly what they are, in
+        // the same pairing the call uses: a call identifies with its *server*
+        // and keys its group on its *channel*.
+        let session = StreamSession(
+            connection: StreamSession.Connection(
+                endpoint: server.endpoint,
+                token: server.token,
+                serverID: String(created.rtcServerID),
+                mediaSessionID: created.rtcChannelID,
+                userID: userID.rawValue,
+                sessionID: sessionID
+            ),
+            target: share.target,
+            quality: share.quality
+        )
+        stream = session
+        session.setPreviewSink(streamPreviewSink)
+
+        streamTask = Task { [weak self] in
+            await session.start()
+            guard let stream = await session.events else { return }
+            for await event in stream {
+                guard let self else { return }
+                self.apply(streamEvent: event)
+            }
+        }
+    }
+
+    private func apply(streamEvent event: StreamSession.Event) {
+        switch event {
+        case .state(.live):
+            guard !model.isScreenSharing else { return }
+            sounds.play(.streamStart)
+            model.isScreenSharing = true
+            model.voiceRevision &+= 1
+
+        case .state(.failed(let reason)):
+            SessionController.trace("stream failed: \(reason)")
+            // Said out loud, for the reason a failed call is: a share that
+            // stops a second after it started, with nothing on screen to say
+            // why, reads as the feature being broken.
+            model.reportActionFailure(reason)
+            stopScreenShare()
+
+        case .state(.connecting):
+            break
+
+        case .encryption(let state):
+            // **The stream's own group, and therefore its own code**, which is
+            // not the call's — showing the call's shield beside a share would
+            // be a claim about the wrong session.
+            //
+            // There is no surface for it yet, and §5.5 forbids storing a fact
+            // the app then draws nowhere, so it goes to the trace: that is
+            // where "is this share actually end-to-end encrypted" gets
+            // answered until a shield of its own exists.
+            SessionController.trace("stream encryption: \(state)")
+
+        case .ended(let reason):
+            SessionController.trace("stream capture ended: \(reason)")
+            stopScreenShare()
         }
     }
 
@@ -749,6 +1065,24 @@ final class VoiceController {
     /// goes away, which is what stops a display layer being fed after it has
     /// left the window.
     func setVideoSink(_ sink: (@Sendable (CMSampleBuffer) -> Void)?, for userID: UserID) {
+        // **Our own tile is never an inbound stream.** A camera's self-view is
+        // the capture session's preview layer and never reaches here; a screen
+        // share's picture comes from the stream session, which is a different
+        // media session altogether. The sink is kept either way, because the
+        // tile attaches before a share exists.
+        guard userID != model.currentUserID else {
+            streamPreviewSink = sink
+            stream?.setPreviewSink(sink)
+            return
+        }
+        // Somebody whose **stream** we are watching is on a media session of
+        // its own, and their camera on the call is not. One person can be both
+        // at once, and the stream is what the tile was opened to show.
+        if userID == model.watchedStreamUserID {
+            watchSink = sink
+            watch?.setVideoSink(sink)
+            return
+        }
         engine?.setVideoSink(sink, for: userID.rawValue)
     }
 

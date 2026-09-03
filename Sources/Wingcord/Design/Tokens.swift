@@ -291,6 +291,23 @@ nonisolated enum Metrics {
     /// A sticker drawn inside a message. Not a thumbnail of anything larger —
     /// this *is* the sticker's size.
     static let stickerInline: CGFloat = 160
+
+    // MARK: Activities
+
+    /// An app's icon on a launcher list row.
+    static let activityRowIcon: CGFloat = 34
+    /// An app's icon in the Recents strip. Larger than a list row's, because
+    /// the icon is the only thing that row carries — there is no name beside it.
+    static let activityRecentIcon: CGFloat = 40
+    /// One featured tile's artwork, two across the flyout's inner width.
+    static let activityTileWidth: CGFloat = 168
+    /// That artwork's height. 16:9, which is the shape every `embedded_cover`
+    /// in the captured shelf is drawn at.
+    static let activityTileArt: CGFloat = activityTileWidth * 9 / 16
+    /// The icon over the top of an app's own page, overlapping its hero.
+    static let activityHeaderIcon: CGFloat = 64
+    /// The app icon on an invitation card in the transcript.
+    static let activityInviteIcon: CGFloat = 64
 }
 
 // MARK: - Proportions

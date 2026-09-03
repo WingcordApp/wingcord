@@ -83,6 +83,12 @@ struct RTPTests {
         #expect(quiet[1] == 127)
     }
 
+    /// The elements a writer emits are the elements a reader finds, in order.
+    ///
+    /// Read with `RTPExtension.describe`, which takes the block out of the
+    /// **decrypted payload** — the only place it exists on this connection.
+    /// A reader that looks in the raw datagram finds ciphertext, which is what
+    /// made the previous reader here impossible to use and unused.
     @Test func anElementCanBeReadBack() throws {
         var writer = RTPWriter(ssrc: 1, payloadType: 120)
         let packet = writer.next(
@@ -90,13 +96,9 @@ struct RTPTests {
             extensions: RTPExtension.audioLevel(id: 3, dBov: 42, isVoice: true)
                 + RTPExtension.absoluteSendTime(id: 4, seconds: 1)
         )
-        // Read back off the whole datagram as it would look once decrypted.
-        let whole = packet.clear + packet.encrypted
-        let level = try #require(RTPExtension.firstElement(id: 3, in: whole))
-        #expect(level == [0x80 | 42])
-        let time = try #require(RTPExtension.firstElement(id: 4, in: whole))
-        #expect(time.count == 3)
-        #expect(RTPExtension.firstElement(id: 9, in: whole) == nil)
+        let header = try #require(RTPHeader(parsing: packet.clear + packet.encrypted))
+        #expect(header.extensionBodyLength == packet.encrypted.count)
+        #expect(RTPExtension.describe(packet.encrypted[...]) == "3:aa 4:040000")
     }
 
     @Test func aNonRTPDatagramIsRejected() {
@@ -150,6 +152,44 @@ struct VoiceEndpointTests {
         #expect(VoiceGateway.authority(from: "voice.discord.media") == "voice.discord.media")
     }
 
+    /// Every packet of one video frame carries the same timestamp, and only the
+    /// last carries the marker.
+    ///
+    /// **Asserted on the emitted headers, because the sender is self-consistent
+    /// either way.** `next` writes the clock it holds and advances afterwards,
+    /// so advancing on the first packet of a frame put that packet — the
+    /// leading NAL, a parameter set on a keyframe — on the *previous* frame's
+    /// timestamp. Nothing at this end notices: the packet count, the bitrate
+    /// and the encoder are all healthy. A receiver groups by timestamp, so
+    /// every frame arrived a NAL short, no keyframe ever assembled, and the far
+    /// end sat on a spinner until it reported a camera that would not start.
+    @Test("Every packet of one video frame carries the same timestamp")
+    func oneFrameIsOneTimestamp() {
+        var writer = RTPWriter(ssrc: 9, payloadType: RTP.PayloadType.h264)
+        let start = writer.timestamp
+
+        func stamp(_ header: RTPHeaderBytes) -> UInt32 {
+            let bytes = header.clear
+            return UInt32(bytes[4]) << 24 | UInt32(bytes[5]) << 16
+                | UInt32(bytes[6]) << 8 | UInt32(bytes[7])
+        }
+
+        // One access unit of four packets, 3000 ticks after the last.
+        writer.advanceClock(by: 3_000)
+        let frame = (0..<4).map { index in
+            writer.next(advancingClockBy: 0, marker: index == 3)
+        }
+        let stamps = frame.map(stamp)
+        #expect(stamps.allSatisfy { $0 == start &+ 3_000 })
+        #expect(Set(stamps).count == 1)
+
+        // And the next frame starts from where this one left the clock, so the
+        // advance a caller computes against `timestamp` is still the real gap.
+        #expect(writer.timestamp == start &+ 3_000)
+        writer.advanceClock(by: 3_000)
+        #expect(stamp(writer.next(advancingClockBy: 0, marker: true)) == start &+ 6_000)
+    }
+
     /// What the URL actually comes out as, because that is the thing that was
     /// wrong.
     @Test("The socket URL carries the port and the version")
@@ -160,5 +200,76 @@ struct VoiceEndpointTests {
         components.queryItems = [URLQueryItem(name: "v", value: "8")]
         #expect(components.port == 2083)
         #expect(components.url?.absoluteString == "wss://host.discord.media:2083?v=8")
+    }
+}
+
+// MARK: - Reading somebody else's extensions
+
+@Suite("RTP header extensions")
+struct RTPExtensionDescriptionTests {
+
+    /// **The reading that the next diagnosis depends on.** Discord's READY
+    /// carries no `header_extensions` on a call or on a stream, so the only
+    /// statement of what the server expects is what a client whose picture
+    /// renders puts on every packet. If this parse is wrong, that reading is
+    /// wrong, and a whole run is spent on it.
+    @Test("Every element in a one-byte block is named with its value")
+    func describesEachElement() {
+        // Abs-send-time, then a three-byte string — the shape a RID takes.
+        let block: [UInt8] = [
+            0x32, 0x0A, 0xBC, 0xDE,             // id 3, three bytes
+            0x92, 0x31, 0x30, 0x30,             // id 9, "100"
+        ]
+        #expect(RTPExtension.describe(block[...]) == "3:0abcde 9:313030")
+    }
+
+    /// Zero is the no-op RFC 8285 pads with, and a reader that stops at the
+    /// first one loses everything behind it.
+    @Test("Padding is skipped rather than read or stopped on")
+    func skipsPadding() {
+        // The low nibble is length MINUS ONE, so a two-byte element is `0x21`.
+        let block: [UInt8] = [0x00, 0x10, 0xFF, 0x00, 0x21, 0xAA, 0xBB, 0x00]
+        #expect(RTPExtension.describe(block[...]) == "1:ff 2:aabb")
+    }
+
+    /// The two elements every packet of a stream Discord renders carries, and
+    /// which this client sent none of. Written the way they were read.
+    @Test("The two elements a working stream carries are written as they were read")
+    func writesWhatWasRead() {
+        let sendTime = RTPExtension.absoluteSendTime(
+            id: RTPExtension.DefaultID.absoluteSendTime, seconds: 47.0
+        )
+        let sequence = RTPExtension.transportSequence(
+            id: RTPExtension.DefaultID.transportSequence, sequence: 0x0047
+        )
+        // `3:<three bytes>` and `5:<two bytes>`, which is the shape captured as
+        // `ext=[3:bcbbac 5:0047]` — and 47 s in 6.18 fixed point is 0xbc0000,
+        // so the captured value is the same clock a few milliseconds later.
+        // That agreement is what identifies the element.
+        #expect(RTPExtension.describe((sendTime + sequence)[...]) == "3:bc0000 5:0047")
+    }
+
+    /// One number for the whole connection, wrapping where the field does.
+    @Test("The transport sequence advances once per packet and wraps at sixteen bits")
+    func transportSequenceCounts() {
+        let counter = TransportSequence()
+        #expect(counter.next() == 0)
+        #expect(counter.next() == 1)
+        for _ in 0..<(0xFFFF - 1) { _ = counter.next() }
+        #expect(counter.next() == 0, "and wraps rather than saturating")
+    }
+
+    @Test("An element that runs past the block says so instead of guessing")
+    func truncated() {
+        #expect(RTPExtension.describe([0x34, 0x01, 0x02][...]) == "truncated")
+        #expect(RTPExtension.describe([][...]).isEmpty)
+    }
+
+    /// The block arrives as a slice of the decrypted payload, whose indices do
+    /// not start at zero — and a reader that assumes they do reads the media.
+    @Test("A block that does not start at zero is read from where it starts")
+    func offsetSlice() {
+        let payload: [UInt8] = [0xDE, 0xAD, 0xBE, 0xEF, 0x10, 0x7F, 0x00, 0x00]
+        #expect(RTPExtension.describe(payload[4...]) == "1:7f")
     }
 }

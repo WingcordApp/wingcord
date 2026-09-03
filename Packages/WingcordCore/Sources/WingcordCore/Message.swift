@@ -79,6 +79,11 @@ public struct Message: Hashable, Sendable, Identifiable, Codable {
     public var mentionedUserIDs: [UserID] { payload?.mentionedUserIDs ?? [] }
     public var mentionsEveryone: Bool { payload?.mentionsEveryone ?? false }
     public var webhookID: UserID? { payload?.webhookID }
+    /// The activity an app launched into this channel. Nil for everything else.
+    public var activityInvite: ActivityInvite? { payload?.activityInvite }
+    /// Who invoked the command this message answers. Nil for everything a
+    /// person typed.
+    public var interaction: MessageInteraction? { payload?.interaction }
 
     /// Whether the message shows nothing at all without its components.
     ///
@@ -91,10 +96,15 @@ public struct Message: Hashable, Sendable, Identifiable, Codable {
     }
 
     /// Whether the message has any renderable body at all.
+    ///
+    /// **An activity invitation counts, and it is the only body it has.** The
+    /// captured launch message carries no content, no embed, no component and
+    /// no attachment — the card is drawn entirely from `activityInvite` — so a
+    /// check that omitted it would call the one thing on the row nothing.
     public var isEmpty: Bool {
         content.isEmpty && attachments.isEmpty && embeds.isEmpty
             && stickers.isEmpty && components.isEmpty && displayComponents.isEmpty
-            && poll == nil && !isComponentsOnly
+            && poll == nil && !isComponentsOnly && activityInvite == nil
     }
 
     /// Whether this row addresses an *object* rather than something someone
@@ -150,6 +160,16 @@ public final class MessagePayload: Hashable, Sendable, Codable {
     /// The nonce a pending send was posted with, so the echo can be matched to
     /// the optimistic row and replace it rather than duplicating it.
     public let nonce: String?
+    /// The invitation card an activity launch leaves behind. Nil for every
+    /// message a person wrote, which is why it is here rather than on `Message`.
+    public let activityInvite: ActivityInvite?
+    /// Who invoked the command this message answers, and what it was called.
+    ///
+    /// **Not activity-specific.** An activity launch and a slash command are
+    /// the same thing on the wire — an interaction — and both draw the same
+    /// "somebody used *name*" line above the reply. Keeping it general is what
+    /// lets the second one arrive without a second header.
+    public let interaction: MessageInteraction?
 
     public init(
         attachments: [Attachment] = [],
@@ -165,8 +185,12 @@ public final class MessagePayload: Hashable, Sendable, Codable {
         reference: MessageReference? = nil,
         forwarded: ForwardedMessage? = nil,
         webhookID: UserID? = nil,
-        nonce: String? = nil
+        nonce: String? = nil,
+        activityInvite: ActivityInvite? = nil,
+        interaction: MessageInteraction? = nil
     ) {
+        self.activityInvite = activityInvite
+        self.interaction = interaction
         self.attachments = attachments
         self.embeds = embeds
         self.reactions = reactions
@@ -208,7 +232,9 @@ public final class MessagePayload: Hashable, Sendable, Codable {
             reference: reference,
             forwarded: forwarded,
             webhookID: webhookID,
-            nonce: nonce
+            nonce: nonce,
+            activityInvite: activityInvite,
+            interaction: interaction
         )
     }
 
@@ -228,7 +254,9 @@ public final class MessagePayload: Hashable, Sendable, Codable {
             reference: reference,
             forwarded: forwarded,
             webhookID: webhookID,
-            nonce: nonce
+            nonce: nonce,
+            activityInvite: activityInvite,
+            interaction: interaction
         )
     }
 
@@ -240,6 +268,7 @@ public final class MessagePayload: Hashable, Sendable, Codable {
             && poll == nil && mentionedUserIDs.isEmpty
             && mentionedRoleIDs.isEmpty && !mentionsEveryone
             && reference == nil && forwarded == nil && webhookID == nil && nonce == nil
+            && activityInvite == nil && interaction == nil
     }
 
     public static func == (lhs: MessagePayload, rhs: MessagePayload) -> Bool {
@@ -259,7 +288,9 @@ public final class MessagePayload: Hashable, Sendable, Codable {
                 && lhs.mentionsEveryone == rhs.mentionsEveryone
                 && lhs.reference == rhs.reference
                 && lhs.forwarded == rhs.forwarded
-                && lhs.webhookID == rhs.webhookID)
+                && lhs.webhookID == rhs.webhookID
+                && lhs.activityInvite == rhs.activityInvite
+                && lhs.interaction == rhs.interaction)
     }
 
     public func hash(into hasher: inout Hasher) {
@@ -616,5 +647,29 @@ extension EmojiRef {
             return nil
         }
         self.init(id: id, name: String(parts[1]), isAnimated: parts[0] == "a")
+    }
+}
+
+
+/// The command a message is answering, and who ran it.
+///
+/// **One type for slash commands and activity launches alike.** Both are
+/// interactions on the wire; the captured launch carries
+/// `interaction_metadata: {id, type: 2, user, name: "launch", command_type: 4}`
+/// beside a legacy `interaction` with the same name and user. The newer key is
+/// preferred and the older one is the fallback — Discord has been removing the
+/// latter, and a client reading only it loses the header when it goes.
+public struct MessageInteraction: Hashable, Sendable, Codable {
+    public var userID: UserID
+    /// The command's name, drawn in the chip: `launch`, `ban`, `play`.
+    public var name: String
+    /// `1` chat input, `2` user, `3` message, `4` primary entry point. Kept raw
+    /// so a kind this client has no name for still draws its header.
+    public var commandType: Int
+
+    public init(userID: UserID, name: String, commandType: Int) {
+        self.userID = userID
+        self.name = name
+        self.commandType = commandType
     }
 }

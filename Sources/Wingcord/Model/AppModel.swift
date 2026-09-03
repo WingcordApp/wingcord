@@ -439,6 +439,67 @@ final class AppModel {
     /// because a partial invalidation is how a stale `viewChannel` survives a
     /// role change and leaks a private channel into the list.
     var roleRevision: UInt64 = 0
+    /// Moves when the activity directory, the Recents table or a search result
+    /// changes. Its own counter for the same reason `expressionRevision` is:
+    /// the launcher's sections are built from seventy-odd apps across nine
+    /// collections, and nothing about a message arriving can change one.
+    var activityRevision: UInt64 = 0
+
+    // MARK: Activities
+    //
+    // The launcher's data. Fetched once per launch by `SessionController`; the
+    // store only ever reads it.
+
+    /// Every app the shelf knows, and the nine collections that group them.
+    @ObservationIgnored var activityDirectory = ActivityDirectory()
+    /// Application ids from the frecency table, most-used first.
+    @ObservationIgnored var activityRecents: [ApplicationID] = []
+    /// Apps whose own directory page has been fetched — richer than the
+    /// directory's copy, and only for the ones actually opened.
+    @ObservationIgnored var activityDetails: [ApplicationID: ActivityApp] = [:]
+    @ObservationIgnored var activitySearchResults: [ActivityApp] = []
+    /// An invitation card's colour, quantised from the app's own icon.
+    ///
+    /// **The same mechanism a themeless profile's colours come from** —
+    /// `ProfileThemePalette`, which was measured against Discord's own
+    /// quantiser rather than guessed at. Its own table rather than
+    /// `derivedPalettes` because that one is keyed by artwork URL for a person,
+    /// and two key spaces in one dictionary is how a lookup silently answers
+    /// somebody else's colour.
+    ///
+    /// Absent until the icon has been decoded. A card with no entry draws in
+    /// the neutral card fill, which is a real state rather than a placeholder.
+    ///
+    /// **Observed, unlike the rest of the activity tables.** The colour lands a
+    /// beat after the card is already laid out and cached, so the transcript
+    /// has to be told — and the only thing that tells a drawn canvas anything
+    /// is its container re-evaluating. A card whose colour arrives on a table
+    /// nobody observes keeps the neutral rule for the life of the channel,
+    /// which is exactly what it did.
+    var activityAccents: [ApplicationID: UInt32] = [:]
+    /// What is typed in the launcher's search field. Observable: it is the one
+    /// input here a keystroke moves.
+    var activityQuery = ""
+    /// Where the launcher is. Observable for the same reason.
+    var activityLauncherPage: ActivityLauncherPage = .directory
+    /// The consent sheet a running activity asked for, if any.
+    var activityConsent: ActivityConsentRequest?
+    /// The live web view for the running activity.
+    ///
+    /// **Held by the store, not by the stage.** The stage is scoped to one
+    /// channel and goes away when the reader looks at another; the session must
+    /// not. See `ActivityRuntime`.
+    @ObservationIgnored var activityRuntime: ActivityRuntime?
+    /// The activity currently on screen, if one is running.
+    var runningActivity: RunningActivity?
+    /// What this client is broadcasting as its own rich presence.
+    ///
+    /// **Written by a running activity through `SET_ACTIVITY`**, which is how
+    /// an embedded app publishes what it is doing — Watch Together sends
+    /// `{type: 3, details: "Adding videos", party: {…}}` a second or two after
+    /// it starts. Cleared when the activity closes, or everybody's roster keeps
+    /// showing a game that ended.
+    var publishedActivity: RichPresenceActivity?
 
     // MARK: Memo storage
     //
@@ -452,6 +513,7 @@ final class AppModel {
     @ObservationIgnored var rosterCache: (key: RosterMemoKey, value: [MemberSection])?
     @ObservationIgnored var emojiCatalogCache: (key: ExpressionMemoKey, value: ExpressionCatalog)?
     @ObservationIgnored var stickerCatalogCache: (key: ExpressionMemoKey, value: ExpressionCatalog)?
+    @ObservationIgnored var activitySectionsCache: (key: ActivityMemoKey, value: [ActivitySection])?
     /// Discord's own sticker packs, fetched once per launch. Not per guild and
     /// not per channel: the set is the same for every account.
     @ObservationIgnored var defaultStickerPacks: [ExpressionSection] = []

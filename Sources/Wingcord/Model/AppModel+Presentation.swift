@@ -235,6 +235,7 @@ extension AppModel {
                 arePinsShown: false,
                 canStartCall: false,
                 isInCall: false,
+                isCallOngoing: false,
                 canShowVoiceChat: false,
                 isVoiceChatShown: false
             )
@@ -253,6 +254,7 @@ extension AppModel {
                 arePinsShown: false,
                 canStartCall: false,
                 isInCall: false,
+                isCallOngoing: false,
                 canShowVoiceChat: false,
                 isVoiceChatShown: false
             )
@@ -276,6 +278,12 @@ extension AppModel {
             // from its own pane, and a text channel has no call to start.
             canStartCall: channel.kind.isPrivate,
             isInCall: connectedVoiceChannelID == channelID,
+            // Somebody else is sitting in it. Read from the voice states rather
+            // than from `directCalls`, which survives the last person leaving.
+            isCallOngoing: connectedVoiceChannelID != channelID
+                && voiceStates.values.contains {
+                    $0.channelID == channelID && $0.userID != currentUserID
+                },
             canShowVoiceChat: channel.kind == .voice || channel.kind == .stage,
             isVoiceChatShown: isVoiceChatShown
         )

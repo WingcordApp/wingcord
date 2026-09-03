@@ -16,6 +16,12 @@ struct TimelineView: NSViewRepresentable {
     /// so a change re-runs `updateNSView`, which is the only place the
     /// coordinator can be told about it.
     var presentationRevision: UInt64
+    /// An invitation card's colour, by application. Packed 24-bit, as every
+    /// other themed value in this store is; the canvas converts.
+    var activityAccents: [ApplicationID: UInt32] = [:]
+    /// What each invitation card paints. Observed by the container so presence
+    /// moving reaches the canvas; see `TimelineCanvasView.apply(activityInviteStatuses:)`.
+    var activityInviteStatuses: [ApplicationID: ActivityInviteStatus] = [:]
     /// How much of the scroll view's foot the composer covers.
     ///
     /// The transcript deliberately extends UNDERNEATH the composer so messages
@@ -43,6 +49,8 @@ struct TimelineView: NSViewRepresentable {
             channelID: channelID,
             items: rows,
             presentationRevision: presentationRevision,
+            activityAccents: activityAccents,
+            activityInviteStatuses: activityInviteStatuses,
             topInset: topInset,
             bottomInset: bottomInset,
             jump: jump
@@ -144,6 +152,13 @@ final class TimelineCoordinator: NSObject {
         canvas.onVote = { [weak self] messageID, answerID in
             guard let self, let channelID = self.channelID else { return }
             self.model.vote(for: answerID, on: messageID, in: channelID)
+        }
+        canvas.onPlayActivity = { [weak self] messageID in
+            guard let self, let channelID = self.channelID,
+                  let invite = self.model.messages(in: channelID)?
+                      .messages.first(where: { $0.id == messageID })?.activityInvite
+            else { return }
+            Task { await self.model.sessionController.joinActivity(invite, in: channelID) }
         }
         canvas.onOpenSticker = { [weak self] sticker, rect in
             guard let self, let canvas = self.canvas else { return }
@@ -307,6 +322,7 @@ final class TimelineCoordinator: NSObject {
         canvas?.onOpenSticker = nil
         canvas?.onOpenAttachment = nil
         canvas?.onVote = nil
+        canvas?.onPlayActivity = nil
         (scrollView as? TimelineScrollView)?.acceptsScrollInput = { true }
         // The clock holds a closure over the canvas; a subscriber that outlives
         // its transcript is a display link running for a channel nobody is
@@ -332,8 +348,18 @@ final class TimelineCoordinator: NSObject {
 
     // MARK: Updating
 
-    func update(channelID: ChannelID, items: [TimelineItem], presentationRevision: UInt64,
-        topInset: CGFloat, bottomInset: CGFloat, jump: MessageJump?) {
+    func update(
+        channelID: ChannelID,
+        items: [TimelineItem],
+        presentationRevision: UInt64,
+        activityAccents: [ApplicationID: UInt32],
+        activityInviteStatuses: [ApplicationID: ActivityInviteStatus],
+        topInset: CGFloat,
+        bottomInset: CGFloat,
+        jump: MessageJump?
+    ) {
+        canvas?.apply(activityAccents: activityAccents)
+        canvas?.apply(activityInviteStatuses: activityInviteStatuses)
         if let scrollView,
            abs(scrollView.contentInsets.bottom - bottomInset) > 0.5
             || abs(scrollView.contentInsets.top - topInset) > 0.5 {
@@ -858,6 +884,21 @@ final class TimelineCoordinator: NSObject {
                     if seen.insert(key).inserted, ImageStore.shared.cached(key) == nil {
                         requests.append(ImageRequest(key: key, source: .still(.thumbnail)))
                     }
+                }
+            }
+
+            // An activity invitation's app icon. It is the card's only picture,
+            // and — unlike everything else on this pass — it is *also* what the
+            // card's colour is quantised from, so the derivation is kicked off
+            // beside the fetch rather than waiting for a second trigger.
+            if let invite = row.activityInvite, let url = invite.iconURL {
+                model.sessionController.deriveActivityAccent(invite.source)
+                let key = ImageStore.Key(
+                    url: url,
+                    maximumPixelSize: Int((invite.iconRect.width * scale).rounded(.up))
+                )
+                if seen.insert(key).inserted, ImageStore.shared.cached(key) == nil {
+                    requests.append(ImageRequest(key: key, source: .still(.thumbnail)))
                 }
             }
 

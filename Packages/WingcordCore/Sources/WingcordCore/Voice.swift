@@ -86,6 +86,82 @@ public struct VoiceServer: Hashable, Sendable {
     }
 }
 
+/// Where a **Go Live stream's own media session** lives.
+///
+/// **A stream is not the call, and this is not `VoiceServer`.** Turning a
+/// camera on is a switch on the call's existing session; a screen share is a
+/// second media session with its own RTC server, its own endpoint, its own
+/// token and its own MLS group. This is the credential for that second session.
+///
+/// It arrives in **two halves in either order**, exactly as a call's does:
+/// `STREAM_CREATE` carries the key and the `rtc_server_id`,
+/// `STREAM_SERVER_UPDATE` carries the endpoint and the token. Neither half
+/// alone can open anything.
+public struct GoLiveServer: Hashable, Sendable {
+    /// The server's own key for this stream — `guild:<guild>:<channel>:<user>`
+    /// or `call:<channel>:<user>`. Echoed back verbatim to end the stream; it
+    /// is never rebuilt from its parts.
+    public var streamKey: String
+    /// What the stream session's IDENTIFY sends as `server_id`: the guild, or
+    /// the DM channel for a private call — the same choice a call makes.
+    public var serverID: String
+    public var token: String
+    public var endpoint: String
+
+    public init(streamKey: String, serverID: String, token: String, endpoint: String) {
+        self.streamKey = streamKey
+        self.serverID = serverID
+        self.token = token
+        self.endpoint = endpoint
+    }
+}
+
+/// What `STREAM_CREATE` said about a stream's media session.
+///
+/// Separate from `GoLiveServer` because the two arrive in **either order** and
+/// neither half is usable alone — the same split a call's credential has.
+public struct GoLiveSession: Hashable, Sendable {
+    public var streamKey: String
+    /// The RTC server the stream was allocated on.
+    public var rtcServerID: UInt64
+    /// The stream's own RTC channel: **the media session**, which is what its
+    /// MLS group is keyed on and what it identifies against. Sent as its own
+    /// field, so it is read rather than derived from `rtcServerID`.
+    public var rtcChannelID: UInt64
+
+    public init(streamKey: String, rtcServerID: UInt64, rtcChannelID: UInt64) {
+        self.streamKey = streamKey
+        self.rtcServerID = rtcServerID
+        self.rtcChannelID = rtcChannelID
+    }
+}
+
+/// A Go Live stream's key, which is an address rather than an opaque token.
+///
+/// **Built by a viewer, echoed by an owner.** Nothing dispatches a stream event
+/// to somebody who is not already watching, so a viewer has to construct the
+/// key of the stream it wants before it can ask for it. An owner never builds
+/// one: `STREAM_CREATE` hands it the server's own string, and that is what goes
+/// back in opcode 19.
+///
+/// Both grammars are captured — `call:1424759145021837325:987654321987654321`
+/// and `guild:<guild>:<channel>:<user>` — and this is the only place either is
+/// assembled, so a change to them is a change to one function.
+public enum GoLiveKey {
+    /// - Parameter guildID: nil for a direct-message call, which is the shorter
+    ///   of the two grammars and drops the guild field entirely rather than
+    ///   sending an empty one.
+    public static func make(
+        guildID: GuildID?, channelID: ChannelID, userID: UserID
+    ) -> String {
+        if let guildID {
+            "guild:\(guildID.rawValue):\(channelID.rawValue):\(userID.rawValue)"
+        } else {
+            "call:\(channelID.rawValue):\(userID.rawValue)"
+        }
+    }
+}
+
 // MARK: - The soundboard
 
 /// One sound anybody in a channel can press.

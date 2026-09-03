@@ -1,6 +1,7 @@
 import AVFoundation
 import CoreMedia
 import Foundation
+import Synchronization
 
 // MARK: - The voice session
 //
@@ -46,7 +47,6 @@ public actor VoiceEngine {
         case statistics(Statistics)
         /// The voice processor heard speech while the input was muted.
         case speechWhileMuted
-        case screenShareStopped(String)
         /// How well protected the call is, and the code to read out to check it.
         case encryption(EncryptionState)
     }
@@ -171,15 +171,38 @@ public actor VoiceEngine {
     private let inbound = InboundStreams()
 
     private var camera: CameraCapture?
-    private var screenShare: ScreenShareCapture?
     private let videoEncode = VideoEncodePath()
 
+
     private var ourSSRC: UInt32 = 0
+    /// The simulcast layer id READY allocated for our video. Echoed back in
+    /// opcode 12 rather than chosen — see `VoiceGateway.VoiceReady`.
+    private var videoRID = ""
+    /// Everybody the gateway has announced on this session, whether or not
+    /// there was a DAVE session to tell at the time.
+    ///
+    /// **A fact the server states before its consumer exists must be
+    /// remembered, not dropped.** The roster arrives on opcodes 11 and 18, and
+    /// both land *before* opcode 4 — which is what creates the DAVE session, so
+    /// `dave?.recognise` was a call on `nil` every time. What saved it was a
+    /// second announcement arriving later by luck; a call where the far end was
+    /// announced once, by opcode 18 alone, refused every welcome the gateway
+    /// sent with "user … is not in this call", never established a group, and
+    /// transmitted nothing in either direction for its whole life.
+    ///
+    /// `StreamViewSession` never had the fault because it seeds its group from
+    /// the two people it knows are on it, which is why watching a share worked
+    /// while nothing this client sent ever left.
+    private var announcedUsers: Set<UInt64> = []
     private var sendTimeExtensionID: UInt8?
+    private var transportSequenceExtensionID: UInt8?
+    /// The call's packet counter, **shared by the microphone and the camera**.
+    /// The number is transport-wide; one per stream would read to the far end
+    /// as a path losing every other packet.
+    private let transportSequence = TransportSequence()
     private var isMuted = false
     private var isDeafened = false
     public private(set) var isCameraOn = false
-    public private(set) var isScreenSharing = false
 
     private var continuation: AsyncStream<Event>.Continuation?
     public private(set) var events: AsyncStream<Event>!
@@ -207,6 +230,7 @@ public actor VoiceEngine {
     public func connect() {
         emit(.state(.connecting))
         let gateway = VoiceGateway(
+            role: .call,
             endpoint: connection.endpoint,
             serverID: connection.serverID,
             userID: String(connection.userID),
@@ -214,6 +238,12 @@ public actor VoiceEngine {
             token: connection.token
         )
         self.gateway = gateway
+
+        inbound.onFirstVideoFrame.withLock { slot in
+            slot = { [weak self] userID in
+                Task { await self?.emit(.videoAvailability(userID: userID, hasVideo: true)) }
+            }
+        }
 
         audioSend.inputMode = preferences.inputMode
         audioSend.onGateChanged.withLock { slot in
@@ -245,7 +275,6 @@ public actor VoiceEngine {
 
         videoEncode.end()
         camera?.stop(); camera = nil
-        await screenShare?.stop(); screenShare = nil
 
         transport?.stop(); transport = nil
         await gateway?.stop(); gateway = nil
@@ -262,15 +291,10 @@ public actor VoiceEngine {
         switch event {
         case .ready(let ready):
             ourSSRC = ready.ssrc
-            sendTimeExtensionID = ready.headerExtensions[
-                "http://www.webrtc.org/experiments/rtp-hdrext/abs-send-time"
-            ]
-            await openTransport(
-                ready,
-                audioLevelID: ready.headerExtensions[
-                    "urn:ietf:params:rtp-hdrext:ssrc-audio-level"
-                ]
-            )
+            videoRID = ready.videoRID
+            sendTimeExtensionID = ready.sendTimeExtensionID
+            transportSequenceExtensionID = ready.transportSequenceExtensionID
+            await openTransport(ready, audioLevelID: ready.audioLevelExtensionID)
 
         case .sessionDescription(let cipher, let key, _, let daveVersion):
             let sealer = VoiceSealer(cipher: cipher, secretKey: key)
@@ -287,7 +311,9 @@ public actor VoiceEngine {
                 ssrc: ourSSRC,
                 bitrate: connection.audioBitrate,
                 audioLevelExtensionID: pendingAudioLevelID,
-                sendTimeExtensionID: sendTimeExtensionID
+                sendTimeExtensionID: sendTimeExtensionID,
+                transportSequenceExtensionID: transportSequenceExtensionID,
+                transportSequence: transportSequence
             )
             videoSend.configure(
                 sealer: sealer,
@@ -297,7 +323,10 @@ public actor VoiceEngine {
                 // the one after. A client that picks its own numbers has its
                 // video forwarded to nobody.
                 ssrc: ourSSRC &+ 1,
-                sendTimeExtensionID: sendTimeExtensionID
+                sendTimeExtensionID: sendTimeExtensionID,
+                transportSequenceExtensionID: transportSequenceExtensionID,
+                transportSequence: transportSequence,
+                label: "call"
             )
             await startMedia()
 
@@ -308,8 +337,13 @@ public actor VoiceEngine {
         case .videoStreams(let userID, let audioSSRC, let videoSSRC):
             if audioSSRC != 0 { inbound.bind(ssrc: audioSSRC, to: userID) }
             if videoSSRC != 0 {
+                // **Bound, not announced.** The SSRC has to be routed in case
+                // packets do arrive; the tile is told only once one has — see
+                // `InboundStreams.onFirstVideoFrame`. Announcing here paints a
+                // black rectangle over the avatar of anybody the gateway says
+                // has video, including a Go Live share on a media session this
+                // client never joined.
                 inbound.bindVideo(ssrc: videoSSRC, to: userID)
-                emit(.videoAvailability(userID: userID, hasVideo: true))
             } else {
                 inbound.unbindVideo(for: userID)
                 emit(.videoAvailability(userID: userID, hasVideo: false))
@@ -319,10 +353,12 @@ public actor VoiceEngine {
             // This is also DAVE's admission list. A member the gateway never
             // announced here may not be added to the MLS group, which is what
             // stops the delivery service seating a listener of its own.
+            announcedUsers.formUnion(ids)
             dave?.recognise(users: Set(ids))
-            emit(.participantsChanged(ids))
+            emit(.participantsChanged(Array(announcedUsers)))
 
         case .clientDisconnected(let userID):
+            announcedUsers.remove(userID)
             inbound.remove(userID: userID)
             dave?.forget(user: userID)
             emit(.speaking(userID: userID, isSpeaking: false))
@@ -352,7 +388,7 @@ public actor VoiceEngine {
         case .resumed:
             emit(.state(.connected))
 
-        case .closed(let reason, _):
+        case .closed(_, let reason, _):
             emit(.state(.failed(reason)))
         }
     }
@@ -379,11 +415,15 @@ public actor VoiceEngine {
         let session = DAVESession(
             protocolVersion: version,
             userID: connection.userID,
-            // The MLS group is keyed by the **channel**, not the guild, and not
-            // the identify payload's `server_id`.
-            channelID: connection.channelID
+            // A call's group is keyed by the **channel**, not the guild, and
+            // not the identify payload's `server_id`. A Go Live stream is a
+            // separate media session and keys on its own — see `StreamSession`.
+            groupKey: .channel(connection.channelID),
+            label: "call"
         )
-        session.recognise(users: [connection.userID])
+        // **Everybody announced so far, not only ourselves.** The roster
+        // arrives before this object exists — see `announcedUsers`.
+        session.recognise(users: announcedUsers.union([connection.userID]))
         dave = session
         audioSend.setDAVE(session.encryptor)
         videoSend.setDAVE(session.encryptor)
@@ -458,32 +498,63 @@ public actor VoiceEngine {
         emitEncryptionState()
     }
 
-    /// When the group was last torn down and rebuilt, for pacing.
-    private var lastRebuild: ContinuousClock.Instant?
+    /// When a recovery may run. See `RecoveryPacer` for what both ways of
+    /// getting this wrong looked like.
+    private var pacer = RecoveryPacer()
 
     private func rebuildDAVE() async {
         guard let dave else { return }
-
-        // **Paced, because the gateway answers a key package with a welcome
-        // immediately.** When the media session contains somebody it has not
-        // announced yet, every welcome is refusable — and the protocol's own
-        // recovery (opcode 31, reset, fresh key package) then spins against a
-        // gateway that answers instantly. Measured against a peer that was
-        // reconnecting: **sixty-seven rebuilds in three seconds**, each one a
-        // fresh signature key, a fresh key package and a 400-byte frame, every
-        // one of them thrown away by the next.
+        // **Paced, and the pacing DEFERS rather than drops.** The gateway
+        // answers a key package with a welcome immediately, so when the media
+        // session contains somebody it has not announced yet, every welcome is
+        // refusable and the protocol's own recovery — opcode 31, reset, fresh
+        // key package — spins against a server that answers instantly. Measured
+        // against a reconnecting peer: sixty-seven rebuilds in three seconds.
         //
-        // Half a second between attempts costs nothing when recovery works the
-        // first time, and turns the storm into a retry that still heals the
-        // moment `clients_connect` names the missing member.
-        let now = ContinuousClock.now
-        if let last = lastRebuild, now - last < .milliseconds(500) { return }
-        lastRebuild = now
+        // **Dropping the request inside the window is what made that unsafe.**
+        // Two refusals a hundred and fifty milliseconds apart, and the second
+        // one is discarded: no key package leaves, the gateway has nothing to
+        // commit us with, and the session never recovers for the rest of the
+        // call — measured as a call that transmitted nothing in either
+        // direction, for its whole life, with `out=0` and a healthy socket. A
+        // rate limiter in front of a recovery path must delay the last attempt,
+        // never throw it away.
+        switch pacer.request() {
+        case .now:
+            break
+        case .alreadyWaiting:
+            return
+        case .after(let remaining):
+            Task { [weak self] in
+                try? await Task.sleep(for: remaining)
+                await self?.rebuildAfterPacing()
+            }
+            return
+        }
 
         dave.reset(protocolVersion: dave.protocolVersion)
         await sendKeyPackage()
         syncTransforms()
         emitEncryptionState()
+    }
+
+
+    /// The rebuild the pacing window held back — **if it is still wanted.**
+    ///
+    /// **A deferred rebuild is a decision taken half a second ago, and half a
+    /// second is long enough for the group to establish.** Acting on it then
+    /// tears down a working group and throws away the send ratchet with it:
+    /// measured as `dave sending under epoch 2` followed a hundred and
+    /// eighty-five milliseconds later by `dave reset to v1`, and every frame
+    /// after that refused as `ours unkeyed` for the rest of the call.
+    ///
+    /// So the precondition is checked again here, not only where the delay
+    /// began. A brake that holds a request back has to ask whether the request
+    /// still makes sense when it lets go.
+    private func rebuildAfterPacing() async {
+        pacer.waitElapsed()
+        guard let dave, dave.status == .establishing else { return }
+        await rebuildDAVE()
     }
 
     /// Pushes the current per-sender transforms to the receive path.
@@ -511,6 +582,13 @@ public actor VoiceEngine {
         guard state != lastEncryptionState else { return }
         lastEncryptionState = state
         emit(.encryption(state))
+
+        // A camera turned on before the group exists has the identical fault
+        // `StreamSession` was found with: its keyframe is refused while there
+        // is no ratchet, and the P-slices after it are undecodable to everybody
+        // until the encoder's own cadence comes round. It is only rarer here,
+        // because a camera is usually switched on well after the call is keyed.
+        if case .endToEnd = state { videoSend.requestKeyframe() }
     }
 
     private var pendingAudioLevelID: UInt8?
@@ -597,11 +675,26 @@ public actor VoiceEngine {
     }
 
     /// How many 500 ms ticks have passed with the microphone delivering
-    /// nothing, and whether the tap has already been put back once.
+    /// nothing, and what it had delivered when we last looked.
     private var mediaTicks = 0
+    /// Video counters gathered across the four drains that make up one printed
+    /// media line. See `publish`.
+    private var videoFramesSubmitted = 0
+    private var videoFramesUnencodable = 0
+    private var videoFramesRefused = 0
+    /// The far end's reports, gathered over the same four drains. See `RTCP`.
+    private var feedback = RTCP.Feedback()
+    private var unreadableFeedback = 0
     private var silentCaptureTicks = 0
-    private var hasRestartedCapture = false
+    private var lastCapturedFrames = 0
+    private var hasRestartedThisStall = false
+    private var hasAbandonedVoiceProcessing = false
     private var hasReportedSilentCapture = false
+    /// Ticks with the microphone feeding, nothing muted, and the gate still
+    /// shut — and the loudest frame seen across them.
+    private var shutGateTicks = 0
+    private var shutGatePeak: Float = 0
+    private var hasReportedShutGate = false
 
     /// Watches for a call that is connected and capturing silence.
     ///
@@ -612,34 +705,98 @@ public actor VoiceEngine {
     /// the audio twin of the op 5 Speaking rule: a connection that is perfect
     /// and inert.
     ///
-    /// Two seconds is not a slow start. At 48 kHz the first buffer is due in
-    /// twenty milliseconds, so zero frames after four ticks means the tap is
-    /// not delivering and never will be. It is put back once — that is the
-    /// whole recovery — and if that does not take, the trace says so plainly
-    /// rather than leaving the reader to work it out from the silence.
+    /// **It watches for movement, not for zero.** The first version asked
+    /// whether the count was zero, which only ever caught a tap that never
+    /// started. A tap that dies *during* a call leaves a large count that stops
+    /// moving, and that is the case this actually has: measured on a real call,
+    /// capture froze sixteen seconds in and stayed frozen for the remaining two
+    /// minutes with nothing said.
+    ///
+    /// Two seconds is not a slow start. At 48 kHz the next buffer is due in
+    /// twenty milliseconds, so four still ticks means the tap has stopped. The
+    /// tap is put back once per stall — repeatedly is a storm — and if that
+    /// does not take, the trace says so plainly rather than leaving the reader
+    /// to work it out from the silence.
     private func checkCaptureIsFeeding() {
         guard audio.isRunning else { return }
-        guard audio.capturedFrames == 0 else {
+        let captured = audio.capturedFrames
+        guard captured == lastCapturedFrames else {
+            lastCapturedFrames = captured
             silentCaptureTicks = 0
+            hasRestartedThisStall = false
             return
         }
         silentCaptureTicks += 1
         guard silentCaptureTicks >= 4 else { return }
-        // Reset the count either way: re-installing the tap zeroes the frame
-        // counter, so without this the follow-up check below could never come
-        // round again and a failed recovery would go unsaid.
         silentCaptureTicks = 0
 
-        if !hasRestartedCapture {
-            hasRestartedCapture = true
-            VoiceTrace.fault(
-                "microphone delivered nothing for two seconds; re-installing the capture tap"
-            )
-            Task { @MainActor [audio] in audio.restartCapture() }
-        } else if !hasReportedSilentCapture {
+        guard !hasRestartedThisStall else {
+            // **The second recovery is to give up the canceller, not to give
+            // up.** The voice processing unit hands over a bus far wider than
+            // the device and there is no guarantee the capture is where this
+            // client reads it; a machine where that is true has a call nobody
+            // can hear, and a call without echo cancellation beats one nobody
+            // can hear. Tried once, and only after a tap restart did not take.
+            if !hasAbandonedVoiceProcessing {
+                hasAbandonedVoiceProcessing = true
+                Task { @MainActor [audio] in _ = audio.abandonVoiceProcessing() }
+                lastCapturedFrames = 0
+                return
+            }
+            guard !hasReportedSilentCapture else { return }
             hasReportedSilentCapture = true
             VoiceTrace.fault("microphone still delivering nothing; this call is sending silence")
+            return
         }
+        hasRestartedThisStall = true
+        VoiceTrace.fault(
+            "microphone stopped delivering for two seconds; re-installing the capture tap"
+        )
+        // Re-installing zeroes the engine's frame count, so the baseline goes
+        // with it or the next tick reads the drop as another stall.
+        lastCapturedFrames = 0
+        Task { @MainActor [audio] in audio.restartCapture() }
+    }
+
+    /// Watches for a microphone that is feeding a gate which never opens.
+    ///
+    /// **The other way this stack is perfect and inert, and the one that
+    /// actually happened.** Voice activity compares an absolute level against a
+    /// threshold the reader set. When the system voice processor is refused
+    /// there is no automatic gain in front of it, the same threshold now means
+    /// something else, and the gate simply never opens: the tap feeds, the
+    /// meter moves, every counter is healthy, and not one packet is ever sent.
+    /// Measured on two real calls — `out=0` for their whole length, with no
+    /// drop counted anywhere, because the frame was refused before anything
+    /// downstream ever saw it.
+    ///
+    /// So the peak is carried across the whole silent window and reported
+    /// against the threshold it failed to reach. One line, once, naming both
+    /// numbers — which is the difference between "nothing is being sent" and
+    /// "you are two thirds of the way to the line you drew".
+    private func checkTransmitIsOpening(_ report: AudioSendPath.Report) {
+        guard !hasReportedShutGate,
+              report.packets == 0,
+              report.offered > 0,
+              !report.isMuted,
+              let threshold = report.threshold
+        else {
+            if report.packets > 0 { shutGateTicks = 0; shutGatePeak = 0 }
+            return
+        }
+        shutGatePeak = max(shutGatePeak, report.peak)
+        shutGateTicks += 1
+        // Twelve ticks is six seconds. Long enough that somebody who joined and
+        // has not spoken yet is not told they are broken.
+        guard shutGateTicks >= 12 else { return }
+        hasReportedShutGate = true
+        VoiceTrace.fault(
+            "microphone is feeding but voice activity has never opened: peak "
+            + String(format: "%.3f", shutGatePeak)
+            + " against a " + String(format: "%.3f", threshold)
+            + " threshold over six seconds"
+            + (audio.isVoiceProcessing ? "" : ", and the voice processor is off so there is no automatic gain")
+        )
     }
 
     // MARK: Switches
@@ -684,10 +841,27 @@ public actor VoiceEngine {
         inbound.setVolume(volume, for: userID)
     }
 
+    /// Where one person's picture goes.
+    ///
+    /// **Our own id is not an inbound stream, and asking for one is how the
+    /// share went black.** Every other participant's video arrives over the
+    /// socket and is keyed by user id in `InboundStreams`; ours never does, so
+    /// a sink registered for our own id there waits for a frame that cannot
+    /// exist. The camera hides this because its tile takes the capture
+    /// session's preview layer and never reaches here at all — a screen share
+    /// has no such layer, falls through to the same view every remote tile
+    /// uses, and draws black for the whole call while the send path is
+    /// perfectly healthy.
+    ///
+    /// So our own id is **refused here** rather than registered: the camera's
+    /// tile takes the capture session's preview layer, and a screen share's
+    /// comes from `StreamSession.setPreviewSink` — a different media session
+    /// entirely. Neither is ever a stream on this socket.
     public nonisolated func setVideoSink(
         _ sink: (@Sendable (CMSampleBuffer) -> Void)?,
         for userID: UInt64
     ) {
+        guard userID != connection.userID else { return }
         inbound.setVideoSink(sink, for: userID)
     }
 
@@ -708,7 +882,6 @@ public actor VoiceEngine {
             await endVideo()
             return true
         }
-        guard !isScreenSharing else { return false }
 
         let capture = CameraCapture()
         capture.onFrame = { [weak self] pixels, _ in
@@ -718,85 +891,57 @@ public actor VoiceEngine {
         else { return false }
         camera = capture
         isCameraOn = true
-        beginVideo(width: video.width, height: video.height, framerate: video.framerate,
-                   bitrate: video.bitrate)
+        await beginVideo(width: video.width, height: video.height, framerate: video.framerate,
+                         bitrate: video.bitrate)
         return true
     }
 
-    public func startScreenShare(
-        target: ShareableTarget,
-        quality: ScreenShareCapture.Quality
-    ) async -> Bool {
-        guard !isCameraOn else { return false }
-        let capture = ScreenShareCapture()
-        capture.onFrame = { [weak self] pixels, _ in
-            self?.encodeVideoFrame(pixels)
-        }
-        capture.onStopped = { [weak self] reason in
-            Task { await self?.screenShareEnded(reason) }
-        }
-        do {
-            try await capture.start(target: target, quality: quality)
-        } catch {
-            return false
-        }
-        screenShare = capture
-        isScreenSharing = true
-        let fitted = ScreenShareCapture.fit(
-            width: target.width, height: target.height,
-            into: quality.width, by: quality.height
+    private func beginVideo(
+        width: Int, height: Int, framerate: Int, bitrate: Int
+    ) async {
+        // **Announced before a single frame can leave, and awaited.** §1.5: op
+        // 12 is silently fatal to skip, and sending before it is the same fault
+        // with a stopwatch on it — video on an SSRC the server has not been
+        // told about is forwarded to nobody, which looks exactly like a camera
+        // that is off. Turning the send path on first and announcing from a
+        // detached task left that a race, won by whichever the scheduler
+        // preferred.
+        await gateway?.announceStreams(
+            audioSSRC: ourSSRC,
+            videoSSRC: ourSSRC &+ 1,
+            rtxSSRC: ourSSRC &+ 2,
+            rid: videoRID,
+            isActive: true,
+            width: width,
+            height: height,
+            framerate: framerate,
+            bitrate: bitrate
         )
-        // A screen is text at rest and motion in bursts, so it earns a higher
-        // ceiling than a face does — a shared editor at a camera's bitrate is
-        // unreadable, which is the only thing anybody shares a screen for.
-        beginVideo(
-            width: fitted.width, height: fitted.height,
-            framerate: quality.framerate, bitrate: 3_500_000
+
+        // **What the far end has to be able to decode**, said out loud. The
+        // profile is constrained baseline and its level is chosen from the
+        // frame size: a receiver that negotiated a lower level than the one in
+        // our SPS refuses to build a decoder at all, which it reports as a
+        // camera that would not start rather than as a resolution it cannot
+        // take.
+        VoiceTrace.write(
+            "video \(width)x\(height)@\(framerate) \(bitrate / 1_000)kbit "
+            + "ssrc=\(ourSSRC &+ 1)"
         )
-        return true
-    }
-
-    public func stopScreenShare() async {
-        await screenShare?.stop()
-        screenShare = nil
-        isScreenSharing = false
-        await endVideo()
-    }
-
-    private func screenShareEnded(_ reason: String) async {
-        screenShare = nil
-        isScreenSharing = false
-        await endVideo()
-        emit(.screenShareStopped(reason))
-    }
-
-    private func beginVideo(width: Int, height: Int, framerate: Int, bitrate: Int) {
         let encoder = H264Encoder(configuration: .init(
             width: width, height: height, framerate: framerate, bitrate: bitrate
         ))
-        encoder.onEncodedFrame = { [videoSend] units, sets, _ in
+        encoder.onEncodedFrame = { [videoSend] units, sets, isKeyframe in
             videoSend.send(
                 units: units,
                 parameterSets: sets,
+                isKeyframe: isKeyframe,
                 presentationTime: CACurrentMediaTime()
             )
         }
         try? encoder.start()
         videoEncode.begin(encoder)
         videoSend.isActive = true
-
-        Task { [gateway, ourSSRC] in
-            await gateway?.announceStreams(
-                audioSSRC: ourSSRC,
-                videoSSRC: ourSSRC &+ 1,
-                rtxSSRC: ourSSRC &+ 2,
-                isActive: true,
-                width: width,
-                height: height,
-                framerate: framerate,
-                bitrate: bitrate
-            )
-        }
     }
 
     private func endVideo() async {
@@ -807,6 +952,7 @@ public actor VoiceEngine {
             audioSSRC: ourSSRC,
             videoSSRC: ourSSRC &+ 1,
             rtxSSRC: ourSSRC &+ 2,
+            rid: videoRID,
             isActive: false,
             width: 0, height: 0, framerate: 0, bitrate: 0
         )
@@ -882,6 +1028,54 @@ public actor VoiceEngine {
         }
     }
 
+    /// The four reasons nothing is leaving, in one word each: the reader is
+    /// muted, the tap has stopped, the level never cleared the line, or it did.
+    private static func gateDescription(_ report: AudioSendPath.Report) -> String {
+        if report.isMuted { return "muted" }
+        if report.offered == 0 { return "no capture" }
+        return report.isGateOpen ? "open" : "shut"
+    }
+
+    /// The video half of the media line, and nothing at all when there is no
+    /// video.
+    ///
+    /// **Four stages, named separately, because they fail separately.** A share
+    /// or a camera that shows the far end black is one of: no frame arriving
+    /// from the capture, no encoder to take it, a transform refusing the access
+    /// unit, or packets leaving perfectly well and the fault being elsewhere.
+    /// Folding them into the one `out=` total — which is what this line did —
+    /// means the first three are indistinguishable and the fourth is invisible.
+    ///
+    /// Silent when nothing is sending video, so an audio-only call's line stays
+    /// the length it has always been.
+    private static func videoDescription(
+        submitted: Int,
+        unencodable: Int,
+        refused: Int,
+        send: VideoSendPath.Report
+    ) -> String {
+        guard send.isActive || submitted > 0 || send.packets > 0 else { return "" }
+        var line = " video=\(send.packets)"
+        line += " frames=\(submitted)"
+        if unencodable > 0 { line += " noencoder=\(unencodable)" }
+        if refused > 0 { line += " refused=\(refused)" }
+        // Frames held back for want of a keyframe to open the stream with. A
+        // handful at the start is the invariant working; a count that never
+        // stops is an encoder ignoring the request.
+        if send.unstartable > 0 { line += " unstartable=\(send.unstartable)" }
+        // The one state where every other number is legitimately zero, and
+        // which otherwise reads exactly like a broken capture.
+        if !send.isActive { line += " INACTIVE" }
+        return line
+    }
+
+    /// Datagrams the stack would not take, when there were any. See
+    /// `VoiceTransport.drainSendFailures`.
+    private static func unsentDescription(_ refused: (count: Int, reason: String?)?) -> String {
+        guard let refused, refused.count > 0 else { return "" }
+        return " UNSENT=\(refused.count)" + (refused.reason.map { " (\($0))" } ?? "")
+    }
+
     private func publish() {
         emit(.inputLevel(audio.currentInputLevel))
         VoiceTrace.flushDrops()
@@ -890,11 +1084,36 @@ public actor VoiceEngine {
         let summary = inbound.statistics()
         let audioCounters = audioSend.drainCounters()
         let videoCounters = videoSend.drainCounters()
+        checkTransmitIsOpening(audioCounters)
         // The far end's loss is what our encoder spends redundancy against.
         // Feeding it back is what makes in-band FEC do anything at all — with
         // the flag on and the percentage at zero, Opus allocates nothing to the
         // redundant copy and the feature is inert.
         audioSend.updateExpectedLoss(percent: summary.lossPercent)
+
+        // **Accumulated, because this drains four times per printed line.**
+        // `publish` runs every 500 ms and the media line is written every
+        // fourth call, so a counter read straight from the drain reports the
+        // last 500 ms while every other number on the line covers two seconds.
+        // That is the same "large and still" trap §1.5 warns about wearing a
+        // different hat: three windows out of four are thrown away, and a
+        // capture that delivered frames in one of them still prints zero.
+        let encodeCounters = videoEncode.drainCounters()
+        videoFramesSubmitted += encodeCounters.submitted
+        videoFramesUnencodable += encodeCounters.unencodable
+        videoFramesRefused += videoCounters.refused
+
+        // **Answered on every drain, not on every printed line.** A viewer who
+        // cannot decode our camera is asking for one keyframe, and this is the
+        // whole of the answer: half a second at worst, against the encoder's
+        // own two-second cadence.
+        let report = inbound.drainFeedback()
+        feedback.merge(report.feedback)
+        unreadableFeedback += report.unreadable
+        if report.feedback.wantsKeyframe { videoSend.requestKeyframe() }
+        // And the other direction: somebody else's camera that arrived
+        // mid-picture has nothing to start from until they are asked.
+        if let transport { inbound.askForKeyframes(on: transport, from: ourSSRC) }
 
         var statistics = Statistics()
         statistics.packetsSent = audioCounters.packets + videoCounters.packets
@@ -906,13 +1125,37 @@ public actor VoiceEngine {
         // and until this existed the two cases were indistinguishable from the
         // outside. `in` is raw datagrams; `read` is the ones that got past the
         // transport cipher. Once every two seconds, and only in a call.
+        //
+        // **`out` carries the reason it is what it is.** A zero on its own sent
+        // one whole session looking at the encryption underneath it, when the
+        // gate above had simply never opened. `mic` is the loudest frame the
+        // tap offered against the threshold it had to clear, and `gate` is what
+        // came of it.
         mediaTicks += 1
         if mediaTicks % 4 == 0 {
             VoiceTrace.write(
                 "media out=\(statistics.packetsSent) in=\(summary.datagrams) "
                 + "read=\(summary.received) loss=\(summary.lossPercent)% "
-                + "capture=\(audio.capturedFrames)"
+                + "capture=\(audio.capturedFrames) "
+                + "mic=" + String(format: "%.3f", audioCounters.peak)
+                + (audioCounters.threshold.map { "/" + String(format: "%.3f", $0) } ?? "")
+                + " gate=" + Self.gateDescription(audioCounters)
+                + Self.videoDescription(
+                    submitted: videoFramesSubmitted,
+                    unencodable: videoFramesUnencodable,
+                    refused: videoFramesRefused,
+                    send: videoCounters
+                )
+                + inbound.drainVideoReport().description
+                + Self.unsentDescription(transport?.drainSendFailures())
+                + feedback.description
+                + (unreadableFeedback > 0 ? " rtcp?=\(unreadableFeedback)" : "")
             )
+            feedback = RTCP.Feedback()
+            unreadableFeedback = 0
+            videoFramesSubmitted = 0
+            videoFramesUnencodable = 0
+            videoFramesRefused = 0
         }
         statistics.lossPercent = summary.lossPercent
         statistics.jitterMilliseconds = summary.jitterMilliseconds

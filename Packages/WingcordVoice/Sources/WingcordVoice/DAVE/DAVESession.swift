@@ -46,12 +46,46 @@ final class DAVESession {
     /// The exporter label DAVE derives every media key under.
     private static let mediaSecretLabel = "Discord Secure Frames v0"
 
-    let userID: UInt64
-    /// The MLS group id: the **channel**'s snowflake, big-endian.
+    /// What a group is keyed on.
     ///
-    /// Not the guild's, and not the identify payload's `server_id`. A Go Live
-    /// stream is a separate media session with its own group, keyed by the
-    /// media session id rather than the channel — see `VoiceEngine`.
+    /// **Two media sessions, two different snowflakes, and neither is
+    /// inferable from the other.** A call keys its group on the voice channel;
+    /// a Go Live stream is a separate media session and keys its own group on
+    /// the media session id. A stream that rides the call's group is a client
+    /// encrypting a second session's media under the first session's keys —
+    /// which every other member rejects as belonging to another group.
+    ///
+    /// This is an enum rather than a snowflake so that a caller cannot pass the
+    /// wrong one without saying which it thinks it is. It used to be a
+    /// parameter named `channelID`, and screen share passed the channel.
+    enum GroupKey: Equatable, Sendable {
+        /// A call's group: the **voice channel**'s snowflake.
+        ///
+        /// Not the guild's, and not the identify payload's `server_id` — in a
+        /// guild those are the same snowflake as each other and neither is the
+        /// channel.
+        case channel(UInt64)
+        /// A Go Live stream's group: the **media session id**, which is the
+        /// `rtc_channel_id` its `STREAM_CREATE` carried.
+        ///
+        /// **Read off the frame, never derived.** The documentation describes
+        /// it as one less than `rtc_server_id`, and in the first captured frame
+        /// it is — but it is also sent outright, and a client that computes it
+        /// agrees with the server only for as long as that holds and has no way
+        /// to notice when it stops.
+        case mediaSession(UInt64)
+
+        var snowflake: UInt64 {
+            switch self {
+            case .channel(let id), .mediaSession(let id): id
+            }
+        }
+    }
+
+    let userID: UInt64
+    /// What this group is keyed on, kept so a trace can say which.
+    let groupKey: GroupKey
+    /// The MLS group id: `groupKey`'s snowflake, big-endian.
     let groupID: [UInt8]
 
     private(set) var protocolVersion: UInt16
@@ -85,14 +119,40 @@ final class DAVESession {
     /// shared one would have to guess whose key to try.
     private var decryptors: [UInt64: DAVEDecryptor] = [:]
 
-    init(protocolVersion: UInt16, userID: UInt64, channelID: UInt64) {
+    /// What this session is called in the trace.
+    ///
+    /// **Three DAVE sessions run at once and every line they wrote looked the
+    /// same.** A call, a share it publishes and a share it watches each own a
+    /// group, and `dave epoch=1` could belong to any of them — which cost real
+    /// reading time on every diagnosis in `HANDOFF.md`. The group kind is not
+    /// enough: a published share and a watched one are both media sessions.
+    private let label: String
+    /// The label with its separator, or nothing at all — so an unlabelled
+    /// session's lines read exactly as they always did.
+    private var tag: String { label.isEmpty ? "" : label + " " }
+
+    init(
+        protocolVersion: UInt16,
+        userID: UInt64,
+        groupKey: GroupKey,
+        label: String = ""
+    ) {
         self.protocolVersion = protocolVersion
         self.userID = userID
+        self.groupKey = groupKey
+        self.label = label
         var writer = TLSWriter(reserving: 8)
-        writer.write(channelID)
+        writer.write(groupKey.snowflake)
         groupID = writer.bytes
         encryptor.setPassthrough(protocolVersion == 0)
-        VoiceTrace.write("dave session v\(protocolVersion) group=\(channelID)")
+        // The kind is traced beside the number: two sessions of one call carry
+        // two group ids, and a bare snowflake does not say which is which.
+        let kind = switch groupKey {
+        case .channel: "channel"
+        case .mediaSession: "media-session"
+        }
+        VoiceTrace.write(
+"\(tag)dave session v\(protocolVersion) group=\(kind):\(groupKey.snowflake)")
     }
 
     // MARK: What the app sees
@@ -166,7 +226,7 @@ final class DAVESession {
         // local group of one can exist.
         try makePendingGroup()
         VoiceTrace.write(
-            "dave key package built, pending group "
+"\(tag)dave key package built, pending group "
             + (pendingGroup == nil ? "waits for the external sender" : "created")
         )
         return package
@@ -174,7 +234,8 @@ final class DAVESession {
 
     /// Throws away everything and starts over, for a re-created group.
     func reset(protocolVersion: UInt16) {
-        VoiceTrace.write("dave reset to v\(protocolVersion)")
+        VoiceTrace.write(
+"\(tag)dave reset to v\(protocolVersion)")
         self.protocolVersion = protocolVersion
         group = nil
         pendingGroup = nil
@@ -198,7 +259,7 @@ final class DAVESession {
         externalSender = sender
         try makePendingGroup()
         VoiceTrace.write(
-            "dave external sender accepted, pending group "
+"\(tag)dave external sender accepted, pending group "
             + (pendingGroup == nil ? "waits for a key package" : "created")
         )
     }
@@ -236,18 +297,21 @@ final class DAVESession {
 
         switch proposals {
         case .append(let messages):
-            VoiceTrace.write("dave proposals append=\(messages.count)")
+            VoiceTrace.write(
+"\(tag)dave proposals append=\(messages.count)")
             for message in messages {
                 try working.handleProposal(message, validate: admit)
             }
         case .revoke(let references):
-            VoiceTrace.write("dave proposals revoke=\(references.count)")
+            VoiceTrace.write(
+"\(tag)dave proposals revoke=\(references.count)")
             try working.revokeProposals(references)
         }
 
         guard !working.pendingProposals.isEmpty else {
             store(working)
-            VoiceTrace.write("dave nothing left to commit")
+            VoiceTrace.write(
+"\(tag)dave nothing left to commit")
             return nil
         }
 
@@ -255,7 +319,7 @@ final class DAVESession {
         store(working)
         cachedCommit = (try output.commit.marshalled(), output.next)
         VoiceTrace.write(
-            "dave commit built over \(working.pendingProposals.count) proposals, "
+"\(tag)dave commit built over \(working.pendingProposals.count) proposals, "
             + "welcome=\(output.welcome != nil)"
         )
         return .commitWelcome(commit: output.commit, welcome: output.welcome)
@@ -315,7 +379,8 @@ final class DAVESession {
             // entirely. If theirs won, a welcome is on its way instead.
             if group == nil {
                 guard let cached = cachedCommit, cached.message == raw else {
-                    VoiceTrace.write("dave commit \(transitionID) is not ours; awaiting a welcome")
+                    VoiceTrace.write(
+"\(tag)dave commit \(transitionID) is not ours; awaiting a welcome")
                     return .ignored
                 }
                 adopt(cached.next)
@@ -330,7 +395,7 @@ final class DAVESession {
             adopt(next)
             return open(transition: transitionID)
         } catch {
-            VoiceTrace.fault("dave commit \(transitionID) refused: \(error)")
+            VoiceTrace.fault("\(tag)dave commit \(transitionID) refused: \(error)")
             return .invalid(transitionID: transitionID)
         }
     }
@@ -363,7 +428,7 @@ final class DAVESession {
             adopt(joined)
             return open(transition: transitionID)
         } catch {
-            VoiceTrace.fault("dave welcome \(transitionID) refused: \(error)")
+            VoiceTrace.fault("\(tag)dave welcome \(transitionID) refused: \(error)")
             return .invalid(transitionID: transitionID)
         }
     }
@@ -381,7 +446,7 @@ final class DAVESession {
         // this runs on every epoch change — which is every join and every part.
         let members = Set((try? next.roster().keys).map(Array.init) ?? [])
         VoiceTrace.write(
-            "dave epoch=\(next.epoch) members=\(members.count) leaf=\(next.leafIndex) "
+"\(tag)dave epoch=\(next.epoch) members=\(members.count) leaf=\(next.leafIndex) "
             + "code=\(DAVESession.displayCode(next.epochAuthenticator))"
         )
 
@@ -413,20 +478,46 @@ final class DAVESession {
     /// the whitepaper's own changelog — so it is written out here rather than
     /// left to a reader to assume it matches the credential.
     private func ratchet(for user: UInt64, in group: MLSGroup) -> MLSHashRatchet {
-        var context = TLSWriter(reserving: 8)
-        context.write(user.littleEndian)
-        return MLSHashRatchet(baseSecret: group.export(
+        MLSHashRatchet(baseSecret: group.export(
             label: Self.mediaSecretLabel,
-            context: context.bytes,
+            context: Self.mediaSecretContext(for: user),
             length: MLSCrypto.aeadKeyLength
         ))
+    }
+
+    /// The sender id as the exporter's context: eight bytes, **least
+    /// significant first**.
+    ///
+    /// **Not `TLSWriter`, and the reason is a bug this cost two sessions.**
+    /// `TLSWriter.write(UInt64)` serialises big-endian, which is right for
+    /// every other integer in MLS and wrong for exactly this one. Writing
+    /// `write(user.littleEndian)` reads as the fix and is not one: on a
+    /// little-endian machine `UInt64.littleEndian` returns *the same value* —
+    /// it means "the value whose in-memory layout is little-endian", not
+    /// "these bytes reversed" — so the two operations cancelled and the context
+    /// went out big-endian. Every media key on both sides of every call was
+    /// derived from the wrong eight bytes.
+    ///
+    /// **Nothing this client could test would have caught it.** Two Wingcord
+    /// ends agree with each other perfectly while agreeing with Discord about
+    /// nothing, which is the same trap the frame nonce carries one field over
+    /// and is pinned against the same way: an assertion on the bytes, not on a
+    /// round trip.
+    ///
+    /// Taking the raw memory of `littleEndian` is correct on either kind of
+    /// host — on a big-endian one it is the byte-swapped value, whose layout is
+    /// again least significant first — and it is what `libdave`'s `memcpy` of a
+    /// `uint64_t` produces (`mls/session.cpp`, `GetKeyRatchet`).
+    static func mediaSecretContext(for user: UInt64) -> [UInt8] {
+        withUnsafeBytes(of: user.littleEndian) { Array($0) }
     }
 
     // MARK: Transitions
 
     /// Opcode 21. Returns whether the caller should report readiness.
     func prepareTransition(id: UInt16, protocolVersion version: UInt16) -> Bool {
-        VoiceTrace.write("dave prepare transition \(id) to v\(version)")
+        VoiceTrace.write(
+"\(tag)dave prepare transition \(id) to v\(version)")
         pendingTransitions[id] = version
         // **Transition zero is a (re)initialisation and executes at once.** It
         // is how the gateway tells a sole remaining member to adopt the fresh
@@ -448,7 +539,8 @@ final class DAVESession {
     /// Opcode 24. Returns `true` when a new key package has to be sent, which
     /// is the signal that the group is being created or re-created.
     func prepareEpoch(_ epoch: UInt64, protocolVersion version: UInt16) -> Bool {
-        VoiceTrace.write("dave prepare epoch \(epoch) at v\(version)")
+        VoiceTrace.write(
+"\(tag)dave prepare epoch \(epoch) at v\(version)")
         guard epoch == 1 else {
             protocolVersion = version
             return false
@@ -462,10 +554,11 @@ final class DAVESession {
         guard let version = pendingTransitions.removeValue(forKey: id) else {
             // A transition we never prepared. Ignoring it is right: acting on
             // it would mean changing keys on a schedule we did not agree to.
-            VoiceTrace.fault("dave execute for a transition \(id) we never prepared")
+            VoiceTrace.fault("\(tag)dave execute for a transition \(id) we never prepared")
             return
         }
-        VoiceTrace.write("dave execute transition \(id) at v\(version)")
+        VoiceTrace.write(
+"\(tag)dave execute transition \(id) at v\(version)")
         protocolVersion = version
 
         guard version > 0 else {
@@ -480,12 +573,13 @@ final class DAVESession {
             // Told to send under an epoch we never reached. Everything we
             // encode from here is dropped rather than sent in the clear, and
             // this line is the only warning of it.
-            VoiceTrace.fault("dave execute \(id) with no established group; sending stays off")
+            VoiceTrace.fault("\(tag)dave execute \(id) with no established group; sending stays off")
             return
         }
         encryptor.setRatchet(ratchet(for: userID, in: group))
         encryptor.setPassthrough(false)
-        VoiceTrace.write("dave sending under epoch \(group.epoch)")
+        VoiceTrace.write(
+"\(tag)dave sending under epoch \(group.epoch)")
     }
 
     // MARK: The verification code
