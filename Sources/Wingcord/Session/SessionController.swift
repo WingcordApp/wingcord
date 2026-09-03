@@ -69,6 +69,15 @@ final class SessionController {
     /// A launch whose instance id has not arrived yet. See
     /// `awaitActivityInstance`; at most one, because a launch is a click.
     var pendingActivityLaunch: PendingActivityLaunch?
+    /// Whether the account's command frecency table has been asked for.
+    ///
+    /// A flag rather than "is the array empty": an account that has never run a
+    /// command answers an empty table, and that is a real answer — one the `/`
+    /// list would otherwise re-ask for on every open.
+    var hasLoadedCommandFrecency = false
+    /// The same latch for the GIF picker's Favourites tile, which reads the same
+    /// blob from a different surface.
+    var hasLoadedFavoriteGIFs = false
     /// Server-tag fetches in flight. A busy channel can show one tag on twenty
     /// consecutive rows; every one of them must share a single request.
     private var guildProfileFetches: Set<GuildID> = []
@@ -412,7 +421,6 @@ final class SessionController {
             guildPositions: snapshot.settings.guildPositions,
             guilds: snapshot.guilds
         )
-        model.favoriteGIFs = snapshot.settings.favoriteGIFs
         model.selfStatus = snapshot.settings.status
         model.selfCustomStatus = snapshot.settings.customStatus
         model.mutedGuildIDs = snapshot.mutedGuildIDs
@@ -553,6 +561,13 @@ final class SessionController {
             // invitation message at all — and about four hundred milliseconds
             // after the interaction rather than whenever a message lands.
             resolveActivityLaunch(interaction: id, nonce: nonce)
+            // …and it is the same dispatch that says a slash command was taken.
+            // Both are looked up by nonce and only one of them can match, so the
+            // order between them does not matter.
+            resolveInteraction(nonce: nonce)
+
+        case .interactionFailed(let nonce):
+            failInteraction(nonce: nonce)
 
         case .messageCreated(let message, let author, let quotedAuthor, _, _):
             let merged = author.merged(over: model.users[author.id])

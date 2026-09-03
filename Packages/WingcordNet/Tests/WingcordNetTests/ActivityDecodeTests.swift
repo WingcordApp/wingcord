@@ -250,21 +250,21 @@ struct ActivityDecodeTests {
            "contexts":[0,2],"integration_types":[0,1],"handler":2}],
          "version":"1376941608135144012"}
         """
-        let index = try JSONDecoder().decode(CommandIndexDTO.self, from: Data(json.utf8))
-        let entry = try #require((index.application_commands ?? []).compactMap(\.domain).first)
+        let dto = try JSONDecoder().decode(CommandIndexDTO.self, from: Data(json.utf8))
+        let entry = try #require(dto.domain.entryPoint)
         #expect(entry.name == "launch")
         #expect(entry.version == "1487256241190708420")
         #expect(entry.contexts == [0, 2])
 
         // Wordle's own shape, verbatim from the captured user index.
-        var appHandled = try #require(index.application_commands?.first)
+        var appHandled = try #require(dto.application_commands?.first)
         appHandled.handler = 1
-        #expect(appHandled.domain != nil)
+        #expect(appHandled.domain?.activityEntryPoint != nil)
 
         // A chat-input command is not an entry point, whatever its handler.
-        var chatInput = try #require(index.application_commands?.first)
+        var chatInput = try #require(dto.application_commands?.first)
         chatInput.type = 1
-        #expect(chatInput.domain == nil)
+        #expect(chatInput.domain?.activityEntryPoint == nil)
     }
 
     // MARK: The consent screen

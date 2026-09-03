@@ -59,7 +59,9 @@ extension DemoFixtures {
         _ id: UInt64,
         _ name: String,
         icon: String,
-        tile: String,
+        /// The wide artwork. Nil for an app with none — Dank Memer has no
+        /// `embedded_cover`, and a featured tile falls back to its icon.
+        tile: String?,
         tagline: String,
         tags: [String],
         maxParticipants: Int?,
@@ -121,6 +123,19 @@ extension DemoFixtures {
                         tags: ["Casual Game", "Farming Game", "Match 3", "Puzzle"],
                         maxParticipants: nil, guildCount: 58200,
                         video: "1232355776870223923",
+                        hero: nil
+                    ),
+                    // **The one row that exercises an app's whole page**: an
+                    // entry point whose own name is the button's words
+                    // (`GRIND XP`), `contexts: [0, 1, 2]` so "Launch in DM"
+                    // appears, and 59 commands under it. `dank memer.har`.
+                    app(
+                        270904126974590976, "Dank Memer",
+                        icon: "a38cf47e5d952bc82bedb9c328725278", tile: nil,
+                        tagline: "Grind, Fight, Wager, Gamble, Fish, Collect, and more. Do it all, right here.",
+                        tags: ["Economy", "Fun", "Game", "Memes", "Social"],
+                        maxParticipants: nil, guildCount: nil,
+                        video: nil,
                         hero: nil
                     ),
                     app(
@@ -193,6 +208,19 @@ extension DemoFixtures {
                 position: 5,
                 kind: 4,
                 apps: [
+                    // **The one row that exercises an app's whole page**: an
+                    // entry point whose own name is the button's words
+                    // (`GRIND XP`), `contexts: [0, 1, 2]` so "Launch in DM"
+                    // appears, and 59 commands under it. `dank memer.har`.
+                    app(
+                        270904126974590976, "Dank Memer",
+                        icon: "a38cf47e5d952bc82bedb9c328725278", tile: nil,
+                        tagline: "Grind, Fight, Wager, Gamble, Fish, Collect, and more. Do it all, right here.",
+                        tags: ["Economy", "Fun", "Game", "Memes", "Social"],
+                        maxParticipants: nil, guildCount: nil,
+                        video: nil,
+                        hero: nil
+                    ),
                     app(
                         880218394199220334, "Watch Together",
                         icon: "ec48acbad4c32efab4275cb9f3ca3a58", tile: "1303047145993277530",

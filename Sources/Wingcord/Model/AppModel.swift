@@ -492,6 +492,55 @@ final class AppModel {
     @ObservationIgnored var activityRuntime: ActivityRuntime?
     /// The activity currently on screen, if one is running.
     var runningActivity: RunningActivity?
+    // MARK: Slash commands
+    //
+    // The `/` flyout's data. Fetched once per scope by `SessionController`; the
+    // store only ever reads it.
+
+    /// Every command index this session has fetched, by scope. A direct message
+    /// needs one; a server needs its own *and* the account's, because a
+    /// user-installed app is in neither the other's list.
+    @ObservationIgnored var commandIndexes: [DiscordREST.CommandScope: CommandIndex] = [:]
+    /// Command ids from the account's frecency table, most-used first.
+    @ObservationIgnored var commandFrecency: [String] = []
+    /// Commands run in *this* session, and when. Layered over the table above,
+    /// which this client reads and never writes — re-encoding a 27 KB protobuf
+    /// it can only read eight fields of would silently delete whichever field it
+    /// dropped. See `DiscordREST.commandFrecency`.
+    @ObservationIgnored var commandUses: [String: Date] = [:]
+    /// Moves when an index lands or a command is run. Its own counter for the
+    /// reason `activityRevision` is: nothing about a message arriving can change
+    /// what may be typed after a slash.
+    var commandRevision: UInt64 = 0
+    /// Interactions posted and not yet answered, by nonce.
+    ///
+    /// Observable, and read by the composer: a command that has been sent draws
+    /// as sending until Discord says the application took it. `POST /interactions`
+    /// answers `204` with no body, so the socket is the only thing that ever
+    /// says whether it worked.
+    var pendingInteractions: [String: PendingInteraction] = [:]
+
+    // MARK: Adding an application, and its store
+
+    /// The Add App sheet's data, while it is open. Nil closes it.
+    ///
+    /// **Fetched per open rather than cached**: `isAuthorized` is the whole
+    /// reason the sheet has two states, and a stale answer offers to add an app
+    /// the reader added a minute ago from somewhere else.
+    var applicationInstall: ApplicationInstall?
+    /// Which sheet the reader asked for, before its data lands.
+    var applicationInstallRequest: ApplicationInstallRequest?
+    var applicationInstallFailure: String?
+    /// Storefronts, by application. An app with none is stored **empty** rather
+    /// than left absent — absent means "not asked".
+    @ObservationIgnored var applicationStores: [ApplicationID: ApplicationStore] = [:]
+    /// Whether each application says it has one, from `storefront_available` on
+    /// its public record. False is a real answer and is stored as one.
+    @ObservationIgnored var applicationStorefronts: [ApplicationID: Bool] = [:]
+    /// Which application's store is open, if any.
+    var openStoreApplicationID: ApplicationID?
+    var storeRevision: UInt64 = 0
+
     /// What this client is broadcasting as its own rich presence.
     ///
     /// **Written by a running activity through `SET_ACTIVITY`**, which is how
@@ -514,6 +563,9 @@ final class AppModel {
     @ObservationIgnored var emojiCatalogCache: (key: ExpressionMemoKey, value: ExpressionCatalog)?
     @ObservationIgnored var stickerCatalogCache: (key: ExpressionMemoKey, value: ExpressionCatalog)?
     @ObservationIgnored var activitySectionsCache: (key: ActivityMemoKey, value: [ActivitySection])?
+    @ObservationIgnored var commandSectionsCache: (key: CommandMemoKey, value: [CommandSection])?
+    @ObservationIgnored
+    var appCommandSectionsCache: (key: AppCommandMemoKey, value: [AppCommandSection])?
     /// Discord's own sticker packs, fetched once per launch. Not per guild and
     /// not per channel: the set is the same for every account.
     @ObservationIgnored var defaultStickerPacks: [ExpressionSection] = []
@@ -791,6 +843,14 @@ struct MessageBox: Sendable {
     /// A message being edited, and its text so far. Survives eviction, and sits
     /// *beside* the draft rather than over it — see `MessageEdit`.
     var editing: MessageEdit?
+    /// A slash command chosen and not yet sent.
+    ///
+    /// **Beside the draft, never inside it.** A command is a token stream — a
+    /// leaf, then a value per option — and a client that keeps it as
+    /// `/8ball question:…` has to re-parse the reader's own punctuation to know
+    /// what they meant. Holding it here also means Escape gives back exactly
+    /// what was typed before the command started. See `PendingCommand`.
+    var command: PendingCommand?
     /// Who is typing, and when their indicator expires.
     var typing: [UserID: Date] = [:]
 

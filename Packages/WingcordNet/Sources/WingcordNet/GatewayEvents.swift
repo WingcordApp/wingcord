@@ -42,6 +42,10 @@ struct GatewayFrame: Decodable, Sendable {
         /// `nonce` echoes what the launch sent, which is how a client tells its
         /// own interaction from anybody else's.
         case interactionSuccess(InteractionAckPayload)
+        /// The application refused, or never answered inside Discord's window.
+        /// The same `{id, nonce}` shape as the success — the *name* is the whole
+        /// difference, which is why one payload type serves both.
+        case interactionFailure(InteractionAckPayload)
         case messageUpdate(MessageDTO)
         case messageDelete(MessageDeletePayload)
         case messageReactionAdd(ReactionEventPayload)
@@ -140,6 +144,8 @@ struct GatewayFrame: Decodable, Sendable {
         case "MESSAGE_CREATE": payload = .messageCreate(try decode(MessageDTO.self))
         case "INTERACTION_SUCCESS":
             payload = .interactionSuccess(try decode(InteractionAckPayload.self))
+        case "INTERACTION_FAILURE":
+            payload = .interactionFailure(try decode(InteractionAckPayload.self))
         case "MESSAGE_UPDATE": payload = .messageUpdate(try decode(MessageDTO.self))
         case "MESSAGE_DELETE": payload = .messageDelete(try decode(MessageDeletePayload.self))
         case "MESSAGE_REACTION_ADD":

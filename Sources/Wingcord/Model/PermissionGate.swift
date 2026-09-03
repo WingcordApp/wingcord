@@ -67,6 +67,10 @@ final class PermissionGate {
             let resolved: Permissions = [
                 .viewChannel, .sendMessages, .readMessageHistory, .addReactions,
                 .attachFiles, .embedLinks, .useExternalEmojis, .sendVoiceMessages,
+                // A direct message has no roles to take this away, and the
+                // capture proves it is granted: both interactions in
+                // `Slash commands.har` were posted from one.
+                .useApplicationCommands,
             ]
             channels[channelID] = resolved
             return resolved
@@ -164,6 +168,21 @@ final class PermissionGate {
             return resolved.contains(.sendMessages)
         }
         return resolved.contains(.sendMessages)
+    }
+
+    /// Whether `/` may open a command list here.
+    ///
+    /// **A separate bit from `sendMessages`, and it is genuinely separate**:
+    /// `USE_APPLICATION_COMMANDS` is what a server takes away to stop a channel
+    /// filling with bot output while leaving everybody able to talk. Gating the
+    /// list on posting alone would open it in exactly the channels where every
+    /// command is refused.
+    ///
+    /// Being able to post is still required on top of it — a command posts an
+    /// interaction into this channel, and a reader who cannot write here cannot
+    /// make a bot write here either.
+    func canUseCommands(in channelID: ChannelID) -> Bool {
+        canSend(in: channelID) && permissions(in: channelID).contains(.useApplicationCommands)
     }
 
     /// Everything the reader may do to one message, in one value.

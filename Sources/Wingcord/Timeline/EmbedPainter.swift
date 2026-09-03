@@ -225,8 +225,9 @@ nonisolated extension TimelineRowPainter {
         }
 
         let font = NSFont.systemFont(ofSize: style.metadataFont.pointSize, weight: .semibold)
-        let trailing = slot.isMenu ? 14 + TimelineMetrics.componentPadding
-            : TimelineMetrics.componentPadding
+        let hasTrailingGlyph = slot.isMenu || slot.url != nil
+        let trailing = TimelineMetrics.componentPadding
+            + (hasTrailingGlyph ? TimelineMetrics.componentTrailingGlyphRoom : 0)
         drawText(
             slot.label,
             font: font,
@@ -236,21 +237,21 @@ nonisolated extension TimelineRowPainter {
             context: context
         )
 
-        if slot.isMenu {
+        // Centred in the band the layout reserved, so the mark and the label
+        // can never meet however long the words are.
+        if hasTrailingGlyph {
+            let side: CGFloat = slot.isMenu ? 10 : 12
+            let band = frame.maxX - TimelineMetrics.componentPadding
+                - TimelineMetrics.componentTrailingGlyphRoom
             drawSymbol(
-                "chevron.down",
-                tint: style.tertiaryColor,
-                in: CGRect(x: frame.maxX - 22, y: frame.midY - 5, width: 10, height: 10),
-                context: context
-            )
-        } else if slot.url != nil {
-            // A link button says where it goes. The mark is the only difference
-            // between "this opens a page" and "this does something here", and
-            // Discord draws it for the same reason.
-            drawSymbol(
-                "arrow.up.forward.square",
-                tint: ink.withAlphaComponent(0.75),
-                in: CGRect(x: frame.maxX - 24, y: frame.midY - 6, width: 12, height: 12),
+                slot.isMenu ? "chevron.down" : "arrow.up.forward.square",
+                tint: slot.isMenu ? style.tertiaryColor : ink.withAlphaComponent(0.75),
+                in: CGRect(
+                    x: band + (TimelineMetrics.componentTrailingGlyphRoom - side) / 2,
+                    y: frame.midY - side / 2,
+                    width: side,
+                    height: side
+                ),
                 context: context
             )
         }
@@ -266,11 +267,23 @@ nonisolated extension TimelineRowPainter {
     ) {
         guard let id = emoji.id else {
             // A Unicode emoji, whose name IS the glyph.
+            //
+            // **Sized by its own advance, not by the box.** A colour emoji is
+            // about 1.2× as wide as its point size, so one set to the box height
+            // overflows the box — and `drawText` answers an overflow by
+            // truncating, which drew a thumbs-up as "…". Measuring once and
+            // scaling to fit is what keeps the glyph a glyph.
+            let nominal = NSFont.systemFont(ofSize: frame.height * 0.86)
+            let advance = TimelineLayoutEngine.measure(emoji.name, font: nominal)
+            let size = advance > frame.width && advance > 0
+                ? nominal.pointSize * (frame.width / advance)
+                : nominal.pointSize
+            let font = NSFont.systemFont(ofSize: size)
             drawText(
                 emoji.name,
-                font: NSFont.systemFont(ofSize: frame.height * 0.86),
+                font: font,
                 color: style.primaryColor,
-                at: CGPoint(x: frame.minX, y: frame.minY),
+                at: CGPoint(x: frame.minX, y: capCenteredY(of: font, in: frame)),
                 maxWidth: frame.width,
                 alignment: .center,
                 context: context

@@ -8,11 +8,16 @@ import Foundation
 /// placeholder for a menu, so a message built entirely out of one does not draw
 /// as a gap.
 ///
-/// A link button is the one kind this client can actually *do*: its destination
-/// is a URL and pressing it opens that URL. Everything else needs an interaction
-/// round trip, which this client does not make — so those are drawn and
-/// disabled, which is the honest answer. A control that looks live and does
-/// nothing is worse than one that says it cannot be pressed.
+/// **Two kinds are live.** A link button opens its URL. A button with a
+/// `custom_id` posts an interaction — `POST /interactions` with `type: 3`,
+/// captured in `slash help.har` — and the application answers by editing the
+/// message underneath it. Everything else is drawn dimmed, which is the honest
+/// answer: a control that looks pressable and does nothing is worse than one
+/// that says it is not.
+///
+/// A select menu is still dimmed, and that is a decision rather than an
+/// oversight. Its interaction carries `data.values` — the options chosen — and
+/// no capture in this repository contains one. `INVARIANTS.md` §5.5.
 public struct ActionRow: Hashable, Sendable, Codable {
     public var components: [MessageComponent]
 
@@ -23,12 +28,19 @@ public struct ActionRow: Hashable, Sendable, Codable {
 
 public struct MessageComponent: Hashable, Sendable, Identifiable, Codable {
     public enum Kind: Hashable, Sendable, Codable {
-        /// Opens a URL. The only kind this client can honour.
+        /// Opens a URL.
         case link(String)
-        /// Needs an interaction round trip. Drawn, disabled.
-        case action
-        /// A select menu, drawn as its placeholder.
+        /// Posts an interaction naming this `custom_id`. The application answers
+        /// by editing the message the button is attached to.
+        case action(customID: String)
+        /// A select menu, drawn as its placeholder. Its interaction carries the
+        /// options chosen, and that shape is not captured.
         case menu
+        /// A button this client cannot honour — a link with no URL, or an action
+        /// with no `custom_id`. Drawn as the inert control it is rather than
+        /// dropped, because a bot's message is unreadable with a control missing
+        /// from the middle of it.
+        case inert
     }
 
     public enum Style: Int, Hashable, Sendable, Codable {
@@ -84,6 +96,15 @@ public struct MessageComponent: Hashable, Sendable, Identifiable, Codable {
         return url
     }
 
+    /// What pressing it posts, or nil for anything that is not a live action
+    /// button. Disabled is checked here for the same reason it is checked on a
+    /// link: Discord marked the control unavailable, and this client does not
+    /// get to disagree.
+    public var customID: String? {
+        guard case .action(let customID) = kind, !isDisabled else { return nil }
+        return customID
+    }
+
     /// Whether pressing it does anything in this client.
-    public var isActionable: Bool { destination != nil }
+    public var isActionable: Bool { destination != nil || customID != nil }
 }

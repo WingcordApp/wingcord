@@ -66,8 +66,171 @@ struct ComposerContainer: View {
                 // picking one is the whole message.
                 model.sendMessage(gif.url.absoluteString, in: channelID)
             },
-            activityChannelID: channelID
+            activityChannelID: channelID,
+            commandQuery: commandQuery,
+            commandSections: commandSections,
+            pickCommand: pick(_:),
+            pendingCommand: pendingCommand,
+            commandPrompt: commandPrompt,
+            setCommandText: setCommandText,
+            pickCommandOption: pick(option:),
+            focusCommandOption: focus(option:),
+            stepCommandOption: step(_:),
+            backspaceCommand: backspaceCommand,
+            cancelCommand: { model.mutateBox(channelID) { $0.command = nil } },
+            submitCommand: submitCommand,
+            pendingInteractions: pendingInteractions
         )
+        .task(id: commandQuery == nil) {
+            // Fetched the first time a `/` is typed in this channel, and never
+            // again: the index carries 183 commands in 119 KB and the reference
+            // client asks for it once. `loadCommandIndex` is guarded per scope.
+            guard commandQuery != nil else { return }
+            await model.sessionController.loadCommandIndex(for: channelID)
+        }
+    }
+
+    // MARK: Slash commands
+
+    private var pendingCommand: PendingCommand? { model.messages(in: channelID)?.command }
+
+    /// The `/` query, when the bar is holding a draft rather than an edit.
+    ///
+    /// **An edit is not a command.** The composer's field is borrowed for both,
+    /// and a message being edited that happens to start with a slash must not
+    /// open a command list over it.
+    private var commandQuery: String? {
+        let box = model.messages(in: channelID)
+        guard box?.editing == nil, box?.command == nil else { return nil }
+        guard model.permissionGate.canUseCommands(in: channelID) else { return nil }
+        return CommandQuery.query(in: box?.draft ?? "")
+    }
+
+    private var commandSections: [CommandSection] {
+        guard let commandQuery else { return [] }
+        return model.commandSections(in: channelID, matching: commandQuery)
+    }
+
+    private var commandPrompt: CommandOptionPrompt? {
+        guard let pendingCommand else { return nil }
+        return model.commandPrompt(for: pendingCommand, in: channelID)
+    }
+
+    private var pendingInteractions: [PendingInteraction] {
+        model.pendingInteractions.values
+            .filter { $0.channelID == channelID }
+            .sorted { $0.nonce < $1.nonce }
+    }
+
+    /// Chosen from the `/` list. The draft that was being typed is cleared, not
+    /// kept: it was `/8ba`, and a command bar with that still behind it would
+    /// send it as text the moment the command is abandoned.
+    private func pick(_ row: CommandRow) {
+        model.mutateBox(channelID) { box in
+            box.draft = ""
+            box.command = PendingCommand(command: row.command)
+        }
+    }
+
+    private func pick(option row: CommandOptionRow) {
+        switch row.action {
+        case .fill(let value):
+            model.mutateBox(channelID) { box in
+                guard let option = box.command?.focusedOption else { return }
+                box.command?.commit(value, for: option)
+            }
+        case .focus(let name):
+            focus(option: name)
+        }
+    }
+
+    /// Puts the caret back into an option, **with its old answer still in the
+    /// field**. A chip that can only be removed is a chip that cannot be fixed,
+    /// and retyping a sentence to change one word is the whole reason this is
+    /// not a text field.
+    private func focus(option name: String) {
+        model.mutateBox(channelID) { box in
+            let previous = box.command?.argument(named: name)?.value.display ?? ""
+            box.command?.clear(name)
+            box.command?.text = previous
+        }
+    }
+
+    private func setCommandText(_ text: String) {
+        model.mutateBox(channelID) { $0.command?.text = text }
+    }
+
+    /// Fills the focused option with what is typed. False when there was
+    /// nothing to fill, which is what lets Return fall through to running.
+    private func commitCommandText() -> Bool {
+        guard let pending = pendingCommand, let option = pending.focusedOption else { return false }
+        let typed = pending.text.trimmingCharacters(in: .whitespaces)
+        guard !typed.isEmpty else { return false }
+        // A closed set never takes typed text: the list is the only valid
+        // source, and committing a name where the wire wants a snowflake is a
+        // value the application rejects. `INVARIANTS.md` §5.5 — a control that
+        // cannot work must not look like one that can.
+        guard !AppModel.isClosedSet(option), let value = option.value(from: typed) else {
+            return false
+        }
+        model.mutateBox(channelID) { $0.command?.commit(value, for: option) }
+        return true
+    }
+
+    /// Tab. Commits what is typed first, so moving on does not silently discard
+    /// it — then falls through to the next option when there was nothing to
+    /// commit.
+    private func step(_ delta: Int) {
+        // Committing already moves to the next option that needs one, which is
+        // what Tab means when there is something in the field.
+        if commitCommandText() { return }
+        guard let command = pendingCommand else { return }
+        let order = command.command.offeredParameters.map(\.name)
+        guard let current = command.focused, let index = order.firstIndex(of: current)
+        else { return }
+        // Wrapping, so Tab never dead-ends on the last option of a command with
+        // eight of them.
+        focus(option: order[((index + delta) % order.count + order.count) % order.count])
+    }
+
+    /// Backspace on an empty option field. Takes the last answer back, or
+    /// abandons the command when there is none.
+    private func backspaceCommand() {
+        model.mutateBox(channelID) { box in
+            guard let last = box.command?.arguments.last else {
+                box.command = nil
+                return
+            }
+            box.command?.clear(last.name)
+            box.command?.text = last.value.display
+        }
+    }
+
+    /// Return, once nothing is listed: fill the option being typed into, then
+    /// run the command if that was the last thing it wanted.
+    ///
+    /// **Completeness is re-read from the store after the commit, not before.**
+    /// Filling the last required option is exactly what makes a command
+    /// runnable, so a caller holding a snapshot from before the write would
+    /// refuse to send precisely the command it had just finished — which is why
+    /// the whole sequence is one function here rather than two closures in the
+    /// view. `pendingCommand` below reads the box.
+    private func submitCommand() {
+        _ = commitCommandText()
+        guard let pending = pendingCommand, pending.isComplete else { return }
+        // **Half-typed answers are not silently thrown away.** A closed set —
+        // a choice list, a person, a channel — refuses typed text, so somebody
+        // part-way through naming one has a command that is technically
+        // complete and an answer that is not. Sending there would drop what
+        // they typed and run the command without it.
+        if let option = pending.focusedOption,
+           AppModel.isClosedSet(option),
+           !pending.text.trimmingCharacters(in: .whitespaces).isEmpty
+        {
+            return
+        }
+        model.mutateBox(channelID) { $0.command = nil }
+        Task { await model.sessionController.runCommand(pending, in: channelID) }
     }
 
     /// The shortcode being typed, if any.

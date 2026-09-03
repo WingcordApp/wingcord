@@ -147,6 +147,21 @@ extension SessionController {
         }
     }
 
+    /// The account's starred GIFs, once per launch.
+    ///
+    /// Its own latch rather than "is the array empty": an account with no
+    /// favourites answers an empty list, and that is a real answer the picker
+    /// would otherwise re-ask for on every open.
+    func loadFavoriteGIFs() async {
+        guard !hasLoadedFavoriteGIFs else { return }
+        hasLoadedFavoriteGIFs = true
+        do {
+            model.favoriteGIFs = try await rest.favoriteGIFs()
+        } catch {
+            Self.trace("gifs: favorites unavailable — \(Self.describe(error))")
+        }
+    }
+
     // MARK: Launching
 
     /// Launch an app into a channel, and put its frame on screen.
@@ -208,6 +223,30 @@ extension SessionController {
             openActivity(app, in: channelID, ticket: ticket, instance: instance)
         } catch {
             model.reportActionFailure(Self.reason(for: error, verb: "launch \(app.name)"))
+        }
+    }
+
+    /// Launch into the reader's direct message with the application's own bot.
+    ///
+    /// **"Launch in DM" is the same launch into a different channel.** The
+    /// capture proves it: two launches of Dank Memer's `GRIND XP`, byte-identical
+    /// apart from the nonce and the `channel_id` — one into the conversation the
+    /// page was opened over, one into `863486177982021682`, the DM with the bot.
+    ///
+    /// **A bot's user id is its application id**, which is what makes the DM
+    /// resolvable without a directory lookup — the same identity the component
+    /// press already leans on.
+    func launchActivityInDirectMessage(_ app: ActivityApp) async {
+        do {
+            let channel = try await rest.openDirectMessage(
+                with: UserID(rawValue: app.id.rawValue)
+            )
+            model.channelIndex.upsert(channel)
+            await launchActivity(app, in: channel.id, section: nil)
+        } catch {
+            model.reportActionFailure(
+                Self.reason(for: error, verb: "open a direct message with \(app.name)")
+            )
         }
     }
 

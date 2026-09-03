@@ -44,6 +44,30 @@ public indirect enum DisplayComponent: Hashable, Sendable, Codable {
         }
     }
 
+    /// The first control anywhere in a tree that satisfies `predicate`.
+    ///
+    /// **The tree, not the top level.** A V2 message keeps its rows where the
+    /// application declared them — inside a container, inside a section — and
+    /// the pager in `slash help.har` is nested exactly that way. A search that
+    /// only looked at the roots would find no button on the one message shape
+    /// this is for.
+    public static func firstControl(
+        in nodes: [DisplayComponent],
+        where predicate: (MessageComponent) -> Bool
+    ) -> MessageComponent? {
+        for node in nodes {
+            switch node {
+            case .row(let row):
+                if let match = row.components.first(where: predicate) { return match }
+            case .container(_, let children), .section(let children, _):
+                if let match = firstControl(in: children, where: predicate) { return match }
+            case .text, .separator, .gallery:
+                continue
+            }
+        }
+        return nil
+    }
+
     /// The plain text of this subtree, for one accessibility label.
     ///
     /// Folded once at layout time for the same reason `MarkdownDocument.plainText`

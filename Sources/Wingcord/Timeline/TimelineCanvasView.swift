@@ -113,6 +113,14 @@ final class TimelineCanvasView: NSView {
     var onPlayActivity: ((MessageID) -> Void)?
     /// A poll answer was chosen.
     var onVote: ((MessageID, Int) -> Void)?
+    /// A button an application attached, pressed. Carries the message it sits on
+    /// and the `custom_id` the interaction has to echo — the canvas knows both
+    /// and the store knows neither.
+    var onPressComponent: ((MessageID, String) -> Void)?
+    /// "Dismiss message" on an ephemeral row. A real removal: the message exists
+    /// only in this session, so taking it out of the store destroys the only
+    /// copy the reader can reach.
+    var onDismissEphemeral: ((MessageID) -> Void)?
     /// A reaction chip was clicked. The reader's own reaction is toggled.
     var onToggleReaction: ((MessageID, EmojiRef) -> Void)?
     /// A reply's quoted line was clicked: go to what it quotes.
@@ -512,10 +520,17 @@ final class TimelineCanvasView: NSView {
             onOpenSticker?(sticker, rect)
         case .person(let userID, let rect):
             onOpenProfile?(userID, rect)
-        case .component(let url, _):
+        case .component(let url, let customID, _):
             // A disabled control consumes the click and does nothing, which is
-            // what a disabled control is.
-            if let url { onOpenLink?(.url(url), .zero) }
+            // what a disabled control is. A live one is exactly one of the two:
+            // a link opens, an action posts an interaction.
+            if let url {
+                onOpenLink?(.url(url), .zero)
+            } else if let customID {
+                onPressComponent?(row.id, customID)
+            }
+        case .dismissEphemeral:
+            onDismissEphemeral?(row.id)
         case .pollAnswer(let answerID, _):
             if let answerID { onVote?(row.id, answerID) }
         case .activityInvite(let origin):
@@ -573,7 +588,8 @@ final class TimelineCanvasView: NSView {
         case person(UserID, CGRect)
         /// A button an app attached. Carries its origin in row space so the
         /// painter can light the one under the pointer.
-        case component(url: String?, origin: CGPoint)
+        case component(url: String?, customID: String?, origin: CGPoint)
+        case dismissEphemeral(origin: CGPoint)
         /// One answer in a poll. `answerID` is nil where the poll cannot be
         /// voted in — the row still swallows the click rather than letting it
         /// fall through to whatever is beneath.
@@ -657,10 +673,17 @@ final class TimelineCanvasView: NSView {
             )
         }
 
+        // Only the "Dismiss message" run, not the note beside it: a target that
+        // spanned the whole line would throw the message away on a click meant
+        // for nothing at all.
+        if let note = row.ephemeralNote, note.dismissRect.contains(local) {
+            return .dismissEphemeral(origin: note.dismissRect.origin)
+        }
+
         // Every button is a hit, live or not: a dead one still has to swallow
         // the click rather than letting it fall through to whatever is beneath.
         for slot in row.components where slot.rect.contains(local) {
-            return .component(url: slot.url, origin: slot.rect.origin)
+            return .component(url: slot.url, customID: slot.customID, origin: slot.rect.origin)
         }
 
         // The whole card is a hit, not only the button: a click anywhere on it
@@ -763,9 +786,12 @@ final class TimelineCanvasView: NSView {
         var component: CGPoint?
         if let index, rows.indices.contains(index), case .message(let row) = rows[index].kind {
             switch target(in: row, at: point, rowIndex: index) {
-            case .component(let url, let origin):
+            case .component(let url, let customID, let origin):
                 component = origin
-                cursor = url == nil ? nil : .pointingHand
+                cursor = url == nil && customID == nil ? nil : .pointingHand
+            case .dismissEphemeral(let origin):
+                component = origin
+                cursor = .pointingHand
             case .pollAnswer(let answerID, let origin):
                 component = origin
                 cursor = answerID == nil ? nil : .pointingHand

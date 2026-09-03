@@ -45,7 +45,11 @@ struct GIFBoard: View {
         }
         .task {
             store.session = model.sessionController
+            // Sequential: the landing grid is what the board draws first, and
+            // the favourites come out of the settings blob the apps flyout may
+            // already have fetched.
             await store.loadLanding()
+            await model.sessionController.loadFavoriteGIFs()
         }
         .task(id: query) {
             // Debounced: a request per keystroke otherwise, and Discord rate

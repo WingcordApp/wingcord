@@ -153,6 +153,30 @@ final class TimelineCoordinator: NSObject {
             guard let self, let channelID = self.channelID else { return }
             self.model.vote(for: answerID, on: messageID, in: channelID)
         }
+        canvas.onPressComponent = { [weak self] messageID, customID in
+            guard let self, let channelID = self.channelID,
+                  let message = self.model.messages(in: channelID)?
+                      .messages.first(where: { $0.id == messageID }),
+                  // Resolved from the message rather than carried through the
+                  // canvas: the slot knows the id it must echo, and the store
+                  // knows the flags, the application and whether the control is
+                  // still live. A canvas that carried all of that would be
+                  // carrying a snapshot that can go stale between the draw and
+                  // the click.
+                  let component = message.pressableComponent(customID: customID)
+            else { return }
+            Task { await self.model.sessionController.pressComponent(component, on: message) }
+        }
+        canvas.onDismissEphemeral = { [weak self] messageID in
+            guard let self, let channelID = self.channelID else { return }
+            // **A removal, not a hide.** The message is delivered over the
+            // socket to this session and exists nowhere else, so this is the
+            // whole of what "dismiss" can mean — and it does not come back:
+            // `messageUpdated` merges onto a message it can find and returns
+            // when it cannot.
+            self.model.mutateBox(channelID) { $0.remove(messageID) }
+            self.model.messageContentRevision &+= 1
+        }
         canvas.onPlayActivity = { [weak self] messageID in
             guard let self, let channelID = self.channelID,
                   let invite = self.model.messages(in: channelID)?
@@ -323,6 +347,8 @@ final class TimelineCoordinator: NSObject {
         canvas?.onOpenAttachment = nil
         canvas?.onVote = nil
         canvas?.onPlayActivity = nil
+        canvas?.onPressComponent = nil
+        canvas?.onDismissEphemeral = nil
         (scrollView as? TimelineScrollView)?.acceptsScrollInput = { true }
         // The clock holds a closure over the canvas; a subscriber that outlives
         // its transcript is a display link running for a channel nobody is

@@ -16,6 +16,10 @@ import WingcordCore
 enum ActivityLauncherPage: Hashable, Sendable {
     case directory
     case app(ApplicationID)
+    /// One app's storefront. **Reached only from that app's page**, which is
+    /// what keeps this a stack of two from anywhere the reader actually is —
+    /// the directory never opens a store directly.
+    case store(ApplicationID, name: String)
 }
 
 /// One row's worth of what the launcher draws.

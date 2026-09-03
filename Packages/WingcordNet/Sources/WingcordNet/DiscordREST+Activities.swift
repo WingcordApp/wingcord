@@ -150,20 +150,48 @@ extension DiscordREST {
     /// rather than trusting the stored one. The row is right; the order within
     /// it may not be. See `HANDOFF.md`.
     public func applicationFrecency() async throws -> [ApplicationID] {
+        FrecencyProto.applications(base64: try await frecencySettings())
+            .filter { $0.totalUses > 0 }
+            .sorted(by: FrecencyProto.mostUsedFirst)
+            .map(\.key)
+    }
+
+    /// The account's own command usage, most-used first — the "Frequently Used"
+    /// section of the `/` list.
+    ///
+    /// **Read, never written.** Discord's client writes this table back after
+    /// every invocation, and a client that wanted to do the same would have to
+    /// re-encode a 27 KB protobuf it can only read eight fields of — where a
+    /// field it dropped is somebody's favourite GIFs or their emoji frecency,
+    /// silently deleted. So the server's table is the floor and this session's
+    /// own uses are layered over it in memory. See `CommandCatalog`.
+    ///
+    /// The blob is the same one `applicationFrecency` reads. Both are on the
+    /// `settings-proto/:type` route budget, and asking for it twice within a
+    /// session fetches it twice — which is why the launcher and the command
+    /// list each call this once, at the moment their surface first opens.
+    public func commandFrecency() async throws -> [String] {
+        FrecencyProto.commands(base64: try await frecencySettings())
+            .filter { $0.totalUses > 0 }
+            .sorted(by: FrecencyProto.mostUsedFirst)
+            .map(\.key)
+    }
+
+    /// The account's starred GIFs, in the order it arranged them.
+    ///
+    /// The same blob the two frecency tables come from, so an account that has
+    /// already opened the apps flyout pays nothing for this.
+    public func favoriteGIFs() async throws -> [GIF] {
+        FrecencyProto.favoriteGIFs(base64: try await frecencySettings())
+    }
+
+    private func frecencySettings() async throws -> String {
         struct Response: Decodable { var settings: String? }
-        let response = try await get(
+        return try await get(
             "/users/@me/settings-proto/2",
             route: "users/@me/settings-proto/:type",
             as: Response.self
-        )
-        guard let settings = response.settings else { return [] }
-        return FrecencyProto.decode(base64: settings)
-            .filter { $0.totalUses > 0 }
-            .sorted {
-                if $0.score != $1.score { return $0.score > $1.score }
-                return ($0.lastUsedAt ?? .distantPast) > ($1.lastUsedAt ?? .distantPast)
-            }
-            .map(\.applicationID)
+        ).settings ?? ""
     }
 
     // MARK: Launching
@@ -178,28 +206,16 @@ extension DiscordREST {
     public func activityEntryPoint(
         for id: ApplicationID
     ) async throws -> ActivityEntryPoint? {
-        let index = try await get(
-            "/applications/\(id.rawValue)/application-command-index",
-            route: "applications/:id/application-command-index",
-            as: CommandIndexDTO.self
-        )
-        if let entry = (index.application_commands ?? []).lazy.compactMap(\.domain).first {
+        if let entry = try await commandIndex(.application(id)).entryPoint {
             return entry
         }
         // **A user-installed app's entry point may only be in the reader's own
         // index.** Wordle's `play` is in `/users/@me/application-command-index`
         // and its `integration_types` include `1` — installed to the account
-        // rather than to a server. Tried second because it is 155 KB against
+        // rather than to a server. Tried second because it is 119 KB against
         // the app-scoped route's 622 bytes, and the common case is answered by
         // the small one.
-        let mine = try await get(
-            "/users/@me/application-command-index",
-            route: "users/@me/application-command-index",
-            as: CommandIndexDTO.self
-        )
-        return (mine.application_commands ?? []).lazy
-            .compactMap(\.domain)
-            .first { $0.applicationID == id }
+        return try await commandIndex(.account).entryPoint(for: id)
     }
 
     /// Launch. Creates the instance and posts the invitation into the channel.
@@ -589,52 +605,6 @@ struct SearchDTO: Decodable, Sendable {
     struct ResultDTO: Decodable, Sendable {
         var type: Int?
         var data: DirectoryApplicationDTO?
-    }
-}
-
-/// `GET /applications/{id}/application-command-index`.
-struct CommandIndexDTO: Decodable, Sendable {
-    var application_commands: [CommandDTO]?
-
-    struct CommandDTO: Decodable, Sendable {
-        var id: String?
-        var type: Int?
-        var application_id: ApplicationID?
-        var version: String?
-        var name: String?
-        var contexts: [Int]?
-        var integration_types: [Int]?
-        /// `2` — Discord opens the activity itself. A `1` would mean the app
-        /// answers the interaction, which is a bot command wearing the same
-        /// type number.
-        var handler: Int?
-
-        var domain: ActivityEntryPoint? {
-            // **`type == 4` alone. The handler is not a filter.**
-            //
-            // `handler` says *who answers* the interaction — `2` is Discord
-            // opening the activity itself, `1` is the app answering and opening
-            // it in its response — not whether there is anything to launch. Of
-            // the seven type-4 entry points in the captured user index, six are
-            // `2` and one is `1`: Wordle's, whose `play` command is exactly as
-            // launchable as Watch Together's. Filtering on `2` reported
-            // "Wordle has nothing to launch."
-            //
-            // Either way the launch produces an invitation message, which is
-            // what the client waits on — so a handler that does not is caught
-            // by that timeout rather than by a guess here.
-            guard type == 4,
-                  let id, let application_id, let version, let name
-            else { return nil }
-            return ActivityEntryPoint(
-                id: id,
-                applicationID: application_id,
-                version: version,
-                name: name,
-                contexts: contexts ?? [],
-                integrationTypes: integration_types ?? []
-            )
-        }
     }
 }
 

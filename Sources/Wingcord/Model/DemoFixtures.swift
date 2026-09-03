@@ -450,6 +450,7 @@ enum DemoFixtures {
         populateGuildSurfaces(model, guildRoles: guildRoles, owner: guideAuthor)
         populateConnectedApps(model)
         populateActivities(model)
+        populateCommands(model)
         // **The guild that actually HAS a voice channel, not the first one.**
         // This passed `first` and guarded on finding a voice channel in it, so
         // when no fixture guild but the last one had a `lobby`, the guard took
@@ -1057,6 +1058,62 @@ enum DemoFixtures {
             ))
         }
 
+        // The captured pager, reproduced. **The one message shape both of this
+        // session's features need at once**: it is ephemeral, it is built out of
+        // Components V2 rather than an embed, and its Prev/Next buttons are
+        // nested inside a container rather than sitting in a top-level action
+        // row — which is exactly where a naive search for a pressed button fails
+        // to find one. `slash help.har`, Make it a Quote's `/help`.
+        moment.addTimeInterval(90)
+        let ephemeralMilliseconds = UInt64(moment.timeIntervalSince1970 * 1000)
+            - Snowflake<MessageTag>.epochMilliseconds
+        messages.append(Message(
+            id: MessageID(rawValue: (ephemeralMilliseconds << 22) | 950),
+            channelID: channelID,
+            authorID: UserID(rawValue: 949_479_338_275_913_799),
+            kind: .chatInputCommand,
+            // `EPHEMERAL` plus `IS_COMPONENTS_V2` — 32832 on the wire, which is
+            // the number the capture echoes back in `message_flags`.
+            flags: [.ephemeral, .isComponentsV2],
+            payload: MessagePayload(
+                displayComponents: [
+                    .container(
+                        accent: 0x00A8_FC,
+                        children: [
+                            .text("### ❓ How to Quote\nYou can either mention the bot in a "
+                                + "reply, or right-click the message and choose "
+                                + "**Apps → Make it a Quote**.\n\n"
+                                + "⚠️ **Note:** Only the right-click method works in DMs!\n"
+                                + "Page 1 / 6"),
+                            .row(ActionRow(components: [
+                                // Disabled on page one, exactly as the capture
+                                // draws it — and the disabled half is what
+                                // proves the dimming still means something now
+                                // that a live button looks different.
+                                MessageComponent(
+                                    id: "help_page__prev",
+                                    label: "Prev",
+                                    kind: .action(customID: "help_page__prev,987654321987654321"),
+                                    style: .secondary,
+                                    isDisabled: true,
+                                    emoji: EmojiRef(name: "⬅️")
+                                ),
+                                MessageComponent(
+                                    id: "help_page__next",
+                                    label: "Next",
+                                    kind: .action(customID: "help_page__next,987654321987654321"),
+                                    style: .secondary,
+                                    emoji: EmojiRef(name: "➡️")
+                                ),
+                            ])),
+                        ]
+                    ),
+                ],
+                interaction: MessageInteraction(userID: userIDs[0], name: "help", commandType: 1),
+                applicationID: ApplicationID(rawValue: 949_479_338_275_913_799)
+            )
+        ))
+
         box.messages = messages
         box.hasMoreHistory = true
         return box
@@ -1203,7 +1260,12 @@ enum DemoFixtures {
                         kind: .link("https://example.com/release"),
                         style: .link
                     ),
-                    MessageComponent(id: "retry", label: "Refresh", kind: .action, style: .secondary),
+                    MessageComponent(
+                        id: "retry",
+                        label: "Refresh",
+                        kind: .action(customID: "retry"),
+                        style: .secondary
+                    ),
                 ])]
             )
         case 25:

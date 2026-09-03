@@ -50,12 +50,49 @@ struct ActivityLauncher: View {
                     applicationID: id,
                     channelID: channelID,
                     onBack: { model.activityLauncherPage = .directory },
-                    onLaunched: { dismiss() }
+                    onLaunched: { dismiss() },
+                    // A command with options goes to the composer rather than
+                    // being filled in here: `gen eject` wants a person, and a
+                    // people picker does not belong in a 388-point page that is
+                    // already scrolling. The bar it lands in is the one the `/`
+                    // list already fills.
+                    onOpenStore: {
+                        model.activityLauncherPage = .store(
+                            id,
+                            name: model.activityApp(id)?.name ?? ""
+                        )
+                    },
+                    onFillCommand: { command in
+                        model.mutateBox(channelID) { box in
+                            box.draft = ""
+                            box.command = PendingCommand(command: command)
+                        }
+                    }
+                )
+                .transition(.opacity)
+
+            case .store(let id, let name):
+                ApplicationStorePage(
+                    applicationID: id,
+                    name: name,
+                    onBack: { model.activityLauncherPage = .app(id) }
                 )
                 .transition(.opacity)
             }
         }
         .frame(width: Self.width, height: Self.height)
+        // **A sheet, not a third page.** Adding an app grants something, and a
+        // grant that shares its surface with a back button is a grant somebody
+        // dismisses by reflex. It also has to survive the flyout closing behind
+        // it, which a page inside the flyout cannot.
+        .sheet(item: $model.applicationInstallRequest) { request in
+            AddApplicationSheet(
+                request: request,
+                channelID: channelID,
+                onFinished: { model.applicationInstall = nil }
+            )
+            .environment(model)
+        }
         // No background: the popover's own material IS the panel, and painting
         // over it is what turns liquid glass into a flat dark rectangle.
         .animation(motion.fade, value: model.activityLauncherPage)

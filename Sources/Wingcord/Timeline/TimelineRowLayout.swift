@@ -57,6 +57,9 @@ nonisolated struct MessageRow: @unchecked Sendable {
     var replyHeader: ReplyHeaderSlot?
     /// The "somebody used *command*" line, when the message answers one.
     var interactionHeader: InteractionHeaderSlot?
+    /// "Only you can see this", under an ephemeral message. Nil for every
+    /// message anybody else can read, which is nearly all of them.
+    var ephemeralNote: EphemeralNoteSlot?
 
     var authorName: String
     /// The styled face and tracking the name was measured in, carried so the
@@ -158,20 +161,49 @@ nonisolated struct StickerSlot: Sendable {
 
 /// One button an app attached to a message.
 ///
-/// **Only a link button is live.** Everything else needs an interaction round
-/// trip this client does not make, so it is drawn dimmed — a bot's message is
-/// unreadable without its controls, and a control that looks pressable and does
-/// nothing is worse than one that says it is not.
+/// **A link button and an action button are both live.** A link opens its URL;
+/// an action posts an interaction naming its `custom_id`. A select menu is not —
+/// its interaction carries the options chosen and that shape is not captured —
+/// so it is drawn dimmed, along with any button malformed enough to be neither.
+/// A bot's message is unreadable without its controls, and a control that looks
+/// pressable and does nothing is worse than one that says it is not.
 nonisolated struct ComponentSlot: Sendable {
     var rect: CGRect
     var label: String
     var emoji: EmojiRef?
     /// Where it goes. Nil for anything this client cannot honour.
     var url: String?
+    /// What pressing it posts. Nil for anything that is not a live action
+    /// button. Never both this and `url` — a component is one or the other.
+    var customID: String?
     var isEnabled: Bool
     var style: MessageComponent.Style
     /// A select menu, drawn as its placeholder with a disclosure.
     var isMenu: Bool
+}
+
+/// The line under a message that says only the reader can see it, and the
+/// control that throws it away.
+///
+/// **Dismissing is a real removal, not a hide.** An ephemeral message is
+/// delivered over the socket to the one session that caused it and exists
+/// nowhere else — it is not in history, and reopening the channel loses it. So
+/// taking it out of the store destroys the only copy the reader can reach, which
+/// is exactly what the word promises. There is no route to call and none is
+/// needed; `INVARIANTS.md` §5.5 asks whether a control *works*, and this one
+/// does completely.
+///
+/// **It does not come back.** `messageUpdated` merges onto a message it can
+/// find and returns when it cannot, so an application editing a dismissed
+/// message no longer has anywhere to put it.
+nonisolated struct EphemeralNoteSlot: Sendable {
+    /// The whole line, note and control together. What the row is measured
+    /// against.
+    var rect: CGRect
+    var text: String
+    /// The "Dismiss message" run alone — the only part that is a target.
+    var dismissRect: CGRect
+    var dismissText: String
 }
 
 /// The quoted line above a reply, laid out.
@@ -429,6 +461,12 @@ nonisolated struct TimelineLayoutEngine: Sendable {
         return rows
     }
 
+    /// Discord's own words. Kept as one constant because the layout measures it
+    /// and the painter draws it, and two copies is two places for it to drift.
+    static let ephemeralNoteText = "Only you can see this"
+    /// Discord's own words for the control beside it.
+    static let ephemeralDismissText = "Dismiss message"
+
     /// How many stale entries to tolerate before sweeping.
     ///
     /// Some slack is worth keeping: a width drag produces a burst of misses and
@@ -458,6 +496,7 @@ nonisolated struct TimelineLayoutEngine: Sendable {
         if let poll = row.poll { bottom = max(bottom, poll.rect.maxY) }
         if let invite = row.activityInvite { bottom = max(bottom, invite.rect.maxY) }
         for slot in row.reactions { bottom = max(bottom, slot.rect.maxY) }
+        if let note = row.ephemeralNote { bottom = max(bottom, note.rect.maxY) }
         return ceil(bottom + TimelineMetrics.runBottomPadding)
     }
 
@@ -691,6 +730,38 @@ nonisolated struct TimelineLayoutEngine: Sendable {
             into: &reactions
         )
 
+        // "Only you can see this", last — under everything, which is where a
+        // note about the whole message belongs and where Discord's own is.
+        var ephemeralNote: EphemeralNoteSlot?
+        if message.isEphemeral {
+            let font = input.style.metadataFont
+            let noteWidth = Self.measure(Self.ephemeralNoteText, font: font)
+            let dismissWidth = Self.measure(Self.ephemeralDismissText, font: font)
+            let noteEnd = contentX + TimelineMetrics.ephemeralNoteGlyphRoom + noteWidth
+            let top = y + TimelineMetrics.ephemeralNoteGap
+            // The control's own rect, measured rather than derived from the
+            // line's: it is the only part that takes a click, and a target that
+            // spans the note would dismiss the message on a click meant for
+            // nothing at all.
+            let dismissRect = CGRect(
+                x: noteEnd + TimelineMetrics.ephemeralNoteSeparatorRoom,
+                y: top,
+                width: dismissWidth,
+                height: TimelineMetrics.ephemeralNoteHeight
+            )
+            ephemeralNote = EphemeralNoteSlot(
+                rect: CGRect(
+                    x: contentX,
+                    y: top,
+                    width: dismissRect.maxX - contentX,
+                    height: TimelineMetrics.ephemeralNoteHeight
+                ),
+                text: Self.ephemeralNoteText,
+                dismissRect: dismissRect,
+                dismissText: Self.ephemeralDismissText
+            )
+        }
+
         return MessageRow(
             id: message.id,
             authorID: message.authorID,
@@ -704,6 +775,7 @@ nonisolated struct TimelineLayoutEngine: Sendable {
             decorationURL: author?.decorationURL,
             replyHeader: replyHeader,
             interactionHeader: interactionHeader,
+            ephemeralNote: ephemeralNote,
             authorName: author?.name ?? "Unknown",
             authorFace: author?.nameFace,
             authorTracking: author?.nameTracking ?? 0,
@@ -728,7 +800,8 @@ nonisolated struct TimelineLayoutEngine: Sendable {
                 body: textBlock?.text.plainLabel ?? "",
                 attachments: message.attachments.count,
                 stickers: stickers.map(\.sticker.name),
-                extra: Self.spokenBody(of: message)
+                extra: Self.spokenBody(of: message),
+                isEphemeral: message.isEphemeral
             )
         )
     }
@@ -1047,7 +1120,13 @@ nonisolated struct TimelineLayoutEngine: Sendable {
                 let glyphRoom = control.emoji == nil
                     ? 0
                     : TimelineMetrics.componentGlyphSide + TimelineMetrics.componentGlyphGap
-                let chevronRoom: CGFloat = control.kind == .menu ? 14 : 0
+                // **A link button needs the room too.** It draws an arrow at
+                // its trailing edge exactly as a menu draws a chevron, and
+                // reserving for one but not the other is what put the mark on
+                // top of "Open roadmap".
+                let chevronRoom: CGFloat = control.kind == .menu || control.destination != nil
+                    ? TimelineMetrics.componentTrailingGlyphRoom
+                    : 0
                 let labelWidth = measure(control.label, font: font)
                 let buttonWidth = min(
                     width,
@@ -1065,6 +1144,7 @@ nonisolated struct TimelineLayoutEngine: Sendable {
                     label: control.label,
                     emoji: control.emoji,
                     url: control.destination,
+                    customID: control.customID,
                     isEnabled: control.isActionable,
                     style: control.style,
                     isMenu: control.kind == .menu
@@ -1166,7 +1246,8 @@ nonisolated struct TimelineLayoutEngine: Sendable {
         body: String,
         attachments: Int,
         stickers: [String],
-        extra: String
+        extra: String,
+        isEphemeral: Bool
     ) -> String {
         var label = "\(author), \(time)"
         if !body.isEmpty { label += ". \(body)" }
@@ -1182,6 +1263,11 @@ nonisolated struct TimelineLayoutEngine: Sendable {
         if attachments > 0 {
             label += attachments == 1 ? ". 1 attachment" : ". \(attachments) attachments"
         }
+        // Spoken, not only drawn. Whether a message is private to the reader is
+        // exactly the kind of fact a note in the quietest ink on the row is the
+        // easiest to miss, and it is the one that changes what somebody does
+        // next.
+        if isEphemeral { label += ". \(ephemeralNoteText)" }
         return label
     }
 }

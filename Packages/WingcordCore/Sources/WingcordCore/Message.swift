@@ -67,6 +67,42 @@ public struct Message: Hashable, Sendable, Identifiable, Codable {
     public var attachments: [Attachment] { payload?.attachments ?? [] }
     public var embeds: [Embed] { payload?.embeds ?? [] }
     public var components: [ActionRow] { payload?.components ?? [] }
+    /// The application to name when a button on this message is pressed.
+    ///
+    /// **`application_id` where Discord sent it, the author otherwise.** A bot
+    /// user's id *is* its application id for every app registered since 2016,
+    /// and the capture's two values agree — `slash help.har` presses a button on
+    /// a message whose author is `949479338275913799` and posts an interaction
+    /// naming `949479338275913799`. The field is preferred anyway because it is
+    /// Discord's own answer rather than an identity this client is assuming.
+    public var componentApplicationID: ApplicationID {
+        payload?.applicationID ?? ApplicationID(rawValue: authorID.rawValue)
+    }
+    /// The live action button carrying this `custom_id`, if the message still
+    /// has one.
+    ///
+    /// **Searched at press time, not carried from the draw.** A pager edits
+    /// itself and the buttons on it change — the capture's Next goes dead on
+    /// page 6 — so a click has to be checked against the message as it is now
+    /// rather than against the slot that was laid out before the last edit.
+    /// Both component paths are walked: an ordinary action row, and the
+    /// Components V2 tree, where the pager in the capture actually lives.
+    public func pressableComponent(customID: String) -> MessageComponent? {
+        for row in components {
+            for control in row.components where control.customID == customID {
+                return control
+            }
+        }
+        return DisplayComponent.firstControl(in: displayComponents) { $0.customID == customID }
+    }
+
+    /// Whether only the reader can see this message.
+    ///
+    /// An ephemeral message is delivered over the socket to the one session that
+    /// caused it and exists nowhere else — it is not in history, and reopening
+    /// the channel loses it. Saying so is the whole point of the note Discord
+    /// draws under it.
+    public var isEphemeral: Bool { flags.contains(.ephemeral) }
     public var displayComponents: [DisplayComponent] { payload?.displayComponents ?? [] }
     public var poll: Poll? { payload?.poll }
     public var stickers: [StickerRef] { payload?.stickers ?? [] }
@@ -170,6 +206,15 @@ public final class MessagePayload: Hashable, Sendable, Codable {
     /// "somebody used *name*" line above the reply. Keeping it general is what
     /// lets the second one arrive without a second header.
     public let interaction: MessageInteraction?
+    /// The application that owns this message's controls.
+    ///
+    /// **Only on an interaction response or an application-owned webhook**,
+    /// which is exactly where a pressable button lives. Pressing one names the
+    /// application, and `Message.componentApplicationID` is what falls back to
+    /// the author when Discord did not send this — a bot user's id *is* its
+    /// application id for every app registered since 2016, and the capture's
+    /// two values agree.
+    public let applicationID: ApplicationID?
 
     public init(
         attachments: [Attachment] = [],
@@ -187,10 +232,12 @@ public final class MessagePayload: Hashable, Sendable, Codable {
         webhookID: UserID? = nil,
         nonce: String? = nil,
         activityInvite: ActivityInvite? = nil,
-        interaction: MessageInteraction? = nil
+        interaction: MessageInteraction? = nil,
+        applicationID: ApplicationID? = nil
     ) {
         self.activityInvite = activityInvite
         self.interaction = interaction
+        self.applicationID = applicationID
         self.attachments = attachments
         self.embeds = embeds
         self.reactions = reactions
@@ -234,7 +281,8 @@ public final class MessagePayload: Hashable, Sendable, Codable {
             webhookID: webhookID,
             nonce: nonce,
             activityInvite: activityInvite,
-            interaction: interaction
+            interaction: interaction,
+            applicationID: applicationID
         )
     }
 
@@ -256,7 +304,8 @@ public final class MessagePayload: Hashable, Sendable, Codable {
             webhookID: webhookID,
             nonce: nonce,
             activityInvite: activityInvite,
-            interaction: interaction
+            interaction: interaction,
+            applicationID: applicationID
         )
     }
 

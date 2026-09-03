@@ -355,6 +355,59 @@ nonisolated enum TimelineRowPainter {
                 scale: scale
             )
         }
+
+        // "Only you can see this". Last, under everything — a note about the
+        // whole message, in the quietest ink the row has.
+        if let note = row.ephemeralNote {
+            let frame = note.rect.offsetBy(dx: rowFrame.minX, dy: rowFrame.minY)
+            drawSymbol(
+                "eye.slash",
+                tint: style.tertiaryColor,
+                in: CGRect(
+                    x: frame.minX,
+                    y: frame.minY + (frame.height - TimelineMetrics.ephemeralNoteGlyphSide) / 2,
+                    width: TimelineMetrics.ephemeralNoteGlyphSide,
+                    height: TimelineMetrics.ephemeralNoteGlyphSide
+                ),
+                context: context
+            )
+            drawText(
+                note.text,
+                font: style.metadataFont,
+                color: style.tertiaryColor,
+                at: CGPoint(
+                    x: frame.minX + TimelineMetrics.ephemeralNoteGlyphRoom,
+                    y: frame.minY + 1
+                ),
+                maxWidth: frame.width,
+                context: context
+            )
+
+            // The separator dot, centred in the gap the layout left for it.
+            let dismiss = note.dismissRect.offsetBy(dx: rowFrame.minX, dy: rowFrame.minY)
+            drawText(
+                "·",
+                font: style.metadataFont,
+                color: style.tertiaryColor,
+                at: CGPoint(
+                    x: dismiss.minX - TimelineMetrics.ephemeralNoteSeparatorRoom / 2,
+                    y: frame.minY + 1
+                ),
+                maxWidth: TimelineMetrics.ephemeralNoteSeparatorRoom,
+                context: context
+            )
+            // The control. In the link colour, because it is the one thing on
+            // this line that does something — and the same colour every other
+            // clickable run in the transcript takes.
+            drawText(
+                note.dismissText,
+                font: style.metadataFont,
+                color: style.linkColor,
+                at: CGPoint(x: dismiss.minX, y: dismiss.minY + 1),
+                maxWidth: dismiss.width,
+                context: context
+            )
+        }
     }
 
     // MARK: Text

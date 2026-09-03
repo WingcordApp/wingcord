@@ -16,10 +16,19 @@ struct ActivityDetailPage: View {
     var channelID: ChannelID
     var onBack: () -> Void
     var onLaunched: () -> Void
+    /// Puts a command into the composer with its first option focused. The page
+    /// closes behind it — the reader is being sent somewhere to type.
+    /// Opens this app's storefront, one page deeper.
+    var onOpenStore: () -> Void = {}
+    var onFillCommand: (SlashCommand) -> Void = { _ in }
 
     @Environment(AppModel.self) private var model
     @Environment(\.motion) private var motion
     @State private var isLaunching = false
+    /// The row currently posting an interaction, by id. One at a time is not
+    /// enforced — a bot answers each independently — but a row has to say which
+    /// one the reader pressed.
+    @State private var sendingRowID: String?
 
     private var app: ActivityApp? { model.activityApp(applicationID) }
 
@@ -30,10 +39,15 @@ struct ActivityDetailPage: View {
             } else {
                 ProgressView().controlSize(.small).frame(maxHeight: .infinity)
             }
-            backButton
+            PageChromeBar(onBack: onBack) { overflowMenu }
         }
         .task(id: applicationID) {
+            // Sequential: the directory copy is what the page draws first, and
+            // the command index is 7,700 bytes that only fills the list below
+            // the fold.
             await model.sessionController.loadActivityApp(applicationID)
+            await model.sessionController.loadAppCommandIndex(for: applicationID)
+            await model.sessionController.loadApplicationStorefrontFlag(applicationID)
         }
     }
 
@@ -60,6 +74,8 @@ struct ActivityDetailPage: View {
                     }
                     .padding(.horizontal, Spacing.snug)
                     .padding(.top, ActivityHero.overhang + Spacing.base)
+
+                    commandList
                 }
                 .padding(.bottom, Spacing.margin)
             }
@@ -152,6 +168,64 @@ struct ActivityDetailPage: View {
         count.formatted(.number.notation(.compactName))
     }
 
+    // MARK: The commands
+
+    /// Everything the application registers, as rows.
+    ///
+    /// **The trailing control is decided by whether the leaf takes anything.**
+    /// A command with no options sends outright; one with options sends the
+    /// reader to the composer with the command already in the bar, because
+    /// filling `gen eject`'s user is a picker and a picker does not belong in a
+    /// 388-point page that is already scrolling.
+    @ViewBuilder
+    private var commandList: some View {
+        let sections = model.appCommandSections(for: applicationID)
+        if !sections.isEmpty {
+            VStack(alignment: .leading, spacing: Spacing.group) {
+                ForEach(sections) { section in
+                    VStack(alignment: .leading, spacing: Spacing.base) {
+                        Text(section.title)
+                            .font(Typeface.sectionHeader)
+                            .foregroundStyle(Ink.secondary)
+                            .textCase(.uppercase)
+                            .kerning(0.4)
+                            .padding(.leading, Spacing.tight)
+                        VStack(spacing: Spacing.hair) {
+                            ForEach(section.rows) { row in
+                                AppCommandRowView(
+                                    row: row,
+                                    isSending: sendingRowID == row.id,
+                                    onSend: { send(row) },
+                                    onFill: {
+                                        onFillCommand(row.command)
+                                        onLaunched()
+                                    }
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+            .padding(.horizontal, Spacing.snug)
+            .padding(.top, Spacing.group)
+        }
+    }
+
+    private func send(_ row: AppCommandRow) {
+        sendingRowID = row.id
+        Task {
+            await model.sessionController.runCommand(
+                PendingCommand(command: row.command),
+                in: channelID,
+                // Captured: the same command sent from an app's page carries
+                // `app_launcher` where the composer's carries `slash_ui`.
+                origin: .applicationPage
+            )
+            sendingRowID = nil
+            onLaunched()
+        }
+    }
+
     // MARK: The one control
 
     /// **Absent, not disabled, when the app cannot be launched.**
@@ -163,33 +237,13 @@ struct ActivityDetailPage: View {
     @ViewBuilder
     private func launchBar(_ app: ActivityApp) -> some View {
         if app.isLaunchable {
-            Button {
-                isLaunching = true
-                Task {
-                    await model.sessionController.launchActivity(
-                        app,
-                        in: channelID,
-                        section: model.activityQuery.isEmpty ? nil : "Search"
-                    )
-                    isLaunching = false
-                    onLaunched()
+            let entryPoint = model.appEntryPoint(for: applicationID)
+            HStack(spacing: Spacing.base) {
+                launchButton(app, entryPoint: entryPoint, inDirectMessage: false)
+                if canLaunchInDirectMessage(entryPoint) {
+                    launchButton(app, entryPoint: entryPoint, inDirectMessage: true)
                 }
-            } label: {
-                Group {
-                    if isLaunching {
-                        ProgressView().controlSize(.small)
-                    } else {
-                        Text("Launch").font(.system(.subheadline, weight: .semibold))
-                    }
-                }
-                .frame(maxWidth: .infinity)
-                .frame(height: Metrics.control)
-                .contentShape(.capsule)
             }
-            .buttonStyle(.plain)
-            .foregroundStyle(.white)
-            .emphasisChrome(Palette.accent)
-            .disabled(isLaunching)
             .padding(Spacing.snug)
         } else {
             Text("This app can't be opened here")
@@ -200,23 +254,179 @@ struct ActivityDetailPage: View {
         }
     }
 
+    /// **The entry point's own name is the button's words.** Dank Memer's is
+    /// called `GRIND XP` and that is exactly what Discord draws — the label is
+    /// the command's `name` and nothing more, which the capture settles: the
+    /// interaction it posts carries `"name": "GRIND XP"` at both levels.
+    /// "Launch" is the fallback for an app whose entry point is in the account
+    /// index rather than its own, where this page cannot see it.
+    ///
+    /// **Only the first character is raised.** A command name is lowercase on
+    /// the wire — Watch Together's entry point is literally `launch` — and
+    /// Discord draws it capitalised. `.capitalized` would do it by *word* and
+    /// turn Dank Memer's `GRIND XP` into `Grind Xp`, so the rest of the name is
+    /// left exactly as its developer wrote it.
+    private func launchLabel(_ entryPoint: ActivityEntryPoint?) -> String {
+        guard let name = entryPoint?.name, !name.isEmpty else { return "Launch" }
+        return name.prefix(1).uppercased() + name.dropFirst()
+    }
+
+    /// **Whether the app runs in a direct message, from its own `contexts`.**
+    /// `1` is `BOT_DM`. Dank Memer's entry point carries `[0, 1, 2]` and its
+    /// page draws "Launch in DM"; an app that only lists `0` runs in servers and
+    /// has nowhere to put a second button.
+    ///
+    /// Hidden rather than disabled when the app cannot: a greyed-out control
+    /// implies a permission that could be gained, and this is not that kind of
+    /// limit. `INVARIANTS.md` §5.5.
+    private func canLaunchInDirectMessage(_ entryPoint: ActivityEntryPoint?) -> Bool {
+        guard let entryPoint, entryPoint.contexts.contains(Self.botDirectMessageContext) else {
+            return false
+        }
+        // In the bot's own DM already, "Launch in DM" is the button beside it.
+        return model.channelIndex[channelID]?.recipientIDs
+            != [UserID(rawValue: applicationID.rawValue)]
+    }
+
+    /// `BOT_DM` in Discord's interaction-context enum.
+    private static let botDirectMessageContext = 1
+
+    private func launchButton(
+        _ app: ActivityApp,
+        entryPoint: ActivityEntryPoint?,
+        inDirectMessage: Bool
+    ) -> some View {
+        Button {
+            isLaunching = true
+            Task {
+                if inDirectMessage {
+                    await model.sessionController.launchActivityInDirectMessage(app)
+                } else {
+                    await model.sessionController.launchActivity(
+                        app,
+                        in: channelID,
+                        section: model.activityQuery.isEmpty ? nil : "Search"
+                    )
+                }
+                isLaunching = false
+                onLaunched()
+            }
+        } label: {
+            Group {
+                if isLaunching {
+                    ProgressView().controlSize(.small)
+                } else {
+                    Text(inDirectMessage ? "Launch in DM" : launchLabel(entryPoint))
+                        .font(.system(.subheadline, weight: .semibold))
+                        .lineLimit(1)
+                }
+            }
+            .frame(maxWidth: .infinity)
+            .frame(height: Metrics.control)
+            .contentShape(.capsule)
+        }
+        .buttonStyle(.plain)
+        // The accent is reserved for the primary action. A second button beside
+        // it in the same colour is two primaries, which is none.
+        .foregroundStyle(inDirectMessage ? AnyShapeStyle(Ink.primary) : AnyShapeStyle(.white))
+        .modifier(LaunchButtonChrome(isSecondary: inDirectMessage))
+        .disabled(isLaunching)
+    }
+
     /// Over the artwork, so it takes `.clear` glass — the picture passes under
     /// it and lenses rather than being frosted away.
-    private var backButton: some View {
-        HStack {
+    /// Everything about the app that is not "run it".
+    ///
+    /// **Open Store is gated on `storefront_available`**, which arrives on the
+    /// application object itself — so the row is offered on Discord's own answer
+    /// rather than on a flag that implies one, and an app with no store never
+    /// shows a row that opens onto nothing. `INVARIANTS.md` §5.5.
+    ///
+    /// There is no "Manage App": managing one is the developer portal, which is
+    /// a website and not a surface this client has.
+    private var overflowMenu: some View {
+        Menu {
+            if model.applicationHasStorefront(applicationID) {
+                Button("Open Store", systemImage: "bag") { onOpenStore() }
+            }
+            Button("Add App", systemImage: "plus.app") {
+                model.applicationInstallRequest = ApplicationInstallRequest(
+                    applicationID: applicationID,
+                    name: app?.name ?? "",
+                    iconHash: app?.iconHash,
+                    summary: app?.tagline ?? app?.about ?? ""
+                )
+            }
+            Divider()
+            Button("Copy App ID", systemImage: "number") {
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString(applicationID.description, forType: .string)
+            }
+        } label: {
+            // **The glass goes on the LABEL, not on the `Menu`.** A `Menu` lays
+            // its label out itself and hands the modifiers outside it a
+            // different box, so chrome applied there drew nothing at all — the
+            // glyph sat in the right place with no circle behind it while the
+            // back button beside it had one. Both controls are now the same
+            // view, which is the only way to guarantee they match.
+            PageChromeCircle { Image(systemName: "ellipsis") }
+        }
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+        .fixedSize()
+        .accessibilityLabel("More")
+    }
+}
+
+/// One circular control over a page's artwork.
+///
+/// The single definition both ends of `PageChromeBar` are built from — a back
+/// arrow and a menu that must be the same size, the same material and the same
+/// ink, and were not while each drew its own.
+struct PageChromeCircle<Content: View>: View {
+    @ViewBuilder var content: Content
+
+    var body: some View {
+        content
+            .font(Typeface.controlGlyph)
+            .foregroundStyle(Ink.primary)
+            .frame(width: Metrics.control, height: Metrics.control)
+            .contentShape(.circle)
+            .interactiveChromeOverMedia(in: .circle)
+    }
+}
+
+/// The controls that float over a page's artwork: one way back, and whatever
+/// that page hangs at the other end.
+///
+/// **The bar does the layout, never the control inside it.** `BackControl` used
+/// to carry its own `Spacer` and padding, so composing it into a row put a
+/// full-width control beside the thing that was meant to sit at the far end —
+/// and pushed that thing off the edge.
+struct PageChromeBar<Trailing: View>: View {
+    var onBack: () -> Void
+    @ViewBuilder var trailing: Trailing
+
+    var body: some View {
+        HStack(spacing: Spacing.base) {
             Button(action: onBack) {
-                Image(systemName: "chevron.backward")
-                    .font(Typeface.controlGlyph)
-                    .frame(width: Metrics.control, height: Metrics.control)
-                    .contentShape(.circle)
+                PageChromeCircle { Image(systemName: "chevron.backward") }
             }
             .buttonStyle(.plain)
-            .foregroundStyle(Ink.primary)
-            .interactiveChromeOverMedia(in: .circle)
-            .accessibilityLabel("Back to apps")
-            Spacer()
+            .accessibilityLabel("Back")
+            Spacer(minLength: 0)
+            trailing
         }
         .padding(Spacing.snug)
+    }
+}
+
+/// The one way back, with nothing at the other end.
+struct BackControl: View {
+    var action: () -> Void
+
+    var body: some View {
+        PageChromeBar(onBack: action) { EmptyView() }
     }
 }
 
@@ -356,6 +566,101 @@ private struct ActivityPreviewVideo: NSViewRepresentable {
             looper = nil
             player = nil
             (layer as? AVPlayerLayer)?.player = nil
+        }
+    }
+}
+
+// MARK: - One command on an app's page
+
+/// `gen eject`, its description, and the one control that fits it.
+///
+/// **Send or a chevron, never both and never neither.** Both captures agree on
+/// every row: a leaf with no options draws Send and runs outright; a leaf that
+/// takes one draws a chevron and hands the command to the composer. Nothing else
+/// separates them.
+private struct AppCommandRowView: View {
+    var row: AppCommandRow
+    var isSending: Bool
+    var onSend: () -> Void
+    var onFill: () -> Void
+
+    @Environment(\.motion) private var motion
+    @State private var isHovered = false
+
+    var body: some View {
+        Button(action: row.sendsImmediately ? onSend : onFill) {
+            HStack(spacing: Spacing.base) {
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(row.command.name)
+                        .font(.system(.subheadline, weight: .semibold))
+                        .foregroundStyle(Ink.primary)
+                        .lineLimit(1)
+                    if !row.command.summary.isEmpty {
+                        Text(row.command.summary)
+                            .font(Typeface.rowSubtitle)
+                            .foregroundStyle(Ink.tertiary)
+                            .lineLimit(1)
+                    }
+                }
+                Spacer(minLength: Spacing.base)
+                control
+            }
+            .padding(.horizontal, Spacing.base)
+            .padding(.vertical, Spacing.base)
+            .background(
+                isHovered ? Palette.hoverFill : .clear,
+                in: .rect(cornerRadius: Radius.row, style: .continuous)
+            )
+            .contentShape(.rect(cornerRadius: Radius.row, style: .continuous))
+        }
+        .buttonStyle(.plain)
+        .onHover { isHovered = $0 }
+        .animation(motion.hover, value: isHovered)
+        .disabled(isSending)
+        .accessibilityLabel(Text(row.command.name))
+        .accessibilityHint(Text(
+            row.sendsImmediately ? "Runs this command" : "Opens this command in the composer"
+        ))
+    }
+
+    @ViewBuilder
+    private var control: some View {
+        if isSending {
+            ProgressView().controlSize(.small)
+        } else if row.sendsImmediately {
+            // A filled pill rather than a bare glyph: it is the only thing on
+            // the row that *does* something, and the chevron beside it on the
+            // next row means something different.
+            HStack(spacing: Spacing.tight) {
+                Text("Send").font(.system(.caption, weight: .semibold))
+                Image(systemName: "paperplane.fill").font(.system(.caption2))
+            }
+            .foregroundStyle(Ink.primary)
+            .padding(.horizontal, Spacing.base)
+            .padding(.vertical, Spacing.tight)
+            .background(Palette.selectionFill, in: .capsule)
+        } else {
+            Image(systemName: "chevron.right")
+                .font(.system(.caption, weight: .semibold))
+                .foregroundStyle(Ink.tertiary)
+        }
+    }
+}
+
+/// The launch bar's two weights.
+///
+/// A modifier rather than a branch at the call site, because `.emphasisChrome`
+/// and `.chromeOverMedia` return different opaque types and a `ViewBuilder`
+/// `if` around them makes the button's identity change with the branch — which
+/// is what makes SwiftUI drop its press state mid-press.
+private struct LaunchButtonChrome: ViewModifier {
+    var isSecondary: Bool
+
+    func body(content: Content) -> some View {
+        if isSecondary {
+            content.chromeOverMedia(in: .capsule)
+        } else {
+            content.emphasisChrome(Palette.accent)
         }
     }
 }

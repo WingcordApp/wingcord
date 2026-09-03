@@ -37,7 +37,11 @@ struct ComponentDecodeTests {
         #expect(rows.isEmpty)
     }
 
-    @Test("An interaction button decodes but is not actionable here")
+    /// **This used to assert the opposite**, and it was right to: until the
+    /// component interaction was captured, an action button was drawn and dead.
+    /// It now carries the `custom_id` a press has to echo. See
+    /// `MessageComponentInteractionTests`.
+    @Test("An interaction button carries the custom_id a press echoes")
     func actionButton() throws {
         let rows = try decode("""
         [{"type":1,"components":[
@@ -45,7 +49,10 @@ struct ComponentDecodeTests {
         ]}]
         """)
         #expect(rows[0].components[0].label == "Refresh")
-        #expect(!rows[0].components[0].isActionable)
+        #expect(rows[0].components[0].customID == "refresh")
+        #expect(rows[0].components[0].isActionable)
+        // A link and an action are exclusive: one opens, the other posts.
+        #expect(rows[0].components[0].destination == nil)
     }
 
     /// The failure this decoder exists to avoid: one unrecognised type must not

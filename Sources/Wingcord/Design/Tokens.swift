@@ -295,6 +295,16 @@ nonisolated enum Metrics {
     // MARK: Activities
 
     /// An app's icon on a launcher list row.
+    /// The application mark beside a command row, and in the composer's command
+    /// chip. Smaller than a directory row's: this is a list of *commands*, and
+    /// the icon is there to say whose rather than to be looked at.
+    static let commandRowIcon: CGFloat = 22
+
+    /// A command or argument chip in the composer. Two points inside the text
+    /// field's own minimum, so a bar holding chips is exactly as tall as one
+    /// holding a caret and the composer does not jump when a command starts.
+    static let commandChipHeight: CGFloat = composerFieldMinHeight - 4
+
     static let activityRowIcon: CGFloat = 34
     /// An app's icon in the Recents strip. Larger than a list row's, because
     /// the icon is the only thing that row carries — there is no name beside it.

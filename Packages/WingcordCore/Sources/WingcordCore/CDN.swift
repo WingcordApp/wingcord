@@ -274,6 +274,26 @@ public enum CDN {
         )
     }
 
+    /// A **store** asset — a subscription's thumbnail, an item's header, a
+    /// benefit's icon.
+    ///
+    /// **A different path from an app's registered assets**, and the one place
+    /// `/app-assets/{id}/store/` is correct: the launcher already learned that
+    /// this path 404s for a `cover_image`, which is a different asset space
+    /// reached through `/app-icons/`. These ids come from `store-layout` and
+    /// they live under `store`.
+    public static func storeAsset(
+        id: ApplicationID,
+        assetID: String,
+        width: CGFloat,
+        scale: CGFloat = 2
+    ) -> URL? {
+        URL(
+            string: "\(host)/app-assets/\(id.rawValue)/store/\(assetID).png"
+                + "?size=\(rung(forSide: width, scale: scale))"
+        )
+    }
+
     /// One of an application's registered assets, by id.
     ///
     /// The shelf's `assets` map answers `{id, type, name}` per application and

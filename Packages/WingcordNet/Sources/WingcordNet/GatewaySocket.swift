@@ -1245,6 +1245,11 @@ public enum GatewayUpdate: Sendable {
     /// An interaction this client sent was accepted. `id` is the interaction's
     /// snowflake; for an activity launch it is the instance.
     case interactionAcknowledged(id: String, nonce: String?)
+    /// An interaction this client sent was refused, or the application let
+    /// Discord's window close on it. Carries no reason — the dispatch is
+    /// `{id, nonce}` and nothing more — so what the reader is told is that the
+    /// command did not run, which is the only thing the wire actually said.
+    case interactionFailed(nonce: String?)
     case messageCreated(
         Message, author: User, quotedAuthor: User?, member: Member?, guildID: GuildID?
     )
@@ -1316,6 +1321,9 @@ public enum GatewayUpdate: Sendable {
         case .interactionSuccess(let ack):
             guard let id = ack.id else { return nil }
             self = .interactionAcknowledged(id: id, nonce: ack.nonce)
+
+        case .interactionFailure(let ack):
+            self = .interactionFailed(nonce: ack.nonce)
 
         case .messageCreate(let dto):
             guard let authorDTO = dto.author else { return nil }

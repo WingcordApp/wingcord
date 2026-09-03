@@ -571,6 +571,15 @@ struct MessageDTO: Decodable, Sendable {
     var message_snapshots: [SnapshotDTO]?
     var pinned: Bool?
     var webhook_id: UserID?
+    /// The application that owns this message's controls.
+    ///
+    /// **Documented, and absent from every capture here** — the messages in
+    /// `slash help.har` arrived over the socket, which a HAR does not record. It
+    /// is decoded because Discord sends it on exactly the messages a button can
+    /// live on, and `Message.componentApplicationID` falls back to the author
+    /// when it is missing: the capture's interaction names `949479338275913799`,
+    /// which is both the application and the bot user who posted the message.
+    var application_id: ApplicationID?
     var nonce: NonceDTO?
     /// The app behind an activity invitation. Only ever present on a message
     /// an application posted, and the invitation card's only source for the
@@ -695,7 +704,8 @@ struct MessageDTO: Decodable, Sendable {
             webhookID: webhook_id,
             nonce: nonce?.text,
             activityInvite: activityInvite,
-            interaction: messageInteraction
+            interaction: messageInteraction,
+            applicationID: application_id
         )
         return Message(
             id: id,
@@ -901,7 +911,6 @@ public struct ClientSettings: Sendable {
     /// The account's favourite GIFs, from the settings proto. Empty for an
     /// account with none, and empty for a blob this client could not read —
     /// see `UserSettingsProto.FavoritesField`.
-    public var favoriteGIFs: [GIF] = []
     public var folders: [GuildFolder]
     /// The rail's order for guilds that are not in a folder.
     ///
@@ -916,14 +925,12 @@ public struct ClientSettings: Sendable {
         folders: [GuildFolder],
         guildPositions: [GuildID] = [],
         status: PresenceStatus,
-        customStatus: String?,
-        favoriteGIFs: [GIF] = []
+        customStatus: String?
     ) {
         self.folders = folders
         self.guildPositions = guildPositions
         self.status = status
         self.customStatus = customStatus
-        self.favoriteGIFs = favoriteGIFs
     }
 }
 
@@ -1453,8 +1460,17 @@ struct ComponentDTO: Decodable, Sendable {
                 // inert control it is rather than as a live one.
                 guard let url, !url.isEmpty else { return nil }
                 kind = .link(url)
+            } else if let custom_id, !custom_id.isEmpty {
+                // What `POST /interactions` sends back, verbatim. It is the
+                // application's own opaque string — `help_page__next,5362364…`
+                // in the capture — and nothing here reads it.
+                kind = .action(customID: custom_id)
             } else {
-                kind = .action
+                // Discord requires a `custom_id` on every non-link button, so
+                // this is a bot that sent something malformed. Drawn dimmed
+                // rather than dropped: a gap in the middle of a control row is
+                // harder to understand than a control that says it is dead.
+                kind = .inert
             }
             let text = label ?? ""
             // A button with neither words nor a glyph has nothing to draw.

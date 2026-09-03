@@ -132,8 +132,27 @@ nonisolated enum TimelineMetrics {
     static let componentGap: CGFloat = 6
     static let componentGlyphSide: CGFloat = 16
     static let componentGlyphGap: CGFloat = 5
+    /// The band at a button's trailing edge for the mark that says what kind of
+    /// button it is — a menu's chevron, a link's arrow. **Reserved by the
+    /// layout and respected by the painter**: a mark drawn into space the label
+    /// was allowed to fill lands on top of the words, which is exactly what a
+    /// link button did.
+    static let componentTrailingGlyphRoom: CGFloat = 16
     /// The gutter glyph on a system row — a join, a boost, a pin.
     static let systemGlyphSide: CGFloat = 16
+
+    // The "Only you can see this" note. Layout and painter read the SAME
+    // constants, for the reason the component geometry above does.
+    static let ephemeralNoteHeight: CGFloat = 16
+    static let ephemeralNoteGap: CGFloat = 6
+    static let ephemeralNoteGlyphSide: CGFloat = 12
+    static let ephemeralNoteGlyphGap: CGFloat = 5
+    /// The glyph plus the gap after it, which is what the text is inset by.
+    static let ephemeralNoteGlyphRoom: CGFloat = ephemeralNoteGlyphSide + ephemeralNoteGlyphGap
+    /// The gap on each side of the dot between the note and the control, plus
+    /// the dot. Layout places the control with it; the painter centres the dot
+    /// in it.
+    static let ephemeralNoteSeparatorRoom: CGFloat = 14
 
 
     // MARK: The hover pill

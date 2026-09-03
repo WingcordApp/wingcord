@@ -33,31 +33,11 @@ enum UserSettingsProto {
     private enum Field {
         static let status = 11
         static let guildFolders = 14
-        static let favorites = 15
-    }
-
-    /// `Favorites { map<string, FavoriteGIF> gifs = 1 }`.
-    ///
-    /// **The one group of numbers in this file that was not walked off a live
-    /// capture**, so it is read defensively rather than trusted: a map entry's
-    /// key is the GIF's own URL, and an entry whose key is not one is dropped.
-    /// A wrong field number therefore yields *nothing* rather than the plausible
-    /// nonsense this file's header warns about — which is the difference between
-    /// an empty Favorites tile and one full of garbage.
-    private enum FavoritesField {
-        static let gifs = 1
     }
 
     private enum MapEntryField {
         static let key = 1
         static let value = 2
-    }
-
-    private enum FavoriteGIFField {
-        static let src = 2
-        static let width = 3
-        static let height = 4
-        static let order = 5
     }
 
     private enum StatusField {
@@ -88,7 +68,6 @@ enum UserSettingsProto {
         var status: PresenceStatus = .online
         var folders: [GuildFolder] = []
         var guildPositions: [GuildID] = []
-        var favoriteGIFs: [GIF] = []
 
         var reader = ProtobufReader(data)
         while let field = reader.next() {
@@ -118,15 +97,6 @@ enum UserSettingsProto {
                     }
                 }
 
-            case Field.favorites:
-                var inner = reader.reader(for: field)
-                while let entry = inner.next() {
-                    guard entry.number == FavoritesField.gifs else { continue }
-                    if let gif = decodeFavoriteGIF(inner.reader(for: entry)) {
-                        favoriteGIFs.append(gif)
-                    }
-                }
-
             default:
                 break
             }
@@ -136,51 +106,7 @@ enum UserSettingsProto {
             folders: folders,
             guildPositions: guildPositions,
             status: status,
-            customStatus: nil,
-            favoriteGIFs: favoriteGIFs
-        )
-    }
-
-    /// One `map<string, FavoriteGIF>` entry: the key is the GIF's URL and the
-    /// value carries the rendition and its dimensions.
-    ///
-    /// Returns nil unless the key really is an `https` URL — see
-    /// `FavoritesField` for why that check is the whole safety net here.
-    private static func decodeFavoriteGIF(_ source: ProtobufReader) -> GIF? {
-        var reader = source
-        var key: String?
-        var src: String?
-        var width: Int?
-        var height: Int?
-
-        while let field = reader.next() {
-            switch field.number {
-            case MapEntryField.key:
-                key = reader.string(for: field)
-            case MapEntryField.value:
-                var value = reader.reader(for: field)
-                while let inner = value.next() {
-                    switch inner.number {
-                    case FavoriteGIFField.src: src = value.string(for: inner)
-                    case FavoriteGIFField.width: width = inner.wireType == 0 ? Int(inner.value) : nil
-                    case FavoriteGIFField.height: height = inner.wireType == 0 ? Int(inner.value) : nil
-                    default: break
-                    }
-                }
-            default:
-                break
-            }
-        }
-
-        guard let key, let url = URL(string: key), url.scheme == "https" else { return nil }
-        // The stored rendition may itself be a video; the picker draws only what
-        // `CGImageSource` can decode, so the canonical URL is the fallback.
-        let preview = src.flatMap(URL.init(string:))
-        return GIF(
-            url: url,
-            previewURL: GIFDTO.drawable(preview, url),
-            width: width,
-            height: height
+            customStatus: nil
         )
     }
 
