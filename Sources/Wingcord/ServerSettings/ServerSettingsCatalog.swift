@@ -34,6 +34,7 @@ enum ServerSettingsSection: String, CaseIterable, Identifiable, Hashable, Codabl
     case soundboard
 
     // Who is in it.
+    case channels
     case members
     case roles
     case invites
@@ -67,6 +68,7 @@ enum ServerSettingsSection: String, CaseIterable, Identifiable, Hashable, Codabl
         case .emoji: "Emoji"
         case .stickers: "Stickers"
         case .soundboard: "Soundboard"
+        case .channels: "Channels"
         case .members: "Members"
         case .roles: "Roles"
         case .invites: "Invites"
@@ -92,6 +94,7 @@ enum ServerSettingsSection: String, CaseIterable, Identifiable, Hashable, Codabl
         case .emoji: "face.smiling.inverse"
         case .stickers: "seal.fill"
         case .soundboard: "speaker.wave.2.fill"
+        case .channels: "number"
         case .members: "person.2.fill"
         case .roles: "shield.fill"
         case .invites: "link"
@@ -115,7 +118,7 @@ enum ServerSettingsSection: String, CaseIterable, Identifiable, Hashable, Codabl
         switch self {
         case .profile, .tag, .engagement, .events: Palette.accent
         case .emoji, .stickers, .soundboard: .orange
-        case .members, .roles, .invites, .access: .teal
+        case .channels, .members, .roles, .invites, .access: .teal
         case .integrations, .webhooks: .indigo
         case .safety, .auditLog, .bans: .pink
         case .community, .onboarding, .serverGuide: .green
@@ -135,6 +138,7 @@ enum ServerSettingsSection: String, CaseIterable, Identifiable, Hashable, Codabl
         case .emoji: ["emote", "upload", "expression"]
         case .stickers: ["expression", "upload"]
         case .soundboard: ["sounds", "audio", "expression"]
+        case .channels: ["create channel", "category", "private", "topic", "slowmode", "permissions", "delete"]
         case .members: ["people", "kick", "ban", "timeout", "pending", "applications", "prune"]
         case .roles: ["permissions", "colour", "color", "hoist", "members"]
         case .invites: ["links", "join", "vanity"]
@@ -179,6 +183,7 @@ enum ServerSettingsSection: String, CaseIterable, Identifiable, Hashable, Codabl
         case .auditLog: .viewAuditLog
         case .bans: .banMembers
         case .members: .kickMembers
+        case .channels: .manageChannels
         case .emoji, .stickers, .soundboard: .manageExpressions
         case .webhooks, .integrations: .manageWebhooks
         default: nil
@@ -191,7 +196,7 @@ enum ServerSettingsSection: String, CaseIterable, Identifiable, Hashable, Codabl
     static let groups: [[ServerSettingsSection]] = [
         [.profile, .tag, .engagement, .events],
         [.emoji, .stickers, .soundboard],
-        [.members, .roles, .invites, .access],
+        [.channels, .members, .roles, .invites, .access],
         [.integrations, .webhooks],
         [.safety, .auditLog, .bans],
         [.community, .onboarding, .serverGuide],
@@ -236,6 +241,8 @@ enum ServerSettingsSection: String, CaseIterable, Identifiable, Hashable, Codabl
             "Custom stickers anyone in this server can send."
         case .soundboard:
             "Custom sound reactions anyone in this server can play in voice."
+        case .channels:
+            "Create, rename and remove the rooms this server is made of."
         case .members:
             "Everyone here, how they got in, and who is still waiting."
         case .roles:

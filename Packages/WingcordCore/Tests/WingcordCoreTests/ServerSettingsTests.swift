@@ -541,3 +541,293 @@ struct ScheduledEventTests {
         )
     }
 }
+
+// MARK: - The editors' own arithmetic
+
+/// Everything a draft decides before a request goes out.
+///
+/// These are the places where a plausible implementation sends something Discord
+/// refuses, or — worse — something it accepts that is not what the reader chose.
+@Suite("Server drafts")
+struct ServerDraftTests {
+
+    // MARK: Channel visibility
+    //
+    // The single most mis-modellable thing on this whole surface: three radio
+    // buttons that are a *product* of two independent wire fields.
+
+    @Test("Content visibility round-trips through its two fields")
+    func visibilityRoundTrip() {
+        for choice in ChannelVisibility.allCases {
+            let decoded = ChannelVisibility(
+                isAgeRestricted: choice.isAgeRestricted,
+                flags: choice.isSpoiler ? ChannelVisibility.spoilerFlag : 0
+            )
+            #expect(decoded == choice, "\(choice) did not survive")
+        }
+    }
+
+    @Test("Spoiler is bit 21 and age-restricted is nsfw, never both")
+    func visibilityFields() {
+        #expect(ChannelVisibility.spoilerFlag == 1 << 21)
+        #expect(ChannelVisibility.spoiler.isSpoiler)
+        #expect(!ChannelVisibility.spoiler.isAgeRestricted)
+        #expect(ChannelVisibility.ageRestricted.isAgeRestricted)
+        #expect(!ChannelVisibility.ageRestricted.isSpoiler)
+        #expect(!ChannelVisibility.default.isSpoiler && !ChannelVisibility.default.isAgeRestricted)
+    }
+
+    @Test("A channel carrying both reads as age-restricted, not as a fourth state")
+    func visibilityBothSet() {
+        // Discord's own UI cannot produce this. Reading it as age-restricted is
+        // the safer of the two, since that is the one with a consequence.
+        let decoded = ChannelVisibility(isAgeRestricted: true, flags: ChannelVisibility.spoilerFlag)
+        #expect(decoded == .ageRestricted)
+    }
+
+    @Test("An unrelated channel flag does not read as spoiler")
+    func visibilityOtherFlags() {
+        #expect(ChannelVisibility(isAgeRestricted: false, flags: 1 << 4) == .default)
+        #expect(ChannelVisibility(isAgeRestricted: false, flags: 1 << 15) == .default)
+    }
+
+    // MARK: AutoMod's trigger-dependent constraints
+    //
+    // Four things the trigger decides. Offering a control the trigger refuses is
+    // the inert control §5.5 is about, and each of these is a place that could
+    // silently drift from the wire.
+
+    @Test("Event type is derived: 2 for a profile rule, 1 for the rest")
+    func autoModEventType() {
+        #expect(AutoModRule.Trigger.userProfile(filter: [], regexes: [], allowList: []).eventType == 2)
+        for trigger in AutoModRule.Trigger.creatable
+        where trigger.wireType != 6 {
+            #expect(trigger.eventType == 1, "\(trigger) should fire on a message")
+        }
+    }
+
+    @Test("Trigger wire values match the captured ones")
+    func autoModTriggerValues() {
+        #expect(AutoModRule.Trigger.keyword(filter: [], regexes: [], allowList: []).wireType == 1)
+        #expect(AutoModRule.Trigger.spam.wireType == 3)
+        #expect(AutoModRule.Trigger.keywordPreset(presets: [], allowList: []).wireType == 4)
+        #expect(AutoModRule.Trigger.mentionSpam(limit: 20, raidProtection: true).wireType == 5)
+        #expect(AutoModRule.Trigger.userProfile(filter: [], regexes: [], allowList: []).wireType == 6)
+        #expect(AutoModRule.Trigger.guildPolicy.wireType == 7)
+    }
+
+    @Test("Timeout is offered only where Discord accepts it")
+    func autoModTimeoutGating() {
+        func offersTimeout(_ trigger: AutoModRule.Trigger) -> Bool {
+            trigger.permittedActions.contains { $0.wireType == 3 }
+        }
+        #expect(offersTimeout(.keyword(filter: [], regexes: [], allowList: [])))
+        #expect(offersTimeout(.mentionSpam(limit: 20, raidProtection: false)))
+        // Everything else refuses it.
+        #expect(!offersTimeout(.spam))
+        #expect(!offersTimeout(.keywordPreset(presets: [], allowList: [])))
+        #expect(!offersTimeout(.userProfile(filter: [], regexes: [], allowList: [])))
+        #expect(!offersTimeout(.guildPolicy))
+    }
+
+    @Test("Quarantine is offered only on a profile rule, and server rules take only an alert")
+    func autoModActionGating() {
+        let profile = AutoModRule.Trigger.userProfile(filter: [], regexes: [], allowList: [])
+        #expect(profile.permittedActions.contains { $0.wireType == 4 })
+        #expect(!AutoModRule.Trigger.spam.permittedActions.contains { $0.wireType == 4 })
+        // GUILD_POLICY takes exactly one action, and it is the alert.
+        #expect(AutoModRule.Trigger.guildPolicy.permittedActions.map(\.wireType) == [2])
+    }
+
+    @Test("A profile rule has no channel exemptions — it fires on a member")
+    func autoModChannelExemptions() {
+        #expect(!AutoModRule.Trigger.userProfile(filter: [], regexes: [], allowList: [])
+            .allowsChannelExemptions)
+        #expect(AutoModRule.Trigger.keyword(filter: [], regexes: [], allowList: [])
+            .allowsChannelExemptions)
+    }
+
+    @Test("Keyword is the only trigger a guild may have more than one of")
+    func autoModLimits() {
+        #expect(AutoModRule.Trigger.keyword(filter: [], regexes: [], allowList: []).perGuildLimit == 6)
+        for trigger in AutoModRule.Trigger.creatable where trigger.wireType != 1 {
+            #expect(trigger.perGuildLimit == 1)
+        }
+    }
+
+    @Test("The create menu never offers Discord's own server-rules trigger")
+    func autoModCreatable() {
+        #expect(!AutoModRule.Trigger.creatable.contains { $0.wireType == 7 })
+    }
+
+    // MARK: What a draft refuses to send
+
+    @Test("A rule with no keywords and no regexes is not savable")
+    func autoModRequiresContent() {
+        var draft = AutoModDraft(name: "Block", trigger: .keyword(filter: [], regexes: [], allowList: []))
+        #expect(!draft.isSavable)
+        draft.trigger = .keyword(filter: ["spam"], regexes: [], allowList: [])
+        #expect(draft.isSavable)
+        // A regex alone is enough — the capture created one exactly that way.
+        draft.trigger = .keyword(filter: [], regexes: ["^b"], allowList: [])
+        #expect(draft.isSavable)
+    }
+
+    @Test("An alert with nowhere to post is not savable")
+    func autoModRequiresAlertChannel() {
+        var draft = AutoModDraft(
+            name: "Alert",
+            trigger: .spam,
+            actions: [.alert(channelID: nil)]
+        )
+        #expect(!draft.isSavable)
+        draft.actions = [.alert(channelID: ChannelID(rawValue: 7))]
+        #expect(draft.isSavable)
+    }
+
+    @Test("Spam needs no metadata and is savable on its own")
+    func autoModSpamSavable() {
+        #expect(AutoModDraft(name: "Spam", trigger: .spam).isSavable)
+        #expect(!AutoModDraft(name: "", trigger: .spam).isSavable)
+    }
+
+    @Test("A rule this client cannot express is not editable")
+    func autoModEditability() {
+        let unknownTrigger = AutoModRule(id: 1, name: "x", trigger: .unrecognised(99))
+        #expect(!AutoModDraft.isEditable(unknownTrigger))
+        let unknownAction = AutoModRule(
+            id: 1, name: "x", trigger: .spam, actions: [.unrecognised(9)]
+        )
+        #expect(!AutoModDraft.isEditable(unknownAction))
+        let ordinary = AutoModRule(
+            id: 1, name: "x", trigger: .spam, actions: [.blockMessage(explanation: nil)]
+        )
+        #expect(AutoModDraft.isEditable(ordinary))
+    }
+
+    // MARK: Onboarding drafts
+
+    @Test("A new prompt id is a millisecond timestamp, as the capture sends")
+    func onboardingID() {
+        let id = OnboardingDraft.newID()
+        let value = try? #require(Int(id))
+        #expect(value != nil)
+        // Milliseconds, not seconds — a seconds value would be ten digits.
+        #expect(id.count >= 13)
+    }
+
+    @Test("A prompt with no title or no answers will be refused")
+    func onboardingCompleteness() {
+        var prompt = OnboardingDraft.Prompt(title: "", options: [])
+        #expect(!prompt.isComplete)
+        prompt.title = "What do you play?"
+        #expect(!prompt.isComplete)
+        prompt.options = [OnboardingDraft.Option(title: "Chess")]
+        #expect(prompt.isComplete)
+    }
+
+    @Test("An answer granting neither a role nor a channel is flagged")
+    func onboardingEmptyAnswer() {
+        #expect(OnboardingDraft.Option(title: "Nothing").grantsNothing)
+        #expect(!OnboardingDraft.Option(
+            title: "Chess", roleIDs: [RoleID(rawValue: 1)]
+        ).grantsNothing)
+    }
+
+    @Test("Pre-join and post-join split on in_onboarding")
+    func onboardingSplit() {
+        let draft = OnboardingDraft(prompts: [
+            OnboardingDraft.Prompt(title: "a", isPreJoin: true),
+            OnboardingDraft.Prompt(title: "b", isPreJoin: false),
+        ])
+        #expect(draft.preJoin.map(\.title) == ["a"])
+        #expect(draft.postJoin.map(\.title) == ["b"])
+    }
+
+    // MARK: The channel delete gate
+    //
+    // Discord's own client refuses these locally and never asks the server, so
+    // this is the check that has to happen *before* the route.
+
+    private var guildID: GuildID { GuildID(rawValue: 1) }
+
+    private func guide(taskIn channelID: ChannelID) -> ServerGuide {
+        ServerGuide(
+            guildID: guildID,
+            isEnabled: true,
+            actions: [
+                ServerGuide.Action(id: 0, channelID: channelID, kind: .read, title: "Say hello"),
+            ]
+        )
+    }
+
+    @Test("A channel carrying a guide task cannot be deleted, and the reason names it")
+    func deleteGateGuideTask() {
+        let channelID = ChannelID(rawValue: 42)
+        let refusal = ChannelDeleteGate.refusal(
+            for: channelID,
+            guide: guide(taskIn: channelID),
+            onboarding: nil,
+            chattableDefaults: 5
+        )
+        #expect(refusal == .guideTask(title: "Say hello"))
+        #expect(refusal?.message.contains("Say hello") == true)
+    }
+
+    @Test("The last chattable default channel cannot be deleted")
+    func deleteGateLastDefault() {
+        let channelID = ChannelID(rawValue: 42)
+        let onboarding = GuildOnboarding(
+            guildID: guildID,
+            isEnabled: true,
+            defaultChannelIDs: [channelID]
+        )
+        #expect(
+            ChannelDeleteGate.refusal(
+                for: channelID, guide: nil, onboarding: onboarding, chattableDefaults: 1
+            ) == .lastDefaultChannel
+        )
+        // With another one left, it may go.
+        #expect(
+            ChannelDeleteGate.refusal(
+                for: channelID, guide: nil, onboarding: onboarding, chattableDefaults: 2
+            ) == nil
+        )
+    }
+
+    @Test("Onboarding that is off gates nothing")
+    func deleteGateDisabledOnboarding() {
+        let channelID = ChannelID(rawValue: 42)
+        let onboarding = GuildOnboarding(
+            guildID: guildID,
+            isEnabled: false,
+            defaultChannelIDs: [channelID]
+        )
+        #expect(
+            ChannelDeleteGate.refusal(
+                for: channelID, guide: nil, onboarding: onboarding, chattableDefaults: 1
+            ) == nil
+        )
+    }
+
+    @Test("An unrelated channel is never gated")
+    func deleteGateUnrelated() {
+        #expect(
+            ChannelDeleteGate.refusal(
+                for: ChannelID(rawValue: 99),
+                guide: guide(taskIn: ChannelID(rawValue: 42)),
+                onboarding: nil,
+                chattableDefaults: 1
+            ) == nil
+        )
+    }
+
+    // MARK: Thread archive durations
+
+    @Test("Hide-after-inactivity offers only the four Discord accepts")
+    func archiveDurations() {
+        #expect(ThreadArchiveDuration.minutes == [60, 1440, 4320, 10080])
+        #expect(ThreadArchiveDuration.title(10080) == "1 week")
+        #expect(ThreadArchiveDuration.title(60) == "1 hour")
+    }
+}

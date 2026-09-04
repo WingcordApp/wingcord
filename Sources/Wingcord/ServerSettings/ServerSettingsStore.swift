@@ -243,6 +243,13 @@ final class ServerSettingsStore {
             // so it is fetched with the list rather than when a tab is pressed.
             await loadMembers()
             await loadJoinForm()
+        case .channels:
+            // The channel list is resident. What this page needs beyond it is
+            // the delete gate's two inputs — a guide task or a default channel
+            // is what makes a channel undeletable, and neither is knowable from
+            // the channel itself.
+            await loadServerGuide()
+            await loadOnboarding()
         }
     }
 
@@ -877,6 +884,181 @@ final class ServerSettingsStore {
             try await rest.deleteTemplate(code, in: guildID)
             template = .loaded(nil)
         }
+    }
+
+    // MARK: Onboarding, the guide, community and AutoMod
+
+    /// The three onboarding writes are three functions because **the route
+    /// merges per field** — see `DiscordREST.setOnboardingChannels`. Sending all
+    /// three together would work and would also make the Enable switch depend on
+    /// what the prompt editor is holding, which is how a save races an edit.
+    func saveOnboardingPrompts(_ prompts: [OnboardingDraft.Prompt]) async {
+        await perform { [self] in
+            onboarding = .loaded(
+                try await rest.setOnboardingPrompts(in: guildID, prompts: prompts)
+            )
+        }
+    }
+
+    func saveOnboardingChannels(_ channelIDs: [ChannelID]) async {
+        await perform { [self] in
+            onboarding = .loaded(
+                try await rest.setOnboardingChannels(in: guildID, defaultChannelIDs: channelIDs)
+            )
+        }
+    }
+
+    func setOnboardingEnabled(_ isEnabled: Bool) async {
+        await perform { [self] in
+            onboarding = .loaded(try await rest.setOnboardingEnabled(in: guildID, isEnabled: isEnabled))
+        }
+    }
+
+    func saveServerGuide(_ guide: ServerGuide, isEnabled: Bool) async {
+        await perform { [self] in
+            serverGuide = .loaded(try await rest.updateServerGuide(guide, isEnabled: isEnabled))
+        }
+    }
+
+    func enableCommunity(
+        rules: DiscordREST.CommunityChannel,
+        updates: DiscordREST.CommunityChannel,
+        verification: VerificationLevel,
+        notifications: NotificationLevel,
+        explicitContent: ExplicitContentFilter
+    ) async {
+        await perform { [self] in
+            guard let current = settings.value else { return }
+            settings = .loaded(try await rest.enableCommunity(
+                in: guildID,
+                features: current.features,
+                verificationLevel: verification,
+                notifications: notifications,
+                explicitContentFilter: explicitContent,
+                rulesChannel: rules,
+                updatesChannel: updates
+            ))
+            // Six community pages appear the moment this lands, and every one of
+            // them is gated on a fetch that has not happened. Invalidated rather
+            // than left stale.
+            onboarding = .idle
+            serverGuide = .idle
+        }
+    }
+
+    func setFeature(_ feature: String, isOn: Bool) async {
+        await perform { [self] in
+            guard let current = settings.value else { return }
+            settings = .loaded(try await rest.setGuildFeature(
+                in: guildID, features: current.features, feature: feature, isOn: isOn
+            ))
+        }
+    }
+
+    func saveAutoModRule(_ draft: AutoModDraft, existing: UInt64?) async {
+        await perform { [self] in
+            // The validate step first, because Discord's regex is Rust-flavoured
+            // and an `NSRegularExpression` check on this side would pass
+            // patterns the server then refuses. A throw here names the pattern.
+            try await rest.validateAutoModRule(in: guildID, draft)
+            let saved: AutoModRule? = if let existing {
+                try await rest.updateAutoModRule(existing, in: guildID, draft)
+            } else {
+                try await rest.createAutoModRule(in: guildID, draft)
+            }
+            guard let saved else { return }
+            var current = autoModRules.value ?? []
+            if let index = current.firstIndex(where: { $0.id == saved.id }) {
+                current[index] = saved
+            } else {
+                current.append(saved)
+            }
+            autoModRules = .loaded(current)
+        }
+    }
+
+    func deleteAutoModRule(_ ruleID: UInt64) async {
+        await perform { [self] in
+            try await rest.deleteAutoModRule(ruleID, in: guildID)
+            autoModRules = .loaded((autoModRules.value ?? []).filter { $0.id != ruleID })
+        }
+    }
+
+    // MARK: Channels
+
+    func createChannel(name: String, kind: ChannelKind, isPrivate: Bool) async {
+        await perform { [self] in
+            guard let channel = try await rest.createChannel(
+                in: guildID, name: name, kind: kind
+            ) else { return }
+            // **Private is not part of the create** — it is a denied
+            // VIEW_CHANNEL bit on @everyone, applied afterwards. See §SM.13.
+            if isPrivate {
+                try await rest.setChannelPrivate(channel.id, in: guildID, isPrivate: true)
+            }
+            channels.append(ChannelSummary(
+                id: channel.id,
+                name: channel.name,
+                kind: channel.kind,
+                categoryName: nil,
+                isPublic: !isPrivate
+            ))
+            channels.sort { $0.name < $1.name }
+        }
+    }
+
+    func setChannelPrivate(_ channelID: ChannelID, isPrivate: Bool) async {
+        await perform { [self] in
+            try await rest.setChannelPrivate(channelID, in: guildID, isPrivate: isPrivate)
+            if let index = channels.firstIndex(where: { $0.id == channelID }) {
+                channels[index].isPublic = !isPrivate
+            }
+        }
+    }
+
+    func saveChannel(_ draft: ChannelDraft) async {
+        await perform { [self] in
+            guard let updated = try await rest.updateChannel(
+                draft.id,
+                name: draft.name,
+                kind: draft.kind,
+                topic: draft.topic,
+                isAgeRestricted: draft.visibility.isAgeRestricted,
+                isSpoiler: draft.visibility.isSpoiler,
+                bitrate: draft.bitrate,
+                userLimit: draft.userLimit,
+                slowmodeSeconds: draft.slowmodeSeconds,
+                autoArchiveMinutes: draft.autoArchiveMinutes
+            ) else { return }
+            if let index = channels.firstIndex(where: { $0.id == draft.id }) {
+                channels[index].name = updated.name
+                channels[index].kind = updated.kind
+            }
+        }
+    }
+
+    func deleteChannel(_ channelID: ChannelID) async {
+        await perform { [self] in
+            try await rest.deleteChannel(channelID)
+            channels.removeAll { $0.id == channelID }
+        }
+    }
+
+    /// Why a channel may not be deleted, or nil.
+    ///
+    /// Discord's own client refuses this locally and never asks the server, so
+    /// this is a pre-check rather than a translated error — and if the server
+    /// would in fact accept the delete, it is the only thing standing between an
+    /// administrator and a Server Guide pointing at nothing.
+    func deleteRefusal(for channelID: ChannelID) -> ChannelDeleteGate.Refusal? {
+        ChannelDeleteGate.refusal(
+            for: channelID,
+            guide: serverGuide.value,
+            onboarding: onboarding.value,
+            chattableDefaults: (onboarding.value?.defaultChannelIDs ?? [])
+                .filter { id in channels.first { $0.id == id }?.isPublic ?? false }
+                .count
+        )
     }
 
     // MARK: Members

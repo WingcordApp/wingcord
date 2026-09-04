@@ -179,6 +179,7 @@ private struct ServerSettingsPaneContent: View {
             case .emoji: EmojiPane(store: store, model: model)
             case .stickers: StickersPane(store: store, model: model)
             case .soundboard: SoundboardPane(store: store, model: model)
+            case .channels: ChannelsPane(store: store)
             case .members: MembersPane(store: store, model: model)
             case .roles: RolesPane(store: store)
             case .invites: InvitesPane(store: store, model: model)

@@ -1,6 +1,7 @@
 import AppKit
 import SwiftUI
 import WingcordCore
+import WingcordNet
 
 // MARK: - Community Overview
 //
@@ -28,30 +29,9 @@ struct CommunityPane: View {
 
     /// What this client will not do.
     ///
-    /// **Turning community on is not offered yet**, and the reason given here
-    /// was reasoning rather than evidence: it claimed the request "refuses
-    /// without naming which field it disliked", which was never tested. The
-    /// body is now captured in full — six fields, and `rules_channel_id: "1"`
-    /// is a sentinel meaning "create one for me" rather than a channel id. See
-    /// HANDOFF §SM.11. This is unwritten, not unbuildable.
+    /// Turning community on — see `EnableCommunityCard`.
     private var notCommunity: some View {
-        SettingsCard {
-            VStack(alignment: .leading, spacing: Spacing.base) {
-                Text("This server is not a Community server.")
-                    .font(SettingsType.rowTitle)
-                    .foregroundStyle(Ink.primary)
-                Text(
-                    "Community brings a rules channel, onboarding, a Server Guide "
-                        + "and Discord's safety notices. Wingcord cannot turn it on "
-                        + "yet — do that in Discord's own client. Everything it "
-                        + "unlocks is editable here once it is on."
-                )
-                .font(SettingsType.rowSubtitle)
-                .foregroundStyle(Ink.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-            }
-            .padding(SettingsMetrics.cardContentInset)
-        }
+        EnableCommunityCard(store: store)
     }
 
     private func channels(_ settings: GuildSettings) -> some View {
@@ -240,126 +220,8 @@ struct OnboardingPane: View {
 
     var body: some View {
         LoadableContent(store.onboarding) { onboarding in
-            VStack(alignment: .leading, spacing: 0) {
-                SettingsGroup {
-                    SettingsCard {
-                        SettingsValueRow(
-                            title: "Onboarding",
-                            value: onboarding.isEnabled ? "On" : "Off"
-                        )
-                        CardDivider()
-                        SettingsValueRow(
-                            title: "Default channels",
-                            value: "\(onboarding.defaultChannelIDs.count)"
-                        )
-                    }
-                }
-
-                defaults(onboarding)
-                questions(
-                    "Pre-join questions",
-                    detail: "Asked before somebody joins. These can assign channels and roles.",
-                    prompts: onboarding.prompts.filter(\.isInOnboarding)
-                )
-                questions(
-                    "Post-join questions",
-                    detail: "Asked afterwards, on the Channels & Roles page.",
-                    prompts: onboarding.prompts.filter { !$0.isInOnboarding }
-                )
-
-                SettingsFootnote(
-                    "Wingcord reads onboarding and cannot yet edit it. Editing these "
-                        + "in Discord's own client works, and nothing here will "
-                        + "overwrite what you do there.",
-                    symbolName: "info.circle"
-                )
-            }
+            OnboardingEditor(store: store, onboarding: onboarding)
         }
-    }
-
-    @ViewBuilder
-    private func defaults(_ onboarding: GuildOnboarding) -> some View {
-        if !onboarding.defaultChannelIDs.isEmpty {
-            SettingsGroup("Default channels") {
-                SettingsCard {
-                    ForEach(Array(onboarding.defaultChannelIDs.enumerated()), id: \.element) { index, id in
-                        if index > 0 { CardDivider() }
-                        SettingsValueRow(
-                            title: store.channelName(id).map { "#\($0)" } ?? "Unknown channel",
-                            value: ""
-                        )
-                    }
-                }
-            }
-        }
-    }
-
-    @ViewBuilder
-    private func questions(
-        _ title: String,
-        detail: String,
-        prompts: [GuildOnboarding.Prompt]
-    ) -> some View {
-        if !prompts.isEmpty {
-            SettingsGroup(title) {
-                ForEach(prompts) { prompt in
-                    SettingsCard {
-                        VStack(alignment: .leading, spacing: Spacing.tight) {
-                            Text(prompt.title)
-                                .font(SettingsType.rowTitle)
-                                .foregroundStyle(Ink.primary)
-                            Text(qualifiers(prompt))
-                                .font(SettingsType.rowSubtitle)
-                                .foregroundStyle(Ink.secondary)
-                        }
-                        .padding(.horizontal, SettingsMetrics.cardContentInset)
-                        .padding(.top, Spacing.snug)
-                        .padding(.bottom, Spacing.base)
-
-                        ForEach(prompt.options) { option in
-                            CardDivider()
-                            ObjectRow(
-                                title: option.title,
-                                subtitle: grants(option)
-                            ) {
-                                Text(option.emojiName ?? "•")
-                                    .font(.system(size: 14))
-                                    .frame(width: 28, height: 28)
-                            }
-                        }
-                    }
-                    .padding(.bottom, Spacing.base)
-                }
-                SettingsFootnote(detail)
-            }
-        }
-    }
-
-    private func qualifiers(_ prompt: GuildOnboarding.Prompt) -> String {
-        var parts: [String] = []
-        parts.append(prompt.isSingleSelect ? "One answer" : "Multiple answers")
-        if prompt.isRequired { parts.append("required") }
-        parts.append(prompt.options.count == 1 ? "1 answer" : "\(prompt.options.count) answers")
-        return parts.joined(separator: " · ")
-    }
-
-    /// What choosing an option does. The member counts are why
-    /// `roles/member-counts` is fetched at all — there is no other source.
-    private func grants(_ option: GuildOnboarding.Option) -> String? {
-        var parts: [String] = []
-        if !option.channelIDs.isEmpty {
-            let names = option.channelIDs.compactMap { store.channelName($0) }.map { "#\($0)" }
-            if !names.isEmpty { parts.append(names.joined(separator: ", ")) }
-        }
-        for roleID in option.roleIDs {
-            guard let role = store.roles.value?.first(where: { $0.id == roleID }) else { continue }
-            if let count = store.roleMemberCounts[roleID] {
-                parts.append("\(role.name) — \(count) chose this")
-            } else {
-                parts.append(role.name)
-            }
-        }
-        return parts.isEmpty ? nil : parts.joined(separator: " · ")
     }
 }
 
@@ -382,76 +244,7 @@ struct GuideSettingsPane: View {
 
     var body: some View {
         LoadableContent(store.serverGuide) { guide in
-            VStack(alignment: .leading, spacing: 0) {
-                SettingsGroup {
-                    SettingsCard {
-                        SettingsValueRow(
-                            title: "Server Guide",
-                            value: guide.isEnabled ? "On" : "Off"
-                        )
-                    }
-                }
-
-                if let welcome = guide.welcome {
-                    SettingsGroup("Welcome message") {
-                        SettingsCard {
-                            Text(welcome.substituting("new member"))
-                                .font(SettingsType.rowLabel)
-                                .foregroundStyle(Ink.primary)
-                                .fixedSize(horizontal: false, vertical: true)
-                                .padding(SettingsMetrics.cardContentInset)
-                        }
-                        SettingsFootnote(
-                            "Each new member sees their own name where “new member” is here."
-                        )
-                    }
-                }
-
-                if !guide.actions.isEmpty {
-                    SettingsGroup("New member tasks — \(guide.actions.count)") {
-                        SettingsCard {
-                            ForEach(Array(guide.actions.enumerated()), id: \.element.id) { index, action in
-                                if index > 0 { CardDivider() }
-                                ObjectRow(
-                                    title: action.title,
-                                    subtitle: store.channelName(action.channelID).map { "#\($0)" }
-                                ) {
-                                    Text(action.emojiName ?? "✓")
-                                        .font(.system(size: 14))
-                                        .frame(width: 28, height: 28)
-                                }
-                            }
-                        }
-                        SettingsFootnote("Discord asks for three to five of these.")
-                    }
-                }
-
-                if !guide.resources.isEmpty {
-                    SettingsGroup("Resource pages — \(guide.resources.count)") {
-                        SettingsCard {
-                            ForEach(Array(guide.resources.enumerated()), id: \.element.id) { index, resource in
-                                if index > 0 { CardDivider() }
-                                ObjectRow(
-                                    title: resource.title,
-                                    subtitle: resource.detail
-                                        ?? store.channelName(resource.channelID).map { "#\($0)" }
-                                ) {
-                                    Image(systemName: "doc.text")
-                                        .font(.system(size: 12))
-                                        .foregroundStyle(Ink.secondary)
-                                        .frame(width: 28, height: 28)
-                                }
-                            }
-                        }
-                    }
-                }
-
-                SettingsFootnote(
-                    "Wingcord reads the guide and cannot yet edit it. Editing it in "
-                        + "Discord's own client works.",
-                    symbolName: "info.circle"
-                )
-            }
+            GuideEditor(store: store, guide: guide)
         }
     }
 }
@@ -759,4 +552,146 @@ struct JoinFormEditor: View {
     }
 
     private var isDirty: Bool { draft != nil && draft?.fields != form.fields }
+}
+
+// MARK: - Turning Community on
+
+/// The wizard, as one card.
+///
+/// **Six fields in one request**, and the trick is one literal: `"1"` in a
+/// channel field is a sentinel meaning *create one for me* rather than a channel
+/// id — Discord makes `#rules` or `#moderator-only` and links it. That is the
+/// wizard's "Create one for me" option, and it is why the two pickers take an
+/// enum rather than an optional id.
+///
+/// Discord's own flow is three steps. It is one card here because the three are
+/// two checkboxes, two pickers and an agreement — a paging control for five
+/// fields is paging for its own sake, and the Review step reviews a form the
+/// reader can already see.
+struct EnableCommunityCard: View {
+    let store: ServerSettingsStore
+
+    @State private var rules: DiscordREST.CommunityChannel = .createForMe
+    @State private var updates: DiscordREST.CommunityChannel = .createForMe
+    @State private var hasAgreed = false
+
+    /// Discord requires both before it will convert. They are checkboxes rather
+    /// than an implicit part of the save, because turning them on changes what
+    /// members may do — and doing that silently on somebody's behalf is not the
+    /// client's call.
+    @State private var requiresVerifiedEmail = true
+    @State private var scansAllMedia = true
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            SettingsGroup {
+                SettingsCard {
+                    VStack(alignment: .leading, spacing: Spacing.base) {
+                        Text("This server is not a Community server.")
+                            .font(SettingsType.rowTitle)
+                            .foregroundStyle(Ink.primary)
+                        Text(
+                            "Community brings a rules channel, onboarding, a Server "
+                                + "Guide and Discord's safety notices. It does not put "
+                                + "your server in Server Discovery."
+                        )
+                        .font(SettingsType.rowSubtitle)
+                        .foregroundStyle(Ink.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                    }
+                    .padding(SettingsMetrics.cardContentInset)
+                }
+            }
+
+            SettingsGroup("Safety checks") {
+                SettingsCard {
+                    SettingsToggle(
+                        title: "Members must have a verified email",
+                        help: "Members with a role are exempt.",
+                        isOn: $requiresVerifiedEmail
+                    )
+                    CardDivider()
+                    SettingsToggle(
+                        title: "Scan media from all members",
+                        help: "Discord deletes explicit media. Age-restricted "
+                            + "channels are exempt.",
+                        isOn: $scansAllMedia
+                    )
+                }
+                SettingsFootnote("Discord requires both before a server can convert.")
+            }
+
+            SettingsGroup("Channels") {
+                SettingsCard {
+                    channelPicker("Rules or guidelines", selection: $rules)
+                    CardDivider()
+                    channelPicker("Community updates", selection: $updates)
+                }
+                SettingsFootnote(
+                    "Choosing “Create one for me” has Discord make the channel and "
+                        + "link it — that is a real option on the route, not this "
+                        + "client filling in a blank."
+                )
+            }
+
+            SettingsGroup("Agree") {
+                SettingsCard {
+                    SettingsToggle(
+                        title: "This server follows Discord's Community Guidelines",
+                        isOn: $hasAgreed
+                    )
+                }
+            }
+
+            HStack {
+                Spacer()
+                Button("Enable Community") {
+                    Task {
+                        await store.enableCommunity(
+                            rules: rules,
+                            updates: updates,
+                            // The two checkboxes above, in the values Discord's
+                            // own wizard sends: a verified email is verification
+                            // level 1, and scanning everybody is filter 2.
+                            verification: requiresVerifiedEmail ? .low : .none,
+                            notifications: .onlyMentions,
+                            explicitContent: scansAllMedia ? .allMembers : .disabled
+                        )
+                    }
+                }
+                .buttonStyle(.glassProminent)
+                .disabled(!hasAgreed || !requiresVerifiedEmail || !scansAllMedia)
+            }
+            .padding(.top, Spacing.margin)
+        }
+    }
+
+    private func channelPicker(
+        _ title: String,
+        selection: Binding<DiscordREST.CommunityChannel>
+    ) -> some View {
+        SettingsControlRow(title) {
+            Menu {
+                Button("Create one for me") { selection.wrappedValue = .createForMe }
+                Divider()
+                ForEach(store.textChannels) { channel in
+                    Button("#\(channel.name)") {
+                        selection.wrappedValue = .existing(channel.id)
+                    }
+                }
+            } label: {
+                Text(label(selection.wrappedValue))
+                    .font(SettingsType.rowLabel)
+            }
+            .menuStyle(.borderlessButton)
+            .fixedSize()
+        }
+    }
+
+    private func label(_ channel: DiscordREST.CommunityChannel) -> String {
+        switch channel {
+        case .createForMe: "Create one for me"
+        case .existing(let id): store.channelName(id).map { "#\($0)" } ?? "Choose"
+        }
+    }
 }

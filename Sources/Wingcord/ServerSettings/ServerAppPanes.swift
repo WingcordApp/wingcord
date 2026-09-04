@@ -299,16 +299,18 @@ struct ChannelPickerSheet: View {
 
 /// The levels every server has, and the AutoMod rules it has made.
 ///
-/// **Only the switch on a rule is offered, so far.** Creating one is a real
-/// surface — a trigger picker, per-trigger metadata, an action list and two
-/// exemption pickers — and it is not written yet. It is *buildable*: the route
-/// is documented, and `…/rules/validate` checks a metadata block before it is
-/// committed. The handoff carries the constraint table.
+/// Rules can now be built, edited and deleted — see `AutoModSheet`, which reads
+/// the four trigger-dependent constraints off `AutoModRule.Trigger` rather than
+/// re-deriving them.
 ///
-/// The switch itself is documentation-derived too: one AutoMod request exists
-/// across five captures and it is a `GET`.
+/// **The enable/disable switch is still the one route here nobody has watched.**
+/// The create is captured; `PATCH /auto-moderation/rules/{id}` is not.
 struct SafetyPane: View {
     let store: ServerSettingsStore
+
+    @State private var editing: AutoModRule?
+    @State private var creating = false
+    @State private var deleting: AutoModRule?
 
     var body: some View {
         LoadableContent(store.settings) { settings in
@@ -354,13 +356,65 @@ struct SafetyPane: View {
                     }
                 }
 
+                raidProtection(settings)
                 autoMod
             }
         }
     }
 
+    /// Two switches that are **guild features rather than fields**, both
+    /// captured as a whole `features` array on `PATCH /guilds/{id}`.
+    ///
+    /// `RAID_ALERTS_DISABLED` is **inverted** — its presence means the alerts
+    /// are off — which is the same shape as `SystemChannelFlags` and the same
+    /// trap: a client mapping the flag straight onto the switch shows every
+    /// server the opposite of the truth.
+    private func raidProtection(_ settings: GuildSettings) -> some View {
+        SettingsGroup("Raid protection") {
+            SettingsCard {
+                SettingsToggle(
+                    title: "Activity alerts",
+                    help: "Notifies moderators about unusual join or DM activity.",
+                    isOn: Binding(
+                        get: { !settings.features.contains("RAID_ALERTS_DISABLED") },
+                        set: { isOn in
+                            Task { await store.setFeature("RAID_ALERTS_DISABLED", isOn: !isOn) }
+                        }
+                    )
+                )
+                CardDivider()
+                SettingsToggle(
+                    title: "Restrict member prune to admins",
+                    help: "Only administrators and the owner can prune inactive members.",
+                    isOn: Binding(
+                        get: { settings.features.contains("PRUNE_REQUIRES_ADMIN") },
+                        set: { isOn in
+                            Task { await store.setFeature("PRUNE_REQUIRES_ADMIN", isOn: isOn) }
+                        }
+                    )
+                )
+            }
+            SettingsFootnote(
+                "CAPTCHA settings and the 2FA requirement are not here: the first "
+                    + "has no captured route, and the second needs an MFA-signed "
+                    + "request this client does not make."
+            )
+        }
+    }
+
     private var autoMod: some View {
         SettingsGroup("AutoMod") {
+            SettingsCard {
+                SettingsActionRow(
+                    "Create a rule",
+                    help: "Block words, spam, mention raids, or words in profiles.",
+                    actionTitle: "Create"
+                ) {
+                    creating = true
+                }
+            }
+            .padding(.bottom, Spacing.base)
+
             LoadableContent(
                 store.autoModRules,
                 isEmpty: \.isEmpty,
@@ -374,25 +428,75 @@ struct SafetyPane: View {
                 SettingsCard {
                     ForEach(Array(rules.enumerated()), id: \.element.id) { index, rule in
                         if index > 0 { CardDivider() }
-                        SettingsToggle(
-                            title: rule.name,
-                            help: ruleHelp(rule),
-                            isOn: Binding(
-                                get: { rule.isEnabled },
-                                set: { isOn in
-                                    Task {
-                                        await store.setAutoModRuleEnabled(rule.id, isEnabled: isOn)
-                                    }
-                                }
-                            )
-                        )
+                        ruleRow(rule)
                     }
                 }
             }
-            SettingsFootnote(
-                "Rules are built in Discord's own client. Wingcord can turn them "
-                    + "on and off, and states what each one does."
+        }
+        .sheet(isPresented: $creating) {
+            AutoModSheet(existing: nil, store: store) { draft, existing in
+                Task { await store.saveAutoModRule(draft, existing: existing) }
+            }
+        }
+        .sheet(item: $editing) { rule in
+            AutoModSheet(existing: rule, store: store) { draft, existing in
+                Task { await store.saveAutoModRule(draft, existing: existing) }
+            }
+        }
+    }
+
+    private func ruleRow(_ rule: AutoModRule) -> some View {
+        ObjectRow(
+            title: rule.name,
+            subtitle: ruleHelp(rule)
+        ) {
+            SettingsIconTile(
+                symbolName: "exclamationmark.shield.fill",
+                tint: rule.isEnabled ? .pink : .gray,
+                side: SettingsMetrics.navigationIconSide,
+                radius: SettingsMetrics.navigationIconRadius
             )
+        } trailing: {
+            HStack(spacing: Spacing.tight) {
+                Toggle("", isOn: Binding(
+                    get: { rule.isEnabled },
+                    set: { isOn in
+                        Task { await store.setAutoModRuleEnabled(rule.id, isEnabled: isOn) }
+                    }
+                ))
+                .toggleStyle(.switch)
+                .labelsHidden()
+                .controlSize(.small)
+                .tint(SettingsSurface.switchOn)
+
+                // **A rule this client cannot express is shown and left alone.**
+                // Editing it would mean saving the parts this build cannot draw
+                // as whatever the encoder defaulted to — see
+                // `AutoModDraft.isEditable`.
+                if AutoModDraft.isEditable(rule) {
+                    RowIconButton(symbolName: "pencil", label: "Edit \(rule.name)") {
+                        editing = rule
+                    }
+                }
+                RowIconButton(
+                    symbolName: "trash",
+                    label: "Delete \(rule.name)",
+                    role: .destructive
+                ) {
+                    deleting = rule
+                }
+            }
+        }
+        .destructiveConfirmation(
+            isPresented: Binding(
+                get: { deleting?.id == rule.id },
+                set: { if !$0 { deleting = nil } }
+            ),
+            title: "Delete \(rule.name)?",
+            message: "AutoMod stops acting on what this rule caught.",
+            confirmTitle: "Delete"
+        ) {
+            Task { await store.deleteAutoModRule(rule.id) }
         }
     }
 
