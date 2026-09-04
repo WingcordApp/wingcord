@@ -299,11 +299,14 @@ struct ChannelPickerSheet: View {
 
 /// The levels every server has, and the AutoMod rules it has made.
 ///
-/// **Only the switch on a rule is offered.** Building one means a trigger
-/// editor, an action editor, a keyword list and an exemption picker — four
-/// surfaces — and half of that shipped as read-only controls would be worse than
-/// none. What an administrator actually reaches for on this page is turning a
-/// rule off, and that is a route this client has.
+/// **Only the switch on a rule is offered, so far.** Creating one is a real
+/// surface — a trigger picker, per-trigger metadata, an action list and two
+/// exemption pickers — and it is not written yet. It is *buildable*: the route
+/// is documented, and `…/rules/validate` checks a metadata block before it is
+/// committed. The handoff carries the constraint table.
+///
+/// The switch itself is documentation-derived too: one AutoMod request exists
+/// across five captures and it is a `GET`.
 struct SafetyPane: View {
     let store: ServerSettingsStore
 

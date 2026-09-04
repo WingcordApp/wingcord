@@ -1004,10 +1004,17 @@ extension DiscordREST {
 
     /// Turns one rule on or off.
     ///
-    /// The only AutoMod write this client offers. Building a rule means a
-    /// trigger editor, an action editor, a keyword list and an exemption
-    /// picker; a switch is the part of that surface which is honest at this
-    /// size, and it is the one an administrator reaches for.
+    /// The only AutoMod write this client offers so far, and **not because the
+    /// rest cannot be built** — `POST /auto-moderation/rules` is fully
+    /// documented, and there is even a `…/rules/validate` route that checks a
+    /// trigger metadata block before you commit it. The editor is simply not
+    /// written yet; the handoff carries the constraint table it needs.
+    ///
+    /// **This route is documentation-derived, exactly like the create.** One
+    /// AutoMod request exists across all five captures and it is a `GET`, so
+    /// enabling a rule has never been watched happening either — the same
+    /// evidence tier as invite create. Worth knowing before this is cited as
+    /// the reason the others are absent.
     public func setAutoModRuleEnabled(
         _ ruleID: UInt64,
         in guildID: GuildID,
