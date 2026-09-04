@@ -329,6 +329,22 @@ public enum CDN {
     ///
     /// Always PNG and always small: it is drawn at eleven points beside nine-point
     /// letters, so there is nothing a larger rung buys.
+    /// A scheduled event's cover.
+    ///
+    /// `guild-events/`, not `guild-event-covers/` — the path does not follow
+    /// the field's name, which is `image`.
+    public static func scheduledEventCover(
+        eventID: UInt64,
+        hash: String,
+        side: CGFloat = 320,
+        scale: CGFloat = 2
+    ) -> URL? {
+        URL(
+            string: "\(host)/guild-events/\(eventID)/\(hash).png"
+                + "?size=\(rung(forSide: side, scale: scale))"
+        )
+    }
+
     public static func guildTagBadge(guildID: GuildID, hash: String) -> URL? {
         URL(string: "\(host)/clan-badges/\(guildID.rawValue)/\(hash).png?size=32")
     }

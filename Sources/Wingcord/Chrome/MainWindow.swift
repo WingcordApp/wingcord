@@ -260,7 +260,6 @@ private struct ChannelSidebarContainer: View {
             },
             toggleCategory: { model.toggleCategory($0) },
             openSurface: { model.openSurface($0) },
-            openGuildMenu: {}
         )
         .equatable()
     }

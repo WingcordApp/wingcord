@@ -115,6 +115,16 @@ struct SoundboardSoundDTO: Decodable, Sendable {
     var guild_id: GuildID?
     var available: Bool?
     var user_id: UserID?
+    /// The uploader, as a whole object.
+    ///
+    /// **Two shapes for one fact.** The gateway's `SOUNDBOARD_SOUNDS` carries
+    /// `user_id`; the REST list and the create response carry a whole `user`.
+    /// Both are decoded and `uploaderID` is the one place they are reconciled,
+    /// so the management page does not care which route it was handed.
+    var user: UserDTO?
+
+    /// Who uploaded it, from whichever of the two shapes arrived.
+    var uploaderID: UserID? { user?.id ?? user_id }
 
     var domain: SoundboardSound {
         SoundboardSound(

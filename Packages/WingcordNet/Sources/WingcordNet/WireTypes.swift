@@ -171,6 +171,11 @@ struct RoleDTO: Decodable, Sendable {
     var mentionable: Bool?
     var icon: String?
     var unicode_emoji: String?
+    var description: String?
+    /// The gradient stops, beside the deprecated flat `color`. Decoded so the
+    /// role editor can write them back — see `Role.colors`.
+    var colors: RoleColorsDTO?
+    var flags: Int?
 
     var domain: Role {
         Role(
@@ -183,7 +188,24 @@ struct RoleDTO: Decodable, Sendable {
             isManaged: managed ?? false,
             isMentionable: mentionable ?? false,
             iconHash: icon,
-            unicodeEmoji: unicode_emoji
+            unicodeEmoji: unicode_emoji,
+            description: description.nonEmpty,
+            colors: colors?.domain,
+            flags: flags ?? 0
+        )
+    }
+}
+
+struct RoleColorsDTO: Decodable, Sendable {
+    var primary_color: UInt32?
+    var secondary_color: UInt32?
+    var tertiary_color: UInt32?
+
+    var domain: RoleColors {
+        RoleColors(
+            primary: primary_color ?? 0,
+            secondary: secondary_color,
+            tertiary: tertiary_color
         )
     }
 }
@@ -1293,6 +1315,12 @@ struct GuildProfileDTO: Decodable, Sendable {
     var features: [String]?
     var premium_subscription_count: Int?
     var premium_tier: Int?
+    /// The **Banner** swatch grid, despite the name. See
+    /// `GuildProfile.brandColorPrimary`.
+    var brand_color_primary: String?
+    var visibility: Int?
+    var badge: Int?
+    var game_application_ids: [ApplicationID]?
 
     struct TraitDTO: Decodable, Sendable {
         var emoji_id: EmojiID?
@@ -1341,7 +1369,12 @@ struct GuildProfileDTO: Decodable, Sendable {
             traits: traitList,
             features: Set(features ?? []),
             premiumSubscriptionCount: premium_subscription_count ?? 0,
-            premiumTier: premium_tier ?? 0
+            premiumTier: premium_tier ?? 0,
+            brandColorPrimary: Self.color(brand_color_primary),
+            visibility: visibility ?? 1,
+            badge: badge ?? 0,
+            customBannerHash: custom_banner_hash,
+            gameApplicationIDs: game_application_ids ?? []
         )
     }
 

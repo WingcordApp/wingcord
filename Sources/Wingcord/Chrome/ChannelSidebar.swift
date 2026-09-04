@@ -39,7 +39,6 @@ struct ChannelSidebar: View, Equatable {
     var openVoiceChat: (ChannelID) -> Void = { _ in }
     var toggleCategory: (ChannelID) -> Void = { _ in }
     var openSurface: (GuildSurface) -> Void = { _ in }
-    var openGuildMenu: () -> Void = {}
 
     @Environment(\.motion) private var motion
     /// Shared namespace so the selection pill *flows* from row to row rather
@@ -112,7 +111,7 @@ struct ChannelSidebar: View, Equatable {
         // row is a menu button and a spacer, and a spacer has no hit region.
         .overlay(alignment: .topLeading) {
             if hasBanner, let header = presentation.header {
-                ServerNamePill(name: header.name, openMenu: openGuildMenu)
+                ServerNamePill(name: header.name, guildID: header.guildID)
                     .padding(.leading, SidebarBannerLayout.pillLeading)
                     .padding(.trailing, Spacing.snug)
                     .offset(y: layout.pillTop)
@@ -146,7 +145,7 @@ struct ChannelSidebar: View, Equatable {
                         // destination rather than a server: there is nothing to
                         // invite anyone to, nothing to configure, and nothing
                         // to leave.
-                        openMenu: header.guildID == nil ? nil : openGuildMenu
+                        guildID: header.guildID
                     )
                     .equatable()
                 }
@@ -391,14 +390,14 @@ struct ChannelSidebar: View, Equatable {
 /// pill cannot be in; `ServerTitleItem` covers the ones it cannot reach.
 private struct ServerNamePill: View {
     var name: String
-    var openMenu: () -> Void
+    var guildID: GuildID?
 
     @Environment(\.motion) private var motion
 
     var body: some View {
         HStack(spacing: Spacing.base) {
             Menu {
-                ServerMenuContent(action: openMenu)
+                ServerMenuContent(guildID: guildID)
             } label: {
                 label
             }
@@ -460,11 +459,11 @@ private struct ServerTitleItem: View, Equatable {
     /// The widest the label may draw. See `SidebarBannerLayout.toolbarTitleWidth`
     /// — over the span, the toolbar drops the item rather than truncating it.
     var maxWidth: CGFloat
-    /// What the chevron opens. **Nil is the direct-message home**, which is a
-    /// destination and not a server: it has no invite, no settings and nothing
-    /// to leave, and a menu offering all three is three commands that cannot
-    /// mean anything. Without it this is a label rather than a control.
-    var openMenu: (() -> Void)?
+    /// Whose menu the chevron opens. **Nil is the direct-message home**, which
+    /// is a destination and not a server: it has no invite, no settings and
+    /// nothing to leave, and a menu offering all three is three commands that
+    /// cannot mean anything. Without it this is a label rather than a control.
+    var guildID: GuildID?
 
     @Environment(\.motion) private var motion
 
@@ -476,14 +475,14 @@ private struct ServerTitleItem: View, Equatable {
     static func == (lhs: ServerTitleItem, rhs: ServerTitleItem) -> Bool {
         lhs.name == rhs.name
             && lhs.maxWidth == rhs.maxWidth
-            && (lhs.openMenu == nil) == (rhs.openMenu == nil)
+            && lhs.guildID == rhs.guildID
     }
 
     var body: some View {
         Group {
-            if let openMenu {
+            if guildID != nil {
                 Menu {
-                    ServerMenuContent(action: openMenu)
+                    ServerMenuContent(guildID: guildID)
                 } label: {
                     title
                 }
@@ -540,7 +539,7 @@ private struct ServerTitleItem: View, Equatable {
     /// has to come out of it rather than be added on top — otherwise the fix for
     /// a cramped short name is what makes a long one disappear.
     private var labelWidthCap: CGFloat {
-        openMenu == nil ? max(20, maxWidth - Self.bareLabelInset * 2) : maxWidth
+        guildID == nil ? max(20, maxWidth - Self.bareLabelInset * 2) : maxWidth
     }
 
     @ViewBuilder
@@ -558,7 +557,7 @@ private struct ServerTitleItem: View, Equatable {
                 label
             }
         }
-        .padding(.horizontal, openMenu == nil ? Self.bareLabelInset : 0)
+        .padding(.horizontal, guildID == nil ? Self.bareLabelInset : 0)
     }
 
     /// What the label would take if nothing stopped it.
@@ -582,15 +581,36 @@ private struct ServerTitleItem: View, Equatable {
     }
 }
 
+/// The server's own menu, under the name.
+///
+/// **Every item here does something.** It used to carry five, all of them wired
+/// to one no-op closure — Invite People, Server Settings, Mark as Read, Leave
+/// Server — and now that two of them are real the other three cannot stay:
+/// `INVARIANTS.md` §5.5, "an inert control teaches people to distrust the live
+/// ones beside it". Mark as Read and Leave Server come back when there is a
+/// route behind them.
 private struct ServerMenuContent: View {
-    var action: () -> Void
+    /// Nil for the direct-message home, which is a destination rather than a
+    /// server. The caller already refuses to draw the pill there; this is the
+    /// second guard, because the menu is also reachable from the toolbar title.
+    var guildID: GuildID?
 
     var body: some View {
-        Button("Invite People", systemImage: "person.badge.plus", action: action)
-        Button("Server Settings", systemImage: "gearshape", action: action)
-        Divider()
-        Button("Mark as Read", systemImage: "checkmark.message", action: action)
-        Divider()
-        Button("Leave Server", systemImage: "rectangle.portrait.and.arrow.right", role: .destructive, action: action)
+        if let guildID {
+            Button("Server Settings", systemImage: "gearshape") {
+                ServerSettingsWindow.open(guildID)
+            }
+            Button("Invite People", systemImage: "person.badge.plus") {
+                // The same window, on the page that makes the link. A second
+                // sheet that made one invite would be a second implementation
+                // of a form the settings window already has.
+                ServerSettingsWindow.open(guildID, section: .invites)
+            }
+            Divider()
+            Button("Copy Server ID", systemImage: "number") {
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString(String(guildID.rawValue), forType: .string)
+            }
+        }
     }
 }

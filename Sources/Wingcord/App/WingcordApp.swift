@@ -93,6 +93,7 @@ struct WingcordApp: App {
                 .mirrorsUnreadCountOnDock()
                 .installsGlobalHotkey()
                 .providesSettingsWindow()
+                .providesServerSettingsWindow()
                 .showsPerformanceInspector()
                 .presentsMedia()
                 .presentsMessageActions()
@@ -128,6 +129,28 @@ struct WingcordApp: App {
         .windowResizability(.contentMinSize)
         // The scene inherits no File menu of its own; the app has one workspace
         // and one settings window, and neither is a document.
+        .commandsRemoved()
+
+        // A server's own settings.
+        //
+        // **A `WindowGroup` here, where the two above are single `Window`s**,
+        // and the difference is the point: this scene is *about* something. Two
+        // servers' settings can be open at once — comparing two permission sets
+        // is the most ordinary reason to want that — so the scene takes a value
+        // and macOS keys a window per server off it.
+        WindowGroup(id: ServerSettingsWindow.sceneID, for: ServerSettingsTarget.self) { target in
+            if let value = target.wrappedValue {
+                ServerSettingsView(target: value, model: model, controller: model.sessionController)
+                    .resolvesMotion()
+                    .environment(model)
+            }
+        }
+        .defaultSize(
+            width: SettingsMetrics.defaultWidth,
+            height: SettingsMetrics.defaultHeight
+        )
+        .defaultPosition(.center)
+        .windowResizability(.contentMinSize)
         .commandsRemoved()
     }
 }

@@ -19,6 +19,19 @@ public struct Role: Hashable, Sendable, Identifiable, Codable {
     public var isMentionable: Bool
     public var iconHash: String?
     public var unicodeEmoji: String?
+    /// The role's own short description, on the roles page only.
+    public var description: String?
+    /// The gradient, where the server has `ENHANCED_ROLE_COLORS`.
+    ///
+    /// **Carried even though nothing draws it yet**, because the role editor
+    /// writes the whole role back — every captured `PATCH /roles/{id}` sends
+    /// `color` *and* `colors` — and a client that decoded only `colorValue`
+    /// would flatten somebody's three-stop gradient to its first stop the
+    /// moment they renamed the role. Round-tripping a field you do not render
+    /// is much cheaper than losing somebody's data.
+    public var colors: RoleColors?
+    /// Discord's role flags. `1 << 0` marks a role selectable in onboarding.
+    public var flags: Int
 
     public init(
         id: RoleID,
@@ -30,7 +43,10 @@ public struct Role: Hashable, Sendable, Identifiable, Codable {
         isManaged: Bool = false,
         isMentionable: Bool = false,
         iconHash: String? = nil,
-        unicodeEmoji: String? = nil
+        unicodeEmoji: String? = nil,
+        description: String? = nil,
+        colors: RoleColors? = nil,
+        flags: Int = 0
     ) {
         self.id = id
         self.name = name
@@ -42,7 +58,25 @@ public struct Role: Hashable, Sendable, Identifiable, Codable {
         self.isMentionable = isMentionable
         self.iconHash = iconHash
         self.unicodeEmoji = unicodeEmoji
+        self.description = description
+        self.colors = colors
+        self.flags = flags
     }
+
+    /// Whether this is the server's `@everyone` role.
+    ///
+    /// **The id equals the guild's**, which is Discord's own convention and the
+    /// only reliable test — the name is localised and can be changed.
+    public func isEveryone(in guildID: GuildID) -> Bool {
+        id.rawValue == guildID.rawValue
+    }
+
+    /// Whether the roles page may offer to edit or delete this role.
+    ///
+    /// A managed role belongs to an integration — a bot's own role, a Twitch
+    /// subscriber role, a boost role — and Discord refuses both. `INVARIANTS.md`
+    /// §5.5: a control that cannot work must not look like one that can.
+    public var isEditable: Bool { !isManaged }
 
     /// Nil when the role sets no colour. Every renderer takes the nil branch and
     /// falls back to the default text colour; none of them re-derives the
@@ -59,6 +93,26 @@ public struct Role: Hashable, Sendable, Identifiable, Codable {
             ? lhs.position > rhs.position
             : lhs.id.rawValue < rhs.id.rawValue
     }
+}
+
+/// A role's up-to-three colour stops.
+///
+/// Discord sends this beside the deprecated flat `color`, and sends **both** on
+/// every write. `primary` duplicates `color` on a solid role; a gradient sets
+/// the second and third.
+public struct RoleColors: Hashable, Sendable, Codable {
+    public var primary: UInt32
+    public var secondary: UInt32?
+    public var tertiary: UInt32?
+
+    public init(primary: UInt32, secondary: UInt32? = nil, tertiary: UInt32? = nil) {
+        self.primary = primary
+        self.secondary = secondary
+        self.tertiary = tertiary
+    }
+
+    /// Whether the role uses more than one stop.
+    public var isGradient: Bool { secondary != nil || tertiary != nil }
 }
 
 /// A member of a guild: the account, plus everything true only inside that

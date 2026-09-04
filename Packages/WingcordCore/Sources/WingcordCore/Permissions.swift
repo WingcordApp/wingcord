@@ -17,6 +17,14 @@ public struct Permissions: OptionSet, Hashable, Sendable, Codable {
         rawValue = UInt64(string) ?? 0
     }
 
+    /// The form Discord's write routes want: a **decimal string**, not a number.
+    ///
+    /// The bitfield is already wider than a JSON number can carry exactly, which
+    /// is why Discord sends and takes it as text — encoding it as an integer
+    /// works for every permission set anybody tests with and silently loses the
+    /// low bits of one that uses a high flag.
+    public var apiString: String { String(rawValue) }
+
     public static let createInvite = Permissions(rawValue: 1 << 0)
     public static let kickMembers = Permissions(rawValue: 1 << 1)
     public static let banMembers = Permissions(rawValue: 1 << 2)
@@ -60,9 +68,24 @@ public struct Permissions: OptionSet, Hashable, Sendable, Codable {
     public static let moderateMembers = Permissions(rawValue: 1 << 40)
     public static let viewCreatorMonetizationAnalytics = Permissions(rawValue: 1 << 41)
     public static let useSoundboard = Permissions(rawValue: 1 << 42)
+    public static let createExpressions = Permissions(rawValue: 1 << 43)
+    public static let createEvents = Permissions(rawValue: 1 << 44)
     public static let useExternalSounds = Permissions(rawValue: 1 << 45)
     public static let sendVoiceMessages = Permissions(rawValue: 1 << 46)
+    // 1 << 47 was `USE_CLYDE_AI` and is retired. Left as a gap rather than
+    // renumbered: a role created while it existed still carries the bit, and
+    // reusing 47 would read somebody's dead Clyde grant as whatever went there.
+    public static let setVoiceChannelStatus = Permissions(rawValue: 1 << 48)
     public static let sendPolls = Permissions(rawValue: 1 << 49)
+    public static let useExternalApps = Permissions(rawValue: 1 << 50)
+    /// Split out of `manageMessages`, and the audit log records the migration
+    /// as its own action (212). A server that has been migrated grants pinning
+    /// through this bit alone.
+    public static let pinMessages = Permissions(rawValue: 1 << 51)
+    /// Also split out of `manageMessages`, alongside `manageChannels` and
+    /// `manageThreads` — audit action 213.
+    public static let bypassSlowmode = Permissions(rawValue: 1 << 52)
+    public static let manageOfficialMessages = Permissions(rawValue: 1 << 53)
 }
 
 /// Resolves what one member may do in one channel.

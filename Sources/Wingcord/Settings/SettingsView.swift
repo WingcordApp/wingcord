@@ -410,7 +410,7 @@ private struct SettingsHistoryControl: View {
 }
 
 /// Brings the source list back. Shown only while it is away.
-private struct SettingsSidebarButton: View {
+struct SettingsSidebarButton: View {
     var action: () -> Void
 
     @Environment(\.motion) private var motion

@@ -599,6 +599,143 @@ public actor DiscordREST {
         let envelope = try? JSONDecoder().decode(ErrorEnvelope.self, from: data)
         return .api(status: status, code: envelope?.code, message: envelope?.message)
     }
+
+    // MARK: Multipart
+    //
+    // **One route in this whole client needs this**, and there is no way to know
+    // that except by capturing it: creating a sticker is `multipart/form-data`
+    // while creating an emoji, one page over in the same window, is JSON with a
+    // base64 data URI. Two uploads, two encodings, and Discord's own
+    // documentation describes neither.
+    //
+    // So this is deliberately not a general uploader. It takes the parts a
+    // sticker needs — a few short text fields and one file — and nothing else,
+    // because a general one would be machinery built for a single caller.
+
+    /// One part of a multipart body.
+    struct MultipartPart: Sendable {
+        var name: String
+        var value: Value
+
+        enum Value: Sendable {
+            case text(String)
+            /// A file, with the filename and content type the part declares.
+            ///
+            /// **The declared type need not match the filename**, and in the
+            /// captured request it does not: the reference client sends
+            /// `filename="474344.jpg"` with `Content-Type: image/png`, because
+            /// it re-encoded the image when it cropped it. Both are therefore
+            /// carried separately rather than derived from each other.
+            case file(Data, filename: String, contentType: String)
+        }
+
+        static func text(_ name: String, _ value: String) -> MultipartPart {
+            MultipartPart(name: name, value: .text(value))
+        }
+
+        static func file(
+            _ name: String,
+            _ data: Data,
+            filename: String,
+            contentType: String
+        ) -> MultipartPart {
+            MultipartPart(name: name, value: .file(data, filename: filename, contentType: contentType))
+        }
+    }
+
+    /// Sends a `multipart/form-data` request.
+    ///
+    /// The boundary is generated per request from a UUID. A fixed one would
+    /// work until the day a caller uploads a file whose bytes contain it, and
+    /// the failure then is a 400 that names the wrong field.
+    func requestMultipart<T: Decodable>(
+        method: String,
+        path: String,
+        route: String,
+        parts: [MultipartPart],
+        as type: T.Type
+    ) async throws -> T {
+        await limiter.acquire(route: route)
+
+        let boundary = "wingcord.\(UUID().uuidString)"
+        var request = URLRequest(url: metadata.apiBase.appending(path: path))
+        request.httpMethod = method
+        metadata.apply(to: &request, token: token)
+        request.setValue(
+            "multipart/form-data; boundary=\(boundary)",
+            forHTTPHeaderField: "Content-Type"
+        )
+        request.httpBody = Self.multipartBody(parts: parts, boundary: boundary)
+
+        let data: Data
+        let response: URLResponse
+        do {
+            (data, response) = try await session.data(for: request)
+        } catch {
+            throw Failure.transport(error.localizedDescription)
+        }
+        guard let http = response as? HTTPURLResponse else {
+            throw Failure.transport("no HTTP response")
+        }
+        await limiter.update(route: route, headers: http.allHeaderFields, statusCode: http.statusCode)
+
+        guard (200..<300).contains(http.statusCode) else {
+            switch http.statusCode {
+            case 401: throw Failure.unauthorized
+            case 403: throw Failure.forbidden
+            case 404: throw Failure.notFound
+            default: throw Self.apiFailure(status: http.statusCode, data: data)
+            }
+        }
+        do {
+            return try decoder.decode(T.self, from: data)
+        } catch {
+            Self.log.error("decode failed for \(route, privacy: .public): \(error)")
+            throw Failure.decoding(String(describing: error))
+        }
+    }
+
+    /// Builds the body.
+    ///
+    /// Static and pure so it is testable without a socket, and so the one thing
+    /// that is easy to get wrong here — CRLF everywhere, including the pair that
+    /// closes the final boundary — is checkable against a captured body.
+    static func multipartBody(parts: [MultipartPart], boundary: String) -> Data {
+        var body = Data()
+        // Reserving up front matters: a sticker is half a megabyte and appending
+        // it to an empty `Data` reallocates its way there.
+        let fileBytes = parts.reduce(0) { total, part in
+            if case .file(let data, _, _) = part.value { return total + data.count }
+            return total + 128
+        }
+        body.reserveCapacity(fileBytes + parts.count * 128 + 64)
+
+        func append(_ text: String) {
+            // UTF-8 of an ASCII-plus-header string never fails to encode, and a
+            // label may legitimately carry an emoji.
+            body.append(Data(text.utf8))
+        }
+
+        for part in parts {
+            append("--\(boundary)\r\n")
+            switch part.value {
+            case .text(let value):
+                append("Content-Disposition: form-data; name=\"\(part.name)\"\r\n\r\n")
+                append(value)
+                append("\r\n")
+            case .file(let data, let filename, let contentType):
+                append(
+                    "Content-Disposition: form-data; name=\"\(part.name)\";"
+                        + " filename=\"\(filename)\"\r\n"
+                )
+                append("Content-Type: \(contentType)\r\n\r\n")
+                body.append(data)
+                append("\r\n")
+            }
+        }
+        append("--\(boundary)--\r\n")
+        return body
+    }
 }
 
 extension ISO8601DateFormatter {
