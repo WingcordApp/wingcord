@@ -220,26 +220,38 @@ nonisolated enum MemberRowPainter {
     // on every pointer move was building forty of it a frame for a value that
     // cannot change.
     //
-    // `nonisolated(unsafe)` for the same reason `MemberRowGeometry.tagChipFont`
-    // is: a `CGGradient` is immutable once created and neither of these is ever
-    // written after first use, while `static let` initialisation is itself
-    // thread-safe.
-
-    private nonisolated(unsafe) static let plateScrim: CGGradient? = CGGradient(
-        colorsSpace: CGColorSpaceCreateDeviceRGB(),
-        colors: [
-            NSColor.black.withAlphaComponent(0.72).cgColor,
-            NSColor.black.withAlphaComponent(0.30).cgColor,
-            NSColor.clear.cgColor,
-        ] as CFArray,
-        locations: [0, 0.45, 1]
-    )
+    // The palette washes below are the reader's *content* — twelve fixed hues
+    // Discord sells — so they are `nonisolated(unsafe)` statics for the same
+    // reason `MemberRowGeometry.tagChipFont` is: immutable once created, never
+    // written after first use, and `static let` initialisation is thread-safe.
+    //
+    // The **scrim** is not one of them. It is the theme's own surface colour and
+    // has to be rebuilt when the theme changes, so it lives on `ThemeInk` beside
+    // every other themed value a painter draws with — a static here was black,
+    // which is a hole in whatever colour the reader chose.
 
     /// One wash per palette, keyed so a draw is a dictionary lookup.
     ///
     /// Twelve at most, and only those with a colour — `.none` is a real answer
     /// and gets no entry, so a plate that asked for no wash cannot be given one
     /// by a fallback.
+    /// What erases the artwork's leading half.
+    ///
+    /// Opaque at the leading edge and gone by the time the strip's own pixels
+    /// begin, so a name always sits on the row's background rather than on a
+    /// picture. It is drawn with `destinationOut`, so only the *alpha* matters —
+    /// the colour is black because a fully-opaque something is what erases, and
+    /// which something is irrelevant.
+    private nonisolated(unsafe) static let plateFade: CGGradient? = CGGradient(
+        colorsSpace: CGColorSpaceCreateDeviceRGB(),
+        colors: [
+            CGColor(gray: 0, alpha: 1),
+            CGColor(gray: 0, alpha: 0.75),
+            CGColor(gray: 0, alpha: 0),
+        ] as CFArray,
+        locations: [0, 0.22, 0.62]
+    )
+
     private nonisolated(unsafe) static let plateWashes: [NameplatePalette: CGGradient] = {
         let space = CGColorSpace(name: CGColorSpace.sRGB) ?? CGColorSpaceCreateDeviceRGB()
         var table: [NameplatePalette: CGGradient] = [:]
@@ -314,16 +326,29 @@ nonisolated enum MemberRowPainter {
                 )
             }
 
-            // 2. The artwork: fit to the plate's height, hung off its trailing
-            // edge — see `MemberRowGeometry.nameplateArtRect`, which carries
-            // the measurement that settled the rule.
+            // 2. The artwork, FADED OUT toward the leading edge.
             //
-            // **Not aspect-fill, which is what this was.** Fill takes whichever
-            // of the two fits is larger, so it lands on the height for a
-            // two-line plate and on the width for a one-line one — and the
-            // second stretches the strip vertically, because the drawn height
-            // is the plate's either way. Half the roster's roses came out as
-            // ellipses.
+            // **The fade erases the picture; it does not paint over it.** This
+            // used to be a scrim — a wash laid on top, opaque under the name and
+            // clear over the roses — and a scrim is a *colour*, so it can only
+            // ever be the right one by accident. Black left a hole in whatever
+            // theme the reader chose; the theme's own surface left a lighter
+            // rectangle, because the roster's ground is the canvas under a
+            // recess and not the surface. Either way the plate read as a box
+            // sitting on the list rather than as artwork emerging out of it.
+            //
+            // Erasing has no colour to be wrong about. The strip is drawn into a
+            // transparency layer and a `destinationOut` ramp takes its leading
+            // half away, so what shows through is exactly the row's own
+            // background — whatever that happens to be — and the picture fades
+            // into it instead of stopping against a plate.
+            //
+            // Fit to the plate's HEIGHT and hung off its trailing edge — see
+            // `MemberRowGeometry.nameplateArtRect`, which carries the
+            // measurement that settled the rule. **Not aspect-fill**: fill takes
+            // whichever of the two fits is larger, which lands on the width for
+            // a wide plate and stretches the strip vertically.
+            context.beginTransparencyLayer(auxiliaryInfo: nil)
             TimelineRowPainter.drawFlipped(
                 image,
                 in: MemberRowGeometry.nameplateArtRect(
@@ -332,19 +357,17 @@ nonisolated enum MemberRowPainter {
                 ),
                 context: context
             )
-
-            // 3. The scrim. Opaque under the text, clear over the artwork —
-            // this is what makes a light plate survive a light name, and it is
-            // why the plate is a painter concern rather than a background
-            // image.
-            if let scrim = plateScrim {
+            if let fade = plateFade {
+                context.setBlendMode(.destinationOut)
                 context.drawLinearGradient(
-                    scrim,
+                    fade,
                     start: CGPoint(x: rect.minX, y: rect.midY),
                     end: CGPoint(x: rect.maxX, y: rect.midY),
                     options: []
                 )
+                context.setBlendMode(.normal)
             }
+            context.endTransparencyLayer()
 
             if isHovered {
                 context.setFillColor(NSColor.white.withAlphaComponent(0.06).cgColor)

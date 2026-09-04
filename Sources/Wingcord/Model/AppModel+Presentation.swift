@@ -149,7 +149,14 @@ extension AppModel {
             status: selfStatus,
             customStatus: selfCustomStatus,
             isMuted: isSelfMuted,
-            isDeafened: isSelfDeafened
+            isDeafened: isSelfDeafened,
+            // Offered only when the reader asked for it. The strip is fetched at
+            // the bar's own width, which is what keeps a 672-pixel asset from
+            // being decoded at CDN size for a 240-point capsule.
+            nameplateURL: AppSettings.shared.showsNameplateInNowBar
+                ? user?.decoration?.nameplate?.artworkURL
+                : nil,
+            nameplatePalette: user?.decoration?.nameplate?.palette ?? .none
         )
     }
 
@@ -282,6 +289,7 @@ extension AppModel {
             name: displayName(of: channel),
             symbolName: channel.kind.symbolName,
             topic: channel.topic,
+            isTopicShown: openTopicChannelID == channelID,
             isMemberListShown: isMemberListShown,
             canShowMemberList: channel.guildID != nil
                 || channel.kind == .groupDirectMessage,
@@ -698,6 +706,9 @@ extension AppModel {
         // clicking the row you came from leaves the page up and does nothing.
         openGuildSurface = nil
         previewedChannelID = nil
+        // A flyout describes the channel it was opened on. Carrying it across
+        // is a card that names one channel while the transcript shows another.
+        openTopicChannelID = nil
         guard selectedChannelID != channelID else { return }
         selectedChannelID = channelID
         let guildID = channelIndex.guildID(of: channelID)

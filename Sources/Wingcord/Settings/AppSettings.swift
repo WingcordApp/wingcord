@@ -241,6 +241,31 @@ final class AppSettings {
         didSet { defaults.set(loadsImagesAutomatically, forKey: Key.loadsImages) }
     }
 
+    /// The identity bar's silhouette. See `ChromeShape`.
+    ///
+    /// **Its own preference, separate from the composer's.** The two bars are
+    /// the same kind of object but they are not the same object: one is a fixed
+    /// 46-point capsule at the foot of a column, the other grows with what is
+    /// typed into it, and a pill reads differently on each. One setting for both
+    /// forced a choice nobody made.
+    var nowBarShape: ChromeShape = .boxy {
+        didSet { defaults.set(nowBarShape.rawValue, forKey: Key.nowBarShape) }
+    }
+
+    /// The composer's silhouette.
+    var composerShape: ChromeShape = .boxy {
+        didSet { defaults.set(composerShape.rawValue, forKey: Key.composerShape) }
+    }
+
+    /// Whether the now bar wears the reader's own nameplate.
+    ///
+    /// A preference rather than always-on: a nameplate is artwork behind the
+    /// one control that is always on screen, and somebody who bought a loud one
+    /// may still want a quiet sidebar.
+    var showsNameplateInNowBar = true {
+        didSet { defaults.set(showsNameplateInNowBar, forKey: Key.nowBarNameplate) }
+    }
+
     // MARK: Media
 
     /// The viewer's playback volume, shared by every clip.
@@ -465,6 +490,11 @@ final class AppSettings {
         showsEmbeds = defaults.object(forKey: Key.showsEmbeds) as? Bool ?? true
         playsAnimatedContent = defaults.object(forKey: Key.playsAnimated) as? Bool ?? true
         loadsImagesAutomatically = defaults.object(forKey: Key.loadsImages) as? Bool ?? true
+        nowBarShape = (defaults.object(forKey: Key.nowBarShape) as? String)
+            .flatMap(ChromeShape.init(rawValue:)) ?? .boxy
+        composerShape = (defaults.object(forKey: Key.composerShape) as? String)
+            .flatMap(ChromeShape.init(rawValue:)) ?? .boxy
+        showsNameplateInNowBar = defaults.object(forKey: Key.nowBarNameplate) as? Bool ?? true
         showsPerformanceInspector = defaults.object(forKey: Key.showsInspector) as? Bool ?? false
         developerMode = defaults.object(forKey: Key.developerMode) as? Bool ?? false
         storedMediaVolume = defaults.object(forKey: Key.mediaVolume) as? Double ?? 1
@@ -584,6 +614,9 @@ final class AppSettings {
         static let showsEmbeds = "chat.showsEmbeds"
         static let playsAnimated = "chat.playsAnimatedContent"
         static let loadsImages = "chat.loadsImagesAutomatically"
+        static let nowBarShape = "appearance.nowBarShape"
+        static let composerShape = "appearance.composerShape"
+        static let nowBarNameplate = "appearance.nowBarNameplate"
         static let showsInspector = "diagnostics.showsPerformanceInspector"
         static let developerMode = "advanced.developerMode"
         static let launchDestination = "startup.launchDestination"

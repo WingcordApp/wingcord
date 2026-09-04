@@ -91,9 +91,23 @@ struct GuildRailTile: View {
                 .opacity(guild.isMuted && !isSelected ? 0.55 : 1)
                 .frame(maxWidth: .infinity, alignment: .center)
             }
+            // **The hit region is declared, never inferred from what is
+            // visible.** The still underneath is taken to zero opacity the
+            // moment the filmstrip has frames, and the filmstrip itself refuses
+            // hits — so on an animated icon the button's only remaining
+            // hit-testable content was the four-point indicator capsule at the
+            // leading edge. The tile looked pressable and swallowed every click
+            // until the animation happened not to be running, which is exactly
+            // "I have to hover twice before a server opens".
+            //
+            // Declared on the LABEL rather than outside the button: a
+            // `.contentShape` outside a `Button` describes the button's own
+            // frame, and it is the label that decides what a plain-styled
+            // button hit-tests.
+            .frame(width: Proportions.railWidth, height: side)
+            .contentShape(.rect)
         }
         .buttonStyle(.plain)
-        .frame(width: Proportions.railWidth, height: side)
         // The guard is on the MODIFIER, not inside the closure. `.onHover`
         // compiles to an AppKit tracking area whose geometry is re-derived
         // whenever its visible rect moves — every frame of every scroll —
@@ -108,11 +122,12 @@ struct GuildRailTile: View {
         }
         .animation(motion.hover, value: isHovering)
         .animation(motion.glassMorph, value: isSelected)
-        // **A flyout, not `.help()`.** A rail tile is a wordless 44-point
-        // picture, so its name is the only thing that identifies it — and a
-        // system tooltip answers that most of a second after the reader gave up
-        // asking, in a box drawn in nothing this app's design system shares.
-        .hoverFlyout(guild.name)
+        // **A published anchor, not a popover.** A rail tile is a wordless
+        // 44-point picture, so its name is the only thing that identifies it —
+        // and it has to arrive while the reader is still asking. One chip is
+        // drawn for the whole rail and travels between tiles; see
+        // `RailHoverLabel`.
+        .railHoverLabel(guild.name, isHovered: isHovering)
         .accessibilityLabel(Text(guild.name))
         .accessibilityAddTraits(isSelected ? [.isButton, .isSelected] : .isButton)
     }
@@ -152,16 +167,20 @@ struct HomeRailTile: View {
                     }
                     .frame(maxWidth: .infinity, alignment: .center)
             }
+            // The whole column is the target, for the reason above: the rail is
+            // a strip of 44-point pictures and aiming between them should not
+            // miss.
+            .frame(width: Proportions.railWidth, height: side)
+            .contentShape(.rect)
         }
         .buttonStyle(.plain)
-        .frame(width: Proportions.railWidth, height: side)
         .onHover { hovering in
             guard isHovering != hovering else { return }
             isHovering = hovering
         }
         .animation(motion.hover, value: isHovering)
         .animation(motion.glassMorph, value: isSelected)
-        .hoverFlyout("Direct Messages")
+        .railHoverLabel("Direct Messages", isHovered: isHovering)
         .accessibilityLabel(Text("Direct Messages"))
         .accessibilityAddTraits(isSelected ? [.isButton, .isSelected] : .isButton)
     }

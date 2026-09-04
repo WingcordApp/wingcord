@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import WingcordCore
 
@@ -311,5 +312,27 @@ extension AppModel {
             selectGuild(nil)
         }
         sessionController.jumpToMessage(link.messageID, in: link.channelID)
+    }
+
+    /// Follows a link somebody wrote — in a message, in a bio, in a status.
+    ///
+    /// **One opener for every surface**, because two of them is two places for
+    /// the boundary below to be got right. A link into this account goes to the
+    /// channel it names; everything else goes to the browser, and only after the
+    /// scheme has been checked *here* rather than trusted from wherever the
+    /// string came from. `INVARIANTS.md` §5.5: a client that navigates on an
+    /// unchecked host is a client anybody who can write to it can steer.
+    func openLink(_ string: String) {
+        // A Discord message link the renderer could not name is still a place in
+        // this account. The store has the whole index, so it can answer what a
+        // single surface could not.
+        if let link = MessageLink.parse(string), channelIndex[link.channelID] != nil {
+            openMessageLink(link)
+            return
+        }
+        guard InlineScannerSchemeCheck.isSafe(string), let url = URL(string: string) else {
+            return
+        }
+        NSWorkspace.shared.open(url)
     }
 }

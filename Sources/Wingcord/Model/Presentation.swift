@@ -240,6 +240,14 @@ struct NowBarPresentation: Hashable, Sendable {
     var customStatus: String?
     var isMuted: Bool
     var isDeafened: Bool
+    /// The reader's own nameplate, when they wear one.
+    ///
+    /// **The artwork and the wash, exactly as the roster carries them.** A plate
+    /// is a strip whose leading two thirds are transparent plus a palette that
+    /// grounds it — see `Nameplate` — and drawing only the strip reads as a
+    /// picture floating beside a name rather than as a plate behind it.
+    var nameplateURL: URL?
+    var nameplatePalette: NameplatePalette = .none
 }
 
 /// Everything the detail column needs to decide what it is showing.
@@ -305,6 +313,12 @@ struct ChannelChrome: Hashable, Sendable {
     /// it at the one place that reads it.
     var symbolName: String
     var topic: String?
+    /// Whether the topic flyout is open on this channel.
+    ///
+    /// **A flyout is only offered where there is something in it** — a pill that
+    /// opens onto an empty box is the inert control §5.5 is about — so the
+    /// control is live exactly when `topic` is non-empty.
+    var isTopicShown: Bool = false
     var isMemberListShown: Bool
     var canShowMemberList: Bool
     /// The DM profile pane's toggle. Its own pair rather than reusing the member

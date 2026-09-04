@@ -240,3 +240,71 @@ struct TimelineMemoKey: Hashable, Sendable {
     /// keeps showing the old text.
     var contentRevision: UInt64
 }
+
+// MARK: - Messages drawn outside the transcript
+
+extension AppModel {
+    /// The channel's pinned messages, laid out as cards.
+    ///
+    /// **Memoized, because a layout is framesetting.** The pane's body runs
+    /// again on every hover of every row in it, and re-laying out fifty pinned
+    /// messages per pointer move is exactly the cost the transcript's own row
+    /// cache exists to avoid.
+    ///
+    /// The key carries the *messages*, not their count: a pin whose body was
+    /// edited or whose embed unfurled has the same id and a different layout —
+    /// the trap `INVARIANTS.md` §2 records against the transcript's first cache.
+    /// `Array ==` short-circuits on buffer identity, so the common case is a
+    /// pointer compare.
+    func pinnedCards(in channelID: ChannelID, width: CGFloat) -> [MessageCard] {
+        // **Every observable input is read before the early return.** A memo
+        // that returns its cache without touching them registers no dependency,
+        // so its reader is never invalidated — §2.
+        let messages = pinnedMessages[channelID] ?? []
+        let revision = PresentationRevision.shared.value
+        let key = PinnedCardKey(channelID: channelID, width: width, revision: revision)
+        if let pinnedCardCache,
+           pinnedCardCache.key == key,
+           pinnedCardCache.messages == messages
+        {
+            return pinnedCardCache.value
+        }
+        guard !messages.isEmpty else {
+            pinnedCardCache = (key, messages, [])
+            return []
+        }
+
+        let style = PresentationRevision.shared.style
+        let settings = PresentationRevision.shared.timeline
+        let engine = TimelineLayoutEngine(presentationRevision: revision)
+        let items = messages.map {
+            TimelineItem.message(TimelineMessage(message: $0, flags: [.head, .tail]))
+        }
+        // One resolve for the whole set rather than one per card: the lookups
+        // are over the same tables and most pins share authors.
+        let authors = authorInfo(for: items, authorFont: style.authorFont)
+        let mentions = mentionContext()
+        let channelName = channelIndex[channelID].map(displayName(of:)) ?? ""
+        let value = messages.map { message in
+            MessageCard.card(
+                for: message,
+                width: width,
+                engine: engine,
+                style: style,
+                settings: settings,
+                mentions: mentions,
+                channelName: channelName,
+                authors: authors
+            )
+        }
+        pinnedCardCache = (key, messages, value)
+        return value
+    }
+}
+
+/// What a set of pinned cards was laid out against.
+struct PinnedCardKey: Hashable, Sendable {
+    var channelID: ChannelID
+    var width: CGFloat
+    var revision: UInt64
+}

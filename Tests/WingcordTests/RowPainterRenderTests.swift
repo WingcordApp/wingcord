@@ -20,59 +20,14 @@ import Testing
 @Suite("Row painter rendering")
 struct RowPainterRenderTests {
 
-    private static let ground = CGFloat(0.5)
-
-    /// Draws into a bitmap and returns the fraction of pixels that differ from
-    /// the mid-grey ground.
+    /// The probe lives in `RenderProbe` — one copy, shared by every drawn
+    /// surface's tests.
     private func inkFraction(
         width: Int = 240,
         height: Int = 48,
         _ draw: (CGContext, CGRect) -> Void
     ) -> Double {
-        let bytesPerRow = width * 4
-        var pixels = [UInt8](repeating: 0, count: bytesPerRow * height)
-        let grey = UInt8(Self.ground * 255)
-        for index in stride(from: 0, to: pixels.count, by: 4) {
-            pixels[index] = grey
-            pixels[index + 1] = grey
-            pixels[index + 2] = grey
-            pixels[index + 3] = 255
-        }
-
-        var differing = 0
-        pixels.withUnsafeMutableBytes { buffer in
-            guard let base = buffer.baseAddress,
-                  let context = CGContext(
-                      data: base,
-                      width: width,
-                      height: height,
-                      bitsPerComponent: 8,
-                      bytesPerRow: bytesPerRow,
-                      space: CGColorSpaceCreateDeviceRGB(),
-                      bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
-                  )
-            else {
-                Issue.record("could not create a bitmap context")
-                return
-            }
-            // The canvases are flipped (top-left origin); a bitmap context is
-            // not. Flipping here means the painter draws exactly as it does on
-            // screen rather than upside down, which would still produce ink and
-            // hide a real geometry bug.
-            context.translateBy(x: 0, y: CGFloat(height))
-            context.scaleBy(x: 1, y: -1)
-
-            let frame = CGRect(x: 0, y: 0, width: CGFloat(width), height: CGFloat(height))
-            NSGraphicsContext.saveGraphicsState()
-            NSGraphicsContext.current = NSGraphicsContext(cgContext: context, flipped: true)
-            draw(context, frame)
-            NSGraphicsContext.restoreGraphicsState()
-        }
-
-        for index in stride(from: 0, to: pixels.count, by: 4) where pixels[index] != grey {
-            differing += 1
-        }
-        return Double(differing) / Double(width * height)
+        RenderProbe.inkFraction(width: width, height: height, draw)
     }
 
     private var style: MessageTextStyle { MessageTextStyle.current() }

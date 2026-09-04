@@ -299,12 +299,16 @@ public actor DiscordREST {
     /// - Parameter stickerIDs: Stickers to send. Discord accepts a message with
     ///   stickers and no text, which is what picking one does — so the content
     ///   may legitimately be empty here and only here.
+    /// - Parameter attachments: Files already uploaded through
+    ///   `createUploadSlots` and `upload(_:to:)`. A message may be nothing but
+    ///   these, which is the second place empty content is legitimate.
     public func sendMessage(
         in channelID: ChannelID,
         content: String,
         nonce: String,
         replyingTo: MessageID? = nil,
-        stickerIDs: [UInt64] = []
+        stickerIDs: [UInt64] = [],
+        attachments: [UploadedAttachment] = []
     ) async throws -> Message {
         struct Body: Encodable {
             var content: String
@@ -315,10 +319,22 @@ public actor DiscordREST {
             /// Omitted entirely when empty: the route rejects an empty array
             /// where it accepts a missing key.
             var sticker_ids: [String]?
+            /// Omitted when empty, for the same reason as `sticker_ids`.
+            var attachments: [Attached]?
 
             struct Reference: Encodable {
                 var message_id: String
                 var fail_if_not_exists = false
+            }
+
+            /// **`uploaded_filename` is the object; `filename` is the label.**
+            /// Sending the reader's own name in the first field is the
+            /// documented way to get a 500 out of this route.
+            struct Attached: Encodable {
+                var id: String
+                var filename: String
+                var uploaded_filename: String
+                var description: String?
             }
         }
         let body = Body(
@@ -328,7 +344,15 @@ public actor DiscordREST {
                 Body.Reference(message_id: $0.description)
             },
             flags: nil,
-            sticker_ids: stickerIDs.isEmpty ? nil : stickerIDs.map(String.init)
+            sticker_ids: stickerIDs.isEmpty ? nil : stickerIDs.map(String.init),
+            attachments: attachments.isEmpty ? nil : attachments.map {
+                Body.Attached(
+                    id: $0.id,
+                    filename: $0.filename,
+                    uploaded_filename: $0.uploadedFilename,
+                    description: $0.altText
+                )
+            }
         )
         return try await post(
             "/channels/\(channelID.rawValue)/messages",

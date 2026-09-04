@@ -18,9 +18,13 @@ import WingcordCore
 /// capsule's material and reads as part of it.
 struct NowBar: View, Equatable {
     var presentation: NowBarPresentation
+    /// The silhouette. Passed in rather than read from `AppSettings` here, so
+    /// the settings preview can show a shape the reader has not committed to
+    /// yet — and so this view still holds no reference to anything observable.
+    var shape: ChromeShape = .boxy
 
     static func == (lhs: NowBar, rhs: NowBar) -> Bool {
-        lhs.presentation == rhs.presentation
+        lhs.presentation == rhs.presentation && lhs.shape == rhs.shape
     }
 
     var toggleMute: () -> Void = {}
@@ -32,6 +36,10 @@ struct NowBar: View, Equatable {
 
     @Environment(\.motion) private var motion
     @State private var isMenuOpen = false
+
+    private var cornerRadius: CGFloat {
+        shape.cornerRadius(forHeight: Metrics.nowBarHeight)
+    }
 
     var body: some View {
         // **The call is not drawn here any more.** It used to be a line above
@@ -58,8 +66,22 @@ struct NowBar: View, Equatable {
         // through it.
         .glassEffect(
             .regular.tint(Palette.selectionFill),
-            in: .rect(cornerRadius: Radius.glass)
+            in: .rect(cornerRadius: cornerRadius)
         )
+        // **The plate goes OVER the material, never behind it.** A fill behind
+        // glass is §4 rule 3 and is exactly what stops a surface lensing; the
+        // artwork belongs on top, the way a nameplate sits over a roster row's
+        // own material. Clipped to the bar's shape and held well under full
+        // strength, so what is behind the window still refracts through.
+        .overlay {
+            if let url = presentation.nameplateURL {
+                NowBarPlate(url: url, palette: presentation.nameplatePalette)
+                    .clipShape(.rect(cornerRadius: cornerRadius, style: .continuous))
+                    .allowsHitTesting(false)
+            }
+        }
+        .specularEdge(in: .rect(cornerRadius: cornerRadius))
+        .animation(motion.glassMorph, value: shape)
         .padding(.horizontal, Spacing.base)
         .padding(.bottom, Spacing.base)
     }
@@ -237,6 +259,54 @@ struct PresenceDot: View {
                 Circle().fill(Color(nsColor: .windowBackgroundColor))
             }
         }
+        .accessibilityHidden(true)
+    }
+}
+
+
+/// The reader's own nameplate, behind their name in the now bar.
+///
+/// **Two layers, exactly as the roster draws one** — `MemberRowPainter.drawPlate`
+/// is where the rule was established. A nameplate strip's leading two thirds are
+/// fully transparent, so the artwork alone reads as a picture floating beside a
+/// name; the palette's wash is what closes the gap and grounds the two into one
+/// object.
+///
+/// It sits *over* the bar's material at low strength rather than behind it: a
+/// fill behind glass is §4 rule 3, and it is what would take the lensing away.
+private struct NowBarPlate: View {
+    var url: URL
+    var palette: NameplatePalette
+
+    /// How strongly the plate reads. High enough to be the reader's own
+    /// artwork, low enough that the glass underneath still shows what is behind
+    /// the window — which is the whole reason the bar is glass.
+    private static let strength: Double = 0.55
+
+    var body: some View {
+        ZStack(alignment: .trailing) {
+            if let value = palette.colorValue {
+                LinearGradient(
+                    stops: [
+                        .init(color: Color(hex: value).opacity(0), location: 0),
+                        .init(color: Color(hex: value).opacity(0.10), location: 0.5),
+                        .init(color: Color(hex: value).opacity(0.30), location: 1),
+                    ],
+                    startPoint: .leading,
+                    endPoint: .trailing
+                )
+            }
+            // Fitted to the bar's HEIGHT and hung off its trailing edge, which
+            // is the measured rule — see `MemberRowGeometry.nameplateArtRect`.
+            // Aspect-*fill* lands on the width for a wide plate and stretches
+            // the strip vertically.
+            RemoteImage(url: url, side: Metrics.nowBarHeight, bucket: .artwork) {
+                Color.clear
+            }
+            .aspectRatio(contentMode: .fit)
+            .frame(height: Metrics.nowBarHeight)
+        }
+        .opacity(Self.strength)
         .accessibilityHidden(true)
     }
 }

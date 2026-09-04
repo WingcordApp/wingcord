@@ -1,4 +1,5 @@
 import SwiftUI
+import UniformTypeIdentifiers
 import WingcordCore
 
 /// Reads the store, hands the composer plain values.
@@ -10,9 +11,16 @@ struct ComposerContainer: View {
     var channelID: ChannelID
 
     @Environment(AppModel.self) private var model
+    /// The file panel. `@State` here rather than on the store, because it is
+    /// this window's presentation and nothing else in the app can raise it.
+    @State private var isChoosingFiles = false
+    /// Read here rather than inside the composer, so the composer stays a pure
+    /// value view with no observable reference of its own.
+    @State private var settings = AppSettings.shared
 
     var body: some View {
         @Bindable var model = model
+        let box = model.messages(in: channelID)
         // Reading `roleRevision` registers the dependency the permission answer
         // below actually depends on — the gate itself is `@ObservationIgnored`,
         // so without this the composer would keep its old enabled state until
@@ -20,9 +28,10 @@ struct ComposerContainer: View {
         let _ = model.roleRevision
         Composer(
             channelName: model.channelIndex[channelID].map(model.displayName(of:)) ?? "",
+            shape: settings.composerShape,
             canSend: model.permissionGate.canSend(in: channelID),
             replyingToAuthor: replyingToAuthor,
-            isEditing: model.messages(in: channelID)?.editing != nil,
+            isEditing: box?.editing != nil,
             // **One field, two destinations.** An edit borrows the bar and must
             // not eat the draft underneath it, so the binding routes by which
             // state is live rather than by copying one into the other — a copy
@@ -55,7 +64,14 @@ struct ComposerContainer: View {
             cancelReply: { model.cancelReply(in: channelID) },
             cancelEdit: { model.cancelEdit(in: channelID) },
             replyToLatest: { model.replyToLatestMessage() },
-            attach: {},
+            attach: { isChoosingFiles = true },
+            canAttach: model.canAttachFiles(in: channelID),
+            attachments: box?.attachments ?? [],
+            attachmentRefusal: box?.attachmentRefusal,
+            removeAttachment: { model.removeAttachment($0, in: channelID) },
+            toggleAttachmentSpoiler: { model.toggleAttachmentSpoiler($0, in: channelID) },
+            dismissAttachmentRefusal: { model.dismissAttachmentRefusal(in: channelID) },
+            isUploading: box?.isUploading ?? false,
             completions: completions,
             completionQuery: completionQuery ?? "",
             commitCompletion: commit,
@@ -81,6 +97,18 @@ struct ComposerContainer: View {
             submitCommand: submitCommand,
             pendingInteractions: pendingInteractions
         )
+        // **One importer on one view.** The rule §2 states is about a
+        // presentation modifier on a list ROW — evaluated by every row on every
+        // pass. There is exactly one composer, and the panel has to be anchored
+        // to the window the `+` is in.
+        .fileImporter(
+            isPresented: $isChoosingFiles,
+            allowedContentTypes: [.item],
+            allowsMultipleSelection: true
+        ) { result in
+            guard case .success(let urls) = result else { return }
+            model.stageAttachments(urls, in: channelID)
+        }
         .task(id: commandQuery == nil) {
             // Fetched the first time a `/` is typed in this channel, and never
             // again: the index carries 183 commands in 119 KB and the reference

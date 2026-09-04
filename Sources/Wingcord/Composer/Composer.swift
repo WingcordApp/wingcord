@@ -20,6 +20,10 @@ import WingcordCore
 /// here, and only once there is something to send.
 struct Composer: View {
     var channelName: String
+    /// The silhouette. Passed in rather than read from `AppSettings`, so the
+    /// settings preview can show a shape the reader has not committed to yet —
+    /// and so this view still reaches for nothing observable.
+    var shape: ChromeShape = .boxy
     var canSend: Bool
     var replyingToAuthor: String?
     /// Whether the bar is holding an edit rather than a new message. It changes
@@ -35,6 +39,17 @@ struct Composer: View {
     /// reply to, so Up falls through to the text view instead of dying.
     var replyToLatest: () -> Bool = { false }
     var attach: () -> Void = {}
+    /// Whether `+` and the drop target are offered at all. A channel that
+    /// refuses files gets neither — `INVARIANTS.md` §5.5.
+    var canAttach: Bool = true
+    /// Files staged for this message, and why the last one was refused.
+    var attachments: [PendingAttachment] = []
+    var attachmentRefusal: AttachmentRefusal?
+    var removeAttachment: (PendingAttachment.ID) -> Void = { _ in }
+    var toggleAttachmentSpoiler: (PendingAttachment.ID) -> Void = { _ in }
+    var dismissAttachmentRefusal: () -> Void = {}
+    /// True while the staged files are going up.
+    var isUploading: Bool = false
     /// The `:shortcode` completions for what is currently typed. Empty closes
     /// the list, which is the only thing that does.
     var completions: [ExpressionItem] = []
@@ -110,6 +125,18 @@ struct Composer: View {
     /// remembering what was refused rather than clearing anything.
     @State private var dismissedCommandQuery: String?
 
+    /// The plate's corner.
+    ///
+    /// **Derived from the field's own minimum, not measured.** The bar grows
+    /// with a wrapped message and a capsule's radius is half its height — but a
+    /// radius that tracked the *grown* height would round a three-line composer
+    /// into a lozenge. The resting height is the shape, and the plate keeps it
+    /// as it grows, which is what every capsule text field on this platform
+    /// does. §2: derive the geometry you already have the inputs for.
+    private var plateCorner: CGFloat {
+        shape.cornerRadius(forHeight: Metrics.composerControlHeight)
+    }
+
     private var hasText: Bool {
         !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
@@ -178,6 +205,17 @@ struct Composer: View {
                 .transition(.materialize(from: .bottom))
             }
 
+            if canSend, !attachments.isEmpty || attachmentRefusal != nil {
+                AttachmentTray(
+                    attachments: attachments,
+                    refusal: attachmentRefusal,
+                    remove: removeAttachment,
+                    toggleSpoiler: toggleAttachmentSpoiler,
+                    dismissRefusal: dismissAttachmentRefusal
+                )
+                .transition(.materialize(from: .bottom))
+            }
+
             if canSend {
                 composerRow
             } else {
@@ -206,7 +244,9 @@ struct Composer: View {
 
     private var composerRow: some View {
         HStack(alignment: .bottom, spacing: Spacing.base) {
-            CircleControl(systemImage: "plus", label: "Add attachment", action: attach)
+            if canAttach {
+                CircleControl(systemImage: "plus", label: "Add attachment", action: attach)
+            }
 
             HStack(alignment: .bottom, spacing: Spacing.base) {
                 if let pendingCommand {
@@ -244,8 +284,10 @@ struct Composer: View {
             }
             .padding(.horizontal, Spacing.snug)
             .padding(.vertical, Spacing.tight)
-            .glassEffect(.regular, in: .rect(cornerRadius: Radius.glass))
+            .glassEffect(.regular, in: .rect(cornerRadius: plateCorner))
+            .specularEdge(in: .rect(cornerRadius: plateCorner))
             .animation(motion.glassMorph, value: canCommit)
+            .animation(motion.glassMorph, value: shape)
         }
         .contentShape(.rect)
         // Clicking anywhere on the bar puts the caret in the field, which is
@@ -278,7 +320,9 @@ struct Composer: View {
     /// `/wordle` case, which takes no options at all.
     private var canCommit: Bool {
         if let pendingCommand { return pendingCommand.isComplete }
-        return hasText
+        // A message may be nothing but files, and a second press while they are
+        // going up would upload every one of them twice.
+        return (hasText || !attachments.isEmpty) && !isUploading
     }
 
     /// What the list actually shows: the matches, unless this exact query was

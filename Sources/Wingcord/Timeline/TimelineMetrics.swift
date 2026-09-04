@@ -90,7 +90,14 @@ nonisolated enum TimelineMetrics {
     nonisolated(unsafe) static let unreadLabelFont = NSFont.systemFont(
         ofSize: 9, weight: .heavy
     )
-    static let conversationStartHeight: CGFloat = 120
+    /// The head of a channel. Everything about it is measured — see
+    /// `TimelineLayoutEngine.conversationStart` — so what is here is the
+    /// spacing, not a height.
+    static let conversationStartIconSide: CGFloat = 64
+    static let conversationStartTopPadding: CGFloat = 24
+    static let conversationStartGap: CGFloat = 16
+    static let conversationStartLineGap: CGFloat = 6
+    static let conversationStartBottomPadding: CGFloat = 20
     /// One placeholder group in the history runway.
     static let skeletonHeight: CGFloat = 56
     /// The quiet "still loading" line shown before the first page lands.
@@ -100,6 +107,24 @@ nonisolated enum TimelineMetrics {
 
     /// Between the message text and an attachment under it.
     static let attachmentGap: CGFloat = 6
+    /// A forwarded message's quote block: the rule, and how far its contents
+    /// are set in behind it.
+    static let forwardRuleWidth: CGFloat = 3
+    static let forwardIndent: CGFloat = 12
+    static let forwardTopPadding: CGFloat = 4
+    static let forwardLineGap: CGFloat = 4
+    static let forwardGlyphSide: CGFloat = 11
+    /// A card for a file with nothing to show: a glyph, a name, a size.
+    static let attachmentCardHeight: CGFloat = 56
+    /// The widest such card. It holds two short lines and grows no further —
+    /// a full-width bar for a 4 KB text file reads as a missing picture.
+    static let attachmentCardMaxWidth: CGFloat = 400
+    /// The glyph's box inside one, and the gap after it.
+    static let attachmentCardGlyphSide: CGFloat = 26
+    static let attachmentCardInset: CGFloat = 12
+    /// A voice note's bar.
+    static let voiceNoteHeight: CGFloat = 44
+    static let voiceNoteMaxWidth: CGFloat = 320
     /// Between reaction chips and the content above them.
     static let reactionGap: CGFloat = 6
     static let reactionChipHeight: CGFloat = 22
@@ -188,7 +213,7 @@ nonisolated enum TimelineMetrics {
     // reaching for it must not be read as having left the row it belongs to.
 
     /// The pill's own height.
-    static let actionBarHeight: CGFloat = 28
+    static let actionBarHeight: CGFloat = 36
     /// Between the pill and the transcript's trailing edge.
     static let actionBarTrailingInset: CGFloat = 12
     /// How far the pill sits above the row's own top edge.

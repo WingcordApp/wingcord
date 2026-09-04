@@ -1045,8 +1045,8 @@ struct MessageDTO: Decodable, Sendable {
         guard let body = message_snapshots?.first?.message else { return nil }
         return ForwardedMessage(
             content: body.content ?? "",
-            attachmentCount: body.attachments?.count ?? 0,
-            hasEmbed: !(body.embeds?.isEmpty ?? true),
+            attachments: body.attachments?.map(\.domain) ?? [],
+            embeds: body.embeds?.map(\.domain) ?? [],
             channelID: message_reference?.channel_id
         )
     }

@@ -14,6 +14,7 @@ struct GuildRailFolder: View {
     var selectGuild: (GuildID) -> Void
 
     @Environment(\.motion) private var motion
+    @State private var isHovering = false
 
     private var side: CGFloat { Metrics.guildTile }
 
@@ -40,10 +41,17 @@ struct GuildRailFolder: View {
                     folderTile
                         .frame(maxWidth: .infinity, alignment: .center)
                 }
+                // The whole column is the target, so aiming between tiles does
+                // not miss — the same rule `GuildRailTile` states.
+                .frame(width: Proportions.railWidth, height: side)
+                .contentShape(.rect)
             }
             .buttonStyle(.plain)
-            .frame(width: Proportions.railWidth, height: side)
-            .hoverFlyout(folder.name ?? "Folder")
+            .onHover { hovering in
+                guard hovering != isHovering else { return }
+                isHovering = hovering
+            }
+            .railHoverLabel(folder.name ?? "Folder", isHovered: isHovering)
             .accessibilityLabel(Text(folder.name ?? "Folder"))
 
             if folder.isExpanded {

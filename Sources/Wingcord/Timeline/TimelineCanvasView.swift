@@ -150,8 +150,21 @@ final class TimelineCanvasView: NSView {
     // playback while a gesture is in flight, which is what buys the scroll its
     // frames.
 
-    /// The frame index each visible sticker is currently showing.
-    private var shownStickerFrames: [UInt64: Int] = [:]
+    /// Names one moving picture in the transcript.
+    ///
+    /// **The message plus its position, never the asset's own id.** The same GIF
+    /// posted twice is two boxes on screen, and a key on the URL would let the
+    /// first one's repaint mark the second as up to date — so the second would
+    /// sit on whichever frame it happened to land on.
+    struct FilmSlot: Hashable {
+        enum Kind: UInt8 { case sticker, attachment, embed }
+        var messageID: MessageID
+        var kind: Kind
+        var index: Int
+    }
+
+    /// The frame index each visible filmstrip is currently showing.
+    private var shownFilmFrames: [FilmSlot: Int] = [:]
     private var isAnimatingStickers = false
     private var animationToken: ObjectIdentifier { ObjectIdentifier(self) }
 
@@ -240,23 +253,28 @@ final class TimelineCanvasView: NSView {
         return running
     }
 
-    /// Subscribes to the clock while a moving sticker is on screen, and stops
-    /// the moment none is.
+    /// Subscribes to the clock while something on screen is moving, and stops
+    /// the moment nothing is.
+    ///
+    /// **Three kinds of moving picture, one subscription.** A sticker, a GIF
+    /// attachment and a GIF a link unfurled into are all filmstrips drawn by the
+    /// same painter on the same clock, and giving each its own subscription
+    /// would be three display-link callbacks for one repaint.
     ///
     /// Called from every place the answer can change: a rows change, a viewport
     /// move, and the pass that installs newly-decoded film. Idempotent, so those
     /// three can call it freely.
     func refreshStickerAnimation() {
-        let wanted = window != nil && hasVisibleAnimatedSticker
+        let wanted = window != nil && hasVisibleFilm
         guard wanted != isAnimatingStickers else { return }
         isAnimatingStickers = wanted
         if wanted {
             AnimationClock.shared.subscribe(animationToken) { [weak self] in
-                self?.advanceStickers()
+                self?.advanceFilm()
             }
         } else {
             AnimationClock.shared.unsubscribe(animationToken)
-            shownStickerFrames.removeAll(keepingCapacity: true)
+            shownFilmFrames.removeAll(keepingCapacity: true)
         }
     }
 
@@ -265,37 +283,87 @@ final class TimelineCanvasView: NSView {
         guard isAnimatingStickers else { return }
         isAnimatingStickers = false
         AnimationClock.shared.unsubscribe(animationToken)
-        shownStickerFrames.removeAll(keepingCapacity: false)
+        shownFilmFrames.removeAll(keepingCapacity: false)
     }
 
-    private var hasVisibleAnimatedSticker: Bool {
+    private var hasVisibleFilm: Bool {
         for index in visibleRowRange() {
             guard case .message(let row) = rows[index].kind else { continue }
             if row.stickers.contains(where: \.isAnimated) { return true }
+            if row.attachments.contains(where: \.isAnimated) { return true }
+            for embed in row.embeds where embed.images.contains(where: \.isAnimated) {
+                return true
+            }
         }
         return false
     }
 
-    /// One clock tick: repaint only the stickers whose frame actually moved.
-    private func advanceStickers() {
+    /// One clock tick: repaint only the boxes whose frame actually moved.
+    ///
+    /// **Per box, not per row and never the whole canvas.** A ten-frame GIF
+    /// authored at 10 fps changes on one clock tick in three, and a repaint of
+    /// the viewport for a picture that did not move is the cost this whole
+    /// arrangement exists to avoid.
+    private func advanceFilm() {
         let time = AnimationClock.shared.time
         let scale = window?.backingScaleFactor ?? 2
+
+        // Local, so the three loops below share one lookup and one comparison
+        // rather than three copies of them.
+        func advance(
+            url: URL?,
+            box: CGRect,
+            decodeWidth: CGFloat,
+            key: FilmSlot,
+            rowOrigin: CGPoint
+        ) {
+            guard let url else { return }
+            let filmKey = AnimatedImageStore.Key(
+                url: url, maximumPixelSize: Int((decodeWidth * scale).rounded(.up))
+            )
+            guard let film = AnimatedImageStore.shared.cached(filmKey) else { return }
+            let next = film.index(at: time)
+            guard shownFilmFrames[key] != next else { return }
+            shownFilmFrames[key] = next
+            setNeedsDisplay(box.offsetBy(dx: rowOrigin.x, dy: rowOrigin.y))
+        }
+
         for index in visibleRowRange() {
-            guard case .message(let row) = rows[index].kind, !row.stickers.isEmpty else {
-                continue
-            }
+            guard case .message(let row) = rows[index].kind else { continue }
             let frame = rowFrame(at: index)
-            for slot in row.stickers where slot.isAnimated {
-                guard let url = slot.url else { continue }
-                let key = AnimatedImageStore.Key(
-                    url: url,
-                    maximumPixelSize: Int((slot.rect.width * scale).rounded(.up))
+            let origin = CGPoint(x: frame.minX, y: frame.minY)
+            for (slot, offset) in zip(row.stickers, row.stickers.indices)
+            where slot.isAnimated {
+                advance(
+                    url: slot.url,
+                    box: slot.rect,
+                    decodeWidth: slot.rect.width,
+                    key: FilmSlot(messageID: row.id, kind: .sticker, index: offset),
+                    rowOrigin: origin
                 )
-                guard let film = AnimatedImageStore.shared.cached(key) else { continue }
-                let next = film.index(at: time)
-                guard shownStickerFrames[slot.sticker.id] != next else { continue }
-                shownStickerFrames[slot.sticker.id] = next
-                setNeedsDisplay(slot.rect.offsetBy(dx: frame.minX, dy: frame.minY))
+            }
+            for (offset, slot) in row.attachments.enumerated() where slot.isAnimated {
+                advance(
+                    url: slot.url,
+                    box: slot.rect,
+                    decodeWidth: slot.decodeWidth,
+                    key: FilmSlot(messageID: row.id, kind: .attachment, index: offset),
+                    rowOrigin: origin
+                )
+            }
+            var embedImage = 0
+            for embed in row.embeds {
+                for slot in embed.images {
+                    defer { embedImage += 1 }
+                    guard slot.isAnimated else { continue }
+                    advance(
+                        url: slot.url,
+                        box: slot.rect,
+                        decodeWidth: slot.decodeWidth,
+                        key: FilmSlot(messageID: row.id, kind: .embed, index: embedImage),
+                        rowOrigin: origin
+                    )
+                }
             }
         }
     }

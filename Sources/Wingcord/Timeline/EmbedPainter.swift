@@ -30,7 +30,8 @@ nonisolated extension TimelineRowPainter {
         context: CGContext,
         style: MessageTextStyle,
         images: ImageStore,
-        scale: CGFloat
+        scale: CGFloat,
+        clock: Double
     ) {
         let frame = slot.rect.offsetBy(dx: offset.x, dy: offset.y)
         let corner = EmbedLayoutEngine.corner
@@ -83,7 +84,8 @@ nonisolated extension TimelineRowPainter {
                 context: context,
                 style: style,
                 images: images,
-                scale: scale
+                scale: scale,
+                clock: clock
             )
         }
     }
@@ -150,7 +152,8 @@ nonisolated extension TimelineRowPainter {
         context: CGContext,
         style: MessageTextStyle,
         images: ImageStore,
-        scale: CGFloat
+        scale: CGFloat,
+        clock: Double
     ) {
         let shape = slot.isCircle
             ? CGPath(ellipseIn: frame, transform: nil)
@@ -164,17 +167,25 @@ nonisolated extension TimelineRowPainter {
         context.addPath(shape)
         context.clip()
 
-        if let url = slot.url,
-           let image = images.cached(
-               ImageStore.Key(
-                   url: url,
-                   maximumPixelSize: Int((slot.decodeWidth * scale).rounded(.up))
-               ),
-               bucket: slot.isArtwork ? .artwork : .thumbnail
-           )
-        {
-            drawFlipped(image, in: frame, context: context)
-        } else {
+        let pixels = Int((slot.decodeWidth * scale).rounded(.up))
+        var drew = false
+        if let url = slot.url {
+            if slot.isAnimated,
+               let film = AnimatedImageStore.shared.cached(
+                   AnimatedImageStore.Key(url: url, maximumPixelSize: pixels)
+               )
+            {
+                drawFlipped(film.frames[film.index(at: clock)], in: frame, context: context)
+                drew = true
+            } else if let image = images.cached(
+                ImageStore.Key(url: url, maximumPixelSize: pixels),
+                bucket: slot.isArtwork ? .artwork : .thumbnail
+            ) {
+                drawFlipped(image, in: frame, context: context)
+                drew = true
+            }
+        }
+        if !drew {
             // A quiet plate at the picture's own size, so nothing reflows when
             // it lands — the box was already reserved.
             context.setFillColor(style.codeBackground.withAlphaComponent(0.6).cgColor)
@@ -257,22 +268,25 @@ nonisolated extension TimelineRowPainter {
         }
     }
 
-    private static func drawComponentGlyph(
+    /// One emoji in a box — a button's, a poll answer's, anything chrome-sized.
+    ///
+    /// **One copy, because getting it wrong is silent and the two surfaces that
+    /// need it look nothing alike.** A colour emoji is about 1.2x as wide as its
+    /// point size, so a glyph sized to the box's *height* overflows the box —
+    /// and `drawText` answers an overflow by truncating, which draws a thumbs-up
+    /// as "…". That was fixed on a button and not on a poll, and the second copy
+    /// is what put "…" in front of every poll answer. `INVARIANTS.md` §5.55.
+    static func drawEmojiInBox(
         _ emoji: EmojiRef,
         in frame: CGRect,
         context: CGContext,
-        style: MessageTextStyle,
+        color: NSColor,
         images: ImageStore,
         scale: CGFloat
     ) {
         guard let id = emoji.id else {
-            // A Unicode emoji, whose name IS the glyph.
-            //
-            // **Sized by its own advance, not by the box.** A colour emoji is
-            // about 1.2× as wide as its point size, so one set to the box height
-            // overflows the box — and `drawText` answers an overflow by
-            // truncating, which drew a thumbs-up as "…". Measuring once and
-            // scaling to fit is what keeps the glyph a glyph.
+            // A Unicode emoji, whose name IS the glyph. Measured once and
+            // scaled to fit, which is what keeps it a glyph.
             let nominal = NSFont.systemFont(ofSize: frame.height * 0.86)
             let advance = TimelineLayoutEngine.measure(emoji.name, font: nominal)
             let size = advance > frame.width && advance > 0
@@ -282,7 +296,7 @@ nonisolated extension TimelineRowPainter {
             drawText(
                 emoji.name,
                 font: font,
-                color: style.primaryColor,
+                color: color,
                 at: CGPoint(x: frame.minX, y: capCenteredY(of: font, in: frame)),
                 maxWidth: frame.width,
                 alignment: .center,
@@ -297,6 +311,24 @@ nonisolated extension TimelineRowPainter {
               ))
         else { return }
         drawFlipped(image, in: frame, context: context)
+    }
+
+    private static func drawComponentGlyph(
+        _ emoji: EmojiRef,
+        in frame: CGRect,
+        context: CGContext,
+        style: MessageTextStyle,
+        images: ImageStore,
+        scale: CGFloat
+    ) {
+        drawEmojiInBox(
+            emoji,
+            in: frame,
+            context: context,
+            color: style.primaryColor,
+            images: images,
+            scale: scale
+        )
     }
 
     /// The button's ground.
@@ -680,25 +712,13 @@ nonisolated extension TimelineRowPainter {
         images: ImageStore,
         scale: CGFloat
     ) {
-        guard let id = emoji.id else {
-            // A Unicode emoji, whose name IS the glyph.
-            drawText(
-                emoji.name,
-                font: NSFont.systemFont(ofSize: frame.height * 0.9),
-                color: style.primaryColor,
-                at: CGPoint(x: frame.minX, y: frame.minY),
-                maxWidth: frame.width,
-                alignment: .center,
-                context: context
-            )
-            return
-        }
-        guard let url = CDN.emoji(id: id, animated: emoji.isAnimated, side: frame.width),
-              let image = images.cached(ImageStore.Key(
-                  url: url,
-                  maximumPixelSize: Int((frame.width * scale).rounded(.up))
-              ))
-        else { return }
-        drawFlipped(image, in: frame, context: context)
+        drawEmojiInBox(
+            emoji,
+            in: frame,
+            context: context,
+            color: style.primaryColor,
+            images: images,
+            scale: scale
+        )
     }
 }

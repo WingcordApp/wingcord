@@ -15,22 +15,26 @@ struct NameplateLayoutTests {
     private static let stripSize = CGSize(width: 672, height: 126)
 
     /// The plate on a two-line row in the roster at its ideal width.
-    private func plate(rowHeight: CGFloat = MemberRowGeometry.doubleLineHeight) -> CGRect {
+    private func plate(rowHeight: CGFloat = MemberRowGeometry.rowHeight) -> CGRect {
         MemberRowGeometry.plateRect(in: CGRect(
             x: 0, y: 0, width: Proportions.memberColumnIdeal, height: rowHeight
         ))
     }
 
-    @Test("The strip keeps its own proportions on BOTH row heights")
+    @Test("The strip keeps its own proportions at any row height")
     func preservesAspect() {
         // The defect this exists for, and it only showed on half the roster.
-        // A naive aspect-*fill* takes whichever fit is larger: for a two-line
-        // plate that is the height, which is correct; for a one-line plate it
-        // is the width, and since the drawn height is the plate's either way
-        // the strip gets stretched vertically. Every rose an ellipse, on the
-        // shorter rows only.
+        // A naive aspect-*fill* takes whichever fit is larger: for a tall plate
+        // that is the height, which is correct; for a short one it is the width,
+        // and since the drawn height is the plate's either way the strip gets
+        // stretched vertically. Every rose an ellipse, on the shorter rows only.
+        //
+        // The roster now draws one height — see `MemberRowGeometry.rowHeight` —
+        // but the rule is about the RECT, and the profile surfaces draw plates
+        // at heights of their own. Checked across the range rather than at the
+        // one number the roster happens to use.
         let sourceAspect = Self.stripSize.width / Self.stripSize.height
-        for height in [MemberRowGeometry.singleLineHeight, MemberRowGeometry.doubleLineHeight] {
+        for height in [32, MemberRowGeometry.rowHeight, 64] as [CGFloat] {
             let art = MemberRowGeometry.nameplateArtRect(
                 in: plate(rowHeight: height), imagePixelSize: Self.stripSize
             )
@@ -72,12 +76,12 @@ struct NameplateLayoutTests {
         #expect(art.minX < plate.minX)
     }
 
-    @Test("A one-line plate leaves bare plate rather than stretching the strip")
+    @Test("A short plate leaves bare plate rather than stretching the strip")
     func shortRowLeavesRoomForTheWash() {
-        // The strip is 5.33 wide and a one-line plate is about 6.1, so fitting
-        // to the height cannot cover it. That gap is exactly what the palette's
-        // wash is for.
-        let plate = plate(rowHeight: MemberRowGeometry.singleLineHeight)
+        // The strip is 5.33 wide and a short plate is wider in proportion, so
+        // fitting to the height cannot cover it. That gap is exactly what the
+        // palette's wash is for.
+        let plate = plate(rowHeight: 32)
         let art = MemberRowGeometry.nameplateArtRect(
             in: plate, imagePixelSize: Self.stripSize
         )

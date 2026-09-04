@@ -19,6 +19,10 @@ struct ChannelToolbar: ToolbarContent {
     var toggleMemberList: () -> Void = {}
     var toggleUserProfile: () -> Void = {}
     var openChannelDetails: () -> Void = {}
+    /// The topic flyout's contents. A closure for the reason `pinsContent` is
+    /// one: the bar is evaluated on every navigation and the flyout is opened a
+    /// few times a session.
+    var topicContent: () -> AnyView = { AnyView(EmptyView()) }
     var toggleCall: () -> Void = {}
     var toggleVoiceChat: () -> Void = {}
     var togglePins: () -> Void = {}
@@ -56,7 +60,10 @@ struct ChannelToolbar: ToolbarContent {
                 ChannelPill(
                     name: chrome.name,
                     symbolName: chrome.symbolName,
-                    action: openChannelDetails
+                    canOpenTopic: !(chrome.topic?.isEmpty ?? true),
+                    isTopicShown: chrome.isTopicShown,
+                    action: openChannelDetails,
+                    topicContent: topicContent
                 )
             }
         }

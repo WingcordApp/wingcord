@@ -690,21 +690,36 @@ public struct MessageReference: Hashable, Sendable, Codable {
 /// forwarder — is asserting something the payload deliberately does not say.
 public struct ForwardedMessage: Hashable, Sendable, Codable {
     public var content: String
-    public var attachmentCount: Int
-    public var hasEmbed: Bool
+    /// **The snapshot's own attachments, not a count of them.** Discord sends
+    /// the whole forwarded message under `message_snapshots` — content,
+    /// attachments and embeds — and a client that kept only a number has
+    /// nothing to draw: a forwarded photograph renders as an author line over
+    /// empty space, which is what a forward looked like in this app.
+    public var attachments: [Attachment]
+    public var embeds: [Embed]
     /// Where it was forwarded from, when the reference named it. Only ever used
     /// to say "from #channel"; never to attribute the message to anybody.
     public var channelID: ChannelID?
 
+    public var attachmentCount: Int { attachments.count }
+    public var hasEmbed: Bool { !embeds.isEmpty }
+
+    /// Whether there is anything at all inside the quote. A forward with an
+    /// empty snapshot is a real state — a message that has since been deleted —
+    /// and the block still draws its label rather than a bare rule.
+    public var isEmpty: Bool {
+        content.isEmpty && attachments.isEmpty && embeds.isEmpty
+    }
+
     public init(
         content: String,
-        attachmentCount: Int = 0,
-        hasEmbed: Bool = false,
+        attachments: [Attachment] = [],
+        embeds: [Embed] = [],
         channelID: ChannelID? = nil
     ) {
         self.content = content
-        self.attachmentCount = attachmentCount
-        self.hasEmbed = hasEmbed
+        self.attachments = attachments
+        self.embeds = embeds
         self.channelID = channelID
     }
 }

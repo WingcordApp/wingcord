@@ -346,7 +346,13 @@ enum DemoFixtures {
                 id: everyoneRole,
                 name: "@everyone",
                 position: 0,
-                permissions: [.viewChannel, .sendMessages, .readMessageHistory, .addReactions]
+                permissions: [
+                    .viewChannel, .sendMessages, .readMessageHistory, .addReactions,
+                    // Without this the composer's `+` is correctly hidden and
+                    // the demo shows a bar with a control missing — a fixture
+                    // that misrepresents the app is worse than no fixture.
+                    .attachFiles, .embedLinks, .useApplicationCommands,
+                ]
             )
         ]
         for (offset, spec) in roleSpecs.enumerated() {

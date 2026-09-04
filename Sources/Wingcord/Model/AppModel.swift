@@ -329,6 +329,16 @@ final class AppModel {
     var pinsLoading: Set<ChannelID> = []
     /// Why the last pins fetch failed, in the reader's words.
     var pinsFailure: [ChannelID: String] = [:]
+    /// The channel whose topic flyout is open, if any. One at a time, and held
+    /// on the store for the reason the pins pane is: the popover hangs off a
+    /// toolbar item and the item is rebuilt on every navigation.
+    var openTopicChannelID: ChannelID?
+    /// The pinned pane's laid-out cards. See `pinnedCards(in:width:)`.
+    ///
+    /// `@ObservationIgnored` like every other memo here: it is derived state,
+    /// and publishing it would invalidate the pane on the write that fills it.
+    @ObservationIgnored
+    var pinnedCardCache: (key: PinnedCardKey, messages: [Message], value: [MessageCard])?
 
     /// Reactions being written, as `(message, emoji)`. Keyed so two chips on one
     /// message can be pressed in either order without one cancelling the other.
@@ -927,6 +937,17 @@ struct MessageBox: Sendable {
     var command: PendingCommand?
     /// Who is typing, and when their indicator expires.
     var typing: [UserID: Date] = [:]
+    /// Files staged for the next message. Survives eviction alongside the
+    /// draft — dropping a video and then switching channels to check something
+    /// must not throw the video away.
+    var attachments: [PendingAttachment] = []
+    /// Why the last file was refused, in the reader's words. Cleared by the
+    /// next successful staging or by dismissing it.
+    var attachmentRefusal: AttachmentRefusal?
+    /// True while the staged files are going up. The composer disables its
+    /// send control on it, because a second press would upload everything
+    /// twice.
+    var isUploading = false
 
     /// Drops the transcript, keeps the user's own input.
     mutating func evictTranscript() {

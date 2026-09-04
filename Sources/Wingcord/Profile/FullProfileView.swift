@@ -24,6 +24,10 @@ struct FullProfileView: View {
     var profile: ProfilePresentation
     var openDirectMessage: (ChannelID) -> Void
     var openEmoji: ((EmojiRef) -> Void)?
+    /// What a click on a link in this person's prose does. Nil draws links as
+    /// accent text and takes no clicks, which is what a surface with no opener
+    /// can honestly offer — `INVARIANTS.md` §5.5.
+    var openLink: ((String) -> Void)?
 
     /// See `MiniProfileCard.inspectedEmoji`.
     @State private var inspectedEmoji: EmojiRef?
@@ -301,7 +305,8 @@ struct FullProfileView: View {
                     font: .system(.subheadline),
                     color: InkColor.secondary,
                     emojiSide: 18,
-                    onEmoji: openEmoji ?? { inspectedEmoji = $0 }
+                    onEmoji: openEmoji ?? { inspectedEmoji = $0 },
+                    onLink: openLink
                 )
             }
         }

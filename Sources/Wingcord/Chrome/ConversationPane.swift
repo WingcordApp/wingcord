@@ -33,6 +33,12 @@ struct ConversationPane: View {
     /// see `ActivityStageContainer`.
     @State private var activityHeight: CGFloat = 0
 
+    /// Whether a drag carrying files is over this pane.
+    @State private var isDropTargeted = false
+
+    @Environment(AppModel.self) private var model
+    @Environment(\.motion) private var motion
+
     var body: some View {
         ZStack(alignment: .top) {
             transcript
@@ -53,6 +59,28 @@ struct ConversationPane: View {
             .padding(.top, callHeight)
         }
         .onGeometryChange(for: CGFloat.self) { $0.safeAreaInsets.top } action: { chromeHeight = $0 }
+        // **The whole conversation is the target, not the composer.** Somebody
+        // dragging a photograph aims at the messages, which is where it is
+        // going; asking them to hit a 38-point circle is asking them to aim at
+        // the mechanism instead of at the outcome.
+        //
+        // The modifier is written unconditionally and the *predicate* carries
+        // the permission — §2's rule about guarding the modifier rather than the
+        // closure. A channel that refuses files answers false, so nothing lights
+        // up and nothing is accepted.
+        .dropDestination(for: URL.self) { urls, _ in
+            guard model.canAttachFiles(in: channelID) else { return false }
+            model.stageAttachments(urls, in: channelID)
+            return true
+        } isTargeted: { targeted in
+            let allowed = targeted && model.canAttachFiles(in: channelID)
+            guard allowed != isDropTargeted else { return }
+            isDropTargeted = allowed
+        }
+        .overlay {
+            if isDropTargeted { DropHalo() }
+        }
+        .animation(motion.standard, value: isDropTargeted)
     }
 
     private var transcript: some View {
@@ -109,5 +137,37 @@ struct ConversationPane: View {
                         }
                     }
             }
+    }
+}
+
+
+/// What a drag over the transcript looks like.
+///
+/// **A ring and a wash, drawn inside the pane's own bounds** — not a sheet over
+/// it. The reader has to keep seeing where they are aiming, and a panel that
+/// covers the conversation to say "drop here" covers the thing that makes the
+/// drop mean something.
+///
+/// It is inert: `allowsHitTesting(false)`, because a view that appears under a
+/// drag and takes hits is a view that can cancel the drag it is advertising.
+private struct DropHalo: View {
+    var body: some View {
+        ZStack {
+            Palette.accent.opacity(0.10)
+            RoundedRectangle(cornerRadius: Radius.card, style: .continuous)
+                .strokeBorder(Palette.accent.opacity(0.55), lineWidth: 2)
+                .padding(Spacing.base)
+            VStack(spacing: Spacing.base) {
+                Image(systemName: "arrow.down.document")
+                    .font(.system(size: 34, weight: .light))
+                Text("Drop to attach")
+                    .font(.system(.headline))
+            }
+            .foregroundStyle(Ink.primary)
+            .padding(Spacing.group)
+            .glassEffect(.clear.tint(Palette.flyoutTint), in: .rect(cornerRadius: Radius.glass))
+        }
+        .allowsHitTesting(false)
+        .transition(.materialize(from: .bottom))
     }
 }

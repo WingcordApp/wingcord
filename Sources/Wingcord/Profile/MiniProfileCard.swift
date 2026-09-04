@@ -33,6 +33,10 @@ struct MiniProfileCard: View {
     /// inert pictures, which is the honest answer on a surface with no route to
     /// ask about one.
     var openEmoji: ((EmojiRef) -> Void)?
+    /// What a click on a link in this person's prose does. Nil draws links as
+    /// accent text and takes no clicks, which is what a surface with no opener
+    /// can honestly offer — `INVARIANTS.md` §5.5.
+    var openLink: ((String) -> Void)?
 
     /// The emoji whose card is open, if any. One popover per surface rather
     /// than one per picture in somebody's prose.
@@ -97,7 +101,8 @@ struct MiniProfileCard: View {
                         font: .system(.caption),
                         color: InkColor.secondary,
                         emojiSide: 16,
-                        onEmoji: openEmoji ?? { inspectedEmoji = $0 }
+                        onEmoji: openEmoji ?? { inspectedEmoji = $0 },
+                    onLink: openLink
                     )
                 }
             }

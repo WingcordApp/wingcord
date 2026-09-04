@@ -29,16 +29,20 @@ struct MessageActionBar: View {
 
     /// Shared with the overlay, which solves a button's box from them rather
     /// than measuring it — see `MessageActionBarOverlay.anchor(of:in:)`.
-    static let glyphSide: CGFloat = 24
-    static let gap: CGFloat = 1
-    static let padding: CGFloat = 2
+    /// **Generous, because the pill is chrome the pointer aims at.** Twenty-four
+    /// points with a one-point gap put five targets inside a hundred and
+    /// twenty-five, which is a row of glyphs rather than a row of controls — and
+    /// a lensing material has nothing to lens through at that scale.
+    static let glyphSide: CGFloat = 28
+    static let gap: CGFloat = 2
+    static let padding: CGFloat = 4
 
     var body: some View {
         HStack(spacing: Self.gap) {
             ForEach(items) { kind in
                 Button { perform(kind) } label: {
                     Image(systemName: kind.symbolName)
-                        .font(.system(size: 12.5, weight: .medium))
+                        .font(.system(size: 14, weight: .medium))
                         .foregroundStyle(tint(of: kind))
                         .frame(width: Self.glyphSide, height: Self.glyphSide)
                         .background {
@@ -65,7 +69,19 @@ struct MessageActionBar: View {
         }
         .padding(Self.padding)
         .frame(height: TimelineMetrics.actionBarHeight)
-        .glassEffect(.clear.tint(Palette.flyoutTint), in: .capsule)
+        // **`.interactive()`, and this is the one hover surface that has earned
+        // it.** §4's rule against interactive glass is about a row in a
+        // *scrolling list*: the cursor stands still while the row slides under
+        // it, so the displacement is recomputed every frame and the row wobbles.
+        // This pill does not scroll — it is repositioned to whichever row the
+        // pointer is on, and the pointer is by definition resting on it. Without
+        // it the material has no specular response at all and reads as a flat
+        // tinted capsule rather than as glass.
+        .glassEffect(.clear.tint(Palette.flyoutTint).interactive(), in: .capsule)
+        // A fixed sheen along the upper edge. Moving glass picks the system's
+        // own specular up as it travels; this pill is placed rather than
+        // dragged, so it has none of its own.
+        .specularEdge(in: .capsule)
         // The hover fill is the only thing that moves here, and it is a fill —
         // a spring would describe physics that are not happening.
         .animation(motion.fadeQuick, value: hovered)

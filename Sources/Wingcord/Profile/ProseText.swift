@@ -33,6 +33,10 @@ struct ProseText: View {
     var mentions: MentionContext?
     /// What a click on a custom emoji does. Nil makes them inert pictures.
     var onEmoji: ((EmojiRef) -> Void)?
+    /// What a click on a link does. Nil draws links as ordinary accent text and
+    /// takes no clicks, which is the honest answer on a surface with nothing to
+    /// open them with — `INVARIANTS.md` §5.5.
+    var onLink: ((String) -> Void)?
 
     var body: some View {
         VStack(alignment: .leading, spacing: Spacing.tight) {
@@ -49,7 +53,8 @@ struct ProseText: View {
                         color: color,
                         emojiSide: emojiSide,
                         spacing: Self.spaceWidth(for: font),
-                        onEmoji: onEmoji
+                        onEmoji: onEmoji,
+                        onLink: onLink
                     )
                 }
             }
@@ -87,21 +92,62 @@ private struct ProseLine: View {
     var emojiSide: CGFloat
     var spacing: CGFloat
     var onEmoji: ((EmojiRef) -> Void)?
+    var onLink: ((String) -> Void)?
 
     var body: some View {
         FlowLayout(spacing: spacing) {
             ForEach(segments) { segment in
                 switch segment.kind {
-                case .word(let text, let style):
-                    Text(text)
-                        .font(style.font(base: font))
-                        .foregroundStyle(style.color(base: color))
-                        .strikethrough(style.inline.contains(.strikethrough))
-                        .underline(style.inline.contains(.underline))
+                case .word(let text, let style, let destination):
+                    ProseWord(
+                        text: text,
+                        style: style,
+                        font: font,
+                        color: color,
+                        // **Offered only where it can be honoured.** A run with
+                        // no destination, or a surface with no opener, gets
+                        // plain text and no pointer — an inert control that
+                        // looks live is exactly what §5.5 forbids.
+                        open: destination.flatMap { url in
+                            onLink.map { handler in { handler(url) } }
+                        }
+                    )
                 case .emoji(let emoji):
                     ProseEmoji(emoji: emoji, side: emojiSide, onTap: onEmoji)
                 }
             }
+        }
+    }
+}
+
+/// One run of letters, and the click on it when it goes somewhere.
+///
+/// **Two branches rather than one always-tappable view.** A `Button` per word
+/// would put a gesture responder behind every word of every bio in the app; the
+/// overwhelming majority of runs are prose, and prose costs a `Text`.
+private struct ProseWord: View {
+    var text: String
+    var style: ProseStyle
+    var font: Font
+    var color: Color
+    var open: (() -> Void)?
+
+    var body: some View {
+        let label = Text(text)
+            .font(style.font(base: font))
+            .foregroundStyle(style.color(base: color))
+            .strikethrough(style.inline.contains(.strikethrough))
+            .underline(style.inline.contains(.underline))
+
+        if let open {
+            Button(action: open) { label.contentShape(.rect) }
+                .buttonStyle(.plain)
+                // The pointer is the affordance. A link that never changes the
+                // cursor reads as coloured text, which is what the accent alone
+                // was saying.
+                .pointerStyle(.link)
+        } else {
+            label
         }
     }
 }
@@ -138,7 +184,14 @@ private struct ProseEmoji: View {
 /// One drawable piece of a line: a styled word, or a picture.
 struct ProseSegment: Identifiable {
     enum Kind {
-        case word(String, ProseStyle)
+        /// A run of letters. The third field is where a click on it goes, and
+        /// it is what makes a link in a bio a link rather than blue text.
+        ///
+        /// **On the word, not on the style.** `ProseStyle` decides how a run is
+        /// drawn and is compared for equality across runs; a destination is per
+        /// occurrence — two links in one bio share a style and go to different
+        /// places.
+        case word(String, ProseStyle, String?)
         case emoji(EmojiRef)
     }
 
@@ -161,47 +214,56 @@ struct ProseSegment: Identifiable {
             counter += 1
         }
 
+        func word(_ text: String, _ style: ProseStyle, _ destination: String? = nil) {
+            emit(.word(text, style, destination))
+        }
+
         func breakLine() {
             lines.append(current)
             current = []
         }
 
-        func append(_ nodes: [InlineNode], style: ProseStyle) {
+        func append(_ nodes: [InlineNode], style: ProseStyle, destination: String? = nil) {
             for node in nodes {
                 switch node {
                 case .text(let value):
-                    for word in value.split(separator: " ", omittingEmptySubsequences: true) {
-                        emit(.word(String(word), style))
+                    for run in value.split(separator: " ", omittingEmptySubsequences: true) {
+                        word(String(run), style, destination)
                     }
                 case .styled(let inline, let children):
-                    append(children, style: style.adding(inline))
+                    append(children, style: style.adding(inline), destination: destination)
                 case .code(let value):
-                    emit(.word(value, style.asCode))
-                case .link(let label, _):
-                    append(label, style: style.asLink)
+                    word(value, style.asCode, destination)
+                case .link(let label, let url):
+                    // **The destination travels with the label.** It used to be
+                    // discarded here, which drew every link in a bio in the
+                    // accent colour with nothing behind it — a control that
+                    // looks live and does nothing, which `INVARIANTS.md` §5.5
+                    // exists to forbid.
+                    append(label, style: style.asLink, destination: url)
                 case .autoLink(let url):
-                    emit(.word(url, style.asLink))
+                    word(url, style.asLink, url)
                 case .customEmoji(let emoji):
                     emit(.emoji(emoji))
                 case .userMention(let id):
                     let name = mentions?.userNames[id].map { "@\($0)" } ?? "@unknown"
-                    emit(.word(name, style.asMention))
+                    word(name, style.asMention)
                 case .roleMention(let id):
                     let name = mentions?.roleNames[id].map { "@\($0)" } ?? "@role"
-                    emit(.word(name, style.asMention))
+                    word(name, style.asMention)
                 case .channelMention(let id):
                     let name = mentions?.channelNames[id].map { "#\($0)" } ?? "#channel"
-                    emit(.word(name, style.asMention))
+                    word(name, style.asMention)
                 case .commandMention(let name, _):
-                    emit(.word("/\(name)", style.asMention))
+                    word("/\(name)", style.asMention)
                 case .everyoneMention:
-                    emit(.word("@everyone", style.asMention))
+                    word("@everyone", style.asMention)
                 case .hereMention:
-                    emit(.word("@here", style.asMention))
+                    word("@here", style.asMention)
                 case .timestamp(let date, let timestampStyle):
                     // A moment in the reader's own zone and locale, which is why
                     // it is a node and not text.
-                    emit(.word(Self.format(date, style: timestampStyle), style.asMention))
+                    word(Self.format(date, style: timestampStyle), style.asMention)
                 case .lineBreak:
                     breakLine()
                 }
@@ -218,14 +280,14 @@ struct ProseSegment: Identifiable {
                 append(nodes, style: style.asSubtext)
             case .codeBlock(_, let code):
                 for line in code.split(separator: "\n", omittingEmptySubsequences: false) {
-                    emit(.word(String(line), style.asCode))
+                    word(String(line), style.asCode)
                     breakLine()
                 }
             case .quote(let children):
                 for child in children { append(child, style: style.asQuote) }
             case .list(let ordered, let start, let items):
                 for (offset, item) in items.enumerated() {
-                    emit(.word(ordered ? "\(start + offset)." : "•", style))
+                    word(ordered ? "\(start + offset)." : "•", style)
                     for child in item { append(child, style: style) }
                     breakLine()
                 }

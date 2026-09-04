@@ -98,6 +98,9 @@ final class TimelineCoordinator: NSObject {
     private var frameObserver: NSObjectProtocol?
     private var scrollBeganObserver: NSObjectProtocol?
     private var scrollEndedObserver: NSObjectProtocol?
+    /// Fires the acknowledgement that was withheld while the app was behind
+    /// another one. See `acknowledgeIfRead`.
+    private var activationObserver: NSObjectProtocol?
     private var liveScrollTimeout: Task<Void, Never>?
     /// Clears the landing mark after a jump. Cancelled by the next jump, so two
     /// in quick succession leave one mark lit rather than the first clearing the
@@ -321,6 +324,37 @@ final class TimelineCoordinator: NSObject {
         ) { [weak self] _ in
             MainActor.assumeIsolated { self?.setScrolling(false) }
         }
+        // **Reading is what marks a channel read, and reading needs the app to
+        // be in front.** A channel left open behind another window is not being
+        // read, so the acknowledgement waits — and the moment the reader comes
+        // back to it, this is what sends the one that was withheld. Without it
+        // an account that switches away and back keeps a channel unread until
+        // the next message arrives in it.
+        activationObserver = NotificationCenter.default.addObserver(
+            forName: NSApplication.didBecomeActiveNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated { self?.acknowledgeIfRead() }
+        }
+    }
+
+    /// Marks the channel read, when the reader is actually reading it.
+    ///
+    /// Three conditions, and each is a different way of not reading: the app has
+    /// to be in front, the transcript has to be at the foot of the channel — a
+    /// reader scrolled up in history has *not* seen what arrived below them —
+    /// and there has to be a channel. `AppModel.markRead` and
+    /// `SessionController.acknowledge` settle the rest: the newest id, the
+    /// suppression latch behind Mark Unread, and the guard that makes a repeat
+    /// call free.
+    ///
+    /// Called from every place those three can change, because there is no
+    /// single event that covers them: a channel opening, a page landing, a
+    /// scroll reaching the bottom, and the app coming forward.
+    private func acknowledgeIfRead() {
+        guard !isTornDown, isNearBottom, NSApp.isActive, let channelID else { return }
+        model.markRead(channelID)
     }
 
     /// Releases everything. Idempotent.
@@ -334,13 +368,17 @@ final class TimelineCoordinator: NSObject {
         liveScrollTimeout?.cancel()
         liveScrollTimeout = nil
         let center = NotificationCenter.default
-        for observer in [boundsObserver, frameObserver, scrollBeganObserver, scrollEndedObserver] {
+        for observer in [
+            boundsObserver, frameObserver, scrollBeganObserver, scrollEndedObserver,
+            activationObserver,
+        ] {
             if let observer { center.removeObserver(observer) }
         }
         boundsObserver = nil
         frameObserver = nil
         scrollBeganObserver = nil
         scrollEndedObserver = nil
+        activationObserver = nil
         rowCache.removeAll(keepingCapacity: false)
         canvas?.onWidthChange = nil
         canvas?.onOpenLink = nil
@@ -551,13 +589,15 @@ final class TimelineCoordinator: NSObject {
         let wasNearBottom = isNearBottom
 
         let engine = TimelineLayoutEngine(presentationRevision: presentationRevision)
+        let channel = channelID.flatMap { model.channelIndex[$0] }
         let input = TimelineLayoutEngine.Input(
             items: items,
             width: width,
             style: style,
             mentions: model.mentionContext(),
-            channelName: channelID.flatMap { model.channelIndex[$0] }
-                .map { model.displayName(of: $0) } ?? "",
+            channelName: channel.map { model.displayName(of: $0) } ?? "",
+            channelSymbol: channel?.kind.symbolName ?? "number",
+            channelTopic: channel?.topic,
             authors: model.authorInfo(for: items, authorFont: style.authorFont),
             calendar: .current,
             settings: settings
@@ -578,6 +618,9 @@ final class TimelineCoordinator: NSObject {
 
         positionCanvas()
         schedulePrefetch()
+        // A page landing is the moment a channel's newest message becomes
+        // known, so it is the moment the channel can be acknowledged at all.
+        acknowledgeIfRead()
     }
 
     private func resizeDocument(to height: CGFloat) {
@@ -637,6 +680,9 @@ final class TimelineCoordinator: NSObject {
         positionCanvas()
         requestEarlierHistoryIfNeeded(viewport: viewport)
         schedulePrefetch()
+        // Scrolling down to the end is the reader saying they have seen what
+        // was below them, and it is the one path a layout cannot cover.
+        acknowledgeIfRead()
     }
 
     private func positionCanvas() {
@@ -796,214 +842,23 @@ final class TimelineCoordinator: NSObject {
         }
     }
 
-    private struct ImageRequest: Hashable {
-        var key: ImageStore.Key
-        /// Which store answers. A Lottie sticker has no bitmap on the CDN at
-        /// all, so its poster is the first frame of a rasterised filmstrip and
-        /// lives in the other cache entirely.
-        var source: Source
-
-        enum Source: Hashable {
-            case still(ImageStore.Bucket)
-            case film
-        }
-
-        static func == (lhs: ImageRequest, rhs: ImageRequest) -> Bool { lhs.key == rhs.key }
-        func hash(into hasher: inout Hasher) { hasher.combine(key) }
-    }
-
-    private func visibleImageRequests(canvas: TimelineCanvasView) -> [ImageRequest] {
-        let scale = canvas.window?.backingScaleFactor ?? 2
-        // Avatars, emoji and stickers are structural — a transcript without them
-        // is unreadable rather than merely plainer — so the preference governs
-        // the two buckets that are actually expensive: a message's attachments
-        // and an embed's artwork. Stickers are exempt: a sticker IS the message,
-        // so suppressing it leaves a row that says nothing. Both still open at
-        // full size in the viewer, which keeps "off" a saving rather than a wall.
-        let loadsArtwork = AppSettings.shared.loadsImagesAutomatically
-        var requests: [ImageRequest] = []
-        var seen = Set<ImageStore.Key>()
-
+    /// The pictures the visible rows need, asked for once per viewport change.
+    ///
+    /// The set itself is built by `TimelineImageRequests`, which every surface
+    /// that draws messages shares — see the note there for why there is only one
+    /// of these.
+    private func visibleImageRequests(canvas: TimelineCanvasView) -> [TimelineImageRequests.Request] {
+        var rows: [MessageRow] = []
         for index in canvas.visibleRowRange() {
             guard case .message(let row) = canvas.rows[index].kind else { continue }
-
-            if let url = row.avatarURL {
-                let key = ImageStore.Key(
-                    url: url,
-                    maximumPixelSize: Int((Metrics.avatarMessage * scale).rounded(.up))
-                )
-                if seen.insert(key).inserted, ImageStore.shared.cached(key) == nil {
-                    requests.append(ImageRequest(key: key, source: .still(.thumbnail)))
-                }
-            }
-
-            // The quoted face above a reply. **Requested at the message
-            // avatar's size and drawn at sixteen points**, so a reply to
-            // somebody already on screen costs nothing at all — the painter
-            // peeks the same slot with the same key. See `drawReplyHeader`.
-            if let url = row.replyHeader?.avatarURL {
-                let key = ImageStore.Key(
-                    url: url,
-                    maximumPixelSize: Int((Metrics.avatarMessage * scale).rounded(.up))
-                )
-                if seen.insert(key).inserted, ImageStore.shared.cached(key) == nil {
-                    requests.append(ImageRequest(key: key, source: .still(.thumbnail)))
-                }
-            }
-
-            // Stickers. **The painter only ever peeks**, so an asset nobody
-            // prefetches is an asset that never arrives — which is the whole of
-            // "stickers render as blank space". The key has to match the
-            // painter's exactly, or the picture lands in a slot the draw never
-            // looks in.
-            for slot in row.stickers {
-                guard let url = slot.url else { continue }
-                let key = ImageStore.Key(
-                    url: url,
-                    maximumPixelSize: Int((slot.rect.width * scale).rounded(.up))
-                )
-                guard seen.insert(key).inserted else { continue }
-                // **A moving sticker needs its FILMSTRIP, not its first frame.**
-                // Asking for the still gave a picture that never changed, which
-                // is the whole of "stickers do not animate in the chat": every
-                // APNG and GIF sticker was decoded once, at frame zero, and
-                // there was nothing for the clock to advance through.
-                if slot.isAnimated {
-                    let film = AnimatedImageStore.Key(
-                        url: key.url, maximumPixelSize: key.maximumPixelSize
-                    )
-                    if AnimatedImageStore.shared.cached(film) == nil,
-                       !AnimatedImageStore.shared.isKnownStill(film)
-                    {
-                        requests.append(ImageRequest(key: key, source: .film))
-                    }
-                } else if ImageStore.shared.cached(key, bucket: .artwork) == nil {
-                    requests.append(ImageRequest(key: key, source: .still(.artwork)))
-                }
-            }
-
-            // An embed's own pictures: an author's mark, a thumbnail, the main
-            // image, a footer icon. The painter only peeks, so anything nobody
-            // prefetches never appears.
-            for image in row.embeds.lazy.flatMap(\.images) {
-                guard loadsArtwork, let url = image.url else { continue }
-                let bucket: ImageStore.Bucket = image.isArtwork ? .artwork : .thumbnail
-                let key = ImageStore.Key(
-                    url: url,
-                    maximumPixelSize: Int((image.decodeWidth * scale).rounded(.up))
-                )
-                if seen.insert(key).inserted, ImageStore.shared.cached(key, bucket: bucket) == nil {
-                    requests.append(ImageRequest(key: key, source: .still(bucket)))
-                }
-            }
-
-            // **Custom emoji inside an embed or a Components V2 card.** The
-            // painter only peeks, so an app's `<:sakura:123>` in a description
-            // is a blank gap until somebody asks for the bytes — and nothing
-            // else on this pass does.
-            for text in row.embeds.lazy.flatMap(\.texts) {
-                for entry in text.block.emojiRects {
-                    guard let id = entry.emoji.id,
-                          let url = CDN.emoji(
-                              id: id, animated: entry.emoji.isAnimated, side: entry.rect.width
-                          )
-                    else { continue }
-                    let key = ImageStore.Key(
-                        url: url,
-                        maximumPixelSize: Int((entry.rect.width * scale).rounded(.up))
-                    )
-                    if seen.insert(key).inserted, ImageStore.shared.cached(key) == nil {
-                        requests.append(ImageRequest(key: key, source: .still(.thumbnail)))
-                    }
-                }
-            }
-
-            // An activity invitation's app icon. It is the card's only picture,
-            // and — unlike everything else on this pass — it is *also* what the
-            // card's colour is quantised from, so the derivation is kicked off
-            // beside the fetch rather than waiting for a second trigger.
-            if let invite = row.activityInvite, let url = invite.iconURL {
-                model.sessionController.deriveActivityAccent(invite.source)
-                let key = ImageStore.Key(
-                    url: url,
-                    maximumPixelSize: Int((invite.iconRect.width * scale).rounded(.up))
-                )
-                if seen.insert(key).inserted, ImageStore.shared.cached(key) == nil {
-                    requests.append(ImageRequest(key: key, source: .still(.thumbnail)))
-                }
-            }
-
-            // A poll's answer glyphs.
-            for answer in row.poll?.answers ?? [] {
-                guard let id = answer.emoji?.id,
-                      let url = CDN.emoji(
-                          id: id,
-                          animated: answer.emoji?.isAnimated ?? false,
-                          side: answer.emojiRect.width
-                      )
-                else { continue }
-                let key = ImageStore.Key(
-                    url: url,
-                    maximumPixelSize: Int((answer.emojiRect.width * scale).rounded(.up))
-                )
-                if seen.insert(key).inserted, ImageStore.shared.cached(key) == nil {
-                    requests.append(ImageRequest(key: key, source: .still(.thumbnail)))
-                }
-            }
-
-            // A button's emoji rides the ordinary inline-emoji rung.
-            for slot in row.components {
-                guard let id = slot.emoji?.id,
-                      let url = CDN.emoji(
-                          id: id,
-                          animated: slot.emoji?.isAnimated ?? false,
-                          side: TimelineMetrics.componentGlyphSide
-                      )
-                else { continue }
-                let key = ImageStore.Key(
-                    url: url,
-                    maximumPixelSize: Int(
-                        (TimelineMetrics.componentGlyphSide * scale).rounded(.up)
-                    )
-                )
-                if seen.insert(key).inserted, ImageStore.shared.cached(key) == nil {
-                    requests.append(ImageRequest(key: key, source: .still(.thumbnail)))
-                }
-            }
-
-            for slot in row.attachments where !slot.isSpoiler {
-                guard loadsArtwork, let url = slot.url else { continue }
-                let key = ImageStore.Key(
-                    url: url,
-                    maximumPixelSize: Int((slot.decodeWidth * scale).rounded(.up))
-                )
-                if seen.insert(key).inserted,
-                   ImageStore.shared.cached(key, bucket: .attachment) == nil
-                {
-                    requests.append(ImageRequest(key: key, source: .still(.attachment)))
-                }
-            }
-
-            if let block = row.textBlock {
-                for entry in block.emojiRects {
-                    guard let id = entry.emoji.id,
-                          let url = CDN.emoji(
-                              id: id,
-                              animated: entry.emoji.isAnimated,
-                              side: entry.rect.width
-                          )
-                    else { continue }
-                    let key = ImageStore.Key(
-                        url: url,
-                        maximumPixelSize: Int((entry.rect.width * scale).rounded(.up))
-                    )
-                    if seen.insert(key).inserted, ImageStore.shared.cached(key) == nil {
-                        requests.append(ImageRequest(key: key, source: .still(.thumbnail)))
-                    }
-                }
-            }
+            rows.append(row)
         }
-        return requests
+        return TimelineImageRequests.requests(
+            for: rows,
+            scale: canvas.window?.backingScaleFactor ?? 2,
+            loadsArtwork: AppSettings.shared.loadsImagesAutomatically,
+            onActivityIcon: { [weak model] in model?.sessionController.deriveActivityAccent($0) }
+        )
     }
 
     // MARK: Actions
@@ -1011,24 +866,13 @@ final class TimelineCoordinator: NSObject {
     private func open(_ target: MessageText.LinkTarget, from rect: CGRect) {
         switch target {
         case .url(let string):
-            // A Discord message link the RENDERER could not name is still a
-            // place in this account. The renderer only has the selected guild's
-            // channels plus the DMs, so a link into a third server arrives here
-            // as an ordinary URL — and handing that to a browser would ask the
-            // reader to sign in to a client they are not using. The opener has
-            // the whole index, so it can answer what the renderer could not.
-            if let link = MessageLink.parse(string), model.channelIndex[link.channelID] != nil {
-                model.openMessageLink(link)
-                return
-            }
-            // The scheme was already checked by the parser, which refuses to
-            // build a link node for anything but http(s) and discord://. This
-            // second check is not redundant: it is the boundary that keeps a
-            // future caller of `open` from bypassing the parser's.
-            guard InlineScannerSchemeCheck.isSafe(string), let url = URL(string: string) else {
-                return
-            }
-            NSWorkspace.shared.open(url)
+            // **The store's opener, not a copy of it here.** It resolves a
+            // message link against the whole account — the renderer only has the
+            // selected guild's channels plus the DMs, so a link into a third
+            // server arrives here as an ordinary URL — and it re-checks the
+            // scheme at the boundary rather than trusting the parser upstream.
+            // Every surface that follows a link somebody wrote goes through it.
+            model.openLink(string)
         case .channel(let channelID):
             model.selectChannel(channelID)
         case .message(let link):

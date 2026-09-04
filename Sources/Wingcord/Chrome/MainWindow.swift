@@ -43,7 +43,35 @@ struct MainWindow: View {
                         chrome: model.channelChrome,
                         toggleMemberList: { model.isMemberListShown.toggle() },
                         toggleUserProfile: { model.isDirectMessageProfileShown.toggle() },
-                        openChannelDetails: {},
+                        openChannelDetails: {
+                            guard let channelID = model.selectedChannelID else { return }
+                            model.openTopicChannelID =
+                                model.openTopicChannelID == channelID ? nil : channelID
+                        },
+                        topicContent: {
+                            // Built only when the popover is presented, which is
+                            // what keeps the topic read out of the toolbar's own
+                            // body.
+                            AnyView(
+                                Group {
+                                    if let channelID = model.openTopicChannelID,
+                                       let channel = model.channelIndex[channelID],
+                                       let topic = channel.topic, !topic.isEmpty
+                                    {
+                                        ChannelTopicPane(
+                                            name: model.displayName(of: channel),
+                                            symbolName: channel.kind.symbolName,
+                                            topic: topic,
+                                            mentions: model.mentionContext(),
+                                            openLink: { model.openLink($0) },
+                                            openEmoji: {
+                                                model.openExpressionInfo(.emoji($0), anchor: .zero)
+                                            }
+                                        )
+                                    }
+                                }
+                            )
+                        },
                         toggleCall: {
                             guard let channelID = model.selectedChannelID else { return }
                             if model.connectedVoiceChannelID == channelID {
@@ -149,11 +177,23 @@ private struct SidebarColumn: View {
             // window's foot the way it runs to its top.
             ChannelSidebarContainer()
                 .safeAreaBar(edge: .bottom, spacing: 0) {
-                    // The bar paints a fill of its own that no modifier can
-                    // suppress, and under a theme it is a slab across the foot
-                    // of the column with a hard edge. Handing it the same ground
-                    // the column has puts the theme back over it — see
-                    // `barGround`.
+                    // **Nothing is painted behind these bars, and that is the
+                    // fix rather than an omission.** They used to be handed the
+                    // column's own themed ground, to cover a fill the bar was
+                    // believed to paint. That ground is opaque, it sat directly
+                    // under the identity capsule's glass, and it is §4 rule 3
+                    // exactly: a surface with an opaque fill behind it has
+                    // nothing to refract, so under any theme the now bar stopped
+                    // lensing and read as a flat plate that no longer floated.
+                    //
+                    // Measured on the running app with a themed window: with the
+                    // ground removed there is no slab and no seam — the sidebar
+                    // ground in the `ZStack` above already ignores its safe
+                    // areas and covers this strip, and the channel list passes
+                    // under the bar for the capsule to lens. Which is precisely
+                    // the arrangement the composer has always had, and the
+                    // reason the composer kept its glass under a theme while
+                    // this bar lost it.
                     //
                     // **The call sits above the identity, in a panel of its
                     // own.** It used to be a line inside the now bar, which made
@@ -163,9 +203,11 @@ private struct SidebarColumn: View {
                         VoiceHUDContainer()
                         NowBarContainer()
                     }
-                    .barGround(.sidebar)
                 }
         }
+        // Drawn HERE, outside the rail's own `ScrollView` — which clips — and on
+        // the one view wide enough to hold a chip beside the 68-point column.
+        .railHoverLabelHost()
     }
 }
 
@@ -285,10 +327,14 @@ private struct ChannelSidebarContainer: View {
 
 private struct NowBarContainer: View {
     @Environment(AppModel.self) private var model
+    /// Read here rather than inside the bar, so the bar stays a pure value view
+    /// and `.equatable()` still has something to compare.
+    @State private var settings = AppSettings.shared
 
     var body: some View {
         NowBar(
             presentation: model.nowBarPresentation,
+            shape: settings.nowBarShape,
             // Through the controller, so the switch reaches the media engine
             // AND is republished over the socket — a mute that only moves a
             // local flag is a mute nobody else can see.

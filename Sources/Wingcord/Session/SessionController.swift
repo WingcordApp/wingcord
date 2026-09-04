@@ -290,6 +290,8 @@ final class SessionController {
         model.pinsLoading = []
         model.pinsFailure = [:]
         model.openPinsChannelID = nil
+        model.openTopicChannelID = nil
+        model.pinnedCardCache = nil
         model.reactionsInFlight = []
         model.blockedUserIDs = []
         model.ignoredUserIDs = []
@@ -1319,36 +1321,109 @@ final class SessionController {
 
     /// - Parameter stickerIDs: Stickers to send. A sticker is a message on its
     ///   own, so this is the one path where empty content is legitimate.
+    /// - Parameter attachments: Files already staged in the composer. A message
+    ///   may be nothing but these, which is the second such path.
     func send(
         _ content: String,
         in channelID: ChannelID,
         replyingTo: MessageID?,
-        stickerIDs: [UInt64] = []
+        stickerIDs: [UInt64] = [],
+        attachments: [PendingAttachment] = []
     ) {
         let trimmed = content.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty || !stickerIDs.isEmpty, let userID = model.currentUserID else {
-            return
-        }
+        guard !trimmed.isEmpty || !stickerIDs.isEmpty || !attachments.isEmpty,
+              model.currentUserID != nil
+        else { return }
         // A nonce, so the gateway's echo can be matched to this send and replace
         // the optimistic row rather than appearing beside it.
         let nonce = String(UInt64(Date.now.timeIntervalSince1970 * 1000))
+        if !attachments.isEmpty { model.mutateBox(channelID) { $0.isUploading = true } }
         Task { [weak self] in
             guard let self else { return }
+            defer {
+                if !attachments.isEmpty {
+                    model.mutateBox(channelID) { $0.isUploading = false }
+                }
+            }
             do {
+                let uploaded = try await upload(attachments, in: channelID)
                 let message = try await rest.sendMessage(
                     in: channelID,
                     content: trimmed,
                     nonce: nonce,
                     replyingTo: replyingTo,
-                    stickerIDs: stickerIDs
+                    stickerIDs: stickerIDs,
+                    attachments: uploaded
                 )
-                model.mutateBox(channelID) { $0.upsert(message) }
+                model.mutateBox(channelID) { box in
+                    box.upsert(message)
+                    box.attachments.removeAll()
+                }
                 model.messageContentRevision &+= 1
             } catch {
                 Self.log.error("send failed: \(Self.describe(error), privacy: .public)")
+                // **The files stay staged.** A refused upload that also cleared
+                // the tray would ask somebody to find five pictures again
+                // because the network dropped; the reason goes where the tray
+                // already draws one.
+                model.mutateBox(channelID) { box in
+                    box.attachmentRefusal = attachments.isEmpty
+                        ? nil
+                        : .sendFailed(Self.describe(error))
+                    for index in box.attachments.indices { box.attachments[index].progress = nil }
+                }
             }
-            _ = userID
         }
+    }
+
+    /// Puts the staged files up, in order, reporting each one's progress.
+    ///
+    /// **Serially, and that is deliberate.** These are the largest transfers the
+    /// app makes — up to half a gigabyte each — and running five at once splits
+    /// one connection's bandwidth five ways while holding five buffers. One at a
+    /// time also makes the progress figure mean something: it is *this* file,
+    /// not an average across a set whose sizes differ by two orders of
+    /// magnitude.
+    private func upload(
+        _ attachments: [PendingAttachment],
+        in channelID: ChannelID
+    ) async throws -> [UploadedAttachment] {
+        guard !attachments.isEmpty else { return [] }
+        let slots = try await rest.createUploadSlots(
+            in: channelID, for: attachments.map(\.uploadRequest)
+        )
+        var uploaded: [UploadedAttachment] = []
+        uploaded.reserveCapacity(slots.count)
+        for (attachment, slot) in zip(attachments, slots) {
+            try await rest.upload(attachment.url, to: slot) { [weak self] fraction in
+                Task { @MainActor [weak self] in
+                    self?.reportUpload(fraction, of: attachment.id, in: channelID)
+                }
+            }
+            uploaded.append(UploadedAttachment(
+                id: slot.id,
+                filename: slot.filename,
+                uploadedFilename: slot.uploadedFilename,
+                altText: attachment.altText
+            ))
+        }
+        return uploaded
+    }
+
+    /// Writes a progress figure into the tray, on a change worth drawing.
+    ///
+    /// **Coalesced on a hundredth**, for the reason `MediaCanvasView` coalesces
+    /// a pinch: `URLSession` reports every buffer it hands to the socket —
+    /// thousands of times for a large file — and the thing reading this is a bar
+    /// a few dozen points wide that cannot show a ten-thousandth.
+    @MainActor
+    private func reportUpload(_ fraction: Double, of id: PendingAttachment.ID, in channelID: ChannelID) {
+        guard let box = model.messages(in: channelID),
+              let index = box.attachments.firstIndex(where: { $0.id == id })
+        else { return }
+        let previous = box.attachments[index].progress ?? -1
+        guard fraction >= 1 || fraction - previous >= 0.01 else { return }
+        model.mutateBox(channelID) { $0.attachments[index].progress = fraction }
     }
 
     static func describe(_ error: any Error) -> String {

@@ -32,13 +32,27 @@ extension AppModel {
         in channelID: ChannelID,
         stickerIDs: [UInt64] = []
     ) {
-        let replyingTo = messages(in: channelID)?.replyingTo
+        guard let box = messages(in: channelID) else {
+            sessionController.send(content, in: channelID, replyingTo: nil, stickerIDs: stickerIDs)
+            return
+        }
+        // **The tray is not cleared here.** The files are still going up, and
+        // the send is what removes them once Discord has taken them — clearing
+        // now means a refused upload has nothing left to retry with. The draft
+        // and the reply are cleared, because those the composer has already
+        // committed.
+        guard !box.isUploading else { return }
         sessionController.send(
-            content, in: channelID, replyingTo: replyingTo, stickerIDs: stickerIDs
+            content,
+            in: channelID,
+            replyingTo: box.replyingTo,
+            stickerIDs: stickerIDs,
+            attachments: box.attachments
         )
         mutateBox(channelID) {
             $0.draft = ""
             $0.replyingTo = nil
+            $0.attachmentRefusal = nil
         }
     }
 

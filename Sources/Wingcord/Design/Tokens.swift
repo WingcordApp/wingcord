@@ -184,6 +184,55 @@ nonisolated enum Spacing {
 
 // MARK: - Corner radii
 
+/// The silhouette the app's two floating bars take.
+///
+/// **One value for both, and it is the reader's.** The now bar and the composer
+/// are the same object in two places — a floating glass plate at the foot of a
+/// column — so a preference that changed one and not the other would be a window
+/// with two opinions about its own shape. Which one is right is genuinely taste,
+/// which is exactly what a setting is for.
+enum ChromeShape: String, CaseIterable, Sendable, Codable {
+    /// Fully rounded ends. The shape a floating bar takes when it is read as an
+    /// object rather than as a region.
+    case pill
+    /// A rounded rectangle at the house radius, so the bar reads as a panel of
+    /// the same family as every card in the app.
+    case boxy
+
+    var label: String {
+        switch self {
+        case .pill: "Pill"
+        case .boxy: "Boxy"
+        }
+    }
+
+    var symbolName: String {
+        switch self {
+        case .pill: "capsule"
+        case .boxy: "rectangle.roundedtop"
+        }
+    }
+
+    /// The corner for a bar of this height.
+    ///
+    /// A capsule is not a constant — it is half the height — so the two answers
+    /// cannot both be written down, and a hard-coded radius for the pill is
+    /// wrong the moment the bar grows a line.
+    ///
+    /// **Boxy is `Radius.chip`, not `Radius.glass`, and that is the difference
+    /// between a setting and a no-op.** The house glass radius is eighteen; a
+    /// composer at rest is thirty-eight points tall, so its capsule radius is
+    /// nineteen — the two answers were one point apart and the picker changed
+    /// nothing anybody could see. Ten reads as a rounded rectangle at both bar
+    /// heights, which is what the choice is actually between.
+    func cornerRadius(forHeight height: CGFloat) -> CGFloat {
+        switch self {
+        case .pill: max(0, height / 2)
+        case .boxy: Radius.chip
+        }
+    }
+}
+
 nonisolated enum Radius {
     /// Small inline chips — folder chips, tag chips, role chips.
     static let chip: CGFloat = 10

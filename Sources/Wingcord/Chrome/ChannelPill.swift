@@ -27,7 +27,16 @@ struct ChannelPill: View {
     /// Resolved by the chrome, because the pill names channels and server
     /// pages alike and only one of those has a `ChannelKind`.
     var symbolName: String
+    /// Whether pressing it does anything. **False where there is no topic** —
+    /// a pill that opens onto an empty box is the inert control §5.5 forbids,
+    /// and a server page has no topic at all.
+    var canOpenTopic: Bool
+    var isTopicShown: Bool
     var action: () -> Void
+    /// The flyout's contents. A closure rather than the pane, so the toolbar
+    /// never builds it for a channel nobody has opened it in — the same reason
+    /// the pins and threads panes are closures.
+    var topicContent: () -> AnyView
 
     @Environment(\.motion) private var motion
 
@@ -42,8 +51,26 @@ struct ChannelPill: View {
                     .contentTransition(.interpolate)
             }
         }
+        .disabled(!canOpenTopic)
         .animation(motion.glassMorph, value: name)
-        .help(name)
+        .help(canOpenTopic ? "\(name) — what this channel is for" : name)
         .accessibilityLabel(Text(name))
+        // **The scoped exception, exactly as the pins popover is.** §2 forbids a
+        // presentation modifier on a list ROW because it is evaluated by every
+        // row on every pass; this is one toolbar item, evaluated once, and it is
+        // the only way to point a surface at the control that opened it.
+        .popover(isPresented: topicBinding, arrowEdge: .bottom) {
+            topicContent()
+        }
+    }
+
+    /// **The setter may only clear when the store is still showing this one.**
+    /// Clearing unconditionally lets a dismissal that arrives while a second
+    /// channel's flyout is opening take the new one down with it.
+    private var topicBinding: Binding<Bool> {
+        Binding(
+            get: { isTopicShown },
+            set: { if !$0, isTopicShown { action() } }
+        )
     }
 }

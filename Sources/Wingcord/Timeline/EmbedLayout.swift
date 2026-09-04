@@ -51,6 +51,10 @@ nonisolated struct EmbedImage: Sendable {
     var corner: CGFloat
     var decodeWidth: CGFloat
     var isArtwork: Bool
+    /// Whether the picture moves. A pasted GIF link unfurls into one of these,
+    /// and drawing its first frame for ever is the whole of "GIFs do not
+    /// animate in the chat" on the embed half of the transcript.
+    var isAnimated: Bool = false
 }
 
 /// Turns an embed into rectangles.
@@ -250,15 +254,32 @@ nonisolated enum EmbedLayoutEngine {
     }
 
     /// A picture with nothing around it.
+    ///
+    /// **Sized by the picture, not by the column.** This used to take the full
+    /// available width whatever the source was and then cap the *height* alone
+    /// — so a 180x320 GIF was drawn 432 points wide and 300 tall, which is both
+    /// four times its own resolution and the wrong shape. Both dimensions move
+    /// together or neither does, and neither goes past the source's own pixels.
+    /// `TimelineLayoutEngine.mediaBox` is the one copy of that rule; a second
+    /// one here is a second place for it to drift.
     private static func bareImage(
         _ media: Embed.Media,
         origin: CGPoint,
         availableWidth: CGFloat
     ) -> EmbedSlot {
-        let width = min(Metrics.embedMaxWidth, availableWidth)
-        let height = media.aspectRatio.map { min(imageMaxHeight, width / $0) }
-            ?? min(imageMaxHeight, width * 0.5625)
+        let box = TimelineLayoutEngine.mediaBox(
+            width: media.width,
+            height: media.height,
+            availableWidth: min(Metrics.embedMaxWidth, availableWidth),
+            maximumHeight: imageMaxHeight
+        )
+        let width = box.width
+        let height = box.height
         let rect = CGRect(x: origin.x, y: origin.y, width: width, height: height)
+        // GIF only: an animated WebP is labelled exactly as a still one, so
+        // there is no fact here to act on. Same rule as `CDN.canAnimate`.
+        let isAnimated = URL(string: media.proxyURL ?? media.url)
+            .map(CDN.canAnimate) ?? false
         return EmbedSlot(
             rect: rect,
             // No accent: there is no rule to draw it on.
@@ -267,13 +288,20 @@ nonisolated enum EmbedLayoutEngine {
             texts: [],
             images: [EmbedImage(
                 rect: rect,
-                url: CDN.resizedAttachment(
-                    proxyURL: media.proxyURL ?? media.url, width: width
-                ),
+                // **Whole, not resized, when it moves.** `width=` on a GIF path
+                // answers with a single frame, so a resized rendition is an
+                // animation with nothing to play; `AnimatedImageStore`
+                // downsamples at decode instead.
+                url: isAnimated
+                    ? URL(string: media.proxyURL ?? media.url)
+                    : CDN.resizedAttachment(
+                        proxyURL: media.proxyURL ?? media.url, width: width
+                    ),
                 isCircle: false,
                 corner: corner,
                 decodeWidth: width,
-                isArtwork: true
+                isArtwork: true,
+                isAnimated: isAnimated
             )]
         )
     }

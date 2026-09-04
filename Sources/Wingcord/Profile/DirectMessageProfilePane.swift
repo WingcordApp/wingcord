@@ -25,7 +25,8 @@ struct DirectMessageProfileContainer: View {
                 anchor: .zero,
                 depth: .full
             )),
-            openFullProfile: { model.openProfile(userID, anchor: .zero, depth: .full) }
+            openFullProfile: { model.openProfile(userID, anchor: .zero, depth: .full) },
+            openLink: { model.openLink($0) }
         )
         .task(id: userID) {
             model.sessionController.loadProfile(of: userID, inGuild: nil)
@@ -50,6 +51,10 @@ struct DirectMessageProfileContainer: View {
 struct DirectMessageProfilePane: View {
     var profile: ProfilePresentation?
     var openFullProfile: () -> Void
+    /// Passed through to the card's prose. The pane holds no model reference —
+    /// see the container above — so the opener arrives as a closure like every
+    /// other action on this surface.
+    var openLink: ((String) -> Void)?
 
     private static let width: CGFloat = Proportions.profileColumnIdeal
 
@@ -67,6 +72,7 @@ struct DirectMessageProfilePane: View {
                     MiniProfileCard(
                         profile: profile,
                         openFullProfile: openFullProfile,
+                        openLink: openLink,
                         width: Self.width,
                         form: .column
                     )

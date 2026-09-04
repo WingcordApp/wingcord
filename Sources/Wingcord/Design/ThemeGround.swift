@@ -120,23 +120,6 @@ extension View {
         modifier(ThemeGroundModifier(role: .sidebar, spreads: true))
     }
 
-    /// The ground behind a **floating bar's own row**.
-    ///
-    /// `safeAreaBar` paints a background of its own under whatever it is handed,
-    /// and there is no supported way to ask it not to. Over the house palette it
-    /// is invisible — the bar's fill and the window's ground are the same
-    /// near-black — and under any theme it is a flat slab across the foot of the
-    /// column, with a hard edge exactly one bar tall. With a picture behind the
-    /// app it cuts the photograph off mid-window.
-    ///
-    /// So the bar is handed the same ground the column has, positioned in the
-    /// same window space, which puts the theme back on top of the system's fill
-    /// and continues the picture through it without a seam. The one bar that
-    /// does *not* need this is the composer's, because the transcript already
-    /// runs underneath it and covers the fill.
-    func barGround(_ role: ThemeGroundRole) -> some View {
-        modifier(ThemeGroundModifier(role: role, spreads: false))
-    }
 }
 
 // MARK: - What is actually drawn

@@ -17,7 +17,7 @@ nonisolated struct TimelineRow: Sendable {
     enum Kind: Sendable {
         case daySeparator(label: String)
         case unreadDivider
-        case conversationStart(name: String)
+        case conversationStart(ConversationStartSlot)
         case skeleton(index: Int)
         case loadingFirstPage
         case historyUnavailable(reason: String)
@@ -75,6 +75,10 @@ nonisolated struct MessageRow: @unchecked Sendable {
 
     var isBot: Bool
 
+    /// The message this one forwards, quoted. Nil for everything else, which is
+    /// nearly every message.
+    var forwarded: ForwardedSlot?
+
     /// Laid-out body text. Nil for a message with no textual content.
     var textBlock: TimelineTextBlock?
     var textOrigin: CGPoint
@@ -127,14 +131,106 @@ nonisolated struct MessageRow: @unchecked Sendable {
     var accessibilityLabel: String
 }
 
+/// A forwarded message, quoted inside the one that carries it.
+///
+/// **The snapshot is drawn, not summarised.** Discord sends the whole forwarded
+/// message — its words, its files and its embeds — and a renderer that knew only
+/// that a forward existed drew an author line over empty space. That is what
+/// every forwarded message looked like in this app, in the transcript and in the
+/// pinned pane alike.
+///
+/// Laid out as a quote: one rule down the leading edge, a label saying what the
+/// block is, then the snapshot's own content indented behind the rule. The
+/// contents are ordinary slots — the same text block, attachment slots and embed
+/// slots the message itself uses — so anything the transcript can draw, a
+/// forward can carry.
+nonisolated struct ForwardedSlot: Sendable {
+    /// The whole block, so the row height and the rule both come from one rect.
+    var rect: CGRect
+    /// The leading rule.
+    var ruleRect: CGRect
+    /// The arrow beside the label.
+    var glyphRect: CGRect
+    var label: TimelineTextBlock
+    var labelOrigin: CGPoint
+    var body: TimelineTextBlock?
+    var bodyOrigin: CGPoint
+    var attachments: [AttachmentSlot]
+    var embeds: [EmbedSlot]
+    /// "#general · 4 Aug 2026", when the source channel is one this account can
+    /// name. Nil otherwise — inventing a name for a channel the reader has no
+    /// access to is a claim the client cannot support.
+    var footer: TimelineTextBlock?
+    var footerOrigin: CGPoint
+}
+
+/// The head of a channel: an icon, a welcome, and what the channel is for.
+///
+/// **Laid out rather than drawn at fixed offsets.** The old version painted two
+/// strings at `+30` and `+62` into a 120-point row, so a long channel name
+/// truncated, a topic had nowhere to go, and the empty band underneath was the
+/// "weird space" — a fixed height reserved for two lines that only ever used
+/// half of it. Everything here is measured, and the row is as tall as what it
+/// holds.
+nonisolated struct ConversationStartSlot: Sendable {
+    /// The icon tile.
+    var iconRect: CGRect
+    /// The channel's own symbol — `#`, a speaker, a megaphone.
+    var symbolName: String
+    /// Where the glyph sits inside the tile.
+    var glyphRect: CGRect
+    var title: TimelineTextBlock
+    var titleOrigin: CGPoint
+    var subtitle: TimelineTextBlock
+    var subtitleOrigin: CGPoint
+    /// The channel's topic, when it has one. Markdown, because people write it
+    /// there — a topic rendered as a plain string shows `<:emoji:id>` and
+    /// `**bold**` as literal characters.
+    var topic: TimelineTextBlock?
+    var topicOrigin: CGPoint
+}
+
 nonisolated struct AttachmentSlot: Sendable {
     var rect: CGRect
     var url: URL?
     var isSpoiler: Bool
-    var isVideo: Bool
     var altText: String?
     /// The pixel width the image should be decoded at.
     var decodeWidth: CGFloat
+    /// What the painter draws, decided at layout time.
+    ///
+    /// **Four kinds, not a Bool.** A picture, a clip with a poster, a voice note
+    /// and a zip file are four different rectangles with four different
+    /// contents, and resolving that inside `draw` puts the decision in every
+    /// repaint of every row — the same rule `EmbedLayoutEngine` follows.
+    var kind: Kind = .image
+    /// The file's own name and size, for the kinds that show them.
+    var filename: String = ""
+    var sizeLabel: String = ""
+    /// Where the name and the size sit inside a file card.
+    var titleOrigin: CGPoint = .zero
+    var subtitleOrigin: CGPoint = .zero
+    /// "0:14", under a clip's play badge. Empty when Discord sent no duration.
+    var durationLabel: String = ""
+    /// Whether the picture is animated and should be drawn from a filmstrip
+    /// rather than from a still. See `AnimatedImageStore`.
+    var isAnimated: Bool = false
+
+    enum Kind: Sendable, Equatable {
+        /// A still or animated picture, drawn at its own size.
+        case image
+        /// A clip. The rect holds a poster; the badge and the duration go over
+        /// it.
+        case video
+        /// A voice note — a waveform and a duration, at one line's height.
+        case voice
+        /// Anything else: a card with a glyph, a name and a size.
+        case file
+    }
+
+    /// Whether the slot draws a picture at all. What decides if the prefetch
+    /// should ask for bytes.
+    var carriesArtwork: Bool { kind == .image || kind == .video }
 }
 
 /// A sticker's box.
@@ -312,6 +408,13 @@ nonisolated struct TimelineLayoutEngine: Sendable {
         var style: MessageTextStyle
         var mentions: MentionContext
         var channelName: String
+        /// The channel's own SF Symbol — `#`, a speaker, a megaphone. Resolved
+        /// by the caller, because the kind is a store fact and this type is
+        /// deliberately unable to reach the store.
+        var channelSymbol: String = "number"
+        /// What the channel is for, in the words whoever set it up wrote.
+        /// Markdown, because that is what the field accepts.
+        var channelTopic: String?
         /// Everything the layout needs about people, resolved by the caller so
         /// this never touches the store.
         var authors: [UserID: AuthorInfo]
@@ -418,9 +521,14 @@ nonisolated struct TimelineLayoutEngine: Sendable {
                 ))
 
             case .conversationStart:
+                let slot = Self.conversationStart(
+                    input,
+                    width: input.width,
+                    parser: parser
+                )
                 rows.append(TimelineRow(
-                    height: TimelineMetrics.conversationStartHeight,
-                    kind: .conversationStart(name: input.channelName)
+                    height: slot.height,
+                    kind: .conversationStart(slot.slot)
                 ))
 
             case .historySkeleton(let index):
@@ -507,6 +615,7 @@ nonisolated struct TimelineLayoutEngine: Sendable {
         if let header = row.interactionHeader { bottom = max(bottom, header.rect.maxY) }
         if let avatarRect = row.avatarRect { bottom = max(bottom, avatarRect.maxY) }
         bottom = max(bottom, row.authorRect.maxY)
+        if let forwarded = row.forwarded { bottom = max(bottom, forwarded.rect.maxY) }
         if let block = row.textBlock {
             bottom = max(bottom, row.textOrigin.y + block.size.height)
         }
@@ -604,6 +713,23 @@ nonisolated struct TimelineLayoutEngine: Sendable {
             y += TimelineMetrics.headerHeight + TimelineMetrics.headerGap
         }
 
+        // The message this one forwards, quoted. **Above the body**, because a
+        // forward that carries a note is "here is a thing, and here is what I
+        // think of it" — the thing comes first, which is the order every client
+        // draws it in.
+        var forwarded: ForwardedSlot?
+        if let snapshot = message.forwarded {
+            let slot = Self.layoutForward(
+                snapshot,
+                origin: CGPoint(x: contentX, y: y),
+                availableWidth: contentWidth,
+                input: input,
+                parser: parser
+            )
+            forwarded = slot
+            y = slot.rect.maxY + TimelineMetrics.attachmentGap
+        }
+
         // Body text.
         //
         // A message that is nothing but emoji is drawn large — the rule every
@@ -649,7 +775,8 @@ nonisolated struct TimelineLayoutEngine: Sendable {
             let slot = Self.attachmentSlot(
                 attachment,
                 origin: CGPoint(x: contentX, y: y),
-                availableWidth: contentWidth
+                availableWidth: contentWidth,
+                style: input.style
             )
             attachments.append(slot)
             y = slot.rect.maxY
@@ -819,6 +946,7 @@ nonisolated struct TimelineLayoutEngine: Sendable {
             timestampRect: timestampRect,
             gutterTimestampText: input.settings.time(message.sentAt),
             isBot: author?.isBot ?? false,
+            forwarded: forwarded,
             textBlock: textBlock,
             textOrigin: textOrigin,
             attachments: attachments,
@@ -1278,43 +1406,410 @@ nonisolated struct TimelineLayoutEngine: Sendable {
         return parts.joined(separator: ". ")
     }
 
+    // MARK: A forwarded message
+
+    /// Lays a forward out as a quote: a rule, a label, and the snapshot inside.
+    private static func layoutForward(
+        _ snapshot: ForwardedMessage,
+        origin: CGPoint,
+        availableWidth: CGFloat,
+        input: Input,
+        parser: MarkdownParser
+    ) -> ForwardedSlot {
+        let style = input.style
+        let indent = TimelineMetrics.forwardIndent
+        let contentX = origin.x + indent
+        let contentWidth = max(60, availableWidth - indent)
+        var y = origin.y + TimelineMetrics.forwardTopPadding
+
+        // The label row: an arrow and the word. Metadata ink, because it names
+        // the block rather than saying anything the sender wrote.
+        let glyphSide = TimelineMetrics.forwardGlyphSide
+        let label = TimelineTextBlock(
+            text: .plain(NSAttributedString(
+                string: "Forwarded",
+                attributes: [
+                    .font: NSFont.systemFont(
+                        ofSize: style.metadataFont.pointSize, weight: .semibold
+                    ),
+                    .foregroundColor: style.tertiaryColor,
+                ]
+            )),
+            width: contentWidth,
+            style: style
+        )
+        let glyphRect = CGRect(
+            x: contentX,
+            y: y + (label.size.height - glyphSide) / 2,
+            width: glyphSide,
+            height: glyphSide
+        )
+        let labelOrigin = CGPoint(x: glyphRect.maxX + Spacing.tight, y: y)
+        y += label.size.height
+
+        // What was forwarded. Markdown like any other body, because it IS
+        // another message's body.
+        var body: TimelineTextBlock?
+        var bodyOrigin = CGPoint.zero
+        if !snapshot.content.isEmpty {
+            y += TimelineMetrics.forwardLineGap
+            let document = parser.parse(snapshot.content)
+            let text = MessageTextBuilder.build(
+                document: document,
+                context: input.mentions,
+                style: style
+            )
+            let block = TimelineTextBlock(text: text, width: contentWidth, style: style)
+            body = block
+            bodyOrigin = CGPoint(x: contentX, y: y)
+            y += block.size.height
+        }
+
+        var attachments: [AttachmentSlot] = []
+        for attachment in snapshot.attachments {
+            y += TimelineMetrics.attachmentGap
+            let slot = attachmentSlot(
+                attachment,
+                origin: CGPoint(x: contentX, y: y),
+                availableWidth: contentWidth,
+                style: style
+            )
+            attachments.append(slot)
+            y = slot.rect.maxY
+        }
+
+        var embeds: [EmbedSlot] = []
+        if input.settings.showsEmbeds {
+            for embed in snapshot.embeds {
+                y += TimelineMetrics.attachmentGap
+                let slot = EmbedLayoutEngine.layout(
+                    embed,
+                    origin: CGPoint(x: contentX, y: y),
+                    availableWidth: contentWidth,
+                    style: style,
+                    mentions: input.mentions,
+                    parser: parser
+                )
+                embeds.append(slot)
+                y = slot.rect.maxY
+            }
+        }
+
+        // Where it came from. **Only when this account can name the channel** —
+        // a forward out of a server the reader is not in has a snowflake and no
+        // name, and inventing one is a claim the client cannot support.
+        var footer: TimelineTextBlock?
+        var footerOrigin = CGPoint.zero
+        if let channelID = snapshot.channelID,
+           let name = input.mentions.channelNames[channelID]
+        {
+            y += TimelineMetrics.forwardLineGap
+            footer = TimelineTextBlock(
+                text: .plain(NSAttributedString(
+                    string: "#\(name)",
+                    attributes: [
+                        .font: style.metadataFont,
+                        .foregroundColor: style.tertiaryColor,
+                    ]
+                )),
+                width: contentWidth,
+                style: style
+            )
+            footerOrigin = CGPoint(x: contentX, y: y)
+            y += footer?.size.height ?? 0
+        }
+
+        let height = y + TimelineMetrics.forwardTopPadding - origin.y
+        return ForwardedSlot(
+            rect: CGRect(x: origin.x, y: origin.y, width: availableWidth, height: height),
+            ruleRect: CGRect(
+                x: origin.x,
+                y: origin.y,
+                width: TimelineMetrics.forwardRuleWidth,
+                height: height
+            ),
+            glyphRect: glyphRect,
+            label: label,
+            labelOrigin: labelOrigin,
+            body: body,
+            bodyOrigin: bodyOrigin,
+            attachments: attachments,
+            embeds: embeds,
+            footer: footer,
+            footerOrigin: footerOrigin
+        )
+    }
+
+    // MARK: The head of a channel
+
+    /// Lays out the welcome block at the top of a channel.
+    private static func conversationStart(
+        _ input: Input,
+        width: CGFloat,
+        parser: MarkdownParser
+    ) -> (slot: ConversationStartSlot, height: CGFloat) {
+        let style = input.style
+        let margin = TimelineMetrics.horizontalMargin
+        let side = TimelineMetrics.conversationStartIconSide
+        let available = max(80, width - margin * 2)
+
+        var y = TimelineMetrics.conversationStartTopPadding
+        let iconRect = CGRect(x: margin, y: y, width: side, height: side)
+        let glyphSide = side * 0.5
+        let glyphRect = CGRect(
+            x: iconRect.midX - glyphSide / 2,
+            y: iconRect.midY - glyphSide / 2,
+            width: glyphSide,
+            height: glyphSide
+        )
+        y = iconRect.maxY + TimelineMetrics.conversationStartGap
+
+        // A channel name can hold emoji — "🗳 | voting" is an ordinary name —
+        // so it goes through the same run builder the body does rather than
+        // through a bare `drawText`, which would draw a custom one as literal
+        // angle brackets.
+        let title = TimelineTextBlock(
+            text: .plain(NSAttributedString(
+                string: "Welcome to #\(input.channelName)",
+                attributes: [
+                    .font: NSFont.systemFont(
+                        ofSize: style.bodyFont.pointSize * 1.65, weight: .bold
+                    ),
+                    .foregroundColor: style.primaryColor,
+                ]
+            )),
+            width: available,
+            style: style
+        )
+        let titleOrigin = CGPoint(x: margin, y: y)
+        y += title.size.height + TimelineMetrics.conversationStartLineGap
+
+        let subtitle = TimelineTextBlock(
+            text: .plain(NSAttributedString(
+                string: "This is the start of the #\(input.channelName) channel.",
+                attributes: [
+                    .font: style.bodyFont,
+                    .foregroundColor: style.secondaryColor,
+                ]
+            )),
+            width: available,
+            style: style
+        )
+        let subtitleOrigin = CGPoint(x: margin, y: y)
+        y += subtitle.size.height
+
+        var topic: TimelineTextBlock?
+        var topicOrigin = CGPoint.zero
+        if let text = input.channelTopic?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !text.isEmpty
+        {
+            y += TimelineMetrics.conversationStartLineGap
+            let document = parser.parse(text)
+            // The topic is prose in the quiet ink, not body text: it is a
+            // caption under a heading, and at full strength it competes with
+            // the welcome above it.
+            var topicStyle = style
+            topicStyle.primaryColor = style.secondaryColor
+            let block = TimelineTextBlock(
+                text: MessageTextBuilder.build(
+                    document: document,
+                    context: input.mentions,
+                    style: topicStyle
+                ),
+                width: available,
+                style: style
+            )
+            topic = block
+            topicOrigin = CGPoint(x: margin, y: y)
+            y += block.size.height
+        }
+
+        return (
+            ConversationStartSlot(
+                iconRect: iconRect,
+                symbolName: input.channelSymbol,
+                glyphRect: glyphRect,
+                title: title,
+                titleOrigin: titleOrigin,
+                subtitle: subtitle,
+                subtitleOrigin: subtitleOrigin,
+                topic: topic,
+                topicOrigin: topicOrigin
+            ),
+            y + TimelineMetrics.conversationStartBottomPadding
+        )
+    }
+
     // MARK: Helpers
 
     private static func attachmentSlot(
         _ attachment: Attachment,
         origin: CGPoint,
+        availableWidth: CGFloat,
+        style: MessageTextStyle
+    ) -> AttachmentSlot {
+        // **The kind is decided once, here.** A picture, a clip, a voice note
+        // and a document are four rectangles, and a painter that worked it out
+        // per frame would branch inside every repaint of every row carrying one.
+        if attachment.waveform != nil || attachment.durationSeconds != nil,
+           attachment.contentType?.hasPrefix("audio/") ?? false
+        {
+            return voiceSlot(attachment, origin: origin, availableWidth: availableWidth)
+        }
+        guard attachment.isImage || attachment.isVideo else {
+            return fileSlot(attachment, origin: origin, availableWidth: availableWidth, style: style)
+        }
+        return mediaSlot(attachment, origin: origin, availableWidth: availableWidth)
+    }
+
+    /// A picture or a clip, drawn at its own scale.
+    ///
+    /// **Never wider than the source.** A 180x120 GIF blown up to the column's
+    /// full width is a soft rectangle of upscaled pixels, and the cap on height
+    /// has to bring the *width* down with it or the picture is stretched —
+    /// which is what "the renderer does not respect the scale of the gif" is.
+    /// Both dimensions move together or neither does.
+    private static func mediaSlot(
+        _ attachment: Attachment,
+        origin: CGPoint,
         availableWidth: CGFloat
     ) -> AttachmentSlot {
+        let box = mediaBox(
+            width: attachment.width,
+            height: attachment.height,
+            availableWidth: availableWidth
+        )
+        let isVideo = attachment.isVideo
+        // **A GIF moves in the transcript, exactly as a sticker does**, and it
+        // is fetched WHOLE rather than through the resizing proxy: `width=` on a
+        // GIF path answers with a single frame, so a resized rendition is an
+        // animation with nothing to play. `AnimatedImageStore` downsamples at
+        // decode, so asking for the original costs bytes on the wire and not
+        // pixels in memory.
+        //
+        // GIF only. Discord labels an animated WebP `image/webp` exactly as it
+        // labels a still one, so there is no fact here to act on — the same
+        // reason `CDN.canAnimate` answers on the extension alone.
+        let isAnimated = !isVideo
+            && !attachment.isSpoiler
+            && attachment.contentType == "image/gif"
+        let url: URL? = if isVideo {
+            CDN.videoPoster(proxyURL: attachment.proxyURL, width: box.width)
+        } else if isAnimated {
+            URL(string: attachment.proxyURL)
+        } else {
+            CDN.resizedAttachment(proxyURL: attachment.proxyURL, width: box.width)
+        }
+        return AttachmentSlot(
+            rect: CGRect(x: origin.x, y: origin.y, width: box.width, height: box.height),
+            url: url,
+            isSpoiler: attachment.isSpoiler,
+            altText: attachment.description,
+            decodeWidth: box.width,
+            kind: isVideo ? .video : .image,
+            filename: attachment.filename,
+            durationLabel: isVideo ? Self.durationLabel(attachment.durationSeconds) : "",
+            isAnimated: isAnimated
+        )
+    }
+
+    /// The box a picture of these pixel dimensions occupies.
+    ///
+    /// Its own function because it is the one piece of attachment geometry a
+    /// test can check against a table, and because the bare-image embed needs
+    /// exactly the same rule — two copies is two places for the ratio to drift.
+    static func mediaBox(
+        width: Int?,
+        height: Int?,
+        availableWidth: CGFloat,
+        maximumHeight: CGFloat = Metrics.attachmentMaxHeight
+    ) -> CGSize {
         // A missing aspect ratio is a real state, not something to substitute a
         // square for: reserving a square for a panorama makes the transcript
         // jump when the picture arrives.
-        let ratio = attachment.aspectRatio
-        let boxWidth: CGFloat
-        let boxHeight: CGFloat
-        if let ratio, ratio > 0 {
-            let naturalWidth = min(availableWidth, CGFloat(attachment.width ?? 0))
-            let width = naturalWidth > 0 ? naturalWidth : availableWidth
-            let height = width / ratio
-            if height > Metrics.attachmentMaxHeight {
-                boxHeight = Metrics.attachmentMaxHeight
-                boxWidth = boxHeight * ratio
-            } else {
-                boxWidth = width
-                boxHeight = height
-            }
-        } else {
-            boxWidth = min(availableWidth, 320)
-            boxHeight = 180
+        guard let width, let height, width > 0, height > 0 else {
+            return CGSize(width: min(availableWidth, 320), height: 180)
         }
+        let ratio = CGFloat(width) / CGFloat(height)
+        // Never upscaled past its own pixels, and never wider than the column.
+        var boxWidth = min(availableWidth, CGFloat(width))
+        var boxHeight = boxWidth / ratio
+        if boxHeight > maximumHeight {
+            boxHeight = maximumHeight
+            boxWidth = boxHeight * ratio
+        }
+        return CGSize(width: boxWidth.rounded(), height: boxHeight.rounded())
+    }
 
+    /// A voice note: a waveform and how long it runs.
+    private static func voiceSlot(
+        _ attachment: Attachment,
+        origin: CGPoint,
+        availableWidth: CGFloat
+    ) -> AttachmentSlot {
+        let width = min(availableWidth, TimelineMetrics.voiceNoteMaxWidth)
         return AttachmentSlot(
-            rect: CGRect(x: origin.x, y: origin.y, width: boxWidth, height: boxHeight),
-            url: CDN.resizedAttachment(proxyURL: attachment.proxyURL, width: boxWidth),
+            rect: CGRect(
+                x: origin.x, y: origin.y, width: width, height: TimelineMetrics.voiceNoteHeight
+            ),
+            url: nil,
             isSpoiler: attachment.isSpoiler,
-            isVideo: attachment.isVideo,
             altText: attachment.description,
-            decodeWidth: boxWidth
+            decodeWidth: width,
+            kind: .voice,
+            filename: attachment.filename,
+            durationLabel: Self.durationLabel(attachment.durationSeconds)
         )
+    }
+
+    /// Anything with no picture in it: a card with a glyph, a name and a size.
+    ///
+    /// **A card rather than a grey rectangle.** A zip file has no dimensions, so
+    /// the picture path reserved 320x180 for it and then drew nothing there for
+    /// ever — an empty box that looks exactly like a picture that failed to
+    /// load, which is what "previews are broken for other types of attachments"
+    /// describes.
+    private static func fileSlot(
+        _ attachment: Attachment,
+        origin: CGPoint,
+        availableWidth: CGFloat,
+        style: MessageTextStyle
+    ) -> AttachmentSlot {
+        let sizeLabel = AttachmentLimits.describe(bytes: attachment.size)
+        let inset = TimelineMetrics.attachmentCardInset
+        let textX = origin.x + inset + TimelineMetrics.attachmentCardGlyphSide + Spacing.base
+        let intrinsic = max(
+            measure(attachment.filename, font: style.bodyFont),
+            measure(sizeLabel, font: style.metadataFont)
+        )
+        let width = min(
+            min(availableWidth, TimelineMetrics.attachmentCardMaxWidth),
+            (textX - origin.x) + intrinsic + inset
+        )
+        let height = TimelineMetrics.attachmentCardHeight
+        // Two lines stacked about the card's middle: the name on the upper
+        // baseline, the size on the lower.
+        let block = style.bodyFont.pointSize + style.metadataFont.pointSize + 4
+        let top = origin.y + (height - block) / 2
+        return AttachmentSlot(
+            rect: CGRect(x: origin.x, y: origin.y, width: max(120, width), height: height),
+            url: nil,
+            isSpoiler: attachment.isSpoiler,
+            altText: attachment.description,
+            decodeWidth: width,
+            kind: .file,
+            filename: attachment.filename,
+            sizeLabel: sizeLabel,
+            titleOrigin: CGPoint(x: textX, y: top),
+            subtitleOrigin: CGPoint(x: textX, y: top + style.bodyFont.pointSize + 4)
+        )
+    }
+
+    /// "1:04", or empty when Discord sent no duration.
+    private static func durationLabel(_ seconds: Double?) -> String {
+        guard let seconds, seconds > 0 else { return "" }
+        let total = Int(seconds.rounded())
+        return String(format: "%d:%02d", total / 60, total % 60)
     }
 
     /// Text width, measured through CoreText rather than through `NSString`

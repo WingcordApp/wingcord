@@ -78,8 +78,15 @@ nonisolated enum TimelineRowPainter {
             drawDaySeparator(label: label, in: rowFrame, context: context, style: style)
         case .unreadDivider:
             drawUnreadDivider(in: rowFrame, context: context, style: style)
-        case .conversationStart(let name):
-            drawConversationStart(name: name, in: rowFrame, context: context, style: style)
+        case .conversationStart(let slot):
+            drawConversationStart(
+                slot,
+                in: rowFrame,
+                context: context,
+                style: style,
+                images: images,
+                scale: scale
+            )
         case .skeleton(let index):
             drawSkeleton(index: index, in: rowFrame, context: context)
         case .loadingFirstPage:
@@ -250,6 +257,18 @@ nonisolated enum TimelineRowPainter {
         }
 
         // Body text.
+        if let forwarded = row.forwarded {
+            drawForward(
+                forwarded,
+                offset: CGPoint(x: rowFrame.minX, y: rowFrame.minY),
+                context: context,
+                style: style,
+                images: images,
+                scale: scale,
+                clock: state.animationTime
+            )
+        }
+
         if let block = row.textBlock {
             let origin = CGPoint(
                 x: rowFrame.minX + row.textOrigin.x,
@@ -288,7 +307,8 @@ nonisolated enum TimelineRowPainter {
                 style: style,
                 images: images,
                 scale: scale,
-                isRevealed: state.revealedAttachments.contains(index)
+                isRevealed: state.revealedAttachments.contains(index),
+                clock: state.animationTime
             )
         }
 
@@ -326,7 +346,8 @@ nonisolated enum TimelineRowPainter {
                 context: context,
                 style: style,
                 images: images,
-                scale: scale
+                scale: scale,
+                clock: state.animationTime
             )
         }
 
@@ -798,34 +819,30 @@ nonisolated enum TimelineRowPainter {
         style: MessageTextStyle,
         images: ImageStore,
         scale: CGFloat,
-        isRevealed: Bool
+        isRevealed: Bool,
+        clock: Double
     ) {
         // A spoiler stays covered until it is clicked, and the click that
         // uncovers it is not the click that opens it — a picture somebody hid
         // deliberately must not be shown full-screen by the same press that
         // reveals it.
         let isHidden = slot.isSpoiler && !isRevealed
-        let path = CGPath(roundedRect: frame, cornerWidth: 8, cornerHeight: 8, transform: nil)
-        context.saveGState()
-        context.addPath(path)
-        context.clip()
-
-        if !isHidden,
-           let url = slot.url,
-           let image = images.cached(
-               ImageStore.Key(
-                   url: url,
-                   maximumPixelSize: Int((slot.decodeWidth * scale).rounded(.up))
-               ),
-               bucket: .attachment
-           )
-        {
-            drawFlipped(image, in: frame, context: context)
-        } else {
-            context.setFillColor(ThemeInk.current.surfaceRaised)
-            context.fill(frame)
+        switch slot.kind {
+        case .image, .video:
+            drawAttachmentArtwork(
+                slot,
+                in: frame,
+                context: context,
+                images: images,
+                scale: scale,
+                isHidden: isHidden,
+                clock: clock
+            )
+        case .voice:
+            drawVoiceNote(slot, in: frame, context: context, style: style)
+        case .file:
+            drawFileCard(slot, in: frame, context: context, style: style)
         }
-        context.restoreGState()
 
         if isHidden {
             drawChip(
@@ -837,23 +854,228 @@ nonisolated enum TimelineRowPainter {
                 context: context
             )
         }
+    }
 
-        if slot.isVideo, !isHidden {
-            let badge = CGRect(x: frame.midX - 20, y: frame.midY - 20, width: 40, height: 40)
-            context.setFillColor(NSColor.black.withAlphaComponent(0.55).cgColor)
-            context.fillEllipse(in: badge)
-            // A fixed dark disc, never glass: glass over moving artwork churns
-            // its sampled blur every frame and leaves the glyph illegible on a
-            // bright frame.
-            drawText(
-                "\u{25B6}",
-                font: NSFont.systemFont(ofSize: 15),
-                color: .white,
-                at: CGPoint(x: badge.minX, y: badge.midY - 9),
-                maxWidth: badge.width,
-                alignment: .center,
-                context: context
-            )
+    /// A picture or a clip's poster, and the clip's badge over it.
+    private static func drawAttachmentArtwork(
+        _ slot: AttachmentSlot,
+        in frame: CGRect,
+        context: CGContext,
+        images: ImageStore,
+        scale: CGFloat,
+        isHidden: Bool,
+        clock: Double
+    ) {
+        let path = CGPath(roundedRect: frame, cornerWidth: 8, cornerHeight: 8, transform: nil)
+        context.saveGState()
+        context.addPath(path)
+        context.clip()
+
+        let pixels = Int((slot.decodeWidth * scale).rounded(.up))
+        var drewArtwork = false
+        if !isHidden, let url = slot.url {
+            if slot.isAnimated,
+               let film = AnimatedImageStore.shared.cached(
+                   AnimatedImageStore.Key(url: url, maximumPixelSize: pixels)
+               )
+            {
+                // The SAME clock every other moving thing reads, so a channel of
+                // GIFs stays in step instead of each drifting on its own
+                // accumulated error. See `AnimationClock`.
+                drawFlipped(film.frames[film.index(at: clock)], in: frame, context: context)
+                drewArtwork = true
+            } else if let image = images.cached(
+                ImageStore.Key(url: url, maximumPixelSize: pixels), bucket: .attachment
+            ) {
+                drawFlipped(image, in: frame, context: context)
+                drewArtwork = true
+            }
+        }
+        if !drewArtwork {
+            context.setFillColor(ThemeInk.current.surfaceRaised)
+            context.fill(frame)
+        }
+        context.restoreGState()
+
+        guard slot.kind == .video, !isHidden else { return }
+        let badge = CGRect(x: frame.midX - 20, y: frame.midY - 20, width: 40, height: 40)
+        context.setFillColor(NSColor.black.withAlphaComponent(0.55).cgColor)
+        context.fillEllipse(in: badge)
+        // A fixed dark disc, never glass: glass over moving artwork churns
+        // its sampled blur every frame and leaves the glyph illegible on a
+        // bright frame.
+        drawText(
+            "\u{25B6}",
+            font: NSFont.systemFont(ofSize: 15),
+            color: .white,
+            at: CGPoint(x: badge.minX, y: badge.midY - 9),
+            maxWidth: badge.width,
+            alignment: .center,
+            context: context
+        )
+        guard !slot.durationLabel.isEmpty else { return }
+        let width = TimelineLayoutEngine.measure(
+            slot.durationLabel, font: NSFont.systemFont(ofSize: 10, weight: .semibold)
+        )
+        drawChip(
+            slot.durationLabel,
+            in: CGRect(
+                x: frame.maxX - width - 20, y: frame.maxY - 26, width: width + 12, height: 18
+            ),
+            fill: NSColor.black.withAlphaComponent(0.6),
+            textColor: .white,
+            font: NSFont.systemFont(ofSize: 10, weight: .semibold),
+            context: context
+        )
+    }
+
+    /// A file with nothing to show: a glyph, its name, its size.
+    ///
+    /// **A card, not an empty rectangle.** Anything that is not a picture used
+    /// to be laid out as one and then drew a permanent grey box, which is
+    /// indistinguishable from a picture that failed to load.
+    private static func drawFileCard(
+        _ slot: AttachmentSlot,
+        in frame: CGRect,
+        context: CGContext,
+        style: MessageTextStyle
+    ) {
+        context.addPath(CGPath(
+            roundedRect: frame,
+            cornerWidth: EmbedLayoutEngine.corner,
+            cornerHeight: EmbedLayoutEngine.corner,
+            transform: nil
+        ))
+        context.setFillColor(ThemeInk.current.cardFill)
+        context.fillPath()
+
+        let side = TimelineMetrics.attachmentCardGlyphSide
+        drawSymbol(
+            Self.fileSymbol(for: slot.filename),
+            tint: style.linkColor,
+            in: CGRect(
+                x: frame.minX + TimelineMetrics.attachmentCardInset,
+                y: frame.midY - side / 2,
+                width: side,
+                height: side
+            ),
+            context: context
+        )
+        let room = max(0, frame.maxX - TimelineMetrics.attachmentCardInset - slot.titleOrigin.x)
+        _ = drawText(
+            slot.filename,
+            font: style.bodyFont,
+            color: style.linkColor,
+            at: slot.titleOrigin,
+            maxWidth: room,
+            context: context
+        )
+        _ = drawText(
+            slot.sizeLabel,
+            font: style.metadataFont,
+            color: style.tertiaryColor,
+            at: slot.subtitleOrigin,
+            maxWidth: room,
+            context: context
+        )
+    }
+
+    /// A voice note: a play glyph, a waveform and how long it runs.
+    ///
+    /// The bars are derived from the file name rather than from Discord's
+    /// base64 waveform — decoding that per repaint is work inside a draw, and
+    /// the shape carries no information the reader acts on. What matters is that
+    /// the row reads as a voice message rather than as a failed picture.
+    private static func drawVoiceNote(
+        _ slot: AttachmentSlot,
+        in frame: CGRect,
+        context: CGContext,
+        style: MessageTextStyle
+    ) {
+        context.addPath(CGPath(
+            roundedRect: frame,
+            cornerWidth: frame.height / 2,
+            cornerHeight: frame.height / 2,
+            transform: nil
+        ))
+        context.setFillColor(ThemeInk.current.cardFill)
+        context.fillPath()
+
+        let inset = TimelineMetrics.attachmentCardInset
+        let glyph = CGRect(x: frame.minX + inset, y: frame.midY - 9, width: 18, height: 18)
+        drawSymbol("play.fill", tint: style.linkColor, in: glyph, context: context)
+
+        let durationWidth = slot.durationLabel.isEmpty
+            ? 0
+            : TimelineLayoutEngine.measure(slot.durationLabel, font: style.metadataFont) + 8
+        let barsX = glyph.maxX + Spacing.base
+        let barsWidth = max(0, frame.maxX - inset - durationWidth - barsX)
+        drawWaveform(
+            in: CGRect(x: barsX, y: frame.midY - 8, width: barsWidth, height: 16),
+            seed: slot.filename,
+            color: style.linkColor.withAlphaComponent(0.55),
+            context: context
+        )
+        guard !slot.durationLabel.isEmpty else { return }
+        _ = drawText(
+            slot.durationLabel,
+            font: style.metadataFont,
+            color: style.tertiaryColor,
+            at: CGPoint(
+                x: frame.maxX - inset - durationWidth + 8,
+                y: frame.midY - style.metadataFont.pointSize / 2 - 1
+            ),
+            maxWidth: durationWidth,
+            context: context
+        )
+    }
+
+    /// Bars across a box. Deterministic on the seed, so the same note draws the
+    /// same shape on every repaint rather than shimmering.
+    private static func drawWaveform(
+        in frame: CGRect,
+        seed: String,
+        color: NSColor,
+        context: CGContext
+    ) {
+        guard frame.width > 8 else { return }
+        let barWidth: CGFloat = 2
+        let gap: CGFloat = 2
+        let count = Int(frame.width / (barWidth + gap))
+        guard count > 0 else { return }
+        context.setFillColor(color.cgColor)
+        var hash = UInt64(truncatingIfNeeded: seed.hashValue) | 1
+        for index in 0..<count {
+            // A cheap xorshift rather than `Double.random`: this runs inside a
+            // display pass and must not touch the system generator.
+            hash ^= hash << 13
+            hash ^= hash >> 7
+            hash ^= hash << 17
+            let level = 0.25 + Double(hash % 1000) / 1000 * 0.75
+            let height = frame.height * level
+            context.fill(CGRect(
+                x: frame.minX + CGFloat(index) * (barWidth + gap),
+                y: frame.midY - height / 2,
+                width: barWidth,
+                height: height
+            ))
+        }
+    }
+
+    /// The glyph for a document, from its extension.
+    ///
+    /// A short table rather than a UTType lookup: `UTType(filenameExtension:)`
+    /// consults the type database, and this is asked once per file card per
+    /// repaint.
+    private static func fileSymbol(for filename: String) -> String {
+        switch (filename as NSString).pathExtension.lowercased() {
+        case "zip", "rar", "7z", "tar", "gz": "doc.zipper"
+        case "pdf": "doc.richtext"
+        case "txt", "md", "log", "rtf": "doc.text"
+        case "mp3", "wav", "flac", "m4a", "ogg", "aac": "waveform"
+        case "swift", "js", "ts", "py", "rs", "c", "h", "cpp", "json", "html", "css": "chevron.left.forwardslash.chevron.right"
+        case "dmg", "pkg", "app": "shippingbox"
+        default: "doc"
         }
     }
 
@@ -1262,29 +1484,146 @@ nonisolated enum TimelineRowPainter {
         )
     }
 
+    /// A forwarded message, quoted inside the one that carries it.
+    ///
+    /// Every rectangle came from the layout, so this has no cases: a rule, a
+    /// glyph, and whatever slots the snapshot turned into — drawn by the same
+    /// functions the message's own content is drawn by, which is what makes a
+    /// forwarded photograph a photograph rather than a line of text about one.
+    private static func drawForward(
+        _ slot: ForwardedSlot,
+        offset: CGPoint,
+        context: CGContext,
+        style: MessageTextStyle,
+        images: ImageStore,
+        scale: CGFloat,
+        clock: Double
+    ) {
+        let rule = slot.ruleRect.offsetBy(dx: offset.x, dy: offset.y)
+        context.addPath(CGPath(
+            roundedRect: rule,
+            cornerWidth: rule.width / 2,
+            cornerHeight: rule.width / 2,
+            transform: nil
+        ))
+        context.setFillColor(style.tertiaryColor.withAlphaComponent(0.45).cgColor)
+        context.fillPath()
+
+        drawSymbol(
+            "arrowshape.turn.up.right.fill",
+            tint: style.tertiaryColor,
+            in: slot.glyphRect.offsetBy(dx: offset.x, dy: offset.y),
+            context: context
+        )
+        drawTextFrame(
+            slot.label,
+            at: CGPoint(x: offset.x + slot.labelOrigin.x, y: offset.y + slot.labelOrigin.y),
+            context: context,
+            images: images,
+            scale: scale
+        )
+        if let body = slot.body {
+            drawTextFrame(
+                body,
+                at: CGPoint(x: offset.x + slot.bodyOrigin.x, y: offset.y + slot.bodyOrigin.y),
+                context: context,
+                images: images,
+                scale: scale
+            )
+        }
+        for attachment in slot.attachments {
+            drawAttachment(
+                attachment,
+                in: attachment.rect.offsetBy(dx: offset.x, dy: offset.y),
+                context: context,
+                style: style,
+                images: images,
+                scale: scale,
+                // A spoiler inside a forward stays covered: the block is a
+                // quote of somebody else's message, and there is nothing here to
+                // click that would reveal it.
+                isRevealed: false,
+                clock: clock
+            )
+        }
+        for embed in slot.embeds {
+            drawEmbed(
+                embed,
+                offset: offset,
+                context: context,
+                style: style,
+                images: images,
+                scale: scale,
+                clock: clock
+            )
+        }
+        if let footer = slot.footer {
+            drawTextFrame(
+                footer,
+                at: CGPoint(x: offset.x + slot.footerOrigin.x, y: offset.y + slot.footerOrigin.y),
+                context: context,
+                images: images,
+                scale: scale
+            )
+        }
+    }
+
+    /// The head of a channel: an icon tile, a welcome, and what the channel is
+    /// for.
+    ///
+    /// Every rectangle here was measured at layout time, so this has no cases
+    /// and no arithmetic — the same rule the embed painter follows.
     private static func drawConversationStart(
-        name: String,
+        _ slot: ConversationStartSlot,
         in frame: CGRect,
         context: CGContext,
-        style: MessageTextStyle
+        style: MessageTextStyle,
+        images: ImageStore,
+        scale: CGFloat
     ) {
-        let inset = TimelineMetrics.horizontalMargin
-        drawText(
-            "Welcome to #\(name)",
-            font: NSFont.systemFont(ofSize: style.bodyFont.pointSize * 1.4, weight: .bold),
-            color: style.primaryColor,
-            at: CGPoint(x: frame.minX + inset, y: frame.minY + 30),
-            maxWidth: frame.width - inset * 2,
+        let offset = CGPoint(x: frame.minX, y: frame.minY)
+
+        // The tile. A rounded square rather than a circle: the channel list's
+        // own rows are rounded rectangles, and a disc here reads as an avatar.
+        let icon = slot.iconRect.offsetBy(dx: offset.x, dy: offset.y)
+        context.addPath(CGPath(
+            roundedRect: icon,
+            cornerWidth: Radius.card,
+            cornerHeight: Radius.card,
+            transform: nil
+        ))
+        context.setFillColor(ThemeInk.current.surfaceRaised)
+        context.fillPath()
+        drawSymbol(
+            slot.symbolName,
+            tint: style.secondaryColor,
+            in: slot.glyphRect.offsetBy(dx: offset.x, dy: offset.y),
             context: context
         )
-        drawText(
-            "This is the beginning of the channel.",
-            font: style.bodyFont,
-            color: style.secondaryColor,
-            at: CGPoint(x: frame.minX + inset, y: frame.minY + 62),
-            maxWidth: frame.width - inset * 2,
-            context: context
+
+        drawTextFrame(
+            slot.title,
+            at: CGPoint(x: offset.x + slot.titleOrigin.x, y: offset.y + slot.titleOrigin.y),
+            context: context,
+            images: images,
+            scale: scale
         )
+        drawTextFrame(
+            slot.subtitle,
+            at: CGPoint(x: offset.x + slot.subtitleOrigin.x, y: offset.y + slot.subtitleOrigin.y),
+            context: context,
+            images: images,
+            scale: scale
+        )
+        if let topic = slot.topic {
+            drawTextFrame(
+                topic,
+                at: CGPoint(x: offset.x + slot.topicOrigin.x, y: offset.y + slot.topicOrigin.y),
+                context: context,
+                images: images,
+                scale: scale
+            )
+        }
     }
 
     /// The first page is still in flight.

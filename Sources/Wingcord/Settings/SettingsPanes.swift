@@ -189,6 +189,49 @@ private struct AppearancePane: View {
             )
         }
 
+        SettingsGroup("Bars") {
+            SettingsChromePreview(
+                nowBarShape: settings.nowBarShape,
+                composerShape: settings.composerShape
+            )
+            .padding(.bottom, SettingsMetrics.cardToHeader)
+            SettingsCard {
+                CardHeaderRow(
+                    title: "Identity bar",
+                    help: "The silhouette of the bar with your name in it."
+                )
+                SettingsSegmentedControl(
+                    selection: $settings.nowBarShape,
+                    options: ChromeShape.allCases.map {
+                        .init($0, $0.label, symbolName: $0.symbolName)
+                    }
+                )
+                CardDivider()
+                SettingsToggle(
+                    title: "Show my nameplate",
+                    help: "Wears the nameplate on your account behind your name.",
+                    isOn: $settings.showsNameplateInNowBar
+                )
+            }
+            SettingsCard {
+                CardHeaderRow(
+                    title: "Composer",
+                    help: "The silhouette of the bar you write in."
+                )
+                SettingsSegmentedControl(
+                    selection: $settings.composerShape,
+                    options: ChromeShape.allCases.map {
+                        .init($0, $0.label, symbolName: $0.symbolName)
+                    }
+                )
+            }
+            .padding(.top, SettingsMetrics.cardToHeader)
+            SettingsFootnote(
+                "The real bars, at the shapes above — not a picture of them.",
+                symbolName: "eye"
+            )
+        }
+
         SettingsCard {
             CardHeaderRow(
                 title: "Message density",

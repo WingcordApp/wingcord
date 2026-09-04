@@ -403,4 +403,34 @@ public enum CDN {
         components.queryItems = items
         return components.url
     }
+
+    /// A still frame from a video attachment.
+    ///
+    /// **A video's own URL is not a picture, and asking for one as if it were is
+    /// how a clip draws as an empty box.** The bytes arrive, `CGImageSource`
+    /// cannot open them, the store records a permanent failure, and the slot
+    /// stays grey for the life of the process — which is exactly the symptom
+    /// "videos have no preview" describes.
+    ///
+    /// Discord's media proxy transcodes: `format=jpg` on a video path answers
+    /// with a still from it. Documented under CDN & file uploads, and the
+    /// response carries `X-Discord-Transform-Duration` to prove it did the work.
+    ///
+    /// Nil when the proxy cannot serve it — anything that is not `http(s)` is a
+    /// local fixture or somebody else's host, and appending a query there is a
+    /// URL that 404s rather than a smaller picture. The caller draws its
+    /// placeholder, which is the honest answer.
+    public static func videoPoster(proxyURL: String, width: CGFloat, scale: CGFloat = 2) -> URL? {
+        guard var components = URLComponents(string: proxyURL),
+              let scheme = components.scheme,
+              scheme == "http" || scheme == "https"
+        else { return nil }
+        let pixels = Int((width * scale).rounded(.up))
+        var items = components.queryItems ?? []
+        items.removeAll { $0.name == "width" || $0.name == "height" || $0.name == "format" }
+        items.append(URLQueryItem(name: "format", value: "jpg"))
+        items.append(URLQueryItem(name: "width", value: String(pixels)))
+        components.queryItems = items
+        return components.url
+    }
 }

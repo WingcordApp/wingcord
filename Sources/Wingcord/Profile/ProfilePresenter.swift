@@ -106,6 +106,7 @@ struct ProfilePresenter: ViewModifier {
             FullProfileView(
                 profile: profile,
                 openDirectMessage: { model.openDirectMessage($0) },
+                openLink: { model.openLink($0) },
                 dismiss: { model.profileRequest = nil }
             )
             // Centred by giving it the whole container to sit in, which needs
@@ -138,6 +139,7 @@ struct ProfilePresenter: ViewModifier {
                 // silently.
                 model.profileRequest?.depth = .full
             },
+            openLink: { model.openLink($0) },
             width: Self.cardWidth
         )
         // **Placed by alignment guides, not by `.position` or by a measured

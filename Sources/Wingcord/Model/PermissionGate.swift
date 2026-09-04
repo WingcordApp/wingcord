@@ -179,6 +179,18 @@ final class PermissionGate {
         return resolved.contains(.sendMessages)
     }
 
+    /// Whether a file may be attached here.
+    ///
+    /// **Two bits, and posting is only the first of them.** `ATTACH_FILES` is
+    /// what a server takes away to keep a channel to words while leaving
+    /// everybody able to talk — so a composer that offers a `+` on `canSend`
+    /// alone offers an upload that is refused after the bytes have gone up.
+    /// `INVARIANTS.md` §5.5: a control that cannot work must not look like one
+    /// that can.
+    func canAttachFiles(in channelID: ChannelID) -> Bool {
+        canSend(in: channelID) && permissions(in: channelID).contains(.attachFiles)
+    }
+
     /// Whether `/` may open a command list here.
     ///
     /// **A separate bit from `sendMessages`, and it is genuinely separate**:

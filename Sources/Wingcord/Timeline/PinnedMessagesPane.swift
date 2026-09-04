@@ -8,18 +8,35 @@ import WingcordCore
 /// and it is not a row in a list. A control in a hand-laid band would sample the
 /// transcript behind it rather than the toolbar's material — `INVARIANTS.md` §1.
 ///
-/// Each row goes somewhere: clicking one scrolls the transcript to it and lights
-/// it, which is the whole reason anybody opens this.
+/// **Each pin is the real message, drawn by the transcript's own painter.** It
+/// used to be a name, a time and one line of `excerpt(of:)` — which is a
+/// sentence for a message made of words and *nothing at all* for a forward, an
+/// embed, a video, a poll or a file. Those are most of what people pin, so the
+/// pane was blank exactly where it mattered. `MessageCard` is the transcript at
+/// 300 points wide; anything the channel can draw, this draws.
+///
+/// Each row still goes somewhere: clicking one scrolls the transcript to it and
+/// lights it, which is the whole reason anybody opens this.
 struct PinnedMessagesPane: View {
     var channelID: ChannelID
 
     @Environment(AppModel.self) private var model
     @Environment(\.motion) private var motion
+    @State private var presentation = PresentationRevision.shared
+    /// Moves when a picture a card draws has landed. Local, because a pinned
+    /// avatar arriving is a repaint of this pane and not of every laid-out row
+    /// in the app — which is what `PresentationRevision` would be.
+    @State private var artworkGeneration: UInt64 = 0
 
-    private static let width: CGFloat = 340
-    private static let maximumHeight: CGFloat = 420
+    /// Wider than a hover card, because it holds real messages: an embed is
+    /// laid out against `Metrics.embedMaxWidth` and a pane narrower than that
+    /// squeezes every card in the channel.
+    private static let width: CGFloat = 400
+    private static let maximumHeight: CGFloat = 520
     /// See the note on the frame below.
     private static let minimumHeight: CGFloat = 260
+    /// What a card is laid out against: the pane less the list's own margins.
+    static var cardWidth: CGFloat { width - Spacing.snug * 2 - Spacing.base * 2 }
 
     var body: some View {
         // Read at the top rather than inside the branches, so an arrival while
@@ -28,6 +45,7 @@ struct PinnedMessagesPane: View {
         let pinned = model.pinnedMessages[channelID]
         let isLoading = model.pinsLoading.contains(channelID)
         let failure = model.pinsFailure[channelID]
+        let cards = model.pinnedCards(in: channelID, width: Self.cardWidth)
 
         VStack(alignment: .leading, spacing: 0) {
             Text("Pinned messages")
@@ -44,8 +62,8 @@ struct PinnedMessagesPane: View {
                     "Nothing is pinned here yet. Pin a message from its menu and it will show up.",
                     symbolName: "pin.slash"
                 )
-            } else if let pinned {
-                list(pinned)
+            } else if pinned != nil {
+                list(cards)
             } else if isLoading {
                 ProgressView()
                     .controlSize(.small)
@@ -73,9 +91,16 @@ struct PinnedMessagesPane: View {
             maxHeight: Self.maximumHeight,
             alignment: .top
         )
-        .animation(motion.standard, value: pinned?.count)
+        .animation(motion.standard, value: cards.count)
         // The popover supplies the material; this must not add a second.
         .presentationBackground(.clear)
+        // **The painter only peeks**, so the pictures these cards draw have to
+        // be asked for by somebody — and nothing else in the app asks for a
+        // pinned message's attachments. One pass per set of cards, behind the
+        // scroll gate like every other optional fetch.
+        .task(id: cards.map(\.id)) {
+            await prefetch(cards)
+        }
     }
 
     private func notice(_ text: String, symbolName: String) -> some View {
@@ -92,18 +117,20 @@ struct PinnedMessagesPane: View {
         .padding(.bottom, Spacing.margin)
     }
 
-    private func list(_ pinned: [Message]) -> some View {
+    private func list(_ cards: [MessageCard]) -> some View {
         ScrollView {
             LazyVStack(spacing: Spacing.tight) {
-                ForEach(pinned) { message in
+                ForEach(cards) { card in
                     PinnedRow(
-                        message: model.pinnedRow(for: message),
-                        canUnpin: model.actions(for: message.id, in: channelID).contains(.unpin),
+                        card: card,
+                        presentationRevision: presentation.value,
+                        artworkGeneration: artworkGeneration,
+                        canUnpin: model.actions(for: card.id, in: channelID).contains(.unpin),
                         open: {
                             model.openPinsChannelID = nil
-                            model.sessionController.jumpToMessage(message.id, in: channelID)
+                            model.sessionController.jumpToMessage(card.id, in: channelID)
                         },
-                        unpin: { model.togglePin(of: message.id, in: channelID) }
+                        unpin: { model.togglePin(of: card.id, in: channelID) }
                     )
                 }
             }
@@ -113,45 +140,45 @@ struct PinnedMessagesPane: View {
         .scrollBounceBehavior(.basedOnSize)
         .softScrollEdgesVertical()
     }
-}
 
-/// One pinned message, as the pane shows it.
-struct PinnedRowContent: Hashable, Sendable {
-    var id: MessageID
-    var authorName: String
-    var avatarURL: URL?
-    var monogram: String
-    var timestamp: String
-    var excerpt: String
-}
-
-extension AppModel {
-    /// A pinned message, resolved for the pane.
-    ///
-    /// Built here rather than in the row so the row holds no store reference —
-    /// the same rule every other surface follows, and what keeps a message
-    /// arriving in the channel from invalidating each pinned row individually.
-    func pinnedRow(for message: Message) -> PinnedRowContent {
-        let author = users[message.authorID]
-        return PinnedRowContent(
-            id: message.id,
-            authorName: author?.preferredName ?? "Unknown",
-            avatarURL: avatarURL(
-                forUserID: message.authorID,
-                inGuild: channelIndex.guildID(of: message.channelID),
-                side: Metrics.avatarRow
-            ),
-            monogram: author?.monogram ?? "?",
-            timestamp: PresentationRevision.shared.timeline.timestampLabel(
-                message.sentAt, calendar: .current
-            ),
-            excerpt: Self.excerpt(of: message)
+    private func prefetch(_ cards: [MessageCard]) async {
+        let requests = TimelineImageRequests.requests(
+            for: cards.flatMap(\.messageRows),
+            scale: 2,
+            loadsArtwork: AppSettings.shared.loadsImagesAutomatically
         )
+        guard !requests.isEmpty else { return }
+        await ScrollWorkGate.waitUntilInactive()
+        guard !Task.isCancelled else { return }
+        await withTaskGroup(of: Void.self) { group in
+            for request in requests {
+                group.addTask {
+                    switch request.source {
+                    case .still(let bucket):
+                        _ = await ImageStore.shared.image(for: request.key, bucket: bucket)
+                    case .film:
+                        _ = await AnimatedImageStore.shared.image(
+                            for: AnimatedImageStore.Key(
+                                url: request.key.url,
+                                maximumPixelSize: request.key.maximumPixelSize
+                            )
+                        )
+                    }
+                }
+            }
+        }
+        guard !Task.isCancelled else { return }
+        // One nudge for the batch: the cards peek the caches on their next
+        // draw, and a repaint per picture would repaint the pane per avatar.
+        artworkGeneration &+= 1
     }
 }
 
+/// One pinned message, and the two things it can do.
 private struct PinnedRow: View {
-    var message: PinnedRowContent
+    var card: MessageCard
+    var presentationRevision: UInt64
+    var artworkGeneration: UInt64
     var canUnpin: Bool
     var open: () -> Void
     var unpin: () -> Void
@@ -161,62 +188,53 @@ private struct PinnedRow: View {
 
     var body: some View {
         Button(action: open) {
-            HStack(alignment: .top, spacing: Spacing.snug) {
-                AvatarView(
-                    url: message.avatarURL,
-                    monogram: message.monogram,
-                    side: Metrics.avatarRow
-                )
-                VStack(alignment: .leading, spacing: 1) {
-                    HStack(spacing: Spacing.base) {
-                        Text(message.authorName)
-                            .font(Typeface.messageAuthor)
-                            .foregroundStyle(Ink.primary)
-                            .lineLimit(1)
-                        Text(message.timestamp)
-                            .font(Typeface.metadata)
-                            .foregroundStyle(Ink.tertiary)
-                            .lineLimit(1)
-                    }
-                    Text(message.excerpt)
-                        .font(.system(.subheadline))
-                        .foregroundStyle(Ink.secondary)
-                        .lineLimit(2)
-                        .multilineTextAlignment(.leading)
-                        .fixedSize(horizontal: false, vertical: true)
+            MessageCardCanvas(
+                card: card,
+                presentationRevision: presentationRevision,
+                artworkGeneration: artworkGeneration
+            )
+                // The height is the layout's, so the row is placed once. A
+                // measured height here would cost a second layout pass per
+                // card and would settle visibly on the first frame.
+                .frame(width: PinnedMessagesPane.cardWidth, height: card.height)
+                .padding(Spacing.base)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background {
+                    RoundedRectangle(cornerRadius: Radius.row, style: .continuous)
+                        .fill(isHovered ? Palette.hoverFill : .clear)
                 }
-                Spacer(minLength: Spacing.tight)
-                // Revealed on hover, and it is a plain control rather than a
-                // glass one: §4 rule 4 — a hover-revealed glass element inside a
-                // container is drawn by the container regardless of the opacity
-                // on the wrapper holding it, so every row's would appear at once.
-                if canUnpin, isHovered {
-                    Button(action: unpin) {
-                        Image(systemName: "pin.slash")
-                            .font(.system(size: 11, weight: .medium))
-                            .foregroundStyle(Ink.secondary)
-                            .frame(width: 22, height: 22)
-                            .contentShape(.circle)
-                    }
-                    .buttonStyle(.plain)
-                    .help("Unpin")
-                    .accessibilityLabel(Text("Unpin message"))
-                    .transition(.opacity)
-                }
-            }
-            .padding(Spacing.base)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background {
-                RoundedRectangle(cornerRadius: Radius.row, style: .continuous)
-                    .fill(isHovered ? Palette.hoverFill : .clear)
-            }
-            .contentShape(.rect)
+                .contentShape(.rect)
         }
         .buttonStyle(.plain)
+        .overlay(alignment: .topTrailing) {
+            // Revealed on hover, and it is a plain control rather than a glass
+            // one: §4 rule 4 — a hover-revealed glass element inside a container
+            // is drawn by the container regardless of the opacity on the wrapper
+            // holding it, so every row's would appear at once.
+            if canUnpin, isHovered {
+                Button(action: unpin) {
+                    Image(systemName: "pin.slash")
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(Ink.secondary)
+                        .frame(width: 22, height: 22)
+                        .background(Circle().fill(.black.opacity(0.45)))
+                        .contentShape(.circle)
+                }
+                .buttonStyle(.plain)
+                .padding(Spacing.tight)
+                .help("Unpin")
+                .accessibilityLabel(Text("Unpin message"))
+                .transition(.opacity)
+            }
+        }
         .onHover { hovering in
             guard hovering != isHovered else { return }
             isHovered = hovering
         }
         .animation(motion.fadeQuick, value: isHovered)
+        // One node with a plain label, exactly as a transcript row carries —
+        // the canvas below draws no views for the platform to walk.
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(Text(card.accessibilityLabel))
     }
 }

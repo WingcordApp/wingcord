@@ -92,14 +92,17 @@ nonisolated enum MemberRowGeometry {
     static let sectionHeaderHeight: CGFloat = 28
     static let sectionSpacing: CGFloat = 6
 
-    /// One line: avatar, name.
-    static let singleLineHeight: CGFloat = 38
-    /// Two lines: avatar, name, activity.
-    static let doubleLineHeight: CGFloat = 46
+    /// Every row, whether or not it carries a second line.
+    ///
+    /// **One height, deliberately.** A roster where the rows with an activity
+    /// are eight points taller than the rows without one has a ragged rhythm
+    /// down its whole length — and because a nameplate is drawn to the plate's
+    /// height, two heights also means the same 672x126 strip is fitted two
+    /// different ways in one list. The name centres itself when there is no
+    /// second line; see `MemberRowPainter.drawMember`.
+    static let rowHeight: CGFloat = 46
 
-    static func height(for entry: MemberEntry) -> CGFloat {
-        entry.subtitle == nil ? singleLineHeight : doubleLineHeight
-    }
+    static func height(for entry: MemberEntry) -> CGFloat { rowHeight }
 
     /// The rounded rect the row's own surface occupies — the hover fill, the
     /// selection pill, and the nameplate artwork all use exactly this.

@@ -46,7 +46,7 @@ nonisolated enum PollLayoutEngine {
     static let answerHeight: CGFloat = 38
     static let answerGap: CGFloat = 6
     static let answerCorner: CGFloat = 8
-    static let emojiSide: CGFloat = 18
+    static let emojiSide: CGFloat = 22
     static let inset: CGFloat = 12
 
     /// A poll's own runs are **plain text, not markdown**, which is why this
