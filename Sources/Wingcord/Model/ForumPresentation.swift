@@ -182,7 +182,7 @@ extension AppModel {
         // reached — see `DiscordREST.searchThreads`.
         let phrase = threadSearchText.trimmingCharacters(in: .whitespacesAndNewlines)
         let isSearching = !phrase.isEmpty
-        let postIDs = isSearching ? threadSearchResults : board.postIDs
+        let postIDs = isSearching ? threadSearchResults : browseOrder(of: channelID, board: board)
 
         var posts: [ForumPostPresentation] = []
         posts.reserveCapacity(postIDs.count)
@@ -300,8 +300,11 @@ extension AppModel {
     /// between the gateway announcing it and the page being fetched would
     /// otherwise appear twice.
     private func browseOrder(of channelID: ChannelID, board: ForumBoard) -> [ChannelID] {
+        // `!= true`, not `== false`: a thread whose payload carried no
+        // `thread_metadata` is one nothing has told us is archived, and reading
+        // that as archived would drop it off the board entirely.
         let live = channelIndex.threadIDs(inParent: channelID).filter {
-            channelIndex[$0]?.threadMetadata?.isArchived == false
+            channelIndex[$0]?.threadMetadata?.isArchived != true
         }
         guard !live.isEmpty else { return board.postIDs }
         let seen = Set(live)

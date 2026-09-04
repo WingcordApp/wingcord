@@ -68,19 +68,23 @@ extension DiscordREST {
 
     /// A channel's **active** threads — the other half of a board.
     ///
-    /// **DERIVED, NOT CAPTURED.** Discord's own client never sends this: it
-    /// already holds the live threads from the gateway, which is why every
-    /// capture shows `post-data` for ten ids it was never seen to fetch. This
-    /// is `archived=false` against the route the archived half demonstrably
-    /// uses, which is the natural counterpart of a parameter proven to select
-    /// rather than include — but nothing has observed Discord send it.
+    /// **Derived rather than captured, and then confirmed against a live
+    /// account.** Discord's own client never sends this — it already holds the
+    /// live threads, which is why every capture shows `post-data` for ten ids it
+    /// was never seen to fetch. So `archived=false` was a reading of a parameter
+    /// proven to *select* rather than include, and nothing had observed the
+    /// server answer it. One traced run did: `active threads …: 19` against
+    /// `#bug-reports`, whose archived half is 36.
     ///
-    /// So the caller must treat a failure here as *nothing to add*, never as a
-    /// broken board: if the guess is wrong the list degrades to the archived
-    /// half alone, which is where it already was. See
-    /// `SessionController.loadActiveThreads`.
+    /// **And the gateway is not an alternative.** The same trace reports
+    /// `ready: threads=4 across 3 guilds` — four for the whole account. A user
+    /// account is told about the threads it has joined and no others, so a board
+    /// that waited for the socket would show its archived half for ever. This
+    /// request is the live half, not a supplement to it.
     ///
-    /// If this needs replacing, the documented alternatives are
+    /// Still failure-silent at the caller, because a route this client sends and
+    /// Discord does not is a route that can change without warning. If it ever
+    /// stops answering, the documented alternatives are
     /// `GET /guilds/{id}/threads/active` (guild-wide, one call for every forum)
     /// and `GET /channels/{id}/threads/active` (channel-scoped, deprecated).
     public func activeThreads(

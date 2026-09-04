@@ -394,15 +394,17 @@ final class SessionController {
         index.replacePrivateChannels(snapshot.privateChannels)
 
         // **A thread in READY is KNOWN, not followed**, and synthesising a
-        // membership for each one was wrong. The reference says a user account
-        // is sent only its joined threads; `forums3.har` disproves it — the ten
-        // active posts the client already held when it opened `#bug-reports`
-        // include three by people the account has no thread with. Treating them
-        // all as followed nested every live post in the sidebar.
+        // membership for each one was wrong — it nested every one of them in the
+        // sidebar.
         //
-        // Membership comes from where it is actually stated: the `members`
-        // array on a `threads/search` page, `THREAD_MEMBER_UPDATE`, and the
-        // reader's own follow.
+        // Membership comes from where it is actually stated: the `members` array
+        // on a `threads/search` page, `THREAD_MEMBER_UPDATE`, and the reader's
+        // own follow.
+        //
+        // The count below is worth keeping. It reads `threads=4 across 3 guilds`
+        // on a real account, which is what proved a forum's live posts do NOT
+        // arrive over the socket and sent the board to fetch them instead — see
+        // `DiscordREST.activeThreads`.
         Self.trace(
             "ready: threads=\(snapshot.threadsByGuild.values.reduce(0) { $0 + $1.count }) "
             + "across \(snapshot.threadsByGuild.count) guilds"

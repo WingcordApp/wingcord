@@ -63,10 +63,15 @@ extension SessionController {
 
     /// Fetches a forum's live posts into the index.
     ///
-    /// **Failure-silent, and deliberately so.** The query is derived rather than
-    /// captured — see `DiscordREST.activeThreads` — so a refusal means the guess
-    /// was wrong, not that the board is broken. The archived half has its own
-    /// request and its own error state; this one adds rows or it adds none.
+    /// **This is the live half of the board, not a supplement to it.** The
+    /// gateway does not carry a forum's active posts — a traced launch reports
+    /// four threads for the entire account — so without this a board shows only
+    /// what has been archived, which in a busy forum is everything older than a
+    /// fortnight and nothing newer.
+    ///
+    /// Failure-silent even so: this client sends a query Discord's own never
+    /// does, so a refusal must degrade to the archived half rather than put a
+    /// retry banner over a list that reads perfectly well.
     func loadActiveThreads(_ channelID: ChannelID, query: ForumQuery) {
         Task { [weak self] in
             guard let self else { return }
