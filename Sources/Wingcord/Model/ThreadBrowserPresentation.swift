@@ -82,7 +82,7 @@ extension AppModel {
                 ThreadBrowserRow(
                     id: threadID,
                     name: thread.name,
-                    startedBy: ownerMember?.resolvedName(user: owner) ?? owner?.displayName,
+                    startedBy: ownerMember?.resolvedName(user: owner) ?? owner?.preferredName,
                     // The id's own timestamp is the fallback: a thread nobody has
                     // answered has no last message, and its age is its own.
                     lastActive: RelativeTime.compact(

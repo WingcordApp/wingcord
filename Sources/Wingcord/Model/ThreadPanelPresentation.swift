@@ -69,7 +69,10 @@ extension AppModel {
         if thread?.threadMetadata?.isLocked == true { return "Locked" }
         if thread?.threadMetadata?.isArchived == true { return "Archived" }
         guard let owner else { return nil }
-        return "Started by \(owner.displayName)"
+        // `preferredName`, not `displayName`: the latter is optional, so
+        // interpolating it printed `Started by Optional("Lina")` — and an
+        // account with no global name would have had none at all.
+        return "Started by \(owner.preferredName)"
     }
 
     /// "Muted until 5:16 PM", or the plain word when there is no end.

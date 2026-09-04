@@ -193,7 +193,10 @@ extension AppModel {
             let authorID = firstMessage?.authorID ?? post.ownerID
             let user = authorID.flatMap { users[$0] }
             let member = guildID.flatMap { guild in authorID.flatMap { members[guild]?[$0] } }
-            let name = member?.resolvedName(user: user) ?? user?.displayName ?? ""
+            // `preferredName` falls back to the username; `displayName` is
+            // optional and would leave the byline blank for any account that
+            // has never set a global name.
+            let name = member?.resolvedName(user: user) ?? user?.preferredName ?? ""
             let color = member.map {
                 RoleResolver.nameColorValue(of: $0.roleIDs, in: guildRoles)
             }?.map { UserColor.desaturated($0, by: saturation) }

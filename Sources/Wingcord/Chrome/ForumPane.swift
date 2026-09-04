@@ -21,7 +21,12 @@ struct ForumPane: View {
     var loadMore: () -> Void
     var reveal: ([ChannelID]) -> Void
     var newPost: () -> Void
-    var setSearch: (String) -> Void
+    /// **A binding rather than a setter closure**, and the difference is not
+    /// style: `Binding(get:set:)` built over a stored non-`Sendable` closure is
+    /// converted to `@isolated(any) @Sendable` by `TextField`, which the release
+    /// build warns about as a possible data race. Handed down from the container
+    /// — which is where the store lives anyway — there is nothing to convert.
+    @Binding var searchText: String
     var clearSearch: () -> Void
 
     var body: some View { board }
@@ -78,7 +83,7 @@ struct ForumPane: View {
                 presentation: presentation,
                 setQuery: setQuery,
                 newPost: newPost,
-                setSearch: setSearch,
+                searchText: $searchText,
                 clearSearch: clearSearch
             )
         }
@@ -493,7 +498,7 @@ private struct ForumFilterBar: View {
     var presentation: ForumPresentation
     var setQuery: (ForumQuery) -> Void
     var newPost: () -> Void
-    var setSearch: (String) -> Void
+    @Binding var searchText: String
     var clearSearch: () -> Void
 
     @State private var isSortOpen = false
@@ -510,11 +515,7 @@ private struct ForumFilterBar: View {
     var body: some View {
         VStack(spacing: Spacing.base) {
             HStack(spacing: Spacing.base) {
-                ForumSearchField(
-                    text: presentation.searchText,
-                    setText: setSearch,
-                    clear: clearSearch
-                )
+                ForumSearchField(text: $searchText, clear: clearSearch)
                 // **Only where the reader may actually post.** Absent rather
                 // than disabled: a greyed New Post in a read-only forum is an
                 // invitation that can only be refused — §5.5.
@@ -720,8 +721,7 @@ private struct ForumTagList: View {
 /// `?name=test&tag_setting=match_some` at a forum channel. So it searches the
 /// whole forum, not the pages loaded.
 private struct ForumSearchField: View {
-    var text: String
-    var setText: (String) -> Void
+    @Binding var text: String
     var clear: () -> Void
 
     var body: some View {
@@ -729,12 +729,9 @@ private struct ForumSearchField: View {
             Image(systemName: "magnifyingglass")
                 .font(.system(.caption, weight: .medium))
                 .foregroundStyle(Ink.tertiary)
-            TextField(
-                "Search posts",
-                text: Binding(get: { text }, set: setText)
-            )
-            .textFieldStyle(.plain)
-            .font(.system(.subheadline))
+            TextField("Search posts", text: $text)
+                .textFieldStyle(.plain)
+                .font(.system(.subheadline))
             if !text.isEmpty {
                 Button(action: clear) {
                     Image(systemName: "xmark.circle.fill")
@@ -937,7 +934,10 @@ struct ForumContainer: View {
             loadMore: { model.loadMoreForumPosts(in: channelID) },
             reveal: { model.requestForumPostDetails($0, in: channelID) },
             newPost: { model.beginForumPost(in: channelID) },
-            setSearch: { model.setThreadSearch($0, in: channelID) },
+            searchText: Binding(
+                get: { model.threadSearchText },
+                set: { model.setThreadSearch($0, in: channelID) }
+            ),
             clearSearch: { model.clearThreadSearch() }
         )
         .sheet(
