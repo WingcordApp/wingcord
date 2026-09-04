@@ -61,7 +61,18 @@ struct PinnedMessagesPane: View {
         // then grows as the rows land, which reads as the flyout being broken
         // for the first second of its life. Reserving the height up front means
         // the first measurement is already the right one.
-        .frame(minHeight: Self.minimumHeight, maxHeight: Self.maximumHeight)
+        // **`alignment: .top`, or the reservation centres what it
+        // reserved for.** A frame with a minimum taller than its content
+        // centres that content by default, so the title and its notice
+        // floated in the middle of the box with empty space above and
+        // below. The floor exists to stop the popover opening as a
+        // sliver; the alignment is what keeps the content where a
+        // header belongs.
+        .frame(
+            minHeight: Self.minimumHeight,
+            maxHeight: Self.maximumHeight,
+            alignment: .top
+        )
         .animation(motion.standard, value: pinned?.count)
         // The popover supplies the material; this must not add a second.
         .presentationBackground(.clear)
