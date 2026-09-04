@@ -61,17 +61,18 @@ extension AppModel {
         let channel = channelIndex[channelID]
         let board = forumBoard(for: channelID)
         let guildID = channel?.guildID
-        let filter = threadSearchText.trimmingCharacters(in: .whitespaces)
+        let isSearching = !threadSearchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+
+        // **Two lists, and the search's is not a subset of the other.** The
+        // server searches the whole channel, so a hit is very often a thread no
+        // page ever reached — filtering the loaded rows would silently miss it.
+        let ids = isSearching ? threadSearchResults : board.postIDs
 
         var rows: [ThreadBrowserRow] = []
-        rows.reserveCapacity(board.postIDs.count)
+        rows.reserveCapacity(ids.count)
 
-        for threadID in board.postIDs {
+        for threadID in ids {
             guard let thread = channelIndex[threadID] else { continue }
-            if !filter.isEmpty,
-               thread.name.range(of: filter, options: .caseInsensitive) == nil {
-                continue
-            }
             let owner = thread.ownerID.flatMap { users[$0] }
             let ownerMember = guildID.flatMap { guild in
                 thread.ownerID.flatMap { members[guild]?[$0] }
@@ -103,14 +104,15 @@ extension AppModel {
             channelID: channelID,
             channelName: channel?.name ?? "",
             rows: rows,
-            isLoading: board.isLoading,
-            loadFailed: board.loadFailed,
-            // A filtered list must not page: the reader is looking at a subset
-            // of what is loaded, and appending a page underneath them would
-            // scroll the answer they were reading off the bottom.
-            hasMore: board.hasMore && filter.isEmpty,
-            totalResults: board.totalResults,
-            isFiltered: !filter.isEmpty
+            isLoading: isSearching ? isSearchingThreads : board.isLoading,
+            loadFailed: isSearching ? threadSearchFailed : board.loadFailed,
+            // **A search does not page.** The capture's reply came back with
+            // `has_more: false` against its own `total_results`, and the query
+            // carries no `offset` to advance — so the browse pager must not run
+            // underneath a set of results it did not fetch.
+            hasMore: board.hasMore && !isSearching,
+            totalResults: isSearching ? rows.count : board.totalResults,
+            isFiltered: isSearching
         )
     }
 

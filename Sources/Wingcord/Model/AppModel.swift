@@ -85,11 +85,21 @@ final class AppModel {
     var openThreadsChannelID: ChannelID?
     /// What the reader has typed into the Threads flyout's field.
     ///
-    /// **Client-side, over the pages already loaded.** `threads/search` almost
-    /// certainly takes a name, but no capture shows the request the field makes
-    /// — so filtering what is held is the honest thing to do rather than
-    /// inventing a parameter. Cleared when the flyout closes.
+    /// **The search is a request, not a filter.** Captured: the field sends
+    /// `threads/search?name=…`, and it searches the whole channel rather than
+    /// the pages loaded — the capture's hit is a thread from a year before the
+    /// oldest row on screen. Cleared when the flyout closes.
     var threadSearchText = ""
+    /// What the last search came back with, in the server's order.
+    ///
+    /// Held apart from `forumBoards` so clearing the field restores the browse
+    /// list instantly: the pages are still there, and a search that overwrote
+    /// them would cost a refetch of everything scrolled.
+    var threadSearchResults: [ChannelID] = []
+    var isSearchingThreads = false
+    var threadSearchFailed = false
+    /// The debounce. A request per keystroke is a request per keystroke.
+    @ObservationIgnored var threadSearchTask: Task<Void, Never>?
     /// The forum a New Post sheet is open for, or nil.
     ///
     /// **At the window root, presented once** — `INVARIANTS.md` §2 forbids a

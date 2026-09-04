@@ -423,6 +423,55 @@ struct ThreadDecodeTests {
         #expect(membership.notification == .nothing)
     }
 
+    /// Typing into the Threads flyout's field.
+    ///
+    /// **A request, not a filter, and its own query shape.** Captured,
+    /// `threads toolbar1.har`: the field sends
+    /// `?name=the+sun&tag_setting=match_some` and nothing else — no `archived`,
+    /// no `sort_by`, no `sort_order`, no `limit`, no `offset`. The hit is a
+    /// thread from 2025, far older than the hundred and fifty rows that had been
+    /// scrolled in, which is what proves the server searches the whole channel
+    /// rather than the pages the client holds.
+    @Test("A name search returns one page, unpaged, from the whole channel")
+    func threadNameSearch() throws {
+        let json = """
+        {"threads":[
+          {"id":"1435313430672119032","type":10,
+           "last_message_id":"1437634372440420240","flags":0,
+           "guild_id":"774352792659691746","name":"the sun is not a real object",
+           "parent_id":"883067831487134463","rate_limit_per_user":0,
+           "owner_id":"366702774403989504",
+           "thread_metadata":{"archived":true,
+             "archive_timestamp":"2025-12-11T02:54:18.658000+00:00",
+             "auto_archive_duration":10080,"locked":false,
+             "create_timestamp":"2025-11-04T17:03:18.008000+00:00"},
+           "message_count":61,"member_count":16,"total_message_sent":62,
+           "member_ids_preview":["174206282014431774","513291562327021859",
+             "172807592412111480","366702774403989504","174322727600521881"]}],
+         "members":[],"has_more":false,"total_results":1}
+        """
+        let dto = try Self.decoder().decode(ThreadSearchDTO.self, from: Data(json.utf8))
+        let page = dto.domain(parentID: ChannelID(rawValue: 883_067_831_487_134_463))
+
+        #expect(page.posts.count == 1)
+        #expect(page.totalResults == 1)
+        // No paging to follow: the query carries no offset to advance, and the
+        // reply says there is nothing after this.
+        #expect(!page.hasMore)
+        #expect(page.memberships.isEmpty)
+
+        let hit = try #require(page.posts.first)
+        #expect(hit.name == "the sun is not a real object")
+        // A substring match rather than a prefix: "the sun" found a name that
+        // continues past it.
+        #expect(hit.name.hasPrefix("the sun"))
+        #expect(hit.threadMessageCount == 61)
+        // 16 in the thread against five faces — below the cap, so the badge is
+        // exact.
+        #expect(hit.memberCount == 16)
+        #expect(hit.memberIDsPreview.count == 5)
+    }
+
     // MARK: The chip under a message
 
     /// A message from `#unstable-releases` with its thread nested inline.

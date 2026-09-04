@@ -60,6 +60,39 @@ extension DiscordREST {
         return page.domain(parentID: channelID)
     }
 
+    /// Threads in a channel whose name matches.
+    ///
+    /// **The same route, and a deliberately different query.** Captured,
+    /// `threads toolbar1.har`: typing into the Threads flyout sends
+    /// `?name=the+sun&tag_setting=match_some` and **nothing else** — no
+    /// `archived`, no `sort_by`, no `sort_order`, no `limit`, no `offset`. So
+    /// this is not the browse query with a name bolted on; it is its own shape,
+    /// and sending the browse parameters alongside would be asserting an order
+    /// and a page the client never asks for here.
+    ///
+    /// It searches the **whole channel**, not the pages already loaded: the
+    /// capture's one hit is a thread from 2025, far beyond the hundred and fifty
+    /// rows that had been scrolled. That is the entire reason this is a request
+    /// rather than a filter.
+    ///
+    /// The reply carries no paging worth following — `has_more` was false
+    /// against a `total_results` of 1 — so this returns one page and no cursor.
+    public func searchThreads(
+        in channelID: ChannelID,
+        name: String
+    ) async throws -> ForumPage {
+        let page = try await get(
+            "/channels/\(channelID.rawValue)/threads/search",
+            route: "channels/{id}/threads/search",
+            query: [
+                URLQueryItem(name: "name", value: name),
+                URLQueryItem(name: "tag_setting", value: TagMatching.some.rawValue),
+            ],
+            as: ThreadSearchDTO.self
+        )
+        return page.domain(parentID: channelID)
+    }
+
     /// The author and opening message of each post, in one call.
     ///
     /// **Undocumented.** It appears in no published reference; the shape here is

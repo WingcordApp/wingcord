@@ -44,6 +44,23 @@ extension SessionController {
         }
     }
 
+    /// Searches a channel's threads by name.
+    ///
+    /// `async` rather than fire-and-forget, unlike the rest of this file: the
+    /// caller is a debounce task that has already waited, and awaiting here is
+    /// what lets its cancellation reach the request.
+    func searchThreads(in channelID: ChannelID, name: String) async {
+        do {
+            let page = try await rest.searchThreads(in: channelID, name: name)
+            guard !Task.isCancelled else { return }
+            model.applyThreadSearch(page, phrase: name, in: channelID)
+        } catch {
+            guard !Task.isCancelled else { return }
+            Self.trace("thread search \(channelID) failed: \(Self.describe(error))")
+            model.applyThreadSearchFailure(phrase: name)
+        }
+    }
+
     /// Fills in the opening message and author for a batch of posts.
     ///
     /// A failure is not surfaced: the rows it would have filled keep their

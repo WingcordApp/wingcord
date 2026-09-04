@@ -141,7 +141,84 @@ extension AppModel {
 
     func closeThreadBrowser() {
         openThreadsChannelID = nil
+        clearThreadSearch()
+    }
+
+    /// Types into the flyout's field, and asks the server about it.
+    ///
+    /// **Debounced, because the search is a request.** The capture sends one
+    /// `?name=…` for the phrase rather than one per keystroke, and a client that
+    /// fires per character is a client rate-limited off the route. The in-flight
+    /// task is cancelled by the next keystroke, so only the last phrase survives.
+    ///
+    /// An empty field is not an empty search — it is *no* search, and the browse
+    /// pages underneath are still loaded, so clearing costs nothing.
+    func setThreadSearch(_ text: String, in channelID: ChannelID) {
+        guard threadSearchText != text else { return }
+        threadSearchText = text
+        threadSearchTask?.cancel()
+
+        let phrase = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !phrase.isEmpty else {
+            threadSearchTask = nil
+            threadSearchResults = []
+            isSearchingThreads = false
+            threadSearchFailed = false
+            return
+        }
+
+        isSearchingThreads = true
+        threadSearchFailed = false
+        threadSearchTask = Task { [weak self] in
+            // Long enough that a typed word is one request, short enough that
+            // the list does not feel like it is lagging behind the field.
+            try? await Task.sleep(for: .milliseconds(250))
+            guard !Task.isCancelled, let self else { return }
+            await sessionController.searchThreads(in: channelID, name: phrase)
+        }
+    }
+
+    func clearThreadSearch() {
+        threadSearchTask?.cancel()
+        threadSearchTask = nil
         threadSearchText = ""
+        threadSearchResults = []
+        isSearchingThreads = false
+        threadSearchFailed = false
+    }
+
+    /// What a search came back with.
+    ///
+    /// The threads go into the index like any others — the rows have to resolve,
+    /// and a hit is very often a thread no page had reached. The *ids* are held
+    /// separately so the browse list underneath survives.
+    func applyThreadSearch(_ page: ForumPage, phrase: String, in channelID: ChannelID) {
+        // The reader may have typed on while this was in flight. Applying a
+        // stale answer would put the previous phrase's hits under the current
+        // one's text.
+        guard threadSearchText.trimmingCharacters(in: .whitespacesAndNewlines) == phrase else {
+            return
+        }
+        for thread in page.posts { channelIndex.upsertThread(thread) }
+        applyThreadPeople(
+            users: page.authors,
+            members: page.members,
+            guildID: channelIndex.guildID(of: channelID)
+        )
+        for membership in page.memberships { threadMemberships[membership.id] = membership }
+
+        threadSearchResults = page.posts.map(\.id)
+        isSearchingThreads = false
+        threadSearchFailed = false
+        threadRevision &+= 1
+    }
+
+    func applyThreadSearchFailure(phrase: String) {
+        guard threadSearchText.trimmingCharacters(in: .whitespacesAndNewlines) == phrase else {
+            return
+        }
+        isSearchingThreads = false
+        threadSearchFailed = true
     }
 
     /// Whether a channel can have threads at all.
@@ -381,7 +458,7 @@ extension AppModel {
     /// user record from a forum row carries no bio, banner or badges, and
     /// writing one straight over a profile-fetched record wipes the card the
     /// reader may be looking at.
-    private func applyThreadPeople(
+    func applyThreadPeople(
         users: [UserID: User],
         members: [UserID: Member],
         guildID: GuildID?

@@ -44,38 +44,48 @@ struct ThreadBrowserPane: View {
                 .font(.system(.headline))
                 .foregroundStyle(Ink.primary)
 
-            // Filters what is loaded rather than asking the server: no capture
-            // shows the request this field makes, and inventing a parameter is
-            // how a client ends up with a search box that silently returns
-            // nothing. See `AppModel.threadSearchText`.
-            ThreadSearchField(text: Binding(
-                get: { model.threadSearchText },
-                set: { model.threadSearchText = $0 }
-            ))
+            // Asks the server, debounced. The route searches the whole channel
+            // rather than the pages loaded — see `AppModel.setThreadSearch`.
+            ThreadSearchField(
+                text: Binding(
+                    get: { model.threadSearchText },
+                    set: { model.setThreadSearch($0, in: channelID) }
+                ),
+                clear: { model.clearThreadSearch() }
+            )
         }
         .padding(.horizontal, Spacing.margin)
         .padding(.top, Spacing.margin)
         .padding(.bottom, Spacing.snug)
     }
 
+    /// **Rows win.** A failure or a spinner only replaces the list when there is
+    /// no list — a page that failed underneath a hundred loaded rows must not
+    /// blank them, and a search in flight must not blank the results already on
+    /// screen either.
     @ViewBuilder
     private func content(_ presentation: ThreadBrowserPresentation) -> some View {
-        if presentation.loadFailed, presentation.rows.isEmpty {
-            notice("Could not load this channel's threads.", symbolName: "exclamationmark.triangle")
-        } else if presentation.rows.isEmpty, presentation.isLoading {
+        if !presentation.rows.isEmpty {
+            list(presentation)
+        } else if presentation.isLoading {
             ProgressView()
                 .controlSize(.small)
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, Spacing.group)
-        } else if presentation.rows.isEmpty {
+        } else if presentation.loadFailed {
+            notice(
+                presentation.isFiltered
+                    ? "Could not search this channel's threads."
+                    : "Could not load this channel's threads.",
+                symbolName: "exclamationmark.triangle"
+            )
+        } else {
             notice(
                 presentation.isFiltered
                     ? "No thread here matches that."
                     : "No threads here yet. Start one from a message's menu and it will show up.",
                 symbolName: presentation.isFiltered ? "magnifyingglass" : "text.bubble"
             )
-        } else {
-            list(presentation)
         }
     }
 
@@ -129,6 +139,7 @@ struct ThreadBrowserPane: View {
 /// focus ring and the glyph are not.
 private struct ThreadSearchField: View {
     @Binding var text: String
+    var clear: () -> Void
 
     var body: some View {
         HStack(spacing: Spacing.base) {
@@ -139,9 +150,7 @@ private struct ThreadSearchField: View {
                 .textFieldStyle(.plain)
                 .font(.system(.subheadline))
             if !text.isEmpty {
-                Button {
-                    text = ""
-                } label: {
+                Button(action: clear) {
                     Image(systemName: "xmark.circle.fill")
                         .font(.system(.caption))
                         .foregroundStyle(Ink.tertiary)
