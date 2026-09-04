@@ -114,6 +114,9 @@ nonisolated enum TimelineMetrics {
     static let forwardTopPadding: CGFloat = 4
     static let forwardLineGap: CGFloat = 4
     static let forwardGlyphSide: CGFloat = 11
+    /// The star that keeps a GIF, on the picture it belongs to.
+    static let favoriteBadgeSide: CGFloat = 30
+    static let favoriteBadgeInset: CGFloat = 8
     /// A card for a file with nothing to show: a glyph, a name, a size.
     static let attachmentCardHeight: CGFloat = 56
     /// The widest such card. It holds two short lines and grows no further —

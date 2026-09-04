@@ -185,6 +185,48 @@ extension DiscordREST {
         FrecencyProto.favoriteGIFs(base64: try await frecencySettings())
     }
 
+    /// Stars or un-stars a GIF, and answers with the account's new list.
+    ///
+    /// **The whole `favorite_gifs` field goes, every time, and nothing else
+    /// does.** Captured in `gif favorite unfavorite.har`: Discord's own client
+    /// sends a partial message on this route — the unfavourite carried a
+    /// *smaller* map than the favourite that followed it, which a merge cannot
+    /// express, and neither request carried the frecency tables that live beside
+    /// it. So the field is replaced and the rest of the message survives
+    /// untouched.
+    ///
+    /// The entries that are staying are re-emitted as **the bytes they arrived
+    /// as**, so a field this client cannot read is not a field it can delete —
+    /// see `FrecencyProto.favoriteGIFEntries`.
+    ///
+    /// - Returns: The favourites as they now stand, newest first, so the caller
+    ///   never has to guess what the server ended up with.
+    @discardableResult
+    public func setFavorite(_ gif: GIF, favorite: Bool) async throws -> [GIF] {
+        let blob = try await frecencySettings()
+        var entries = FrecencyProto.favoriteGIFEntries(base64: blob)
+        let key = gif.url.absoluteString
+        entries.removeAll { $0.key == key }
+        if favorite {
+            // One past the highest, which is what puts it at the front of the
+            // grid — the counter is an insertion order and the reader sorts on
+            // it descending.
+            let next = (entries.map(\.order).max() ?? 0) + 1
+            entries.append(FrecencyProto.favoriteEntry(for: gif, order: next))
+        }
+
+        struct Body: Encodable { var settings: String }
+        _ = try await requestData(
+            method: "PATCH",
+            path: "/users/@me/settings-proto/2",
+            route: "users/@me/settings-proto/:type",
+            body: Body(settings: FrecencyProto.encodeFavoriteGIFs(entries))
+        )
+        return FrecencyProto.favoriteGIFs(
+            base64: FrecencyProto.encodeFavoriteGIFs(entries)
+        )
+    }
+
     private func frecencySettings() async throws -> String {
         struct Response: Decodable { var settings: String? }
         return try await get(

@@ -18,7 +18,13 @@ import WingcordNet
 /// is bumped once.
 @MainActor
 final class SessionController {
-    private static let log = Logger(subsystem: "dev.wingcord.Wingcord", category: "Session")
+    static let log = Logger(subsystem: "dev.wingcord.Wingcord", category: "Session")
+    /// GIFs whose favourite write is out.
+    ///
+    /// The route reads the account's whole settings blob, edits it and writes it
+    /// back, so two overlapping toggles would both start from the state before
+    /// either — and the later would undo the earlier. See `toggleFavorite`.
+    var favoriteWritesInFlight: Set<URL> = []
 
     nonisolated static func trace(_ message: @autoclosure () -> String) {
         DiagnosticLog.trace("session", message())

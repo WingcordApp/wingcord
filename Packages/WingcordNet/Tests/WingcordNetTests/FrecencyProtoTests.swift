@@ -198,3 +198,89 @@ struct FrecencyProtoTests {
         #expect(FrecencyProto.favoriteGIFs(base64: "not base64 at all!!").isEmpty)
     }
 }
+
+// MARK: - Writing a favourite back
+
+/// The round trip that `setFavorite` depends on.
+///
+/// **A writer is what turns a decode bug into data loss**, so this holds the two
+/// properties that matter: an entry this client did not fully parse survives
+/// re-serialisation byte for byte, and removing one really does produce a
+/// smaller map — which is the only way an unfavourite can be expressed at all.
+@Suite("Favourite GIF round trip")
+struct FavoriteGIFRoundTripTests {
+
+    /// One map entry carrying a field this reader knows nothing about.
+    ///
+    /// Field 9 is not in `GIFField`, and it is here precisely because it is not:
+    /// an entry rebuilt from the five understood fields would drop it, and every
+    /// favourite the account has would lose it the first time somebody starred a
+    /// new one.
+    private func blob(withUnknownField: Bool) -> String {
+        var value = ProtobufWriter()
+        value.varint(field: 1, 2)
+        value.string(field: 2, "https://media.example.invalid/one.mp4")
+        value.varint(field: 3, 498)
+        value.varint(field: 4, 282)
+        value.varint(field: 5, 13)
+        if withUnknownField { value.string(field: 9, "something this client cannot read") }
+
+        var entry = ProtobufWriter()
+        entry.string(field: 1, "https://tenor.example.invalid/view/one")
+        entry.message(field: 2, value.data)
+
+        var second = ProtobufWriter()
+        second.varint(field: 1, 1)
+        second.string(field: 2, "https://media.example.invalid/two.gif")
+        second.varint(field: 5, 7)
+        var secondEntry = ProtobufWriter()
+        secondEntry.string(field: 1, "https://tenor.example.invalid/view/two")
+        secondEntry.message(field: 2, second.data)
+
+        var map = ProtobufWriter()
+        map.message(field: 1, entry.data)
+        map.message(field: 1, secondEntry.data)
+        var top = ProtobufWriter()
+        top.message(field: 2, map.data)
+        return top.base64
+    }
+
+    @Test("An entry this client cannot fully read survives a rewrite")
+    func preservesUnknownFields() {
+        let original = blob(withUnknownField: true)
+        let entries = FrecencyProto.favoriteGIFEntries(base64: original)
+        #expect(entries.count == 2)
+        // Re-emitted untouched, which is what makes the rewrite safe.
+        #expect(FrecencyProto.encodeFavoriteGIFs(entries) == original)
+    }
+
+    @Test("Removing one produces a strictly smaller map")
+    func removalShrinks() {
+        // The whole reason the field is replaced rather than merged: a map
+        // merges by key and has no way to say "this one is gone".
+        let entries = FrecencyProto.favoriteGIFEntries(base64: blob(withUnknownField: false))
+        let kept = entries.filter { $0.key != "https://tenor.example.invalid/view/one" }
+        let before = Data(base64Encoded: FrecencyProto.encodeFavoriteGIFs(entries))?.count ?? 0
+        let after = Data(base64Encoded: FrecencyProto.encodeFavoriteGIFs(kept))?.count ?? 0
+        #expect(after < before)
+        #expect(FrecencyProto.favoriteGIFs(base64: FrecencyProto.encodeFavoriteGIFs(kept)).count == 1)
+    }
+
+    @Test("A new entry reads back as the GIF that was starred")
+    func newEntryRoundTrips() {
+        let gif = GIF(
+            url: URL(string: "https://tenor.example.invalid/view/three")!,
+            previewURL: URL(string: "https://media.example.invalid/three.mp4"),
+            width: 400,
+            height: 300
+        )
+        var entries = FrecencyProto.favoriteGIFEntries(base64: blob(withUnknownField: false))
+        entries.append(FrecencyProto.favoriteEntry(for: gif, order: 14))
+        let read = FrecencyProto.favoriteGIFs(base64: FrecencyProto.encodeFavoriteGIFs(entries))
+        // Highest order first — the newest favourite leads the grid.
+        #expect(read.first?.url == gif.url)
+        #expect(read.first?.previewURL == gif.previewURL)
+        #expect(read.first?.width == 400)
+        #expect(read.first?.height == 300)
+    }
+}

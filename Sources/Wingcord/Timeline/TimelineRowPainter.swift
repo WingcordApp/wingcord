@@ -41,6 +41,17 @@ nonisolated enum TimelineRowPainter {
         /// between passes. One field for both, because at most one thing in a
         /// row is under the pointer.
         var hoveredComponent: CGPoint?
+        /// Which attachment the pointer is over, if any.
+        ///
+        /// **Its own field rather than another meaning for `hoveredComponent`.**
+        /// That one is an origin because a button and a poll answer are
+        /// identified by where they sit; an attachment already has an index, and
+        /// overloading the point would make the star and a button under the same
+        /// pointer indistinguishable.
+        var hoveredAttachment: Int?
+        /// Whether the account has already starred the hovered GIF, so the badge
+        /// says which way the click goes.
+        var isHoveredAttachmentFavorite = false
         /// The shared animation clock's current time.
         ///
         /// Passed in rather than read here: the painter is `nonisolated` so a
@@ -308,7 +319,13 @@ nonisolated enum TimelineRowPainter {
                 images: images,
                 scale: scale,
                 isRevealed: state.revealedAttachments.contains(index),
-                clock: state.animationTime
+                clock: state.animationTime,
+                // The star is a hover control: it exists on the picture the
+                // pointer is on and nowhere else, exactly as the action pill
+                // exists on the row the pointer is on.
+                favorite: state.hoveredAttachment == index
+                    ? (state.isHoveredAttachmentFavorite ? .starred : .unstarred)
+                    : nil
             )
         }
 
@@ -820,7 +837,8 @@ nonisolated enum TimelineRowPainter {
         images: ImageStore,
         scale: CGFloat,
         isRevealed: Bool,
-        clock: Double
+        clock: Double,
+        favorite: FavoriteBadge?
     ) {
         // A spoiler stays covered until it is clicked, and the click that
         // uncovers it is not the click that opens it — a picture somebody hid
@@ -854,6 +872,57 @@ nonisolated enum TimelineRowPainter {
                 context: context
             )
         }
+
+        if let favorite, slot.favorite != nil, !isHidden {
+            drawFavoriteBadge(
+                favorite,
+                in: slot.favoriteRect.offsetBy(
+                    dx: frame.minX - slot.rect.minX,
+                    dy: frame.minY - slot.rect.minY
+                ),
+                context: context
+            )
+        }
+    }
+
+    /// Which way the star's click goes.
+    enum FavoriteBadge: Sendable {
+        case starred
+        case unstarred
+    }
+
+    /// The control that keeps a GIF.
+    ///
+    /// **A fixed dark plate, never glass.** It sits on moving artwork, and glass
+    /// over a moving picture churns its sampled blur every frame and leaves the
+    /// glyph illegible on a bright one — the same rule the play badge follows.
+    /// Boxy rather than round, because it is a control rather than a mark.
+    private static func drawFavoriteBadge(
+        _ state: FavoriteBadge,
+        in frame: CGRect,
+        context: CGContext
+    ) {
+        context.addPath(CGPath(
+            roundedRect: frame,
+            cornerWidth: Radius.row,
+            cornerHeight: Radius.row,
+            transform: nil
+        ))
+        context.setFillColor(NSColor.black.withAlphaComponent(0.55).cgColor)
+        context.fillPath()
+
+        let side = frame.width * 0.52
+        drawSymbol(
+            state == .starred ? "star.fill" : "star",
+            tint: state == .starred ? NSColor.systemYellow : .white,
+            in: CGRect(
+                x: frame.midX - side / 2,
+                y: frame.midY - side / 2,
+                width: side,
+                height: side
+            ),
+            context: context
+        )
     }
 
     /// A picture or a clip's poster, and the clip's badge over it.
@@ -1543,7 +1612,11 @@ nonisolated enum TimelineRowPainter {
                 // quote of somebody else's message, and there is nothing here to
                 // click that would reveal it.
                 isRevealed: false,
-                clock: clock
+                clock: clock,
+                // And nothing in a quote is a control. A star on somebody else's
+                // forwarded GIF would be a control that cannot be pointed at,
+                // because the hit test does not descend into the block.
+                favorite: nil
             )
         }
         for embed in slot.embeds {

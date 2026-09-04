@@ -544,3 +544,56 @@ extension SessionController {
         pending.answer(instance)
     }
 }
+
+
+// MARK: - Keeping a GIF
+
+extension SessionController {
+    /// Whether the account already keeps this one.
+    func isFavorite(_ gif: GIF) -> Bool {
+        model.favoriteGIFs.contains { $0.url == gif.url }
+    }
+
+    /// Stars or un-stars a GIF.
+    ///
+    /// **Optimistic, and re-settled on the answer.** The star is a control on a
+    /// picture under the pointer; waiting a round trip to fill it in reads as
+    /// the click having missed. The route re-reads the account's whole
+    /// favourites blob and returns what it wrote, so the second write is the
+    /// truth rather than a guess.
+    ///
+    /// Guarded against a second press while the first is out: this route reads
+    /// the blob, edits it and writes it back, so two overlapping toggles would
+    /// both start from the state before either — and the later one would undo
+    /// the earlier.
+    func toggleFavorite(_ gif: GIF) {
+        guard !favoriteWritesInFlight.contains(gif.url) else { return }
+        let wasFavorite = isFavorite(gif)
+        favoriteWritesInFlight.insert(gif.url)
+        if wasFavorite {
+            model.favoriteGIFs.removeAll { $0.url == gif.url }
+        } else {
+            model.favoriteGIFs.insert(gif, at: 0)
+        }
+
+        Task { [weak self] in
+            guard let self else { return }
+            defer { favoriteWritesInFlight.remove(gif.url) }
+            do {
+                model.favoriteGIFs = try await rest.setFavorite(gif, favorite: !wasFavorite)
+            } catch {
+                Self.log.error(
+                    "favourite failed: \(Self.describe(error), privacy: .public)"
+                )
+                // Put it back. A star that stayed lit on a write that failed is
+                // a client telling the reader something the account does not
+                // agree with.
+                if wasFavorite {
+                    if !isFavorite(gif) { model.favoriteGIFs.insert(gif, at: 0) }
+                } else {
+                    model.favoriteGIFs.removeAll { $0.url == gif.url }
+                }
+            }
+        }
+    }
+}

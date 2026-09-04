@@ -215,6 +215,15 @@ nonisolated struct AttachmentSlot: Sendable {
     /// Whether the picture is animated and should be drawn from a filmstrip
     /// rather than from a still. See `AnimatedImageStore`.
     var isAnimated: Bool = false
+    /// The GIF this slot would star, when it is one the account can keep.
+    ///
+    /// **Only a GIF, and only one with a URL another client can unfurl.** A
+    /// favourite is stored as its source URL and re-sent as a message; a
+    /// photograph or a clip has nothing to send. Nil is what keeps the control
+    /// off every attachment that is not one — `INVARIANTS.md` §5.5.
+    var favorite: GIF?
+    /// Where the star sits inside the picture. Only meaningful with `favorite`.
+    var favoriteRect: CGRect = .zero
 
     enum Kind: Sendable, Equatable {
         /// A still or animated picture, drawn at its own size.
@@ -1700,8 +1709,9 @@ nonisolated struct TimelineLayoutEngine: Sendable {
         } else {
             CDN.resizedAttachment(proxyURL: attachment.proxyURL, width: box.width)
         }
+        let rect = CGRect(x: origin.x, y: origin.y, width: box.width, height: box.height)
         return AttachmentSlot(
-            rect: CGRect(x: origin.x, y: origin.y, width: box.width, height: box.height),
+            rect: rect,
             url: url,
             isSpoiler: attachment.isSpoiler,
             altText: attachment.description,
@@ -1709,7 +1719,9 @@ nonisolated struct TimelineLayoutEngine: Sendable {
             kind: isVideo ? .video : .image,
             filename: attachment.filename,
             durationLabel: isVideo ? Self.durationLabel(attachment.durationSeconds) : "",
-            isAnimated: isAnimated
+            isAnimated: isAnimated,
+            favorite: isAnimated ? Self.favorite(for: attachment) : nil,
+            favoriteRect: favoriteBadgeRect(in: rect)
         )
     }
 
@@ -1802,6 +1814,36 @@ nonisolated struct TimelineLayoutEngine: Sendable {
             sizeLabel: sizeLabel,
             titleOrigin: CGPoint(x: textX, y: top),
             subtitleOrigin: CGPoint(x: textX, y: top + style.bodyFont.pointSize + 4)
+        )
+    }
+
+    /// Where the star sits on a picture: the leading top corner, inset.
+    ///
+    /// Shared by the layout and the hit test, because a control drawn in one
+    /// place and clicked in another is the defect this kind of geometry
+    /// produces and the only kind a test can catch.
+    static func favoriteBadgeRect(in picture: CGRect) -> CGRect {
+        CGRect(
+            x: picture.minX + TimelineMetrics.favoriteBadgeInset,
+            y: picture.minY + TimelineMetrics.favoriteBadgeInset,
+            width: TimelineMetrics.favoriteBadgeSide,
+            height: TimelineMetrics.favoriteBadgeSide
+        )
+    }
+
+    /// The GIF an attachment would be starred as.
+    ///
+    /// **The `cdn.discordapp.com` URL is the key**, exactly as the capture
+    /// shows: `gif favorite unfavorite.har` stores an attachment favourite under
+    /// its CDN address with the proxied rendition in `src`. Sending that URL
+    /// back into a channel is what every client unfurls into the same GIF.
+    private static func favorite(for attachment: Attachment) -> GIF? {
+        guard let url = URL(string: attachment.url), url.scheme == "https" else { return nil }
+        return GIF(
+            url: url,
+            previewURL: URL(string: attachment.proxyURL),
+            width: attachment.width,
+            height: attachment.height
         )
     }
 

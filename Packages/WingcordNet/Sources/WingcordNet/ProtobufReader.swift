@@ -84,6 +84,19 @@ struct ProtobufReader {
         ProtobufReader(bytes: bytes, from: field.range.lowerBound, to: field.range.upperBound)
     }
 
+    /// The raw bytes of a length-delimited field, framing excluded.
+    ///
+    /// **What makes a partial rewrite safe.** Discord's settings message is
+    /// re-serialised whole when one entry in it changes, and this reader knows
+    /// five of a favourite's fields — so an entry rebuilt from what it
+    /// understands loses whatever it does not. Keeping each entry's own bytes
+    /// and re-emitting them verbatim means only the entry that actually changed
+    /// is ever rewritten. See `FrecencyProto.favoriteGIFEntries`.
+    func data(for field: Field) -> Data? {
+        guard field.wireType == 2 else { return nil }
+        return Data(bytes[field.range])
+    }
+
     func string(for field: Field) -> String? {
         guard field.wireType == 2 else { return nil }
         return String(decoding: bytes[field.range], as: UTF8.self)

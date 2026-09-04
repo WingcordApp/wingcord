@@ -152,6 +152,12 @@ final class TimelineCoordinator: NSObject {
                 anchor: canvas.anchorInHostingRoot(rect)
             )
         }
+        canvas.onToggleFavoriteGIF = { [weak self] gif in
+            self?.model.sessionController.toggleFavorite(gif)
+        }
+        canvas.isFavoriteGIF = { [weak self] gif in
+            self?.model.sessionController.isFavorite(gif) ?? false
+        }
         canvas.onVote = { [weak self] messageID, answerID in
             guard let self, let channelID = self.channelID else { return }
             self.model.vote(for: answerID, on: messageID, in: channelID)
@@ -388,6 +394,8 @@ final class TimelineCoordinator: NSObject {
         canvas?.onOpenEmoji = nil
         canvas?.onOpenSticker = nil
         canvas?.onOpenAttachment = nil
+        canvas?.onToggleFavoriteGIF = nil
+        canvas?.isFavoriteGIF = nil
         canvas?.onVote = nil
         canvas?.onPlayActivity = nil
         canvas?.onPressComponent = nil

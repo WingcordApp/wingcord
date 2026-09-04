@@ -48,6 +48,9 @@ final class TimelineCanvasView: NSView {
     /// only means anything beside the array it came from, and the canvas keeps
     /// no such array between passes.
     private var hoveredComponent: CGPoint?
+    /// Which attachment the pointer is over. Its own field for the reason
+    /// `TimelineRowPainter.State.hoveredAttachment` gives.
+    private var hoveredAttachment: Int?
     private var highlightedMessageID: MessageID?
     private var revealedSpoilers: [MessageID: Set<Int>] = [:]
     /// Which spoilered attachments have been uncovered, keyed the same way and
@@ -109,6 +112,16 @@ final class TimelineCanvasView: NSView {
     /// was drawn at — a peek built from any other number looks in a slot nothing
     /// was ever put in.
     var onOpenAttachment: ((MessageID, Int, [CGFloat]) -> Void)?
+    /// Stars or un-stars a GIF in the transcript.
+    var onToggleFavoriteGIF: ((GIF) -> Void)?
+    /// Whether the account already keeps this one, asked at paint time.
+    ///
+    /// **A closure, not a set copied into the canvas.** The favourites live on
+    /// the store and change from three places — the picker, this badge, another
+    /// client — and a snapshot handed to the canvas is a snapshot that goes
+    /// stale. It is called once per hovered attachment per repaint, which is at
+    /// most one.
+    var isFavoriteGIF: ((GIF) -> Bool)?
     /// The Play button on an activity invitation was pressed.
     var onPlayActivity: ((MessageID) -> Void)?
     /// A poll answer was chosen.
@@ -496,7 +509,17 @@ final class TimelineCanvasView: NSView {
                     state.isHighlighted = messageID == highlightedMessageID
                     state.revealedSpoilers = revealedSpoilers[messageID] ?? []
                     state.revealedAttachments = revealedAttachments[messageID] ?? []
-                    if hoveredRow == index { state.hoveredComponent = hoveredComponent }
+                    if hoveredRow == index {
+                        state.hoveredComponent = hoveredComponent
+                        state.hoveredAttachment = hoveredAttachment
+                        if let hoveredAttachment,
+                           case .message(let message) = row.kind,
+                           message.attachments.indices.contains(hoveredAttachment),
+                           let gif = message.attachments[hoveredAttachment].favorite
+                        {
+                            state.isHoveredAttachmentFavorite = isFavoriteGIF?(gif) ?? false
+                        }
+                    }
                 }
                 if case .message(let message) = row.kind,
                    let invite = message.activityInvite {
@@ -582,6 +605,10 @@ final class TimelineCanvasView: NSView {
                 return
             }
             onOpenAttachment?(row.id, attachmentIndex, row.attachments.map(\.decodeWidth))
+        case .favoriteGIF(let attachmentIndex):
+            guard let gif = row.attachments[attachmentIndex].favorite else { return }
+            onToggleFavoriteGIF?(gif)
+            invalidateRow(index)
         case .link(let destination, let rect):
             onOpenLink?(destination, rect)
         case .emoji(let emoji, let rect):
@@ -654,6 +681,9 @@ final class TimelineCanvasView: NSView {
         case spoiler(Int)
         /// A picture, a GIF or a video, and whether it is still covered.
         case attachment(index: Int, isHidden: Bool)
+        /// The star on a GIF. Ahead of the picture in the hit test, because it
+        /// sits inside it and the picture would otherwise swallow every press.
+        case favoriteGIF(index: Int)
         case link(MessageText.LinkTarget, CGRect)
         case emoji(EmojiRef, CGRect)
         case sticker(StickerRef, CGRect)
@@ -786,10 +816,13 @@ final class TimelineCanvasView: NSView {
         let revealedHere = revealedAttachments[row.id] ?? []
         for (attachmentIndex, slot) in row.attachments.enumerated()
         where slot.rect.contains(local) {
-            return .attachment(
-                index: attachmentIndex,
-                isHidden: slot.isSpoiler && !revealedHere.contains(attachmentIndex)
-            )
+            let isHidden = slot.isSpoiler && !revealedHere.contains(attachmentIndex)
+            // The star, before the picture it is drawn on. A spoiler still
+            // covered has no star to press: the first click uncovers.
+            if slot.favorite != nil, !isHidden, slot.favoriteRect.contains(local) {
+                return .favoriteGIF(index: attachmentIndex)
+            }
+            return .attachment(index: attachmentIndex, isHidden: isHidden)
         }
 
         if let chip = row.threadChip, chip.rect.contains(local) {
@@ -863,7 +896,18 @@ final class TimelineCanvasView: NSView {
         // nothing is scrolling.
         var cursor: NSCursor?
         var component: CGPoint?
+        var attachment: Int?
         if let index, rows.indices.contains(index), case .message(let row) = rows[index].kind {
+            // **Resolved from the geometry, not from the click target.** The
+            // star is drawn on whichever picture the pointer is over, and the
+            // target under the pointer is the *star* once it is on it — so
+            // asking the target which attachment this is would take the badge
+            // away the moment somebody reached for it.
+            let local = CGPoint(
+                x: point.x - rowFrame(at: index).minX,
+                y: point.y - rowFrame(at: index).minY
+            )
+            attachment = row.attachments.firstIndex { $0.rect.contains(local) }
             switch target(in: row, at: point, rowIndex: index) {
             case .component(let url, let customID, let origin):
                 component = origin
@@ -889,6 +933,8 @@ final class TimelineCanvasView: NSView {
                 // A quote with nothing behind it swallows the click and goes
                 // nowhere, so it must not offer a hand that says it does.
                 cursor = target == nil ? nil : .pointingHand
+            case .favoriteGIF:
+                cursor = .pointingHand
             case .some:
                 cursor = .pointingHand
             case nil:
@@ -901,10 +947,12 @@ final class TimelineCanvasView: NSView {
         // pointer generates these at event rate.
         let rowChanged = index != hoveredRow
         let componentChanged = component != hoveredComponent
-        guard rowChanged || componentChanged else { return }
+        let attachmentChanged = attachment != hoveredAttachment
+        guard rowChanged || componentChanged || attachmentChanged else { return }
         let previous = hoveredRow
         hoveredRow = index
         hoveredComponent = component
+        hoveredAttachment = attachment
         if rowChanged { invalidateRow(previous) }
         invalidateRow(index)
         if rowChanged { publishHover() }

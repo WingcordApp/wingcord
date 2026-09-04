@@ -186,10 +186,112 @@ enum FrecencyProto {
     }
 
     private enum GIFField {
+        /// 1 for a still, 2 for a video rendition. Captured in
+        /// `gif favorite unfavorite.har`: a Tenor entry carries `format = 2`.
+        static let format = 1
         static let src = 2
         static let width = 3
         static let height = 4
         static let order = 5
+    }
+
+    // MARK: Writing a favourite back
+
+    /// One favourite, as it sits on the wire.
+    ///
+    /// **The entry's own bytes are kept.** Rewriting the map means re-emitting
+    /// every entry, and an entry rebuilt from the five fields above loses
+    /// anything Discord adds to it later — for every favourite the account has,
+    /// silently, the first time somebody stars a new one. Re-framing the bytes
+    /// that arrived cannot lose what it never parsed.
+    public struct FavoriteEntry: Sendable {
+        /// The GIF's own URL, which is the map key.
+        public var key: String
+        /// The insertion counter. The highest is the most recent.
+        public var order: Int
+        /// The map entry's payload, framing excluded.
+        public var raw: Data
+    }
+
+    /// The account's favourites, each with the bytes it arrived as.
+    public static func favoriteGIFEntries(base64: String) -> [FavoriteEntry] {
+        guard let data = Data(base64Encoded: base64) else { return [] }
+        var reader = ProtobufReader(data)
+        var found: [FavoriteEntry] = []
+        while let field = reader.next() {
+            guard field.number == Field.favoriteGIFs, field.wireType == 2 else { continue }
+            var map = reader.reader(for: field)
+            while let element = map.next() {
+                guard element.number == mapField, element.wireType == 2,
+                      let raw = map.data(for: element)
+                else { continue }
+                var entry = map.reader(for: element)
+                var key: String?
+                var order = 0
+                while let inner = entry.next() {
+                    switch inner.number {
+                    case MapEntryField.key where inner.wireType == 2:
+                        key = entry.string(for: inner)
+                    case MapEntryField.value where inner.wireType == 2:
+                        var value = entry.reader(for: inner)
+                        while let leaf = value.next() {
+                            guard leaf.number == GIFField.order, leaf.wireType == 0 else {
+                                continue
+                            }
+                            order = Int(leaf.value)
+                        }
+                    default:
+                        continue
+                    }
+                }
+                guard let key else { continue }
+                found.append(FavoriteEntry(key: key, order: order, raw: raw))
+            }
+        }
+        return found
+    }
+
+    /// The whole `favorite_gifs` field, ready to PATCH.
+    ///
+    /// **The field is replaced, not merged, and the capture is what says so.**
+    /// Unfavouriting sent a *smaller* map — 5,101 bytes where the favourite that followed
+    /// sent 5,424 — which a merge could not express, because a map merges by key
+    /// and has no way to say "this one is gone". So the whole map goes every
+    /// time, and every entry that is staying goes as the bytes it arrived as.
+    public static func encodeFavoriteGIFs(_ entries: [FavoriteEntry]) -> String {
+        var map = ProtobufWriter()
+        for entry in entries { map.message(field: mapField, entry.raw) }
+        var top = ProtobufWriter()
+        top.message(field: Field.favoriteGIFs, map.data)
+        return top.base64
+    }
+
+    /// Builds the map entry for a GIF the account has just starred.
+    ///
+    /// The shape is the capture's, field for field: a key, then a value holding
+    /// the format, the proxied rendition, the pixel size and the insertion
+    /// counter. `order` is the caller's — one past the highest it already has,
+    /// which is what puts a new favourite at the front of the grid.
+    public static func favoriteEntry(for gif: GIF, order: Int) -> FavoriteEntry {
+        var value = ProtobufWriter()
+        // 1 is a still and 2 is a video rendition. Discord serves Tenor results
+        // as `.mp4`, so anything whose preview is one is a video — and getting
+        // this wrong shows the entry as a broken still in every other client.
+        let isVideo = (gif.previewURL ?? gif.url).pathExtension.lowercased() == "mp4"
+        value.varint(field: GIFField.format, isVideo ? 2 : 1)
+        if let src = gif.previewURL?.absoluteString ?? Optional(gif.url.absoluteString) {
+            value.string(field: GIFField.src, src)
+        }
+        if let width = gif.width, width > 0 { value.varint(field: GIFField.width, UInt64(width)) }
+        if let height = gif.height, height > 0 {
+            value.varint(field: GIFField.height, UInt64(height))
+        }
+        value.varint(field: GIFField.order, UInt64(max(0, order)))
+
+        var entry = ProtobufWriter()
+        entry.string(field: MapEntryField.key, gif.url.absoluteString)
+        entry.message(field: MapEntryField.value, value.data)
+        return FavoriteEntry(key: gif.url.absoluteString, order: order, raw: entry.data)
     }
 
     /// Applications, by how much the account uses them.
