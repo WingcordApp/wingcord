@@ -28,12 +28,12 @@ struct CommunityPane: View {
 
     /// What this client will not do.
     ///
-    /// **Turning community on is not offered.** It is a `features` write that
-    /// also demands a verification level, an explicit-content filter, a rules
-    /// channel and an updates channel all set in one request — and getting any
-    /// of them wrong answers a 400 that names none of them. A wizard that
-    /// half-works here would leave a server in a state its owner cannot see.
-    /// §5.5: better to say so than to offer it.
+    /// **Turning community on is not offered yet**, and the reason given here
+    /// was reasoning rather than evidence: it claimed the request "refuses
+    /// without naming which field it disliked", which was never tested. The
+    /// body is now captured in full — six fields, and `rules_channel_id: "1"`
+    /// is a sentinel meaning "create one for me" rather than a channel id. See
+    /// HANDOFF §SM.11. This is unwritten, not unbuildable.
     private var notCommunity: some View {
         SettingsCard {
             VStack(alignment: .leading, spacing: Spacing.base) {
@@ -42,11 +42,9 @@ struct CommunityPane: View {
                     .foregroundStyle(Ink.primary)
                 Text(
                     "Community brings a rules channel, onboarding, a Server Guide "
-                        + "and Discord's safety notices. Wingcord does not turn it "
-                        + "on — the request sets six things at once and refuses "
-                        + "without naming which one it disliked, so it belongs in "
-                        + "Discord's own client. Everything it unlocks is editable "
-                        + "here once it is on."
+                        + "and Discord's safety notices. Wingcord cannot turn it on "
+                        + "yet — do that in Discord's own client. Everything it "
+                        + "unlocks is editable here once it is on."
                 )
                 .font(SettingsType.rowSubtitle)
                 .foregroundStyle(Ink.secondary)
@@ -229,12 +227,14 @@ enum GuildLocale {
 /// the flag is the same fact said in a way that does not tell you where the
 /// editor puts it.
 ///
-/// **This page is read-only, deliberately.** `PUT /guilds/{id}/onboarding`
-/// replaces the whole ballot — every prompt, every option, every role and
-/// channel id — and no capture of that request exists. A save built from the
-/// documentation alone that got one field wrong would not fail loudly; it would
-/// wipe a server's prompts. The editing side waits for a capture, and §5.5 says
-/// to state that rather than draw controls that might do it.
+/// **This page is read-only because the editor is not written**, and no longer
+/// because the route is dangerous — that reason was wrong. It used to say the
+/// PUT "replaces the whole ballot"; `community and onboarding.har` shows it
+/// **merges per field**: one request carrying only `default_channel_ids` left
+/// the prompts alone, one carrying only `prompts` left the channels alone, and
+/// one carrying only `enabled` left both. See HANDOFF §SM.11, which also has the
+/// two things a new prompt needs — a client-minted millisecond-timestamp id, and
+/// its emoji sent twice.
 struct OnboardingPane: View {
     let store: ServerSettingsStore
 
@@ -268,11 +268,9 @@ struct OnboardingPane: View {
                 )
 
                 SettingsFootnote(
-                    "Wingcord reads onboarding and does not write it. Saving replaces "
-                        + "the whole ballot in one request — every question, answer, "
-                        + "role and channel — and this client has never seen that "
-                        + "request made, so a wrong guess would not fail: it would "
-                        + "erase the questions. Edit these in Discord's own client.",
+                    "Wingcord reads onboarding and cannot yet edit it. Editing these "
+                        + "in Discord's own client works, and nothing here will "
+                        + "overwrite what you do there.",
                     symbolName: "info.circle"
                 )
             }
@@ -369,9 +367,10 @@ struct OnboardingPane: View {
 
 /// The welcome, the first tasks and the pages new members are pointed at.
 ///
-/// Read-only for the same reason onboarding is: `PUT
-/// /guilds/{id}/new-member-welcome` replaces the whole guide, and no capture of
-/// it exists.
+/// Read-only because the editor is not written. The route **is** captured, and
+/// unlike onboarding it really is a whole-object replace — the second captured
+/// PUT re-sends both tasks to add one. `guild_id` goes in the body and an absent
+/// emoji is `{}`. HANDOFF §SM.11.
 ///
 /// **The welcome line carries `[@username]`**, which `ServerGuide.Welcome`
 /// already substitutes — the reader's side of this client has done that since
@@ -448,9 +447,8 @@ struct GuideSettingsPane: View {
                 }
 
                 SettingsFootnote(
-                    "Wingcord reads the guide and does not write it, for the same "
-                        + "reason as onboarding: saving replaces the whole guide in "
-                        + "one request this client has never seen made.",
+                    "Wingcord reads the guide and cannot yet edit it. Editing it in "
+                        + "Discord's own client works.",
                     symbolName: "info.circle"
                 )
             }

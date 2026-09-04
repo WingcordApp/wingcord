@@ -932,11 +932,28 @@ extension DiscordREST {
     /// ordinary case rather than an error — the caller reads that as "no guide"
     /// and draws no row for it.
     public func serverGuide(of guildID: GuildID) async throws -> ServerGuide {
-        try await get(
-            "/guilds/\(guildID.rawValue)/new-member-welcome",
+        // **A server with no guide answers 204, not 404**, and a 204 has an
+        // empty body — so decoding it throws `.decoding` rather than the
+        // `.notFound` a caller would think to catch. That is the *ordinary*
+        // answer for a fresh server, and it is what a capture of one caught:
+        // the reader's side survived it only because it catches every error and
+        // stores an empty guide, while the settings page reported "Discord
+        // answered with something this client could not read."
+        //
+        // Handled here rather than at either caller, so the next one does not
+        // have to know.
+        let data = try await requestData(
+            method: "GET",
+            path: "/guilds/\(guildID.rawValue)/new-member-welcome",
             route: "guilds/{id}/new-member-welcome",
-            as: NewMemberWelcomeDTO.self
-        ).domain(guildID: guildID)
+            body: Optional<Never>.none
+        )
+        guard !data.isEmpty else { return ServerGuide(guildID: guildID, isEnabled: false) }
+        do {
+            return try decoder.decode(NewMemberWelcomeDTO.self, from: data).domain(guildID: guildID)
+        } catch {
+            throw Failure.decoding(String(describing: error))
+        }
     }
 
     /// The questions a community server asks, and what answering them unlocks.
