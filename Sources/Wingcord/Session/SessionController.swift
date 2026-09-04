@@ -393,19 +393,20 @@ final class SessionController {
         }
         index.replacePrivateChannels(snapshot.privateChannels)
 
-        // READY's threads are the ones the account **follows** — a user account
-        // is sent no others — so their presence is the membership record. The
-        // flags are not in the payload, which is why this is a bare row rather
-        // than a decoded one: `THREAD_MEMBER_UPDATE` fills in the rest.
-        var memberships: [ChannelID: ThreadMember] = [:]
-        for threads in snapshot.threadsByGuild.values {
-            for thread in threads {
-                memberships[thread.id] = ThreadMember(
-                    id: thread.id, userID: snapshot.currentUser.id
-                )
-            }
-        }
-        model.threadMemberships = memberships
+        // **A thread in READY is KNOWN, not followed**, and synthesising a
+        // membership for each one was wrong. The reference says a user account
+        // is sent only its joined threads; `forums3.har` disproves it — the ten
+        // active posts the client already held when it opened `#bug-reports`
+        // include three by people the account has no thread with. Treating them
+        // all as followed nested every live post in the sidebar.
+        //
+        // Membership comes from where it is actually stated: the `members`
+        // array on a `threads/search` page, `THREAD_MEMBER_UPDATE`, and the
+        // reader's own follow.
+        Self.trace(
+            "ready: threads=\(snapshot.threadsByGuild.values.reduce(0) { $0 + $1.count }) "
+            + "across \(snapshot.threadsByGuild.count) guilds"
+        )
 
         var guilds: [GuildID: Guild] = [:]
         guilds.reserveCapacity(snapshot.guilds.count)

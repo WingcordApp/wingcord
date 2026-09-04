@@ -61,6 +61,25 @@ extension SessionController {
         }
     }
 
+    /// Fetches a forum's live posts into the index.
+    ///
+    /// **Failure-silent, and deliberately so.** The query is derived rather than
+    /// captured — see `DiscordREST.activeThreads` — so a refusal means the guess
+    /// was wrong, not that the board is broken. The archived half has its own
+    /// request and its own error state; this one adds rows or it adds none.
+    func loadActiveThreads(_ channelID: ChannelID, query: ForumQuery) {
+        Task { [weak self] in
+            guard let self else { return }
+            do {
+                let page = try await rest.activeThreads(in: channelID, query: query)
+                Self.trace("active threads \(channelID): \(page.posts.count)")
+                model.applyActiveThreads(page, in: channelID)
+            } catch {
+                Self.trace("active threads \(channelID) failed: \(Self.describe(error))")
+            }
+        }
+    }
+
     /// Fills in the opening message and author for a batch of posts.
     ///
     /// A failure is not surfaced: the rows it would have filled keep their

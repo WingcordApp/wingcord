@@ -246,6 +246,9 @@ extension AppModel {
         forumBoards[channelID] = board
         threadRevision &+= 1
         sessionController.loadForumPage(channelID, query: board.query, offset: 0, replacing: true)
+        // The live half. Separate request, separate failure — see
+        // `SessionController.loadActiveThreads`.
+        sessionController.loadActiveThreads(channelID, query: board.query)
     }
 
     /// Asks for the next page. A no-op while one is in flight or at the end.
@@ -282,6 +285,7 @@ extension AppModel {
             forumBoards[channelID] = board
             threadRevision &+= 1
             sessionController.loadForumPage(channelID, query: query, offset: 0, replacing: true)
+            sessionController.loadActiveThreads(channelID, query: query)
         } else {
             forumBoards[channelID] = board
             threadRevision &+= 1
@@ -425,6 +429,29 @@ extension AppModel {
         applyThreadPeople(users: page.authors, members: page.members, guildID: channelIndex.guildID(of: channelID))
         for membership in page.memberships { threadMemberships[membership.id] = membership }
 
+        threadRevision &+= 1
+        sidebarRevision &+= 1
+    }
+
+    /// A forum's live posts, straight into the index.
+    ///
+    /// **No board order is written here.** `browseOrder` reads the live threads
+    /// out of the index and puts them in front of the archived pages, so this
+    /// only has to make them *known* — which is also what makes the same rows
+    /// arrive correctly when the gateway supplies them instead.
+    func applyActiveThreads(_ page: ForumPage, in channelID: ChannelID) {
+        guard !page.posts.isEmpty else { return }
+        var board = forumBoard(for: channelID)
+        for post in page.posts { channelIndex.upsertThread(post) }
+        board.firstMessages.merge(page.firstMessages) { _, new in new }
+        forumBoards[channelID] = board
+
+        applyThreadPeople(
+            users: page.authors,
+            members: page.members,
+            guildID: channelIndex.guildID(of: channelID)
+        )
+        for membership in page.memberships { threadMemberships[membership.id] = membership }
         threadRevision &+= 1
         sidebarRevision &+= 1
     }

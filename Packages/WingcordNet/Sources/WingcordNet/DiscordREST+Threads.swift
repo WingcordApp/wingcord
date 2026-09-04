@@ -66,6 +66,48 @@ extension DiscordREST {
         return page.domain(parentID: channelID)
     }
 
+    /// A channel's **active** threads — the other half of a board.
+    ///
+    /// **DERIVED, NOT CAPTURED.** Discord's own client never sends this: it
+    /// already holds the live threads from the gateway, which is why every
+    /// capture shows `post-data` for ten ids it was never seen to fetch. This
+    /// is `archived=false` against the route the archived half demonstrably
+    /// uses, which is the natural counterpart of a parameter proven to select
+    /// rather than include — but nothing has observed Discord send it.
+    ///
+    /// So the caller must treat a failure here as *nothing to add*, never as a
+    /// broken board: if the guess is wrong the list degrades to the archived
+    /// half alone, which is where it already was. See
+    /// `SessionController.loadActiveThreads`.
+    ///
+    /// If this needs replacing, the documented alternatives are
+    /// `GET /guilds/{id}/threads/active` (guild-wide, one call for every forum)
+    /// and `GET /channels/{id}/threads/active` (channel-scoped, deprecated).
+    public func activeThreads(
+        in channelID: ChannelID,
+        query: ForumQuery,
+        limit: Int = 25
+    ) async throws -> ForumPage {
+        var items = [
+            URLQueryItem(name: "archived", value: "false"),
+            URLQueryItem(name: "sort_by", value: query.sortOrder.queryValue),
+            URLQueryItem(name: "sort_order", value: "desc"),
+            URLQueryItem(name: "limit", value: String(limit)),
+            URLQueryItem(name: "tag_setting", value: query.tagMatching.rawValue),
+            URLQueryItem(name: "offset", value: "0"),
+        ]
+        for tag in query.tags.sorted() {
+            items.append(URLQueryItem(name: "tag", value: String(tag.rawValue)))
+        }
+        let page = try await get(
+            "/channels/\(channelID.rawValue)/threads/search",
+            route: "channels/{id}/threads/search",
+            query: items,
+            as: ThreadSearchDTO.self
+        )
+        return page.domain(parentID: channelID)
+    }
+
     /// Threads in a channel whose name matches.
     ///
     /// **The same route, and a deliberately different query.** Captured,
