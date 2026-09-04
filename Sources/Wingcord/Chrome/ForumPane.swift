@@ -33,16 +33,14 @@ struct ForumPane: View {
                     ForumGuidelines(text: guidelines)
                 }
 
-                ForEach(presentation.posts) { post in
-                    ForumPostRow(post: post, layout: presentation.query.layout) {
-                        open(post.id)
-                    }
-                    // **The batch is driven from the row appearing**, which is
-                    // the only signal that says which posts are about to be
-                    // drawn. The store filters out anything already asked for,
-                    // so a list scrolled up and down does not re-request — see
-                    // `requestForumPostDetails`.
-                    .onAppear { reveal([post.id]) }
+                // **Two layouts, two containers.** A gallery is not a list with
+                // the pictures taken out — which is all it was, and it made the
+                // control read as broken. It is a grid whose cards lead with the
+                // picture, so it needs its own container rather than a flag on a
+                // row.
+                switch presentation.query.layout {
+                case .list: rows
+                case .gallery: grid
                 }
 
                 footer
@@ -86,6 +84,35 @@ struct ForumPane: View {
         }
     }
 
+    private var rows: some View {
+        ForEach(presentation.posts) { post in
+            ForumPostRow(post: post) { open(post.id) }
+                // **The batch is driven from the row appearing**, which is the
+                // only signal that says which posts are about to be drawn. The
+                // store filters out anything already asked for, so a list
+                // scrolled up and down does not re-request — see
+                // `requestForumPostDetails`.
+                .onAppear { reveal([post.id]) }
+        }
+    }
+
+    /// The gallery.
+    ///
+    /// `.adaptive` rather than a fixed column count: the board's width is the
+    /// window's minus whatever columns are open beside it, and a count chosen
+    /// here would be wrong the moment somebody opens a post or the roster.
+    private var grid: some View {
+        LazyVGrid(
+            columns: [GridItem(.adaptive(minimum: Metrics.forumCardMinimum), spacing: Spacing.snug)],
+            spacing: Spacing.snug
+        ) {
+            ForEach(presentation.posts) { post in
+                ForumPostCard(post: post) { open(post.id) }
+                    .onAppear { reveal([post.id]) }
+            }
+        }
+    }
+
     @ViewBuilder
     private var footer: some View {
         if presentation.loadFailed {
@@ -123,15 +150,12 @@ struct ForumPane: View {
 /// does nothing. §2.
 private struct ForumPostRow: View, Equatable {
     var post: ForumPostPresentation
-    var layout: ForumLayout
     var open: () -> Void
 
     @State private var isHovering = false
     @Environment(\.motion) private var motion
 
-    static func == (lhs: Self, rhs: Self) -> Bool {
-        lhs.post == rhs.post && lhs.layout == rhs.layout
-    }
+    static func == (lhs: Self, rhs: Self) -> Bool { lhs.post == rhs.post }
 
     var body: some View {
         Button(action: open) {
@@ -159,7 +183,7 @@ private struct ForumPostRow: View, Equatable {
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
 
-                if layout == .list, let url = post.thumbnailURL {
+                if let url = post.thumbnailURL {
                     RemoteImage(url: url, side: Metrics.forumThumbnail) { Color.clear }
                         .frame(width: Metrics.forumThumbnail, height: Metrics.forumThumbnail)
                         .clipShape(.rect(cornerRadius: Radius.row))
@@ -264,6 +288,156 @@ private struct ForumPostRow: View, Equatable {
         if !post.tags.isEmpty {
             parts.append(post.tags.map(\.name).joined(separator: ", "))
         }
+        if !post.authorName.isEmpty { parts.append("by \(post.authorName)") }
+        parts.append("\(post.messageCount) messages")
+        if post.isArchived { parts.append("archived") }
+        return parts.joined(separator: ", ")
+    }
+}
+
+// MARK: - One post, as a card
+
+/// A post in the gallery.
+///
+/// **The picture leads, and the tags ride on it.** That is the whole difference
+/// from a row: a gallery exists to be scanned by image, so the picture takes the
+/// card's width and the tags sit over its foot where they cost no vertical space.
+/// A post with no picture is not a broken card — the opening line fills the same
+/// block, so the grid stays even.
+private struct ForumPostCard: View, Equatable {
+    var post: ForumPostPresentation
+    var open: () -> Void
+
+    @State private var isHovering = false
+    @Environment(\.motion) private var motion
+
+    static func == (lhs: Self, rhs: Self) -> Bool { lhs.post == rhs.post }
+
+    var body: some View {
+        Button(action: open) {
+            VStack(alignment: .leading, spacing: Spacing.base) {
+                byline
+                title
+                artwork
+                footer
+            }
+            .padding(Spacing.snug)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(Palette.surface.opacity(isHovering ? 0.9 : 0.55), in: card)
+            .overlay {
+                card.strokeBorder(Color.white.opacity(isHovering ? 0.10 : 0.05), lineWidth: 1)
+            }
+            .animation(motion.hover, value: isHovering)
+            .contentShape(card)
+        }
+        .buttonStyle(.plain)
+        .onHover { isHovering = $0 }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(Text(accessibilityLabel))
+        .accessibilityAddTraits(.isButton)
+    }
+
+    private var card: RoundedRectangle { .rect(cornerRadius: Radius.glass) }
+
+    /// Who posted it and when it was *made* — not when it was last answered,
+    /// which is what a list row says. See `ForumPostPresentation.postedAt`.
+    private var byline: some View {
+        HStack(spacing: Spacing.tight) {
+            if post.isPinned {
+                Image(systemName: "pin.fill")
+                    .font(.system(.caption2))
+                    .foregroundStyle(Ink.tertiary)
+            }
+            Text(post.authorName)
+                .foregroundStyle(post.authorColorValue.map(Color.init(hex:)) ?? InkColor.secondary)
+                .lineLimit(1)
+            Text("Posted \(RelativeTime.compact(post.postedAt)) ago")
+                .foregroundStyle(Ink.quaternary)
+                .lineLimit(1)
+        }
+        .font(.system(.caption, weight: .medium))
+    }
+
+    private var title: some View {
+        Text(post.title)
+            .font(.system(.subheadline, weight: .semibold))
+            .foregroundStyle(Ink.primary)
+            .lineLimit(2)
+            .multilineTextAlignment(.leading)
+            .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private var artwork: some View {
+        ZStack(alignment: .bottomLeading) {
+            if let url = post.thumbnailURL {
+                RemoteImage(url: url, side: Metrics.forumCardArtHeight * 2) { Color.clear }
+                    .frame(maxWidth: .infinity)
+                    .frame(height: Metrics.forumCardArtHeight)
+                    // `.fill`, so a wide screenshot and a tall one both fill the
+                    // block and the grid's rows stay level.
+                    .clipped()
+                    .background(Palette.surfaceRaised)
+            } else {
+                // The opening line takes the picture's place rather than the
+                // card collapsing — a grid of cards at two different heights
+                // reads as a rendering fault.
+                Text(post.preview)
+                    .font(.system(.caption))
+                    .lineLimit(4)
+                    .multilineTextAlignment(.leading)
+                    .frame(maxWidth: .infinity, alignment: .topLeading)
+                    .frame(height: Metrics.forumCardArtHeight, alignment: .topLeading)
+                    .padding(Spacing.base)
+                    .background(Palette.surfaceRaised)
+            }
+
+            if !post.tags.isEmpty {
+                ForumTagRow(tags: post.tags)
+                    .padding(Spacing.base)
+            }
+        }
+        .clipShape(.rect(cornerRadius: Radius.row))
+    }
+
+    private var footer: some View {
+        HStack(spacing: Spacing.base) {
+            Label {
+                Text(post.messageCount, format: .number)
+            } icon: {
+                Image(systemName: "bubble.left.fill")
+            }
+            .font(.system(.caption, weight: .medium))
+            .foregroundStyle(Ink.tertiary)
+            .labelStyle(.titleAndIcon)
+
+            Spacer(minLength: 0)
+
+            if post.isMuted {
+                stateGlyph("bell.slash.fill")
+            }
+            if post.isFollowed {
+                stateGlyph("checkmark.circle.fill")
+            }
+            if post.isLocked {
+                stateGlyph("lock.fill")
+            }
+            if post.isArchived {
+                stateGlyph("archivebox.fill")
+            }
+            AvatarView(url: post.avatarURL, monogram: post.monogram, side: Metrics.avatarInline)
+        }
+    }
+
+    private func stateGlyph(_ symbol: String) -> some View {
+        Image(systemName: symbol)
+            .font(.system(.caption2))
+            .foregroundStyle(Ink.quaternary)
+            .accessibilityHidden(true)
+    }
+
+    private var accessibilityLabel: String {
+        var parts: [String] = [post.title]
+        if !post.tags.isEmpty { parts.append(post.tags.map(\.name).joined(separator: ", ")) }
         if !post.authorName.isEmpty { parts.append("by \(post.authorName)") }
         parts.append("\(post.messageCount) messages")
         if post.isArchived { parts.append("archived") }

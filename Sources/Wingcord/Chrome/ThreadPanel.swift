@@ -31,24 +31,13 @@ struct ThreadPanel: View {
     var body: some View {
         TimelineContainer(channelID: presentation.channelID, bottomInset: composerHeight)
             .floatingTopBar {
-                VStack(alignment: .leading, spacing: Spacing.base) {
-                    ThreadPanelHeader(
-                        presentation: presentation,
-                        close: close,
-                        setFollowed: setFollowed,
-                        setNotification: setNotification,
-                        setMute: setMute
-                    )
-                    // **A post's tags belong in its header**, which is where
-                    // Discord puts them and, more to the point, the only place
-                    // they can go: the board's row shows them, and without them
-                    // here the panel is the only view of a post that does not
-                    // say what it is filed under. Absent for a thread off a
-                    // message, which has none.
-                    if !presentation.tags.isEmpty {
-                        ThreadTagStrip(tags: presentation.tags)
-                    }
-                }
+                ThreadPanelHeader(
+                    presentation: presentation,
+                    close: close,
+                    setFollowed: setFollowed,
+                    setNotification: setNotification,
+                    setMute: setMute
+                )
                 .padding(.horizontal, Spacing.snug)
                 .padding(.bottom, Spacing.base)
             }
@@ -165,40 +154,6 @@ private struct ThreadPanelHeader: View {
     }
 }
 
-/// A post's tags, as one floating strip.
-///
-/// **One glass body with the chips inside it**, not a chip per body: §4 forbids
-/// stacking glass on glass, and five tinted capsules each on their own material
-/// over a transcript is exactly that. The chips keep their own quiet fill, which
-/// over the strip's tint reads as regions cut into one surface — the same way
-/// the now bar's controls sit inside its material rather than on top of it.
-private struct ThreadTagStrip: View {
-    var tags: [ForumTag]
-
-    var body: some View {
-        FlowLayout(spacing: Spacing.tight) {
-            ForEach(tags) { tag in
-                HStack(spacing: Spacing.tight) {
-                    if let emoji = tag.emoji {
-                        ExpressionGlyph(emoji: emoji, side: 12)
-                    }
-                    Text(tag.name)
-                        .font(.system(.caption2, weight: .medium))
-                        .foregroundStyle(Ink.secondary)
-                        .lineLimit(1)
-                }
-                .padding(.horizontal, Spacing.base)
-                .padding(.vertical, 3)
-                .background(Color.white.opacity(0.07), in: .capsule)
-            }
-        }
-        .padding(Spacing.base)
-        .chromeOverMedia(tinted: Palette.flyoutTint, in: .rect(cornerRadius: Radius.chip))
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel(Text("Tagged \(tags.map(\.name).joined(separator: ", "))"))
-    }
-}
-
 /// One circular control in the header's cluster.
 private struct ThreadPanelControl: View {
     var systemImage: String
@@ -303,14 +258,19 @@ private struct ThreadMenuControl: View {
             Image(systemName: "ellipsis")
                 .font(Typeface.controlGlyph)
                 .foregroundStyle(Ink.secondary)
-                .frame(
-                    width: Metrics.control + Spacing.base,
-                    height: Metrics.control + Spacing.base
-                )
-                .contentShape(.circle)
         }
+        // **The frame goes on the MENU, not on its label.** A borderless menu
+        // lays its label out inside a control of its own choosing and ignores a
+        // frame set on the label — so the glass was being applied to a circle
+        // the size of three dots while the close button beside it had a real
+        // one, and the two read as different kinds of control.
         .menuStyle(.borderlessButton)
         .menuIndicator(.hidden)
+        .frame(
+            width: Metrics.control + Spacing.base,
+            height: Metrics.control + Spacing.base
+        )
+        .contentShape(.circle)
         .interactiveChromeOverMedia(in: .circle)
         .help("Thread options")
         .accessibilityLabel(Text("Thread options"))

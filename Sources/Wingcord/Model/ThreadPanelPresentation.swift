@@ -19,13 +19,6 @@ struct ThreadPanelPresentation {
     /// Join/Leave for a thread, and the distinction is real: a post has no
     /// message it hangs off to return to.
     var isPost: Bool
-    /// A post's own tags, resolved against its forum's `availableTags`.
-    ///
-    /// **Only a post has them**, and they are the one thing about it that has
-    /// nowhere else to go: the board's row shows them, and without them here the
-    /// panel is the only view of a post that does not say what it is filed
-    /// under. Empty for a thread off a message.
-    var tags: [ForumTag]
     var isFollowed: Bool
     var isMuted: Bool
     /// "Muted until 5:16 PM", when there is an end to name.
@@ -52,7 +45,6 @@ extension AppModel {
             name: thread?.name ?? "Thread",
             subtitle: Self.subtitle(thread: thread, owner: thread?.ownerID.flatMap { users[$0] }),
             isPost: parent?.isForumLike ?? false,
-            tags: Self.tags(of: thread, in: parent),
             isFollowed: membership != nil,
             isMuted: isMuted,
             muteSummary: isMuted ? Self.muteSummary(membership?.muteConfig) : nil,
@@ -71,20 +63,6 @@ extension AppModel {
             },
             copyID: { Self.copy(channelID.description) }
         )
-    }
-
-    /// A post's tags, joined against the forum that defines them.
-    ///
-    /// A tag id the forum no longer lists is dropped rather than drawn as a
-    /// number — deleting a tag leaves its id behind on every post that had it.
-    private static func tags(of thread: Channel?, in parent: Channel?) -> [ForumTag] {
-        guard let thread, let parent, parent.isForumLike, !thread.appliedTags.isEmpty else {
-            return []
-        }
-        var byID: [ForumTagID: ForumTag] = [:]
-        byID.reserveCapacity(parent.availableTags.count)
-        for tag in parent.availableTags { byID[tag.id] = tag }
-        return thread.appliedTags.compactMap { byID[$0] }
     }
 
     private static func subtitle(thread: Channel?, owner: User?) -> String? {

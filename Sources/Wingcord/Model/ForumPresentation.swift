@@ -18,6 +18,11 @@ struct ForumPostPresentation: Hashable, Sendable, Identifiable {
     /// and an id nothing matches is dropped rather than drawn as a number.
     var tags: [ForumTag]
     var authorName: String
+    /// The author's role colour. Read by the gallery card's byline, which draws
+    /// the name on its own — the list row gets it inside `preview` instead,
+    /// because there the name and the line after it have to wrap as one
+    /// paragraph.
+    var authorColorValue: UInt32?
     var avatarURL: URL?
     var monogram: String
     /// "author: the first line of the post", with the author in their role
@@ -39,6 +44,14 @@ struct ForumPostPresentation: Hashable, Sendable, Identifiable {
     /// When the post last had a message. Falls back to its own creation time,
     /// which the id carries.
     var lastActivity: Date
+    /// When the post was opened.
+    ///
+    /// **Distinct from `lastActivity`, and the gallery is why.** A list row says
+    /// how long ago somebody last replied; a gallery card says when the post was
+    /// *made* — "Posted 4m ago" — which for a busy post is a different number.
+    /// A snowflake carries its own creation time, so this costs no field on the
+    /// wire.
+    var postedAt: Date
     var isPinned: Bool
     var isArchived: Bool
     var isLocked: Bool
@@ -181,6 +194,9 @@ extension AppModel {
             let user = authorID.flatMap { users[$0] }
             let member = guildID.flatMap { guild in authorID.flatMap { members[guild]?[$0] } }
             let name = member?.resolvedName(user: user) ?? user?.displayName ?? ""
+            let color = member.map {
+                RoleResolver.nameColorValue(of: $0.roleIDs, in: guildRoles)
+            }?.map { UserColor.desaturated($0, by: saturation) }
 
             posts.append(
                 ForumPostPresentation(
@@ -190,15 +206,14 @@ extension AppModel {
                     // a deleted tag leaves its id on every post that had it.
                     tags: post.appliedTags.compactMap { tagsByID[$0] },
                     authorName: name,
+                    authorColorValue: color,
                     avatarURL: authorID.map {
                         avatarURL(forUserID: $0, inGuild: guildID, side: Metrics.avatarRow)
                     } ?? nil,
                     monogram: user?.monogram ?? "",
                     preview: Self.previewLine(
                         author: name,
-                        colorValue: member.map {
-                            RoleResolver.nameColorValue(of: $0.roleIDs, in: guildRoles)
-                        }?.map { UserColor.desaturated($0, by: saturation) },
+                        colorValue: color,
                         message: firstMessage
                     ),
                     thumbnailURL: firstMessage.flatMap(Self.thumbnailURL),
@@ -208,6 +223,7 @@ extension AppModel {
                     // post's id is the fallback for one that has never been
                     // replied to.
                     lastActivity: post.lastMessageID?.timestamp ?? postID.timestamp,
+                    postedAt: post.threadMetadata?.createdAt ?? postID.timestamp,
                     isPinned: post.isPinnedPost,
                     isArchived: post.threadMetadata?.isArchived ?? false,
                     isLocked: post.threadMetadata?.isLocked ?? false,
@@ -261,6 +277,32 @@ extension AppModel {
         body.foregroundColor = InkColor.tertiary
         line.append(body)
         return line
+    }
+
+    /// A board's posts: the live ones, then the archived pages.
+    ///
+    /// **`threads/search?archived=true` returns only the archived**, which is
+    /// half a board — `forums.har` proves it: every thread the search answered
+    /// with was archived, and the ten ids the client fetched `post-data` for
+    /// immediately beforehand do not appear in it at all. Those ten are the live
+    /// posts, and the client already had them, because active threads arrive
+    /// over the gateway rather than on any route.
+    ///
+    /// So the live ones come out of the index — where READY, GUILD_CREATE and
+    /// THREAD_LIST_SYNC put them — and go in front. `ChannelIndex` already keeps
+    /// a parent's threads in most-recent-first order, which is the order a board
+    /// wants, so there is nothing to sort here.
+    ///
+    /// A thread in both is kept once, in its live position: a post archived
+    /// between the gateway announcing it and the page being fetched would
+    /// otherwise appear twice.
+    private func browseOrder(of channelID: ChannelID, board: ForumBoard) -> [ChannelID] {
+        let live = channelIndex.threadIDs(inParent: channelID).filter {
+            channelIndex[$0]?.threadMetadata?.isArchived == false
+        }
+        guard !live.isEmpty else { return board.postIDs }
+        let seen = Set(live)
+        return live + board.postIDs.filter { !seen.contains($0) }
     }
 
     /// The opening message reduced to one line.

@@ -16,13 +16,19 @@ extension DiscordREST {
 
     // MARK: Listing a forum's posts
 
-    /// One page of a forum's posts.
+    /// One page of a channel's **archived** threads.
     ///
-    /// **`archived=true` is not a filter, it is "include archived".** The
-    /// capture sends it on the first page of an ordinary forum whose posts are
-    /// mostly live — leaving it off returns only unarchived posts, which in a
-    /// forum that has been running a while is almost none of them. Discord's own
-    /// client always sends it.
+    /// **`archived=true` selects, it does not include** — and getting that
+    /// backwards is why a board first showed nothing but posts a fortnight old.
+    /// In `forums.har` every one of the twenty-five threads this returns has
+    /// `thread_metadata.archived == true`, and the ten ids the client asked
+    /// `post-data` about *immediately before* the search do not intersect them
+    /// at all. Those ten are the live posts, which the client already had from
+    /// the gateway.
+    ///
+    /// So this is half a board. The other half — the active threads — is in
+    /// `ChannelIndex`, put there by READY, GUILD_CREATE and THREAD_LIST_SYNC,
+    /// and the two are stitched together in `AppModel.forumPresentation`.
     ///
     /// Paging is by `offset`, not by a cursor: the capture's second page is
     /// `offset=25` against the same `limit=25`. That is worth stating because

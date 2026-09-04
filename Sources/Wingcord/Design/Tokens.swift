@@ -279,6 +279,16 @@ nonisolated enum Metrics {
     /// Each thumbnail when one message carries several.
     static let attachmentThumbnail: CGFloat = 170
 
+    /// The picture block on a forum post's gallery card.
+    ///
+    /// Fixed rather than aspect-derived: a grid whose cards are each as tall as
+    /// their own screenshot is a grid with ragged rows, and the picture is a
+    /// hint about the post rather than the post.
+    static let forumCardArtHeight: CGFloat = 150
+    /// The narrowest a gallery card is allowed to get before the grid drops a
+    /// column. Wide enough for a two-line title and three tag chips.
+    static let forumCardMinimum: CGFloat = 260
+
     /// The picture on a forum post's row.
     ///
     /// Square, and small enough that the title beside it still gets two lines at
