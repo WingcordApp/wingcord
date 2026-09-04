@@ -302,6 +302,7 @@ struct ChannelDTO: Decodable, Sendable {
     var template: String?
     var flags: Int?
     var member_count: Int?
+    var member_ids_preview: [UserID]?
     var total_message_sent: Int?
     /// The thread's creator, as a guild member.
     ///
@@ -341,6 +342,7 @@ struct ChannelDTO: Decodable, Sendable {
             template: template,
             flags: ChannelFlags(rawValue: flags ?? 0),
             memberCount: member_count,
+            memberIDsPreview: member_ids_preview ?? [],
             totalMessageSent: total_message_sent
         )
     }

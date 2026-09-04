@@ -161,6 +161,12 @@ public struct Channel: Hashable, Sendable, Identifiable, Codable {
     /// A thread's approximate member count. **Discord stops counting at 50**, so
     /// this is a floor above that, never a total.
     public var memberCount: Int?
+    /// A handful of the people in a thread, for a row's avatar stack.
+    ///
+    /// **Five ids and nothing else** — no user objects, so a client that has not
+    /// met these people cannot draw their faces and must degrade to the count
+    /// beside them. `threads/search` is the only route that sends it.
+    public var memberIDsPreview: [UserID]
     /// Every message ever sent in a thread, including deleted ones — it never
     /// goes down where `messageCount` does.
     ///
@@ -197,6 +203,7 @@ public struct Channel: Hashable, Sendable, Identifiable, Codable {
         template: String? = nil,
         flags: ChannelFlags = [],
         memberCount: Int? = nil,
+        memberIDsPreview: [UserID] = [],
         totalMessageSent: Int? = nil
     ) {
         self.id = id
@@ -226,6 +233,7 @@ public struct Channel: Hashable, Sendable, Identifiable, Codable {
         self.template = template
         self.flags = flags
         self.memberCount = memberCount
+        self.memberIDsPreview = memberIDsPreview
         self.totalMessageSent = totalMessageSent
     }
 

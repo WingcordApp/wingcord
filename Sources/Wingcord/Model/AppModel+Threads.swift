@@ -118,8 +118,47 @@ extension AppModel {
 
     // MARK: Opening a board
 
+    // MARK: The Threads flyout
+
+    /// Opens the Threads flyout over a channel, loading its first page.
+    ///
+    /// **The same route the board uses**, and the capture is what says so:
+    /// `threads toolbar.har` opens this flyout on an *announcement* channel and
+    /// sends `GET /channels/{id}/threads/search` with exactly the parameters a
+    /// forum board sends. The published reference calls that route forum-only;
+    /// it is wrong, and the capture wins. So the flyout and the board share one
+    /// fetch, one page store and one pager — they are the same question asked
+    /// about two kinds of channel.
+    ///
+    /// The one difference in the reply is that a text channel's carries no
+    /// `first_messages`, which `ThreadSearchDTO` already treats as optional.
+    func openThreadBrowser(_ channelID: ChannelID) {
+        guard canBrowseThreads(in: channelID) else { return }
+        threadSearchText = ""
+        openThreadsChannelID = channelID
+        loadThreadList(channelID)
+    }
+
+    func closeThreadBrowser() {
+        openThreadsChannelID = nil
+        threadSearchText = ""
+    }
+
+    /// Whether a channel can have threads at all.
+    ///
+    /// A forum's threads *are* its whole surface, so it gets no flyout — the
+    /// board is the list. A voice channel and a DM have none.
+    func canBrowseThreads(in channelID: ChannelID) -> Bool {
+        guard let channel = channelIndex[channelID] else { return false }
+        return (channel.kind == .text || channel.kind == .announcement)
+            && permissionGate.canReadHistory(channelID)
+    }
+
     /// Loads a forum's first page, unless it is already loaded or loading.
-    func openForum(_ channelID: ChannelID) {
+    func openForum(_ channelID: ChannelID) { loadThreadList(channelID) }
+
+    /// The shared loader behind the board and the flyout.
+    private func loadThreadList(_ channelID: ChannelID) {
         var board = forumBoard(for: channelID)
         guard board.postIDs.isEmpty, !board.isLoading else {
             forumBoards[channelID] = board

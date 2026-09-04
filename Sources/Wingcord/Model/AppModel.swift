@@ -77,6 +77,19 @@ final class AppModel {
     /// Whether a flush is already scheduled, so a hundred rows appearing in one
     /// pass schedule one hop rather than a hundred.
     @ObservationIgnored var isFlushingPostDetails = false
+    /// The channel whose Threads flyout is open, or nil.
+    ///
+    /// Its own property rather than a bool, for the reason `openPinsChannelID`
+    /// is: a dismissal arriving while a second channel's flyout is opening must
+    /// not take the new one down with it.
+    var openThreadsChannelID: ChannelID?
+    /// What the reader has typed into the Threads flyout's field.
+    ///
+    /// **Client-side, over the pages already loaded.** `threads/search` almost
+    /// certainly takes a name, but no capture shows the request the field makes
+    /// — so filtering what is held is the honest thing to do rather than
+    /// inventing a parameter. Cleared when the flyout closes.
+    var threadSearchText = ""
     /// The forum a New Post sheet is open for, or nil.
     ///
     /// **At the window root, presented once** — `INVARIANTS.md` §2 forbids a

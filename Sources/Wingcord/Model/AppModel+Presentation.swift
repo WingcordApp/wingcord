@@ -247,6 +247,8 @@ extension AppModel {
                 canShowUserProfile: false,
                 canShowPins: false,
                 arePinsShown: false,
+                canShowThreads: false,
+                areThreadsShown: false,
                 canStartCall: false,
                 isInCall: false,
                 isCallOngoing: false,
@@ -266,6 +268,8 @@ extension AppModel {
                 canShowUserProfile: false,
                 canShowPins: false,
                 arePinsShown: false,
+                canShowThreads: false,
+                areThreadsShown: false,
                 canStartCall: false,
                 isInCall: false,
                 isCallOngoing: false,
@@ -288,6 +292,8 @@ extension AppModel {
             // opens onto a refusal is the inert control §5.5 is about.
             canShowPins: permissionGate.canReadHistory(channelID),
             arePinsShown: openPinsChannelID == channelID,
+            canShowThreads: canBrowseThreads(in: channelID),
+            areThreadsShown: openThreadsChannelID == channelID,
             // A conversation, not a channel: a guild's voice channel is joined
             // from its own pane, and a text channel has no call to start.
             canStartCall: channel.kind.isPrivate,

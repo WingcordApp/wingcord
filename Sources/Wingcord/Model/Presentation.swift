@@ -316,6 +316,10 @@ struct ChannelChrome: Hashable, Sendable {
     /// only thing that removes it is there being no conversation.
     var canShowPins: Bool
     var arePinsShown: Bool
+    /// Whether this channel can have threads at all. False for a forum, whose
+    /// board already *is* the list — see `AppModel.canBrowseThreads`.
+    var canShowThreads: Bool
+    var areThreadsShown: Bool
     /// Whether a call can be started here. Direct messages and group
     /// conversations only — a guild's voice channel is joined from its own
     /// pane, and a text channel has no call at all.

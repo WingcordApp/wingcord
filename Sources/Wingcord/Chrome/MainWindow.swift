@@ -72,6 +72,23 @@ struct MainWindow: View {
                                     }
                                 }
                             )
+                        },
+                        toggleThreads: {
+                            guard let channelID = model.selectedChannelID else { return }
+                            if model.openThreadsChannelID == channelID {
+                                model.closeThreadBrowser()
+                            } else {
+                                model.openThreadBrowser(channelID)
+                            }
+                        },
+                        threadsContent: {
+                            AnyView(
+                                Group {
+                                    if let channelID = model.openThreadsChannelID {
+                                        ThreadBrowserPane(channelID: channelID)
+                                    }
+                                }
+                            )
                         }
                     )
                 }

@@ -359,6 +359,70 @@ struct ThreadDecodeTests {
         #expect(dto.parent_id == ChannelID(rawValue: 1_528_179_084_432_292_239))
     }
 
+    // MARK: The Threads flyout
+
+    /// The toolbar's Threads flyout, opened on an **announcement** channel.
+    ///
+    /// **This overturns the published reference.** `threads/search` is
+    /// documented as forum- and media-only; `threads toolbar.har` sends it at
+    /// `#unstable-releases` — a type-5 announcement channel — with byte-identical
+    /// parameters to a forum board's, and gets 307 results back. So the flyout
+    /// and the board share one route, one fetch and one pager.
+    ///
+    /// The one difference in the reply is that this form carries **no
+    /// `first_messages`**, which is why that field is optional and why nothing
+    /// downstream may assume a preview exists.
+    @Test("threads/search answers for a text channel, without first_messages")
+    func textChannelThreadSearch() throws {
+        let json = """
+        {"threads":[
+          {"id":"1521943196534020354","type":10,
+           "last_message_id":"1528517632624731806","flags":0,
+           "guild_id":"774352792659691746","name":"Iris 1.11.2 Beta 1",
+           "parent_id":"883067831487134463","rate_limit_per_user":0,
+           "owner_id":"366702774403989504",
+           "thread_metadata":{"archived":true,
+             "archive_timestamp":"2026-08-18T21:53:04.133000+00:00",
+             "auto_archive_duration":10080,"locked":false,
+             "create_timestamp":"2026-07-01T18:19:02.325000+00:00"},
+           "message_count":720,"member_count":50,"total_message_sent":728,
+           "member_ids_preview":["363450540096547977","358032084213393543",
+             "544194482528981400","366702774403989504","413535697256054598"],
+           "owner":{"nick":null,"roles":["1087548257416565860"],
+             "joined_at":"2020-11-06T22:22:37.166000+00:00",
+             "user":{"id":"366702774403989504","username":"lina","discriminator":"0"}}}],
+         "members":[
+          {"id":"1521943196534020354","user_id":"987654321987654321",
+           "join_timestamp":"2026-09-04T14:21:55.866000+00:00","flags":9,
+           "muted":false,"mute_config":null}],
+         "has_more":true,"total_results":307}
+        """
+        let dto = try Self.decoder().decode(ThreadSearchDTO.self, from: Data(json.utf8))
+        let page = dto.domain(parentID: ChannelID(rawValue: 883_067_831_487_134_463))
+
+        #expect(page.totalResults == 307)
+        #expect(page.hasMore)
+        // Absent, not empty-and-wrong: a text channel's reply carries none.
+        #expect(page.firstMessages.isEmpty)
+
+        let thread = try #require(page.posts.first)
+        #expect(thread.kind == .announcementThread)
+        #expect(thread.memberCount == 50)
+        // Five bare ids, for the row's avatar stack.
+        #expect(thread.memberIDsPreview.count == 5)
+        #expect(thread.threadMessageCount == 720)
+
+        // The owner still splits into a user and a member, which is where
+        // "Started by IMS" comes from.
+        #expect(page.authors[UserID(rawValue: 366_702_774_403_989_504)]?.username == "lina")
+
+        // `flags: 9` is HAS_INTERACTED | NO_MESSAGES — a followed thread the
+        // reader has set to notify them of nothing.
+        let membership = try #require(page.memberships.first)
+        #expect(membership.flags.contains(.hasInteracted))
+        #expect(membership.notification == .nothing)
+    }
+
     // MARK: The chip under a message
 
     /// A message from `#unstable-releases` with its thread nested inline.

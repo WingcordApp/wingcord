@@ -27,6 +27,11 @@ struct ChannelToolbar: ToolbarContent {
     /// popover's content closure is only called when it is presented, and this
     /// keeps the store read out of the toolbar's own body.
     var pinsContent: () -> AnyView = { AnyView(EmptyView()) }
+    var toggleThreads: () -> Void = {}
+    /// The Threads popover's contents, for the reason `pinsContent` is a
+    /// closure: it is opened a few times a session and the bar is evaluated on
+    /// every navigation.
+    var threadsContent: () -> AnyView = { AnyView(EmptyView()) }
 
     private var callTitle: String {
         if chrome.isInCall { return "Leave the Call" }
@@ -93,6 +98,21 @@ struct ChannelToolbar: ToolbarContent {
         // toolbar item, evaluated once, and it is the only place a popover can
         // point at the control that opened it — the alternative is a
         // window-root presenter anchored to a rect the toolbar cannot report.
+        // Beside the pins and under the same scoped exception — one toolbar
+        // item, evaluated once, pointing its popover at the control that opened
+        // it.
+        ToolbarItem(placement: .primaryAction) {
+            if chrome.canShowThreads {
+                Button(action: toggleThreads) {
+                    Label("Threads", systemImage: "bubble.left.and.bubble.right")
+                }
+                .help("Threads")
+                .popover(isPresented: threadsBinding, arrowEdge: .bottom) {
+                    threadsContent()
+                }
+            }
+        }
+
         ToolbarItem(placement: .primaryAction) {
             if chrome.canShowPins {
                 Button(action: togglePins) {
@@ -138,6 +158,15 @@ struct ChannelToolbar: ToolbarContent {
         Binding(
             get: { chrome.arePinsShown },
             set: { if !$0, chrome.arePinsShown { togglePins() } }
+        )
+    }
+
+    /// Same rule as `pinsBinding`: the setter may only clear when the store is
+    /// still showing this one.
+    private var threadsBinding: Binding<Bool> {
+        Binding(
+            get: { chrome.areThreadsShown },
+            set: { if !$0, chrome.areThreadsShown { toggleThreads() } }
         )
     }
 }
