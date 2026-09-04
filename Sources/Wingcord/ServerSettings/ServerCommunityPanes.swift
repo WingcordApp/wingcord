@@ -207,14 +207,14 @@ enum GuildLocale {
 /// the flag is the same fact said in a way that does not tell you where the
 /// editor puts it.
 ///
-/// **This page is read-only because the editor is not written**, and no longer
-/// because the route is dangerous — that reason was wrong. It used to say the
-/// PUT "replaces the whole ballot"; `community and onboarding.har` shows it
-/// **merges per field**: one request carrying only `default_channel_ids` left
-/// the prompts alone, one carrying only `prompts` left the channels alone, and
-/// one carrying only `enabled` left both. See HANDOFF §SM.11, which also has the
-/// two things a new prompt needs — a client-minted millisecond-timestamp id, and
-/// its emoji sent twice.
+/// The editor is `OnboardingEditor`. This page was read-only for two releases
+/// on a reason that turned out to be wrong: it said the PUT "replaces the whole
+/// ballot" and that a partial save would erase a server's questions.
+/// `community and onboarding.har` shows it **merges per field** — one request
+/// carrying only `default_channel_ids` left the prompts alone, one carrying only
+/// `prompts` left the channels alone, and one carrying only `enabled` left both.
+/// HANDOFF §SM.11 has the correction and the two things a new prompt needs: a
+/// client-minted millisecond-timestamp id, and its emoji sent twice.
 struct OnboardingPane: View {
     let store: ServerSettingsStore
 
@@ -415,11 +415,11 @@ struct TemplatePane: View {
 
 /// The questions somebody answers before they are let in.
 ///
-/// **Captured, unlike onboarding.** Turning "Apply to Join" on sent
-/// `PATCH /guilds/{id}/member-verification` with `form_fields` and `enabled`, so
-/// this one is editable — and `INVARIANTS.md` §5.5's rule that dimming has to be
-/// re-earned when evidence arrives is why it is not read-only beside the two
-/// pages above it.
+/// Turning "Apply to Join" on sent `PATCH /guilds/{id}/member-verification` with
+/// `form_fields` and `enabled`. This was the first page on the surface to become
+/// editable when its capture arrived, which is `INVARIANTS.md` §5.5's rule that
+/// dimming has to be re-earned; onboarding and the guide followed later for the
+/// same reason.
 struct JoinFormEditor: View {
     var form: JoinApplicationForm
     var commit: (JoinApplicationForm) -> Void
