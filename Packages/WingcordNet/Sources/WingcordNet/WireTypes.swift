@@ -292,6 +292,25 @@ struct ChannelDTO: Decodable, Sendable {
     /// `Channel.bitrate`.
     var bitrate: Int?
     var user_limit: Int?
+    var thread_metadata: ThreadMetadataDTO?
+    var applied_tags: [ForumTagID]?
+    var available_tags: [ForumTagDTO]?
+    var default_reaction_emoji: DefaultReactionDTO?
+    var default_sort_order: Int?
+    var default_forum_layout: Int?
+    var default_thread_rate_limit_per_user: Int?
+    var template: String?
+    var flags: Int?
+    var member_count: Int?
+    var total_message_sent: Int?
+    /// The thread's creator, as a guild member.
+    ///
+    /// **Only `threads/search` sends it**, and it is not part of the channel
+    /// object anywhere else. It is decoded here rather than in a wrapper because
+    /// it arrives *on* the channel — but it is deliberately not mapped into
+    /// `domain()`: `Channel` holds an `ownerID`, and the person behind it
+    /// belongs in the user and member stores like every other.
+    var owner: MemberDTO?
 
     func domain(guildID: GuildID? = nil) -> Channel {
         Channel(
@@ -311,9 +330,217 @@ struct ChannelDTO: Decodable, Sendable {
             ownerID: owner_id,
             messageCount: message_count,
             bitrate: bitrate,
-            userLimit: user_limit
+            userLimit: user_limit,
+            threadMetadata: thread_metadata?.domain,
+            appliedTags: applied_tags ?? [],
+            availableTags: available_tags?.map(\.domain) ?? [],
+            defaultReaction: default_reaction_emoji?.domain,
+            defaultSortOrder: default_sort_order.flatMap(ForumSortOrder.init(rawValue:)),
+            defaultForumLayout: default_forum_layout.map(ForumLayout.init(rawChannelValue:)),
+            defaultThreadRateLimitPerUser: default_thread_rate_limit_per_user,
+            template: template,
+            flags: ChannelFlags(rawValue: flags ?? 0),
+            memberCount: member_count,
+            totalMessageSent: total_message_sent
         )
     }
+}
+
+extension ChannelDTO {
+    /// The three fields a message's thread chip draws.
+    ///
+    /// **`message_count`, and the capture settles it.** The thread in
+    /// `threads.har` reports `message_count: 720` beside
+    /// `total_message_sent: 728`, and Discord's own chip reads "720 Messages" —
+    /// so the count people see is the one that *excludes* deleted messages, not
+    /// the running total. `total_message_sent` is the fallback only for a thread
+    /// old enough that Discord caps the other at 50.
+    var threadSummary: MessageThread {
+        MessageThread(
+            id: id,
+            name: name ?? "",
+            messageCount: message_count ?? total_message_sent ?? 0,
+            isArchived: thread_metadata?.archived ?? false
+        )
+    }
+}
+
+struct ThreadMetadataDTO: Decodable, Sendable {
+    var archived: Bool?
+    var archive_timestamp: Date?
+    var auto_archive_duration: Int?
+    var locked: Bool?
+    var invitable: Bool?
+    var create_timestamp: Date?
+
+    var domain: ThreadMetadata {
+        ThreadMetadata(
+            isArchived: archived ?? false,
+            archivedAt: archive_timestamp,
+            // Discord's own default when it omits the field. Three days, not one
+            // — a thread that reports no duration is not a thread that archives
+            // in an hour.
+            autoArchiveMinutes: auto_archive_duration ?? 4320,
+            isLocked: locked ?? false,
+            isInvitable: invitable,
+            createdAt: create_timestamp
+        )
+    }
+}
+
+struct ForumTagDTO: Decodable, Sendable {
+    var id: ForumTagID
+    var name: String?
+    var moderated: Bool?
+    var emoji_id: EmojiID?
+    var emoji_name: String?
+
+    var domain: ForumTag {
+        ForumTag(
+            id: id,
+            name: name ?? "",
+            isModerated: moderated ?? false,
+            emoji: Self.emoji(id: emoji_id, name: emoji_name)
+        )
+    }
+
+    /// Discord sends both fields on every tag and nulls the one that does not
+    /// apply — so "has an emoji" is "either field is set", never "the object is
+    /// present".
+    static func emoji(id: EmojiID?, name: String?) -> EmojiRef? {
+        if let id { return EmojiRef(id: id, name: name ?? "") }
+        guard let name, !name.isEmpty else { return nil }
+        return EmojiRef(name: name)
+    }
+}
+
+struct DefaultReactionDTO: Decodable, Sendable {
+    var emoji_id: EmojiID?
+    var emoji_name: String?
+
+    var domain: EmojiRef? { ForumTagDTO.emoji(id: emoji_id, name: emoji_name) }
+}
+
+/// The current user's membership of a thread.
+///
+/// **Captured**, `forums.har` and `threads.har`: returned from
+/// `PATCH /channels/{id}/thread-members/@me/settings` and carried in the
+/// `members` array of `threads/search`.
+struct ThreadMemberDTO: Decodable, Sendable {
+    var id: ChannelID?
+    var user_id: UserID?
+    var join_timestamp: Date?
+    var flags: Int?
+    var muted: Bool?
+    var mute_config: MuteConfigDTO?
+
+    /// The thread id is not always in the payload.
+    ///
+    /// `THREAD_MEMBER_UPDATE` carries it, and so does every `members` entry —
+    /// but the reply to a settings PATCH is about a thread the caller named in
+    /// the URL, and a `GET /thread-members` row omits it for the same reason.
+    /// The caller supplies what it asked about rather than this failing to
+    /// decode.
+    func domain(threadID: ChannelID, userID: UserID) -> ThreadMember {
+        ThreadMember(
+            id: id ?? threadID,
+            userID: user_id ?? userID,
+            joinedAt: join_timestamp,
+            flags: ThreadMemberFlags(rawValue: flags ?? 0),
+            isMuted: muted ?? false,
+            muteConfig: mute_config?.domain
+        )
+    }
+}
+
+struct MuteConfigDTO: Decodable, Sendable {
+    var end_time: Date?
+    var selected_time_window: Int?
+
+    var domain: ThreadMuteConfig {
+        ThreadMuteConfig(endTime: end_time, selectedTimeWindow: selected_time_window)
+    }
+}
+
+/// `THREAD_CREATE` — a channel object with two extra fields beside it.
+///
+/// The channel is decoded from the **same container**, not from a nested key:
+/// Discord sends the thread's fields at the top level of `d` and hangs
+/// `newly_created` and `member` alongside them.
+struct ThreadCreateDTO: Decodable, Sendable {
+    var channel: ChannelDTO
+    /// Absent when the event is Discord re-announcing a thread the account has
+    /// just gained access to, which is most of them. **Only a true here means a
+    /// thread that did not exist a moment ago** — anything that animates or
+    /// notifies keys off it rather than off the event's name.
+    var newly_created: Bool?
+    /// Our own membership, present when the event is about a thread we are in.
+    var member: ThreadMemberDTO?
+
+    private enum CodingKeys: String, CodingKey {
+        case newly_created, member
+    }
+
+    init(from decoder: any Decoder) throws {
+        channel = try ChannelDTO(from: decoder)
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        newly_created = try container.decodeIfPresent(Bool.self, forKey: .newly_created)
+        member = try container.decodeIfPresent(ThreadMemberDTO.self, forKey: .member)
+    }
+}
+
+/// `THREAD_DELETE` — a partial channel: four fields, and no `name`.
+struct ThreadDeleteDTO: Decodable, Sendable {
+    var id: ChannelID
+    var guild_id: GuildID?
+    var parent_id: ChannelID?
+    var type: Int?
+}
+
+/// `THREAD_LIST_SYNC` — every thread the account can now see in the named
+/// channels, with its own memberships for the ones it has joined.
+struct ThreadListSyncDTO: Decodable, Sendable {
+    var guild_id: GuildID?
+    /// The parents this sync covers. **Nil means the whole guild**, and the
+    /// difference is load-bearing: a client that treats nil as "no channels"
+    /// keeps stale threads for every channel the event was meant to clear.
+    var channel_ids: [ChannelID]?
+    var threads: [ChannelDTO]?
+    var members: [ThreadMemberDTO]?
+}
+
+/// `THREAD_MEMBER_UPDATE` — our own membership of one thread.
+struct ThreadMemberUpdateDTO: Decodable, Sendable {
+    var id: ChannelID?
+    var user_id: UserID?
+    var guild_id: GuildID?
+    var join_timestamp: Date?
+    var flags: Int?
+    var muted: Bool?
+    var mute_config: MuteConfigDTO?
+
+    func domain(userID: UserID) -> ThreadMember? {
+        guard let id else { return nil }
+        return ThreadMember(
+            id: id,
+            userID: user_id ?? userID,
+            joinedAt: join_timestamp,
+            flags: ThreadMemberFlags(rawValue: flags ?? 0),
+            isMuted: muted ?? false,
+            muteConfig: mute_config?.domain
+        )
+    }
+}
+
+/// `THREAD_MEMBERS_UPDATE` — somebody else came or went.
+struct ThreadMembersUpdateDTO: Decodable, Sendable {
+    var id: ChannelID
+    var guild_id: GuildID?
+    /// The thread's count after the change. Caps at 50 like every other
+    /// `member_count`.
+    var member_count: Int?
+    var added_members: [ThreadMemberDTO]?
+    var removed_member_ids: [UserID]?
 }
 
 struct GuildDTO: Decodable, Sendable {
@@ -336,6 +563,13 @@ struct GuildDTO: Decodable, Sendable {
     var emojis: [EmojiDTO]?
     var stickers: [StickerDTO]?
     var channels: [ChannelDTO]?
+    /// The threads in this guild, beside its channels rather than among them.
+    ///
+    /// **A user account is sent only the threads it has joined**, not every
+    /// active one — bots get the full set, this client does not. So this is the
+    /// followed-thread list at launch, and a thread's absence here says nothing
+    /// about whether it exists.
+    var threads: [ChannelDTO]?
     var members: [MemberDTO]?
     var presences: [PresenceDTO]?
     /// A server's soundboard, when the payload carries one.
@@ -579,6 +813,12 @@ struct MessageDTO: Decodable, Sendable {
     var mention_roles: [RoleID]?
     var mention_everyone: Bool?
     var message_reference: ReferenceDTO?
+    /// The thread started from this message.
+    ///
+    /// **Captured**, `threads.har`: a whole channel object, nested. It is
+    /// decoded as one — rather than as the three fields the chip draws — because
+    /// the caller puts it into `ChannelIndex` so that opening the chip resolves.
+    var thread: ChannelDTO?
     /// The message a reply quotes, sent inline. Absent when the target was
     /// deleted, which is a real state the header has to draw.
     ///
@@ -727,7 +967,8 @@ struct MessageDTO: Decodable, Sendable {
             nonce: nonce?.text,
             activityInvite: activityInvite,
             interaction: messageInteraction,
-            applicationID: application_id
+            applicationID: application_id,
+            thread: thread.map(\.threadSummary)
         )
         return Message(
             id: id,

@@ -125,6 +125,29 @@ nonisolated enum TimelineMetrics {
             + countWidth + reactionTrailingInset
     }
 
+    // The thread chip under a message that started one. Layout and painter read
+    // the SAME constants — two halves of one geometry, and drifting them is
+    // invisible until it isn't.
+    /// Between the chip and whatever is above it.
+    static let threadChipGap: CGFloat = 8
+    static let threadChipHeight: CGFloat = 34
+    static let threadChipLeadingInset: CGFloat = 10
+    static let threadChipTrailingInset: CGFloat = 10
+    /// Between the name and the count beside it.
+    static let threadChipLabelGap: CGFloat = 8
+    /// The chevron at the trailing edge, and the room it takes.
+    static let threadChipChevronRoom: CGFloat = 14
+    /// How far the chip is inset from the message's content column.
+    ///
+    /// **Indented, because the chip belongs to the message above it.** Discord
+    /// draws a hook from the avatar down into it; this app says the same thing
+    /// with the indent alone — a second elbow in the transcript competes with
+    /// the reply header's, which is already a line pointing upward.
+    static let threadChipIndent: CGFloat = 0
+    /// The widest a chip is drawn, so a long thread name does not stretch one
+    /// across a maximised window.
+    static let threadChipMaxWidth: CGFloat = 420
+
     // A button an app attached. Layout and painter read the SAME constants —
     // two halves of one geometry, and drifting them is invisible until it isn't.
     static let componentHeight: CGFloat = 30

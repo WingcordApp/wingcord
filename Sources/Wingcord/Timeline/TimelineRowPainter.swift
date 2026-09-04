@@ -356,6 +356,19 @@ nonisolated enum TimelineRowPainter {
             )
         }
 
+        // The thread this message started. Above the ephemeral note for the
+        // same reason it is laid out there: the chip is about the message, the
+        // note is about the row.
+        if let chip = row.threadChip {
+            drawThreadChip(
+                chip,
+                in: chip.rect.offsetBy(dx: rowFrame.minX, dy: rowFrame.minY),
+                context: context,
+                style: style,
+                isHovered: state.hoveredComponent == chip.rect.origin
+            )
+        }
+
         // "Only you can see this". Last, under everything — a note about the
         // whole message, in the quietest ink the row has.
         if let note = row.ephemeralNote {
@@ -842,6 +855,83 @@ nonisolated enum TimelineRowPainter {
                 context: context
             )
         }
+    }
+
+    /// The chip under a message that started a thread.
+    ///
+    /// **A rounded rectangle, not a capsule.** A capsule at this height reads as
+    /// an oversized reaction chip; the chip is a *destination*, and the corner
+    /// radius is the one every card in this app uses so it reads as a surface
+    /// you can go into.
+    private static func drawThreadChip(
+        _ slot: ThreadChipSlot,
+        in frame: CGRect,
+        context: CGContext,
+        style: MessageTextStyle,
+        isHovered: Bool
+    ) {
+        let path = CGPath(
+            roundedRect: frame,
+            cornerWidth: Radius.row,
+            cornerHeight: Radius.row,
+            transform: nil
+        )
+        context.addPath(path)
+        context.setFillColor(
+            NSColor.white.withAlphaComponent(isHovered ? 0.10 : 0.05).cgColor
+        )
+        context.fillPath()
+
+        var x = frame.minX + TimelineMetrics.threadChipLeadingInset
+        // Everything but the chevron and the insets. Clamped at zero so a chip
+        // squeezed to nothing does not ask `drawText` to truncate to a negative
+        // width, which draws the full string past the rect.
+        let room = max(
+            0,
+            frame.maxX - TimelineMetrics.threadChipTrailingInset
+                - TimelineMetrics.threadChipChevronRoom - x
+        )
+
+        // The name takes the accent, because it is the link. The count beside it
+        // is metadata in the quietest ink, exactly as a timestamp is.
+        let nameWidth = min(slot.nameWidth, room)
+        _ = drawText(
+            slot.name,
+            font: style.authorFont,
+            color: NSColor.controlAccentColor,
+            at: CGPoint(x: x, y: frame.midY - style.authorFont.pointSize * 0.7),
+            maxWidth: nameWidth,
+            context: context
+        )
+        x += nameWidth + TimelineMetrics.threadChipLabelGap
+
+        let countRoom = max(0, frame.maxX - TimelineMetrics.threadChipTrailingInset
+            - TimelineMetrics.threadChipChevronRoom - x)
+        if countRoom > 0 {
+            _ = drawText(
+                slot.countText,
+                font: style.metadataFont,
+                color: style.tertiaryColor,
+                at: CGPoint(x: x, y: frame.midY - style.metadataFont.pointSize * 0.7),
+                maxWidth: countRoom,
+                context: context
+            )
+        }
+
+        // The chevron says this goes somewhere, which is the one thing the fill
+        // alone does not.
+        let side: CGFloat = 10
+        drawSymbol(
+            "chevron.right",
+            tint: style.tertiaryColor,
+            in: CGRect(
+                x: frame.maxX - TimelineMetrics.threadChipTrailingInset - side,
+                y: frame.midY - side / 2,
+                width: side,
+                height: side
+            ),
+            context: context
+        )
     }
 
     private static func drawReaction(

@@ -243,6 +243,7 @@ private struct ChannelSidebarContainer: View {
             target: model.sidebarTarget,
             connectedVoiceChannelID: model.connectedVoiceChannelID,
             selectChannel: { model.selectChannel($0) },
+            openThread: { model.openThread($0) },
             joinVoice: { channelID in
                 // The same control leaves the call it is already in. Pin and
                 // Unpin are one bit resolved two ways, and so is this — two rows

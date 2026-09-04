@@ -107,6 +107,8 @@ public struct Message: Hashable, Sendable, Identifiable, Codable {
     public var poll: Poll? { payload?.poll }
     public var stickers: [StickerRef] { payload?.stickers ?? [] }
     public var reactions: [Reaction] { payload?.reactions ?? [] }
+    /// The thread started from this message. Nil for everything else.
+    public var thread: MessageThread? { payload?.thread }
     /// What a reply quotes. Nil for everything else.
     public var reference: MessageReference? { payload?.reference }
     public var referencedMessageID: MessageID? { payload?.reference?.messageID }
@@ -215,6 +217,9 @@ public final class MessagePayload: Hashable, Sendable, Codable {
     /// application id for every app registered since 2016, and the capture's
     /// two values agree.
     public let applicationID: ApplicationID?
+    /// The thread started from this message, when there is one. Nil for
+    /// everything else, which is nearly every message.
+    public let thread: MessageThread?
 
     public init(
         attachments: [Attachment] = [],
@@ -233,7 +238,8 @@ public final class MessagePayload: Hashable, Sendable, Codable {
         nonce: String? = nil,
         activityInvite: ActivityInvite? = nil,
         interaction: MessageInteraction? = nil,
-        applicationID: ApplicationID? = nil
+        applicationID: ApplicationID? = nil,
+        thread: MessageThread? = nil
     ) {
         self.activityInvite = activityInvite
         self.interaction = interaction
@@ -252,6 +258,7 @@ public final class MessagePayload: Hashable, Sendable, Codable {
         self.forwarded = forwarded
         self.webhookID = webhookID
         self.nonce = nonce
+        self.thread = thread
     }
 
     /// The same box with one array replaced.
@@ -282,7 +289,8 @@ public final class MessagePayload: Hashable, Sendable, Codable {
             nonce: nonce,
             activityInvite: activityInvite,
             interaction: interaction,
-            applicationID: applicationID
+            applicationID: applicationID,
+            thread: thread
         )
     }
 
@@ -305,7 +313,8 @@ public final class MessagePayload: Hashable, Sendable, Codable {
             nonce: nonce,
             activityInvite: activityInvite,
             interaction: interaction,
-            applicationID: applicationID
+            applicationID: applicationID,
+            thread: thread
         )
     }
 
@@ -317,7 +326,7 @@ public final class MessagePayload: Hashable, Sendable, Codable {
             && poll == nil && mentionedUserIDs.isEmpty
             && mentionedRoleIDs.isEmpty && !mentionsEveryone
             && reference == nil && forwarded == nil && webhookID == nil && nonce == nil
-            && activityInvite == nil && interaction == nil
+            && activityInvite == nil && interaction == nil && thread == nil
     }
 
     public static func == (lhs: MessagePayload, rhs: MessagePayload) -> Bool {
@@ -339,7 +348,8 @@ public final class MessagePayload: Hashable, Sendable, Codable {
                 && lhs.forwarded == rhs.forwarded
                 && lhs.webhookID == rhs.webhookID
                 && lhs.activityInvite == rhs.activityInvite
-                && lhs.interaction == rhs.interaction)
+                && lhs.interaction == rhs.interaction
+                && lhs.thread == rhs.thread)
     }
 
     public func hash(into hasher: inout Hasher) {
@@ -491,6 +501,34 @@ public struct Reaction: Hashable, Sendable, Codable {
         self.count = count
         self.isMine = isMine
         self.burstCount = burstCount
+    }
+}
+
+/// The thread hanging off a message, as its chip needs it.
+///
+/// **Captured**, `threads.har`: `GET /channels/{id}/messages` returns a whole
+/// nested channel object under `thread` on any message that started one — name,
+/// `message_count`, `thread_metadata` and all. So the chip needs no second
+/// fetch and no active-threads sweep; the transcript already has everything it
+/// draws.
+///
+/// A summary rather than the `Channel` itself: the chip needs three fields, and
+/// the full channel goes into `ChannelIndex` on the same page so that opening it
+/// resolves. Holding a second copy here is how the chip and the panel come to
+/// disagree about the thread's name.
+public struct MessageThread: Hashable, Sendable, Codable {
+    public var id: ChannelID
+    public var name: String
+    /// What the chip says. `total_message_sent` where Discord sends it, because
+    /// it never decrements — see `Channel.threadMessageCount`.
+    public var messageCount: Int
+    public var isArchived: Bool
+
+    public init(id: ChannelID, name: String, messageCount: Int, isArchived: Bool = false) {
+        self.id = id
+        self.name = name
+        self.messageCount = messageCount
+        self.isArchived = isArchived
     }
 }
 

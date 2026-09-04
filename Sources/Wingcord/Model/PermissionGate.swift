@@ -82,13 +82,22 @@ final class PermissionGate {
         }
 
         let memberRoles = model.members[guildID]?[userID]?.roleIDs ?? []
+        // **A thread is resolved against its PARENT's overwrites.** A thread
+        // carries none of its own — Discord's model is that it inherits the
+        // channel it hangs off — so resolving against the thread itself finds an
+        // empty overwrite list and hands back the reader's guild-level
+        // permissions. That fails open: a thread inside a channel `@everyone` is
+        // denied `viewChannel` on would resolve as *visible*.
+        let governing = channel.kind.isThread
+            ? channel.parentID.flatMap { model.channelIndex[$0] } ?? channel
+            : channel
         let resolved = PermissionResolver.permissions(
             forMember: memberRoles,
             userID: userID,
             guildID: guildID,
             guildOwnerID: guild.ownerID,
             roles: model.roles[guildID] ?? [:],
-            channel: channel
+            channel: governing
         )
         channels[channelID] = resolved
         return resolved

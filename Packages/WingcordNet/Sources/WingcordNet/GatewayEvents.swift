@@ -61,6 +61,27 @@ struct GatewayFrame: Decodable, Sendable {
         case channelCreate(ChannelDTO)
         case channelUpdate(ChannelDTO)
         case channelDelete(ChannelDTO)
+        /// A thread was made, or one the account can already see changed.
+        ///
+        /// **`THREAD_CREATE` is also how a thread arrives when access is
+        /// gained** — Discord re-sends it rather than a list, so it must be
+        /// treated as an upsert and never as "this is new, animate it in".
+        case threadCreate(ThreadCreateDTO)
+        case threadUpdate(ChannelDTO)
+        /// Deleting a thread sends a *partial* channel: id, guild, parent and
+        /// type, and nothing else. It is decoded as its own narrow payload so a
+        /// missing `name` cannot fail the frame.
+        case threadDelete(ThreadDeleteDTO)
+        /// The threads in one or more channels, sent when the account gains
+        /// access to a channel that already had some.
+        case threadListSync(ThreadListSyncDTO)
+        /// **Our own** membership of one thread changed — joined, left, or the
+        /// notification and mute settings moved. Nobody else's membership
+        /// arrives this way.
+        case threadMemberUpdate(ThreadMemberUpdateDTO)
+        /// Somebody else joined or left a thread. Carries the new member count,
+        /// which is the only reason this client listens to it.
+        case threadMembersUpdate(ThreadMembersUpdateDTO)
         case presenceUpdate(PresenceDTO)
         case typingStart(TypingPayload)
         case guildMembersChunk(MembersChunkPayload)
@@ -162,6 +183,14 @@ struct GatewayFrame: Decodable, Sendable {
         case "CHANNEL_CREATE": payload = .channelCreate(try decode(ChannelDTO.self))
         case "CHANNEL_UPDATE": payload = .channelUpdate(try decode(ChannelDTO.self))
         case "CHANNEL_DELETE": payload = .channelDelete(try decode(ChannelDTO.self))
+        case "THREAD_CREATE": payload = .threadCreate(try decode(ThreadCreateDTO.self))
+        case "THREAD_UPDATE": payload = .threadUpdate(try decode(ChannelDTO.self))
+        case "THREAD_DELETE": payload = .threadDelete(try decode(ThreadDeleteDTO.self))
+        case "THREAD_LIST_SYNC": payload = .threadListSync(try decode(ThreadListSyncDTO.self))
+        case "THREAD_MEMBER_UPDATE":
+            payload = .threadMemberUpdate(try decode(ThreadMemberUpdateDTO.self))
+        case "THREAD_MEMBERS_UPDATE":
+            payload = .threadMembersUpdate(try decode(ThreadMembersUpdateDTO.self))
         case "PRESENCE_UPDATE": payload = .presenceUpdate(try decode(PresenceDTO.self))
         case "TYPING_START": payload = .typingStart(try decode(TypingPayload.self))
         case "GUILD_MEMBERS_CHUNK":

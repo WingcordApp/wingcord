@@ -125,6 +125,8 @@ final class TimelineCanvasView: NSView {
     var onToggleReaction: ((MessageID, EmojiRef) -> Void)?
     /// A reply's quoted line was clicked: go to what it quotes.
     var onOpenReplyTarget: ((MessageID) -> Void)?
+    /// The thread chip under a message was clicked: open that thread.
+    var onOpenThread: ((ChannelID) -> Void)?
     /// The pointer moved onto, or off, a message row. The rect is in the CLIP
     /// VIEW's space, because what reads it is a floating pill overlaid on the
     /// scroll view rather than anything in document coordinates.
@@ -538,6 +540,8 @@ final class TimelineCanvasView: NSView {
             if origin != .zero { onPlayActivity?(row.id) }
         case .reaction(let emoji, _):
             onToggleReaction?(row.id, emoji)
+        case .threadChip(let threadID, _):
+            onOpenThread?(threadID)
         case .replyHeader(let target):
             // A strip with nothing behind it still swallows the click: falling
             // through would open the profile of whoever is underneath.
@@ -603,6 +607,9 @@ final class TimelineCanvasView: NSView {
         /// under the pointer — identified by origin, not index, for the reason
         /// `hoveredComponent` is.
         case reaction(EmojiRef, origin: CGPoint)
+        /// The chip under a message that started a thread. Carries the thread
+        /// to open, and its origin in row space so the painter can light it.
+        case threadChip(ChannelID, origin: CGPoint)
         /// The quoted line above a reply. Carries where to go, or nil when the
         /// quoted message is gone — which still swallows the click, because a
         /// strip that says "original message was deleted" is not a hole in the
@@ -717,6 +724,10 @@ final class TimelineCanvasView: NSView {
             )
         }
 
+        if let chip = row.threadChip, chip.rect.contains(local) {
+            return .threadChip(chip.targetID, origin: chip.rect.origin)
+        }
+
         for slot in row.reactions where slot.rect.contains(local) {
             return .reaction(slot.emoji, origin: slot.rect.origin)
         }
@@ -799,6 +810,11 @@ final class TimelineCanvasView: NSView {
                 component = origin
                 cursor = origin == .zero ? nil : .pointingHand
             case .reaction(_, let origin):
+                component = origin
+                cursor = .pointingHand
+            case .threadChip(_, let origin):
+                // The origin is published so the painter lights the chip the
+                // pointer is on, exactly as a reaction chip does.
                 component = origin
                 cursor = .pointingHand
             case .replyHeader(let target):

@@ -90,6 +90,8 @@ nonisolated struct MessageRow: @unchecked Sendable {
     /// the message — the launch carries no body at all.
     var activityInvite: ActivityInviteSlot?
     var reactions: [ReactionSlot]
+    /// The thread this message started, when it did.
+    var threadChip: ThreadChipSlot?
 
     /// A system event's gutter glyph — a join, a boost, a pin.
     ///
@@ -263,6 +265,25 @@ nonisolated struct InteractionHeaderSlot: @unchecked Sendable {
     var commandRect: CGRect
     /// The chip's own box: the text's rect grown by its padding.
     var chipRect: CGRect
+}
+
+/// The chip under a message that started a thread.
+///
+/// **Its own slot rather than a reaction-shaped one**, because it is a
+/// navigation target: it opens a channel, where every other chip on a row
+/// toggles something about this message. `targetID` is what the hit test hands
+/// back, and the whole `rect` takes the click — a chip whose label is the only
+/// live part is a chip people click beside.
+nonisolated struct ThreadChipSlot: Sendable {
+    var rect: CGRect
+    var targetID: ChannelID
+    var name: String
+    /// "720 Messages", pre-composed: the painter draws strings, and pluralising
+    /// per frame in a draw loop is work with one answer.
+    var countText: String
+    /// Where the name ends and the count begins, so the painter can colour the
+    /// two differently without measuring again.
+    var nameWidth: CGFloat
 }
 
 nonisolated struct ReactionSlot: Sendable {
@@ -496,6 +517,7 @@ nonisolated struct TimelineLayoutEngine: Sendable {
         if let poll = row.poll { bottom = max(bottom, poll.rect.maxY) }
         if let invite = row.activityInvite { bottom = max(bottom, invite.rect.maxY) }
         for slot in row.reactions { bottom = max(bottom, slot.rect.maxY) }
+        if let chip = row.threadChip { bottom = max(bottom, chip.rect.maxY) }
         if let note = row.ephemeralNote { bottom = max(bottom, note.rect.maxY) }
         return ceil(bottom + TimelineMetrics.runBottomPadding)
     }
@@ -730,6 +752,18 @@ nonisolated struct TimelineLayoutEngine: Sendable {
             into: &reactions
         )
 
+        // The thread this message started, under its content and above the
+        // ephemeral note — it is about the message, and the note is about the
+        // whole row.
+        let chip = Self.layoutThreadChip(
+            message.thread,
+            contentX: contentX,
+            y: y,
+            width: contentWidth,
+            style: input.style
+        )
+        y = chip.bottom
+
         // "Only you can see this", last — under everything, which is where a
         // note about the whole message belongs and where Discord's own is.
         var ephemeralNote: EphemeralNoteSlot?
@@ -794,6 +828,7 @@ nonisolated struct TimelineLayoutEngine: Sendable {
             poll: poll,
             activityInvite: activityInvite,
             reactions: reactions,
+            threadChip: chip.slot,
             accessibilityLabel: Self.accessibilityLabel(
                 author: author?.name ?? "Unknown",
                 time: input.settings.time(message.sentAt),
@@ -842,13 +877,24 @@ nonisolated struct TimelineLayoutEngine: Sendable {
         // A join message can be reacted to like any other, and dropping them
         // would be dropping data the payload already carries.
         var reactions: [ReactionSlot] = []
-        _ = Self.layoutReactions(
+        let reactionsBottom = Self.layoutReactions(
             message.reactions,
             contentX: contentX,
             y: y + block.size.height,
             width: contentWidth,
             style: input.style,
             into: &reactions
+        )
+
+        // **A THREAD_CREATED system message carries the thread it announces.**
+        // Without the chip the sentence names a thread with no way to open it,
+        // which is the one thing that line exists to offer.
+        let systemChip = Self.layoutThreadChip(
+            message.thread,
+            contentX: contentX,
+            y: reactionsBottom,
+            width: contentWidth,
+            style: input.style
         )
 
         return MessageRow(
@@ -878,6 +924,7 @@ nonisolated struct TimelineLayoutEngine: Sendable {
             poll: nil,
             activityInvite: nil,
             reactions: reactions,
+            threadChip: systemChip.slot,
             systemSymbol: sentence?.symbolName ?? "circle",
             systemTint: Self.tintColor(sentence?.tint),
             accessibilityLabel: text.plainLabel
@@ -1045,6 +1092,51 @@ nonisolated struct TimelineLayoutEngine: Sendable {
             excerptRect: excerptRect,
             isBot: reference.isAuthorBot,
             targetID: isUnavailable ? nil : reference.messageID
+        )
+    }
+
+    /// The thread chip under a message that started one.
+    ///
+    /// Returns the y the next thing starts at, exactly as the reaction row does.
+    private static func layoutThreadChip(
+        _ thread: MessageThread?,
+        contentX: CGFloat,
+        y startY: CGFloat,
+        width: CGFloat,
+        style: MessageTextStyle
+    ) -> (slot: ThreadChipSlot?, bottom: CGFloat) {
+        guard let thread else { return (nil, startY) }
+
+        let y = startY + TimelineMetrics.threadChipGap
+        let countText = thread.messageCount == 1
+            ? "1 Message"
+            : "\(thread.messageCount) Messages"
+        let nameWidth = measure(thread.name, font: style.authorFont)
+        let countWidth = measure(countText, font: style.metadataFont)
+
+        let natural = TimelineMetrics.threadChipLeadingInset
+            + nameWidth + TimelineMetrics.threadChipLabelGap + countWidth
+            + TimelineMetrics.threadChipChevronRoom
+            + TimelineMetrics.threadChipTrailingInset
+        // Clamped at both ends: never wider than the column it sits in, never
+        // wider than the cap, and never narrower than the room the chevron needs
+        // on its own.
+        let chipWidth = min(natural, min(width, TimelineMetrics.threadChipMaxWidth))
+
+        return (
+            ThreadChipSlot(
+                rect: CGRect(
+                    x: contentX + TimelineMetrics.threadChipIndent,
+                    y: y,
+                    width: chipWidth,
+                    height: TimelineMetrics.threadChipHeight
+                ),
+                targetID: thread.id,
+                name: thread.name,
+                countText: countText,
+                nameWidth: nameWidth
+            ),
+            y + TimelineMetrics.threadChipHeight
         )
     }
 

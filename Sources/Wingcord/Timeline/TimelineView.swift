@@ -195,6 +195,11 @@ final class TimelineCoordinator: NSObject {
             guard let self, let channelID = self.channelID else { return }
             self.model.toggleReaction(emoji, on: messageID, in: channelID)
         }
+        canvas.onOpenThread = { [weak self] threadID in
+            // The store decides between the panel and the whole column, on the
+            // thread's parent — see `AppModel.openThread`.
+            self?.model.openThread(threadID)
+        }
         canvas.onOpenReplyTarget = { [weak self] messageID in
             guard let self, let channelID = self.channelID else { return }
             // The same jump a message link takes, so a quote and a link land

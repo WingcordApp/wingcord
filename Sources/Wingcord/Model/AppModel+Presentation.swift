@@ -193,6 +193,20 @@ extension AppModel {
     /// people and no roster route, and a pane showing one of them would be
     /// arbitrary.
     private func supplementary(for channel: Channel) -> WorkspacePresentation.Supplementary? {
+        // **An open thread takes the column ahead of everything.** It is the
+        // thing the reader just opened, and it is read *beside* the channel it
+        // came out of — which is the whole reason it is a column rather than a
+        // destination. The roster is one click away again the moment it closes.
+        //
+        // A thread whose parent is no longer the selected channel is not shown:
+        // moving to another channel with the panel open would otherwise leave a
+        // thread from somewhere else beside it.
+        if let selectedThreadID,
+           let thread = channelIndex[selectedThreadID],
+           thread.parentID == channel.id
+        {
+            return .thread(selectedThreadID)
+        }
         // A voice channel's own chat takes the column ahead of the roster:
         // you are looking at the people already, in tiles the size of faces,
         // and the thing you cannot see is what anybody wrote.
@@ -460,6 +474,7 @@ extension AppModel {
 
         for channel in byParent[nil] ?? [] {
             rows.append(.channel(makeSidebarChannel(channel)))
+            appendThreadRows(under: channel, into: &rows)
         }
 
         for category in categories {
@@ -477,6 +492,7 @@ extension AppModel {
             guard isExpanded else { continue }
             for channel in children {
                 rows.append(.channel(makeSidebarChannel(channel)))
+                appendThreadRows(under: channel, into: &rows)
             }
         }
 
@@ -494,6 +510,45 @@ extension AppModel {
             ),
             rows: rows
         )
+    }
+
+    /// The followed threads under one channel, as rows beneath it.
+    ///
+    /// **Followed only, and that is the whole rule.** Opening a forum loads its
+    /// entire board into the index, so nesting every known thread would put
+    /// thirty-six rows under one channel the moment the reader looked at it.
+    /// What Discord nests — and what the reader has actually asked to keep an
+    /// eye on — is the set they follow. See `AppModel.threadMemberships`.
+    ///
+    /// A collapsed category never reaches here, because its children are not
+    /// emitted at all.
+    private func appendThreadRows(under channel: Channel, into rows: inout [SidebarRow]) {
+        // Cheap guard first: most channels have no threads, and this is the one
+        // place the whole tree is walked.
+        let threadIDs = channelIndex.threadIDs(inParent: channel.id)
+        guard !threadIDs.isEmpty else { return }
+
+        var followed: [Channel] = []
+        for threadID in threadIDs {
+            guard threadMemberships[threadID] != nil,
+                  let thread = channelIndex[threadID],
+                  permissionGate.canView(threadID)
+            else { continue }
+            followed.append(thread)
+        }
+        guard !followed.isEmpty else { return }
+
+        for (offset, thread) in followed.enumerated() {
+            let state = unreadState(of: thread)
+            rows.append(.thread(SidebarThread(
+                id: thread.id,
+                name: thread.name,
+                isUnread: state.unread,
+                mentionCount: state.mentions,
+                isMuted: state.muted || (threadMemberships[thread.id]?.isMutedNow() ?? false),
+                isLast: offset == followed.count - 1
+            )))
+        }
     }
 
     private func makeSidebarChannel(_ channel: Channel) -> SidebarChannel {

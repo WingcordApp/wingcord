@@ -101,12 +101,7 @@ private struct PrimaryPane: View {
         case .conversation(let channelID):
             ConversationPane(channelID: channelID)
         case .forum(let channelID):
-            PlaceholderPane(
-                symbol: "list.bullet.rectangle",
-                title: "Forum",
-                detail: "Forum channels are not built yet.",
-                channelID: channelID
-            )
+            ForumContainer(channelID: channelID)
         case .voice(let channelID):
             VoiceChannelPane(channelID: channelID)
         case .guildSurface(_, let surface):
@@ -149,13 +144,7 @@ private struct SupplementaryPane: View {
         case .userProfile(let userID):
             DirectMessageProfileContainer(userID: userID)
         case .thread(let channelID):
-            PlaceholderPane(
-                symbol: "text.bubble",
-                title: "Thread",
-                detail: "Threads are not built yet.",
-                channelID: channelID
-            )
-            .frame(width: Proportions.memberColumnIdeal)
+            ThreadPanelContainer(channelID: channelID)
         case .search:
             PlaceholderPane(
                 symbol: "magnifyingglass",

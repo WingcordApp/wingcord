@@ -80,6 +80,13 @@ struct SidebarHeader: Hashable, Sendable {
 enum SidebarRow: Hashable, Sendable, Identifiable {
     case category(SidebarCategory)
     case channel(SidebarChannel)
+    /// A followed thread, under the channel it hangs off.
+    ///
+    /// **A flat row with a flag, not a nested model.** §2's rule holds: a nested
+    /// sidebar model re-materialises whole sections on every rebuild and cannot
+    /// be diffed per row. The view draws the elbow and the indent from
+    /// `isLast`; the array stays one sequence `ForEach` can diff.
+    case thread(SidebarThread)
     /// Server Guide, Channels & Roles and Game Servers — the rows above the
     /// first category that go somewhere other than a transcript.
     case guildAction(GuildSurface)
@@ -88,11 +95,26 @@ enum SidebarRow: Hashable, Sendable, Identifiable {
         switch self {
         case .category(let category): category.id.rawValue
         case .channel(let channel): channel.id.rawValue
+        case .thread(let thread): thread.id.rawValue
         // A surface's raw value is a small integer and a channel id is a
         // snowflake, so the two spaces cannot collide inside one list.
         case .guildAction(let surface): surface.rawValue
         }
     }
+}
+
+/// A followed thread's row.
+struct SidebarThread: Hashable, Sendable, Identifiable {
+    var id: ChannelID
+    var name: String
+    var isUnread: Bool
+    var mentionCount: Int
+    var isMuted: Bool
+    /// Whether this is the last thread under its channel, so the view knows to
+    /// draw the elbow rather than the tee. Precomputed here because a row that
+    /// indexes forward into the array to ask about its neighbour cannot be
+    /// diffed cheaply — §2, the same reason `TimelineMessage.RunFlags` exists.
+    var isLast: Bool
 }
 
 /// What the sidebar is currently pointing at.

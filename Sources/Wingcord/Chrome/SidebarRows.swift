@@ -350,3 +350,130 @@ struct VoiceMemberStrip: View {
         .accessibilityElement(children: .combine)
     }
 }
+
+// MARK: - A followed thread
+
+/// One thread, indented under the channel it hangs off.
+///
+/// **The elbow is drawn, not a disclosure control.** A thread under a channel is
+/// not a branch the reader opens and closes — it is there because they follow
+/// it, and the line exists only to say which channel it belongs to. Discord
+/// draws the same hook for the same reason.
+struct SidebarThreadRow: View {
+    var thread: SidebarThread
+    var isSelected: Bool
+    var namespace: Namespace.ID
+    var action: () -> Void
+
+    @Environment(\.motion) private var motion
+    @State private var isHovering = false
+
+    /// Where the hook sits, measured from the row's leading edge.
+    ///
+    /// Lined up with the centre of the channel glyph above it — the gutter is
+    /// `Spacing.base` of padding plus half a glyph — so the line descends out of
+    /// the icon rather than out of the gap beside it.
+    private static let hookInset: CGFloat = Spacing.base + 7
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: Spacing.base) {
+                hook
+                Text(thread.name)
+                    .font(thread.isUnread ? Typeface.rowTitleUnread : Typeface.rowTitle)
+                    .foregroundStyle(nameStyle)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+
+                Spacer(minLength: Spacing.tight)
+
+                if thread.mentionCount > 0 {
+                    UnreadBadge(count: thread.mentionCount, isMuted: thread.isMuted)
+                }
+            }
+            .padding(.horizontal, Spacing.base)
+            .padding(.vertical, Spacing.tight)
+            .frame(minHeight: Metrics.rowMinHeight, alignment: .leading)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .contentShape(.rect(cornerRadius: Radius.row))
+        }
+        .buttonStyle(.plain)
+        .background {
+            // The same two-shape slot the channel row uses, for the same reason:
+            // giving the row two view identities makes selection cut rather than
+            // flow.
+            ZStack {
+                RoundedRectangle(cornerRadius: Radius.row, style: .continuous)
+                    .fill(Palette.hoverFill)
+                    .opacity(isHovering && !isSelected ? 1 : 0)
+
+                if isSelected {
+                    Color.clear
+                        .glassEffect(
+                            .regular.tint(Palette.selectionFill),
+                            in: .rect(cornerRadius: Radius.row)
+                        )
+                        .glassEffectID(SidebarSelection.id, in: namespace)
+                }
+            }
+        }
+        .onHover { hovering in
+            guard isHovering != hovering else { return }
+            isHovering = hovering
+        }
+        .animation(motion.fadeQuick, value: isHovering)
+        .accessibilityLabel(Text("Thread, \(thread.name)"))
+        .accessibilityAddTraits(isSelected ? [.isButton, .isSelected] : .isButton)
+    }
+
+    /// The elbow, and the run of line above it.
+    ///
+    /// Drawn in a fixed-width leading slot rather than as a background on the
+    /// row, so the label after it starts at one x whatever the hook does.
+    private var hook: some View {
+        ThreadHook(isLast: thread.isLast)
+            .stroke(Ink.quaternary, style: StrokeStyle(lineWidth: 1, lineCap: .round))
+            .frame(width: Self.hookInset, height: Metrics.rowMinHeight)
+            .accessibilityHidden(true)
+    }
+
+    private var nameStyle: AnyShapeStyle {
+        if isSelected || thread.isUnread { AnyShapeStyle(Ink.primary) }
+        else if thread.isMuted { AnyShapeStyle(Ink.quaternary) }
+        else { AnyShapeStyle(Ink.tertiary) }
+    }
+}
+
+/// The line that ties a thread to the channel above it.
+///
+/// A `Shape` rather than two `Rectangle`s in a stack: it is one stroked path, so
+/// the corner joins instead of showing the seam two filled bars leave at their
+/// meeting point.
+private nonisolated struct ThreadHook: Shape {
+    /// The last thread under a channel stops at the elbow; the ones above it
+    /// carry the line on down to the next row.
+    var isLast: Bool
+
+    func path(in rect: CGRect) -> Path {
+        let x = rect.midX
+        let corner: CGFloat = 5
+        let elbowY = rect.midY
+
+        var path = Path()
+        path.move(to: CGPoint(x: x, y: rect.minY))
+        if isLast {
+            path.addLine(to: CGPoint(x: x, y: elbowY - corner))
+            path.addQuadCurve(
+                to: CGPoint(x: x + corner, y: elbowY),
+                control: CGPoint(x: x, y: elbowY)
+            )
+            path.addLine(to: CGPoint(x: rect.maxX, y: elbowY))
+        } else {
+            // A tee: the trunk runs the full height and the arm branches off it.
+            path.addLine(to: CGPoint(x: x, y: rect.maxY))
+            path.move(to: CGPoint(x: x, y: elbowY))
+            path.addLine(to: CGPoint(x: rect.maxX, y: elbowY))
+        }
+        return path
+    }
+}

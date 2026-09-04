@@ -385,8 +385,27 @@ final class SessionController {
                 snapshot.channelsByGuild[guild.id] ?? [],
                 inGuild: guild.id
             )
+            // After that guild's channels, never before — `replaceChannels`
+            // sweeps the threads of any parent it does not see.
+            for thread in snapshot.threadsByGuild[guild.id] ?? [] {
+                index.upsertThread(thread)
+            }
         }
         index.replacePrivateChannels(snapshot.privateChannels)
+
+        // READY's threads are the ones the account **follows** — a user account
+        // is sent no others — so their presence is the membership record. The
+        // flags are not in the payload, which is why this is a bare row rather
+        // than a decoded one: `THREAD_MEMBER_UPDATE` fills in the rest.
+        var memberships: [ChannelID: ThreadMember] = [:]
+        for threads in snapshot.threadsByGuild.values {
+            for thread in threads {
+                memberships[thread.id] = ThreadMember(
+                    id: thread.id, userID: snapshot.currentUser.id
+                )
+            }
+        }
+        model.threadMemberships = memberships
 
         var guilds: [GuildID: Guild] = [:]
         guilds.reserveCapacity(snapshot.guilds.count)
@@ -653,11 +672,15 @@ final class SessionController {
             )
 
         case .guildAvailable(
-            let guild, let channels, let roles, let members, let users, let presences,
-            let emojis, let stickers
+            let guild, let channels, let threads, let roles, let members, let users,
+            let presences, let emojis, let stickers
         ):
             model.guilds[guild.id] = guild
             model.channelIndex.replaceChannels(channels, inGuild: guild.id)
+            // After the channels, never before: `replaceChannels` drops the
+            // threads of any parent that did not come back, so threads inserted
+            // first would be swept straight out again.
+            for thread in threads { model.channelIndex.upsertThread(thread) }
             model.roles[guild.id] = roles
             if !members.isEmpty { model.members[guild.id] = members }
             model.guildEmojis[guild.id] = emojis.isEmpty ? nil : emojis
@@ -714,6 +737,23 @@ final class SessionController {
             model.permissionGate.invalidate()
             model.railRevision &+= 1
             model.roleRevision &+= 1
+
+        case .threadUpserted(let thread, _, let membership):
+            model.applyThreadUpsert(thread, membership: membership)
+
+        case .threadRemoved(let threadID, _):
+            model.applyThreadRemoval(threadID)
+
+        case .threadListSynced(let guildID, let channelIDs, let threads, let memberships):
+            model.applyThreadListSync(
+                threads, parentIDs: channelIDs, memberships: memberships, guildID: guildID
+            )
+
+        case .threadMembershipChanged(let membership):
+            model.applyThreadMembership(membership)
+
+        case .threadMemberCountChanged(let threadID, let count):
+            model.applyThreadMemberCount(count, in: threadID)
 
         case .channelUpserted(let channel):
             model.channelIndex.upsert(channel)
@@ -853,6 +893,7 @@ final class SessionController {
                     namesChanged = true
                 }
                 if namesChanged { model.identityRevision &+= 1 }
+                model.applyThreadsFromMessages(page.threads)
                 model.mutateBox(channelID) { box in
                     for message in page.messages { box.upsert(message) }
                     box.isLoadingHistory = false
@@ -1107,6 +1148,7 @@ final class SessionController {
                     namesChanged = true
                 }
                 if namesChanged { model.identityRevision &+= 1 }
+                model.applyThreadsFromMessages(page.threads)
                 model.mutateBox(channelID) { box in
                     box.messages = page.messages
                     box.isLoadingHistory = false

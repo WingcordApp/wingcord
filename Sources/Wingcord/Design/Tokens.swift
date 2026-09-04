@@ -279,6 +279,13 @@ nonisolated enum Metrics {
     /// Each thumbnail when one message carries several.
     static let attachmentThumbnail: CGFloat = 170
 
+    /// The picture on a forum post's row.
+    ///
+    /// Square, and small enough that the title beside it still gets two lines at
+    /// the narrowest the column goes to — the picture is a hint about the post,
+    /// not the post.
+    static let forumThumbnail: CGFloat = 64
+
     /// The widest an embed card is drawn. Capped rather than full-width: an
     /// embed is a card *inside* a message, and one that runs the whole column
     /// reads as the message rather than as something attached to it.
@@ -351,6 +358,23 @@ nonisolated enum Proportions {
     static var sidebarMax: CGFloat { railWidth + channelColumnMax }
 
     static let memberColumnIdeal: CGFloat = 236
+
+    /// The thread panel beside a transcript.
+    ///
+    /// Wider than the roster, because this column holds a *conversation* rather
+    /// than a list of names: message text at the roster's width wraps every four
+    /// or five words, which reads as a column of fragments. Narrower than the
+    /// transcript it sits beside, so it stays legible as the secondary of the
+    /// two.
+    static let threadColumnIdeal: CGFloat = 340
+
+    /// The same panel, when what is in it is a forum post.
+    ///
+    /// **Wider, because the roles are reversed.** Beside a transcript the thread
+    /// is the aside and the conversation is the page; beside a *board* the post
+    /// is the page and the list is the index you came in through. It gets the
+    /// room accordingly — the board still shows a readable row at what is left.
+    static let postColumnIdeal: CGFloat = 460
 
     /// The profile column beside a direct message.
     ///

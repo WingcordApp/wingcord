@@ -122,6 +122,12 @@ public enum RTCServerTag: Sendable {}
 /// `timestamp` is the only place "authorized on" comes from — the response
 /// carries no date field of its own.
 public enum OAuthGrantTag: Sendable {}
+/// One of a forum's own tags — the chips a post is filed under.
+///
+/// Tagged apart from every other id because a tag is only meaningful against the
+/// forum that defines it: the same integer names nothing in another channel, and
+/// resolving one is always a lookup into *that* forum's `availableTags`.
+public enum ForumTagTag: Sendable {}
 
 public typealias GuildID = Snowflake<GuildTag>
 public typealias ChannelID = Snowflake<ChannelTag>
@@ -133,3 +139,4 @@ public typealias ApplicationID = Snowflake<ApplicationTag>
 public typealias AttachmentID = Snowflake<AttachmentTag>
 public typealias RTCServerID = Snowflake<RTCServerTag>
 public typealias OAuthGrantID = Snowflake<OAuthGrantTag>
+public typealias ForumTagID = Snowflake<ForumTagTag>

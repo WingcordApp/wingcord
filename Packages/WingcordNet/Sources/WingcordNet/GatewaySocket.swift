@@ -62,6 +62,14 @@ public actor GatewaySocket {
     private var sequence: Int?
     private var sessionID: String?
     private var resumeURL: String?
+    /// Who we are, remembered from READY.
+    ///
+    /// **Two thread events are about us and say so only by omission.** The
+    /// membership nested in `THREAD_CREATE`, and the one in a `THREAD_LIST_SYNC`
+    /// row, leave `user_id` out because the account is implied — so converting
+    /// either into a `ThreadMember` needs an id the payload does not carry.
+    /// Held here rather than fabricated at the call site.
+    private var currentUserID: UserID?
 
     /// The session READY named, for the one caller outside this socket that
     /// needs it.
@@ -419,6 +427,7 @@ public actor GatewaySocket {
             reconnectAttempt = 0
             sessionID = ready.session_id
             resumeURL = ready.resume_gateway_url
+            currentUserID = ready.user.id
             continuation?.yield(.ready(ReadySnapshot(payload: ready)))
 
         case .resumed:
@@ -426,7 +435,7 @@ public actor GatewaySocket {
             continuation?.yield(.resumed)
 
         default:
-            if let update = GatewayUpdate(frame.payload) {
+            if let update = GatewayUpdate(frame.payload, currentUserID: currentUserID) {
                 continuation?.yield(.update(update))
             }
         }
@@ -1037,6 +1046,13 @@ public struct ReadySnapshot: Sendable {
     public var currentUser: User
     public var guilds: [Guild]
     public var channelsByGuild: [GuildID: [Channel]]
+    /// The threads the account follows, per guild.
+    ///
+    /// **A user account is sent only the threads it has joined**, so this is the
+    /// followed set at launch and not the guild's active threads. Kept apart
+    /// from `channelsByGuild` for the reason `guildAvailable` states: a thread's
+    /// parent is a channel, not a category.
+    public var threadsByGuild: [GuildID: [Channel]]
     public var rolesByGuild: [GuildID: [RoleID: Role]]
     /// A server's own emoji and stickers, for the expression picker. Kept beside
     /// the guilds rather than on them, the way roles and members already are:
@@ -1084,6 +1100,7 @@ public struct ReadySnapshot: Sendable {
 
         var guilds: [Guild] = []
         var channelsByGuild: [GuildID: [Channel]] = [:]
+        var threadsByGuild: [GuildID: [Channel]] = [:]
         var rolesByGuild: [GuildID: [RoleID: Role]] = [:]
         var emojisByGuild: [GuildID: [EmojiRef]] = [:]
         var stickersByGuild: [GuildID: [StickerRef]] = [:]
@@ -1101,6 +1118,9 @@ public struct ReadySnapshot: Sendable {
 
             if let channels = guildDTO.channels {
                 channelsByGuild[guild.id] = channels.map { $0.domain(guildID: guild.id) }
+            }
+            if let threads = guildDTO.threads, !threads.isEmpty {
+                threadsByGuild[guild.id] = threads.map { $0.domain(guildID: guild.id) }
             }
             if let sounds = guildDTO.soundboard_sounds, !sounds.isEmpty {
                 soundboardsByGuild[guild.id] = sounds.map(\.domain)
@@ -1144,6 +1164,7 @@ public struct ReadySnapshot: Sendable {
         }
         self.guilds = guilds
         self.channelsByGuild = channelsByGuild
+        self.threadsByGuild = threadsByGuild
         self.rolesByGuild = rolesByGuild
         self.emojisByGuild = emojisByGuild
         self.stickersByGuild = stickersByGuild
@@ -1260,6 +1281,13 @@ public enum GatewayUpdate: Sendable {
     case guildAvailable(
         Guild,
         channels: [Channel],
+        /// The threads the account follows in this guild.
+        ///
+        /// Beside the channels rather than among them: a thread's `parentID` is
+        /// a channel, not a category, so a builder that groups channels by
+        /// parent would silently drop every one of them into a bucket it never
+        /// emits. Kept separate so the sidebar has to say what it does with them.
+        threads: [Channel],
         roles: [RoleID: Role],
         members: [UserID: Member],
         users: [UserID: User],
@@ -1275,6 +1303,31 @@ public enum GatewayUpdate: Sendable {
     case guildRemoved(GuildID, wasLeft: Bool)
     case channelUpserted(Channel)
     case channelRemoved(ChannelID)
+    /// A thread arrived or changed.
+    ///
+    /// `isNew` is Discord's `newly_created`, and it is the only way to tell a
+    /// thread that has just been opened from one being re-announced because the
+    /// account gained access to its parent — the event name is the same for
+    /// both. `membership` is our own, present when the payload carried it.
+    case threadUpserted(Channel, isNew: Bool, membership: ThreadMember?)
+    case threadRemoved(ChannelID, parentID: ChannelID?)
+    /// Every thread the account can see in `channelIDs`, replacing what was
+    /// held for those parents.
+    ///
+    /// **A nil `channelIDs` covers the whole guild.** The caller must not read
+    /// that as an empty list — see `ThreadListSyncDTO.channel_ids`.
+    case threadListSynced(
+        GuildID?,
+        channelIDs: [ChannelID]?,
+        threads: [Channel],
+        memberships: [ThreadMember]
+    )
+    /// Our own membership of one thread moved: joined, left, muted, or the
+    /// notification setting changed.
+    case threadMembershipChanged(ThreadMember)
+    /// Somebody else came or went. Only the count is acted on — a thread's
+    /// member list is not something this client draws.
+    case threadMemberCountChanged(ChannelID, count: Int?)
     case presenceUpdated(Presence)
     case typingStarted(ChannelID, userID: UserID, at: Date)
     case membersChunk(GuildID, members: [UserID: Member], users: [UserID: User], presences: [UserID: Presence])
@@ -1316,7 +1369,12 @@ public enum GatewayUpdate: Sendable {
     /// relative to `streamChanged`, exactly as a call's two halves do.
     case streamServerChanged(GoLiveServer)
 
-    init?(_ payload: GatewayFrame.Payload) {
+    /// - Parameter currentUserID: who we are, for the thread events whose
+    ///   membership payload leaves `user_id` out because the account is
+    ///   implied. Nil before READY, in which case those memberships are
+    ///   dropped rather than attributed to nobody — a `ThreadMember` with a
+    ///   zero user id would be indistinguishable from a real one.
+    init?(_ payload: GatewayFrame.Payload, currentUserID: UserID? = nil) {
         switch payload {
         case .interactionSuccess(let ack):
             guard let id = ack.id else { return nil }
@@ -1371,6 +1429,7 @@ public enum GatewayUpdate: Sendable {
             self = .guildAvailable(
                 guild,
                 channels: (dto.channels ?? []).map { $0.domain(guildID: guild.id) },
+                threads: (dto.threads ?? []).map { $0.domain(guildID: guild.id) },
                 roles: roles,
                 members: members,
                 users: users,
@@ -1393,6 +1452,48 @@ public enum GatewayUpdate: Sendable {
             self = .channelUpserted(dto.domain())
         case .channelDelete(let dto):
             self = .channelRemoved(dto.id)
+
+        case .threadCreate(let payload):
+            let thread = payload.channel.domain()
+            self = .threadUpserted(
+                thread,
+                isNew: payload.newly_created ?? false,
+                membership: currentUserID.map {
+                    payload.member?.domain(threadID: thread.id, userID: $0)
+                } ?? nil
+            )
+        case .threadUpdate(let dto):
+            // No `newly_created` on an update, and no membership: an edit to the
+            // thread's own fields says nothing about whether we are in it.
+            self = .threadUpserted(dto.domain(), isNew: false, membership: nil)
+        case .threadDelete(let payload):
+            self = .threadRemoved(payload.id, parentID: payload.parent_id)
+        case .threadListSync(let payload):
+            let memberships: [ThreadMember]
+            if let currentUserID {
+                memberships = (payload.members ?? []).compactMap { dto in
+                    // A sync row names its thread and omits the user, which is
+                    // the mirror of `THREAD_CREATE`'s nested member.
+                    dto.id.map { dto.domain(threadID: $0, userID: currentUserID) }
+                }
+            } else {
+                memberships = []
+            }
+            self = .threadListSynced(
+                payload.guild_id,
+                channelIDs: payload.channel_ids,
+                threads: (payload.threads ?? []).map { $0.domain(guildID: payload.guild_id) },
+                memberships: memberships
+            )
+        case .threadMemberUpdate(let payload):
+            // This one *does* carry `user_id` — it is a full thread member
+            // object — so the fallback is only reached before READY.
+            guard let currentUserID,
+                  let membership = payload.domain(userID: currentUserID)
+            else { return nil }
+            self = .threadMembershipChanged(membership)
+        case .threadMembersUpdate(let payload):
+            self = .threadMemberCountChanged(payload.id, count: payload.member_count)
         case .presenceUpdate(let dto):
             guard let presence = dto.domain else { return nil }
             self = .presenceUpdated(presence)

@@ -178,4 +178,187 @@ struct ChannelIndexTests {
         index.patchLastMessage(MessageID(rawValue: 1), in: ChannelID(rawValue: 404))
         #expect(index.valueRevision == before)
     }
+
+    // MARK: Threads
+    //
+    // A thread's parent is a CHANNEL, not a category, so the partition it lives
+    // in is the whole point: every test below fails on an implementation that
+    // files threads through `upsert`.
+
+    private func thread(
+        _ id: UInt64,
+        parent: UInt64,
+        lastMessage: UInt64? = nil
+    ) -> Channel {
+        Channel(
+            id: ChannelID(rawValue: id),
+            kind: .publicThread,
+            guildID: guildID,
+            name: "t\(id)",
+            parentID: ChannelID(rawValue: parent),
+            lastMessageID: lastMessage.map { MessageID(rawValue: $0) }
+        )
+    }
+
+    @Test("A thread resolves by id but never joins the guild's channel list")
+    func threadsStayOutOfTheGuildList() {
+        var index = ChannelIndex()
+        index.replaceChannels([channel(1), channel(2)], inGuild: guildID)
+        index.upsertThread(thread(100, parent: 1))
+
+        // Resolvable — the timeline and the chrome look a thread up this way.
+        #expect(index[ChannelID(rawValue: 100)]?.name == "t100")
+        #expect(index.guildID(of: ChannelID(rawValue: 100)) == guildID)
+        #expect(index.parentID(ofThread: ChannelID(rawValue: 100))?.rawValue == 1)
+
+        // But absent from the list the sidebar and the browse page build from.
+        #expect(index.channelIDs(inGuild: guildID).map(\.rawValue) == [1, 2])
+        #expect(index.threadIDs(inParent: ChannelID(rawValue: 1)).map(\.rawValue) == [100])
+    }
+
+    @Test("Replacing a guild's channels keeps the threads of parents that survive")
+    func replaceChannelsKeepsLivingThreads() {
+        var index = ChannelIndex()
+        index.replaceChannels([channel(1), channel(2)], inGuild: guildID)
+        index.upsertThread(thread(100, parent: 1))
+        index.upsertThread(thread(200, parent: 2))
+
+        // The same channels arrive again, as they do on every GUILD_CREATE.
+        index.replaceChannels([channel(1), channel(2)], inGuild: guildID)
+
+        #expect(index[ChannelID(rawValue: 100)] != nil)
+        #expect(index.threadIDs(inParent: ChannelID(rawValue: 1)).count == 1)
+        #expect(index.threadIDs(inParent: ChannelID(rawValue: 2)).count == 1)
+    }
+
+    @Test("A parent that does not come back takes its threads with it")
+    func replaceChannelsDropsOrphanedThreads() {
+        var index = ChannelIndex()
+        index.replaceChannels([channel(1), channel(2)], inGuild: guildID)
+        index.upsertThread(thread(100, parent: 1))
+        index.upsertThread(thread(200, parent: 2))
+
+        // Channel 2 was deleted while the app was away.
+        index.replaceChannels([channel(1)], inGuild: guildID)
+
+        #expect(index[ChannelID(rawValue: 100)] != nil)
+        // Left behind, 200 would be an unreachable row whose parent no longer
+        // resolves.
+        #expect(index[ChannelID(rawValue: 200)] == nil)
+        #expect(index.threadIDs(inParent: ChannelID(rawValue: 2)).isEmpty)
+        #expect(index.parentID(ofThread: ChannelID(rawValue: 200)) == nil)
+    }
+
+    @Test("Removing a channel cascades to its threads")
+    func removingAParentCascades() {
+        var index = ChannelIndex()
+        index.replaceChannels([channel(1)], inGuild: guildID)
+        index.upsertThread(thread(100, parent: 1))
+
+        index.remove(ChannelID(rawValue: 1))
+
+        #expect(index[ChannelID(rawValue: 100)] == nil)
+        #expect(index.threadIDs(inParent: ChannelID(rawValue: 1)).isEmpty)
+    }
+
+    @Test("Removing a thread leaves its parent alone")
+    func removingAThreadIsLocal() {
+        var index = ChannelIndex()
+        index.replaceChannels([channel(1)], inGuild: guildID)
+        index.upsertThread(thread(100, parent: 1))
+        index.upsertThread(thread(101, parent: 1))
+
+        index.remove(ChannelID(rawValue: 100))
+
+        #expect(index[ChannelID(rawValue: 1)] != nil)
+        #expect(index.threadIDs(inParent: ChannelID(rawValue: 1)).map(\.rawValue) == [101])
+        #expect(index.channelIDs(inGuild: guildID).map(\.rawValue) == [1])
+    }
+
+    @Test("Threads sort by recent activity, newest first, stably")
+    func threadsSortByActivity() {
+        var index = ChannelIndex()
+        index.replaceChannels([channel(1)], inGuild: guildID)
+        index.upsertThread(thread(100, parent: 1, lastMessage: 50))
+        index.upsertThread(thread(101, parent: 1, lastMessage: 90))
+        index.upsertThread(thread(102, parent: 1, lastMessage: 70))
+
+        #expect(index.threadIDs(inParent: ChannelID(rawValue: 1)).map(\.rawValue) == [101, 102, 100])
+    }
+
+    @Test("A message in a thread re-sorts it without moving the structure")
+    func threadActivityIsNotStructural() {
+        var index = ChannelIndex()
+        index.replaceChannels([channel(1)], inGuild: guildID)
+        index.upsertThread(thread(100, parent: 1, lastMessage: 50))
+        index.upsertThread(thread(101, parent: 1, lastMessage: 90))
+
+        let structure = index.structureRevision
+        index.patchLastMessage(MessageID(rawValue: 999), in: ChannelID(rawValue: 100))
+
+        // The order changed — a thread's order genuinely is recency.
+        #expect(index.threadIDs(inParent: ChannelID(rawValue: 1)).map(\.rawValue) == [100, 101])
+        // The SET did not, so the sidebar's memo must not be cleared. Moving
+        // this counter here would clear it on every message in every thread.
+        #expect(index.structureRevision == structure)
+    }
+
+    @Test("A sync of named parents leaves other parents untouched")
+    func listSyncScopedToParents() {
+        var index = ChannelIndex()
+        index.replaceChannels([channel(1), channel(2)], inGuild: guildID)
+        index.upsertThread(thread(100, parent: 1))
+        index.upsertThread(thread(200, parent: 2))
+
+        index.replaceThreads(
+            [thread(101, parent: 1)],
+            inParents: [ChannelID(rawValue: 1)],
+            guildID: guildID
+        )
+
+        #expect(index.threadIDs(inParent: ChannelID(rawValue: 1)).map(\.rawValue) == [101])
+        #expect(index[ChannelID(rawValue: 100)] == nil)
+        // Channel 2 was not in the sync, so its thread stands.
+        #expect(index.threadIDs(inParent: ChannelID(rawValue: 2)).map(\.rawValue) == [200])
+    }
+
+    @Test("A sync with no parents named clears the whole guild")
+    func listSyncNilParentsClearsGuild() {
+        var index = ChannelIndex()
+        index.replaceChannels([channel(1), channel(2)], inGuild: guildID)
+        index.upsertThread(thread(100, parent: 1))
+        index.upsertThread(thread(200, parent: 2))
+
+        // Nil is "every parent", not "no parents" — reading it the other way
+        // leaves every stale thread the event was sent to clear.
+        index.replaceThreads([thread(101, parent: 1)], inParents: nil, guildID: guildID)
+
+        #expect(index.threadIDs(inParent: ChannelID(rawValue: 1)).map(\.rawValue) == [101])
+        #expect(index.threadIDs(inParent: ChannelID(rawValue: 2)).isEmpty)
+        #expect(index[ChannelID(rawValue: 200)] == nil)
+    }
+
+    @Test("A thread with no parent is dropped rather than filed under nothing")
+    func parentlessThreadIsDropped() {
+        var index = ChannelIndex()
+        index.replaceChannels([channel(1)], inGuild: guildID)
+        let orphan = Channel(
+            id: ChannelID(rawValue: 100), kind: .publicThread, guildID: guildID, name: "t100"
+        )
+        index.upsertThread(orphan)
+
+        #expect(index[ChannelID(rawValue: 100)] == nil)
+        #expect(index.channelIDs(inGuild: guildID).map(\.rawValue) == [1])
+    }
+
+    @Test("Upserting a thread twice does not duplicate it")
+    func threadUpsertIsIdempotent() {
+        var index = ChannelIndex()
+        index.replaceChannels([channel(1)], inGuild: guildID)
+        index.upsertThread(thread(100, parent: 1))
+        index.upsertThread(thread(100, parent: 1, lastMessage: 5))
+
+        #expect(index.threadIDs(inParent: ChannelID(rawValue: 1)).map(\.rawValue) == [100])
+        #expect(index[ChannelID(rawValue: 100)]?.lastMessageID?.rawValue == 5)
+    }
 }

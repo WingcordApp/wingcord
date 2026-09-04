@@ -130,6 +130,44 @@ public struct Channel: Hashable, Sendable, Identifiable, Codable {
     public var bitrate: Int?
     /// How many people a voice channel holds. Zero, and nil, both mean no limit.
     public var userLimit: Int?
+    /// A thread's own state. **Its presence is what makes this a thread** — see
+    /// `ThreadMetadata`. Nil on every other kind.
+    public var threadMetadata: ThreadMetadata?
+    /// A forum post's tags, as ids into its parent forum's `availableTags`.
+    /// Up to five. Empty on everything that is not a post.
+    public var appliedTags: [ForumTagID]
+    /// A forum's own tag definitions. Up to twenty. Empty everywhere else.
+    ///
+    /// **This arrives over the gateway, never over HTTP.** The channel object in
+    /// READY and GUILD_CREATE carries it; no REST route this client calls
+    /// returns it. A forum whose posts render with bare tag ids is a forum whose
+    /// channel object was never merged, not a decode fault here.
+    public var availableTags: [ForumTag]
+    /// The one-tap reaction Discord offers on every post in this forum.
+    public var defaultReaction: EmojiRef?
+    /// The order the forum opens in, before the reader chooses one.
+    public var defaultSortOrder: ForumSortOrder?
+    /// The layout the forum opens in. Discord's 0 is resolved on decode — see
+    /// `ForumLayout.init(rawChannelValue:)`.
+    public var defaultForumLayout: ForumLayout?
+    /// Slow mode *inside* new posts, in seconds. Copied onto a post at creation;
+    /// the forum's own `rateLimitPerUser` throttles making posts instead.
+    public var defaultThreadRateLimitPerUser: Int?
+    /// Text a new post's composer is pre-filled with.
+    public var template: String?
+    /// Discord's channel bitfield. Carried whole so the bits this client cannot
+    /// draw survive a write back — `INVARIANTS.md` §1.
+    public var flags: ChannelFlags
+    /// A thread's approximate member count. **Discord stops counting at 50**, so
+    /// this is a floor above that, never a total.
+    public var memberCount: Int?
+    /// Every message ever sent in a thread, including deleted ones — it never
+    /// goes down where `messageCount` does.
+    ///
+    /// **Not what a chip shows**, despite being the more stable number: the
+    /// capture's thread reports 728 here against a `messageCount` of 720, and
+    /// Discord's own chip reads "720 Messages". See `threadMessageCount`.
+    public var totalMessageSent: Int?
 
     public init(
         id: ChannelID,
@@ -148,7 +186,18 @@ public struct Channel: Hashable, Sendable, Identifiable, Codable {
         ownerID: UserID? = nil,
         messageCount: Int? = nil,
         bitrate: Int? = nil,
-        userLimit: Int? = nil
+        userLimit: Int? = nil,
+        threadMetadata: ThreadMetadata? = nil,
+        appliedTags: [ForumTagID] = [],
+        availableTags: [ForumTag] = [],
+        defaultReaction: EmojiRef? = nil,
+        defaultSortOrder: ForumSortOrder? = nil,
+        defaultForumLayout: ForumLayout? = nil,
+        defaultThreadRateLimitPerUser: Int? = nil,
+        template: String? = nil,
+        flags: ChannelFlags = [],
+        memberCount: Int? = nil,
+        totalMessageSent: Int? = nil
     ) {
         self.id = id
         self.kind = kind
@@ -167,7 +216,42 @@ public struct Channel: Hashable, Sendable, Identifiable, Codable {
         self.messageCount = messageCount
         self.bitrate = bitrate
         self.userLimit = userLimit
+        self.threadMetadata = threadMetadata
+        self.appliedTags = appliedTags
+        self.availableTags = availableTags
+        self.defaultReaction = defaultReaction
+        self.defaultSortOrder = defaultSortOrder
+        self.defaultForumLayout = defaultForumLayout
+        self.defaultThreadRateLimitPerUser = defaultThreadRateLimitPerUser
+        self.template = template
+        self.flags = flags
+        self.memberCount = memberCount
+        self.totalMessageSent = totalMessageSent
     }
+
+    /// Whether this channel holds posts rather than a transcript.
+    ///
+    /// Forum and media are one concept with two layouts, and every call site
+    /// that cares treats them identically — a media channel is a forum whose
+    /// posts lead with a picture.
+    public var isForumLike: Bool { kind == .forum || kind == .media }
+
+    /// Whether this post is pinned to the top of its forum.
+    public var isPinnedPost: Bool { flags.contains(.pinned) }
+
+    /// Whether a post here must carry at least one tag.
+    public var requiresTag: Bool { flags.contains(.requireTag) }
+
+    /// The "N messages" a thread chip or a forum row shows.
+    ///
+    /// **`messageCount`, and the capture settles which.** A thread in
+    /// `threads.har` reports `message_count: 720` beside
+    /// `total_message_sent: 728`, and Discord's own chip reads "720 Messages" —
+    /// so the number people see excludes deleted messages rather than counting
+    /// everything ever sent. `totalMessageSent` is the fallback only where the
+    /// other is missing, which is a thread old enough that Discord caps it.
+    /// Neither includes the opening message.
+    public var threadMessageCount: Int? { messageCount ?? totalMessageSent }
 
     /// Sort order inside a guild.
     ///

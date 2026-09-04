@@ -35,6 +35,10 @@ struct ChannelSidebar: View, Equatable {
     }
 
     var selectChannel: (ChannelID) -> Void = { _ in }
+    /// Its own closure rather than `selectChannel`: opening a thread decides
+    /// between the panel and the whole column on the thread's *parent*, which is
+    /// a store question — see `AppModel.openThread`.
+    var openThread: (ChannelID) -> Void = { _ in }
     var joinVoice: (ChannelID) -> Void = { _ in }
     var openVoiceChat: (ChannelID) -> Void = { _ in }
     var toggleCategory: (ChannelID) -> Void = { _ in }
@@ -192,6 +196,13 @@ struct ChannelSidebar: View, Equatable {
                 openChat: channel.kind == .voice || channel.kind == .stage
                     ? { openVoiceChat(channel.id) }
                     : nil
+            )
+        case .thread(let thread):
+            SidebarThreadRow(
+                thread: thread,
+                isSelected: target == .channel(thread.id),
+                namespace: selectionNamespace,
+                action: { openThread(thread.id) }
             )
         }
     }

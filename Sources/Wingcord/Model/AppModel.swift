@@ -53,6 +53,45 @@ final class AppModel {
     var expandedFolderIDs: Set<UInt64> = []
     var collapsedCategoryIDs: Set<ChannelID> = []
 
+    // MARK: Threads and forums
+
+    /// Our own membership of every thread the account follows.
+    ///
+    /// **Following is what this table records, and nothing else does.** A thread
+    /// being in `channelIndex` means it is known, not that it is followed — a
+    /// forum's posts are all loaded into the index the moment the board opens.
+    /// The sidebar nests exactly the threads with a row here, which is the rule
+    /// Discord's own client follows.
+    var threadMemberships: [ChannelID: ThreadMember] = [:]
+    /// One post list per forum channel, built as the reader scrolls it.
+    ///
+    /// Keyed by the forum rather than held on the selected channel, so paging
+    /// back to a board that was already open does not start from an empty list.
+    var forumBoards: [ChannelID: ForumBoard] = [:]
+    /// Post ids gathered from rows that have just appeared, waiting to go out
+    /// as one `post-data` call. Keyed by the forum they belong to.
+    ///
+    /// **Not observed by anything, and it must not be** — it changes at scroll
+    /// rate. Nothing reads it but the flush; see `requestForumPostDetails`.
+    @ObservationIgnored var pendingPostDetails: [ChannelID: Set<ChannelID>] = [:]
+    /// Whether a flush is already scheduled, so a hundred rows appearing in one
+    /// pass schedule one hop rather than a hundred.
+    @ObservationIgnored var isFlushingPostDetails = false
+    /// The forum a New Post sheet is open for, or nil.
+    ///
+    /// **At the window root, presented once** — `INVARIANTS.md` §2 forbids a
+    /// presentation modifier inline on a list row, and the sheet is opened from
+    /// the board's bar rather than from a row anyway. Held as the channel id
+    /// rather than as a bool so the sheet knows which forum it is posting to
+    /// without a second source of truth.
+    var composingPostIn: ChannelID?
+    /// Moves when a thread's membership changes, or a board gains a page.
+    ///
+    /// **Its own counter, and not `sidebarRevision`.** A board paging in
+    /// twenty-five posts changes nothing in the sidebar, and a memo over the
+    /// channel tree keyed on this would be cleared by every scroll of a forum.
+    var threadRevision: UInt64 = 0
+
     // MARK: Messages
 
     /// Loaded transcripts, LRU-evicted.
@@ -83,6 +122,16 @@ final class AppModel {
     /// different channels, and one property holding both is how following a
     /// resource loses the channel you came from.
     var previewedChannelID: ChannelID?
+    /// The thread open in the panel, beside whatever it hangs off.
+    ///
+    /// **Its own property, exactly as the preview is.** A thread is read
+    /// *beside* its parent — a thread beside its channel, a forum post beside
+    /// its board — so the two are different channels, and one property holding
+    /// both is how closing the panel loses what was underneath it. Keeping the
+    /// parent in `selectedChannelID` is also what keeps a way back on screen:
+    /// a post is not in the sidebar unless it is followed, so a post that
+    /// replaced its board would leave nothing lit to return to.
+    var selectedThreadID: ChannelID?
     /// The last channel visited in each guild, so switching back returns where
     /// you were rather than to the top of the list.
     var lastChannelByGuild: [GuildID: ChannelID] = [:]
@@ -560,6 +609,7 @@ final class AppModel {
     @ObservationIgnored var sidebarCache: (key: SidebarMemoKey, value: SidebarPresentation)?
     @ObservationIgnored var timelineCache: (key: TimelineMemoKey, value: [TimelineItem])?
     @ObservationIgnored var rosterCache: (key: RosterMemoKey, value: [MemberSection])?
+    @ObservationIgnored var forumCache: (key: ForumMemoKey, value: ForumPresentation)?
     @ObservationIgnored var emojiCatalogCache: (key: ExpressionMemoKey, value: ExpressionCatalog)?
     @ObservationIgnored var stickerCatalogCache: (key: ExpressionMemoKey, value: ExpressionCatalog)?
     @ObservationIgnored var activitySectionsCache: (key: ActivityMemoKey, value: [ActivitySection])?
@@ -762,6 +812,7 @@ final class AppModel {
         railCache = nil
         sidebarCache = nil
         rosterCache = nil
+        forumCache = nil
         channelsAndRolesCache = nil
         emojiCatalogCache = nil
         stickerCatalogCache = nil

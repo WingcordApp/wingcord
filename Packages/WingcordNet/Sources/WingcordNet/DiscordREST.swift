@@ -11,6 +11,14 @@ import WingcordCore
 public struct MessagePage: Sendable {
     public var messages: [Message]
     public var authors: [UserID: User]
+    /// The threads hanging off messages on this page.
+    ///
+    /// **The whole channel, not just the chip's three fields.** A message that
+    /// started a thread carries the thread's channel object inline — captured,
+    /// `threads.har` — and putting it into `ChannelIndex` is what makes clicking
+    /// the chip open something. Without this the chip resolves to nothing and
+    /// the click is silently dropped.
+    public var threads: [Channel] = []
 }
 
 public actor DiscordREST {
@@ -281,7 +289,11 @@ public actor DiscordREST {
         // Discord returns newest first; the store keeps oldest first, and
         // reversing here means no surface ever has to remember which way round
         // a page arrived.
-        return MessagePage(messages: page.reversed().map(\.domain), authors: authors)
+        return MessagePage(
+            messages: page.reversed().map(\.domain),
+            authors: authors,
+            threads: page.compactMap { $0.thread?.domain() }
+        )
     }
 
     /// - Parameter stickerIDs: Stickers to send. Discord accepts a message with
