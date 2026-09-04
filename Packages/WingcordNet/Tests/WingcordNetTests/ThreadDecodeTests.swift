@@ -296,6 +296,43 @@ struct ThreadDecodeTests {
         #expect(channel.defaultReaction?.name == "🐛")
     }
 
+    /// A forum's own search field.
+    ///
+    /// **The same route and the same query as a text channel's**, which is what
+    /// makes one implementation correct for both: `forums search.har` sends
+    /// `?name=test&tag_setting=match_some` at a *forum* channel, byte-identical
+    /// to what `threads toolbar1.har` sends at an announcement one. Neither
+    /// carries `archived`, `sort_by`, `sort_order`, `limit` or `offset`.
+    @Test("A forum's search is the same request a text channel's is")
+    func forumNameSearch() throws {
+        let json = """
+        {"threads":[
+          {"id":"1534597441621588395","type":11,"flags":0,
+           "guild_id":"1520000000000000001","name":"test post please ignore",
+           "parent_id":"1528181068579257750","rate_limit_per_user":0,
+           "owner_id":"708402754576396841",
+           "thread_metadata":{"archived":false,"auto_archive_duration":4320,
+             "locked":false,
+             "archive_timestamp":"2026-08-05T16:22:21.524000+00:00"},
+           "message_count":2,"member_count":1,"total_message_sent":2,
+           "applied_tags":["1528179216382813544"]}],
+         "members":[],"has_more":false,"total_results":1}
+        """
+        let dto = try Self.decoder().decode(ThreadSearchDTO.self, from: Data(json.utf8))
+        let page = dto.domain(parentID: ChannelID(rawValue: 1_528_181_068_579_257_750))
+
+        #expect(page.posts.count == 1)
+        #expect(!page.hasMore)
+        let post = try #require(page.posts.first)
+        // A forum's hit still carries its tags, so the row that draws it needs
+        // no second lookup.
+        #expect(post.appliedTags.count == 1)
+        #expect(post.threadMessageCount == 2)
+        // Unarchived here, where the toolbar capture's hits were archived —
+        // the search returns both, which is why it sends no `archived` filter.
+        #expect(post.threadMetadata?.isArchived == false)
+    }
+
     @Test("Discord's layout 0 resolves to the list rather than a third state")
     func layoutZeroResolves() {
         #expect(ForumLayout(rawChannelValue: 0) == .list)

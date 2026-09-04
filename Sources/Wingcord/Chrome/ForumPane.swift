@@ -21,16 +21,10 @@ struct ForumPane: View {
     var loadMore: () -> Void
     var reveal: ([ChannelID]) -> Void
     var newPost: () -> Void
+    var setSearch: (String) -> Void
+    var clearSearch: () -> Void
 
-    @Environment(\.motion) private var motion
-    @State private var chromeHeight: CGFloat = 0
-
-    var body: some View {
-        board
-            .onGeometryChange(for: CGFloat.self) { $0.safeAreaInsets.top } action: {
-                chromeHeight = $0
-            }
-    }
+    var body: some View { board }
 
     private var board: some View {
         ScrollView {
@@ -50,7 +44,6 @@ struct ForumPane: View {
                     // `requestForumPostDetails`.
                     .onAppear { reveal([post.id]) }
                 }
-                .animation(motion.standard, value: presentation.posts.count)
 
                 footer
             }
@@ -58,8 +51,27 @@ struct ForumPane: View {
             .padding(.bottom, Spacing.group)
         }
         .scrollBounceBehavior(.always)
+        // **The board opens at its newest post, and stays there.**
+        //
+        // Two things were moving it. A page of twenty-five rows was inserted
+        // under `.animation(_:value:)` on the row count, so SwiftUI animated a
+        // bulk insert inside a `LazyVStack` and the scroll offset drifted with
+        // it — the board opened partway down, on posts a fortnight old. And
+        // when content grows, a scroll view with no stated anchor is free to
+        // keep whatever offset it had. A page arriving is not a gesture and
+        // owes no animation; the anchor says where the list belongs.
+        .defaultScrollAnchor(.top)
         .softScrollEdgesVertical()
-        .ignoresSafeArea(.container, edges: .top)
+        // **No `ignoresSafeArea` here, and its absence is the fix for a real
+        // bug.** With it, the scroll view extended under the titlebar and the
+        // first posts were hidden behind the bar — the board looked like it had
+        // opened halfway down the list. Worse, the height the bar was padded by
+        // was measured on *this* view, which ignored the inset and therefore
+        // reported zero: §2's rule, "a reader that ignores an inset has already
+        // been handed the region the inset describes". `safeAreaBar` composes
+        // with the window's own safe area on its own; nothing here has to
+        // measure anything.
+        //
         // `safeAreaBar`, not `safeAreaInset`: the filter row registers as a bar,
         // which is what the scroll edge effect keys off. Without it the cards
         // slide under the chrome sharp and unreadable.
@@ -67,9 +79,10 @@ struct ForumPane: View {
             ForumFilterBar(
                 presentation: presentation,
                 setQuery: setQuery,
-                newPost: newPost
+                newPost: newPost,
+                setSearch: setSearch,
+                clearSearch: clearSearch
             )
-            .padding(.top, chromeHeight)
         }
     }
 
@@ -86,7 +99,10 @@ struct ForumPane: View {
                 .padding(.vertical, Spacing.margin)
                 .onAppear(perform: loadMore)
         } else if presentation.posts.isEmpty, !presentation.isLoading {
-            ForumEmptyState(hasFilter: !presentation.query.tags.isEmpty)
+            ForumEmptyState(
+                isSearching: presentation.isSearching,
+                hasFilter: !presentation.query.tags.isEmpty
+            )
         } else if !presentation.posts.isEmpty {
             Text("^[\(presentation.totalResults) post](inflect: true)")
                 .font(.system(.caption))
@@ -303,25 +319,124 @@ private struct ForumFilterBar: View {
     var presentation: ForumPresentation
     var setQuery: (ForumQuery) -> Void
     var newPost: () -> Void
+    var setSearch: (String) -> Void
+    var clearSearch: () -> Void
 
     @State private var isSortOpen = false
+    @State private var isTagListOpen = false
+
+    /// How many tags stand in the bar before the rest go behind "All".
+    ///
+    /// **Five, and a scroller is the wrong answer.** A horizontal scroll view
+    /// inside a bar steals the trackpad gesture from the list it floats over,
+    /// and a forum with twelve tags put every one of them in the bar — which is
+    /// what a reader reported. Discord shows five and a chip; so does this.
+    private static let inlineTagLimit = 5
 
     var body: some View {
-        HStack(spacing: Spacing.base) {
-            sortAndView
-            if !presentation.availableTags.isEmpty {
-                Divider().frame(height: 16)
-                tagFilters
+        VStack(spacing: Spacing.base) {
+            HStack(spacing: Spacing.base) {
+                ForumSearchField(
+                    text: presentation.searchText,
+                    setText: setSearch,
+                    clear: clearSearch
+                )
+                // **Only where the reader may actually post.** Absent rather
+                // than disabled: a greyed New Post in a read-only forum is an
+                // invitation that can only be refused — §5.5.
+                if presentation.canPost {
+                    newPostButton
+                }
             }
-            // **Only where the reader may actually post.** Absent rather than
-            // disabled: a greyed New Post in a read-only forum is an invitation
-            // that can only be refused — §5.5.
-            if presentation.canPost {
-                newPostButton
+
+            HStack(spacing: Spacing.base) {
+                sortAndView
+                if !presentation.availableTags.isEmpty {
+                    Divider().frame(height: 16)
+                    tagFilters
+                }
+                Spacer(minLength: 0)
             }
         }
         .padding(.horizontal, Spacing.margin)
         .padding(.vertical, Spacing.base)
+    }
+
+    /// The tags, and the chip that holds the rest.
+    private var tagFilters: some View {
+        let inline = presentation.availableTags.prefix(Self.inlineTagLimit)
+        let overflows = presentation.availableTags.count > Self.inlineTagLimit
+        return HStack(spacing: Spacing.base) {
+            ForEach(inline) { tag in
+                tagButton(tag)
+            }
+            if overflows {
+                allTagsButton
+            }
+        }
+    }
+
+    private func tagButton(_ tag: ForumTag) -> some View {
+        let isOn = presentation.query.tags.contains(tag.id)
+        return Button {
+            var query = presentation.query
+            // A chip toggles rather than replaces: filtering by two tags is the
+            // whole reason `tag_setting` exists.
+            if isOn { query.tags.remove(tag.id) } else { query.tags.insert(tag.id) }
+            setQuery(query)
+        } label: {
+            ForumTagChip(tag: tag, isOn: isOn)
+        }
+        .buttonStyle(.plain)
+        .accessibilityAddTraits(isOn ? [.isButton, .isSelected] : .isButton)
+    }
+
+    private var allTagsButton: some View {
+        Button {
+            isTagListOpen = true
+        } label: {
+            HStack(spacing: Spacing.tight) {
+                Text("All")
+                // The count of tags the reader has lit, including any that are
+                // behind this chip rather than in the bar — which is the whole
+                // reason it carries a number.
+                if !presentation.query.tags.isEmpty {
+                    Text(presentation.query.tags.count, format: .number)
+                        .font(.system(.caption2, weight: .bold))
+                        .foregroundStyle(.white)
+                        .frame(minWidth: 15)
+                        .padding(.vertical, 1)
+                        .background(Palette.accent, in: .capsule)
+                }
+                Image(systemName: isTagListOpen ? "chevron.up" : "chevron.down")
+                    .font(.system(.caption2, weight: .semibold))
+            }
+            .font(.system(.caption, weight: .medium))
+            .foregroundStyle(Ink.secondary)
+            .padding(.horizontal, Spacing.snug)
+            .frame(height: Metrics.compactControl)
+            .contentShape(.capsule)
+        }
+        .buttonStyle(.plain)
+        .interactiveChrome()
+        .popover(isPresented: $isTagListOpen, arrowEdge: .bottom) {
+            ForumTagList(
+                tags: presentation.availableTags,
+                selected: presentation.query.tags,
+                toggle: { id in
+                    var query = presentation.query
+                    if query.tags.contains(id) { query.tags.remove(id) } else { query.tags.insert(id) }
+                    setQuery(query)
+                },
+                clear: {
+                    var query = presentation.query
+                    query.tags = []
+                    setQuery(query)
+                }
+            )
+            .presentationBackground(.clear)
+        }
+        .accessibilityLabel(Text("All tags"))
     }
 
     private var newPostButton: some View {
@@ -370,27 +485,101 @@ private struct ForumFilterBar: View {
         .accessibilityLabel(Text("Sort and view options"))
     }
 
-    private var tagFilters: some View {
-        ScrollView(.horizontal) {
+}
+
+/// The full tag set, behind the "All" chip.
+private struct ForumTagList: View {
+    var tags: [ForumTag]
+    var selected: Set<ForumTagID>
+    var toggle: (ForumTagID) -> Void
+    var clear: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: Spacing.snug) {
             HStack(spacing: Spacing.base) {
-                ForEach(presentation.availableTags) { tag in
-                    let isOn = presentation.query.tags.contains(tag.id)
-                    Button {
-                        var query = presentation.query
-                        // A chip toggles rather than replaces: filtering by two
-                        // tags is the whole reason `tag_setting` exists.
-                        if isOn { query.tags.remove(tag.id) } else { query.tags.insert(tag.id) }
-                        setQuery(query)
-                    } label: {
-                        ForumTagChip(tag: tag, isOn: isOn)
+                Text("Select Tags")
+                    .font(.system(.subheadline, weight: .semibold))
+                    .foregroundStyle(Ink.primary)
+                Text(selected.count, format: .number)
+                    .font(.system(.caption2, weight: .bold))
+                    .foregroundStyle(.white)
+                    .frame(minWidth: 16)
+                    .padding(.vertical, 2)
+                    .background(
+                        selected.isEmpty ? AnyShapeStyle(Color.white.opacity(0.2))
+                            : AnyShapeStyle(Palette.accent),
+                        in: .capsule
+                    )
+            }
+
+            FlowLayout(spacing: Spacing.base) {
+                ForEach(tags) { tag in
+                    Button { toggle(tag.id) } label: {
+                        ForumTagChip(tag: tag, isOn: selected.contains(tag.id))
                     }
                     .buttonStyle(.plain)
-                    .accessibilityAddTraits(isOn ? [.isButton, .isSelected] : .isButton)
+                    .accessibilityAddTraits(
+                        selected.contains(tag.id) ? [.isButton, .isSelected] : .isButton
+                    )
                 }
             }
-            .padding(.horizontal, 1)
+
+            Divider()
+            Button("Clear all", action: clear)
+                .buttonStyle(.plain)
+                .font(.system(.caption, weight: .medium))
+                .foregroundStyle(selected.isEmpty ? AnyShapeStyle(Ink.quaternary) : AnyShapeStyle(Palette.accent))
+                .disabled(selected.isEmpty)
         }
-        .scrollIndicators(.never)
+        .padding(Spacing.margin)
+        .frame(width: 300)
+        // A flyout over the board counts as being over content — §4 — so it is
+        // clear glass with the shared tint, never `.regular`.
+        .chromeOverMedia(tinted: Palette.flyoutTint, in: .rect(cornerRadius: Radius.card))
+    }
+}
+
+/// The board's own search field.
+///
+/// **A request, not a filter** — the same route the Threads flyout uses, and
+/// captured on a forum too: `forums search.har` sends
+/// `?name=test&tag_setting=match_some` at a forum channel. So it searches the
+/// whole forum, not the pages loaded.
+private struct ForumSearchField: View {
+    var text: String
+    var setText: (String) -> Void
+    var clear: () -> Void
+
+    var body: some View {
+        HStack(spacing: Spacing.base) {
+            Image(systemName: "magnifyingglass")
+                .font(.system(.caption, weight: .medium))
+                .foregroundStyle(Ink.tertiary)
+            TextField(
+                "Search posts",
+                text: Binding(get: { text }, set: setText)
+            )
+            .textFieldStyle(.plain)
+            .font(.system(.subheadline))
+            if !text.isEmpty {
+                Button(action: clear) {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.system(.caption))
+                        .foregroundStyle(Ink.tertiary)
+                        .contentShape(.circle)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(Text("Clear the search"))
+            }
+        }
+        .padding(.horizontal, Spacing.snug)
+        .frame(height: Metrics.control + Spacing.tight)
+        .frame(maxWidth: .infinity)
+        .background(Palette.surfaceRaised, in: .capsule)
+        // A field never moves, so it catches no travelling specular highlight —
+        // the still-life edge is what stops it reading as a slightly lighter
+        // region on a near-black ground.
+        .specularEdge(in: Capsule())
     }
 }
 
@@ -517,22 +706,41 @@ private struct ForumRetryRow: View {
 }
 
 private struct ForumEmptyState: View {
+    var isSearching: Bool
     var hasFilter: Bool
 
     var body: some View {
         VStack(spacing: Spacing.base) {
-            Image(systemName: hasFilter ? "line.3.horizontal.decrease.circle" : "bubble.left.and.bubble.right")
+            Image(systemName: symbolName)
                 .font(.system(size: 34, weight: .light))
                 .foregroundStyle(Ink.quaternary)
-            Text(hasFilter ? "No posts match those tags" : "No posts yet")
+            Text(title)
                 .font(.system(.headline))
                 .foregroundStyle(Ink.secondary)
-            Text(hasFilter ? "Try turning one off." : "Be the first to start one.")
+            Text(detail)
                 .font(.system(.caption))
                 .foregroundStyle(Ink.tertiary)
         }
         .frame(maxWidth: .infinity)
         .padding(.vertical, Spacing.section)
+    }
+
+    // A search that found nothing and a tag filter that matched nothing are
+    // different situations with different ways out, so they say different
+    // things. The search is named first: it is the more recent act.
+    private var symbolName: String {
+        if isSearching { return "magnifyingglass" }
+        return hasFilter ? "line.3.horizontal.decrease.circle" : "bubble.left.and.bubble.right"
+    }
+
+    private var title: String {
+        if isSearching { return "No posts match that" }
+        return hasFilter ? "No posts match those tags" : "No posts yet"
+    }
+
+    private var detail: String {
+        if isSearching { return "Try a shorter phrase." }
+        return hasFilter ? "Try turning one off." : "Be the first to start one."
     }
 }
 
@@ -554,7 +762,9 @@ struct ForumContainer: View {
             setQuery: { model.setForumQuery($0, in: channelID) },
             loadMore: { model.loadMoreForumPosts(in: channelID) },
             reveal: { model.requestForumPostDetails($0, in: channelID) },
-            newPost: { model.beginForumPost(in: channelID) }
+            newPost: { model.beginForumPost(in: channelID) },
+            setSearch: { model.setThreadSearch($0, in: channelID) },
+            clearSearch: { model.clearThreadSearch() }
         )
         .sheet(
             isPresented: Binding(
@@ -568,6 +778,9 @@ struct ForumContainer: View {
         // channel change inside the same surface, and a `.task` keyed on nothing
         // would not run again for the second forum opened.
         .onChange(of: channelID, initial: true) { _, id in
+            // A search belongs to the forum it was typed in. Carried across, it
+            // would show one forum's hits under another's name.
+            model.clearThreadSearch()
             model.openForum(id)
         }
     }

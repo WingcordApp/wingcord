@@ -18,6 +18,8 @@ struct PinnedMessagesPane: View {
 
     private static let width: CGFloat = 340
     private static let maximumHeight: CGFloat = 420
+    /// See the note on the frame below.
+    private static let minimumHeight: CGFloat = 260
 
     var body: some View {
         // Read at the top rather than inside the branches, so an arrival while
@@ -52,7 +54,14 @@ struct PinnedMessagesPane: View {
             }
         }
         .frame(width: Self.width)
-        .frame(maxHeight: Self.maximumHeight)
+        // **A minimum, and it is what stops the popover opening as a sliver.**
+        // AppKit sizes a popover from its content's *first* layout, and on that
+        // pass the pins have not been fetched — the pane is a title over a
+        // spinner, about forty points tall. The window is made that size and
+        // then grows as the rows land, which reads as the flyout being broken
+        // for the first second of its life. Reserving the height up front means
+        // the first measurement is already the right one.
+        .frame(minHeight: Self.minimumHeight, maxHeight: Self.maximumHeight)
         .animation(motion.standard, value: pinned?.count)
         // The popover supplies the material; this must not add a second.
         .presentationBackground(.clear)

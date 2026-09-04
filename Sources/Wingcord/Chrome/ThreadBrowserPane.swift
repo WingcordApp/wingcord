@@ -20,6 +20,8 @@ struct ThreadBrowserPane: View {
 
     private static let width: CGFloat = 380
     private static let maximumHeight: CGFloat = 460
+    /// See the note on the frame below.
+    private static let minimumHeight: CGFloat = 280
 
     var body: some View {
         // Read at the top rather than inside the branches, so a page arriving
@@ -32,7 +34,11 @@ struct ThreadBrowserPane: View {
             content(presentation)
         }
         .frame(width: Self.width)
-        .frame(maxHeight: Self.maximumHeight)
+        // The same reservation the pins pane makes, and for the same reason:
+        // AppKit sizes a popover from its content's first layout, and on that
+        // pass this is a title and a field over a spinner. Without a floor the
+        // flyout opens as a sliver and grows as the page lands.
+        .frame(minHeight: Self.minimumHeight, maxHeight: Self.maximumHeight)
         .animation(motion.standard, value: presentation.rows.count)
         // The popover supplies the material; this must not add a second.
         .presentationBackground(.clear)

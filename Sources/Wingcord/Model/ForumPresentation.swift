@@ -65,6 +65,10 @@ struct ForumPresentation: Hashable, Sendable {
     /// Whether the reader may open a post here at all.
     var canPost: Bool
     var requiresTag: Bool
+    /// What is in the board's search field.
+    var searchText: String
+    /// Whether `posts` is a set of search results rather than the browse list.
+    var isSearching: Bool
 
     static func empty(_ channelID: ChannelID) -> ForumPresentation {
         ForumPresentation(
@@ -79,7 +83,9 @@ struct ForumPresentation: Hashable, Sendable {
             hasMore: false,
             totalResults: 0,
             canPost: false,
-            requiresTag: false
+            requiresTag: false,
+            searchText: "",
+            isSearching: false
         )
     }
 }
@@ -102,6 +108,12 @@ struct ForumMemoKey: Hashable, Sendable {
     var memberRevision: UInt64
     /// Role colours, and whether the reader may post here at all.
     var roleRevision: UInt64
+    /// The board shows search results instead of the browse list while this is
+    /// non-empty, so a memo that left it out would keep answering with the list
+    /// the reader has just searched away from.
+    var searchText: String
+    var isSearchingThreads: Bool
+    var threadSearchFailed: Bool
 }
 
 extension AppModel {
@@ -125,7 +137,10 @@ extension AppModel {
             valueRevision: channelIndex.valueRevision,
             identityRevision: identityRevision,
             memberRevision: memberRevision,
-            roleRevision: roleRevision
+            roleRevision: roleRevision,
+            searchText: threadSearchText,
+            isSearchingThreads: isSearchingThreads,
+            threadSearchFailed: threadSearchFailed
         )
         if let forumCache, forumCache.key == key { return forumCache.value }
 
@@ -149,10 +164,17 @@ extension AppModel {
         tagsByID.reserveCapacity(channel.availableTags.count)
         for tag in channel.availableTags { tagsByID[tag.id] = tag }
 
-        var posts: [ForumPostPresentation] = []
-        posts.reserveCapacity(board.postIDs.count)
+        // **Search results are not a subset of the browse list.** The route
+        // searches the whole forum, so a hit is very often a post no page
+        // reached — see `DiscordREST.searchThreads`.
+        let phrase = threadSearchText.trimmingCharacters(in: .whitespacesAndNewlines)
+        let isSearching = !phrase.isEmpty
+        let postIDs = isSearching ? threadSearchResults : board.postIDs
 
-        for postID in board.postIDs {
+        var posts: [ForumPostPresentation] = []
+        posts.reserveCapacity(postIDs.count)
+
+        for postID in postIDs {
             guard let post = channelIndex[postID] else { continue }
             let firstMessage = board.firstMessages[postID]
             let authorID = firstMessage?.authorID ?? post.ownerID
@@ -203,12 +225,17 @@ extension AppModel {
             query: board.query,
             availableTags: channel.availableTags,
             posts: posts,
-            isLoading: board.isLoading,
-            loadFailed: board.loadFailed,
-            hasMore: board.hasMore,
-            totalResults: board.totalResults,
+            isLoading: isSearching ? isSearchingThreads : board.isLoading,
+            loadFailed: isSearching ? threadSearchFailed : board.loadFailed,
+            // A search does not page: its query carries no offset to advance,
+            // and running the browse pager underneath results it did not fetch
+            // would splice the two lists together.
+            hasMore: board.hasMore && !isSearching,
+            totalResults: isSearching ? posts.count : board.totalResults,
             canPost: permissionGate.canSend(in: channelID),
-            requiresTag: channel.requiresTag
+            requiresTag: channel.requiresTag,
+            searchText: threadSearchText,
+            isSearching: isSearching
         )
     }
 
