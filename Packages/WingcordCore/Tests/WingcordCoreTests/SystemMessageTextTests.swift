@@ -85,3 +85,83 @@ struct SystemMessageTextTests {
         #expect(SystemMessageText.sentence(for: message(kind), name: "ada") == nil)
     }
 }
+
+// MARK: - A poll that has ended
+
+/// `POLL_RESULT`, type 46.
+///
+/// **The words are in an embed, and the row has nothing else.** The message's
+/// content is empty and the embed is a bag of fields — so a renderer that knew
+/// neither drew an author line over a blank space, which is what a closed poll
+/// looked like in this transcript.
+@Suite("Poll result messages")
+struct PollResultMessageTests {
+
+    private func message(fields: [Embed.Field]) -> Message {
+        Message(
+            id: MessageID(rawValue: 1 << 22),
+            channelID: ChannelID(rawValue: 1),
+            authorID: UserID(rawValue: 1),
+            kind: .pollResult,
+            payload: MessagePayload(embeds: [Embed(kind: "poll_result", fields: fields)])
+        )
+    }
+
+    private func field(_ name: String, _ value: String) -> Embed.Field {
+        Embed.Field(name: name, value: value, isInline: false)
+    }
+
+    @Test("Type 46 is a poll result, not an unknown message")
+    func kindIsRecognised() {
+        #expect(MessageKind(rawValue: 46) == .pollResult)
+    }
+
+    @Test("The question and the winner come out of the embed's fields")
+    func readsTheFields() {
+        let result = message(fields: [
+            field("poll_question_text", "Nightly builds?"),
+            field("victor_answer_text", "Yes, let them break!"),
+            field("victor_answer_votes", "10"),
+            field("total_votes", "12"),
+        ]).pollResult
+        #expect(result?.question == "Nightly builds?")
+        #expect(result?.winner == "Yes, let them break!")
+        #expect(abs((result?.share ?? 0) - 10.0 / 12.0) < 0.001)
+    }
+
+    @Test("A poll nobody voted in claims no winner")
+    func noVotes() {
+        // Saying a winner won with 0% is a claim the wire did not make.
+        let sentence = SystemMessageText.sentence(
+            for: message(fields: [field("poll_question_text", "Anything?")]),
+            name: "vexlor"
+        )
+        #expect(sentence?.suffix.contains("Nobody voted") == true)
+        #expect(sentence?.suffix.contains("Anything?") == true)
+    }
+
+    @Test("The sentence names the winner and its share")
+    func sentenceCarriesTheOutcome() {
+        let sentence = SystemMessageText.sentence(
+            for: message(fields: [
+                field("poll_question_text", "Nightly builds?"),
+                field("victor_answer_text", "Yes, let them break!"),
+                field("victor_answer_votes", "10"),
+                field("total_votes", "12"),
+            ]),
+            name: "vexlor"
+        )
+        #expect(sentence?.name == "vexlor")
+        #expect(sentence?.suffix.contains("Yes, let them break!") == true)
+        #expect(sentence?.suffix.contains("83%") == true)
+    }
+
+    @Test("The result embed is never drawn as a card")
+    func embedIsNotDrawn() {
+        // It is a bag of field names — `victor_answer_id` and the rest — and an
+        // ordinary embed card would list them at somebody.
+        let message = message(fields: [field("poll_question_text", "Nightly builds?")])
+        #expect(message.embeds.count == 1)
+        #expect(message.drawableEmbeds.isEmpty)
+    }
+}

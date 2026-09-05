@@ -64,6 +64,46 @@ public struct Message: Hashable, Sendable, Identifiable, Codable {
         self.payload = payload
     }
 
+    /// The result of a poll that has ended, for a `POLL_RESULT` message.
+    ///
+    /// Nil for everything else, which is nearly every message — and nil for a
+    /// `POLL_RESULT` whose embed Discord shaped differently, which draws the
+    /// plain sentence rather than a claim the wire did not make.
+    public var pollResult: PollResult? {
+        guard kind == .pollResult,
+              let embed = embeds.first(where: { $0.kind == "poll_result" }) ?? embeds.first
+        else { return nil }
+        func field(_ name: String) -> String? {
+            embed.fields.first { $0.name == name }?.value
+        }
+        guard let question = field("poll_question_text") else { return nil }
+        let emojiName = field("victor_answer_emoji_name")
+        let emojiID = field("victor_answer_emoji_id").flatMap(UInt64.init).map(EmojiID.init(rawValue:))
+        return PollResult(
+            question: question,
+            winner: field("victor_answer_text"),
+            winnerEmoji: emojiName.map {
+                EmojiRef(
+                    id: emojiID,
+                    name: $0,
+                    isAnimated: field("victor_answer_emoji_animated") == "true"
+                )
+            },
+            winnerVotes: field("victor_answer_votes").flatMap(Int.init) ?? 0,
+            totalVotes: field("total_votes").flatMap(Int.init) ?? 0
+        )
+    }
+
+    /// The embeds a transcript should draw.
+    ///
+    /// Everything but a poll result's, whose fields the row's own sentence
+    /// already says — drawn as an ordinary card it is a grey box listing
+    /// `victor_answer_id` at somebody.
+    public var drawableEmbeds: [Embed] {
+        guard kind == .pollResult else { return embeds }
+        return embeds.filter { $0.kind != "poll_result" }
+    }
+
     public var attachments: [Attachment] { payload?.attachments ?? [] }
     public var embeds: [Embed] { payload?.embeds ?? [] }
     public var components: [ActionRow] { payload?.components ?? [] }
@@ -380,6 +420,11 @@ public enum MessageKind: Int, Hashable, Sendable, Codable {
     case threadStarterMessage = 21
     case contextMenuCommand = 23
     case autoModerationAction = 24
+    /// A poll that has ended. **Its words are in an embed, not in `content`** —
+    /// see `Message.pollResult` — so a renderer that only knows about content
+    /// draws an author line over a blank row, which is what a closed poll looked
+    /// like in this app.
+    case pollResult = 46
     case unknown = -1
 
     public init(rawValue: Int) {
@@ -403,6 +448,7 @@ public enum MessageKind: Int, Hashable, Sendable, Codable {
         case 21: .threadStarterMessage
         case 23: .contextMenuCommand
         case 24: .autoModerationAction
+        case 46: .pollResult
         default: .unknown
         }
     }
@@ -688,6 +734,29 @@ public struct MessageReference: Hashable, Sendable, Codable {
 /// the whole point of the shape is that the original's identity does not travel
 /// with it. A client that invents one — from the reference's channel, from the
 /// forwarder — is asserting something the payload deliberately does not say.
+/// What a closed poll says about itself.
+///
+/// **Read out of an embed, because that is where Discord puts it.** A
+/// `POLL_RESULT` message has empty content and one embed of kind `poll_result`
+/// whose *fields* carry the question, the winning answer and the counts. They
+/// are fields rather than a payload, so the names below are the wire's and a
+/// typo in one is a nil rather than a failure.
+public struct PollResult: Hashable, Sendable {
+    public var question: String
+    /// The answer that won, when anybody voted.
+    public var winner: String?
+    public var winnerEmoji: EmojiRef?
+    public var winnerVotes: Int
+    public var totalVotes: Int
+
+    /// The winner's share, 0...1. Zero when nobody voted, which is a real state:
+    /// a poll can close with no votes at all.
+    public var share: Double {
+        guard totalVotes > 0 else { return 0 }
+        return Double(winnerVotes) / Double(totalVotes)
+    }
+}
+
 public struct ForwardedMessage: Hashable, Sendable, Codable {
     public var content: String
     /// **The snapshot's own attachments, not a count of them.** Discord sends

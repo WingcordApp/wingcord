@@ -99,6 +99,35 @@ public enum SystemMessageText {
                 tint: .celebratory
             )
 
+        case .pollResult:
+            // **The sentence carries the question and the winner, because the
+            // row has nothing else.** A `POLL_RESULT` message has empty content
+            // and an embed nobody draws — so without this it is an author line
+            // over a blank space, which is exactly what a closed poll looked
+            // like in this transcript.
+            guard let result = message.pollResult else {
+                return SystemSentence(
+                    prefix: "", name: name, suffix: "'s poll has closed.",
+                    symbolName: "chart.bar.fill", tint: .quiet
+                )
+            }
+            let outcome: String
+            if let winner = result.winner, result.totalVotes > 0 {
+                let percent = Int((result.share * 100).rounded())
+                outcome = " \u{201C}\(winner)\u{201D} won with \(percent)%."
+            } else {
+                // A poll can close with nobody having voted, and saying a winner
+                // won with 0% is a claim the wire did not make.
+                outcome = " Nobody voted."
+            }
+            return SystemSentence(
+                prefix: "",
+                name: name,
+                suffix: "'s poll \u{201C}\(result.question)\u{201D} has closed.\(outcome)",
+                symbolName: "chart.bar.fill",
+                tint: .quiet
+            )
+
         case .channelPinnedMessage:
             return SystemSentence(
                 prefix: "", name: name, suffix: " pinned a message to this channel.",

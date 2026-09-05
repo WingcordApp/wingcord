@@ -831,7 +831,11 @@ nonisolated struct TimelineLayoutEngine: Sendable {
         // markdown description and a field grid; measuring one nobody will see
         // is the most expensive way to draw nothing.
         var embeds: [EmbedSlot] = []
-        for embed in input.settings.showsEmbeds ? message.embeds : [] {
+        // **A poll result's embed is not drawn**: it is a bag of *fields* — the
+        // question, the winner, the counts — that the row's own sentence already
+        // says, and drawn as an ordinary card it is a grey box listing
+        // `victor_answer_id` at somebody. See `Message.pollResult`.
+        for embed in input.settings.showsEmbeds ? message.drawableEmbeds : [] {
             y += TimelineMetrics.attachmentGap
             let slot = EmbedLayoutEngine.layout(
                 embed,
