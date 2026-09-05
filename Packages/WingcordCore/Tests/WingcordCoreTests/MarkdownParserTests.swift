@@ -175,6 +175,26 @@ struct MarkdownParserTests {
         ])
     }
 
+    /// **`(<url>)` is the form most posts that carry a link actually use** —
+    /// the angle brackets are how Discord is told not to unfurl an embed, and
+    /// every announcement in Discord's own game servers is written that way.
+    /// They were part of the URL string, so the scheme check rejected it and
+    /// the whole construct printed as literal markup in the transcript.
+    @Test("A masked link whose target is wrapped to suppress the embed is still a link")
+    func maskedLinkWithSuppressedEmbed() {
+        #expect(inline("[netflix.com/GTAVI](<https://netflix.com/GTAVI>)") == [
+            .link(label: [.text("netflix.com/GTAVI")], url: "https://netflix.com/GTAVI")
+        ])
+    }
+
+    /// The wrapper does not become a way past the scheme check, which is a
+    /// security boundary rather than a formatting nicety.
+    @Test("A wrapped target is still checked for its scheme")
+    func maskedLinkWrappedUnsafeScheme() {
+        let nodes = inline("[click](<javascript:void>)")
+        #expect(!nodes.contains { if case .link = $0 { true } else { false } })
+    }
+
     @Test("A non-http scheme is refused and left as text")
     func unsafeSchemeRefused() {
         let nodes = inline("[click](javascript:alert(1))")

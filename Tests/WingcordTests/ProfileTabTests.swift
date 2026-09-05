@@ -5,11 +5,12 @@ import WingcordCore
 
 /// Which tabs the full profile's content column offers.
 ///
-/// **The gating is the whole of the blank case.** A tab with nothing behind it
-/// is an empty state — a client apologising for somebody's own choices — and the
-/// picker exists only where there is a choice to make. Neither decision is
-/// visible in a rendered view, so both are tested here rather than by opening a
-/// profile and counting.
+/// **Two of the three are unconditional and one is not**, and the difference is
+/// what a tab's absence would mean: everybody has an answer to "what are they
+/// doing" and "what do we share", often "nothing", while a board is a thing
+/// somebody made and a tab for one they never made promises a surface that does
+/// not exist. The decision is invisible in a rendered view, so it is tested here
+/// rather than by opening a profile and counting.
 @Suite("Profile tabs")
 @MainActor
 struct ProfileTabTests {
@@ -82,55 +83,42 @@ struct ProfileTabTests {
             board: BoardPresentation(tiles: [], isLoadingGames: false),
             activity: ProfileActivityPresentation()
         )
-        #expect(tabs == [.activity])
+        #expect(tabs == [.activity, .mutuals])
     }
 
-    /// Recent activity alone earns the tab: somebody offline who played
-    /// yesterday has something to show and no presence.
-    @Test("Recent activity alone earns the Activity tab")
-    func recentAlone() {
+    /// A board that never arrived is the same answer as an empty one: the
+    /// difference between "no widgets" and "the route has not answered yet" is
+    /// not something a picker can express.
+    @Test("No board at all draws no Board tab")
+    func noBoard() {
         let tabs = ProfileTab.available(profile: profile(), board: nil, activity: recent)
-        #expect(tabs == [.activity])
+        #expect(tabs == [.activity, .mutuals])
     }
 
-    /// Mutual friends with no mutual servers still earn the tab — the two are
-    /// separate lists and either one is content.
-    @Test("Mutual friends alone earn the Mutuals tab")
-    func friendsAlone() {
-        let tabs = ProfileTab.available(
-            profile: profile(mutualFriends: [
-                MutualFriend(
-                    id: UserID(rawValue: 2), name: "alex", avatarHash: nil, monogram: "A"
-                ),
-            ]),
-            board: nil,
-            activity: ProfileActivityPresentation()
-        )
-        #expect(tabs == [.mutuals])
-    }
-
-    /// **The blank case, and it has to be a real answer rather than a crash or a
-    /// default.** An account with no board, nothing to say about what they are
-    /// doing and no server in common draws no picker at all and one honest line.
-    @Test("An account with nothing shared gets no tabs")
+    /// **The blank case, and the whole of what changed.** An account with no
+    /// board, nothing to say about what they are doing and no server in common
+    /// still offers both tabs; each answers with one honest line. Hiding them
+    /// made the picker a different shape for every person.
+    @Test("An account with nothing shared still offers Activity and Mutuals")
     func nothing() {
         let tabs = ProfileTab.available(
             profile: profile(),
             board: nil,
             activity: ProfileActivityPresentation()
         )
-        #expect(tabs.isEmpty)
+        #expect(tabs == [.activity, .mutuals])
     }
 
-    /// One surviving tab draws no picker: a segmented control with a single
-    /// segment is a label that looks pressable.
-    @Test("One tab is not a picker")
-    func onePicker() {
+    /// The picker is drawn from two segments up, so it is always drawn — which
+    /// is the point. A one-segment picker is a label that looks pressable, and
+    /// there is no longer any profile that produces one.
+    @Test("There is never fewer than one choice to make")
+    func alwaysAPicker() {
         let tabs = ProfileTab.available(
-            profile: profile(activity: Activity(kind: .playing, name: "Xcode")),
+            profile: profile(),
             board: nil,
             activity: ProfileActivityPresentation()
         )
-        #expect(tabs.count == 1)
+        #expect(tabs.count >= 2)
     }
 }

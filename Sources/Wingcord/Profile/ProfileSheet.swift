@@ -272,6 +272,9 @@ struct ProfileSheet: View {
             } else if activity.isLoading {
                 loadingRow
             }
+            if profile.activity == nil, activity.recent.isEmpty, !activity.isLoading {
+                emptyPane("\(profile.displayName) hasn't shared any activity.")
+            }
         }
         .padding(.top, Spacing.base)
     }
@@ -310,23 +313,34 @@ struct ProfileSheet: View {
                     }
                 }
             }
-            // **One honest line, not an illustration.** An account with no
-            // board, nothing to say about what they are doing and no server in
-            // common has nothing behind any tab, and the sheet has already
-            // shrunk to fit — so what is left is a sentence saying so.
-            if tabs.isEmpty {
-                Text(
+            if profile.mutualServers.isEmpty, profile.mutualFriends.isEmpty {
+                emptyPane(
                     profile.isLoading
                         ? "Loading…"
-                        : "Nothing shared here yet."
+                        : "No servers or friends in common."
                 )
-                .font(.system(.subheadline))
-                .foregroundStyle(InkColor.tertiary)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.vertical, Spacing.group)
             }
         }
         .padding(.top, Spacing.base)
+    }
+
+    /// What a tab says when the honest answer is nothing.
+    ///
+    /// **One line, centred, and no illustration.** These tabs are always
+    /// offered — see `ProfileTab.available` — so "nothing" is a state the reader
+    /// reaches on purpose rather than an error, and it is answered the way the
+    /// rest of the app answers an empty list. The minimum height is what stops a
+    /// sentence floating at the top of a column the identity panel has already
+    /// made six hundred points tall; the sheet still sizes to its content, so a
+    /// short profile is still a short sheet.
+    private func emptyPane(_ message: String) -> some View {
+        Text(message)
+            .font(.system(.subheadline))
+            .foregroundStyle(InkColor.tertiary)
+            .multilineTextAlignment(.center)
+            .lineLimit(3)
+            .frame(maxWidth: .infinity, minHeight: 200)
+            .padding(.vertical, Spacing.group)
     }
 
     private var loadingRow: some View {
@@ -367,13 +381,20 @@ enum ProfileTab: Hashable, CaseIterable, Sendable {
         }
     }
 
-    /// The tabs with something behind them, in the order they are drawn.
+    /// The tabs this profile offers, in the order they are drawn.
     ///
-    /// **A tab exists only where there is something to show.** An account with
-    /// no board has no Board tab, not an empty one — an empty state is a client
-    /// apologising for a person's own choices. An empty answer is a real one:
-    /// there is nothing shared here, the picker is not drawn, and the column
-    /// carries one honest line.
+    /// **Activity and Mutuals are always offered; the Board is not.** The
+    /// distinction is what the tab's absence would *mean*. Everybody has an
+    /// answer to "what are they doing" and "what do we share" — often "nothing",
+    /// which is a real answer and the column says so in a line — so hiding those
+    /// tabs makes the picker's shape change from person to person and takes away
+    /// a place the reader knows to look. A board is a thing somebody *made*, and
+    /// a Board tab on an account that has never made one is a promise of a
+    /// surface that does not exist.
+    ///
+    /// This reverses the rule that used to be here, which hid all three. Discord
+    /// keeps its own Activity and Mutuals tabs on an empty profile and labels
+    /// them with the count, and it is right: see `docs/PROFILE-DESIGN-SPEC.md`.
     ///
     /// A function on the tab rather than a computed property on the sheet, so
     /// the gating is reachable from a test — the decision it makes is invisible
@@ -386,10 +407,8 @@ enum ProfileTab: Hashable, CaseIterable, Sendable {
     ) -> [ProfileTab] {
         var tabs: [ProfileTab] = []
         if board?.tiles.isEmpty == false { tabs.append(.board) }
-        if profile.activity != nil || !activity.recent.isEmpty { tabs.append(.activity) }
-        if !profile.mutualServers.isEmpty || !profile.mutualFriends.isEmpty {
-            tabs.append(.mutuals)
-        }
+        tabs.append(.activity)
+        tabs.append(.mutuals)
         return tabs
     }
 }

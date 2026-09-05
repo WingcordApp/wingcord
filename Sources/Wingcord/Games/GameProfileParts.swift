@@ -268,11 +268,16 @@ private struct AnnouncementCard: View {
                     .clipped()
             }
             VStack(alignment: .leading, spacing: Spacing.base) {
+                // **No `.fixedSize`, and that is what keeps the date on the
+                // card.** A fixed size takes the text's ideal height whatever it
+                // was offered, so a nine-line post grew past a 240-point card
+                // and pushed its own footer over the edge. Given the height it
+                // actually has, a `Text` fills it and truncates.
                 Text(announcement.text)
                     .font(.system(.caption))
                     .foregroundStyle(InkColor.secondary)
                     .multilineTextAlignment(.leading)
-                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: .leading)
                 Spacer(minLength: 0)
                 HStack(spacing: Spacing.base) {
                     Text(announcement.postedAt, format: .dateTime.month(.wide).day().year())

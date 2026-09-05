@@ -202,11 +202,11 @@ extension AppModel {
         return GameAnnouncementCard(
             id: message.id,
             imageURL: image,
-            // **The markdown is stripped rather than rendered.** These posts
+            // **The markdown is reduced rather than rendered.** These posts
             // are headed with `##` and studded with links; a shelf card three
             // hundred points wide has no room for a heading scale, and leaving
             // the marks in prints "## Map Tools Update" on the card.
-            text: Self.plainText(joined),
+            text: Self.excerpt(joined),
             postedAt: message.sentAt,
             reactionCount: message.reactions.reduce(0) { $0 + $1.count }
         )
@@ -216,23 +216,94 @@ extension AppModel {
         URL(string: media.proxyURL ?? media.url)
     }
 
-    /// Markdown reduced to its words.
+    /// Markdown reduced to the words a card can carry.
     ///
-    /// Heading and emphasis marks removed, links reduced to their label. Not a
-    /// parser: this is a *card excerpt*, and the app's real parser produces a
-    /// node tree for a painted canvas that this surface does not have.
-    static func plainText(_ markdown: String) -> String {
-        var result = ""
-        result.reserveCapacity(markdown.count)
-        for line in markdown.split(separator: "\n", omittingEmptySubsequences: false) {
-            var text = Substring(line)
-            while text.first == "#" { text = text.dropFirst() }
-            if text.first == " " { text = text.dropFirst() }
-            result += text
-            result += "\n"
+    /// **The app's own parser, not a second pass of string replacements.** What
+    /// this replaces stripped `#`, `**` and `__` and left everything else on
+    /// screen, so a Rockstar post reached the shelf as
+    ///
+    /// ```
+    /// … official site <@&1299097019163480074>
+    /// [youtube.com/rockstargames](<https://www.youtube.com/watch?v=…>)
+    /// ```
+    ///
+    /// — which is the raw wire content with three marks missing. A card excerpt
+    /// is not a smaller kind of markdown, it is the *fold* of the same tree the
+    /// transcript paints, and `MarkdownParser` already builds that tree.
+    ///
+    /// **Mentions and timestamps are dropped rather than named**, which is the
+    /// one place this differs from `MarkdownDocument.plainText`. That fold
+    /// answers `@role` and `time`, which is right for an accessibility label
+    /// read aloud in place and is a fake name on a card: these posts come from
+    /// the game's own server, which the reader is usually not in, so there is no
+    /// role table to resolve `<@&…>` against. A trailing ping carries nothing a
+    /// digest needs either way.
+    static func excerpt(_ markdown: String) -> String {
+        var out = ""
+        out.reserveCapacity(markdown.count)
+        for (index, block) in MarkdownParser().parse(markdown).blocks.enumerated() {
+            if index > 0 { out += "\n" }
+            append(block, to: &out)
         }
-        result = result.replacingOccurrences(of: "**", with: "")
-            .replacingOccurrences(of: "__", with: "")
-        return result.trimmingCharacters(in: .whitespacesAndNewlines)
+        return tidied(out)
+    }
+
+    private static func append(_ block: BlockNode, to out: inout String) {
+        switch block {
+        case .paragraph(let nodes), .subtext(let nodes), .heading(_, let nodes):
+            append(nodes, to: &out)
+        case .codeBlock(_, let code):
+            out += code
+        case .quote(let children):
+            for (index, child) in children.enumerated() {
+                if index > 0 { out += "\n" }
+                append(child, to: &out)
+            }
+        case .list(_, _, let items):
+            for (index, item) in items.enumerated() {
+                if index > 0 { out += "\n" }
+                for child in item { append(child, to: &out) }
+            }
+        }
+    }
+
+    private static func append(_ nodes: [InlineNode], to out: inout String) {
+        for node in nodes {
+            switch node {
+            case .text(let value), .code(let value), .autoLink(let value):
+                out += value
+            // A link becomes its label, which is what the author wrote for a
+            // reader rather than for a browser.
+            case .styled(_, let children), .link(let children, _):
+                append(children, to: &out)
+            case .customEmoji(let emoji):
+                out += ":\(emoji.name):"
+            case .lineBreak:
+                out += "\n"
+            case .userMention, .roleMention, .channelMention, .commandMention,
+                 .everyoneMention, .hereMention, .timestamp:
+                continue
+            }
+        }
+    }
+
+    /// One space between words, one line per line, nothing blank anywhere.
+    ///
+    /// **Dropping a node leaves the space that was around it**, so a sentence
+    /// ending in a ping comes out with a hole in it and a paragraph that was
+    /// nothing but a ping comes out empty. Both are the excerpt's own doing and
+    /// are cleaned up here rather than left for a `Text` to render as a gap.
+    ///
+    /// Blank lines go entirely, not down to one: blocks are already joined with
+    /// a single newline, so every empty line reaching this point is one the fold
+    /// made, and a 240-point card has no room to spend on the ones it did not.
+    private static func tidied(_ text: String) -> String {
+        var lines: [String] = []
+        for line in text.split(separator: "\n", omittingEmptySubsequences: false) {
+            let squeezed = line.split(whereSeparator: \.isWhitespace).joined(separator: " ")
+            if squeezed.isEmpty { continue }
+            lines.append(squeezed)
+        }
+        return lines.joined(separator: "\n")
     }
 }

@@ -392,8 +392,19 @@ struct InlineScanner {
 
         let urlBytes = bytes[(parenStart + 1)..<parenEnd]
         var url = String(decoding: urlBytes, as: UTF8.self)
-        // Discord allows `(url "title")`; the title is dropped.
-        if let space = url.firstIndex(of: " ") { url = String(url[url.startIndex..<space]) }
+        // **`[label](<url>)` is a link whose target is wrapped to suppress the
+        // embed**, and it is the form most posts that carry a link actually
+        // use — every announcement in Discord's own game servers is written
+        // this way. Unhandled, the angle brackets are part of the string, the
+        // scheme check below rejects it, and the whole construct prints as
+        // literal markup: `[netflix.com/GTAVI](<https://netflix.com/GTAVI>)`
+        // in the middle of a sentence.
+        if url.hasPrefix("<"), let close = url.firstIndex(of: ">") {
+            url = String(url[url.index(after: url.startIndex)..<close])
+        } else if let space = url.firstIndex(of: " ") {
+            // Discord allows `(url "title")`; the title is dropped.
+            url = String(url[url.startIndex..<space])
+        }
         guard Self.isSafeLinkURL(url) else { return false }
 
         let labelBytes = Array(bytes[(index + 1)..<labelEnd])
