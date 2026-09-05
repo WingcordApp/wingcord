@@ -1,3 +1,4 @@
+import CoreGraphics
 import Foundation
 
 /// A person's availability.
@@ -107,13 +108,45 @@ public struct Activity: Hashable, Sendable {
     public var applicationID: ApplicationID?
     public var largeImageKey: String?
     public var smallImageKey: String?
+    /// The hover texts on those two images.
+    ///
+    /// **The small image is a badge with no room for a caption**, so its text is
+    /// the only thing that ever says what it means — Medal's small mark is the
+    /// Medal logo and `small_text` is what names it.
+    public var largeText: String?
+    public var smallText: String?
+    /// Where a click on each image goes, when the app published one.
+    ///
+    /// Captured from a live Medal presence: `large_url` is
+    /// `medal.tv/games/counter-strike-2?ref=discordrpc` and `small_url` is
+    /// `medal.tv/?ref=discordrpc` — see `RichPresenceTests`.
+    public var largeImageURL: URL?
+    public var smallImageURL: URL?
     /// A custom status' emoji.
     public var emoji: EmojiRef?
     public var startedAt: Date?
+    /// When it will finish, for an activity that knows — a track's length, a
+    /// match's clock. **Not a duration**: Discord sends an absolute instant, and
+    /// what a client draws is the gap between the two ends.
+    public var endsAt: Date?
     /// `[current, maximum]`. **This is where "1 Playing" comes from** on an
     /// activity invitation, and it is the only count on the wire — an app that
     /// sends no party is one this client cannot count for.
     public var partySize: [Int]?
+    /// The session the activity belongs to.
+    ///
+    /// **Carried because it is half of an address, not because anything draws
+    /// it.** The button URLs live behind
+    /// `/users/{id}/sessions/{session_id}/activities/{application_id}/metadata`
+    /// and there is no other way to reach them — a presence over the gateway
+    /// sends the button *labels* and never their links.
+    public var sessionID: String?
+    /// The labels of the custom buttons, at most two.
+    ///
+    /// **Labels only.** Their URLs are the metadata route above; a button drawn
+    /// from this array alone is a control that opens nothing, which is the inert
+    /// control `INVARIANTS.md` §5.5 forbids.
+    public var buttons: [String]
 
     public init(
         kind: Kind,
@@ -123,9 +156,16 @@ public struct Activity: Hashable, Sendable {
         applicationID: ApplicationID? = nil,
         largeImageKey: String? = nil,
         smallImageKey: String? = nil,
+        largeText: String? = nil,
+        smallText: String? = nil,
+        largeImageURL: URL? = nil,
+        smallImageURL: URL? = nil,
         emoji: EmojiRef? = nil,
         startedAt: Date? = nil,
-        partySize: [Int]? = nil
+        endsAt: Date? = nil,
+        partySize: [Int]? = nil,
+        sessionID: String? = nil,
+        buttons: [String] = []
     ) {
         self.partySize = partySize
         self.kind = kind
@@ -135,8 +175,76 @@ public struct Activity: Hashable, Sendable {
         self.applicationID = applicationID
         self.largeImageKey = largeImageKey
         self.smallImageKey = smallImageKey
+        self.largeText = largeText
+        self.smallText = smallText
+        self.largeImageURL = largeImageURL
+        self.smallImageURL = smallImageURL
         self.emoji = emoji
         self.startedAt = startedAt
+        self.endsAt = endsAt
+        self.sessionID = sessionID
+        self.buttons = buttons
+    }
+
+    /// The large artwork, at `side` points.
+    public func largeArtworkURL(side: CGFloat) -> URL? {
+        Self.assetURL(largeImageKey, application: applicationID, side: side)
+    }
+
+    /// The small badge that rides its corner.
+    public func smallArtworkURL(side: CGFloat) -> URL? {
+        Self.assetURL(smallImageKey, application: applicationID, side: side)
+    }
+
+    /// Resolves one asset key.
+    ///
+    /// **An asset key is a tagged union written as a string**, and only the
+    /// untagged form is an application asset. The prefixes and their templates
+    /// are Discord's own, from the presence documentation:
+    ///
+    /// | key | resolves to |
+    /// | --- | --- |
+    /// | `mp:{id}` | `media.discordapp.net/{id}` |
+    /// | `spotify:{id}` | `i.scdn.co/image/{id}` |
+    /// | `twitch:{name}` | a live preview still |
+    /// | `youtube:{id}` | a video thumbnail |
+    /// | anything else | `/app-assets/{application}/{key}.png` |
+    ///
+    /// A key this client does not recognise resolves to nil rather than being
+    /// pasted onto the application path, because the failure modes differ: a nil
+    /// draws the placeholder the caller already has, and a wrong path draws a
+    /// permanent grey box that looks like a broken picture.
+    public static func assetURL(
+        _ key: String?,
+        application: ApplicationID?,
+        side: CGFloat
+    ) -> URL? {
+        guard let key, !key.isEmpty else { return nil }
+        guard let separator = key.firstIndex(of: ":") else {
+            guard let application else { return nil }
+            return CDN.applicationAsset(id: application, assetID: key, side: side)
+        }
+        let value = String(key[key.index(after: separator)...])
+        guard !value.isEmpty else { return nil }
+        switch key[key.startIndex..<separator] {
+        case "mp":
+            return URL(string: "https://media.discordapp.net/\(value)")
+        case "spotify":
+            return URL(string: "https://i.scdn.co/image/\(value)")
+        case "twitch":
+            let pixels = CDN.rung(forSide: side)
+            return URL(
+                string: "https://static-cdn.jtvnw.net/previews-ttv"
+                    + "/live_user_\(value)-\(pixels)x\(pixels).jpg"
+            )
+        case "youtube":
+            return URL(string: "https://i.ytimg.com/vi/\(value)/hqdefault.jpg")
+        default:
+            // A prefix this client has never seen is not an application asset,
+            // and pasting it onto the application path draws a permanent grey
+            // box that reads as a broken picture rather than as a missing one.
+            return nil
+        }
     }
 
     /// The single line a roster row shows beneath the name.

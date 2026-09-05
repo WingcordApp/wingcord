@@ -1,0 +1,148 @@
+import AppKit
+import SwiftUI
+
+/// The capsule segmented control Clock, Podcasts and Freeform use, in SwiftUI.
+///
+/// **`NSSegmentedControl`, not `Picker(.segmented)` and not a hand-rolled row
+/// of capsules**, and the difference is the whole reason this file exists:
+///
+///  - SwiftUI's `.segmented` style is still the old bordered box. Rounded
+///    corners, a hairline between each pair, a fill on the selected one. It is
+///    the control from before Liquid Glass and it does not become the new one by
+///    being put on a glass surface.
+///  - A hand-rolled row is a travelling capsule somebody has to animate, a
+///    selection colour somebody has to pick, and a keyboard story somebody has
+///    to write. All three then drift from the system's as it changes, and none
+///    of them picks up the specular response the real control gets as the
+///    selection slides — which is the part people actually recognise.
+///
+/// `segmentStyle = .capsule` with `borderShape = .capsule` is what makes it the
+/// pill; `role = .tabs` is what tells AppKit these segments switch *views*
+/// rather than set a value, which is what Clock's own strip is. Both are macOS
+/// 27 API and the deployment target is macOS 27, so neither is gated.
+///
+/// **It brings its own material, so nothing may add one.** The control renders
+/// Liquid Glass itself — putting `.glassEffect` on it, or dropping it into a
+/// `GlassEffectContainer`, is glass on glass (`INVARIANTS.md` §4 rule 2) and
+/// the second material is what turns a pill into a grey slab.
+struct SegmentedPicker<Value: Hashable>: NSViewRepresentable {
+    /// The segments, in the order they are drawn. Titles are shown as sent.
+    var options: [Option]
+    @Binding var selection: Value
+
+    struct Option: Equatable {
+        var value: Value
+        var title: String
+
+        init(_ value: Value, _ title: String) {
+            self.value = value
+            self.title = title
+        }
+    }
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(selection: $selection, values: options.map(\.value))
+    }
+
+    func makeNSView(context: Context) -> NSSegmentedControl {
+        let control = NSSegmentedControl()
+        control.target = context.coordinator
+        control.action = #selector(Coordinator.selectionDidChange(_:))
+        control.segmentStyle = .capsule
+        control.borderShape = .capsule
+        control.role = .tabs
+        control.trackingMode = .selectOne
+        control.segmentDistribution = .fit
+        // **`.extraLarge`, and it is measured rather than chosen.** The four
+        // sizes resolve to 24, 28 and 36 points tall for the same 13-point
+        // label; Clock's own strip is 36, and at 28 the pill reads as a
+        // toolbar control that wandered into a page rather than as the page's
+        // own tab bar. Beside a 28-point close button the smaller one also
+        // looked like the shorter of two things that should have matched.
+        control.controlSize = .extraLarge
+        // Hug: this sits at the leading end of a bar beside a count and a close
+        // button, and a control that stretched would push both off the edge.
+        control.setContentHuggingPriority(.required, for: .horizontal)
+        control.setContentCompressionResistancePriority(.required, for: .horizontal)
+        apply(to: control, context: context)
+        return control
+    }
+
+    func updateNSView(_ control: NSSegmentedControl, context: Context) {
+        // Rebound every update: the coordinator holds a `Binding` captured when
+        // it was made, and a representable's binding is re-created on every
+        // parent evaluation. A stale one writes into a view that is gone.
+        context.coordinator.selection = $selection
+        context.coordinator.values = options.map(\.value)
+        control.target = context.coordinator
+        control.action = #selector(Coordinator.selectionDidChange(_:))
+        apply(to: control, context: context)
+    }
+
+    /// `NSSegmentedControl` sizes itself from its labels, and a representable
+    /// that does not forward that reports zero to SwiftUI — which lays out a
+    /// control with no width and clips every label to nothing.
+    func sizeThatFits(
+        _ proposal: ProposedViewSize,
+        nsView: NSSegmentedControl,
+        context: Context
+    ) -> CGSize? {
+        nsView.intrinsicContentSize
+    }
+
+    private func apply(to control: NSSegmentedControl, context: Context) {
+        if control.segmentCount != options.count {
+            control.segmentCount = options.count
+        }
+        for (index, option) in options.enumerated() {
+            if control.label(forSegment: index) != option.title {
+                control.setLabel(option.title, forSegment: index)
+            }
+            // **Measured label plus a fixed pad, not zero.** Left to size
+            // itself the control packs 227 points into three segments — 76
+            // each, which is the label with about ten points of air and reads
+            // as cramped next to the space Clock leaves. The pad below is that
+            // difference, applied per segment so `Board` stays narrower than
+            // `Activity`; `.fillEqually` would level them, which the system's
+            // own strips do not do.
+            control.setWidth(Self.width(of: option.title, in: control), forSegment: index)
+        }
+        let index = options.firstIndex { $0.value == selection } ?? 0
+        if control.selectedSegment != index {
+            control.selectedSegment = index
+        }
+    }
+
+    /// How much air a segment gets around its label, total.
+    ///
+    /// A computed property rather than a stored one: this type is generic, and
+    /// Swift has no static storage on a generic type.
+    private static var segmentPadding: CGFloat { 40 }
+
+    private static func width(of title: String, in control: NSSegmentedControl) -> CGFloat {
+        let font = control.font ?? .systemFont(ofSize: NSFont.systemFontSize)
+        let measured = (title as NSString).size(withAttributes: [.font: font]).width
+        return (measured + segmentPadding).rounded(.up)
+    }
+
+    @MainActor
+    final class Coordinator: NSObject {
+        var selection: Binding<Value>
+        var values: [Value]
+
+        init(selection: Binding<Value>, values: [Value]) {
+            self.selection = selection
+            self.values = values
+        }
+
+        @objc func selectionDidChange(_ sender: NSSegmentedControl) {
+            let index = sender.selectedSegment
+            guard values.indices.contains(index) else { return }
+            // Guarded: writing an equal value still invalidates every view
+            // observing it, and AppKit sends the action on a click that changed
+            // nothing.
+            guard selection.wrappedValue != values[index] else { return }
+            selection.wrappedValue = values[index]
+        }
+    }
+}

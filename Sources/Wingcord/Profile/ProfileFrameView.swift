@@ -154,4 +154,50 @@ extension View {
             self
         }
     }
+
+    /// Wraps a fixed-width **region** of this surface, reserving nothing.
+    ///
+    /// **The difference from the version above is the padding, and it is the
+    /// whole difference between a card and a panel.** A card *is* the thing the
+    /// artwork wraps, so whatever places it has to reserve the overhang or the
+    /// roses land off screen. The full profile's identity panel is a region
+    /// inside a sheet that is already centred in the window with air around it —
+    /// there is nothing to reserve against, and padding here would push the
+    /// content column sideways by the artwork's width the moment a frame
+    /// resolved.
+    ///
+    /// The two passes are still two, and for the reason they always were: a
+    /// `back` layer drawn in front covers the avatar it was authored to sit
+    /// behind. Here that means one goes under the whole sheet and one over it.
+    @ViewBuilder
+    func profileFrame(
+        _ frame: ProfileFrame?,
+        over regionWidth: CGFloat,
+        alignment: Alignment = .leading
+    ) -> some View {
+        if let frame, !frame.isEmpty {
+            self
+                .background(alignment: alignment) {
+                    region(frame, regionWidth, .back)
+                }
+                .overlay(alignment: alignment) {
+                    region(frame, regionWidth, .front)
+                }
+        } else {
+            self
+        }
+    }
+
+    /// The region the layers hang off: as wide as the panel, as tall as the
+    /// surface, and drawing nothing itself.
+    private func region(
+        _ frame: ProfileFrame,
+        _ width: CGFloat,
+        _ order: ProfileFrame.Order
+    ) -> some View {
+        Color.clear
+            .frame(width: width)
+            .overlay { ProfileFrameView(frame: frame, cardWidth: width, order: order) }
+            .allowsHitTesting(false)
+    }
 }

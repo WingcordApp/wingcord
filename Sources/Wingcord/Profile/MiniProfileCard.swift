@@ -70,6 +70,7 @@ struct MiniProfileCard: View {
         case column
     }
 
+    @Environment(AppModel.self) private var model
     @Environment(\.motion) private var motion
     /// **One height, banner or no banner.**
     ///
@@ -121,6 +122,7 @@ struct MiniProfileCard: View {
                     .padding(.horizontal, Spacing.margin)
                     .padding(.bottom, Spacing.snug)
             }
+            currentActivity
             if !profile.isLoading, !profile.roles.isEmpty {
                 section("Roles") {
                     // **Two rows, then a count.** A card is a summary that opens
@@ -301,7 +303,7 @@ struct MiniProfileCard: View {
         // **The avatar's drop AND its decoration's overhang.** A decoration is
         // drawn outside the avatar's bounds and contributes no layout size, so
         // reserving the drop alone put the display name under a ring of clouds.
-        .padding(.bottom, avatarDrop + ProfileAvatar.decorationOverhang)
+        .padding(.bottom, avatarDrop + ProfileAvatar.decorationOverhang())
     }
 
     private var hasCustomStatus: Bool {
@@ -386,12 +388,6 @@ struct MiniProfileCard: View {
                     .padding(.top, 2)
             }
 
-            if let subtitle = profile.activity?.rowSubtitle {
-                Label(subtitle, systemImage: "gamecontroller.fill")
-                    .font(.system(.caption))
-                    .foregroundStyle(InkColor.secondary)
-                    .lineLimit(1)
-            }
         }
         .padding(.horizontal, Spacing.margin)
         // A deliberate gap under the avatar rather than the name starting where
@@ -425,6 +421,41 @@ struct MiniProfileCard: View {
                 .padding(.horizontal, Spacing.margin)
                 .padding(.bottom, Spacing.snug)
         }
+    }
+
+    /// What they are doing right now, drawn in full.
+    ///
+    /// **The whole rich presence, and it used to be one grey line.** The card
+    /// said "Playing Counter-Strike 2 with Medal" in caption type under the
+    /// badges, which threw away the game's art, the publisher's mark riding its
+    /// corner, the two lines the app wrote, the clock and both of its buttons.
+    /// Every one of those is on the wire and the card has room for them.
+    ///
+    /// **No recent activity here, and that is deliberate.** A card is a summary
+    /// that opens beside a row; twenty inventory entries would make it taller
+    /// than the window, and they are what the full profile's Activity tab is
+    /// for. What somebody is doing *now* is the one thing on that tab worth
+    /// answering before the reader has asked for it.
+    @ViewBuilder
+    private var currentActivity: some View {
+        if !profile.isLoading, let activity = profile.activity, activity.kind != .custom {
+            CurrentActivityCard(
+                activity: activity,
+                buttonURLs: profile.activityButtonURLs,
+                ground: ground,
+                openGame: openGame(for: activity)
+            )
+            .padding(.horizontal, Spacing.margin)
+            .padding(.bottom, Spacing.snug)
+        }
+    }
+
+    /// **Only for a game.** A Spotify session and a custom status have no page
+    /// behind them, and a title that looks pressable and opens nothing is the
+    /// inert control `INVARIANTS.md` §5.5 forbids.
+    private func openGame(for activity: Activity) -> (() -> Void)? {
+        guard activity.kind == .playing, let id = activity.applicationID else { return nil }
+        return { model.openGameProfile(id) }
     }
 
     /// The accounts they have linked.

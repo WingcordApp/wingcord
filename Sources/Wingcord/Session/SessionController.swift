@@ -94,6 +94,12 @@ final class SessionController {
     /// Game-profile fetches in flight. A game profile can be reached from four
     /// tiles on one board and every one of them must share a request.
     var gameProfileFetches: Set<ApplicationID> = []
+    /// Recent-activity fetches in flight, by person. Read from
+    /// `SessionController+Presence`.
+    var recentActivityFetches: Set<UserID> = []
+    /// Activity-metadata fetches in flight, keyed by the session the activity
+    /// belongs to — the same key its answer is filed under.
+    var activityMetadataFetches: Set<String> = []
     /// Whether `/widget-configs/featured` has been asked for this session.
     ///
     /// A latch rather than "is the table empty": the set is shared with the

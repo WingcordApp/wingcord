@@ -31,6 +31,12 @@ struct DirectMessageProfileContainer: View {
         )
         .task(id: userID) {
             model.sessionController.loadProfile(of: userID, inGuild: nil)
+            // The card draws their current activity in full, and the links
+            // behind its buttons are a route of their own — a presence carries
+            // the labels and never the addresses.
+            if let activity = model.presences[userID]?.primaryActivity {
+                model.sessionController.loadActivityButtons(of: userID, activity: activity)
+            }
         }
     }
 }

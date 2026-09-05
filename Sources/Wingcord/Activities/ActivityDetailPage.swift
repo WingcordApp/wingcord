@@ -472,7 +472,7 @@ private struct ActivityHero: View {
             .aspectRatio(16 / 9, contentMode: .fit)
             .overlay {
                 if let videoURL, !motion.reduceMotion {
-                    ActivityPreviewVideo(url: videoURL)
+                    LoopingVideo(url: videoURL)
                 } else if stillURL != nil {
                     RemoteImage(url: stillURL, side: ActivityLauncher.width, bucket: .artwork) {
                         Palette.surfaceRaised
@@ -501,72 +501,6 @@ private struct ActivityHero: View {
                 .padding(.leading, Spacing.snug)
                 .alignmentGuide(.bottom) { $0[.bottom] - Self.overhang }
             }
-    }
-}
-
-/// A silent, looping preview.
-///
-/// `AVPlayerLayer` through a representable rather than `VideoPlayer`: the
-/// SwiftUI view brings transport controls, and there is nothing here to
-/// control. It is a moving picture.
-private struct ActivityPreviewVideo: NSViewRepresentable {
-    var url: URL
-
-    func makeNSView(context: Context) -> PreviewView {
-        let view = PreviewView()
-        view.play(url)
-        return view
-    }
-
-    func updateNSView(_ view: PreviewView, context: Context) {
-        view.play(url)
-    }
-
-    static func dismantleNSView(_ view: PreviewView, coordinator: ()) {
-        // Without this the player keeps its decoder and its network connection
-        // alive after the page is gone — and this page is opened and left
-        // constantly, once per app somebody looks at.
-        view.stop()
-    }
-
-    final class PreviewView: NSView {
-        private var player: AVQueuePlayer?
-        private var looper: AVPlayerLooper?
-        private var current: URL?
-
-        override var isFlipped: Bool { true }
-
-        override func makeBackingLayer() -> CALayer { AVPlayerLayer() }
-
-        func play(_ url: URL) {
-            guard current != url else { return }
-            current = url
-            stop()
-
-            wantsLayer = true
-            let item = AVPlayerItem(url: url)
-            let player = AVQueuePlayer()
-            player.isMuted = true
-            // The preview is decoration; it must never duck a call or take the
-            // audio session. Muted is not enough on its own — a player with
-            // audio still claims one.
-            player.audiovisualBackgroundPlaybackPolicy = .pauses
-            // `AVPlayerLooper` rather than an end-of-item notification: the
-            // notification path shows a black frame at the seam.
-            looper = AVPlayerLooper(player: player, templateItem: item)
-            (layer as? AVPlayerLayer)?.player = player
-            (layer as? AVPlayerLayer)?.videoGravity = .resizeAspectFill
-            player.play()
-            self.player = player
-        }
-
-        func stop() {
-            player?.pause()
-            looper?.disableLooping()
-            looper = nil
-            player = nil
-            (layer as? AVPlayerLayer)?.player = nil
-        }
     }
 }
 

@@ -45,17 +45,24 @@ struct CustomStatusBubble: View {
     /// The widest the card can spare. The bubble never decides the card's width;
     /// the card decides the bubble's.
     var cardWidth: CGFloat
+    /// The avatar this hangs off. **A parameter for the same reason the drop is
+    /// one**: the card draws an 80-point face and the full profile's identity
+    /// panel a 96-point one, and every number in the layout below is written
+    /// against it.
+    var avatarSide: CGFloat = Metrics.avatarProfile
+    /// The gutter the avatar is inset by, for the same reason.
+    var margin: CGFloat = Spacing.margin
 
     /// Where every piece goes. See `StatusBubbleLayout` — the numbers are
     /// measured off a reference, and they live in one value so a test can hold
     /// them to the relationships that make this read as speech.
     private var layout: StatusBubbleLayout {
         StatusBubbleLayout(
-            avatarSide: Metrics.avatarProfile,
+            avatarSide: avatarSide,
             avatarDrop: avatarDrop,
-            decorationOverhang: ProfileAvatar.decorationOverhang,
+            decorationOverhang: ProfileAvatar.decorationOverhang(side: avatarSide),
             cardWidth: cardWidth,
-            margin: Spacing.margin,
+            margin: margin,
             gap: Spacing.base
         )
     }

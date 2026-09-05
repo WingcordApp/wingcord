@@ -646,6 +646,46 @@ struct RoleChipFlow: View {
     /// so this is handed down rather than measured — a `GeometryReader` here
     /// would cost a pass and publish a number that outlives the card.
     var width: CGFloat = 0
+    /// How much room a chip gets.
+    ///
+    /// **The card and the identity panel are two sizes, not two designs.** A
+    /// popover 320 wide holding two rows of chips wants them small; a 360-point
+    /// panel under a 26-point name wants the handoff's own capsule — 13-point
+    /// label, nine-point dot, a full round. One shape, one number.
+    var size: Size = .compact
+
+    enum Size: Equatable {
+        case compact
+        case comfortable
+
+        var font: Font {
+            switch self {
+            case .compact: .system(.caption2)
+            case .comfortable: .system(.subheadline, weight: .medium)
+            }
+        }
+
+        var dotSide: CGFloat {
+            switch self {
+            case .compact: RoleChipFit.dotSide
+            case .comfortable: 9
+            }
+        }
+
+        var horizontalPadding: CGFloat {
+            switch self {
+            case .compact: RoleChipFit.horizontalPadding
+            case .comfortable: 12
+            }
+        }
+
+        var verticalPadding: CGFloat {
+            switch self {
+            case .compact: 3
+            case .comfortable: 6
+            }
+        }
+    }
 
     private var visibleCount: Int {
         guard let maximumRows, width > 0 else { return roles.count }
@@ -673,17 +713,20 @@ struct RoleChipFlow: View {
         HStack(spacing: RoleChipFit.dotGap) {
             Circle()
                 .fill(role.colorValue.map { Color(hex: $0) } ?? Palette.presenceOffline)
-                .frame(width: RoleChipFit.dotSide, height: RoleChipFit.dotSide)
+                .frame(width: size.dotSide, height: size.dotSide)
             Text(role.name)
-                .font(.system(.caption2))
+                .font(size.font)
                 .foregroundStyle(InkColor.primary)
                 .lineLimit(1)
         }
-        .padding(.horizontal, RoleChipFit.horizontalPadding)
-        .padding(.vertical, 3)
+        .padding(.horizontal, size.horizontalPadding)
+        .padding(.vertical, size.verticalPadding)
         // Clear glass, because the ground behind it is the person's own
         // colour and a `.regular` material would blur it into grey.
-        .glassEffect(.clear, in: .rect(cornerRadius: 7))
+        .glassEffect(
+            .clear.tint(Palette.flyoutTint),
+            in: size == .compact ? AnyShape(.rect(cornerRadius: 7)) : AnyShape(.capsule)
+        )
     }
 }
 
@@ -951,6 +994,17 @@ struct ProfileAvatar: View {
     var dotSide: CGFloat
     /// Nil where the avatar opens nothing — the full profile is already open.
     var openFullProfile: (() -> Void)?
+    /// **A parameter, because the two surfaces are two sizes.** The card is 320
+    /// wide and the full profile's identity panel is 360, and an avatar that
+    /// looked right on the first is small on the second. Every number below —
+    /// the cut-out, the dot's corner, the decoration's overhang — is written
+    /// against this one, so the hole and the thing it is a hole for cannot
+    /// drift apart at either size.
+    var side: CGFloat = Metrics.avatarProfile
+    /// The rail's own gutter. **A parameter for the same reason the side is
+    /// one**: the card's margin is 16 and the identity panel's is 26, and the
+    /// hole in the artwork has to land where the avatar does under both.
+    var leading: CGFloat = Spacing.margin
 
     /// The gap the cut-out leaves around the avatar, per edge.
     static let ringGap: CGFloat = 5
@@ -959,22 +1013,21 @@ struct ProfileAvatar: View {
     /// How far the dot is pulled inside the avatar's corner.
     private static let dotInset: CGFloat = 2
 
-    private var side: CGFloat { Metrics.avatarProfile }
-
     /// The mask an artwork block takes so this avatar can sit in it.
     ///
     /// Bottom-leading, like the stack the avatar is placed in, and offset by the
     /// same drop — so the hole is wherever the avatar is, including after a
     /// metric changes.
-    static func bannerMask(drop: CGFloat) -> some View {
+    static func bannerMask(
+        side: CGFloat = Metrics.avatarProfile,
+        drop: CGFloat,
+        leading: CGFloat = Spacing.margin
+    ) -> some View {
         Rectangle()
             .overlay(alignment: .bottomLeading) {
                 Circle()
-                    .frame(
-                        width: Metrics.avatarProfile + ringGap * 2,
-                        height: Metrics.avatarProfile + ringGap * 2
-                    )
-                    .padding(.leading, Spacing.margin - ringGap)
+                    .frame(width: side + ringGap * 2, height: side + ringGap * 2)
+                    .padding(.leading, leading - ringGap)
                     .offset(y: drop + ringGap)
                     .blendMode(.destinationOut)
             }
@@ -989,12 +1042,12 @@ struct ProfileAvatar: View {
                 // the banner's lower edge, so what shows through it is the card
                 // ground with no artwork in the way.
                 .mask { dotMask }
-                .padding(.leading, Spacing.margin)
+                .padding(.leading, leading)
                 .offset(y: drop)
 
             PresenceDot(status: profile.status, side: dotSide, hasPlate: false)
                 .frame(width: dotSide, height: dotSide)
-                .padding(.leading, Spacing.margin + side - dotSide - Self.dotInset)
+                .padding(.leading, leading + side - dotSide - Self.dotInset)
                 .offset(y: drop - Self.dotInset)
         }
     }
@@ -1026,10 +1079,11 @@ struct ProfileAvatar: View {
     /// contributes no size to layout at all — so a card that reserves the
     /// avatar's own height alone puts the next line under a ring of clouds. The
     /// number belongs to one place, and the places that must clear it read it.
-    static let decorationOverhang: CGFloat =
-        Metrics.avatarProfile * (Metrics.decorationScale - 1) / 2
+    static func decorationOverhang(side: CGFloat = Metrics.avatarProfile) -> CGFloat {
+        side * (Metrics.decorationScale - 1) / 2
+    }
 
-    private var decorationOverhang: CGFloat { Self.decorationOverhang }
+    private var decorationOverhang: CGFloat { Self.decorationOverhang(side: side) }
 
     private var dotMask: some View {
         // **The rectangle has to cover the DECORATION, not just the avatar.** A

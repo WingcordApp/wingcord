@@ -1,12 +1,14 @@
 import SwiftUI
 import WingcordCore
 
-/// One board tile, as a slab on the profile stage.
+/// One board tile.
 ///
-/// **Glass over the ambient field, not a flat wash.** These used to be
-/// `panelFill` — a sixteen-per-cent tint — because the surface behind them was
-/// paint and there was nothing to refract. On the stage there is, so they take
-/// the same clear glass every other slab does and lens the person's own banner.
+/// **Three shapes, and which one is drawn is a fact about the tile.** A widget
+/// naming a single game is a hero card — cover, title, the comment they wrote
+/// and their tags; a widget naming several is a shelf of artwork under a
+/// heading; an application's own widget carries hero art and a stat grid and
+/// takes the bleeding slab. The handoff draws all three and they are not
+/// variants of one card.
 struct BoardSlab: View {
     var tile: BoardTile
     var ground: ProfileGround
@@ -15,36 +17,15 @@ struct BoardSlab: View {
     @State private var isMenuOpen = false
 
     var body: some View {
-        Group {
-            switch tile.content {
-            case .application(let application):
-                // The application widget carries its own header inside artwork
-                // that runs to the tile's edges, so it takes the bleeding slab.
-                ProfileBleedSlab(ground: ground) {
-                    ApplicationWidgetCard(tile: application, ground: ground)
-                }
-            case .detailed(let games):
-                ProfileSlab(title: tile.title, ground: ground) {
-                    VStack(alignment: .leading, spacing: Spacing.snug) {
-                        ForEach(games) { game in
-                            DetailedGameRow(game: game)
-                        }
-                    }
-                }
-            case .grid(let games):
-                ProfileSlab(title: tile.title, ground: ground) {
-                    GameCoverWall(games: games)
-                }
-            }
-        }
-        .overlay(alignment: .topTrailing) {
-            BoardTileMenuButton(
-                isOpen: $isMenuOpen,
-                widgetID: tile.id,
-                userID: userID,
-                gameID: tile.linkedGameID
+        BoardSlabBody(tile: tile, ground: ground) {
+            AnyView(
+                BoardTileMenuButton(
+                    isOpen: $isMenuOpen,
+                    widgetID: tile.id,
+                    userID: userID,
+                    gameID: tile.linkedGameID
+                )
             )
-            .padding(Spacing.snug)
         }
     }
 }
@@ -62,10 +43,12 @@ struct BoardTilePreview: View {
     }
 }
 
-/// A tile's surface and content with no control on it.
+/// A tile's surface and content.
 private struct BoardSlabBody: View {
     var tile: BoardTile
     var ground: ProfileGround
+    /// The "…". Nil in the report sheet's preview, where nothing is pressable.
+    var menu: (() -> AnyView)?
 
     var body: some View {
         switch tile.content {
@@ -73,90 +56,238 @@ private struct BoardSlabBody: View {
             ProfileBleedSlab(ground: ground) {
                 ApplicationWidgetCard(tile: application, ground: ground)
             }
+            .overlay(alignment: .topTrailing) { menu?().padding(Spacing.snug) }
         case .detailed(let games):
-            ProfileSlab(title: tile.title, ground: ground) {
-                VStack(alignment: .leading, spacing: Spacing.snug) {
-                    ForEach(games) { game in
-                        DetailedGameRow(game: game)
-                    }
-                }
+            if let only = games.first, games.count == 1 {
+                FeaturedGameCard(title: tile.title, game: only, ground: ground, menu: menu)
+            } else {
+                GameShelf(title: tile.title, games: games, ground: ground, menu: menu)
             }
         case .grid(let games):
-            ProfileSlab(title: tile.title, ground: ground) {
-                GameCoverWall(games: games)
-            }
+            GameShelf(title: tile.title, games: games, ground: ground, menu: menu)
         }
     }
 }
 
-/// A game with its comment and badges — the favourite and rotation tiles.
-private struct DetailedGameRow: View {
+/// The hero card: one game, at the size the handoff draws it.
+///
+/// **The bleed is the point.** The card's ground is a blurred radial wash at its
+/// leading edge, behind the glass and under the cover — which is what makes it
+/// read as a card *about* something rather than a rectangle with a picture in the
+/// corner. The handoff pulls that colour out of the box art; this pulls it from
+/// the person's own ground, which is the source `INVARIANTS.md` §4 already
+/// mandates and costs no second decode per game.
+private struct FeaturedGameCard: View {
+    var title: String
     var game: BoardGame
+    var ground: ProfileGround
+    var menu: (() -> AnyView)?
 
-    private static let coverWidth: CGFloat = GameArt.rowWidth
+    @Environment(AppModel.self) private var model
+    @Environment(\.motion) private var motion
+    @State private var isHovering = false
+
+    private static let cover: CGFloat = 80
+    private static let corner: CGFloat = 22
 
     var body: some View {
-        HStack(alignment: .top, spacing: Spacing.snug) {
-            GameCover(game: game, width: Self.coverWidth)
-            VStack(alignment: .leading, spacing: 6) {
+        Button { model.openGameProfile(game.gameID) } label: { card }
+            .buttonStyle(.plain)
+            .disabled(game.name == nil)
+            .onHover { hovering in
+                guard isHovering != hovering else { return }
+                isHovering = hovering
+            }
+            // The handoff's lift: three points up and a deeper shadow, which is
+            // the whole hover state. Nothing changes colour — the card is
+            // already the person's colour.
+            .offset(y: isHovering ? -3 : 0)
+            .shadow(
+                color: .black.opacity(isHovering ? 0.5 : 0.34),
+                radius: isHovering ? 30 : 20,
+                y: isHovering ? 14 : 9
+            )
+            .animation(motion.hover, value: isHovering)
+            .accessibilityHint(Text("Opens the game's profile"))
+    }
+
+    private var card: some View {
+        HStack(alignment: .center, spacing: 15) {
+            GameCover(game: game, width: Self.cover, corner: 16)
+            VStack(alignment: .leading, spacing: 5) {
+                HStack(spacing: Spacing.base) {
+                    Text(title)
+                        .font(Typeface.sectionHeader)
+                        .foregroundStyle(InkColor.tertiary)
+                        .textCase(.uppercase)
+                        .tracking(0.9)
+                    Spacer(minLength: 0)
+                    menu?()
+                }
                 Text(game.name ?? " ")
-                    .font(.system(.subheadline, weight: .semibold))
+                    .font(.system(.title3, weight: .bold))
                     .foregroundStyle(InkColor.primary)
-                    .lineLimit(2)
-                    // Redacted rather than blank while `/games` is out: the row
-                    // keeps its height, so the card does not grow under the
-                    // reader when the names land.
+                    .lineLimit(1)
+                    // Redacted rather than blank while `/games` is out: the card
+                    // keeps its height, so nothing reflows when the name lands.
                     .redacted(reason: game.name == nil ? .placeholder : [])
                 if let comment = game.comment {
                     // **Quoted, because it is theirs.** A comment set in plain
                     // body text beside a title reads as a subtitle the app
-                    // wrote; the mark says a person did.
-                    HStack(alignment: .top, spacing: 4) {
-                        Image(systemName: "quote.opening")
-                            .font(.system(size: 9))
-                            .foregroundStyle(InkColor.tertiary)
-                            .padding(.top, 3)
-                        Text(comment)
-                            .font(.system(.caption))
-                            .foregroundStyle(InkColor.secondary)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
+                    // wrote; the marks say a person did.
+                    Text("\u{201C}\(comment)\u{201D}")
+                        .font(.system(.subheadline))
+                        .foregroundStyle(InkColor.secondary)
+                        .lineLimit(2)
                 }
                 if !game.tags.isEmpty {
-                    FlowLayout(spacing: Spacing.tight) {
-                        ForEach(Array(game.tags.enumerated()), id: \.offset) { _, tag in
+                    FlowLayout(spacing: 5) {
+                        ForEach(Array(game.tags.prefix(3).enumerated()), id: \.offset) { _, tag in
                             GameTagChip(tag: tag)
                         }
+                        if game.tags.count > 3 {
+                            GameTagOverflowChip(count: game.tags.count - 3)
+                        }
                     }
+                    .padding(.top, 6)
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .padding(.horizontal, Spacing.tight)
-        .contentShape(.rect)
-        .modifier(OpensGameProfile(gameID: game.gameID, isEnabled: game.name != nil))
+        .padding(18)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(alignment: .leading) { bleed }
+        .glassEffect(
+            .clear.tint(Palette.flyoutTint),
+            in: .rect(cornerRadius: Self.corner, style: .continuous)
+        )
+        .overlay {
+            RoundedRectangle(cornerRadius: Self.corner, style: .continuous)
+                .strokeBorder(ground.borderStyle, lineWidth: ground.borderWidth)
+        }
+        .contentShape(.rect(cornerRadius: Self.corner, style: .continuous))
+    }
+
+    /// The wash behind the cover. Blurred well past any edge, so what reaches
+    /// the glass is light rather than a shape.
+    @ViewBuilder
+    private var bleed: some View {
+        if let accent = ground.accent {
+            Circle()
+                .fill(accent.opacity(0.55))
+                .frame(width: 190, height: 190)
+                .blur(radius: 46)
+                .offset(x: -40)
+                .allowsHitTesting(false)
+        }
     }
 }
 
-/// Covers only — the liked and wishlist tiles.
+/// Several games under one heading, as a shelf of artwork.
 ///
-/// **A wrapping flow, not a fixed column count.** These slabs no longer have a
-/// width this file knows: the masonry decides it, and it differs between a
-/// one-column window and a three-column one. A flow puts as many covers on a row
-/// as fit and wraps, which is the only arrangement that is right at both.
-private struct GameCoverWall: View {
+/// **The heading sits outside the tiles, not inside a card around them.** That
+/// is the handoff's arrangement and it is the right one: a wall of box art is
+/// already a group, and drawing a second box around it is a container with
+/// nothing to contain.
+private struct GameShelf: View {
+    var title: String
     var games: [BoardGame]
+    var ground: ProfileGround
+    var menu: (() -> AnyView)?
 
     var body: some View {
-        FlowLayout(spacing: Spacing.base) {
-            ForEach(games) { game in
-                GameCover(game: game, width: GameArt.gridWidth)
-                    .modifier(
-                        OpensGameProfile(gameID: game.gameID, isEnabled: game.name != nil)
-                    )
-                    .help(game.name ?? "")
+        VStack(alignment: .leading, spacing: 11) {
+            HStack(spacing: Spacing.base) {
+                Text(title)
+                    .font(Typeface.sectionHeader)
+                    .foregroundStyle(InkColor.tertiary)
+                    .textCase(.uppercase)
+                    .tracking(0.9)
+                Spacer(minLength: 0)
+                menu?()
+            }
+            .padding(.horizontal, Spacing.tight)
+
+            FlowLayout(spacing: 10) {
+                ForEach(games) { game in
+                    ShelfTile(game: game, ground: ground)
+                }
             }
         }
+    }
+}
+
+/// One game on a shelf: its art, its name over the foot of it, its tags under.
+private struct ShelfTile: View {
+    var game: BoardGame
+    var ground: ProfileGround
+
+    @Environment(AppModel.self) private var model
+    @Environment(\.motion) private var motion
+    @State private var isHovering = false
+
+    private static let width: CGFloat = GameArt.shelfWidth
+    private static let corner: CGFloat = 18
+
+    var body: some View {
+        Button { model.openGameProfile(game.gameID) } label: { tile }
+            .buttonStyle(.plain)
+            .disabled(game.name == nil)
+            .onHover { hovering in
+                guard isHovering != hovering else { return }
+                isHovering = hovering
+            }
+            .offset(y: isHovering ? -4 : 0)
+            .scaleEffect(isHovering ? 1.015 : 1)
+            .shadow(
+                color: .black.opacity(isHovering ? 0.55 : 0.4),
+                radius: isHovering ? 26 : 18,
+                y: isHovering ? 12 : 8
+            )
+            .animation(motion.hover, value: isHovering)
+            .help(game.name ?? "")
+            .accessibilityLabel(Text(game.name ?? "Game"))
+            .accessibilityHint(Text("Opens the game's profile"))
+    }
+
+    private var tile: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            GameCover(game: game, width: Self.width, corner: Self.corner)
+                // The name rides the foot of the artwork under a scrim, which is
+                // what the handoff does and what keeps a shelf reading as a
+                // shelf rather than as a grid of pictures with captions.
+                .overlay(alignment: .bottom) { nameplate }
+                .clipShape(.rect(cornerRadius: Self.corner, style: .continuous))
+            if !game.tags.isEmpty {
+                FlowLayout(spacing: 4) {
+                    ForEach(Array(game.tags.prefix(2).enumerated()), id: \.offset) { _, tag in
+                        GameTagChip(tag: tag)
+                    }
+                }
+                .frame(width: Self.width, alignment: .leading)
+            }
+        }
+        .contentShape(.rect)
+    }
+
+    private var nameplate: some View {
+        Text(game.name ?? " ")
+            .font(.system(.caption, weight: .semibold))
+            .foregroundStyle(.white)
+            .lineLimit(2)
+            .multilineTextAlignment(.leading)
+            .redacted(reason: game.name == nil ? .placeholder : [])
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 9)
+            .padding(.bottom, 8)
+            .padding(.top, 26)
+            .background {
+                LinearGradient(
+                    colors: [.clear, .black.opacity(0.88)],
+                    startPoint: .top,
+                    endPoint: .bottom
+                )
+            }
     }
 }
 
@@ -172,11 +303,15 @@ struct GameCover: View {
     /// The frame's width. Nil takes whatever the layout offers, which is what a
     /// grid column needs.
     var width: CGFloat?
+    /// The frame's radius. Nil scales it with the width, which is right
+    /// everywhere the cover stands alone; the shelf and the hero card set it
+    /// because their corner has to match the tile the cover sits in.
+    var corner: CGFloat?
 
     private static let cornerFraction: CGFloat = 0.11
 
     private var referenceWidth: CGFloat { width ?? GameArt.gridWidth }
-    private var corner: CGFloat { referenceWidth * Self.cornerFraction }
+    private var resolvedCorner: CGFloat { corner ?? referenceWidth * Self.cornerFraction }
 
     var body: some View {
         Group {
@@ -186,11 +321,11 @@ struct GameCover: View {
                 art.aspectRatio(GameArt.coverAspect, contentMode: .fit)
             }
         }
-        .clipShape(.rect(cornerRadius: corner, style: .continuous))
+        .clipShape(.rect(cornerRadius: resolvedCorner, style: .continuous))
         // A hairline over the artwork rather than under it: many covers are
         // near-black at the edge and would otherwise bleed into the slab.
         .overlay {
-            RoundedRectangle(cornerRadius: corner, style: .continuous)
+            RoundedRectangle(cornerRadius: resolvedCorner, style: .continuous)
                 .strokeBorder(Color.white.opacity(0.1), lineWidth: 1)
         }
         .accessibilityLabel(Text(game.name ?? "Game"))
@@ -286,37 +421,37 @@ struct GameTagChip: View {
                 .font(.system(size: 8, weight: .semibold))
                 .foregroundStyle(InkColor.tertiary)
             Text(tag.title)
-                .font(.system(size: 10))
-                .foregroundStyle(InkColor.secondary)
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(InkColor.primary)
                 .lineLimit(1)
         }
-        .padding(.horizontal, 7)
-        .padding(.vertical, 3)
-        // Clear glass, matching the connection chips one column over: these are
-        // the same object — a small factual badge on somebody's own ground —
-        // and giving them two materials is what makes a profile look assembled
-        // from parts.
-        .glassEffect(.clear, in: .rect(cornerRadius: 8))
+        .padding(.horizontal, 9)
+        .padding(.vertical, 4)
+        // A capsule, and clear glass — matching the role chips one column over.
+        // These are the same object, a small factual badge on somebody's own
+        // ground, and giving them two shapes is what makes a profile look
+        // assembled from parts.
+        .glassEffect(.clear.tint(Palette.flyoutTint), in: .capsule)
         .accessibilityElement(children: .combine)
     }
 }
 
-/// Makes a cover open the game's own profile.
+/// The tags a capped row could not show.
 ///
-/// A modifier rather than a `Button` at each site, because the two call sites
-/// disagree about their shape and agree about everything else — and because a
-/// game whose name has not arrived must not be clickable: the sheet it would
-/// open has nothing to draw yet.
-private struct OpensGameProfile: ViewModifier {
-    var gameID: ApplicationID
-    var isEnabled: Bool
+/// **A count, not a `+n` that opens something.** The full set is on the game's
+/// own profile, which the tile already opens; a second control inside the first
+/// would be two targets in the same eleven points.
+struct GameTagOverflowChip: View {
+    var count: Int
 
-    @Environment(AppModel.self) private var model
-
-    func body(content: Content) -> some View {
-        Button { model.openGameProfile(gameID) } label: { content }
-            .buttonStyle(.plain)
-            .disabled(!isEnabled)
-            .accessibilityHint(Text("Opens the game's profile"))
+    var body: some View {
+        Text("+\(count)")
+            .font(.system(size: 11, weight: .medium))
+            .monospacedDigit()
+            .foregroundStyle(InkColor.tertiary)
+            .padding(.horizontal, 9)
+            .padding(.vertical, 4)
+            .glassEffect(.clear, in: .capsule)
+            .accessibilityLabel(Text("\(count) more"))
     }
 }

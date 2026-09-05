@@ -65,6 +65,15 @@ struct ProfilePresentation: Equatable, Sendable {
     /// a single concatenated string cannot represent.
     var customStatusEmoji: EmojiRef?
     var activity: Activity?
+    /// Where that activity's custom buttons go, once the metadata route has
+    /// answered.
+    ///
+    /// **Empty is the common case and it is also the honest one.** A presence
+    /// carries the button *labels* and never their links, so a button drawn
+    /// before this array arrives is a control that opens nothing. The count is
+    /// matched against the labels at the draw, and a label with no address is
+    /// not drawn.
+    var activityButtonURLs: [URL] = []
     var bio: String?
     var isBot: Bool
     var badges: [ProfileBadge]
@@ -103,6 +112,12 @@ struct ProfilePresentation: Equatable, Sendable {
     var isProfilePrivate: Bool
     /// The reader's own private note about them.
     var note: String
+    /// What the account is to them — which is the whole of what the foot bar's
+    /// primary button says and does.
+    var relationship: Relationship = .none
+    /// Whether a relationship write is in flight, so the button holds rather
+    /// than offering a second click into the same route.
+    var isRelationshipBusy: Bool = false
     /// The server the profile was opened in — its name and icon, so the
     /// "joined" line can say *which* server rather than showing a bare date
     /// beside an anonymous symbol. Nil in a DM.

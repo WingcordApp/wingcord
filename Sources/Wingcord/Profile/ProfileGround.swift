@@ -129,6 +129,14 @@ enum ProfileGround: Equatable {
         }
     }
 
+    /// The two colours this ground lends a ramp — the date span's rule, the
+    /// friend pill's fill.
+    ///
+    /// **Nil is an answer, not a missing value**: an unthemed profile has no
+    /// colours of its own, and the correct treatment for it is the app's own
+    /// neutral rather than a pair invented on its behalf.
+    var accentPair: (primary: Color, secondary: Color)? { pair }
+
     /// How heavy that edge is drawn. A themed rim is a light source and needs
     /// body; a neutral hairline is a separation and must stay a hairline.
     var borderWidth: CGFloat { pair == nil ? 1 : 1.5 }

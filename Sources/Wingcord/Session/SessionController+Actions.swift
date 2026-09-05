@@ -298,6 +298,28 @@ extension SessionController {
         }
     }
 
+    /// Opens the conversation with somebody, making it if there is not one yet,
+    /// and takes the reader there.
+    ///
+    /// **The DM is created rather than the button being hidden**, which is a
+    /// correction: the profile's Message control used to be drawn only where a
+    /// conversation already existed, on the belief that opening one was a round
+    /// trip this client did not make. It is `POST /users/@me/channels`, it is
+    /// idempotent — called for somebody already written to it answers with the
+    /// existing channel — and `sendInvite` has been using it all along.
+    func openConversation(with userID: UserID) {
+        Task { [weak self] in
+            guard let self else { return }
+            do {
+                let channelID = try await resolveDirectMessage(with: userID)
+                model.openDirectMessage(channelID)
+            } catch {
+                Self.trace("open DM \(userID) failed: \(Self.describe(error))")
+                model.reportActionFailure(Self.describe(error))
+            }
+        }
+    }
+
     private func resolveDirectMessage(with userID: UserID) async throws -> ChannelID {
         if let existing = model.directMessageChannel(with: userID) { return existing }
         let channel = try await rest.openDirectMessage(with: userID)

@@ -49,9 +49,10 @@ struct ProfilePresenter: ViewModifier {
     private static let cardWidth: CGFloat = 320
     /// The full profile's ceiling, and the air left around it.
     ///
-    /// Wide enough for three slab columns at 320 with the stage's own margins,
-    /// which is where the masonry stops adding columns.
-    private static let maximumWidth: CGFloat = 1080
+    /// Wide enough for the 360-point identity panel and two 320-point board
+    /// slabs beside it with the column's own margins — which is where the
+    /// masonry stops adding columns.
+    private static let maximumWidth: CGFloat = 1040
     private static let maximumHeight: CGFloat = 780
     private static let inset: CGFloat = 48
 
@@ -110,20 +111,19 @@ struct ProfilePresenter: ViewModifier {
         case .mini:
             miniCard(request, profile, container: container)
         case .full:
-            ProfileStage(
+            ProfileSheet(
                 profile: profile,
                 board: model.boardPresentation(for: request.userID),
-                openDirectMessage: { model.openDirectMessage($0) },
-                openLink: { model.openLink($0) },
+                activity: model.activityPresentation(for: request.userID),
+                // **A ceiling, not a size.** The sheet takes this width and as
+                // much of this height as its content actually needs — an
+                // account with a bio and nothing else is a short sheet rather
+                // than four hundred points of void under a name.
+                maximumSize: CGSize(
+                    width: min(container.width - Self.inset * 2, Self.maximumWidth),
+                    height: min(container.height - Self.inset * 2, Self.maximumHeight)
+                ),
                 dismiss: { model.profileRequest = nil }
-            )
-            // **Sized to the window rather than pinned at 700 by 560.** The old
-            // sheet was a fixed card in a 1512-point window; the stage is a
-            // surface, and a surface that does not grow with its window is a
-            // surface with a hard ceiling on how much it can show.
-            .frame(
-                width: min(container.width - Self.inset * 2, Self.maximumWidth),
-                height: min(container.height - Self.inset * 2, Self.maximumHeight)
             )
             // **And then given the whole container to sit in.** The layer's
             // stack is top-leading aligned, so a sized child without this is
@@ -154,7 +154,7 @@ struct ProfilePresenter: ViewModifier {
                 // flag lives on the store while the code setting it runs inside
                 // a view being torn down, and a missed window drops the request
                 // silently.
-                model.profileRequest?.depth = .full
+                model.expandProfile()
             },
             openLink: { model.openLink($0) },
             gameCollection: model.gameCollection(for: request.userID),

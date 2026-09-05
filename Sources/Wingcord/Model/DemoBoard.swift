@@ -40,8 +40,18 @@ extension DemoFixtures {
                     bio: user.decoration?.bio
                         ?? "sometimes dev sometimes music, sometimes wasting time playing games",
                     themeColorValues: [0x1F_4E_5F, 0x0E_2A_38],
-                    connectedAccounts: user.decoration?.connectedAccounts ?? [],
-                    premiumTier: .nitro
+                    connectedAccounts: user.decoration?.connectedAccounts
+                        ?? Self.demoConnections,
+                    premiumTier: .nitro,
+                    premiumSince: Date.now.addingTimeInterval(-86_400 * 900),
+                    // **Both lists, so the Mutuals tab exists at all.** The tab
+                    // strip is gated on there being something behind each tab,
+                    // so a fixture with no mutual servers can only ever show two
+                    // of the three — which is the half of the picker least worth
+                    // checking.
+                    mutualGuilds: model.guilds.keys.sorted { $0.rawValue < $1.rawValue }
+                        .map { MutualGuild(id: $0) },
+                    mutualFriends: Self.demoMutualFriends(model, excluding: owner)
                 )
             )
         }
@@ -95,7 +105,16 @@ extension DemoFixtures {
                     ProfileWidgetGame(
                         gameID: sims,
                         comment: "who doesn't love the sims??",
-                        tags: Array(repeating: .feeling(.loveIt), count: 6)
+                        // One of each group, plus enough behind them to draw the
+                        // overflow chip. Six copies of the same tag is a fixture
+                        // that reads as a rendering bug.
+                        tags: [
+                            .skill(.expert),
+                            .feeling(.loveIt),
+                            .social(.openToPlay),
+                            .feeling(.obsessed),
+                            .social(.lookingToDiscuss),
+                        ]
                     ),
                 ])
             ),
@@ -151,15 +170,67 @@ extension DemoFixtures {
         )
     }
 
+    /// Three people the reader and the board's owner both know.
+    ///
+    /// Taken off the roster rather than invented, so the rows draw the same
+    /// avatars the member list does and a click opens a profile that exists.
+    private static func demoMutualFriends(
+        _ model: AppModel,
+        excluding owner: UserID
+    ) -> [MutualFriend] {
+        model.users.values
+            .filter { $0.id != owner && $0.id != model.currentUserID && !$0.isBot }
+            .sorted { $0.id.rawValue < $1.id.rawValue }
+            .prefix(3)
+            .map {
+                MutualFriend(
+                    id: $0.id,
+                    name: $0.preferredName,
+                    avatarHash: $0.avatarHash,
+                    monogram: $0.monogram
+                )
+            }
+    }
+
+    /// Two linked accounts, so the Connections dock has marks to magnify and
+    /// facts to spell out. The metadata below is `connected_accounts[].metadata`'s
+    /// own shape — a Steam join date and a game count, Reddit karma.
+    private static var demoConnections: [ConnectedAccount] {
+        [
+            ConnectedAccount(
+                id: "76561199847664494",
+                service: "steam",
+                name: "blahaj",
+                isVerified: true,
+                // `connected_accounts[].metadata`, in Steam's own keys and with
+                // its own string values — captured from a live profile.
+                metadata: ["created_at": "2019-04-27T09:12:04", "game_count": "16"]
+            ),
+            ConnectedAccount(
+                id: "blahaj",
+                service: "github",
+                name: "blahaj",
+                isVerified: true
+            ),
+            ConnectedAccount(
+                id: "blahaj",
+                service: "spotify",
+                name: "blåhaj",
+                isVerified: true
+            ),
+        ]
+    }
+
     // MARK: The applications
 
-    private static let sims = ApplicationID(rawValue: 359_509_007_423_242_240)
-    private static let beatSaber = ApplicationID(rawValue: 451_991_967_149_195_264)
-    private static let endfield = ApplicationID(rawValue: 1_461_154_307_171_811_401)
+    // The four the presence fixture also names, so one id has one definition.
+    static let sims = ApplicationID(rawValue: 359_509_007_423_242_240)
+    static let beatSaber = ApplicationID(rawValue: 451_991_967_149_195_264)
+    static let endfield = ApplicationID(rawValue: 1_461_154_307_171_811_401)
     private static let endfieldApplication = ApplicationID(rawValue: 1_496_037_472_226_906_183)
     private static let zenless = ApplicationID(rawValue: 1_257_819_671_114_289_184)
     private static let wuthering = ApplicationID(rawValue: 1_247_227_126_416_146_462)
-    private static let battlefield = ApplicationID(rawValue: 1_425_690_433_018_925_056)
+    static let battlefield = ApplicationID(rawValue: 1_425_690_433_018_925_056)
 
     private static func website(_ url: String, _ category: GameLinkCategory) -> GameWebsite {
         GameWebsite(url: URL(string: url)!, category: category)

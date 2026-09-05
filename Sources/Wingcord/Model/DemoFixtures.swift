@@ -491,6 +491,7 @@ enum DemoFixtures {
         populateGuildSurfaces(model, guildRoles: guildRoles, owner: guideAuthor)
         populateConnectedApps(model)
         populateBoard(model, owner: guideAuthor)
+        populatePresence(model, owner: guideAuthor, others: userIDs)
         populateActivities(model)
         populateCommands(model)
         // **The guild that actually HAS a voice channel, not the first one.**

@@ -24,7 +24,8 @@ extension AppModel {
             markURL: gameArtURL(game, kind: .mark, side: 64),
             artworkURL: gameArtworkURL(game, width: 1024),
             globalRank: game.globalRank,
-            media: gameScreenshotURLs(game, width: 720),
+            media: gameMedia(of: game),
+            themes: game.themes,
             details: detailRows(of: game),
             links: game.socialLinks,
             storeLink: game.websites.first { $0.category == .steam },
@@ -57,6 +58,20 @@ extension AppModel {
             },
             isLoading: gameProfilesLoading.contains(gameID)
         )
+    }
+
+    /// The tray's items: the trailer first, then every still.
+    ///
+    /// **The trailer was decoded and never drawn**, which made it the single
+    /// biggest unbuilt thing on this page — a game's own moving pitch, sitting
+    /// in the payload behind a shelf of stills. `GameTrailer` names a store
+    /// asset, so it resolves through the same `/app-assets/{id}/store/` path
+    /// the activity preview already probed.
+    private func gameMedia(of game: Game) -> [GameMediaItem] {
+        let trailers = game.trailers.compactMap {
+            CDN.gameTrailer(id: $0.applicationID, assetID: $0.id).map(GameMediaItem.trailer)
+        }
+        return trailers + gameScreenshotURLs(game, width: 720).map(GameMediaItem.still)
     }
 
     /// The Details table, in Discord's own order.

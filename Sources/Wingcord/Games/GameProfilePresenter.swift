@@ -18,11 +18,13 @@ struct GameProfilePresenter: ViewModifier {
     @Environment(AppModel.self) private var model
     @Environment(\.motion) private var motion
 
-    /// The page's ideal size, clamped to the window in the body below. Wide
-    /// enough for a 16:9 still beside the aside, and no taller than the shortest
-    /// window this app allows.
-    private static let idealWidth: CGFloat = 900
-    private static let idealHeight: CGFloat = 640
+    /// The page's ideal size, clamped to the window in the body below.
+    ///
+    /// Wide enough for a 16:9 stage beside the 320-point aside with the three
+    /// floating objects' own margins, and no taller than the shortest window
+    /// this app allows. The spec's numbers.
+    private static let idealWidth: CGFloat = 1_100
+    private static let idealHeight: CGFloat = 780
     /// How much of the window is left around it.
     private static let inset: CGFloat = 48
 

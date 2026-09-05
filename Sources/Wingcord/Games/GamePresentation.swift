@@ -23,7 +23,14 @@ struct GamePresentation: Equatable, Sendable {
     /// The rank badge, or nil for a game Discord does not rank. Absent for most
     /// games and for two of the three captured ones.
     var globalRank: Int?
-    var media: [URL]
+    /// The hero and the tray, in the order they are shown. **The trailer first
+    /// where there is one** — it is the thing this page has that a shelf of
+    /// stills does not, and Discord leads with it too.
+    var media: [GameMediaItem]
+    /// Free-text themes, already localised by the server. Drawn as chips under
+    /// the summary, which is the space the mockup spent on a stat trio whose
+    /// three numbers were all invented.
+    var themes: [String]
     var details: [GameDetailRow]
     var links: [GameWebsite]
     var storeLink: GameWebsite?
@@ -50,6 +57,7 @@ struct GamePresentation: Equatable, Sendable {
             && lhs.artworkURL == rhs.artworkURL
             && lhs.globalRank == rhs.globalRank
             && lhs.media == rhs.media
+            && lhs.themes == rhs.themes
             && lhs.details == rhs.details
             && lhs.links == rhs.links
             && lhs.storeLink == rhs.storeLink
@@ -61,6 +69,28 @@ struct GamePresentation: Equatable, Sendable {
             && lhs.announcementsChannel?.channelID == rhs.announcementsChannel?.channelID
             && lhs.similar == rhs.similar
             && lhs.isLoading == rhs.isLoading
+    }
+}
+
+/// One thing the media tray can show.
+///
+/// **Two cases, because a trailer is not a big screenshot.** It has to be
+/// played, it has a poster that is not itself, and it is the one item on the
+/// page whose thumbnail needs a mark saying so. Folding it into the URL list
+/// is how a page ends up trying to decode an `.mp4` as a picture.
+enum GameMediaItem: Hashable, Sendable, Identifiable {
+    case trailer(URL)
+    case still(URL)
+
+    var id: URL {
+        switch self {
+        case .trailer(let url), .still(let url): url
+        }
+    }
+
+    var isTrailer: Bool {
+        if case .trailer = self { return true }
+        return false
     }
 }
 

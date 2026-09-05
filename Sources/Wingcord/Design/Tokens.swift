@@ -293,6 +293,15 @@ nonisolated enum Metrics {
     /// other and must not out-weigh the identity beside them.
     static let compactControl: CGFloat = 26
 
+    /// A control in the full profile's floating action dock: the friend pill's
+    /// height and the two circles beside it.
+    ///
+    /// **One number for all three**, because the dock is one object and a pill
+    /// two points taller than the circle next to it is the kind of thing nobody
+    /// can name and everybody sees. 46 in the design handoff, at its 1,280-point
+    /// sheet; this column is 0.797 of that.
+    static let profileDockControl: CGFloat = 37
+
     /// The now bar's own height — the floating identity capsule at the foot of
     /// the sidebar.
     static let nowBarHeight: CGFloat = 46

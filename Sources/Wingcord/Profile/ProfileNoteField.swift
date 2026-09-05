@@ -26,6 +26,39 @@ struct ProfileNoteField: View {
     /// pane it draws; a field that also titles itself put "Note" over "NOTE" in
     /// the same box. The small card has no slab and still needs the label.
     var showsLabel: Bool = true
+    /// How much room the field takes.
+    ///
+    /// **A card's note is one line that grows; a panel's is a block.** The
+    /// handoff draws it 64 points tall with a recessed ground, which is what
+    /// makes an empty note read as somewhere to write rather than as a caption
+    /// that failed to load.
+    var form: Form = .card
+
+    enum Form: Equatable {
+        case card
+        case panel
+
+        var lineRange: ClosedRange<Int> {
+            switch self {
+            case .card: 1...4
+            case .panel: 3...8
+            }
+        }
+
+        var font: Font {
+            switch self {
+            case .card: .system(.caption)
+            case .panel: .system(.subheadline)
+            }
+        }
+
+        var corner: CGFloat {
+            switch self {
+            case .card: Radius.chip
+            case .panel: 14
+            }
+        }
+    }
 
     @Environment(AppModel.self) private var model
     @Environment(\.motion) private var motion
@@ -43,25 +76,32 @@ struct ProfileNoteField: View {
 
             TextField("Only you can see this", text: $draft, axis: .vertical)
                 .textFieldStyle(.plain)
-                .font(.system(.caption))
+                .font(form.font)
                 .foregroundStyle(InkColor.primary)
-                .lineLimit(1...4)
+                .lineLimit(form.lineRange)
                 .focused($isFocused)
                 .onSubmit(commit)
-                .padding(.horizontal, Spacing.base)
-                .padding(.vertical, Spacing.base - 2)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                // Clear glass, because the ground behind it is the person's own
-                // colour and a `.regular` material would blur it into grey —
-                // the same reason every chip on this card is clear.
-                .glassEffect(.clear, in: .rect(cornerRadius: Radius.chip))
+                .padding(.horizontal, form == .card ? Spacing.base : 13)
+                .padding(.vertical, form == .card ? Spacing.base - 2 : 11)
+                .frame(maxWidth: .infinity, alignment: .topLeading)
+                // **Recessed, not raised.** A note is somewhere the reader
+                // writes, and the handoff sinks it into the rail — a dark well
+                // with a hairline — where every other block on the column
+                // floats. Glass here would make it a fifth floating thing and
+                // there would be nothing left to say "this one takes input".
+                .background(
+                    Color.black.opacity(0.22),
+                    in: .rect(cornerRadius: form.corner, style: .continuous)
+                )
                 .overlay {
                     // The focus ring the plain style does not draw. A field with
                     // no visible focus is a field Full Keyboard Access cannot be
                     // used in.
-                    RoundedRectangle(cornerRadius: Radius.chip, style: .continuous)
-                        .strokeBorder(Palette.accent, lineWidth: 1)
-                        .opacity(isFocused ? 1 : 0)
+                    RoundedRectangle(cornerRadius: form.corner, style: .continuous)
+                        .strokeBorder(
+                            isFocused ? Palette.accent : Color.white.opacity(0.08),
+                            lineWidth: 1
+                        )
                 }
                 .accessibilityLabel(Text("Note, only visible to you"))
         }

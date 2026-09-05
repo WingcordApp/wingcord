@@ -40,6 +40,8 @@ extension AppModel {
             customStatus: presence?.customStatus?.state,
             customStatusEmoji: presence?.customStatus?.emoji,
             activity: presence?.primaryActivity,
+            activityButtonURLs: presence?.primaryActivity?.sessionID
+                .flatMap { activityButtonURLs[$0] } ?? [],
             bio: decoration?.bio,
             isBot: user.isBot,
             badges: AccountBadges.resolve(flags: user.flags, decoration: decoration),
@@ -87,11 +89,37 @@ extension AppModel {
             mutualFriends: decoration?.mutualFriends ?? [],
             isProfilePrivate: decoration?.isProfilePrivate ?? false,
             note: notes[user.id] ?? "",
+            relationship: relationship(with: user.id),
+            isRelationshipBusy: relationshipsInFlight.contains(user.id),
             guild: guildID.flatMap(mutualServer(for:)),
             directMessageChannelID: user.id == currentUserID
                 ? nil
                 : directMessageChannel(with: user.id),
             isLoading: profilesLoading.contains(user.id)
+        )
+    }
+
+    /// What the Activity tab draws, joined.
+    ///
+    /// **The covers are resolved here, not in the row.** A row that looked its
+    /// own game up would redo the lookup on every hover anywhere in the list,
+    /// and there are twenty of them; joined once, the list is a value the pane
+    /// can compare in O(1).
+    func activityPresentation(for userID: UserID) -> ProfileActivityPresentation {
+        let entries = recentActivity[userID] ?? []
+        var covers: [String: URL] = [:]
+        covers.reserveCapacity(entries.count)
+        for entry in entries {
+            guard let id = entry.subject.applicationID, let game = games[id] else { continue }
+            // The square mark, not the portrait cover: this is a 40-point tile
+            // in a list, and a 40-point sliver of box art is unrecognisable
+            // where the icon still reads.
+            covers[entry.id] = gameArtURL(game, kind: .mark, side: Metrics.activityRecentIcon)
+        }
+        return ProfileActivityPresentation(
+            recent: entries,
+            covers: covers,
+            isLoading: recentActivityLoading.contains(userID)
         )
     }
 
@@ -213,6 +241,33 @@ extension AppModel {
         }
     }
 
+    /// Opens the card that is already showing out into the full profile.
+    ///
+    /// **Written synchronously, and it starts the one fetch the card did not
+    /// need.** Recent activity is the full profile's alone — the card has no
+    /// section for it and the tab strip that would gate on it does not exist
+    /// there — so asking for it when a card opens would be one request per
+    /// avatar anybody clicks.
+    func expandProfile() {
+        guard let request = profileRequest, request.depth != .full else { return }
+        profileRequest?.depth = .full
+        sessionController.loadRecentActivity(of: request.userID)
+    }
+
+    /// Writes to somebody from their profile.
+    ///
+    /// Resolves the conversation first — making one where there is not one yet —
+    /// so the control works for a person the reader has never spoken to, which
+    /// is most of the people whose profile anybody opens.
+    func messagePerson(_ userID: UserID) {
+        guard userID != currentUserID else { return }
+        if let existing = directMessageChannel(with: userID) {
+            openDirectMessage(existing)
+            return
+        }
+        sessionController.openConversation(with: userID)
+    }
+
     /// Leaves the profile and opens the conversation.
     func openDirectMessage(_ channelID: ChannelID) {
         profileRequest = nil
@@ -234,6 +289,12 @@ extension AppModel {
             depth: depth
         )
         sessionController.loadProfile(of: userID, inGuild: selectedGuildID)
+        // The buttons on a rich presence, for both depths: the card draws the
+        // current activity too, and their links are a route of their own.
+        if let activity = presences[userID]?.primaryActivity {
+            sessionController.loadActivityButtons(of: userID, activity: activity)
+        }
+        if depth == .full { sessionController.loadRecentActivity(of: userID) }
         // **Started here as well as after the profile route answers**, so a
         // derived theme resolves alongside that request rather than behind it.
         // Both entry points are guarded on the palette already being known, so

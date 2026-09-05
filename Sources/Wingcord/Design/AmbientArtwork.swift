@@ -43,6 +43,17 @@ struct AmbientArtwork: View {
     /// How much of the scroll the field takes. A third: enough to feel like
     /// depth, not enough to read as a second thing moving.
     private static let parallax: CGFloat = 0.3
+    /// How far the field may travel, whatever the scroll says.
+    ///
+    /// **Unclamped, the parallax slides the picture's own edge into view.** The
+    /// field is the artwork scaled by `overscan` — 17.5% of spare height at each
+    /// end — and a long page scrolls further than that, so past a few hundred
+    /// points the blurred image runs out and what is under it is a hard
+    /// horizontal line with `Palette.surface` below it. That is exactly the
+    /// "colour cutting off at the bottom" of a scrolled game profile. Sixty
+    /// points of travel is inside the overscan for any sheet taller than 350,
+    /// which every surface that uses this is.
+    private static let maximumTravel: CGFloat = 60
 
     var body: some View {
         ZStack {
@@ -58,7 +69,7 @@ struct AmbientArtwork: View {
                     // toward grey at the edges.
                     .blur(radius: 60, opaque: true)
                     .scaleEffect(Self.overscan)
-                    .offset(y: -offset * Self.parallax)
+                    .offset(y: -min(max(offset, 0) * Self.parallax, Self.maximumTravel))
                     .saturation(1.25)
                     .opacity(strength)
             }

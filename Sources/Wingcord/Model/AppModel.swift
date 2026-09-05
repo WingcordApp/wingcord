@@ -428,6 +428,22 @@ final class AppModel {
     /// game id and its account-linking address exist.
     var widgetApplications: [ApplicationID: WidgetApplication] = [:]
 
+    // MARK: What somebody has been doing
+
+    /// The Activity tab's list, by person. `GET /content-inventory/users/{id}
+    /// /outbox`.
+    var recentActivity: [UserID: [RecentActivity]] = [:]
+    /// Which of those have a fetch out, so a tab opened twice asks once.
+    var recentActivityLoading: Set<UserID> = []
+    /// The links behind a rich presence's custom buttons, keyed by the session
+    /// the activity belongs to.
+    ///
+    /// **Keyed on the session, not on the person.** One account can be playing
+    /// on a desktop and listening on a phone at the same time, and the two
+    /// activities have separate metadata behind separate addresses — a key on
+    /// the user would let one overwrite the other's buttons.
+    var activityButtonURLs: [String: [URL]] = [:]
+
     // MARK: A game's own profile
 
     /// The game whose profile is open, if any.

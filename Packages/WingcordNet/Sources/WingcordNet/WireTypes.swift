@@ -1095,6 +1095,14 @@ struct ActivityDTO: Decodable, Sendable {
     var emoji: EmojiDTO?
     var timestamps: Timestamps?
     var party: PartyDTO?
+    /// **The half of a button that arrives over the gateway.** The URLs are a
+    /// separate route — see `DiscordREST.activityMetadata` — and a client with
+    /// only this array can name a button and not open it.
+    var buttons: [String]?
+    /// The other half of that route's address. Nullable on the wire and absent
+    /// for most activities; an activity without one has no reachable metadata
+    /// at all, so its buttons are not drawn.
+    var session_id: String?
 
     /// `size` is `[current, maximum]`. The id is carried but not read: apps
     /// spell it however they like — Watch Together sends the instance reversed
@@ -1106,7 +1114,11 @@ struct ActivityDTO: Decodable, Sendable {
 
     struct Assets: Decodable, Sendable {
         var large_image: String?
+        var large_text: String?
+        var large_url: String?
         var small_image: String?
+        var small_text: String?
+        var small_url: String?
     }
 
     struct Timestamps: Decodable, Sendable {
@@ -1124,11 +1136,20 @@ struct ActivityDTO: Decodable, Sendable {
             applicationID: application_id,
             largeImageKey: assets?.large_image,
             smallImageKey: assets?.small_image,
+            largeText: assets?.large_text,
+            smallText: assets?.small_text,
+            largeImageURL: assets?.large_url.flatMap(URL.init(string:)),
+            smallImageURL: assets?.small_url.flatMap(URL.init(string:)),
             emoji: emoji?.domain,
             // Discord sends milliseconds; a client that reads them as seconds
             // dates every activity to 1970 and every "elapsed" reads as decades.
             startedAt: timestamps?.start.map { Date(timeIntervalSince1970: $0 / 1000) },
-            partySize: party?.size.map { Array($0.prefix(2)) }
+            endsAt: timestamps?.end.map { Date(timeIntervalSince1970: $0 / 1000) },
+            partySize: party?.size.map { Array($0.prefix(2)) },
+            sessionID: session_id,
+            // At most two: the wire caps it there and a third would be a row
+            // this layout has no room for.
+            buttons: Array((buttons ?? []).prefix(2))
         )
     }
 }

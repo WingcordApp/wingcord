@@ -4,11 +4,13 @@ import WingcordCore
 /// A game's own page: what it is, who made it, what people think of it, and
 /// where its players are.
 ///
-/// **Two columns, split by kind rather than by length** — the same split the
-/// full profile makes. The wide column is the game *presenting itself*: its
-/// pictures, its blurb, what its own server has been posting. The narrow one is
-/// everything a reader would act on or check: where to buy it, where its
-/// community is, how it reviewed, and the facts table.
+/// **Glass floating over the game's own artwork**, which is the design handoff's
+/// arrangement and a real correction to what was here. The old page put the
+/// artwork in a 168-point band at the top and everything else on flat ground —
+/// so the one picture the page had was a strip, and the cards below it were
+/// clear glass over nothing, which renders as a slightly lighter rectangle. Now
+/// the artwork lights the whole sheet and three glass objects float on it: the
+/// header, the aside, and the media tray.
 ///
 /// **Every section is conditional and most games have most of them missing.**
 /// Beat Saber has no rank badge, no Discord server, no announcements and one
@@ -26,42 +28,57 @@ struct GameProfileView: View {
     @State private var selectedMedia: URL?
     @State private var didCopyLink = false
     @State private var copyReset: Task<Void, Never>?
-    /// Whether the header has given its artwork up for room.
+    /// Whether the header has given its cover and its title size up for room.
     ///
     /// **Driven by the main column alone, not by both.** The two columns scroll
-    /// independently — the same split the full profile makes — and the aside is
-    /// short enough to fit without scrolling on most games. Collapsing on either
-    /// one would mean the header jumping when somebody nudges a list of four
-    /// details.
+    /// independently and the aside is short enough to fit without scrolling on
+    /// most games. Collapsing on either one would mean the header jumping when
+    /// somebody nudges a list of four details.
     @State private var isHeaderCollapsed = false
     /// How far the main column has travelled, for the ambient field's parallax.
     @State private var scrollOffset: CGFloat = 0
 
-    /// The header artwork's height. Enough for the icon to sit in it with the
-    /// title beside, and no more: the artwork is a backdrop, and a page that
-    /// opens on a picture buries what it is a page *about*.
-    private static let headerHeight: CGFloat = 168
-    /// What it shrinks to once the reader has started reading: the identity in
-    /// one bar, so the page never stops saying which game it is about.
-    private static let collapsedHeaderHeight: CGFloat = 46
+    /// The margin the three floating objects share. 22 in the handoff.
+    private static let inset: CGFloat = 18
+    /// The header bar, open and condensed. The spec's numbers, and the reason
+    /// for the second one is that the page must never stop saying which game it
+    /// is about.
+    /// **Sized from the cover, not chosen.** Box art is 3:4, so a 60-point
+    /// cover is 80 tall and the bar is that plus its own padding. Set to the
+    /// spec's 92 the artwork overflowed the glass and was cut at both ends —
+    /// which is what a number picked before the thing it has to contain gets
+    /// you.
+    private static let headerHeight: CGFloat =
+        GameHeaderBar.cover / GameArt.coverAspect + GameHeaderBar.padding * 2
+    private static let condensedHeaderHeight: CGFloat = 54
     /// How far the main column travels before the header gives way. Roughly the
-    /// artwork's own height — collapsing sooner reads as the header flinching.
-    private static let collapseThreshold: CGFloat = 110
+    /// difference between the two — collapsing sooner reads as the header
+    /// flinching.
+    private static let collapseThreshold: CGFloat = 60
+    /// 412 in the handoff, at its 1,360-point sheet.
     private static let asideWidth: CGFloat = 320
-    /// The poster, and how far it hangs below the header.
-    private static let posterWidth: CGFloat = 128
-    private static let posterOverhang: CGFloat = 44
+
+    private var headerReserve: CGFloat {
+        (isHeaderCollapsed ? Self.condensedHeaderHeight : Self.headerHeight) + Self.inset * 2
+    }
 
     var body: some View {
-        VStack(spacing: 0) {
-            header
+        ZStack(alignment: .top) {
             columns
+            GameHeaderBar(
+                game: game,
+                isCondensed: isHeaderCollapsed,
+                didCopyLink: didCopyLink,
+                copyLink: copyLink,
+                dismiss: dismiss
+            )
+            .padding(.horizontal, Self.inset)
+            .padding(.top, Self.inset)
         }
-        // **The game's own artwork, bleeding under the whole page.** The same
-        // field the profile stage uses: without it the aside's cards were flat
-        // grey and the page could have been about any game. Fed the header
-        // artwork, so the light in the page and the picture at the top of it are
-        // the same image.
+        // **The game's own artwork, lighting the whole page.** Without it the
+        // aside's cards are flat grey and the page could be about any game. Fed
+        // the header artwork, so the light in the page and the pictures on it
+        // are the same image.
         .ambientArtwork(game.artworkURL, tint: nil, strength: 0.42, offset: scrollOffset)
         .clipShape(.rect(cornerRadius: Radius.card, style: .continuous))
         .overlay {
@@ -69,195 +86,27 @@ struct GameProfileView: View {
                 .strokeBorder(Ink.quaternary, lineWidth: 1)
         }
         .shadow(color: .black.opacity(0.5), radius: 36, y: 14)
+        .animation(motion.standard, value: isHeaderCollapsed)
         .onDisappear { copyReset?.cancel() }
-    }
-
-    // MARK: The header
-
-    private var header: some View {
-        // `Color.clear` under the artwork for the same reason every other
-        // banner in this app uses one: a filling image reports its own size
-        // upward and would set this sheet's width to the picture's.
-        Color.clear
-            .frame(height: isHeaderCollapsed ? Self.collapsedHeaderHeight : Self.headerHeight)
-            .background { headerArtwork }
-            .overlay(alignment: isHeaderCollapsed ? .leading : .bottomLeading) { headerIdentity }
-            .overlay(alignment: .topTrailing) { headerControls }
-            // **The poster hangs past the header's foot**, like a sleeve on a
-            // shelf, and that overhang is the whole reason the page reads as
-            // being *about* something rather than as a panel with a picture in
-            // it. `zIndex` because an overlay on the header would otherwise be
-            // cut by the body that follows it.
-            .zIndex(1)
-            .animation(motion.standard, value: isHeaderCollapsed)
-    }
-
-    @ViewBuilder
-    private var headerArtwork: some View {
-        ZStack {
-            Palette.surfaceRaised
-            if let url = game.artworkURL {
-                RemoteImage(url: url, side: 1024, bucket: .artwork) { Color.clear }
-                    .aspectRatio(contentMode: .fill)
-                    // Faded rather than removed: the bar keeps a trace of the
-                    // artwork's colour, so the collapse reads as the same
-                    // surface thinning rather than as a different one arriving.
-                    .opacity(isHeaderCollapsed ? 0.35 : 1)
-            }
-            // **A much lighter wash than this used to carry.** It was
-            // `.85 → .35 → .5`, which turned The Sims' bright header into fog.
-            // The title gets its legibility from its own shadow and from the
-            // ambient field it sits over, not from a curtain across the picture.
-            LinearGradient(
-                colors: [.black.opacity(0.6), .black.opacity(0.12), .clear],
-                startPoint: .bottom,
-                endPoint: .top
-            )
-        }
-        .clipped()
-    }
-
-    /// The game's identity, in whichever of the two arrangements the header is
-    /// currently in.
-    ///
-    /// **The rank badge moves from above the title to beside it**, which is the
-    /// only way it survives a bar 46 points tall — stacked, it would be the half
-    /// that gets clipped.
-    @ViewBuilder
-    private var headerIdentity: some View {
-        if isHeaderCollapsed {
-            HStack(spacing: Spacing.base) {
-                mark
-                Text(game.name)
-                    .font(.system(.headline))
-                    .foregroundStyle(.white)
-                    .lineLimit(1)
-                if let rank = game.globalRank {
-                    RankBadge(rank: rank)
-                }
-                Spacer(minLength: 0)
-            }
-            .padding(.horizontal, Spacing.snug)
-            .padding(.trailing, Metrics.control * 3)
-        } else {
-            HStack(alignment: .bottom, spacing: Spacing.margin) {
-                cover(width: Self.posterWidth)
-                    // Past the header's own foot.
-                    .offset(y: Self.posterOverhang)
-                    .shadow(color: .black.opacity(0.5), radius: 18, y: 8)
-                VStack(alignment: .leading, spacing: 2) {
-                    if let rank = game.globalRank {
-                        RankBadge(rank: rank)
-                    }
-                    Text(game.name)
-                        .font(.system(.title2, weight: .bold))
-                        .foregroundStyle(.white)
-                        .lineLimit(1)
-                    if !game.genreLine.isEmpty {
-                        Text(game.genreLine)
-                            .font(.system(.subheadline))
-                            .foregroundStyle(.white.opacity(0.75))
-                            .lineLimit(1)
-                    }
-                }
-                Spacer(minLength: 0)
-            }
-            .padding(.horizontal, Spacing.margin)
-            .padding(.bottom, Spacing.snug)
-        }
-    }
-
-    /// The poster: real box art at last, rather than a square icon stretched
-    /// into a portrait frame.
-    private func cover(width: CGFloat) -> some View {
-        GameCover(
-            game: BoardGame(
-                gameID: game.gameID,
-                name: game.name,
-                coverURL: game.coverURL,
-                isCoverArt: game.hasCoverArt,
-                tags: []
-            ),
-            width: width
-        )
-    }
-
-    /// The square mark the condensed bar wears.
-    private var mark: some View {
-        GameMark(
-            game: BoardGame(gameID: game.gameID, name: game.name, coverURL: game.markURL, tags: []),
-            side: 26
-        )
-    }
-
-    /// The one control this client can honour, and the close.
-    ///
-    /// **No "Add to Profile".** Discord's own header offers it, and it would
-    /// need a board editor to write into — `PUT /users/@me/widgets` is
-    /// implemented and there is no editor yet. A button that opens nothing is
-    /// the inert control `INVARIANTS.md` §5.5 forbids, so it is not drawn until
-    /// there is something behind it.
-    ///
-    /// The store button is not here either, and that is a placement rather than
-    /// an omission: it is the page's primary action and it belongs at the top of
-    /// the aside, labelled, beside Join — not as a nameless glyph in a corner.
-    private var headerControls: some View {
-        HStack(spacing: Spacing.base) {
-            Button(action: copyLink) {
-                Image(systemName: didCopyLink ? "checkmark" : "link")
-                    .font(Typeface.controlGlyph)
-                    .frame(width: Metrics.control, height: Metrics.control)
-                    .contentShape(.circle)
-            }
-            .buttonStyle(.plain)
-            .foregroundStyle(.white)
-            .interactiveChromeOverMedia(in: .circle)
-            .help(didCopyLink ? "Copied" : "Copy the game's id")
-            .accessibilityLabel(Text("Copy game id"))
-
-            Button(action: dismiss) {
-                Image(systemName: "xmark")
-                    .font(Typeface.controlGlyph)
-                    .frame(width: Metrics.control, height: Metrics.control)
-                    .contentShape(.circle)
-            }
-            .buttonStyle(.plain)
-            .foregroundStyle(.white)
-            .interactiveChromeOverMedia(in: .circle)
-            .keyboardShortcut(.cancelAction)
-            .accessibilityLabel(Text("Close"))
-        }
-        .padding(Spacing.snug)
-        .animation(motion.standard, value: didCopyLink)
-    }
-
-    private func copyLink() {
-        AppModel.copy(game.gameID.description)
-        didCopyLink = true
-        copyReset?.cancel()
-        copyReset = Task {
-            try? await Task.sleep(for: .seconds(1.4))
-            guard !Task.isCancelled else { return }
-            didCopyLink = false
-        }
     }
 
     // MARK: The body
 
     private var columns: some View {
-        HStack(alignment: .top, spacing: 0) {
+        HStack(alignment: .top, spacing: Self.inset) {
             mainColumn
             aside
         }
+        .padding(.horizontal, Self.inset)
+        .padding(.bottom, Self.inset)
+        .padding(.top, headerReserve)
     }
 
     private var mainColumn: some View {
         ScrollView {
             mainContent
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(Spacing.margin)
-                // Clear of the poster, which now hangs into this column.
-                .padding(.top, isHeaderCollapsed ? 0 : Self.posterOverhang)
+                .padding(.bottom, Spacing.group)
         }
         .scrollIndicators(.never)
         .softScrollEdgesVertical()
@@ -280,21 +129,46 @@ struct GameProfileView: View {
     // gives it one small problem instead of one large one. See `HANDOFF.md`.
     @ViewBuilder
     private var mainContent: some View {
-        VStack(alignment: .leading, spacing: Spacing.group) {
+        VStack(alignment: .leading, spacing: Self.inset) {
             if !game.media.isEmpty {
-                GameMediaCarousel(media: game.media, selection: $selectedMedia)
+                GameMediaStage(media: game.media, selection: $selectedMedia)
             }
             if let summary = game.summary {
                 Text(summary)
                     .font(.system(.subheadline))
                     .foregroundStyle(InkColor.secondary)
                     .fixedSize(horizontal: false, vertical: true)
+                    .padding(.horizontal, Spacing.tight)
             }
+            themes
             announcements
             if !game.similar.isEmpty {
                 GameSimilarShelf(games: game.similar)
             }
             if game.isLoading { loadingRow }
+        }
+    }
+
+    /// What the game is *about*, as chips.
+    ///
+    /// **Real, decoded, and never drawn until now.** `themes` has been on the
+    /// wire and in `Game` the whole time — "Action", "Fantasy", "Sandbox" — and
+    /// this is the space the mockup spent on a stat trio whose three numbers
+    /// were all invented.
+    @ViewBuilder
+    private var themes: some View {
+        if !game.themes.isEmpty {
+            FlowLayout(spacing: Spacing.tight) {
+                ForEach(game.themes, id: \.self) { theme in
+                    Text(theme)
+                        .font(.system(.caption, weight: .medium))
+                        .foregroundStyle(InkColor.secondary)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 5)
+                        .glassEffect(.clear.tint(Palette.flyoutTint), in: .capsule)
+                }
+            }
+            .padding(.horizontal, Spacing.tight)
         }
     }
 
@@ -320,6 +194,13 @@ struct GameProfileView: View {
         return openAnnouncementsChannel
     }
 
+    /// The aside: one floating glass panel, with regions cut into it.
+    ///
+    /// **One material, not one per section.** Every card in here used to carry
+    /// its own `.glassEffect` and they sat side by side down a column — five
+    /// stacked materials over the same artwork, which §4 forbids and which
+    /// reads as five plates rather than one pane. The panel is the glass; the
+    /// sections are regions inside it.
     private var aside: some View {
         ScrollView {
             asideContent
@@ -329,6 +210,14 @@ struct GameProfileView: View {
         .scrollIndicators(.never)
         .softScrollEdgesVertical()
         .frame(width: Self.asideWidth)
+        .glassEffect(
+            .clear.tint(Palette.flyoutTint),
+            in: .rect(cornerRadius: 26, style: .continuous)
+        )
+        .overlay {
+            RoundedRectangle(cornerRadius: 26, style: .continuous)
+                .strokeBorder(Color.white.opacity(0.14), lineWidth: 1)
+        }
     }
 
     @ViewBuilder
@@ -362,6 +251,17 @@ struct GameProfileView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
+    private func copyLink() {
+        AppModel.copy(game.gameID.description)
+        didCopyLink = true
+        copyReset?.cancel()
+        copyReset = Task {
+            try? await Task.sleep(for: .seconds(1.4))
+            guard !Task.isCancelled else { return }
+            didCopyLink = false
+        }
+    }
+
     private func openAnnouncementsChannel() {
         guard let channel = game.announcementsChannel else { return }
         model.dismissGameProfile()
@@ -369,27 +269,138 @@ struct GameProfileView: View {
     }
 }
 
-/// "#43 Global Rank" — the one badge a game wears.
+/// The page's identity, floating over its artwork.
+///
+/// **It condenses rather than disappearing.** Open it is the cover, the rank,
+/// the genres and the title at 24 points; scrolled it is a 26-point mark and the
+/// name — so the page never stops saying which game it is about, which a header
+/// that scrolled away would.
+///
+/// **No "Add to Profile".** The handoff offers it and it would need a board
+/// editor to write into: `PUT /users/@me/widgets` is implemented and typed, and
+/// there is no editor. A button that opens nothing is the inert control
+/// `INVARIANTS.md` §5.5 forbids, so it is not drawn — not disabled, not drawn —
+/// until there is something behind it.
+private struct GameHeaderBar: View {
+    var game: GamePresentation
+    var isCondensed: Bool
+    var didCopyLink: Bool
+    var copyLink: () -> Void
+    var dismiss: () -> Void
+
+    /// The cover's width; its height follows from `GameArt.coverAspect`, and the
+    /// bar's height follows from that. 76 in the handoff, whose cover is square.
+    static let cover: CGFloat = 60
+    static let padding: CGFloat = 14
+    private static let mark: CGFloat = 30
+
+    var body: some View {
+        HStack(spacing: Spacing.snug) {
+            if isCondensed {
+                GameMark(
+                    game: BoardGame(gameID: game.gameID, name: game.name, coverURL: game.markURL, tags: []),
+                    side: Self.mark
+                )
+                Text(game.name)
+                    .font(.system(.headline))
+                    .foregroundStyle(InkColor.primary)
+                    .lineLimit(1)
+                if let rank = game.globalRank { RankChip(rank: rank) }
+            } else {
+                GameCover(
+                    game: BoardGame(
+                        gameID: game.gameID,
+                        name: game.name,
+                        coverURL: game.coverURL,
+                        isCoverArt: game.hasCoverArt,
+                        tags: []
+                    ),
+                    width: Self.cover,
+                    corner: 16
+                )
+                VStack(alignment: .leading, spacing: 5) {
+                    HStack(spacing: Spacing.base) {
+                        if let rank = game.globalRank { RankChip(rank: rank) }
+                        if !game.genreLine.isEmpty {
+                            Text(game.genreLine)
+                                .font(.system(.caption))
+                                .foregroundStyle(InkColor.tertiary)
+                                .lineLimit(1)
+                        }
+                    }
+                    Text(game.name)
+                        .font(.system(.title, weight: .bold))
+                        .foregroundStyle(InkColor.primary)
+                        .lineLimit(1)
+                }
+            }
+            Spacer(minLength: Spacing.snug)
+            circle(didCopyLink ? "checkmark" : "link", didCopyLink ? "Copied" : "Copy the game's id", copyLink)
+            circle("xmark", "Close", dismiss)
+                .keyboardShortcut(.cancelAction)
+        }
+        .padding(.horizontal, Spacing.snug)
+        .padding(.vertical, isCondensed ? Spacing.base : Self.padding)
+        .frame(height: isCondensed ? 54 : Self.cover / GameArt.coverAspect + Self.padding * 2)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .glassEffect(
+            .clear.tint(Palette.flyoutTint),
+            in: .rect(cornerRadius: isCondensed ? 20 : 26, style: .continuous)
+        )
+        .overlay {
+            RoundedRectangle(cornerRadius: isCondensed ? 20 : 26, style: .continuous)
+                .strokeBorder(Color.white.opacity(0.16), lineWidth: 1)
+        }
+        .shadow(color: .black.opacity(0.55), radius: 26, y: 12)
+    }
+
+    private func circle(
+        _ symbolName: String,
+        _ label: String,
+        _ perform: @escaping () -> Void
+    ) -> some View {
+        Button(action: perform) {
+            Image(systemName: symbolName)
+                .font(Typeface.controlGlyph)
+                .foregroundStyle(InkColor.primary)
+                .frame(width: Metrics.control + 6, height: Metrics.control + 6)
+                .contentShape(.circle)
+        }
+        .buttonStyle(.plain)
+        .interactiveChromeOverMedia(in: .circle)
+        .help(label)
+        .accessibilityLabel(Text(label))
+    }
+}
+
+/// "#43 GLOBAL" — the one badge a game wears.
 ///
 /// **Drawn only where Discord ranks the game**, which is a minority: of the
 /// three captured games, The Sims is 43rd and Arknights 79th, and Beat Saber
 /// carries no `l30_rank` at all. A badge reading "#—" would be a client
 /// inventing a fact.
-private struct RankBadge: View {
+private struct RankChip: View {
     var rank: Int
 
     var body: some View {
         HStack(spacing: 4) {
             Image(systemName: "trophy.fill")
                 .font(.system(size: 8, weight: .bold))
-            Text("#\(rank) Global Rank")
+            Text("#\(rank) GLOBAL")
                 .font(.system(size: 10, weight: .bold))
-                .textCase(.uppercase)
+                .monospacedDigit()
         }
-        .foregroundStyle(.black)
-        .padding(.horizontal, 7)
+        .foregroundStyle(.black.opacity(0.82))
+        .padding(.horizontal, 8)
         .padding(.vertical, 3)
-        .background(Capsule().fill(.white.opacity(0.92)))
+        .background(
+            LinearGradient(
+                colors: [Color(hex: 0xF6_D3_6B), Color(hex: 0xE0_A9_3A)],
+                startPoint: .top,
+                endPoint: .bottom
+            ),
+            in: .capsule
+        )
         .accessibilityLabel(Text("Ranked number \(rank) globally"))
     }
 }
