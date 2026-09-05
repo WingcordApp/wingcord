@@ -310,7 +310,7 @@ extension AppModel {
         let author = users[message.authorID]
         reportRequest = ReportRequest(
             subject: .message(messageID, channelID: channelID),
-            preview: QuotedMessage(
+            preview: .quoted(QuotedMessage(
                 authorName: author?.preferredName ?? "Unknown",
                 avatarURL: avatarURL(
                     forUserID: message.authorID,
@@ -320,7 +320,7 @@ extension AppModel {
                 monogram: author?.monogram ?? "?",
                 timestamp: PresentationRevision.shared.timeline.time(message.sentAt),
                 excerpt: Self.excerpt(of: message)
-            )
+            ))
         )
         sessionController.loadReportMenu(.message)
     }
@@ -330,7 +330,7 @@ extension AppModel {
         dismissMessageSurfaces()
         reportRequest = ReportRequest(
             subject: .user(userID, guildID: guildID),
-            preview: QuotedMessage(
+            preview: .quoted(QuotedMessage(
                 authorName: user.preferredName,
                 avatarURL: avatarURL(
                     forUserID: userID, inGuild: guildID, side: Metrics.avatarInline * 2
@@ -338,9 +338,30 @@ extension AppModel {
                 monogram: user.monogram,
                 timestamp: nil,
                 excerpt: user.handle
-            )
+            ))
         )
         sessionController.loadReportMenu(.user)
+    }
+
+    /// Reports one tile on somebody's board.
+    ///
+    /// **Both ids travel.** The widget's id says which tile and the person's
+    /// says whose board it is on; Discord's route requires the pair, and a
+    /// report carrying only the first would be unattributable.
+    ///
+    /// The tile is looked up rather than passed in: the menu that raises this
+    /// lives inside the board, and handing a whole resolved tile through a
+    /// closure would capture a value that goes stale the moment the games land.
+    func reportWidget(_ widgetID: String, of userID: UserID) {
+        guard userID != currentUserID,
+              let tile = boardPresentation(for: userID)?.tiles.first(where: { $0.id == widgetID })
+        else { return }
+        dismissMessageSurfaces()
+        reportRequest = ReportRequest(
+            subject: .widget(id: widgetID, userID: userID),
+            preview: .widget(tile)
+        )
+        sessionController.loadReportMenu(.widget)
     }
 
     func submitReport(path: ReportPath) {

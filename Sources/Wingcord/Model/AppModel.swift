@@ -400,6 +400,47 @@ final class AppModel {
     /// Profile frames, by SKU and for the same reason: a frame is a purchase,
     /// and a server where twenty people wear Dark Roses resolves it once.
     var profileFrames: [String: ProfileFrame] = [:]
+    // MARK: The profile board
+    //
+    // Five tables, and the split is by **what the key means** rather than by
+    // convenience. A board's tiles belong to a person; a game, a widget config
+    // and an application belong to nobody and are shared by every board that
+    // names them. Keying the games by person would fetch The Sims 4 once per
+    // profile that likes it, which on a server of simmers is the same answer
+    // over and over.
+    //
+    // An absent entry means "not asked yet" and an empty one means "asked, and
+    // there is nothing" — the same distinction the server pages draw, and for
+    // the same reason: collapsing them makes a surface ask forever.
+
+    /// Everybody's board, by person. Arrives with the profile fetch.
+    var profileWidgets: [UserID: [ProfileWidget]] = [:]
+    /// Their linked game accounts — the data half of an application widget.
+    var applicationIdentities: [UserID: [ApplicationIdentity]] = [:]
+    /// Games, by application id. Shared across every board and every game
+    /// profile in the session.
+    var games: [ApplicationID: Game] = [:]
+    /// Widget templates, by the application they belong to. Seeded in bulk from
+    /// `/widget-configs/featured` and topped up per application for the ones
+    /// Discord has not featured.
+    var widgetConfigs: [ApplicationID: WidgetConfig] = [:]
+    /// The applications behind application widgets — the only place a widget's
+    /// game id and its account-linking address exist.
+    var widgetApplications: [ApplicationID: WidgetApplication] = [:]
+
+    // MARK: A game's own profile
+
+    /// The game whose profile is open, if any.
+    var gameProfileRequest: GameProfileRequest?
+    /// Recent posts from a game's own server, by game.
+    var gameAnnouncements: [ApplicationID: GameAnnouncements] = [:]
+    /// Games Discord thinks play like this one, by game.
+    var similarGames: [ApplicationID: [ApplicationID]] = [:]
+    /// The server behind a game's community card, by that game.
+    var gameCommunities: [ApplicationID: GuildProfile] = [:]
+    /// Which games have a fetch out, so a profile opened twice asks once.
+    var gameProfilesLoading: Set<ApplicationID> = []
+
     /// Profile colours quantised out of somebody's artwork, keyed by that
     /// artwork's URL.
     ///

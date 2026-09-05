@@ -137,7 +137,7 @@ struct ReportMenuDTO: Decodable, Sendable {
 
     private static func element(_ dto: ElementDTO) -> ReportElement {
         switch dto.type {
-        case "message_preview", "app_preview", "user_preview":
+        case "message_preview", "app_preview", "user_preview", "widget_preview":
             return .subjectPreview
         case "breadcrumbs":
             return .breadcrumbs
@@ -185,4 +185,6 @@ struct ReportSubmissionDTO: Encodable, Sendable {
     var message_id: String?
     var guild_id: String?
     var user_id: String?
+    /// Only a widget report carries this, and it carries `user_id` beside it.
+    var widget_id: String?
 }

@@ -47,6 +47,13 @@ struct ProfilePresenter: ViewModifier {
     /// places it. Two copies is how a card ends up anchored eight points from
     /// where it is drawn.
     private static let cardWidth: CGFloat = 320
+    /// The full profile's ceiling, and the air left around it.
+    ///
+    /// Wide enough for three slab columns at 320 with the stage's own margins,
+    /// which is where the masonry stops adding columns.
+    private static let maximumWidth: CGFloat = 1080
+    private static let maximumHeight: CGFloat = 780
+    private static let inset: CGFloat = 48
 
     func body(content: Content) -> some View {
         content.overlay {
@@ -103,15 +110,25 @@ struct ProfilePresenter: ViewModifier {
         case .mini:
             miniCard(request, profile, container: container)
         case .full:
-            FullProfileView(
+            ProfileStage(
                 profile: profile,
+                board: model.boardPresentation(for: request.userID),
                 openDirectMessage: { model.openDirectMessage($0) },
                 openLink: { model.openLink($0) },
                 dismiss: { model.profileRequest = nil }
             )
-            // Centred by giving it the whole container to sit in, which needs
-            // no arithmetic and no measurement — and the frame's own overhang
-            // travels with it, because the view reports its padded size.
+            // **Sized to the window rather than pinned at 700 by 560.** The old
+            // sheet was a fixed card in a 1512-point window; the stage is a
+            // surface, and a surface that does not grow with its window is a
+            // surface with a hard ceiling on how much it can show.
+            .frame(
+                width: min(container.width - Self.inset * 2, Self.maximumWidth),
+                height: min(container.height - Self.inset * 2, Self.maximumHeight)
+            )
+            // **And then given the whole container to sit in.** The layer's
+            // stack is top-leading aligned, so a sized child without this is
+            // pinned to the window's corner — which is where the stage was
+            // sitting, an 1,080-point sheet jammed against the top-left edge.
             .frame(width: container.width, height: container.height)
             .transition(.materialize)
         }
@@ -140,6 +157,7 @@ struct ProfilePresenter: ViewModifier {
                 model.profileRequest?.depth = .full
             },
             openLink: { model.openLink($0) },
+            gameCollection: model.gameCollection(for: request.userID),
             width: Self.cardWidth
         )
         // **Placed by alignment guides, not by `.position` or by a measured

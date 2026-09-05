@@ -1221,7 +1221,7 @@ final class ServerSettingsStore {
     func resolveGames(_ ids: [ApplicationID]) async throws -> [GameSummary] {
         let missing = ids.filter { gameCache[$0] == nil }
         if !missing.isEmpty {
-            for game in try await rest.games(ids: missing) { gameCache[game.id] = game }
+            for game in try await rest.gameSummaries(ids: missing) { gameCache[game.id] = game }
         }
         // In the profile's own order, which is the order the page draws them.
         return ids.compactMap { gameCache[$0] }

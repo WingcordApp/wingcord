@@ -88,6 +88,18 @@ final class SessionController {
     /// consecutive rows; every one of them must share a single request.
     private var guildProfileFetches: Set<GuildID> = []
     private var expressionSourceFetches: Set<UInt64> = []
+    /// Widget-template fetches in flight, by application. Read from
+    /// `SessionController+Board`.
+    var widgetConfigFetches: Set<ApplicationID> = []
+    /// Game-profile fetches in flight. A game profile can be reached from four
+    /// tiles on one board and every one of them must share a request.
+    var gameProfileFetches: Set<ApplicationID> = []
+    /// Whether `/widget-configs/featured` has been asked for this session.
+    ///
+    /// A latch rather than "is the table empty": the set is shared with the
+    /// per-application route, so an account whose featured call answered nothing
+    /// would otherwise re-ask on every board opened.
+    var didLoadFeaturedWidgetConfigs = false
     /// Connect-instruction fetches in flight, by SKU.
     var gameServerProductFetches: Set<String> = []
     /// The two connected-apps lists in flight, so a pane appearing twice in one
@@ -1031,7 +1043,8 @@ final class SessionController {
                 model.profilesLoading.remove(userID)
             }
             do {
-                let user = try await rest.profile(of: userID, inGuild: guildID)
+                let fetched = try await rest.profile(of: userID, inGuild: guildID)
+                let user = fetched.user
                 // **Assigned whole, not merged.** This route is the
                 // authoritative answer for every cosmetic field, so a bio
                 // somebody deleted has to be able to disappear — see
@@ -1043,6 +1056,15 @@ final class SessionController {
                     model.users[userID] = user
                     model.identityRevision &+= 1
                 }
+                // The board arrives on this route and nowhere else — assigned
+                // whole for the same reason, so a tile somebody deleted stops
+                // being drawn. Its games, templates and identities are three
+                // further routes, started here rather than from the tab: the tab
+                // only exists because these widgets arrived.
+                if model.profileWidgets[userID] != fetched.widgets {
+                    model.profileWidgets[userID] = fetched.widgets
+                }
+                loadBoard(of: userID, widgets: fetched.widgets)
                 // The profile names each collectible by SKU; the artwork is a
                 // second request, and only for a SKU nothing has resolved yet.
                 if let sku = user.decoration?.profileEffectSKU,

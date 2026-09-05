@@ -116,6 +116,24 @@ struct ReportSheet: View {
         .padding(.bottom, Spacing.group)
     }
 
+    /// What is being reported, drawn as itself.
+    ///
+    /// A message and a person are one quoted row; a board tile is the tile —
+    /// see `ReportPreview`. The tile is drawn on the app's own raised surface
+    /// rather than on the person's theme: this sheet is the app asking a
+    /// question, and washing it in the reported account's colours would put
+    /// their branding around the control that reports them.
+    @ViewBuilder
+    private var preview: some View {
+        switch request.preview {
+        case .quoted(let message):
+            QuotedMessageRow(message: message)
+        case .widget(let tile):
+            BoardTilePreview(tile: tile)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+
     // MARK: One node
 
     @ViewBuilder
@@ -123,7 +141,7 @@ struct ReportSheet: View {
         ScrollView {
             VStack(alignment: .leading, spacing: Spacing.margin) {
                 if node.elements.contains(.subjectPreview) {
-                    QuotedMessageRow(message: request.preview)
+                    preview
                 }
                 if let info = node.info {
                     Callout(text: info)
@@ -303,6 +321,9 @@ struct ReportSheet: View {
         case .user(let userID, _): userID
         case .message(let messageID, let channelID):
             model.message(messageID, in: channelID)?.authorID
+        // A widget report names its owner directly — the acknowledgement's
+        // block and ignore act on the person whose board it is.
+        case .widget(_, let userID): userID
         }
     }
 }

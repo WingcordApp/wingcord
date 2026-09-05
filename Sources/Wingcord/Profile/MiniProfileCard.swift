@@ -37,6 +37,12 @@ struct MiniProfileCard: View {
     /// accent text and takes no clicks, which is what a surface with no opener
     /// can honestly offer — `INVARIANTS.md` §5.5.
     var openLink: ((String) -> Void)?
+    /// The strip of game covers, or nil where they have arranged no board.
+    ///
+    /// Resolved by the presenter for the same reason the full profile's board
+    /// is: joining the widgets to the games is a table lookup per cover, and
+    /// doing it in this body would redo it on every hover anywhere on the card.
+    var gameCollection: GameCollection?
 
     /// The emoji whose card is open, if any. One popover per surface rather
     /// than one per picture in somebody's prose.
@@ -105,6 +111,15 @@ struct MiniProfileCard: View {
                     onLink: openLink
                     )
                 }
+            }
+            // **Between the bio and the roles**, which is where Discord puts it
+            // and where it belongs regardless: the bio is what someone says
+            // about themselves and the roles are what a server says about them,
+            // so the games — which they also chose — sit with the first group.
+            if !profile.isLoading, let gameCollection {
+                GameCollectionRow(collection: gameCollection, openBoard: openFullProfile)
+                    .padding(.horizontal, Spacing.margin)
+                    .padding(.bottom, Spacing.snug)
             }
             if !profile.isLoading, !profile.roles.isEmpty {
                 section("Roles") {

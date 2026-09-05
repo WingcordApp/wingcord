@@ -1235,17 +1235,31 @@ struct UserProfileDTO: Decodable, Sendable {
     /// servers the reader can see for themselves, so a client that used this to
     /// hide them would be inventing a restriction the server did not make.
     var `private`: Bool?
+    /// The profile board.
+    ///
+    /// **The one route that answers with it, and it arrives unasked.** There is
+    /// no `GET /users/{id}/widgets`; the tiles come down beside the banner and
+    /// the bio, in a key this client ignored until the board was built.
+    var widgets: [ProfileWidgetDTO]?
 
     struct ConnectionDTO: Decodable, Sendable {
         var id: String?
         var type: String?
         var name: String?
         var verified: Bool?
+        /// **Every value is a string on the wire**, including the numbers —
+        /// Steam sends `"game_count": "16"` and Reddit `"total_karma":
+        /// "20223"`. Decoded as written; `ConnectionFact` is what reads them.
+        var metadata: [String: String]?
 
         var domain: ConnectedAccount? {
             guard let id, let type, let name else { return nil }
             return ConnectedAccount(
-                id: id, service: type, name: name, isVerified: verified ?? false
+                id: id,
+                service: type,
+                name: name,
+                isVerified: verified ?? false,
+                metadata: metadata ?? [:]
             )
         }
     }

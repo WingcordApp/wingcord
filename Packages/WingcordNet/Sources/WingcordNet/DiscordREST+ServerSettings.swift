@@ -1075,20 +1075,26 @@ extension DiscordREST {
     /// Returns whatever came back rather than throwing on a partial answer: a
     /// server whose profile names a delisted game would otherwise show an empty
     /// Games section instead of the three that still resolve.
-    public func games(ids: [ApplicationID]) async throws -> [GameSummary] {
+    ///
+    /// **The same route `games(ids:)` calls, decoded thin on purpose.** That one
+    /// answers with the whole store page — artwork, genres, companies, review
+    /// aggregates — which is seven kilobytes a game and none of it reaches this
+    /// pane. A settings list that wants a name and an icon should not pay for a
+    /// hundred and thirty kilobytes of JSON it discards.
+    public func gameSummaries(ids: [ApplicationID]) async throws -> [GameSummary] {
         guard !ids.isEmpty else { return [] }
         return try await get(
             "/games",
             route: "games",
             query: ids.map { URLQueryItem(name: "game_ids", value: String($0.rawValue)) },
-            as: [GameDTO].self
+            as: [GameSummaryDTO].self
         ).compactMap(\.domain)
     }
 }
 
 /// The autocomplete shape. Its icon is a **tagged union** — `{"type":"hash",
 /// "value":"…"}` — rather than the bare string every other Discord route uses
-/// for an icon, so it cannot share `GameDTO`'s decoder.
+/// for an icon, so it cannot share `GameSummaryDTO`'s decoder.
 struct GameAutocompleteDTO: Decodable, Sendable {
     var id: ApplicationID?
     var name: String?
@@ -1110,7 +1116,7 @@ struct GameAutocompleteDTO: Decodable, Sendable {
 }
 
 /// The catalogue shape. Thirty-odd fields on the wire; three are decoded.
-struct GameDTO: Decodable, Sendable {
+struct GameSummaryDTO: Decodable, Sendable {
     var id: ApplicationID?
     var name: String?
     var icon_hash: String?

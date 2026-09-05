@@ -115,7 +115,7 @@ public actor DiscordREST {
     public func profile(
         of userID: UserID,
         inGuild guildID: GuildID? = nil
-    ) async throws -> User {
+    ) async throws -> ProfileFetch {
         var query = [
             URLQueryItem(name: "with_mutual_guilds", value: "true"),
             // **Asked for, because the answer is people the store has never
@@ -127,7 +127,7 @@ public actor DiscordREST {
         if let guildID {
             query.append(URLQueryItem(name: "guild_id", value: String(guildID.rawValue)))
         }
-        let user = try await get(
+        let payload = try await get(
             "/users/\(userID.rawValue)/profile",
             // The rate limiter buckets by ROUTE, not by URL: every profile has
             // to share one bucket or a roster of five hundred opens five hundred
@@ -136,7 +136,10 @@ public actor DiscordREST {
             query: query,
             as: UserProfileDTO.self
         )
-        return user.domain
+        return ProfileFetch(
+            user: payload.domain,
+            widgets: (payload.widgets ?? []).compactMap(\.domain)
+        )
     }
 
     /// Names what a profile response actually contains, once per session.

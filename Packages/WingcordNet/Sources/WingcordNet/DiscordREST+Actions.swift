@@ -274,7 +274,8 @@ extension DiscordREST {
             channel_id: nil,
             message_id: nil,
             guild_id: nil,
-            user_id: nil
+            user_id: nil,
+            widget_id: nil
         )
         switch subject {
         case .message(let messageID, let channelID):
@@ -283,6 +284,9 @@ extension DiscordREST {
         case .user(let userID, let guildID):
             body.user_id = userID.description
             body.guild_id = guildID?.description
+        case .widget(let widgetID, let userID):
+            body.widget_id = widgetID
+            body.user_id = userID.description
         }
         _ = try await requestData(
             method: "POST",
@@ -297,17 +301,27 @@ extension DiscordREST {
 public enum ReportSubjectKind: String, Hashable, Sendable {
     case message
     case user
+    /// One tile on somebody's profile board. Its tree is the shallowest of the
+    /// three — four categories, each of which submits immediately — and its
+    /// welcome node carries a `widget_preview`, which is the reported tile drawn
+    /// inside the sheet.
+    case widget
 }
 
 /// What is being reported, and the ids the submission needs for it.
 public enum ReportSubject: Hashable, Sendable {
     case message(MessageID, channelID: ChannelID)
     case user(UserID, guildID: GuildID?)
+    /// **Two ids, and both are required.** The widget id alone does not say
+    /// whose board it is on, and the user id alone does not say which tile —
+    /// somebody with five widgets would be reported for all of them.
+    case widget(id: String, userID: UserID)
 
     public var kind: ReportSubjectKind {
         switch self {
         case .message: .message
         case .user: .user
+        case .widget: .widget
         }
     }
 }

@@ -125,12 +125,38 @@ public struct ConnectedAccount: Hashable, Sendable, Codable, Identifiable {
     public let service: String
     public let name: String
     public let isVerified: Bool
+    /// What the service publishes about the account, verbatim.
+    ///
+    /// **Every value is a string, and the keys are the service's own.** Steam
+    /// sends `created_at`, `game_count` and two `item_count_*`; Reddit sends
+    /// `total_karma`, `gold` and `mod`; Twitter sends `followers_count` and
+    /// `statuses_count`. There is no closed set — a service Discord adds next
+    /// month arrives with keys nothing here has seen, which is why this is a map
+    /// rather than a struct and why `ConnectionFact` renders it by *shape*.
+    public let metadata: [String: String]
 
-    public init(id: String, service: String, name: String, isVerified: Bool) {
+    public init(
+        id: String,
+        service: String,
+        name: String,
+        isVerified: Bool,
+        metadata: [String: String] = [:]
+    ) {
         self.id = id
         self.service = service
         self.name = name
         self.isVerified = isVerified
+        self.metadata = metadata
+    }
+
+    /// The line under the account name: what the service says about it.
+    ///
+    /// Ordered so a date leads and counts follow, because "Member since 2019 ·
+    /// 16 Games" reads and "16 Games · Member since 2019" does not.
+    public var facts: [ConnectionFact] {
+        metadata
+            .compactMap { ConnectionFact(key: $0.key, rawValue: $0.value) }
+            .sorted { $0.sortRank < $1.sortRank }
     }
 
     /// Where this account lives on the web, when it has a public page.

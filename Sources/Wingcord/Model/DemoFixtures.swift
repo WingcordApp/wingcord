@@ -281,9 +281,44 @@ enum DemoFixtures {
                     connectedAccounts: [
                         // One with a page and one without, so both halves of the
                         // chip's affordance are on screen.
+                        // **With metadata, because that half was invisible.**
+                        // `connected_accounts[].metadata` has always been on the
+                        // wire and the decoder dropped it, so a connection here
+                        // was a name and nothing else. These are the shapes the
+                        // captures and the docs actually carry — Steam's join
+                        // date and game count with its two `-1`/`0` sentinels,
+                        // Reddit's karma and moderator flag, Twitter's posts and
+                        // followers — so the demo shows every branch of
+                        // `ConnectionFact`, including the two that draw nothing.
                         ConnectedAccount(
                             id: "76561198000000000", service: "steam",
-                            name: "wingcord", isVerified: true
+                            name: "wingcord", isVerified: true,
+                            metadata: [
+                                "created_at": "2020-08-08T15:29:17",
+                                "game_count": "16",
+                                "item_count_dota2": "-1",
+                                "item_count_tf2": "0",
+                            ]
+                        ),
+                        ConnectedAccount(
+                            id: "wingcord", service: "reddit",
+                            name: "u/wingcord", isVerified: true,
+                            metadata: [
+                                "created_at": "2019-05-02T20:28:37",
+                                "total_karma": "20223",
+                                "gold": "0",
+                                "mod": "1",
+                            ]
+                        ),
+                        ConnectedAccount(
+                            id: "123456", service: "twitter",
+                            name: "wingcordapp", isVerified: true,
+                            metadata: [
+                                "created_at": "2016-01-01T00:00:00",
+                                "followers_count": "100000",
+                                "statuses_count": "482",
+                                "verified": "1",
+                            ]
                         ),
                         ConnectedAccount(
                             id: "1", service: "playstation",
@@ -455,6 +490,7 @@ enum DemoFixtures {
         model.guilds[firstGuild]?.ownerID = guideAuthor
         populateGuildSurfaces(model, guildRoles: guildRoles, owner: guideAuthor)
         populateConnectedApps(model)
+        populateBoard(model, owner: guideAuthor)
         populateActivities(model)
         populateCommands(model)
         // **The guild that actually HAS a voice channel, not the first one.**

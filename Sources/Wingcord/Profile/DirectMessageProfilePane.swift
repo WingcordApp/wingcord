@@ -26,7 +26,8 @@ struct DirectMessageProfileContainer: View {
                 depth: .full
             )),
             openFullProfile: { model.openProfile(userID, anchor: .zero, depth: .full) },
-            openLink: { model.openLink($0) }
+            openLink: { model.openLink($0) },
+            gameCollection: model.gameCollection(for: userID)
         )
         .task(id: userID) {
             model.sessionController.loadProfile(of: userID, inGuild: nil)
@@ -55,6 +56,8 @@ struct DirectMessageProfilePane: View {
     /// see the container above — so the opener arrives as a closure like every
     /// other action on this surface.
     var openLink: ((String) -> Void)?
+    /// Their board's covers, resolved by the container for the same reason.
+    var gameCollection: GameCollection?
 
     private static let width: CGFloat = Proportions.profileColumnIdeal
 
@@ -73,6 +76,7 @@ struct DirectMessageProfilePane: View {
                         profile: profile,
                         openFullProfile: openFullProfile,
                         openLink: openLink,
+                        gameCollection: gameCollection,
                         width: Self.width,
                         form: .column
                     )

@@ -20,6 +20,12 @@ struct ProfileNoteField: View {
     /// arriving after the card opened.
     var note: String
     var width: CGFloat
+    /// Whether the field draws its own heading.
+    ///
+    /// **False inside a slab, which already has one.** The stage titles every
+    /// pane it draws; a field that also titles itself put "Note" over "NOTE" in
+    /// the same box. The small card has no slab and still needs the label.
+    var showsLabel: Bool = true
 
     @Environment(AppModel.self) private var model
     @Environment(\.motion) private var motion
@@ -28,10 +34,12 @@ struct ProfileNoteField: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: Spacing.tight) {
-            Text("NOTE")
-                .font(Typeface.sectionHeader)
-                .foregroundStyle(InkColor.tertiary)
-                .accessibilityHidden(true)
+            if showsLabel {
+                Text("NOTE")
+                    .font(Typeface.sectionHeader)
+                    .foregroundStyle(InkColor.tertiary)
+                    .accessibilityHidden(true)
+            }
 
             TextField("Only you can see this", text: $draft, axis: .vertical)
                 .textFieldStyle(.plain)

@@ -68,9 +68,21 @@ struct ReportRequest: Identifiable, Hashable, Sendable {
     var subject: ReportSubject
     /// What the report is about, drawn at the top of every screen so the reader
     /// can see they are reporting the right thing.
-    var preview: QuotedMessage
+    var preview: ReportPreview
 
     var id: ReportSubject { subject }
+}
+
+/// What the sheet shows above the questions.
+///
+/// **A widget is redrawn, not excerpted.** A message and a person both reduce to
+/// a line of text under a name, and that is enough to recognise them. A board
+/// tile does not: its content is a picture, a grid of numbers or a list of game
+/// covers, and one line of it would leave the reader confirming a report against
+/// something they cannot identify. So the tile is drawn again, as itself.
+enum ReportPreview: Hashable, Sendable {
+    case quoted(QuotedMessage)
+    case widget(BoardTile)
 }
 
 /// One message, quoted: who wrote it, when, and a line of what it said.

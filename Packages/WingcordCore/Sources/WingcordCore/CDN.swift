@@ -349,6 +349,55 @@ public enum CDN {
         URL(string: "\(host)/clan-badges/\(guildID.rawValue)/\(hash).png?size=32")
     }
 
+    /// A game's icon, banner, cover or artwork, from the hash `/games` sends.
+    ///
+    /// **All four live in `/app-icons/`, and the reference's CDN table names
+    /// none of them.** The table has an entry for an application's icon, cover
+    /// and splash and one for a game *screenshot*, and nothing for
+    /// `media.banner`, `media.artwork` or `media.cover` when they arrive as
+    /// hashes. Probed live against The Sims 4's banner hash
+    /// `4bf8d6cf…` and Arknights' cover hash `ad75eaf2…`:
+    /// `/app-assets/{id}/{hash}.png` answers 404, so do
+    /// `/app-assets/{id}/game/{hash}.png`, `…/game/artworks/…` and
+    /// `…/game/covers/…`; `/app-icons/{id}/{hash}.png` answers 200 for every one
+    /// of them, and honours `?size=`.
+    ///
+    /// So this is `applicationCover`'s path, and it is a separate function
+    /// because it is a separate *fact* — one probed against game media rather
+    /// than against an application's `cover_image` — and because a caller
+    /// holding a `Game` should not have to know they coincide.
+    public static func gameAsset(
+        id: ApplicationID,
+        hash: String,
+        side: CGFloat,
+        scale: CGFloat = 2
+    ) -> URL? {
+        URL(
+            string: "\(host)/app-icons/\(id.rawValue)/\(hash).png"
+                + "?size=\(rung(forSide: side, scale: scale))"
+        )
+    }
+
+    /// One of a game's screenshots, for the games whose shots Discord hosts
+    /// rather than proxying from IGDB.
+    public static func gameScreenshot(
+        id: ApplicationID,
+        hash: String,
+        width: CGFloat,
+        scale: CGFloat = 2
+    ) -> URL? {
+        URL(
+            string: "\(host)/app-assets/\(id.rawValue)/game/screenshots/\(hash).png"
+                + "?size=\(rung(forSide: width, scale: scale))"
+        )
+    }
+
+    /// A game trailer, which is a store asset and therefore `.mp4` under
+    /// `/store/` — the same shape `activityPreviewVideo` already probed.
+    public static func gameTrailer(id: ApplicationID, assetID: String) -> URL? {
+        URL(string: "\(host)/app-assets/\(id.rawValue)/store/\(assetID).mp4")
+    }
+
     public static func roleIcon(
         roleID: RoleID,
         hash: String,

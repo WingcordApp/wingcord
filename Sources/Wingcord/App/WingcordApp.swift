@@ -98,6 +98,10 @@ struct WingcordApp: App {
                 .presentsMedia()
                 .presentsMessageActions()
                 .presentsProfiles()
+                // **After the profiles, so it draws over them.** A game profile
+                // is opened from a tile inside the full profile and has to sit
+                // on top of the surface that raised it.
+                .presentsGameProfile()
                 .presentsUserMenu()
                 .presentsExpressionInfo()
                 .presentsGuildSurfaces()
