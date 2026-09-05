@@ -25,18 +25,25 @@ struct SidebarChannelRow: View {
 
     @Environment(\.motion) private var motion
     @State private var isHovering = false
+    /// Bumped by a press, to play the name's effect once.
+    ///
+    /// **A token, not a `Bool`.** `.task(id:)` restarts on a change, so a second
+    /// press while the first play is still running cancels it and starts again —
+    /// where a flag already true would leave the first timer to end the second
+    /// play early.
+    @State private var playToken = 0
 
     var body: some View {
-        Button(action: action) {
+        Button {
+            // A press plays the name's effect once. See `playToken`.
+            if channel.nameStyle?.isPlain == false { playToken &+= 1 }
+            action()
+        } label: {
             VStack(alignment: .leading, spacing: Spacing.tight) {
                 HStack(spacing: Spacing.base) {
                     SidebarRowLeading(channel: channel)
 
-                    Text(channel.name)
-                        .font(channel.isUnread ? Typeface.rowTitleUnread : Typeface.rowTitle)
-                        .foregroundStyle(nameStyle)
-                        .lineLimit(1)
-                        .truncationMode(.tail)
+                    identity
 
                     Spacer(minLength: Spacing.tight)
 
@@ -58,7 +65,12 @@ struct SidebarChannelRow: View {
             }
             .padding(.horizontal, Spacing.base)
             .padding(.vertical, Spacing.tight)
-            .frame(minHeight: Metrics.rowMinHeight, alignment: .leading)
+            .frame(
+                minHeight: channel.isPerson
+                    ? Metrics.directMessageRowHeight
+                    : Metrics.rowMinHeight,
+                alignment: .leading
+            )
             .frame(maxWidth: .infinity, alignment: .leading)
             .contentShape(.rect(cornerRadius: Radius.row))
         }
@@ -68,6 +80,16 @@ struct SidebarChannelRow: View {
             // selection pill are different states of the same slot, and giving
             // the row two view identities makes selection cut instead of flow.
             ZStack {
+                // **The plate is a state of the row's own slot, not a layer over
+                // it.** Under the hover fill and the selection pill, so all
+                // three share the row's shape and its corner — a plate over the
+                // pill would cover the one thing that says which conversation is
+                // open.
+                if let url = channel.nameplateURL, isPlateShown {
+                    SidebarNameplate(url: url, palette: channel.nameplatePalette)
+                        .transition(.opacity)
+                }
+
                 RoundedRectangle(cornerRadius: Radius.row, style: .continuous)
                     .fill(Palette.hoverFill)
                     .opacity(isHovering && !isSelected ? 1 : 0)
@@ -90,7 +112,17 @@ struct SidebarChannelRow: View {
             isHovering = hovering
         }
         .animation(motion.fadeQuick, value: isHovering)
-        .accessibilityLabel(Text(channel.name))
+        .animation(motion.standard, value: isSelected)
+        // **A press plays the effect once and then stops.** A style is something
+        // its owner chose and worth seeing; a column of them all looping at once
+        // is a list that never settles, which is why the resting state is still.
+        .task(id: playToken) {
+            guard playToken > 0 else { return }
+            try? await Task.sleep(for: .seconds(DisplayNameEffectLayers.cycle))
+            guard !Task.isCancelled else { return }
+            playToken = 0
+        }
+        .accessibilityLabel(Text(accessibilityLabel))
         .accessibilityAddTraits(isSelected ? [.isButton, .isSelected] : .isButton)
         .accessibilityActions {
             if let join {
@@ -128,9 +160,173 @@ struct SidebarChannelRow: View {
     }
 
     private var nameStyle: AnyShapeStyle {
-        if isSelected || channel.isUnread { AnyShapeStyle(Ink.primary) }
-        else if channel.isMuted { AnyShapeStyle(Ink.quaternary) }
-        else { AnyShapeStyle(Ink.secondary) }
+        if let value = channel.nameColorValue { return AnyShapeStyle(Color(hex: value)) }
+        if isSelected || channel.isUnread { return AnyShapeStyle(Ink.primary) }
+        if channel.isMuted { return AnyShapeStyle(Ink.quaternary) }
+        return AnyShapeStyle(Ink.secondary)
+    }
+
+    /// The name, whatever the person wears beside it, and what they are doing.
+    ///
+    /// **A guild channel takes the plain branch and pays for nothing.** Every
+    /// view in the first branch is behind `isPerson`, which is false for every
+    /// row in a server — so a hundred-channel sidebar builds exactly what it
+    /// built before.
+    @ViewBuilder
+    private var identity: some View {
+        if channel.isPerson {
+            VStack(alignment: .leading, spacing: 0) {
+                HStack(spacing: Spacing.tight) {
+                    StyledDisplayName(
+                        text: channel.name,
+                        style: channel.nameStyle,
+                        textStyle: .subheadline,
+                        weight: channel.isUnread ? .semibold : .regular,
+                        // Moving while the pointer is on it, and once on a
+                        // press. Reduce Motion still wins inside.
+                        animates: isHovering || playToken > 0
+                    )
+                    .lineLimit(1)
+                    if let tag = channel.tag {
+                        SidebarTagChip(text: tag, badgeURL: channel.tagBadgeURL)
+                    }
+                }
+                if let subtitle = channel.subtitle {
+                    HStack(spacing: Spacing.hair) {
+                        if let emoji = channel.subtitleEmoji {
+                            SidebarInlineEmoji(emoji: emoji, side: 11)
+                        }
+                        Text(subtitle)
+                            .font(Typeface.rowSubtitle)
+                            .foregroundStyle(Ink.tertiary)
+                            .lineLimit(1)
+                            .truncationMode(.tail)
+                    }
+                }
+            }
+        } else {
+            Text(channel.name)
+                .font(channel.isUnread ? Typeface.rowTitleUnread : Typeface.rowTitle)
+                .foregroundStyle(nameStyle)
+                .lineLimit(1)
+                .truncationMode(.tail)
+        }
+    }
+
+    /// One string for one node. The row draws a name, a tag and a status line;
+    /// letting the platform derive a label from three views is the permanent
+    /// accessibility tax §2 is about.
+    private var accessibilityLabel: String {
+        var parts = [channel.name]
+        if let tag = channel.tag { parts.append(tag) }
+        if let subtitle = channel.subtitle { parts.append(subtitle) }
+        return parts.joined(separator: ", ")
+    }
+
+    /// Whether the plate is drawn.
+    ///
+    /// **On hover, and while the conversation is open.** A column of plates all
+    /// at once is a list of artwork rather than a list of people; one under the
+    /// pointer is somebody answering the question you are asking.
+    private var isPlateShown: Bool { channel.isPerson && (isHovering || isSelected) }
+}
+
+/// A server tag, beside a name in the list.
+///
+/// The same three parts the roster's chip carries — a badge, the letters, a
+/// ground — at the size a sidebar row can hold. Drawn in SwiftUI because this
+/// surface is composed; `MemberRowPainter` draws the same thing on a canvas, and
+/// the two agree because they are handed the same two fields.
+private struct SidebarTagChip: View {
+    var text: String
+    var badgeURL: URL?
+
+    var body: some View {
+        HStack(spacing: 3) {
+            if let badgeURL {
+                RemoteImage(url: badgeURL, side: 11) { Color.clear }
+                    .frame(width: 11, height: 11)
+            }
+            Text(text)
+                .font(.system(size: 9, weight: .bold))
+                .foregroundStyle(Ink.secondary)
+                .lineLimit(1)
+        }
+        .padding(.horizontal, 5)
+        .frame(height: 15)
+        .background { Capsule().fill(Palette.hoverFill) }
+        .fixedSize()
+    }
+}
+
+/// One emoji beside a custom status.
+private struct SidebarInlineEmoji: View {
+    var emoji: EmojiRef
+    var side: CGFloat
+
+    var body: some View {
+        if let id = emoji.id {
+            RemoteImage(
+                url: CDN.emoji(id: id, animated: emoji.isAnimated, side: side),
+                side: side
+            ) { Color.clear }
+            .frame(width: side, height: side)
+        } else {
+            Text(emoji.name)
+                .font(.system(size: side))
+                .lineLimit(1)
+        }
+    }
+}
+
+/// The nameplate behind a direct-message row.
+///
+/// **The same two layers the roster draws, and the same erasing fade** — see
+/// `MemberRowPainter.drawPlate`, which is where the rule was settled: a strip's
+/// leading two thirds are transparent, so the palette's wash is what grounds it,
+/// and the artwork is faded *out* rather than painted over. A scrim is a colour,
+/// and a colour can only be the row's own by accident.
+private struct SidebarNameplate: View {
+    var url: URL
+    var palette: NameplatePalette
+
+    var body: some View {
+        ZStack(alignment: .trailing) {
+            if let value = palette.colorValue {
+                LinearGradient(
+                    stops: [
+                        .init(color: Color(hex: value).opacity(0), location: 0),
+                        .init(color: Color(hex: value).opacity(0.10), location: 0.5),
+                        .init(color: Color(hex: value).opacity(0.28), location: 1),
+                    ],
+                    startPoint: .leading,
+                    endPoint: .trailing
+                )
+            }
+            // Fitted to the row's HEIGHT and hung off its trailing edge, which
+            // is the measured rule — `MemberRowGeometry.nameplateArtRect`.
+            RemoteImage(url: url, side: Metrics.directMessageRowHeight, bucket: .artwork) {
+                Color.clear
+            }
+            .aspectRatio(contentMode: .fit)
+            .frame(height: Metrics.directMessageRowHeight)
+            .mask {
+                // Erasing rather than painting: what shows through the leading
+                // half is the row's own background, whatever that happens to be.
+                LinearGradient(
+                    stops: [
+                        .init(color: .clear, location: 0),
+                        .init(color: .black.opacity(0.25), location: 0.22),
+                        .init(color: .black, location: 0.62),
+                    ],
+                    startPoint: .leading,
+                    endPoint: .trailing
+                )
+            }
+        }
+        .clipShape(.rect(cornerRadius: Radius.row, style: .continuous))
+        .allowsHitTesting(false)
+        .accessibilityHidden(true)
     }
 }
 

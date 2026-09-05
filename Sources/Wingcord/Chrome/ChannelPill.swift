@@ -41,26 +41,42 @@ struct ChannelPill: View {
     @Environment(\.motion) private var motion
 
     var body: some View {
-        Button(action: action) {
-            HStack(spacing: Spacing.tight) {
-                Image(systemName: symbolName)
-                    .foregroundStyle(Ink.tertiary)
-                Text(name)
-                    .fontWeight(.semibold)
-                    .lineLimit(1)
-                    .contentTransition(.interpolate)
-            }
+        // **A label where there is nothing to open, not a dimmed button.** §5.5
+        // says a control that cannot work must not look like one that can — and
+        // the honest form of that here is *not* `.disabled`, which greys the
+        // channel's own name and reads as the app having lost the channel. A
+        // server page and a channel whose owner wrote no topic get the title
+        // they always had, with no press affordance at all.
+        if canOpenTopic {
+            Button(action: action) { label }
+                .animation(motion.glassMorph, value: name)
+                .help("\(name) — what this channel is for")
+                .accessibilityLabel(Text(name))
+                .accessibilityHint(Text("Shows what this channel is for"))
+                // **The scoped exception, exactly as the pins popover is.** §2
+                // forbids a presentation modifier on a list ROW because it is
+                // evaluated by every row on every pass; this is one toolbar
+                // item, evaluated once, and it is the only way to point a
+                // surface at the control that opened it.
+                .popover(isPresented: topicBinding, arrowEdge: .bottom) {
+                    topicContent()
+                }
+        } else {
+            label
+                .animation(motion.glassMorph, value: name)
+                .help(name)
+                .accessibilityLabel(Text(name))
         }
-        .disabled(!canOpenTopic)
-        .animation(motion.glassMorph, value: name)
-        .help(canOpenTopic ? "\(name) — what this channel is for" : name)
-        .accessibilityLabel(Text(name))
-        // **The scoped exception, exactly as the pins popover is.** §2 forbids a
-        // presentation modifier on a list ROW because it is evaluated by every
-        // row on every pass; this is one toolbar item, evaluated once, and it is
-        // the only way to point a surface at the control that opened it.
-        .popover(isPresented: topicBinding, arrowEdge: .bottom) {
-            topicContent()
+    }
+
+    private var label: some View {
+        HStack(spacing: Spacing.tight) {
+            Image(systemName: symbolName)
+                .foregroundStyle(Ink.tertiary)
+            Text(name)
+                .fontWeight(.semibold)
+                .lineLimit(1)
+                .contentTransition(.interpolate)
         }
     }
 

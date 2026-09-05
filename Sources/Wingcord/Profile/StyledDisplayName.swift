@@ -13,6 +13,14 @@ struct StyledDisplayName: View {
     var style: DisplayNameStyle?
     var textStyle: Font.TextStyle
     var weight: Font.Weight
+    /// Whether the effect runs, when the reader has not asked for less motion.
+    ///
+    /// **A parameter, because not every surface wants it always on.** A profile
+    /// card shows one name and it moves; the direct-message list shows a hundred
+    /// and a column of effects all looping at once never settles — so that
+    /// surface runs the one under the pointer and parks the rest on their first
+    /// keyframe. Default `true`, so every existing call site is unchanged.
+    var animates: Bool = true
 
     @Environment(\.motion) private var motion
 
@@ -25,7 +33,7 @@ struct StyledDisplayName: View {
                 // Reduce Motion parks each effect on its own first keyframe
                 // rather than hiding it: the style is part of how someone
                 // chose to be named, and the preference is about movement.
-                animates: !motion.reduceMotion
+                animates: animates && !motion.reduceMotion
             )
             .accessibilityElement(children: .ignore)
             .accessibilityLabel(Text(text))

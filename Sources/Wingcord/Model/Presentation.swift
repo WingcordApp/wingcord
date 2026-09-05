@@ -156,6 +156,38 @@ struct SidebarChannel: Hashable, Sendable, Identifiable {
     var monogram: String?
     /// Drawn on the avatar. Nil for a group DM, which has no single presence.
     var status: PresenceStatus?
+
+    // MARK: What a direct message says about the person in it
+    //
+    // A guild channel is a topic; a direct message is a *person*, and the list
+    // is the only place in the app where their identity has to be legible
+    // without opening anything. These are the same facts the roster draws — see
+    // `MemberEntry` — resolved into the same shapes, so the two surfaces cannot
+    // disagree about what somebody looks like.
+
+    /// What they are doing: an activity, or a custom status. Nil is a real
+    /// state and the row keeps its height either way.
+    var subtitle: String?
+    /// The emoji beside a custom status, when they set one.
+    var subtitleEmoji: EmojiRef?
+    /// A server tag, worn beside the name.
+    var tag: String?
+    var tagBadgeURL: URL?
+    /// The nameplate they wear, and the wash that grounds it.
+    var nameplateURL: URL?
+    var nameplatePalette: NameplatePalette = .none
+    /// The face and effect they chose for their name. Nil is nearly everybody
+    /// and costs nothing — see `StyledDisplayName`.
+    var nameStyle: DisplayNameStyle?
+    /// Their name's colour, when a role or their own palette gives them one.
+    var nameColorValue: UInt32?
+
+    /// Whether this row draws the taller, two-line form.
+    ///
+    /// **On the value, not on the view.** The row's height decides the list's
+    /// scroll geometry, and a view that worked it out from three optionals is
+    /// three places for the answer to differ from the one the list measured.
+    var isPerson: Bool { kind == .directMessage || kind == .groupDirectMessage }
 }
 
 extension SidebarChannel {

@@ -272,6 +272,15 @@ nonisolated enum Metrics {
     /// height in Finder's sidebar and Mail's, and matching it is what makes the
     /// column read as part of the OS rather than as a web page.
     static let rowMinHeight: CGFloat = 28
+    /// A direct-message row: an avatar, a name with whatever style its owner
+    /// chose, and a line for what they are doing.
+    ///
+    /// **One height whether or not there is a second line**, for the reason the
+    /// roster's is one — see `MemberRowGeometry.rowHeight`. A list whose rows
+    /// change height as people start and stop doing things reflows under the
+    /// reader, and a nameplate fitted to the row's height would be fitted two
+    /// different ways in one column.
+    static let directMessageRowHeight: CGFloat = 46
 
     /// A category disclosure header. Shorter than a row: it is a label, not a
     /// destination.

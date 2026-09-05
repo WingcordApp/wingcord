@@ -53,6 +53,14 @@ struct SidebarMemoKey: Hashable, Sendable {
     /// that did not carry them would keep answering with the list from before
     /// the guide came back.
     var surfaceRows: [GuildSurface]
+    /// Presence, **and only while the direct-message list is the one showing**.
+    ///
+    /// A DM row draws the other person: their dot, and what they are doing. A
+    /// guild's channel rows draw neither, so carrying this unconditionally would
+    /// rebuild a five-hundred-channel tree every time anybody in the account
+    /// started a game. Zero here is "this list does not depend on presence",
+    /// which is the truth for every server.
+    var presenceRevision: UInt64
 }
 
 // MARK: - Projections
@@ -113,7 +121,8 @@ extension AppModel {
             voiceRevision: voiceRevision,
             speakingIDs: speakingUserIDs,
             hiddenSelection: hiddenSelectedChannelID,
-            surfaceRows: selectedGuildID.map(guildSurfaceRows(for:)) ?? []
+            surfaceRows: selectedGuildID.map(guildSurfaceRows(for:)) ?? [],
+            presenceRevision: selectedGuildID == nil ? presenceRevision : 0
         )
         let guildTable = guilds
         // Read before the early return, so a cache hit still registers the
@@ -416,6 +425,15 @@ extension AppModel {
                 nil
             }
 
+            // **The same facts the roster draws, in the same shapes.** A direct
+            // message is a *person*, and the list is the only place their
+            // identity has to be legible without opening anything — so the row
+            // says what they are doing, what tag they wear, and what plate and
+            // name style they chose, exactly as `AppModel+Roster` resolves them
+            // for a server's member list. A group has none of it: there is no
+            // single person for any of these to be about.
+            let presence = partnerID.flatMap { presences[$0] }
+            let decoration = partner?.decoration
             rows.append(.channel(SidebarChannel(
                 id: channelID,
                 name: name,
@@ -432,7 +450,23 @@ extension AppModel {
                 // A group has several people and no single presence; a dot on
                 // one of them would be a fact about somebody the row does not
                 // name.
-                status: partnerID.map { presences[$0]?.status ?? .offline }
+                status: partnerID.map { presences[$0]?.status ?? .offline },
+                subtitle: presence?.primaryActivity?.rowSubtitle
+                    ?? presence?.customStatus?.rowSubtitle,
+                subtitleEmoji: presence?.primaryActivity == nil
+                    ? presence?.customStatus?.emoji
+                    : nil,
+                tag: decoration?.primaryGuildTag,
+                tagBadgeURL: decoration.flatMap { decoration in
+                    guard let guildID = decoration.primaryGuildID,
+                          let hash = decoration.primaryGuildBadgeHash
+                    else { return nil }
+                    return CDN.guildTagBadge(guildID: guildID, hash: hash)
+                },
+                nameplateURL: decoration?.nameplate?.artworkURL,
+                nameplatePalette: decoration?.nameplate?.palette ?? .none,
+                nameStyle: decoration?.displayNameStyle,
+                nameColorValue: nil
             )))
         }
 

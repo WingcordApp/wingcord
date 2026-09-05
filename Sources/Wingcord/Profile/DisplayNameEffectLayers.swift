@@ -24,7 +24,11 @@ import WingcordCore
 enum DisplayNameEffectLayers {
 
     /// The cycle every effect but Prism runs on.
-    private static let cycle: CFTimeInterval = 4
+    ///
+    /// Exposed so a surface that plays an effect *once* — the DM list's rows do,
+    /// on a click — knows how long once is. A duration invented at the call site
+    /// would cut an effect off mid-movement.
+    static let cycle: CFTimeInterval = 4
     /// Prism scrolls one tile per two seconds, linearly.
     private static let prismCycle: CFTimeInterval = 2
 
@@ -145,7 +149,7 @@ enum DisplayNameEffectLayers {
             "fillColor",
             values: [white, white, off, white, white, off, white, white, off, white, white],
             keyTimes: [0, 0.15, 0.16, 0.18, 0.20, 0.22, 0.23, 0.25, 0.28, 0.50, 1],
-            duration: cycle,
+            duration: Self.cycle,
             timing: neonEase
         )
         core.add(flicker, forKey: "flicker")
@@ -204,7 +208,7 @@ enum DisplayNameEffectLayers {
                 "position.y",
                 values: [top, top, bottom, bottom],
                 keyTimes: [0, 0.05, 0.55, 1],
-                duration: cycle,
+                duration: Self.cycle,
                 timing: ease
             ),
             forKey: "sheen"
@@ -276,7 +280,7 @@ enum DisplayNameEffectLayers {
                 // Core Animation a value it has to coerce per frame.
                 values: [0, 0.05 * em, -0.08 * em, 0, 0] as [CGFloat],
                 keyTimes: [0, 0.18, 0.35, 0.50, 1],
-                duration: cycle,
+                duration: Self.cycle,
                 timing: ease
             ),
             forKey: "lift"
@@ -286,7 +290,7 @@ enum DisplayNameEffectLayers {
                 "transform.translation.y",
                 values: [-lift, -0.13 * em, 0, -lift, -lift] as [CGFloat],
                 keyTimes: [0, 0.18, 0.35, 0.50, 1],
-                duration: cycle,
+                duration: Self.cycle,
                 timing: ease
             ),
             forKey: "lift"
@@ -298,7 +302,7 @@ enum DisplayNameEffectLayers {
                     CGPoint.zero, CGPoint(x: width, y: height), CGPoint(x: width, y: height),
                 ],
                 keyTimes: [0, 0.5, 1],
-                duration: cycle,
+                duration: Self.cycle,
                 timing: ease
             ),
             forKey: "sweep"
@@ -340,7 +344,7 @@ enum DisplayNameEffectLayers {
                     keyPath,
                     values: values,
                     keyTimes: [0, 0.07, 0.14, 0.21, 0.28, 0.35, 1],
-                    duration: cycle,
+                    duration: Self.cycle,
                     timing: ease
                 )
                 squish.beginTime = start + Double(index) * 0.05
