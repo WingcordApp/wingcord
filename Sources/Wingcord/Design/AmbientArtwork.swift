@@ -62,16 +62,35 @@ struct AmbientArtwork: View {
             Palette.surface
 
             if let url {
-                RemoteImage(url: url, side: Self.rung, bucket: .thumbnail) { Color.clear }
-                    .aspectRatio(contentMode: .fill)
-                    // `opaque: true` — a transparent blur samples the clear
-                    // pixels outside the picture and pulls the whole field
-                    // toward grey at the edges.
-                    .blur(radius: 60, opaque: true)
-                    .scaleEffect(Self.overscan)
-                    .offset(y: -min(max(offset, 0) * Self.parallax, Self.maximumTravel))
-                    .saturation(1.25)
-                    .opacity(strength)
+                // **`Color.clear` under the picture, never the picture as a
+                // sibling** — the trap the banner in both profile surfaces is
+                // already written against, and this field had it. An
+                // aspect-**filled** image reports the size it grew to, so a
+                // 2.5:1 banner filling a 680 × 726 column reports 1,750 wide;
+                // a `ZStack` then sizes itself to that AND re-proposes it to
+                // every flexible sibling at placement, so `Palette.surface` —
+                // an opaque colour — spread 535 points past each edge.
+                //
+                // The `.background` this is applied through does not clip, and
+                // in the full profile the content column is drawn *after* the
+                // identity panel: the panel was painted over. Measured on the
+                // report's own capture — a 1,040-point sheet whose 360-point
+                // rail was 336.5 points of visible panel — which is the whole
+                // of "the profile bugs out when there is a banner", and, with
+                // the square avatar the fallback uses, of the trailing gutter
+                // that came out 23 points narrower than the leading one.
+                Color.clear.overlay {
+                    RemoteImage(url: url, side: Self.rung, bucket: .thumbnail) { Color.clear }
+                        .aspectRatio(contentMode: .fill)
+                        // `opaque: true` — a transparent blur samples the clear
+                        // pixels outside the picture and pulls the whole field
+                        // toward grey at the edges.
+                        .blur(radius: 60, opaque: true)
+                        .scaleEffect(Self.overscan)
+                        .offset(y: -min(max(offset, 0) * Self.parallax, Self.maximumTravel))
+                        .saturation(1.25)
+                        .opacity(strength)
+                }
             }
 
             if let tint {
@@ -95,6 +114,12 @@ struct AmbientArtwork: View {
             )
         }
         .compositingGroup()
+        // **The overscan is meant to be cropped.** The field is the artwork
+        // grown past the box on purpose so the blur's soft edges never reach
+        // its own — which only works if something takes the surplus off. It
+        // also keeps the rasterised buffer the size of the surface rather than
+        // the size of the picture that lights it.
+        .clipped()
         .drawingGroup()
         .allowsHitTesting(false)
         .accessibilityHidden(true)
@@ -105,8 +130,15 @@ extension View {
     /// Lights this surface with `url`, tinted by `tint`.
     ///
     /// Applied as a `.background` rather than a `ZStack` sibling so the field
-    /// never contributes to layout — a filling image reports its own size
-    /// upward, and a stack holding one sets the sheet's width to the picture's.
+    /// never contributes to the surface's own layout — a filling image reports
+    /// its own size upward, and a stack holding one sets the sheet's width to
+    /// the picture's.
+    ///
+    /// **That is only half the guard, and the other half is inside the field.**
+    /// A background is sized from its host but is neither bounded nor clipped
+    /// by it: whatever the field reports, it is drawn centred on the host and
+    /// allowed to run past it, over anything drawn earlier. So the picture must
+    /// contribute no size *there* either — see the body.
     func ambientArtwork(
         _ url: URL?,
         tint: Color?,
