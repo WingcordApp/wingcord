@@ -96,7 +96,7 @@ struct ProfilePresenter: ViewModifier {
                 .contentShape(.rect)
         }
         .buttonStyle(.plain)
-        .keyboardShortcut(.cancelAction)
+        .cancelAction(unless: model.gameProfileRequest != nil)
         .accessibilityLabel(Text("Close profile"))
         .transition(.opacity)
     }
@@ -187,5 +187,24 @@ extension View {
     /// Apply once, at the window root.
     func presentsProfiles() -> some View {
         modifier(ProfilePresenter())
+    }
+}
+
+extension View {
+    /// Escape, but only while this really is the topmost layer.
+    ///
+    /// **Three controls in this app claimed `.cancelAction` at once**, and one
+    /// key cannot mean three things: the profile's scrim, the profile sheet's
+    /// own close button, and the game profile's scrim above both of them.
+    /// SwiftUI settles a contested shortcut by hierarchy rather than by what is
+    /// drawn on top, so Escape over an open game profile closed the profile
+    /// *underneath* it and left the page floating over nothing.
+    ///
+    /// A conditional `KeyboardShortcut?` rather than `.disabled`: a disabled
+    /// control gives up its shortcut but also stops answering the pointer and
+    /// takes its label's contrast with it, which is wrong for a button that is
+    /// merely covered rather than unavailable.
+    func cancelAction(unless isCovered: Bool) -> some View {
+        keyboardShortcut(isCovered ? nil : .cancelAction)
     }
 }

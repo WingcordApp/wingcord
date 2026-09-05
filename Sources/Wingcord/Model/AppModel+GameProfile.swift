@@ -34,15 +34,24 @@ extension AppModel {
             reviews: game.reviews,
             openCriticURL: game.openCriticURL,
             announcements: (announcements?.messages ?? []).compactMap(Self.announcementCard),
-            // **Only where the reader could actually go there.** The
-            // announcements live in the game's own server, which most readers
-            // are not in — and a "View All" that opens nothing is the inert
-            // control `INVARIANTS.md` §5.5 forbids. Joining is offered one
-            // section over, on the community card.
+            // **The ids are enough, and the permission check that used to be
+            // here was the whole of "clicking an announcement does nothing".**
+            //
+            // It asked `canOpen(channelID)`, which resolves against the channel
+            // INDEX — and a channel in a server the reader has not joined is not
+            // in the index at all, so it answered false for every reader this
+            // shelf is drawn for. That was the right answer while nothing could
+            // open the destination. Previewing is what changed it: the server a
+            // game's announcements live in carries `PREVIEW_ENABLED` by
+            // construction — Discord only surfaces it here because it is
+            // discoverable — so the destination exists for everyone, and the
+            // lurk is what makes it reachable. See `AppModel.openAnnouncement`.
+            //
+            // The failure is still handled rather than assumed away: a lurk that
+            // is refused clears the preview and leaves the reader where they
+            // were, which is `SessionController.previewGuild`'s own guard.
             announcementsChannel: announcements.flatMap { payload in
-                guard let guildID = payload.guildID,
-                      let channelID = payload.channelID,
-                      canOpen(channelID)
+                guard let guildID = payload.guildID, let channelID = payload.channelID
                 else { return nil }
                 return (guildID, channelID)
             },

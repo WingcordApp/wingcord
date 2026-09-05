@@ -13,9 +13,11 @@ extension AppModel {
     /// joined. Selecting that channel directly would find no channel in the
     /// index and do nothing at all, which is what a shelf card did before this.
     ///
-    /// The game profile is dismissed first. It is a modal layer over the whole
-    /// window and the destination is behind it, so leaving it up would put the
-    /// transcript under a scrim nobody asked for.
+    /// **Every layer over the window comes down first**, not just the game
+    /// profile. The page is usually opened from a tile on somebody's full
+    /// profile, so both are up — and the destination is behind both of them.
+    /// Dismissing only the page leaves a profile sheet floating over a
+    /// transcript it has nothing to do with, which is what this did before.
     func openAnnouncement(
         _ messageID: MessageID?,
         in channelID: ChannelID,
@@ -23,6 +25,7 @@ extension AppModel {
         game gameID: ApplicationID
     ) {
         dismissGameProfile()
+        profileRequest = nil
         sessionController.previewGuild(
             guildID,
             channelID: channelID,

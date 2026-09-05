@@ -1,6 +1,7 @@
 import CoreGraphics
 import Foundation
 import WingcordCore
+import WingcordNet
 
 /// Deterministic fixture data, behind `--demo`.
 ///
@@ -494,6 +495,44 @@ enum DemoFixtures {
             origin: .gameProfile(Self.battlefield),
             isStarting: false
         )
+
+        // **The shelf that raises a preview, so the path is drivable.** Two
+        // posts in that server's announcement channel, with the markup a real
+        // one arrives in — a heading, a role ping and a link whose target is
+        // wrapped to suppress the embed. `AppModel.excerpt` folds all three
+        // away, and a fixture that carried plain prose would prove nothing
+        // about it.
+        let announcementChannel = index.channelIDs(inGuild: previewGuild).first {
+            index[$0]?.name == "announcements"
+        }
+        if let announcementChannel {
+            model.gameAnnouncements[Self.battlefield] = GameAnnouncements(
+                guildID: previewGuild,
+                channelID: announcementChannel,
+                messages: [
+                    Message(
+                        // **Real snowflake magnitudes**: a message's date is
+                        // derived from its id, so a small one dates the card to
+                        // 2015 and the shelf reads as an archive.
+                        id: MessageID(rawValue: 1_544_800_968_774_918_184),
+                        channelID: announcementChannel,
+                        authorID: userIDs[1],
+                        content: "## Season 2 is live\nNew map, new mode, and the "
+                            + "reworked gunplay everyone has been asking for. "
+                            + "<@&1151759657363320838> "
+                            + "[battlefield.com/season-2](<https://www.ea.com/games/battlefield>)"
+                    ),
+                    Message(
+                        id: MessageID(rawValue: 1_542_500_000_000_000_000),
+                        channelID: announcementChannel,
+                        authorID: userIDs[1],
+                        content: "Patch notes for 2.1 are up. Weapon balance, two "
+                            + "crash fixes, and the scoreboard finally sorts by "
+                            + "squad. <@&1151759657363320838>"
+                    ),
+                ]
+            )
+        }
         model.roleRevision &+= 1
         model.memberRevision &+= 1
         model.presenceRevision &+= 1

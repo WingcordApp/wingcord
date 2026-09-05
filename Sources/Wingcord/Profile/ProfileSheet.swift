@@ -190,7 +190,9 @@ struct ProfileSheet: View {
         }
         .buttonStyle(.plain)
         .interactiveChromeOverMedia(in: .circle)
-        .keyboardShortcut(.cancelAction)
+        // See `View.cancelAction(unless:)`: a game profile opened from this
+        // sheet's own board sits on top of it and owns Escape while it is there.
+        .cancelAction(unless: model.gameProfileRequest != nil)
         .accessibilityLabel(Text("Close"))
     }
 
