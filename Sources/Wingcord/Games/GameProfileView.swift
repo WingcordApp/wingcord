@@ -177,13 +177,14 @@ struct GameProfileView: View {
         if !game.announcements.isEmpty {
             GameAnnouncementsShelf(
                 announcements: game.announcements,
-                openChannel: viewAllAction
+                openChannel: viewAllAction,
+                openMessage: openAnnouncementAction
             )
         }
     }
 
-    /// Nil where the reader is not in the game's server, and the shelf then
-    /// draws its heading without a "View All".
+    /// Nil where the digest carried no channel, and the shelf then draws its
+    /// heading without a "View All".
     ///
     /// Written out with an explicit type rather than as a ternary in the call:
     /// a conditional whose branches are `nil` and an unapplied method reference
@@ -192,6 +193,12 @@ struct GameProfileView: View {
     private var viewAllAction: (() -> Void)? {
         guard game.announcementsChannel != nil else { return nil }
         return openAnnouncementsChannel
+    }
+
+    /// Opening one post. Nil only where the digest carried no channel.
+    private var openAnnouncementAction: ((MessageID) -> Void)? {
+        guard game.announcementsChannel != nil else { return nil }
+        return { messageID in openAnnouncement(messageID) }
     }
 
     /// The aside: one floating glass panel, with regions cut into it.
@@ -262,10 +269,22 @@ struct GameProfileView: View {
         }
     }
 
+    /// **The reader is usually not in the game's server**, so this cannot be a
+    /// plain channel selection: `openChannelFromSurface` looks the channel up in
+    /// the index, finds nothing, and does nothing at all. Previewing is what
+    /// makes the destination exist — see `AppModel.openAnnouncement`.
     private func openAnnouncementsChannel() {
+        openAnnouncement(nil)
+    }
+
+    private func openAnnouncement(_ messageID: MessageID?) {
         guard let channel = game.announcementsChannel else { return }
-        model.dismissGameProfile()
-        model.openChannelFromSurface(channel.channelID)
+        model.openAnnouncement(
+            messageID,
+            in: channel.channelID,
+            guildID: channel.guildID,
+            game: game.gameID
+        )
     }
 }
 

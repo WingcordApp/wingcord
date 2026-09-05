@@ -116,11 +116,25 @@ struct ConversationPane: View {
                 // transcript, so the height it takes is measured with the
                 // composer's and the newest message is never hidden behind it.
                 VStack(spacing: 0) {
-                    // Above the composer, not below it. The composer floats at
-                    // the window's foot, so a line under it is a line jammed
-                    // against the edge of the screen.
-                    TypingIndicatorContainer(channelID: channelID)
-                    ComposerContainer(channelID: channelID)
+                    // **A previewed server gets the way back, not a composer.**
+                    // The reader cannot post, so a bar that says so and nothing
+                    // else would spend the window's only fixed slot on a refusal
+                    // — where the one thing they do need is the page that sent
+                    // them here. The typing indicator goes with it: nobody is
+                    // waiting on somebody who cannot type.
+                    if model.isPreviewingSelectedGuild,
+                       let preview = model.guildPreviewPresentation
+                    {
+                        PreviewReturnBar(preview: preview, back: { model.leavePreview() })
+                            .padding(.horizontal, Spacing.snug)
+                            .padding(.bottom, Spacing.snug)
+                    } else {
+                        // Above the composer, not below it. The composer floats
+                        // at the window's foot, so a line under it is a line
+                        // jammed against the edge of the screen.
+                        TypingIndicatorContainer(channelID: channelID)
+                        ComposerContainer(channelID: channelID)
+                    }
                 }
                 .background {
                         GeometryReader { proxy in

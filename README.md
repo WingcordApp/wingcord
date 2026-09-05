@@ -32,7 +32,7 @@ swift test                                        # layout, painting, viewport
 
 | Flag | What it does |
 | --- | --- |
-| `--demo` | Fixture servers, channels, members and a 220-message transcript. Nothing else reaches it — there is no fallback from a failed sign-in into fixtures. |
+| `--demo` | Fixture servers, channels, members and a 220-message transcript, plus one server pinned above the rail's divider that the fixture is **previewing** rather than a member of. Nothing else reaches it — there is no fallback from a failed sign-in into fixtures. |
 
 ---
 

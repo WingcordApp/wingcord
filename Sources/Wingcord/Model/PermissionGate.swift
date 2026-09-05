@@ -44,7 +44,8 @@ final class PermissionGate {
     }
 
     /// Discards everything. Called on any role, member or channel-structure
-    /// change, and on account switch.
+    /// change, on account switch, and when a preview starts or ends — a lurk
+    /// changes every answer in one guild and the cache cannot see it happen.
     func invalidate() {
         base.removeAll(keepingCapacity: true)
         channels.removeAll(keepingCapacity: true)
@@ -98,9 +99,26 @@ final class PermissionGate {
             guildOwnerID: guild.ownerID,
             roles: model.roles[guildID] ?? [:],
             channel: governing
-        )
+        ).intersection(lurkerMask(for: guildID))
         channels[channelID] = resolved
         return resolved
+    }
+
+    /// Everything a lurker keeps, or everything, for a server they are in.
+    ///
+    /// **The resolver cannot see this and must not try to.** A lurker has no
+    /// member record, so it falls back to `@everyone` alone — which on most
+    /// public servers grants `SEND_MESSAGES` and `ADD_REACTIONS`, and the
+    /// resolver is right to answer that: those *are* `@everyone`'s permissions.
+    /// What it does not know is that the reader is not one of them yet. That is
+    /// a fact about the session, it lives on the store, and it is applied here
+    /// where the two meet.
+    ///
+    /// An intersection rather than a subtraction, so a permission Discord adds
+    /// next year is denied to a lurker without anybody remembering to add it —
+    /// see `Permissions.lurker`.
+    private func lurkerMask(for guildID: GuildID) -> Permissions {
+        model.guildPreview?.guildID == guildID ? .lurker : .all
     }
 
     /// Guild-level permissions, with no channel in the picture.
@@ -118,7 +136,7 @@ final class PermissionGate {
             guildOwnerID: guild.ownerID,
             roles: model.roles[guildID] ?? [:],
             channel: nil
-        )
+        ).intersection(lurkerMask(for: guildID))
         base[guildID] = resolved
         return resolved
     }
@@ -191,6 +209,20 @@ final class PermissionGate {
         canSend(in: channelID) && permissions(in: channelID).contains(.attachFiles)
     }
 
+    /// Whether the reader may connect to a voice channel.
+    ///
+    /// **`CONNECT` is a real bit and it was never checked.** Every other write
+    /// in the app is gated and this one was reached straight from the row —
+    /// which was survivable while every channel on screen belonged to a server
+    /// the reader had joined, and stops being so the moment a **previewed**
+    /// server puts its voice channels in the list. A lurker holds
+    /// `Permissions.lurker` and nothing else, so this answers false there by
+    /// construction rather than by a second rule about previews.
+    func canJoinVoice(_ channelID: ChannelID) -> Bool {
+        let resolved = permissions(in: channelID)
+        return resolved.contains(.viewChannel) && resolved.contains(.connect)
+    }
+
     /// Whether `/` may open a command list here.
     ///
     /// **A separate bit from `sendMessages`, and it is genuinely separate**:
@@ -228,6 +260,7 @@ final class PermissionGate {
                 hasText: !message.content.isEmpty,
                 isPinned: message.isPinned,
                 isDirectMessage: channel?.kind.isPrivate ?? false,
+                isPreviewing: guildID != nil && guildID == model.guildPreview?.guildID,
                 developerMode: AppSettings.shared.developerMode
             )
         )

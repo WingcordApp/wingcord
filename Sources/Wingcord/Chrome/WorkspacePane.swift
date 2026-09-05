@@ -19,6 +19,7 @@ struct WorkspacePane: View {
     /// How far the supplementary column is lifted off the shared field.
     static let rosterLift: Double = 0.055
 
+    @Environment(AppModel.self) private var model
     @Environment(\.motion) private var motion
 
     /// The window's chrome above this column.
@@ -32,6 +33,26 @@ struct WorkspacePane: View {
 
     var body: some View {
         columns
+            // **The preview banner is declared HERE, above both columns**, so it
+            // spans the transcript and the roster the way Discord's does and so
+            // every surface a previewed server can show — a channel, a forum, a
+            // voice stage, the server guide — inherits it without a branch of
+            // its own.
+            //
+            // `safeAreaBar`, not an overlay: the canvases underneath run to the
+            // window's top and pay for the chrome as a content inset, and
+            // `chromeHeight` below is read from the safe area — so the
+            // transcript's inset grows by exactly this bar's height with no
+            // number written down anywhere.
+            .safeAreaBar(edge: .top, spacing: 0) {
+                if let preview = model.guildPreviewPresentation, model.isPreviewingSelectedGuild {
+                    GuildPreviewBanner(
+                        preview: preview,
+                        join: { model.joinPreviewedGuild() },
+                        leave: { model.leavePreview() }
+                    )
+                }
+            }
             .onGeometryChange(for: CGFloat.self) { $0.safeAreaInsets.top } action: { chromeHeight = $0 }
     }
 

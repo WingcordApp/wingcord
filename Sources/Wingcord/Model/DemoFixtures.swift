@@ -440,9 +440,60 @@ enum DemoFixtures {
         model.members[firstGuild] = guildMembers
         model.presences = presences
 
+        // **A server nobody joined, so `--demo` reaches preview mode.**
+        //
+        // It is built like every other fixture guild and then deliberately left
+        // OUT of `folders`, which is the whole shape of a lurk: the account's
+        // folder order is a settings payload, a previewed server is not in it,
+        // and the rail pins it above the divider instead. Without this the
+        // banner, the return bar, the rail pin and every permission the mask
+        // takes away are code nobody can see without an account and a link into
+        // a game's own server.
+        let previewGuild = GuildID(rawValue: 1_900)
+        guilds[previewGuild] = Guild(
+            id: previewGuild,
+            name: "The Sims",
+            bannerHash: "demofixturebanner",
+            ownerID: userIDs[1],
+            premiumTier: 3,
+            features: ["COMMUNITY", "DISCOVERABLE", "PREVIEW_ENABLED"],
+            memberCount: 1_240_000
+        )
+        index.replaceChannels(
+            channels(for: previewGuild, spec: previewGuildSpec),
+            inGuild: previewGuild
+        )
+        // **`@everyone` grants everything a public server does**, and that is
+        // the point of the fixture: a lurker's permissions are resolved from
+        // this role, because there is no member record to resolve from. A guild
+        // with no roles at all resolves to nothing and hides its own channels —
+        // which would make the preview *look* gated for the wrong reason and
+        // hide whether the mask works at all.
+        let previewEveryone = RoleID(rawValue: previewGuild.rawValue)
+        model.roles[previewGuild] = [
+            previewEveryone: Role(
+                id: previewEveryone,
+                name: "@everyone",
+                position: 0,
+                permissions: [
+                    .viewChannel, .readMessageHistory, .sendMessages, .addReactions,
+                    .attachFiles, .embedLinks, .connect, .speak, .createInvite,
+                    .useApplicationCommands,
+                ]
+            ),
+        ]
+
         model.guilds = guilds
         model.folders = folders
         model.channelIndex = index
+        // `isStarting: false`: the lurk has already been acknowledged and the
+        // GUILD_CREATE has already landed, which is the state every surface
+        // draws against.
+        model.guildPreview = GuildPreview(
+            guildID: previewGuild,
+            origin: .gameProfile(Self.battlefield),
+            isStarting: false
+        )
         model.roleRevision &+= 1
         model.memberRevision &+= 1
         model.presenceRevision &+= 1
@@ -932,6 +983,19 @@ enum DemoFixtures {
         var memberCount: Int
         var categories: [(String, [String])]
     }
+
+    /// The previewed server's channels. Announcement-shaped, because that is
+    /// what a game's own server is and what the announcement shelf links into.
+    private static let previewGuildSpec = GuildSpec(
+        name: "The Sims",
+        hasBanner: true,
+        isCommunity: true,
+        memberCount: 1_240_000,
+        categories: [
+            ("ANNOUNCEMENTS & INFO", ["welcome", "moderation-info", "announcements"]),
+            ("GENERAL", ["llama-lounge", "anything-sims", "sims-memes"]),
+        ]
+    )
 
     private static let guildSpecs: [GuildSpec] = [
         GuildSpec(

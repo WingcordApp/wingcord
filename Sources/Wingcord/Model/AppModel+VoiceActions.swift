@@ -17,7 +17,12 @@ extension AppModel {
 
     // MARK: Joining
 
+    /// Joins a guild voice channel.
+    ///
+    /// Gated on `CONNECT` — see `PermissionGate.canJoinVoice`. A direct call has
+    /// no such bit and is not routed through here.
     func joinVoice(_ channelID: ChannelID) {
+        guard permissionGate.canJoinVoice(channelID) else { return }
         let guildID = channelIndex[channelID]?.guildID
         voice.join(channelID: channelID, guildID: guildID)
     }

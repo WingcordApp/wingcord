@@ -376,6 +376,12 @@ final class SessionController {
             if model.connectionState != .ready { model.connectionState = .connecting }
         case .ready(let snapshot):
             Self.trace("applying READY")
+            // **Before the snapshot lands, not after.** A READY is a NEW gateway
+            // session, and a lurk lives on the old one — so the previewed guild
+            // is already gone server-side and its channels are about to be
+            // absent from the store. Clearing first means the rail never draws a
+            // frame with a server in it that nothing can open.
+            dropPreviewForNewSession()
             applyReady(snapshot)
         case .resumed:
             model.connectionState = .ready

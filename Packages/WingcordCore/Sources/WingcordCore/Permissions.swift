@@ -86,6 +86,24 @@ public struct Permissions: OptionSet, Hashable, Sendable, Codable {
     /// `manageThreads` — audit action 213.
     public static let bypassSlowmode = Permissions(rawValue: 1 << 52)
     public static let manageOfficialMessages = Permissions(rawValue: 1 << 53)
+
+    /// Everything a **lurker** keeps: read the channel, read its history.
+    ///
+    /// **An allow-list, and it has to be one.** A lurker is not a member, so the
+    /// resolver computing their permissions finds no member record, falls back
+    /// to `@everyone` alone, and hands back whatever a server grants the public
+    /// — which on most servers includes `SEND_MESSAGES` and `ADD_REACTIONS`.
+    /// Every one of those would 403, and §5.5 forbids a control that looks like
+    /// it works and does not.
+    ///
+    /// Written as the two bits that are kept rather than as the many that are
+    /// taken away, because the failure modes are not symmetric: a deny-list that
+    /// misses a bit grants it, and Discord adds bits. This misses nothing by
+    /// construction, and a bit added tomorrow is denied by default.
+    ///
+    /// Not "read-only": `VIEW_CHANNEL` alone still lists a voice channel, and
+    /// connecting to one is a write in every sense that matters here.
+    public static let lurker: Permissions = [.viewChannel, .readMessageHistory]
 }
 
 /// Resolves what one member may do in one channel.

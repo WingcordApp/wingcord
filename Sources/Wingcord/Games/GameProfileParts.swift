@@ -205,9 +205,12 @@ struct GameMediaStage: View {
 /// Recent posts from the game's own server.
 struct GameAnnouncementsShelf: View {
     var announcements: [GameAnnouncementCard]
-    /// Nil where the reader is not in that server, and the heading then carries
-    /// no action.
+    /// Opens the whole channel. **Always available now**: the reader does not
+    /// have to be in the server, because opening it starts a preview — see
+    /// `AppModel.openAnnouncement`.
     var openChannel: (() -> Void)?
+    /// Opens one post where it was made.
+    var openMessage: ((MessageID) -> Void)?
 
     private static let cardWidth: CGFloat = 220
     private static let cardHeight: CGFloat = 240
@@ -240,8 +243,11 @@ struct GameAnnouncementsShelf: View {
             ScrollView(.horizontal) {
                 HStack(alignment: .top, spacing: Spacing.snug) {
                     ForEach(announcements) { announcement in
-                        AnnouncementCard(announcement: announcement)
-                            .frame(width: Self.cardWidth, height: Self.cardHeight)
+                        AnnouncementCard(
+                            announcement: announcement,
+                            open: openMessage.map { open in { open(announcement.id) } }
+                        )
+                        .frame(width: Self.cardWidth, height: Self.cardHeight)
                     }
                 }
                 .padding(.vertical, 2)
@@ -253,8 +259,23 @@ struct GameAnnouncementsShelf: View {
 
 private struct AnnouncementCard: View {
     var announcement: GameAnnouncementCard
+    /// Nil only where the post carries no channel to open, which the digest
+    /// route has never yet answered without. A card with no destination is drawn
+    /// as a card, not as a dead button — §5.5.
+    var open: (() -> Void)?
 
     var body: some View {
+        if let open {
+            Button(action: open) { card }
+                .buttonStyle(.plain)
+                .accessibilityAddTraits(.isButton)
+                .accessibilityHint(Text("Opens this post in the game's server"))
+        } else {
+            card
+        }
+    }
+
+    private var card: some View {
         VStack(alignment: .leading, spacing: 0) {
             if let url = announcement.imageURL {
                 Color.clear

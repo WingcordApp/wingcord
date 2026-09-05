@@ -281,6 +281,7 @@ private struct GuildRailContainer: View {
     var body: some View {
         GuildRail(
             items: model.railItems,
+            previewedGuild: model.previewRailGuild,
             selectedGuildID: model.selectedGuildID,
             isHomeSelected: model.selectedGuildID == nil,
             homeMentionCount: 0,

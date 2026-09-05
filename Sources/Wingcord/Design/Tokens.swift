@@ -393,6 +393,13 @@ nonisolated enum Metrics {
     /// An app's icon in the Recents strip. Larger than a list row's, because
     /// the icon is the only thing that row carries — there is no name beside it.
     static let activityRecentIcon: CGFloat = 40
+    /// The game's mark on the preview's return bar.
+    ///
+    /// **The same square asset the board rows use, drawn larger.** Discord does
+    /// the same thing on this bar rather than shipping a second rendition, and
+    /// a mark is authored to read at a glance — it survives the scale where a
+    /// slice of portrait box art would not.
+    static let previewReturnIcon: CGFloat = 34
     /// One featured tile's artwork, two across the flyout's inner width.
     static let activityTileWidth: CGFloat = 168
     /// That artwork's height. 16:9, which is the shape every `embedded_cover`

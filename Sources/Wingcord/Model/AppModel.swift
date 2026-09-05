@@ -444,6 +444,17 @@ final class AppModel {
     /// the user would let one overwrite the other's buttons.
     var activityButtonURLs: [String: [URL]] = [:]
 
+    // MARK: Previewing a server
+
+    /// The server being previewed, if any. See `GuildPreview`.
+    ///
+    /// **Never persisted and never restored.** A lurk lives on one gateway
+    /// session; a preview that outlived the socket would be a server in the rail
+    /// whose channels stop loading with nothing on screen to say why.
+    var guildPreview: GuildPreview?
+    /// Whether a join raised from the preview banner is in flight.
+    var isJoiningPreviewedGuild = false
+
     // MARK: A game's own profile
 
     /// The game whose profile is open, if any.
@@ -812,6 +823,20 @@ final class AppModel {
     func clearAllMessages() {
         messageBoxes.removeAll(keepingCapacity: false)
         boxRecency.removeAll(keepingCapacity: false)
+    }
+
+    /// Drops the transcripts of a set of channels.
+    ///
+    /// The one caller is `forgetPreviewedGuild`: a lurk ends and the server's
+    /// channels stop existing, so their transcripts are memory held for rows
+    /// nothing can reach. Here rather than in that extension because the table
+    /// and its recency list are `private(set)` together — a second place that
+    /// emptied one without the other is exactly what that access level is for.
+    func forgetMessages(in channelIDs: some Sequence<ChannelID>) {
+        for channelID in channelIDs {
+            messageBoxes[channelID] = nil
+            boxRecency.removeAll { $0 == channelID }
+        }
     }
 
     /// Records that a channel's box was used, and evicts past the limit.

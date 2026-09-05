@@ -498,6 +498,7 @@ public actor DiscordREST {
         route: String,
         query: [URLQueryItem] = [],
         body: Body?,
+        headers: [String: String] = [:],
         as type: T.Type
     ) async throws -> T {
         let data = try await requestData(
@@ -505,7 +506,8 @@ public actor DiscordREST {
             path: path,
             route: route,
             query: query,
-            body: body
+            body: body,
+            headers: headers
         )
         // One route's raw shape is worth naming, once, while it is still
         // unknown. See `traceProfileShape`.
@@ -518,12 +520,18 @@ public actor DiscordREST {
         }
     }
 
+    /// - Parameter headers: request-scoped headers on top of the client's own.
+    ///   **Only for the analytics headers Discord's own client sends on specific
+    ///   routes** — `x-context-properties` and nothing else so far. Anything
+    ///   every request needs belongs in `ClientMetadata.apply`, which is the one
+    ///   place a header can be added without a call site having to remember it.
     func requestData<Body: Encodable>(
         method: String,
         path: String,
         route: String,
         query: [URLQueryItem] = [],
-        body: Body?
+        body: Body?,
+        headers: [String: String] = [:]
     ) async throws -> Data {
         await limiter.acquire(route: route)
 
@@ -537,6 +545,9 @@ public actor DiscordREST {
         var request = URLRequest(url: url)
         request.httpMethod = method
         metadata.apply(to: &request, token: token)
+        // After the client's own, so a route may only add and never silently
+        // replace an identity header.
+        for (name, value) in headers { request.setValue(value, forHTTPHeaderField: name) }
         if let body {
             request.httpBody = try JSONEncoder().encode(body)
             request.setValue("application/json", forHTTPHeaderField: "Content-Type")

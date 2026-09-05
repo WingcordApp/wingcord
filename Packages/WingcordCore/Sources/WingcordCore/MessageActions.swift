@@ -84,6 +84,15 @@ public enum MessageActionPolicy {
         public var isPinned: Bool
         /// A DM or a group DM: no roles, and Discord's own implicit grants.
         public var isDirectMessage: Bool
+        /// The reader is **lurking** this server rather than in it.
+        ///
+        /// **Not expressible as a permission, which is why it is its own
+        /// input.** Joining a reaction somebody else started needs no bit at all
+        /// — see `joinReaction` — so a lurker with `viewChannel` would be
+        /// offered every chip on the message and refused by the API on each. The
+        /// three actions that touch the server (react, reply, edit) are already
+        /// gated by bits a lurker does not hold; this is the fourth.
+        public var isPreviewing: Bool
         /// Whether the reader turned developer mode on.
         public var developerMode: Bool
 
@@ -96,6 +105,7 @@ public enum MessageActionPolicy {
             hasText: Bool = true,
             isPinned: Bool = false,
             isDirectMessage: Bool = false,
+            isPreviewing: Bool = false,
             developerMode: Bool = false
         ) {
             self.permissions = permissions
@@ -106,6 +116,7 @@ public enum MessageActionPolicy {
             self.hasText = hasText
             self.isPinned = isPinned
             self.isDirectMessage = isDirectMessage
+            self.isPreviewing = isPreviewing
             self.developerMode = developerMode
         }
     }
@@ -119,7 +130,10 @@ public enum MessageActionPolicy {
         guard input.permissions.contains(.viewChannel) else { return [] }
 
         var actions: MessageActions = []
-        let canAct = !input.isTimedOut
+        // A lurker is in the same position as a timed-out member for everything
+        // that reaches the server, and in a different one for everything that
+        // does not: they may still forward, copy and mark unread.
+        let canAct = !input.isTimedOut && !input.isPreviewing
 
         // Reacting. Two bits, because Discord gates them differently — see the
         // note on `joinReaction`.

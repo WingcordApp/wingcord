@@ -606,16 +606,30 @@ private struct ServerMenuContent: View {
     /// second guard, because the menu is also reachable from the toolbar title.
     var guildID: GuildID?
 
+    @Environment(AppModel.self) private var model
+
     var body: some View {
         if let guildID {
-            Button("Server Settings", systemImage: "gearshape") {
-                ServerSettingsWindow.open(guildID)
-            }
-            Button("Invite People", systemImage: "person.badge.plus") {
-                // The same window, on the page that makes the link. A second
-                // sheet that made one invite would be a second implementation
-                // of a form the settings window already has.
-                ServerSettingsWindow.open(guildID, section: .invites)
+            // **A previewed server has two items and neither is a setting.**
+            // Server Settings and Invite People both need permissions a lurker
+            // does not hold, and a menu that offers them offers two round trips
+            // to a 403 — §5.5. Discord's own preview menu is exactly these two,
+            // and its "Leave Server" is the same verb this app's Back is: it
+            // ends the lurk.
+            if model.isPreviewing(guildID) {
+                Button("Leave Server", systemImage: "rectangle.portrait.and.arrow.right") {
+                    model.leavePreview()
+                }
+            } else {
+                Button("Server Settings", systemImage: "gearshape") {
+                    ServerSettingsWindow.open(guildID)
+                }
+                Button("Invite People", systemImage: "person.badge.plus") {
+                    // The same window, on the page that makes the link. A second
+                    // sheet that made one invite would be a second implementation
+                    // of a form the settings window already has.
+                    ServerSettingsWindow.open(guildID, section: .invites)
+                }
             }
             Divider()
             Button("Copy Server ID", systemImage: "number") {

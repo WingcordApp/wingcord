@@ -17,6 +17,13 @@ import WingcordCore
 /// decoded off-main.
 struct GuildRail: View, Equatable {
     var items: [RailItem]
+    /// The server being previewed, pinned above the divider.
+    ///
+    /// **Not in `items`, and it must not be.** That list is built from the
+    /// account's folder order — a settings payload the client writes back — and
+    /// a server nobody joined has no place in it. Discord pins the preview to the
+    /// top for the same reason: it is a temporary destination, not a membership.
+    var previewedGuild: RailGuild?
     var selectedGuildID: GuildID?
     /// Whether the home (DMs) entry is the current destination.
     var isHomeSelected: Bool
@@ -30,6 +37,7 @@ struct GuildRail: View, Equatable {
     /// that makes an `EquatableView` look like it does nothing at all.
     static func == (lhs: GuildRail, rhs: GuildRail) -> Bool {
         lhs.items == rhs.items
+            && lhs.previewedGuild == rhs.previewedGuild
             && lhs.selectedGuildID == rhs.selectedGuildID
             && lhs.isHomeSelected == rhs.isHomeSelected
             && lhs.homeMentionCount == rhs.homeMentionCount
@@ -49,6 +57,17 @@ struct GuildRail: View, Equatable {
                     hasUnread: homeHasUnread,
                     action: selectHome
                 )
+
+                // Between the home entry and the rule, which is where Discord
+                // puts it: above the line is where you are, below it is what you
+                // are in.
+                if let previewedGuild {
+                    GuildRailTile(
+                        guild: previewedGuild,
+                        isSelected: previewedGuild.id == selectedGuildID,
+                        action: { selectGuild(previewedGuild.id) }
+                    )
+                }
 
                 RailDivider()
 
