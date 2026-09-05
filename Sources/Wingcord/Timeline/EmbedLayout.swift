@@ -91,8 +91,8 @@ nonisolated enum EmbedLayoutEngine {
         // is what a pasted image link unfurls into, and drawing a bordered box
         // with twelve points of padding around a photograph is a frame nobody
         // asked for — `Embed.isBareImage` exists to name exactly this case.
-        if embed.isBareImage, let image = embed.image {
-            return bareImage(image, origin: origin, availableWidth: availableWidth)
+        if let media = embed.bareMedia {
+            return bareImage(media, origin: origin, availableWidth: availableWidth)
         }
 
         let cardWidth = min(Metrics.embedMaxWidth, availableWidth)

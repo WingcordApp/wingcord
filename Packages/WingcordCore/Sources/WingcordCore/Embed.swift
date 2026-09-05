@@ -107,13 +107,42 @@ public struct Embed: Hashable, Sendable, Codable {
         self.providerName = providerName
     }
 
-    /// An embed that is nothing but a picture.
+    /// The picture an embed that is *only* a picture is made of, or nil where
+    /// the embed is a card.
     ///
-    /// These render as a bare image with no card, no rule and no padding, which
-    /// is how Discord draws a pasted image link. Treating one as a card puts an
-    /// empty bordered box around a photograph.
-    public var isBareImage: Bool {
-        title == nil && description == nil && author == nil && footer == nil
-            && fields.isEmpty && image != nil
+    /// These render with no card, no rule and no padding, which is how Discord
+    /// draws a pasted image link. Treating one as a card puts an empty bordered
+    /// box around a photograph — and, worse, drops the photograph into the
+    /// 80-point thumbnail well in the corner.
+    ///
+    /// **A `type: "image"` embed carries its picture in `thumbnail`, and `image`
+    /// is absent entirely.** Captured, `threads.har`:
+    ///
+    /// ```json
+    /// { "type": "image",
+    ///   "url": "https://cdn.discordapp.com/emojis/1180624887707074641.webp?…",
+    ///   "thumbnail": { "url": "…", "proxy_url": "…", "width": 48, "height": 36 } }
+    /// ```
+    ///
+    /// Reading `image` alone is what made every pasted picture and every direct
+    /// `.gif` link render as a short empty card with a tiny thumbnail beside it.
+    ///
+    /// **A `gifv` is bare even though it has a title.** Tenor's unfurl carries a
+    /// title, a provider and a page URL, and Discord draws none of them — just
+    /// the picture. So the type decides here, not the emptiness test: an embed
+    /// that *is* a GIF is not a link preview that happens to have one.
+    public var bareMedia: Media? {
+        if kind == "gifv" || kind == "video" {
+            // **The thumbnail, not the video.** `video` on one of these is an
+            // MP4 that this client has no inline player for; the thumbnail is
+            // the picture, at the source's own dimensions.
+            return thumbnail ?? image
+        }
+        guard title == nil, description == nil, author == nil, footer == nil, fields.isEmpty
+        else { return nil }
+        return image ?? thumbnail
     }
+
+    /// Whether this embed draws as a bare picture rather than as a card.
+    public var isBareImage: Bool { bareMedia != nil }
 }

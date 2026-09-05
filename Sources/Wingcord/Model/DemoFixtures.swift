@@ -1292,8 +1292,25 @@ enum DemoFixtures {
     /// **An emoji-only message every so often**, because the jumbo rule is a
     /// layout branch and a branch nothing on screen exercises is a branch that
     /// breaks silently.
+    /// The one message that is nothing but a link to a picture.
+    ///
+    /// **Keyed on the absolute index, because the two halves are picked by
+    /// different moduli** — the words by `% 23` and the payload by `% 31`. They
+    /// have to be the same message or the suppression has no embed to check
+    /// itself against and the fixture proves nothing.
+    /// Near the foot of the 220-message transcript, so it is on screen when the
+    /// channel opens rather than two hundred rows up.
+    private static let bareImageLinkIndex = 214
+
+    /// The GIF that link unfurls into. A real file on disk — see `DemoMedia` —
+    /// so the row actually animates rather than reserving a box for a 404.
+    private static var bareImageLinkURL: String {
+        DemoMedia.attachments().first { $0.filename.hasSuffix(".gif") }?.url ?? ""
+    }
+
     private static func content(at index: Int) -> String {
-        switch index % 23 {
+        if index == bareImageLinkIndex { return bareImageLinkURL }
+        return switch index % 23 {
         case 7: "🎉"
         case 18: "😀 🎉 ✨"
         default: bodies[index % bodies.count]
@@ -1383,7 +1400,23 @@ enum DemoFixtures {
     }
 
     private static func payload(at index: Int) -> MessagePayload? {
-        switch index % 31 {
+        // **A `type: "image"` embed puts its picture in `thumbnail` and sends no
+        // `image` at all** — captured, `threads.har`. That is the shape a pasted
+        // picture link actually arrives in, and reading `image` alone is what
+        // drew every one of them as a short empty card with the picture squeezed
+        // into the thumbnail well beside it. The fixture carries the captured
+        // shape rather than the convenient one.
+        if index == bareImageLinkIndex {
+            let url = bareImageLinkURL
+            return MessagePayload(embeds: [Embed(
+                kind: "image",
+                url: url,
+                thumbnail: Embed.Media(
+                    url: url, proxyURL: url, width: 420, height: 420
+                )
+            )])
+        }
+        return switch index % 31 {
         case 12:
             MessagePayload(
                 embeds: [Embed(

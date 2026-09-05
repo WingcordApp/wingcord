@@ -104,6 +104,37 @@ public struct Message: Hashable, Sendable, Identifiable, Codable {
         return embeds.filter { $0.kind != "poll_result" }
     }
 
+    /// The words to draw, which is not always the words that were sent.
+    ///
+    /// **A message that is nothing but a link to a picture draws the picture and
+    /// not the link.** Discord does this and it is not cosmetic: the unfurl is
+    /// already the whole message, so the address above it is the same thing said
+    /// twice — once in a form nobody can read. Both of the shapes that reach
+    /// this are one URL and one embed: a direct `cdn.discordapp.com/…/x.gif`
+    /// link, and a Tenor page whose `gifv` unfurl *is* the GIF.
+    ///
+    /// **Every URL in the content has to be accounted for, and the whole content
+    /// has to be URLs.** "look at this https://…gif" keeps its words, because
+    /// the sentence is not the link; two links where only one unfurled keeps
+    /// both, because dropping the text would lose the one that did not.
+    ///
+    /// Matched against the embed's own `url` — the address Discord says it
+    /// unfurled — rather than against the media inside it, which is a different
+    /// address on a different host after proxying.
+    public var displayedContent: String {
+        let trimmed = content.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return content }
+        let sources = Set(
+            drawableEmbeds.lazy
+                .filter { $0.isBareImage }
+                .compactMap(\.url)
+        )
+        guard !sources.isEmpty else { return content }
+        let words = trimmed.split(whereSeparator: \.isWhitespace)
+        guard words.allSatisfy({ sources.contains(String($0)) }) else { return content }
+        return ""
+    }
+
     public var attachments: [Attachment] { payload?.attachments ?? [] }
     public var embeds: [Embed] { payload?.embeds ?? [] }
     public var components: [ActionRow] { payload?.components ?? [] }

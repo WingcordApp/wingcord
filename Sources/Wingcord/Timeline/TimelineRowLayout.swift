@@ -748,8 +748,13 @@ nonisolated struct TimelineLayoutEngine: Sendable {
         // test and `:thumbsup:` was expanded server-side long before this.
         var textBlock: TimelineTextBlock?
         let textOrigin = CGPoint(x: contentX, y: y)
-        if !message.content.isEmpty {
-            let document = parser.parse(message.content)
+        // **`displayedContent`, not `content`.** A message that is nothing but a
+        // link to a picture draws the picture — see `Message.displayedContent`.
+        // Display only: the words the message actually carries are still what a
+        // copy, a search and an accessibility label get.
+        let drawnContent = input.settings.showsEmbeds ? message.displayedContent : message.content
+        if !drawnContent.isEmpty {
+            let document = parser.parse(drawnContent)
             let style = document.jumboEmojiCount == nil ? input.style : input.style.jumbo
             let text = MessageTextBuilder.build(
                 document: document,
