@@ -118,17 +118,21 @@ struct ProfileSheet: View {
         // — and it is what registers the bar the scroll edge effect keys off.
         .floatingTopBar { topBar }
         .frame(maxWidth: .infinity)
-        // The light, and the reason the cards in this column read as glass at
-        // all. The identity panel keeps its own opaque ground instead: it
-        // carries prose, and §1 says a reading surface is opaque.
-        .ambientArtwork(
-            profile.bannerURL ?? profile.avatarURL,
-            tint: ground.accent,
-            // An avatar is a much smaller, flatter source than a banner; at
-            // banner strength it washes the whole column one colour and the
-            // cards have nothing to stand out from.
-            strength: profile.bannerURL == nil ? 0.16 : 0.34
-        )
+        // **The same ground as the panel, from the same person, so the sheet is
+        // one surface.** This column used to be lit by `AmbientArtwork` — the
+        // banner blurred at a 64-point rung and spread underneath — which is a
+        // picture, not a decision: a member with a dark red theme and a pale
+        // banner got a dark red rail beside a dusty pink board, and the colour
+        // on two thirds of their profile was one they never chose.
+        //
+        // It is the rule `ProfileGround`'s own doc comment opens with, applied
+        // to the other half of the sheet: **artwork does not tint the body.**
+        // Discord derives colours from a picture in exactly one case — full
+        // Nitro, no `theme_colors` set — and that case already arrives here as
+        // `ProfileGround.derived`, fitted against Discord's own card. Anything
+        // that reaches past it for the picture again is answering a question
+        // that has already been answered.
+        .modifier(ProfileGroundFill(ground: ground, corner: 0))
     }
 
     private var topBar: some View {
