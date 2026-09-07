@@ -151,6 +151,10 @@ struct AnimatedDecoration: NSViewRepresentable {
         private var isSubscribed = false
         private var loadTask: Task<Void, Never>?
         private var isAnimated = true
+        /// Bumped on every reconfigure and on teardown, so a deferred playback
+        /// report belonging to a previous configuration is dropped. See
+        /// `report(_:)`.
+        private var generation = 0
 
         private var token: ObjectIdentifier { ObjectIdentifier(self) }
 
@@ -163,6 +167,7 @@ struct AnimatedDecoration: NSViewRepresentable {
             guard newKey != key || isAnimated != self.isAnimated else { return }
             key = newKey
             self.isAnimated = isAnimated
+            generation &+= 1
 
             loadTask?.cancel()
             loadTask = nil
@@ -180,7 +185,7 @@ struct AnimatedDecoration: NSViewRepresentable {
             }
             view?.setImage(nil)
             unsubscribe()
-            onPlayback?(false)
+            report(false)
 
             loadTask = Task { [weak self] in
                 let image = await AnimatedImageStore.shared.image(for: newKey)
@@ -195,12 +200,40 @@ struct AnimatedDecoration: NSViewRepresentable {
                 // A still, or Reduce Motion: show one frame and never subscribe.
                 if image != nil { view?.show(at: 0) }
                 unsubscribe()
-                onPlayback?(image != nil)
+                report(image != nil)
                 return
             }
             view?.show(at: AnimationClock.shared.time)
             subscribe()
-            onPlayback?(true)
+            report(true)
+        }
+
+        /// Tells the caller whether there are frames on screen — **always out of
+        /// the current update pass.**
+        ///
+        /// `configure` runs from `updateNSView`, and two of its three paths —
+        /// a cached filmstrip and a known still — call `install` *synchronously*
+        /// from there. A callback made on that stack is a `@State` write during
+        /// a SwiftUI view update: undefined, and in practice it does not stick.
+        ///
+        /// **That is the whole of the "second hover draws the still behind the
+        /// film" bug.** The first hover misses the cache, so the report comes
+        /// from the load's continuation and lands; every hover after it hits the
+        /// cache, reports from inside the update, and the write is dropped — so
+        /// the still underneath is never taken away and an icon with a soft or
+        /// transparent rim shows as two offset copies. The doc comment on
+        /// `onPlayback` has always said this fires "never from `updateNSView`";
+        /// this is what makes that true.
+        ///
+        /// **Guarded on the generation, not fired blind.** A report that arrived
+        /// after a reconfigure or a teardown would hide the still for a film
+        /// that is no longer there, which is an icon that draws nothing at all.
+        private func report(_ playing: Bool) {
+            let generation = generation
+            Task { @MainActor [weak self] in
+                guard let self, self.generation == generation, self.view != nil else { return }
+                self.onPlayback?(playing)
+            }
         }
 
         private func subscribe() {
@@ -225,6 +258,8 @@ struct AnimatedDecoration: NSViewRepresentable {
             loadTask = nil
             unsubscribe()
             view = nil
+            // Any report still in flight belongs to a view that has gone.
+            generation &+= 1
         }
 
         deinit {
