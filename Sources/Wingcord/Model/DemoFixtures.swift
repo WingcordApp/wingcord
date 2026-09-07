@@ -867,6 +867,54 @@ enum DemoFixtures {
                 me: Member(userID: me, roleIDs: [], joinedAt: Date.now, isPending: true)
             ]
         }
+        // The join gate's own fixture, on the one server the reader has not
+        // agreed to. **Two prompts, of which one is `in_onboarding`** — which is
+        // the split the gate exists to honour, and the only way to see that the
+        // filter is working rather than merely present: the gate must read
+        // "Question 1 of 1" while Channels & Roles on the same server shows both.
+        let thirdRoles = (model.roles[third] ?? [:]).values
+            .filter { $0.name != "@everyone" }
+            .sorted { $0.position > $1.position }
+            .map(\.id)
+        model.guildOnboardings[third] = GuildOnboarding(
+            guildID: third,
+            isEnabled: true,
+            prompts: [
+                GuildOnboarding.Prompt(
+                    id: 5101,
+                    title: "Would you like to join any of our non-English speaking sections?",
+                    options: [
+                        onboardingOption(11, "Français", "fr", thirdRoles, 0, thirdChannels),
+                        onboardingOption(12, "Deutsch", "de", thirdRoles, 1, thirdChannels),
+                        onboardingOption(13, "Español", "es", thirdRoles, 2, thirdChannels),
+                        onboardingOption(14, "日本語", "jp", thirdRoles, 3, thirdChannels),
+                    ],
+                    isSingleSelect: false,
+                    isRequired: false,
+                    isInOnboarding: true
+                ),
+                GuildOnboarding.Prompt(
+                    id: 5102,
+                    title: "Which games would you like to talk about?",
+                    options: [
+                        onboardingOption(15, "Racing", "checkered_flag", thirdRoles, 4, thirdChannels),
+                    ],
+                    isSingleSelect: false,
+                    isRequired: false,
+                    // Channels & Roles only. A gate that showed this would be
+                    // asking something the server deliberately does not ask on
+                    // the way in.
+                    isInOnboarding: false
+                ),
+            ],
+            defaultChannelIDs: Array(thirdChannels.prefix(3))
+        )
+        var thirdCounts: [RoleID: Int] = [:]
+        for (offset, roleID) in thirdRoles.enumerated() {
+            thirdCounts[roleID] = [11_285, 8_940, 6_741, 9_439, 2_768][offset % 5]
+        }
+        model.roleMemberCounts[third] = thirdCounts
+
         model.memberVerifications[third] = MemberVerification(
             guildID: third,
             detail: "A small server with three rules and no patience for a fourth.",
@@ -1061,7 +1109,10 @@ enum DemoFixtures {
         ),
         GuildSpec(
             name: "Wingcord",
-            hasBanner: false,
+            // **The gated server needs artwork**, because the join gate draws the
+            // banner as its whole surface — and a fixture without one can only
+            // ever photograph the fallback ground.
+            hasBanner: true,
             isCommunity: true,
             memberCount: 419,
             categories: [

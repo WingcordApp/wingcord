@@ -243,3 +243,56 @@ struct UnreadBadge: View {
             .accessibilityLabel(Text("^[\(count) unread message](inflect: true)"))
     }
 }
+
+/// Add a Server.
+///
+/// **Below the servers, not above them**, which is where Discord puts it and
+/// where it belongs: the rail is read top-down as "where I am, then what I am
+/// in", and an action tile among the memberships would be a button somebody
+/// aims past on the way to a server they visit every day.
+///
+/// It borrows `HomeRailTile`'s geometry rather than `GuildRailTile`'s: it is not
+/// a server, so it has no unread state, no selected state and no indicator —
+/// only the hover morph every tile in the column shares, so the column still
+/// reads as one row of controls.
+struct AddServerRailTile: View {
+    var action: () -> Void
+
+    @Environment(\.motion) private var motion
+    @State private var isHovering = false
+
+    private var side: CGFloat { Metrics.guildTile }
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: "plus")
+                .font(.system(size: side * 0.36, weight: .medium))
+                // Green on hover, like Discord's — the one place in the rail
+                // where a colour means "this makes something new" rather than
+                // "this is unread".
+                .foregroundStyle(
+                    isHovering ? AnyShapeStyle(.white) : AnyShapeStyle(Palette.affirmative)
+                )
+                .frame(width: side, height: side)
+                .background(isHovering ? Palette.affirmative : Palette.surfaceRaised)
+                .clipShape(.rect(
+                    cornerRadius: isHovering ? 17 : side / 2,
+                    style: .continuous
+                ))
+                // The whole column is the target, exactly as the other tiles:
+                // the rail is a strip of 44-point pictures and aiming between
+                // them should not miss.
+                .frame(width: Proportions.railWidth, height: side)
+                .contentShape(.rect)
+        }
+        .buttonStyle(.plain)
+        .onHover { hovering in
+            guard isHovering != hovering else { return }
+            isHovering = hovering
+        }
+        .animation(motion.hover, value: isHovering)
+        .railHoverLabel("Add a Server", isHovered: isHovering)
+        .accessibilityLabel(Text("Add a Server"))
+        .accessibilityAddTraits(.isButton)
+    }
+}

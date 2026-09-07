@@ -148,7 +148,7 @@ extension SessionController {
     /// previews, and leaking one hangs the caller for the life of the process.
     /// Ten checks at 120 ms is a fifth of a second of latency in the worst case
     /// and no state that can be got wrong.
-    private func waitForGuild(_ guildID: GuildID) async -> Bool {
+    func waitForGuild(_ guildID: GuildID) async -> Bool {
         for _ in 0..<10 {
             if model.channelIndex.channelIDs(inGuild: guildID).isEmpty == false { return true }
             try? await Task.sleep(for: .milliseconds(120))

@@ -47,6 +47,7 @@ struct GuildRail: View, Equatable {
     var selectHome: () -> Void = {}
     var selectGuild: (GuildID) -> Void = { _ in }
     var toggleFolder: (UInt64) -> Void = { _ in }
+    var addServer: () -> Void = {}
 
     var body: some View {
         ScrollView {
@@ -88,6 +89,8 @@ struct GuildRail: View, Equatable {
                         )
                     }
                 }
+
+                AddServerRailTile(action: addServer)
             }
             .padding(.vertical, Spacing.base)
         }

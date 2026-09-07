@@ -163,7 +163,7 @@ struct OnboardingDTO: Decodable, Sendable {
     }
 }
 
-/// What `PUT /guilds/{id}/onboarding-responses` answers with — the ballot as the
+/// What `POST /guilds/{id}/onboarding-responses` answers with — the ballot as the
 /// server now holds it.
 ///
 /// Read back rather than assumed: the route can drop an option the reader may no
@@ -177,19 +177,39 @@ struct OnboardingResponsesDTO: Decodable, Sendable {
     }
 }
 
-/// The body of that PUT.
+/// The body of that POST.
 ///
-/// **The two `seen` maps are not optional.** Discord's own client sends every
-/// prompt id and every option id of every prompt, each stamped with the moment
-/// of the click, and the response echoes them back — so they are part of the
-/// ballot rather than telemetry the client may skip. `Encodable` over
-/// `[String: UInt64]` produces exactly the object shape captured.
+/// **The two `seen` maps are not optional**, and the response echoes them back —
+/// so they are part of the ballot rather than telemetry a client may skip.
+/// `Encodable` over `[String: UInt64]` produces exactly the object shape
+/// captured.
+///
+/// **`seen` means SHOWN, not "exists".** This was got wrong once and the capture
+/// settles it. `forza onboarding1.har` entry 16 is the join flow's submit on a
+/// server with **six** prompts, of which one has `in_onboarding: true`:
+///
+/// ```
+/// "onboarding_prompts_seen":   {"1108815692297416788": 1788794513428},
+/// "onboarding_responses_seen": { …the four options of that ONE prompt… }
+/// ```
+///
+/// One prompt, not six. Entry 11 — the `GET` — echoes back the same single id
+/// from a previous session, which confirms it accumulates what has actually been
+/// put in front of somebody rather than what the server offers.
+///
+/// So the caller passes **the prompts it drew**: every answerable prompt from
+/// Channels & Roles, which shows all of them, and only the join-flow prompts
+/// from the gate, which by construction shows only those. A gate that sent all
+/// six would tell Discord somebody had seen five questions nobody asked them,
+/// and Discord would stop offering them.
 struct OnboardingResponsesBody: Encodable, Sendable {
     var onboarding_responses: [String]
     var onboarding_prompts_seen: [String: UInt64]
     var onboarding_responses_seen: [String: UInt64]
 
     /// Builds the body for one ballot, stamped now.
+    ///
+    /// - Parameter prompts: **the prompts actually shown**, per the note above.
     ///
     /// The timestamp is milliseconds since the epoch, which is what the capture
     /// carries and is a different unit from every `Date` on the wire.
