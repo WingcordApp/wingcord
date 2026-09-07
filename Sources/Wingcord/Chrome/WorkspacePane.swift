@@ -142,6 +142,35 @@ private struct PrimaryPane: View {
             case .gameServers:
                 GameServersContainer()
             }
+        case .joinGate:
+            ServerJoinGateContainer()
+        }
+    }
+}
+
+/// The onboarding gate, fed from the store.
+///
+/// Reads the SELECTED guild's gate rather than taking the id from the case, for
+/// the same reason the three surface containers do: the presentation already
+/// decided which server this is, and a second source of truth for it is a second
+/// thing to keep in step.
+private struct ServerJoinGateContainer: View {
+    @Environment(AppModel.self) private var model
+
+    var body: some View {
+        Group {
+            if let presentation = model.joinGatePresentation {
+                ServerJoinGatePane(
+                    presentation: presentation,
+                    toggleOption: { model.toggleJoinGateOption($0, inPrompt: $1) },
+                    back: { model.retreatJoinGate() },
+                    forward: { model.advanceJoinGate() },
+                    dismiss: { model.dismissJoinGate() }
+                )
+                .equatable()
+            } else {
+                SurfaceLoadingState(message: "Getting this server ready…")
+            }
         }
     }
 }
@@ -167,13 +196,8 @@ private struct SupplementaryPane: View {
         case .thread(let channelID):
             ThreadPanelContainer(channelID: channelID)
         case .search:
-            PlaceholderPane(
-                symbol: "magnifyingglass",
-                title: "Search",
-                detail: "Search is not built yet.",
-                channelID: nil
-            )
-            .frame(width: Proportions.memberColumnIdeal)
+            SearchPane()
+                .frame(width: Proportions.searchColumnIdeal)
         case .voiceChat(let channelID):
             VoiceChatContainer(channelID: channelID)
         case .channelPreview(let channelID):

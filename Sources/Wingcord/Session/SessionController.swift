@@ -122,6 +122,14 @@ final class SessionController {
     /// change, which is what stops a sweep through the rail asking about ninety
     /// servers nobody stopped on.
     var guildPrefetchTask: Task<Void, Never>?
+    /// The message search in flight, replaced rather than queued: an answer to
+    /// a question the reader has moved past is worse than no answer.
+    var searchTask: Task<Void, Never>?
+    /// The invite resolve behind the Add a Server field, replaced per keystroke.
+    var inviteLookupTask: Task<Void, Never>?
+    /// Whose join gate is being submitted, so a double-click on Finish sends
+    /// one agreement rather than two.
+    var joinGateSubmissions: Set<GuildID> = []
     /// The last ballot the server confirmed, per guild. What an optimistic write
     /// is rolled back to when the route refuses it.
     var lastConfirmedOnboarding: [GuildID: Set<UInt64>] = [:]
@@ -1570,8 +1578,24 @@ extension SessionController {
             loadServerGuide(guildID)
             loadOnboarding(guildID)
             loadGameServers(guildID)
+            // **A server can be gated and this client never asked.** Joining on
+            // a phone or on discord.com lands the membership here over the
+            // socket with no gate raised, which is exactly the case that made
+            // Wingcord drop somebody into a channel of a server whose questions
+            // it had never shown. The rules route is the one that says so, and
+            // it is only worth asking where the guild claims the feature — every
+            // other server answers it with an empty form.
+            if model.guilds[guildID]?.features.contains(Self.verificationFeature) == true {
+                loadMemberVerification(guildID)
+            }
+            // Both tables can already be filled from an earlier visit, in which
+            // case neither loader runs and neither offers.
+            model.offerJoinGateIfNeeded(guildID)
         }
     }
+
+    /// The guild feature that says a server has a rules gate at all.
+    static let verificationFeature = "MEMBER_VERIFICATION_GATE_ENABLED"
 
     /// The page a server shows a new arrival.
     ///
@@ -1613,6 +1637,14 @@ extension SessionController {
                 )
                 Self.trace("onboarding \(guildID) failed: \(Self.describe(error))")
             }
+            // **Offered as the answer lands, not when the server was opened.**
+            // Whether a server gates is computed from tables that fill
+            // asynchronously, so a single check on selection would run before
+            // there was anything to check and never run again.
+            model.offerJoinGateIfNeeded(guildID)
+            // A gate raised by a fresh join exists before its questions do, so
+            // this is the moment its answer set can be seeded. No-op once seeded.
+            if model.joinGate?.guildID == guildID { model.seedJoinGateSelection() }
         }
     }
 
@@ -1642,7 +1674,7 @@ extension SessionController {
     }
 
     /// The rules a server makes people agree to.
-    func loadMemberVerification(_ guildID: GuildID) {
+    func loadMemberVerification(_ guildID: GuildID, inviteCode: String? = nil) {
         let fetch = GuildSurfaceFetch(guildID: guildID, subject: .rules)
         guard model.memberVerifications[guildID] == nil,
               model.loadingGuildSurfaces.insert(fetch).inserted
@@ -1651,11 +1683,14 @@ extension SessionController {
             guard let self else { return }
             defer { model.loadingGuildSurfaces.remove(fetch) }
             do {
-                model.memberVerifications[guildID] = try await rest.memberVerification(of: guildID)
+                model.memberVerifications[guildID] = try await rest.memberVerification(
+                    of: guildID, inviteCode: inviteCode
+                )
             } catch {
                 model.memberVerifications[guildID] = MemberVerification(guildID: guildID)
                 Self.trace("member verification \(guildID) failed: \(Self.describe(error))")
             }
+            model.offerJoinGateIfNeeded(guildID)
         }
     }
 

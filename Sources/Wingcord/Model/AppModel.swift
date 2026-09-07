@@ -339,6 +339,10 @@ final class AppModel {
     /// and publishing it would invalidate the pane on the write that fills it.
     @ObservationIgnored
     var pinnedCardCache: (key: PinnedCardKey, messages: [Message], value: [MessageCard])?
+    /// The same memo for the search panel. Its own slot rather than a shared
+    /// one: the pinned pane and the search panel are open at the same time on a
+    /// wide window, and one cache would be cleared by whichever drew last.
+    var searchCardCache: (key: SearchCardKey, messages: [Message], value: [SearchResultCard])?
 
     /// Reactions being written, as `(message, emoji)`. Keyed so two chips on one
     /// message can be pressed in either order without one cancelling the other.
@@ -511,6 +515,39 @@ final class AppModel {
     var gameServerConnect: GameServerConnectRequest?
     /// The rules sheet, same.
     var serverRulesGuildID: GuildID?
+
+    // MARK: Joining a server
+    //
+    // See `AppModel+JoinFlow` for the whole of it.
+
+    /// The Add a Server sheet — nil when it is not up.
+    var joinServerSheet: JoinServerSheetState?
+    /// The onboarding gate, for the one server that is showing one.
+    ///
+    /// **One at a time, by construction.** It takes the detail column, and a
+    /// second gate would be a second answer to "what is this column showing" —
+    /// which §1 does not allow and which nobody could act on anyway.
+    var joinGate: ServerJoinGate?
+    /// The message-search panel — nil when it is not open.
+    ///
+    /// **On the store rather than in the panel's own `@State`**, because the
+    /// answer lands from a task the view does not own and because clicking a
+    /// result changes the selected channel underneath it. A panel that held its
+    /// own results would lose them on the first jump, which is the one thing
+    /// the reader is there to do.
+    var messageSearch: MessageSearchState?
+    /// Whether the search filter sheet is up. A bool rather than a value: it
+    /// edits the query the panel already holds, so there is nothing else to
+    /// carry and a second copy would be a second source of truth.
+    var isSearchFiltersShown = false
+
+    /// Servers whose gate the reader closed without answering.
+    ///
+    /// **For the session only, and never persisted.** It exists so a gate does
+    /// not reappear every time somebody clicks back onto a server they chose to
+    /// skip past; persisting it would mean a server whose rules were never
+    /// agreed to quietly stops offering them for ever.
+    var dismissedJoinGates: Set<GuildID> = []
 
     // MARK: Connected Apps
     //

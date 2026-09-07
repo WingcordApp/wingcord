@@ -205,6 +205,15 @@ extension View {
     ) -> some View {
         safeAreaBar(edge: .top, spacing: spacing, content: bar)
     }
+
+    /// The same along the bottom edge, for a surface whose controls advance
+    /// through it rather than filter it.
+    func floatingBottomBar(
+        spacing: CGFloat = 0,
+        @ViewBuilder _ bar: () -> some View
+    ) -> some View {
+        safeAreaBar(edge: .bottom, spacing: spacing, content: bar)
+    }
 }
 
 // MARK: - The reading surface

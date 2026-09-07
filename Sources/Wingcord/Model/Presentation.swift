@@ -301,6 +301,12 @@ struct WorkspacePresentation: Hashable, Sendable {
         /// `WorkspacePane`, which is internal `_ConditionalContent` under a
         /// stable outer type — not the structural swap §1 forbids.
         case guildSurface(GuildID, GuildSurface)
+        /// A server's onboarding gate, taking the whole column.
+        ///
+        /// **A case rather than a sheet**, for the reason every other
+        /// destination here is one: the column holds one view type, and the rail
+        /// stays live so somebody can step away from a gate and come back to it.
+        case joinGate(GuildID)
     }
 
     enum Supplementary: Hashable, Sendable {
@@ -335,6 +341,33 @@ struct WorkspacePresentation: Hashable, Sendable {
 
 /// The chrome across the top of the detail column.
 struct ChannelChrome: Hashable, Sendable {
+    /// A bar that draws nothing.
+    ///
+    /// **An empty name is how this bar disappears**, not a missing title: the
+    /// pill is declared only for a non-empty one and every control is declared
+    /// only for its own `can` flag, so this is the whole of "no chrome here".
+    /// Named once because two surfaces want it — a column with no channel, and
+    /// the join gate, which is a takeover rather than a page in the app.
+    static let none = ChannelChrome(
+        channelID: nil,
+        name: "",
+        symbolName: ChannelKind.text.symbolName,
+        topic: nil,
+        isMemberListShown: false,
+        canShowMemberList: false,
+        isUserProfileShown: false,
+        canShowUserProfile: false,
+        canShowPins: false,
+        arePinsShown: false,
+        canShowThreads: false,
+        areThreadsShown: false,
+        canStartCall: false,
+        isInCall: false,
+        isCallOngoing: false,
+        canShowVoiceChat: false,
+        isVoiceChatShown: false
+    )
+
     var channelID: ChannelID?
     var name: String
     /// The glyph in the pill.

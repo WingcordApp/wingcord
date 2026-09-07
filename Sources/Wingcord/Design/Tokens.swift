@@ -494,6 +494,14 @@ nonisolated enum Proportions {
     /// the page it was meant to sit beside.
     static let previewColumnIdeal: CGFloat = 340
 
+    /// The search panel's column.
+    ///
+    /// **Wider than the roster and than a thread**, because it holds real
+    /// messages: a hit can be an embed, and an embed is laid out against
+    /// `Metrics.embedMaxWidth` — a narrower column squeezes every card on the
+    /// page. The same reasoning as the pinned pane's 400, plus the page bar.
+    static let searchColumnIdeal: CGFloat = 420
+
     /// The widest a server's own page is drawn — the guide, the channel
     /// browser, the game servers.
     ///

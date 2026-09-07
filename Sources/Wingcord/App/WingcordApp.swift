@@ -105,6 +105,8 @@ struct WingcordApp: App {
                 .presentsUserMenu()
                 .presentsExpressionInfo()
                 .presentsGuildSurfaces()
+                .presentsJoinServer()
+                .presentsSearchFilters()
                 .presentsVoiceSurfaces()
                 .watchesPushToTalk()
                 .resolvesMotion()

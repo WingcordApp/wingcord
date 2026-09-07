@@ -41,6 +41,12 @@ public actor DiscordREST {
     let metadata: ClientMetadata
     private let limiter = RateLimiter()
     private var token: String?
+    /// Who can put a human check on screen. See `DiscordREST+Captcha`.
+    ///
+    /// **Nil is a working configuration**, not a missing dependency: with none
+    /// installed a challenged write fails with Discord's own rejection, which is
+    /// what the test suite and any headless use of this actor want.
+    var captchaSolver: (any CaptchaSolving)?
 
     /// One decoder for the process.
     ///
@@ -598,8 +604,60 @@ public actor DiscordREST {
             }
             return retryData
         default:
+            // **A human check is a rejection with instructions, not a failure.**
+            // It arrives as a 400 carrying no `code` and no `message`, so it
+            // does not survive `apiFailure` — which is why it is recognised
+            // here, before the status becomes an error, rather than at a call
+            // site that would have to know which routes can raise one.
+            if let solution = await solveCaptcha(in: data) {
+                solution.apply(to: &request)
+                return try await sendSolved(request, route: route)
+            }
             throw Self.apiFailure(status: http.statusCode, data: data)
         }
+    }
+
+    /// Puts a challenge on screen and waits, if this really is one and there is
+    /// anybody to show it to.
+    ///
+    /// Returns nil for every other outcome — no challenge in the body, a service
+    /// this build cannot render, no solver installed, or somebody who closed it
+    /// — and the caller then reports Discord's own rejection.
+    private func solveCaptcha(in data: Data) async -> CaptchaSolution? {
+        guard let solver = captchaSolver,
+              let challenge = Self.captchaChallenge(in: data),
+              challenge.isSolvable
+        else { return nil }
+        return await solver.solve(challenge)
+    }
+
+    /// Re-sends a request that a solved challenge has just been applied to.
+    ///
+    /// **Exactly once.** hCaptcha's token is single-use and Discord's rejection
+    /// of a solved one is a real answer, so a second challenge on the retry is
+    /// reported rather than presented — the alternative is a window somebody
+    /// cannot get out of by answering it correctly.
+    private func sendSolved(_ request: URLRequest, route: String) async throws -> Data {
+        await limiter.acquire(route: route)
+        let data: Data
+        let response: URLResponse
+        do {
+            (data, response) = try await session.data(for: request)
+        } catch {
+            throw Failure.transport(error.localizedDescription)
+        }
+        guard let http = response as? HTTPURLResponse else {
+            throw Failure.transport("no HTTP response on captcha retry")
+        }
+        await limiter.update(
+            route: route,
+            headers: http.allHeaderFields,
+            statusCode: http.statusCode
+        )
+        guard (200..<300).contains(http.statusCode) else {
+            throw Self.apiFailure(status: http.statusCode, data: data)
+        }
+        return data
     }
 
     /// Like `requestData`, but returns the response verbatim — body and
@@ -616,10 +674,17 @@ public actor DiscordREST {
         method: String,
         path: String,
         route: String,
+        query: [URLQueryItem] = [],
         body: Body?
     ) async throws -> (data: Data, statusCode: Int) {
         await limiter.acquire(route: route)
-        var request = URLRequest(url: metadata.apiBase.appending(path: path))
+        var components = URLComponents(
+            url: metadata.apiBase.appending(path: path),
+            resolvingAgainstBaseURL: false
+        )
+        if !query.isEmpty { components?.queryItems = query }
+        guard let url = components?.url else { throw Failure.transport("bad url: \(path)") }
+        var request = URLRequest(url: url)
         request.httpMethod = method
         metadata.apply(to: &request, token: token)
         if let body {
@@ -1041,6 +1106,20 @@ extension DiscordREST {
     /// Records the reader's answers, and returns the ballot as the server now
     /// holds it.
     ///
+    /// **`POST`, and the method is not a detail.** This was `PUT` — which reads
+    /// as right for a whole-object replace, and is what the route's own name
+    /// suggests — and Discord answers a `PUT` here with **403 "You do not have
+    /// permission to do that."** That is a rejection nothing about the request
+    /// explains: the account is a member, the body is correct, and the message
+    /// names permissions rather than a method. `forza onboarding1.har` entry 16
+    /// settles it — `POST /guilds/{id}/onboarding-responses`, 200.
+    ///
+    /// It cost a live join to find, because the 403 was invisible in every test:
+    /// nothing here exercises the real route, and the surface that used it
+    /// before — Channels & Roles — reports a failed save by quietly restoring
+    /// the previous answer, which looks exactly like a chip that did not take
+    /// the click.
+    ///
     /// **The whole ballot, never a delta.** The route replaces a selection, so a
     /// client that sent only the id just clicked would drop every previous
     /// answer — the same shape as the poll route, and for the same reason.
@@ -1054,7 +1133,7 @@ extension DiscordREST {
         inGuild guildID: GuildID
     ) async throws -> Set<UInt64> {
         let data = try await requestData(
-            method: "PUT",
+            method: "POST",
             path: "/guilds/\(guildID.rawValue)/onboarding-responses",
             route: "guilds/{id}/onboarding-responses",
             body: OnboardingResponsesBody(responses: optionIDs, prompts: prompts)
@@ -1068,11 +1147,25 @@ extension DiscordREST {
     /// `with_guild=false` because the guild half of the response is a copy of
     /// an object the store already holds, and asking for it doubles the payload
     /// to learn nothing.
-    public func memberVerification(of guildID: GuildID) async throws -> MemberVerification {
-        try await get(
+    ///
+    /// - Parameter inviteCode: the invite this gate was reached through, when it
+    ///   was. Captured — `?with_guild=false&invite_code=forza` — and sent for the
+    ///   same reason `location` is sent on the join: Discord's own client sends
+    ///   it, and a gate reached by a route this client does not model is a gate
+    ///   Discord may describe differently. Omitted where there was no invite,
+    ///   which is every server opened from the rail.
+    public func memberVerification(
+        of guildID: GuildID,
+        inviteCode: String? = nil
+    ) async throws -> MemberVerification {
+        var query = [URLQueryItem(name: "with_guild", value: "false")]
+        if let inviteCode, !inviteCode.isEmpty {
+            query.append(URLQueryItem(name: "invite_code", value: inviteCode))
+        }
+        return try await get(
             "/guilds/\(guildID.rawValue)/member-verification",
             route: "guilds/{id}/member-verification",
-            query: [URLQueryItem(name: "with_guild", value: "false")],
+            query: query,
             as: MemberVerificationDTO.self
         ).domain(guildID: guildID)
     }

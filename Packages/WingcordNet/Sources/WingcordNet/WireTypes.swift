@@ -915,6 +915,12 @@ struct MessageDTO: Decodable, Sendable {
     /// so the header can name and picture them with no second request.
     var quotedAuthor: UserDTO? { referenced_message?.author }
 
+    /// **Search only.** Marks the matching message inside a result group. The
+    /// groups once carried surrounding context and no longer do, so today it is
+    /// true on every message that comes back — read anyway, because it costs
+    /// nothing and is correct again the day context returns.
+    var hit: Bool?
+
     /// One forwarded message. Deliberately authorless — see `ForwardedMessage`.
     struct SnapshotDTO: Decodable, Sendable {
         var message: Body?

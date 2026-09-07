@@ -932,7 +932,7 @@ extension AppModel {
     /// **shortcode** — `"fire"`, not 🔥 — and goes through the generated table;
     /// anything else falls back to a symbol the app chose. Done once here rather
     /// than at each row, so no view has to know about the shortcode form.
-    private func glyph(
+    func glyph(
         emojiID: EmojiID?,
         emojiName: String?,
         isAnimated: Bool,

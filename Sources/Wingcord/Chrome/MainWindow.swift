@@ -24,16 +24,68 @@ struct MainWindow: View {
     @Environment(AppModel.self) private var model
     @State private var columnVisibility: NavigationSplitViewVisibility = .all
 
+    /// The search field's text.
+    ///
+    /// **Opening the panel is a side effect of typing**, which is what the
+    /// native item implies: there is no separate "open search" control once the
+    /// field is in the toolbar, so the first character is what raises the
+    /// results column.
+    private var searchText: Binding<String> {
+        Binding(
+            get: { model.searchText },
+            set: { text in
+                if !text.isEmpty, !model.isSearchShown { model.toggleSearch() }
+                model.searchText = text
+            }
+        )
+    }
+
     var body: some View {
         NavigationSplitView(columnVisibility: $columnVisibility) {
             SidebarColumn()
+                // **The column narrows to the rail while the gate is up**, or
+                // the hidden channel list leaves a two-hundred-point hole beside
+                // it. A fixed width rather than a range: there is nothing in
+                // there to resize, and a draggable divider over a 68-point strip
+                // is a control that can only make it wrong.
                 .navigationSplitViewColumnWidth(
-                    min: Proportions.sidebarMin,
-                    ideal: Proportions.sidebarIdeal,
-                    max: Proportions.sidebarMax
+                    min: model.isJoinGateShown ? Proportions.railWidth : Proportions.sidebarMin,
+                    ideal: model.isJoinGateShown ? Proportions.railWidth : Proportions.sidebarIdeal,
+                    max: model.isJoinGateShown ? Proportions.railWidth : Proportions.sidebarMax
                 )
         } detail: {
             WorkspacePane(presentation: model.workspacePresentation)
+                // **The system's own search item, which is Finder's control.**
+                // `.searchable` in a window with a real toolbar becomes an
+                // `NSSearchToolbarItem`: a circular button that expands into a
+                // field, set apart from the other items by the toolbar itself.
+                //
+                // There is no `.searchToolbarBehavior(.minimize)` here on
+                // purpose — that value is `@available(macOS, unavailable)`, iOS
+                // only. On macOS the collapse-and-expand *is* the default, and
+                // asking for it explicitly does not compile.
+                .searchable(
+                    text: searchText,
+                    placement: .toolbar,
+                    prompt: Text("Search \(model.searchScopeTitle)")
+                )
+                .searchSuggestions {
+                    // Built from the store's own scope, so moving between
+                    // servers or conversations changes the list with no
+                    // invalidation of its own — see `searchSuggestions(for:)`.
+                    ForEach(model.searchSuggestions(for: model.searchText)) { suggestion in
+                        SearchSuggestionRow(suggestion: suggestion)
+                            // The whole field text, computed where the tokenizer
+                            // is. `.searchCompletion` takes a string, and
+                            // building it in the view would put the grammar in
+                            // two places.
+                            .searchCompletion(suggestion.completion)
+                    }
+                }
+                // Return runs it; typing alone does not. A request per keystroke
+                // against a route that indexes whole servers is a request per
+                // keystroke, and the field is where a filter grammar is typed.
+                .onSubmit(of: .search) { model.runSearch() }
                 .toolbar {
                     // **The closures have to be passed.** They default to `{}`,
                     // so a toolbar built without them compiles, renders, and
@@ -175,6 +227,13 @@ private struct SidebarColumn: View {
             // space in it is reserving space in the wrong list. Scoped here it
             // insets exactly the list it floats over, and the rail runs to the
             // window's foot the way it runs to its top.
+            // **The gate takes the channel list too.** It is a takeover: a
+            // list of channels beside a page that says the reader may not use
+            // them yet is an invitation to click one and find out. The rail
+            // stays, deliberately — stepping away to another server and coming
+            // back to the gate where you left it is the point of it being a
+            // destination rather than a modal.
+            if !model.isJoinGateShown {
             ChannelSidebarContainer()
                 .safeAreaBar(edge: .bottom, spacing: 0) {
                     // **Nothing is painted behind these bars, and that is the
@@ -204,6 +263,7 @@ private struct SidebarColumn: View {
                         NowBarContainer()
                     }
                 }
+            }
         }
         // Drawn HERE, outside the rail's own `ScrollView` — which clips — and on
         // the one view wide enough to hold a chip beside the 68-point column.
@@ -288,7 +348,8 @@ private struct GuildRailContainer: View {
             homeHasUnread: false,
             selectHome: { model.selectGuild(nil) },
             selectGuild: { model.selectGuild($0) },
-            toggleFolder: { model.toggleFolder($0) }
+            toggleFolder: { model.toggleFolder($0) },
+            addServer: { model.joinServerSheet = JoinServerSheetState() }
         )
         .equatable()
     }

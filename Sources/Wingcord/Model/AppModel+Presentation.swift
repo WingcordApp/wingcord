@@ -177,6 +177,13 @@ extension AppModel {
     /// constant there is no swap to fire on. Anything added later becomes a case
     /// on `Primary`, never a branch in the view builder.
     var workspacePresentation: WorkspacePresentation {
+        // **The gate is checked first, and that is what makes it a gate.** It is
+        // the server saying the reader may not use it yet, so it outranks every
+        // other answer to "what is this column showing" — including a channel
+        // the sidebar still has selected underneath it.
+        if let gate = joinGate, gate.guildID == selectedGuildID {
+            return WorkspacePresentation(primary: .joinGate(gate.guildID), supplementary: nil)
+        }
         // A server page takes the whole column: it is about the server, so
         // there is no roster and no profile that belongs beside it.
         if let openGuildSurface, let guildID = selectedGuildID {
@@ -228,26 +235,45 @@ extension AppModel {
         // and the thing you cannot see is what anybody wrote.
         if channel.kind == .voice || channel.kind == .stage {
             if isVoiceChatShown { return .voiceChat(channel.id) }
-            return isMemberListShown ? .members : nil
+            return supplementary(orMembers: isMemberListShown)
         }
         if channel.guildID != nil {
-            return isMemberListShown ? .members : nil
+            return supplementary(orMembers: isMemberListShown)
         }
         // A group DM has a roster — its recipients — and no single person, so it
         // takes the member list rather than the profile pane. The same toggle
         // drives it, because from the reader's side it is the same control:
         // "show me who is in here".
         if channel.kind == .groupDirectMessage {
-            return isMemberListShown ? .members : nil
+            return supplementary(orMembers: isMemberListShown)
         }
-        guard isDirectMessageProfileShown, channel.kind == .directMessage,
-              let partnerID = channel.recipientIDs.first(where: { $0 != currentUserID })
-        else { return nil }
-        return .userProfile(partnerID)
+        if isDirectMessageProfileShown, channel.kind == .directMessage,
+           let partnerID = channel.recipientIDs.first(where: { $0 != currentUserID })
+        {
+            return supplementary(orMembers: false) ?? .userProfile(partnerID)
+        }
+        return supplementary(orMembers: false)
+    }
+
+    /// Which panel the supplementary column shows.
+    ///
+    /// **Search outranks the roster, and every other panel.** It is a list
+    /// somebody is working through — clicking a hit changes the channel
+    /// underneath it, and a column that handed itself back to the member list on
+    /// that click would close the search on its first use, which is the one
+    /// thing the panel exists not to do.
+    private func supplementary(orMembers: Bool) -> WorkspacePresentation.Supplementary? {
+        if isSearchShown { return .search }
+        return orMembers ? .members : nil
     }
 
     /// The toolbar's channel chrome.
     var channelChrome: ChannelChrome {
+        // **The gate has no chrome at all.** It is a takeover, not a page inside
+        // the app: naming a channel over it, or offering a roster toggle beside
+        // it, describes a window the reader is not in. An empty name is already
+        // how this bar draws nothing — see `ChannelToolbar`.
+        if isJoinGateShown { return .none }
         // The pill names whatever the column is showing, which on a server page
         // is the page. Its own branch rather than a nil channel, so the bar has
         // a title there instead of a hole its neighbours slide into.
@@ -273,25 +299,7 @@ extension AppModel {
             )
         }
         guard let channelID = selectedChannelID, let channel = channelIndex[channelID] else {
-            return ChannelChrome(
-                channelID: nil,
-                name: "",
-                symbolName: ChannelKind.text.symbolName,
-                topic: nil,
-                isMemberListShown: false,
-                canShowMemberList: false,
-                isUserProfileShown: false,
-                canShowUserProfile: false,
-                canShowPins: false,
-                arePinsShown: false,
-                canShowThreads: false,
-                areThreadsShown: false,
-                canStartCall: false,
-                isInCall: false,
-                isCallOngoing: false,
-                canShowVoiceChat: false,
-                isVoiceChatShown: false
-            )
+            return .none
         }
         return ChannelChrome(
             channelID: channelID,
@@ -731,6 +739,11 @@ extension AppModel {
         } else {
             selectedChannelID = channelIndex.privateChannelIDs().first
         }
+        // **The panel follows the rail, not the channel list.** Moving between
+        // channels inside a server must leave the results alone — that is the
+        // whole point of clicking one — but a panel still showing another
+        // server's hits after the rail moved is a list about somewhere else.
+        searchScopeDidChange()
     }
 
     func selectChannel(_ channelID: ChannelID) {
