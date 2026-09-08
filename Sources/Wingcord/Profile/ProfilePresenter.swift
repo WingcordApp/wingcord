@@ -96,7 +96,7 @@ struct ProfilePresenter: ViewModifier {
                 .contentShape(.rect)
         }
         .buttonStyle(.plain)
-        .cancelAction(unless: model.gameProfileRequest != nil)
+        .cancelAction(unless: model.gameProfileRequest != nil || model.isQuickSwitchShown)
         .accessibilityLabel(Text("Close profile"))
         .transition(.opacity)
     }
@@ -199,6 +199,13 @@ extension View {
     /// SwiftUI settles a contested shortcut by hierarchy rather than by what is
     /// drawn on top, so Escape over an open game profile closed the profile
     /// *underneath* it and left the page floating over nothing.
+    ///
+    /// The quick switcher is the fourth, and it covers all three — it is opened
+    /// by a key rather than by a click, so it is the one layer that can appear
+    /// over any of them without anybody having dismissed anything. Its own field
+    /// handles Escape while it has focus, but a key *equivalent* is matched
+    /// before a key press reaches the responder chain, so the layers underneath
+    /// have to give the shortcut up rather than rely on that.
     ///
     /// A conditional `KeyboardShortcut?` rather than `.disabled`: a disabled
     /// control gives up its shortcut but also stops answering the pointer and

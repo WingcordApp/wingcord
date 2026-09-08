@@ -177,6 +177,29 @@ extension DiscordREST {
             .map(\.key)
     }
 
+    /// Every server and channel the account goes to, and how much.
+    ///
+    /// **This is what orders the quick switcher, and there is no route that
+    /// answers it directly.** Discord keeps it in the same settings protobuf as
+    /// the two tables above — field 12, keyed by a guild *or* a channel
+    /// snowflake — and its own client resolves the keys against tables it
+    /// already holds. So does this one: the answer is a bare id-to-score map and
+    /// nothing here knows or cares which ids are servers.
+    ///
+    /// Keyed by the raw snowflake rather than by a typed id, because the table
+    /// mixes two id spaces and typing it either way would be a lie at half the
+    /// call sites. The caller looks each key up in the channel index and in the
+    /// guild table; one that answers to neither is a place the account has left.
+    public func navigationFrecency() async throws -> [UInt64: PlaceFrecency] {
+        let entries = FrecencyProto.guildsAndChannels(base64: try await frecencySettings())
+        var table: [UInt64: PlaceFrecency] = [:]
+        table.reserveCapacity(entries.count)
+        for entry in entries {
+            table[entry.key] = PlaceFrecency(score: entry.score, lastUsedAt: entry.lastUsedAt)
+        }
+        return table
+    }
+
     /// The account's starred GIFs, in the order it arranged them.
     ///
     /// The same blob the two frecency tables come from, so an account that has

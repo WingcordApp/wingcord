@@ -158,6 +158,21 @@ final class AppModel {
     /// The last channel visited in each guild, so switching back returns where
     /// you were rather than to the top of the list.
     var lastChannelByGuild: [GuildID: ChannelID] = [:]
+    /// Channels opened in this window, newest first and bounded.
+    ///
+    /// **Beside `lastChannelByGuild` rather than derived from it**, because they
+    /// answer different questions: that one is "where was I in *this* server",
+    /// which is per-guild by construction, and this is "where was I last",
+    /// across the whole account and in order. One flat list cannot serve the
+    /// first and a table of one entry per guild cannot serve the second.
+    var recentChannelIDs: [ChannelID] = []
+    /// How much the account uses each server and channel, from Discord's own
+    /// table — `guild_and_channel_frecency`, keyed by the raw snowflake because
+    /// the table mixes both id spaces. Fetched once, on the first ⌘K.
+    ///
+    /// Empty is a real state and not a failure: it is what a session that has
+    /// never opened the switcher has, and the switcher works without it.
+    var placeFrecency: [UInt64: PlaceFrecency] = [:]
     /// Seeded from the reader's preference. A per-guild override still lives in
     /// the toolbar toggle; this is only where a fresh window starts.
     var isMemberListShown = AppSettings.shared.showsMemberListByDefault
@@ -540,6 +555,13 @@ final class AppModel {
     /// edits the query the panel already holds, so there is nothing else to
     /// carry and a second copy would be a second source of truth.
     var isSearchFiltersShown = false
+    /// The quick switcher — nil when it is not up.
+    ///
+    /// **A layer at the window root, not a presentation**, for the reason the
+    /// profile card is one: it floats over the transcript in clear glass, and
+    /// every `.sheet` and `.popover` on this platform paints its own backdrop
+    /// behind the whole of its content. See `QuickSwitchPresenter`.
+    var quickSwitch: QuickSwitchState?
 
     /// Servers whose gate the reader closed without answering.
     ///
@@ -778,6 +800,12 @@ final class AppModel {
     /// the view rather than rebuilt per query.
     @ObservationIgnored
     var forwardTargetCache: (key: ForwardTargetMemoKey, value: [ForwardTarget])?
+    /// Everywhere the quick switcher can send anybody. The same walk as the one
+    /// above and for the same reason it is memoized — this one is filtered per
+    /// keystroke rather than per sheet, so rebuilding it per keystroke would be
+    /// a walk of the account per character typed.
+    @ObservationIgnored
+    var quickSwitchCache: (key: QuickSwitchMemoKey, value: [QuickSwitchCandidate])?
 
     /// Asks the session for a page of history above what is loaded.
     ///
@@ -969,10 +997,11 @@ final class AppModel {
         emojiCatalogCache = nil
         stickerCatalogCache = nil
         mentionCache = nil
-        // Every channel in the account, walked through the permission gate. It
-        // is rebuilt the next time the forward sheet opens, which costs a pass
+        // Every channel in the account, walked through the permission gate. Both
+        // are rebuilt the next time their surface opens, which costs a pass
         // nobody is waiting through.
         forwardTargetCache = nil
+        quickSwitchCache = nil
         memberRevision &+= 1
         presenceRevision &+= 1
     }

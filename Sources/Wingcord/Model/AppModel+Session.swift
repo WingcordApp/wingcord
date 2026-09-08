@@ -23,7 +23,15 @@ extension AppModel {
 
     /// Called when a channel becomes the destination: loads its newest page and
     /// subscribes to its roster.
+    ///
+    /// **And records the visit**, which is the quick switcher's Previous list.
+    /// Here rather than in `selectChannel` because that is not the only way a
+    /// channel becomes the destination — a selection restored at launch, a
+    /// message link and a keyboard shortcut all arrive through this one
+    /// `onChange`, and a recorder on the click handler would miss every one of
+    /// them. `recordChannelVisit` is what refuses a previewed channel.
     func channelDidOpen(_ channelID: ChannelID) {
+        recordChannelVisit(channelID)
         sessionController.openChannel(channelID)
     }
 

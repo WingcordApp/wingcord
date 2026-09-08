@@ -52,6 +52,7 @@ enum FrecencyProto {
         static let favoriteGIFs = 2
         static let applicationCommandFrecency = 7
         static let applicationFrecency = 9
+        static let guildAndChannelFrecency = 12
     }
 
     /// The map inside each wrapper. `1` for both, and named once so the two
@@ -296,7 +297,38 @@ enum FrecencyProto {
 
     /// Applications, by how much the account uses them.
     static func applications(base64: String) -> [Entry<ApplicationID>] {
-        decode(base64: base64, field: Field.applicationFrecency, key: ApplicationID.init)
+        decode(base64: base64, field: Field.applicationFrecency) {
+            $0.string(for: $1).flatMap(ApplicationID.init)
+        }
+    }
+
+    /// Every server and channel the account goes to, with Discord's own score.
+    ///
+    /// **Field 12, and its map key is a `fixed64` where both tables above use a
+    /// string.** That is the only structural difference between them and it is
+    /// not guessable: read with a string key this map decodes to a hundred
+    /// entries of mojibake, silently, on a blob that is perfectly well formed.
+    /// Walked off `quick switcher.har` — a hundred keys, ten of which are guild
+    /// ids the same capture's `quests/decision` call lists as visible, the rest
+    /// channels, with scores to 1000 and last-use timestamps from the minutes
+    /// the capture was taken.
+    ///
+    /// ```
+    /// GuildAndChannelFrecency guild_and_channel_frecency = 12 {
+    ///   map<fixed64, FrecencyItem> = 1     // key = a guild OR a channel id
+    /// }
+    /// ```
+    ///
+    /// **One table for both, and nothing here separates them.** A guild id and a
+    /// channel id are snowflakes from one sequence and cannot collide, so the
+    /// caller resolves each key against its own tables and a key that answers to
+    /// neither is a place the account has left. Read, never written — the same
+    /// rule the command table is held to, and for the same reason: this client
+    /// understands eight fields of a twenty-eight-kilobyte message.
+    static func guildsAndChannels(base64: String) -> [Entry<UInt64>] {
+        decode(base64: base64, field: Field.guildAndChannelFrecency) { _, field in
+            field.wireType == 1 ? field.value : nil
+        }
     }
 
     /// Commands, by how much the account uses them.
@@ -308,13 +340,17 @@ enum FrecencyProto {
     /// key simply matches no command and costs that one row its place in the
     /// Frequently Used list.
     static func commands(base64: String) -> [Entry<String>] {
-        decode(base64: base64, field: Field.applicationCommandFrecency, key: { String($0) })
+        decode(base64: base64, field: Field.applicationCommandFrecency) { $0.string(for: $1) }
     }
 
+    /// The three tables are byte-identical below the field number, and the only
+    /// thing that differs is how the map's key is written — so the key is the
+    /// one thing a caller supplies. It takes the reader *and* the field rather
+    /// than a decoded string, because a `fixed64` key never becomes one.
     private static func decode<Key>(
         base64: String,
         field number: Int,
-        key parse: (String) -> Key?
+        key parse: (ProtobufReader, ProtobufReader.Field) -> Key?
     ) -> [Entry<Key>] {
         guard let data = Data(base64Encoded: base64) else { return [] }
         var reader = ProtobufReader(data)
@@ -335,18 +371,19 @@ enum FrecencyProto {
 
     private static func entry<Key>(
         _ reader: ProtobufReader,
-        _ parse: (String) -> Key?
+        _ parse: (ProtobufReader, ProtobufReader.Field) -> Key?
     ) -> Entry<Key>? {
         var reader = reader
         var key: Key?
         var item: (uses: Int, score: Int, last: Date?)?
         while let field = reader.next() {
             switch field.number {
-            case MapEntryField.key where field.wireType == 2:
-                // Anything the caller cannot parse is a different map at the
-                // same number in a future revision, and dropping it is how a
-                // wrong guess stays harmless.
-                key = reader.string(for: field).flatMap(parse)
+            case MapEntryField.key:
+                // **The caller owns the wire type as well as the parse.**
+                // Anything it cannot read is a different map at the same number
+                // in a future revision, and dropping it is how a wrong guess
+                // stays harmless.
+                key = parse(reader, field)
             case MapEntryField.value where field.wireType == 2:
                 item = self.item(reader.reader(for: field))
             default:

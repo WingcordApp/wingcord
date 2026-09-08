@@ -18,6 +18,7 @@ nonisolated struct SettingsShortcut: Identifiable, Sendable {
 
     static let groups: [(title: String, shortcuts: [SettingsShortcut])] = [
         ("Going somewhere", [
+            .init(keys: "⌘K", action: "Quick switcher"),
             .init(keys: "⌥↑", action: "Previous channel"),
             .init(keys: "⌥↓", action: "Next channel"),
             .init(keys: "⌥⌘↑", action: "Previous server"),

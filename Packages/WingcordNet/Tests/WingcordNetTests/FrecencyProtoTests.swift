@@ -284,3 +284,98 @@ struct FavoriteGIFRoundTripTests {
         #expect(read.first?.height == 300)
     }
 }
+
+// MARK: - Servers and channels — what orders the quick switcher
+
+/// Field 12 (`guild_and_channel_frecency`), the table the switcher ranks on.
+///
+/// **Five real map entries, wrapper intact, out of `quick switcher.har`.** Its
+/// key is a `fixed64` where fields 7 and 9 use a string, which is the one thing
+/// about this table that cannot be guessed — read with a string key it decodes
+/// to a hundred entries of mojibake on a blob that is perfectly well formed.
+/// The first key is a guild the same capture's `quests/decision` call lists as
+/// visible; the rest are channels.
+@Suite("Navigation frecency")
+struct NavigationFrecencyTests {
+
+    private let blob = """
+    YpwDClkJbwDCQrCRihMSTggTEjyq1+vjhzTJ2OvjhzTm2evjhzSI2+vjhzSw3OvjhzTj3evjhzSF3+vjhzSz\
+    mO3jhzTmr5DkhzSn5/flhzQY////////////ASDoBwpZCQIAhEkMBfMFEk4IGxI88b6Q5Ic0jqSR5Ic0mdWT\
+    5Ic0vaSd5Ic03te95Ic0hq/r5Ic0hq/r5Ic0tfL35Yc02ZW25oc0jb6F54c0GP///////////wEgygcKWgkk\
+    EID+Ny01FRJPCLQEEjyB5ufjhzTMseXkhzTMseXkhzS+h+fkhzS+h+fkhzSk0PHlhzSrtoDnhzTDhIbnhzTj\
+    ha3nhzSEqPbnhzQY////////////ASCsBwpaCfLSFC03LTUVEk8IugUSPOrkls+HNIHm5+OHNNPe7eOHNPqi\
+    9OOHNIfF5OSHNM3D8eWHNKu2gOeHNMOEhueHNOOFreeHNISo9ueHNBj///////////8BIPAGCiwJeACET1jA\
+    Vw8SIQgDEhLQ497jhzTyj9/jhzTriPLjhzQY////////////AQ==
+    """
+
+    @Test("Every map entry decodes through its wrapper")
+    func decodesEntries() {
+        #expect(FrecencyProto.guildsAndChannels(base64: blob).count == 5)
+    }
+
+    /// The account's most-used place in the capture, and a guild rather than a
+    /// channel — which is the fact that says this one table holds both.
+    @Test("Scores and use counts match the capture")
+    func scoresMatchTheCapture() throws {
+        let byKey = Dictionary(
+            FrecencyProto.guildsAndChannels(base64: blob).map { ($0.key, $0) },
+            uniquingKeysWith: { first, _ in first }
+        )
+
+        let guild = try #require(byKey[1_408_098_019_726_983_279])
+        #expect(guild.score == 1000)
+        #expect(guild.totalUses == 19)
+
+        let busiest = try #require(byKey[1_520_000_000_000_000_001])
+        #expect(busiest.score == 880)
+        #expect(busiest.totalUses == 698)
+    }
+
+    /// The tie-break for "previous channels". A stored score with no timestamp
+    /// would order the list by how often rather than how recently.
+    @Test("The last visit comes back as a date")
+    func lastUsedIsRead() throws {
+        let byKey = Dictionary(
+            FrecencyProto.guildsAndChannels(base64: blob).map { ($0.key, $0) },
+            uniquingKeysWith: { first, _ in first }
+        )
+        let entry = try #require(byKey[1_520_000_000_000_000_001])
+        let last = try #require(entry.lastUsedAt)
+        // September 2026, which is when the capture was taken.
+        #expect(last > Date(timeIntervalSince1970: 1_757_000_000))
+        #expect(last < Date(timeIntervalSince1970: 1_790_000_000))
+    }
+
+    /// A place with no uses is still an entry, and the caller decides whether a
+    /// zero score is worth a row. Nothing is filtered out down here.
+    @Test("A zero score is a real answer, not an absence")
+    func zeroScoreSurvives() throws {
+        let byKey = Dictionary(
+            FrecencyProto.guildsAndChannels(base64: blob).map { ($0.key, $0) },
+            uniquingKeysWith: { first, _ in first }
+        )
+        let cold = try #require(byKey[1_105_563_719_066_452_088])
+        #expect(cold.score == 0)
+        #expect(cold.totalUses == 3)
+    }
+
+    /// The depth guard the whole file exists for. Read one level too shallow —
+    /// each map entry written directly as field 12 — the decoder must answer
+    /// nothing rather than plausible nonsense.
+    @Test("The wrong framing decodes to nothing")
+    func wrongFramingIsEmpty() throws {
+        let data = try #require(Data(base64Encoded: blob.filter { !$0.isWhitespace }))
+        // Strip the outer field-12 wrapper's own tag and length, leaving the map
+        // entries at the top level — which is the mistake that shipped once.
+        let shallow = data.dropFirst(3)
+        #expect(FrecencyProto.guildsAndChannels(base64: shallow.base64EncodedString()).isEmpty)
+    }
+
+    /// A string key on this map is exactly the wrong guess this table invites,
+    /// and it has to cost the entry rather than yield a mangled one.
+    @Test("Read with a string key the map yields nothing")
+    func stringKeysFindNothing() {
+        #expect(FrecencyProto.applications(base64: blob).isEmpty)
+        #expect(FrecencyProto.commands(base64: blob).isEmpty)
+    }
+}

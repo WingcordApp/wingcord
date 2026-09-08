@@ -552,6 +552,37 @@ enum DemoFixtures {
         }
         model.readStates = readStates
 
+        // **Somewhere to have been, so the quick switcher's resting state is
+        // drivable.** Its Previous list is the session's own visits layered
+        // over Discord's `guild_and_channel_frecency`, and a fixture has
+        // neither — so ⌘K in `--demo` would open onto Mentions alone and the
+        // half of the panel that needs no typing could not be looked at.
+        //
+        // Both halves are seeded: three channels across two servers as visits,
+        // and a score against a handful of places so the *ordering* is
+        // exercised rather than only the rows. The scores are the shape a real
+        // table has — 0…1000, most of the account absent — not a ramp.
+        let visited = index.channelIDs(inGuild: firstGuild)
+            .filter { index[$0]?.kind == .text }
+            .prefix(3)
+        model.recentChannelIDs = Array(visited.dropFirst())
+        var frecency: [UInt64: PlaceFrecency] = [:]
+        for (offset, channelID) in visited.enumerated() {
+            frecency[channelID.rawValue] = PlaceFrecency(
+                score: 1000 - offset * 220,
+                lastUsedAt: Date.now.addingTimeInterval(-Double(offset) * 3_600)
+            )
+        }
+        for (offset, guildID) in guilds.keys.sorted(by: { $0.rawValue < $1.rawValue })
+            .prefix(4).enumerated()
+        {
+            frecency[guildID.rawValue] = PlaceFrecency(
+                score: 900 - offset * 200,
+                lastUsedAt: Date.now.addingTimeInterval(-Double(offset) * 7_200)
+            )
+        }
+        model.placeFrecency = frecency
+
         let first = firstGuild
         model.selectedGuildID = first
         model.selectedChannelID = index.channelIDs(inGuild: first).first {

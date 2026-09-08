@@ -192,7 +192,7 @@ struct ProfileSheet: View {
         .interactiveChromeOverMedia(in: .circle)
         // See `View.cancelAction(unless:)`: a game profile opened from this
         // sheet's own board sits on top of it and owns Escape while it is there.
-        .cancelAction(unless: model.gameProfileRequest != nil)
+        .cancelAction(unless: model.gameProfileRequest != nil || model.isQuickSwitchShown)
         .accessibilityLabel(Text("Close"))
     }
 

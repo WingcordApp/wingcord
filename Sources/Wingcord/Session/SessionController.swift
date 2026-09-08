@@ -84,6 +84,9 @@ final class SessionController {
     /// The same latch for the GIF picker's Favourites tile, which reads the same
     /// blob from a different surface.
     var hasLoadedFavoriteGIFs = false
+    /// And again for the quick switcher's ordering, which is a fourth table in
+    /// that one blob. Read from `SessionController+QuickSwitch`.
+    var hasLoadedNavigationFrecency = false
     /// Server-tag fetches in flight. A busy channel can show one tag on twenty
     /// consecutive rows; every one of them must share a single request.
     private var guildProfileFetches: Set<GuildID> = []
@@ -127,6 +130,9 @@ final class SessionController {
     var searchTask: Task<Void, Never>?
     /// The invite resolve behind the Add a Server field, replaced per keystroke.
     var inviteLookupTask: Task<Void, Never>?
+    /// The quick switcher's game autocomplete, replaced per keystroke and
+    /// debounced inside — see `SessionController+QuickSwitch`.
+    var gameSearchTask: Task<Void, Never>?
     /// Whose join gate is being submitted, so a double-click on Finish sends
     /// one agreement rather than two.
     var joinGateSubmissions: Set<GuildID> = []
@@ -314,6 +320,13 @@ final class SessionController {
         model.selectedGuildID = nil
         model.selectedChannelID = nil
         model.lastChannelByGuild = [:]
+        // Where the *previous* account had been, and how much it used each
+        // place. Both are as per-account as a roster is, and a switcher opened
+        // after a switch would otherwise offer the last account's channels.
+        model.recentChannelIDs = []
+        model.placeFrecency = [:]
+        hasLoadedNavigationFrecency = false
+        model.closeQuickSwitch()
         model.clearAllMessages()
         // Everything a message action or a person's row holds. **Per-account,
         // every one of them** — a note, a block and a channel's pins all answer
@@ -356,6 +369,7 @@ final class SessionController {
         model.timelineCache = nil
         model.rosterCache = nil
         model.forwardTargetCache = nil
+        model.quickSwitchCache = nil
         model.permissionGate.invalidate()
         model.connectionState = .signedOut
         ImageStore.shared.purge()

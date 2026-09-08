@@ -42,7 +42,7 @@ struct GameProfilePresenter: ViewModifier {
                             Color.black.opacity(0.5).contentShape(.rect)
                         }
                         .buttonStyle(.plain)
-                        .keyboardShortcut(.cancelAction)
+                        .cancelAction(unless: model.isQuickSwitchShown)
                         .accessibilityLabel(Text("Close game profile"))
                         .transition(.opacity)
 

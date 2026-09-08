@@ -108,6 +108,11 @@ struct WingcordApp: App {
                 .presentsJoinServer()
                 .presentsSearchFilters()
                 .presentsVoiceSurfaces()
+                // **Last, so it draws over every one of them.** ⌘K is reached
+                // from anywhere — including from on top of a profile card or a
+                // game page — and a switcher that opened underneath the surface
+                // it was summoned from would be invisible.
+                .presentsQuickSwitcher()
                 .watchesPushToTalk()
                 .resolvesMotion()
                 .environment(model)
@@ -186,6 +191,15 @@ struct WingcordCommands: Commands {
         // heading that says going somewhere.
         CommandMenu("Go") {
             Group {
+                // First in the menu because it is first in the hand: everything
+                // under it is a step, and this is the way to somewhere you
+                // cannot see. ⌘K is where every editor on this platform puts it,
+                // and it is free here — the toolbar's search field owns ⌘F.
+                Button("Quick Switcher…") { model.toggleQuickSwitch() }
+                    .keyboardShortcut("k", modifiers: .command)
+
+                Divider()
+
                 Button("Next Channel") { model.stepChannel(by: 1) }
                 .keyboardShortcut(.downArrow, modifiers: .option)
             Button("Previous Channel") { model.stepChannel(by: -1) }
