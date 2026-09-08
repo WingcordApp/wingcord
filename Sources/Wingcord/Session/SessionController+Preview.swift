@@ -83,6 +83,13 @@ extension SessionController {
             guard model.guildPreview?.guildID == guildID else { return }
             model.guildPreview?.isStarting = false
             model.permissionGate.invalidate()
+            // **Discovery closes HERE, on the answer, not on the click.** It
+            // used to close first, and a refused lurk — the hundred-server cap
+            // is the commonest one, and it is captured — then left the reader
+            // standing in whatever channel was underneath with a notice about a
+            // server they could no longer see. A page stays up until the thing
+            // it raised has actually happened.
+            model.closeDiscovery()
             if channelID == nil {
                 // Selected only now, after `GUILD_CREATE` — before it the guild
                 // is not in the store and `selectGuild` would land on nothing.

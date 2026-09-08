@@ -144,18 +144,34 @@ struct DiscoveryTests {
 
     // MARK: The headings
 
-    /// Seventeen primary headings are a picker; forty-nine is a list nobody
-    /// reads to the end of. The subcategories stay decoded, because a search
-    /// facet answers with them.
-    @Test("Only primary headings are offered for browsing")
-    func onlyPrimaryCategoriesAreOffered() {
+    /// The route answers forty-nine headings; the picker offers the five the
+    /// reference client's own tab strip shows, **in its order**. The rest stay
+    /// decoded, because a search facet answers in category ids and a bucket
+    /// nobody can name is a number with no label.
+    @Test("The picker offers Discord's own five, in Discord's order")
+    func headingsAreCurated() {
         let model = model()
         model.toggleDiscovery()
         model.discovery?.categories = [
-            DiscoveryCategory(id: 1, name: "Gaming", isPrimary: true),
             DiscoveryCategory(id: 30, name: "LFG", isPrimary: false),
+            DiscoveryCategory(id: 6, name: "Education", isPrimary: true),
+            DiscoveryCategory(id: 1, name: "Gaming", isPrimary: true),
+            DiscoveryCategory(id: 13, name: "Other", isPrimary: true),
+            DiscoveryCategory(id: 3, name: "Entertainment", isPrimary: true),
         ]
-        #expect(model.discoveryCategories.map(\.name) == ["Gaming"])
+        // Gaming, Entertainment, Education — the featured ids that were sent,
+        // in the featured order, with the primary-but-unfeatured one out.
+        #expect(model.discoveryCategories.map(\.name) == ["Gaming", "Entertainment", "Education"])
+    }
+
+    /// The names come from the route so a reader in another language gets their
+    /// own; only the ids are this client's.
+    @Test("A heading nobody sent is not invented")
+    func missingHeadingsAreDropped() {
+        let model = model()
+        model.toggleDiscovery()
+        model.discovery?.categories = []
+        #expect(model.discoveryCategories.isEmpty)
     }
 
     /// A page number carried across a question is how a category opens onto
@@ -204,5 +220,108 @@ struct DiscoveryTests {
             DiscordREST.Failure.api(status: 400, code: 30001, message: "You are at the 100 server limit.")
         )
         #expect(failure.contains("100 servers"))
+    }
+}
+
+// MARK: - The five defects the first live run found
+
+/// Each of these shipped, was seen on screen, and is pinned here so it cannot
+/// come back. Four of the five were silent — nothing failed, the surface simply
+/// answered wrongly.
+@Suite("Discovery regressions")
+@MainActor
+struct DiscoveryRegressionTests {
+
+    private let joinedID = GuildID(rawValue: 1000)
+
+    private func model() -> AppModel {
+        let model = AppModel()
+        model.currentUserID = UserID(rawValue: 1)
+        model.guilds = [
+            joinedID: Guild(id: joinedID, name: "Lumen Club", ownerID: UserID(rawValue: 1)),
+        ]
+        return model
+    }
+
+    /// **The toolbar's search field sat over discovery**, offering to search a
+    /// server nobody could see. `ChannelChrome.none` empties every control the
+    /// bar *builds*, and the field is the system's — installed by `.searchable`,
+    /// and unreachable from a chrome value. The whole bar goes instead.
+    @Test("A takeover hides the window toolbar, search field included")
+    func takeoverHidesTheToolbar() {
+        let model = model()
+        #expect(!model.isColumnTakenOver)
+        model.toggleDiscovery()
+        #expect(model.isColumnTakenOver)
+    }
+
+    /// **A refused preview used to dump the reader out of discovery.** The page
+    /// closed on the click, so at the hundred-server cap — which a lurk counts
+    /// against, captured — they landed in whatever channel was underneath,
+    /// reading a notice about a server no longer on screen.
+    @Test("A card click does not close discovery until the preview starts")
+    func discoveryStaysUpUntilThePreviewStarts() {
+        let model = model()
+        model.toggleDiscovery()
+        model.discovery?.page = DiscoveryPage(
+            guilds: [
+                DiscoverableGuild(
+                    id: GuildID(rawValue: 2000),
+                    name: "Somewhere",
+                    features: ["DISCOVERABLE", "PREVIEW_ENABLED"]
+                ),
+            ],
+            total: 1
+        )
+        let card = model.discoveryCards[0]
+        model.openDiscoveryCard(card)
+        // The lurk needs a gateway session, which a bare store has none of — so
+        // it cannot have started, and the page must still be there.
+        #expect(model.isDiscoveryShown)
+    }
+
+    /// A card for a server the account is in is navigation, and that path *does*
+    /// close immediately — there is no request to wait on.
+    @Test("A joined card closes discovery at once")
+    func joinedCardClosesAtOnce() {
+        let model = model()
+        model.toggleDiscovery()
+        model.discovery?.page = DiscoveryPage(
+            guilds: [DiscoverableGuild(id: joinedID, name: "Lumen Club")],
+            total: 1
+        )
+        model.openDiscoveryCard(model.discoveryCards[0])
+        #expect(!model.isDiscoveryShown)
+        #expect(model.selectedGuildID == joinedID)
+    }
+
+    /// **An app card opened the Add App sheet instead of the app's page.** The
+    /// directory card is a question — what *is* this app — and adding it is one
+    /// button on the answer.
+    @Test("An app card opens its page, one level inside discovery")
+    func appCardOpensItsPage() {
+        let model = model()
+        model.toggleDiscovery()
+        let app = ActivityApp(id: ApplicationID(rawValue: 42), name: "Wordle")
+        model.openDiscoveryApp(app)
+        #expect(model.discovery?.openAppID == app.id)
+        // Still discovery, and the grid underneath is not thrown away.
+        #expect(model.isDiscoveryShown)
+        #expect(model.applicationInstallRequest == nil)
+
+        model.closeDiscoveryApp()
+        #expect(model.discovery?.openAppID == nil)
+    }
+
+    /// Adding is the one act that leaves the page, because the sheet is a task
+    /// with an end.
+    @Test("Adding an app from its page raises the install sheet")
+    func addingRaisesTheSheet() {
+        let model = model()
+        model.toggleDiscovery()
+        let id = ApplicationID(rawValue: 42)
+        model.addDiscoveredApp(id)
+        #expect(!model.isDiscoveryShown)
+        #expect(model.applicationInstallRequest?.applicationID == id)
     }
 }

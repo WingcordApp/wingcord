@@ -14,15 +14,20 @@ import WingcordCore
 /// Roles uses, and for the reason stated there: `SegmentedPicker` brings its own
 /// material, and a `GlassEffectContainer` around one is glass on glass.
 struct DiscoveryPane: View {
-    var tab: DiscoveryState.Tab
+    /// A binding for the same reason `query` is one: a stored closure is a
+    /// non-`Sendable` function value where the control's own binding wants a
+    /// main-actor-isolated one.
+    @Binding var tab: DiscoveryState.Tab
     /// **A binding, built where the store is.** The setter goes through
     /// `setDiscoveryQuery`, which is what raises the request — and a stored
     /// `(String) -> Void` property is a non-`Sendable` function value where
     /// `TextField` wants a main-actor-isolated one.
     @Binding var query: String
-    var categoryID: Int?
+    /// Bindings for the reason `tab` is one — the control's own selection
+    /// binding wants a main-actor-isolated setter, and a stored closure is not.
+    @Binding var categoryID: Int?
     var categories: [DiscoveryCategory]
-    var appCategoryID: Int?
+    @Binding var appCategoryID: Int?
     var appCategories: [AppDirectoryCategory]
     var cards: [DiscoveryCard]
     var apps: [ActivityApp]
@@ -31,11 +36,12 @@ struct DiscoveryPane: View {
     /// Whether there is another page under this one.
     var hasMore: Bool
 
-    var setTab: (DiscoveryState.Tab) -> Void
-    var setCategory: (Int?) -> Void
-    var setAppCategory: (Int?) -> Void
+    /// The app whose own page is open, one level in. Nil is the grid.
+    var openAppID: ApplicationID?
     var openCard: (DiscoveryCard) -> Void
     var openApp: (ActivityApp) -> Void
+    var closeApp: () -> Void
+    var addApp: (ApplicationID) -> Void
     var loadMore: () -> Void
     var dismiss: () -> Void
 
@@ -48,10 +54,35 @@ struct DiscoveryPane: View {
     private static let measure = Proportions.surfaceColumnWide
 
     var body: some View {
+        // **A stack of two under one view type**, which is the same rule §1
+        // states for the detail column itself: internal `_ConditionalContent`
+        // under a stable outer type is not a structural swap, and the grid
+        // underneath keeps its scroll and its page while a page is open over it.
+        Group {
+            if let openAppID {
+                ActivityDetailPage(
+                    applicationID: openAppID,
+                    // **No channel here.** The directory is reached from the
+                    // rail with nothing open, so a Launch or a Send would have
+                    // nowhere to act — the page draws its description, its
+                    // commands as a read-only list, and Add App.
+                    channelID: nil,
+                    onBack: closeApp,
+                    onLaunched: closeApp,
+                    onAdd: { addApp(openAppID) }
+                )
+                .readingSurface()
+            } else {
+                browse
+            }
+        }
+    }
+
+    private var browse: some View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: Spacing.group) {
                 heading
-                chips
+                headings
                 grid
                 footer
             }
@@ -62,12 +93,7 @@ struct DiscoveryPane: View {
         .scrollBounceBehavior(.always, axes: .vertical)
         .readingSurface()
         .floatingTopBar {
-            DiscoveryBar(
-                tab: tab,
-                query: $query,
-                setTab: setTab,
-                dismiss: dismiss
-            )
+            DiscoveryBar(tab: $tab, query: $query, dismiss: dismiss)
             .surfaceColumn(Self.measure)
             .padding(.bottom, Spacing.base)
         }
@@ -100,58 +126,43 @@ struct DiscoveryPane: View {
         return categories.first { $0.id == categoryID }?.name ?? "Servers"
     }
 
-    // MARK: The headings row
+    // MARK: The headings
 
-    /// A scrolling row of capsules, with one travelling pill.
+    /// The same control as the tabs above it, and the same one the full profile
+    /// uses: `NSSegmentedControl`, capsule, `role: .tabs` — §1's rule, and what
+    /// Clock, Podcasts and Freeform draw.
     ///
-    /// **Not a second segmented control**, though the shape is close: there are
-    /// seventeen primary server headings, and `NSSegmentedControl` packs its
-    /// segments to equal widths — seventeen of them is a strip of slivers. A row
-    /// that scrolls holds any number of them and keeps the app's own chip shape.
+    /// **It holds six headings, which is what makes it the right instrument.**
+    /// The route answers forty-nine and the reference client's own strip shows
+    /// six; a control that sizes each segment to its label — which this one does,
+    /// see `SegmentedPicker` — would be fifteen hundred points wide with all of
+    /// them. `AppModel.featuredCategoryIDs` is the curation.
+    ///
+    /// Not inside a `GlassEffectContainer` and carrying no `.glassEffect`: the
+    /// control brings its own material.
     @ViewBuilder
-    private var chips: some View {
-        ScrollView(.horizontal) {
-            HStack(spacing: Spacing.base) {
-                if tab == .servers {
-                    chip("Featured", isOn: categoryID == nil) { setCategory(nil) }
-                    ForEach(categories) { category in
-                        chip(category.name, isOn: categoryID == category.id) {
-                            setCategory(category.id)
-                        }
-                    }
-                } else {
-                    chip("All", isOn: appCategoryID == nil) { setAppCategory(nil) }
-                    ForEach(appCategories) { category in
-                        chip(category.name, isOn: appCategoryID == category.id) {
-                            setAppCategory(category.id)
-                        }
-                    }
-                }
-            }
-            .padding(.vertical, 2)
-        }
-        .scrollIndicators(.never)
-        // A row of chips is chrome over the page, not content in it, so it
-        // clips at the column's edge rather than running under the window's.
-        .scrollClipDisabled(false)
-    }
-
-    private func chip(_ title: String, isOn: Bool, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            Text(title)
-                .font(.system(.subheadline, weight: isOn ? .semibold : .regular))
-                .foregroundStyle(isOn ? AnyShapeStyle(Ink.primary) : AnyShapeStyle(Ink.secondary))
-                .lineLimit(1)
-                .padding(.horizontal, Spacing.snug)
-                .padding(.vertical, Spacing.base)
-                .background(
-                    isOn ? Palette.selectionFill : Palette.hoverFill,
-                    in: .rect(cornerRadius: Radius.chip, style: .continuous)
+    private var headings: some View {
+        if tab == .servers {
+            if !categories.isEmpty {
+                SegmentedPicker(
+                    options: [SegmentedPicker.Option(nil, "Featured")]
+                        + categories.map { SegmentedPicker.Option($0.id, $0.name) },
+                    selection: $categoryID
                 )
-                .contentShape(.rect(cornerRadius: Radius.chip, style: .continuous))
+                .accessibilityLabel(Text("Browse servers by category"))
+            }
+        } else if !appCategories.isEmpty {
+            SegmentedPicker(
+                // **"All", not "Featured".** For servers the front page is a
+                // genuinely curated shortlist; for apps it is an unfiltered
+                // search, and naming it Featured would be a promise the route
+                // does not keep.
+                options: [SegmentedPicker.Option(nil, "All")]
+                    + appCategories.map { SegmentedPicker.Option($0.id, $0.name) },
+                selection: $appCategoryID
+            )
+            .accessibilityLabel(Text("Browse apps by category"))
         }
-        .buttonStyle(.plain)
-        .animation(motion.hover, value: isOn)
     }
 
     // MARK: The grid
@@ -214,74 +225,47 @@ struct DiscoveryPane: View {
 
 // MARK: - The bar
 
-/// The one glass surface on this page.
+/// The page's floating bar.
+///
+/// **`SegmentedPicker` — the system's own `NSSegmentedControl`, and NOT a
+/// `GlassEffectContainer` around it.** §1 says both halves of that: the control
+/// Clock, Podcasts and Freeform use is the right instrument for two mutually
+/// exclusive halves, and it *brings its own material*, so a container around it
+/// or a `.glassEffect` on it is glass on glass. The full profile's tab strip is
+/// the same call.
+///
+/// The container is gone rather than kept around the other two: it exists to
+/// merge adjacent glass bodies, and with the picker carrying its own and the
+/// field carrying a fill, there was exactly one glass element left in it.
 private struct DiscoveryBar: View {
-    var tab: DiscoveryState.Tab
+    @Binding var tab: DiscoveryState.Tab
     @Binding var query: String
-    var setTab: (DiscoveryState.Tab) -> Void
     var dismiss: () -> Void
 
-    @Environment(\.motion) private var motion
-    @Namespace private var pill
-
     var body: some View {
-        GlassEffectContainer(spacing: Spacing.base) {
-            HStack(spacing: Spacing.base) {
-                tabs
-                DiscoverySearchField(query: $query)
-                Button(action: dismiss) {
-                    Image(systemName: "xmark")
-                        .font(Typeface.controlGlyph)
-                        .frame(width: Metrics.control, height: Metrics.control)
-                        .contentShape(.circle)
-                }
-                .buttonStyle(.plain)
-                .foregroundStyle(Ink.secondary)
-                .frame(height: Metrics.control + Spacing.base)
-                .padding(.horizontal, Spacing.base)
-                .glassEffect(.regular.interactive(), in: .capsule)
-                .keyboardShortcut(.cancelAction)
-                .accessibilityLabel(Text("Close discovery"))
+        HStack(spacing: Spacing.base) {
+            SegmentedPicker(
+                options: DiscoveryState.Tab.allCases.map {
+                    SegmentedPicker.Option($0, $0.title)
+                },
+                selection: $tab
+            )
+            DiscoverySearchField(query: $query)
+            Spacer(minLength: 0)
+            Button(action: dismiss) {
+                Image(systemName: "xmark")
+                    .font(Typeface.controlGlyph)
+                    .frame(width: Metrics.control, height: Metrics.control)
+                    .contentShape(.circle)
             }
+            .buttonStyle(.plain)
+            .foregroundStyle(Ink.secondary)
+            .frame(height: Metrics.control + Spacing.base)
+            .padding(.horizontal, Spacing.base)
+            .glassEffect(.regular.interactive(), in: .capsule)
+            .keyboardShortcut(.cancelAction)
+            .accessibilityLabel(Text("Close discovery"))
         }
-    }
-
-    /// Two segments and one travelling pill.
-    ///
-    /// The pill is a tinted region *inside* the control's material rather than a
-    /// second glass body — §4 rule 2 — and it travels with
-    /// `matchedGeometryEffect`. The system's own `NSSegmentedControl` is the
-    /// rule elsewhere and is wrong here for the reason §1 states about it: it
-    /// brings its own material, and inside a `GlassEffectContainer` that is
-    /// glass on glass.
-    private var tabs: some View {
-        HStack(spacing: 2) {
-            ForEach(DiscoveryState.Tab.allCases, id: \.self) { value in
-                Button { setTab(value) } label: {
-                    Text(value.title)
-                        .font(.system(.subheadline, weight: .semibold))
-                        .foregroundStyle(
-                            tab == value ? AnyShapeStyle(Ink.primary) : AnyShapeStyle(Ink.secondary)
-                        )
-                        .padding(.horizontal, Spacing.snug)
-                        .frame(height: Metrics.control)
-                        .contentShape(.capsule)
-                        .background {
-                            if tab == value {
-                                Capsule()
-                                    .fill(Palette.selectionFill)
-                                    .matchedGeometryEffect(id: "discovery.tab", in: pill)
-                            }
-                        }
-                }
-                .buttonStyle(.plain)
-                .accessibilityAddTraits(tab == value ? [.isButton, .isSelected] : .isButton)
-            }
-        }
-        .padding(3)
-        .frame(height: Metrics.control + Spacing.base)
-        .glassEffect(.regular, in: .capsule)
-        .animation(motion.glassMorph, value: tab)
     }
 }
 

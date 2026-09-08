@@ -140,7 +140,7 @@ extension SessionController {
                 query: request.query,
                 categoryID: request.categoryID,
                 page: request.page,
-                locale: Locale.current.identifier(.bcp47)
+                locale: metadata.locale
             )
             guard !Task.isCancelled,
                   model.discovery?.appRequest.query == request.query,
@@ -170,7 +170,16 @@ extension SessionController {
     /// headings and the same five app ones for years. A latch each, because one
     /// failing must not cost the other.
     private func loadDiscoveryCategories() {
-        let locale = Locale.current.identifier(.bcp47)
+        // **`metadata.locale`, never `Locale.current`.** This shipped as
+        // `Locale.current.identifier(.bcp47)` and both category routes came back
+        // empty on a live account: on a Mac with a regional override that
+        // identifier is `en-US-u-rg-mdzzzz`, a perfectly valid BCP-47 tag that
+        // Discord does not accept. `ClientMetadata.locale` is
+        // `Locale.preferredLanguages.first` — `en-US` — and it is what every
+        // other route in this app sends, including the two the app directory
+        // already used. Two sources for one fact, and the wrong one failed
+        // silently: the grid filled, the chips did not.
+        let locale = metadata.locale
         if !hasLoadedDiscoveryCategories {
             hasLoadedDiscoveryCategories = true
             Task { [weak self] in

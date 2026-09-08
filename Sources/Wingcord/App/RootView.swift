@@ -36,8 +36,19 @@ struct RootView: View {
             // can see the sidebar. Hiding the window's toolbar is what removes
             // it, because the item is the system's and there is nothing of ours
             // to take away.
-            .toolbarVisibility(model.showsWorkspace ? .automatic : .hidden, for: .windowToolbar)
+            // **And hidden over a takeover, for the same reason.** The gate and
+            // discovery both draw `ChannelChrome.none`, which empties every
+            // control the bar builds — but the *search field* is the system's,
+            // installed by `.searchable`, and an empty chrome value cannot
+            // remove it. It sat over discovery offering to search a server
+            // nobody could see. There is nothing else in the bar during a
+            // takeover, so the bar goes.
+            .toolbarVisibility(
+                model.showsWorkspace && !model.isColumnTakenOver ? .automatic : .hidden,
+                for: .windowToolbar
+            )
             .animation(.easeOut(duration: 0.2), value: model.showsWorkspace)
+            .animation(.easeOut(duration: 0.2), value: model.isColumnTakenOver)
             // A channel becoming the destination is what triggers its history
             // fetch and its roster subscription. Driven from `onChange` rather
             // than from the click handler, so a selection restored at launch,

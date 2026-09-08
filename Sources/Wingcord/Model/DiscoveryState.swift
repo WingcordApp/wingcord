@@ -51,6 +51,11 @@ struct DiscoveryState: Hashable, Sendable {
 
     // MARK: Apps
 
+    /// The app whose own page is open, one level inside the Apps tab.
+    ///
+    /// **A stack of two, and the grid underneath is not thrown away.** Going
+    /// back to it must not re-fetch a page somebody has already scrolled.
+    var openAppID: ApplicationID?
     var appCategoryID: Int?
     var appCategories: [AppDirectoryCategory] = []
     var apps: [ActivityApp] = []

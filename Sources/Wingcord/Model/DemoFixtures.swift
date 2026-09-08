@@ -1648,7 +1648,6 @@ extension DemoFixtures {
     static func populateDiscovery(_ model: AppModel) {
         var state = DiscoveryState()
         state.categories = [
-            DiscoveryCategory(id: 0, name: "General", isPrimary: true),
             DiscoveryCategory(id: 1, name: "Gaming", isPrimary: true),
             DiscoveryCategory(id: 2, name: "Music", isPrimary: true),
             DiscoveryCategory(id: 3, name: "Entertainment", isPrimary: true),

@@ -13,7 +13,16 @@ import WingcordCore
 /// the whole reason Discord ships one.
 struct ActivityDetailPage: View {
     var applicationID: ApplicationID
-    var channelID: ChannelID
+    /// Where a command sent from this page would go, and where an activity
+    /// launched from it would run.
+    ///
+    /// **Nil is a real caller: discovery.** The directory is reached from the
+    /// rail with no channel in the picture, so there is nowhere for a Launch or
+    /// a Send to act — and §5.5 says a control that cannot work must not look
+    /// like one that can. With no channel the page is a *description*: the
+    /// screenshots, the commands as a read-only list, and Add App. That is
+    /// exactly what the reference client's own directory page shows.
+    var channelID: ChannelID?
     var onBack: () -> Void
     var onLaunched: () -> Void
     /// Puts a command into the composer with its first option focused. The page
@@ -21,6 +30,9 @@ struct ActivityDetailPage: View {
     /// Opens this app's storefront, one page deeper.
     var onOpenStore: () -> Void = {}
     var onFillCommand: (SlashCommand) -> Void = { _ in }
+    /// Adds this app to a server. The whole action bar where there is no
+    /// channel, and a menu row where there is.
+    var onAdd: () -> Void = {}
 
     @Environment(AppModel.self) private var model
     @Environment(\.motion) private var motion
@@ -194,6 +206,11 @@ struct ActivityDetailPage: View {
                             ForEach(section.rows) { row in
                                 AppCommandRowView(
                                     row: row,
+                                    // With no channel there is nowhere to send
+                                    // to and no composer to fill, so the list is
+                                    // what it looks like: a description of what
+                                    // this app can do.
+                                    isActionable: channelID != nil,
                                     isSending: sendingRowID == row.id,
                                     onSend: { send(row) },
                                     onFill: {
@@ -212,6 +229,7 @@ struct ActivityDetailPage: View {
     }
 
     private func send(_ row: AppCommandRow) {
+        guard let channelID else { return }
         sendingRowID = row.id
         Task {
             await model.sessionController.runCommand(
@@ -236,7 +254,16 @@ struct ActivityDetailPage: View {
     /// instead. `INVARIANTS.md` §5.5.
     @ViewBuilder
     private func launchBar(_ app: ActivityApp) -> some View {
-        if app.isLaunchable {
+        if channelID == nil {
+            // **Add App is the whole bar in the directory.** There is nothing to
+            // launch into, and adding the app to a server is what somebody
+            // reading a directory page came to do.
+            Button("Add App", systemImage: "plus.app") { onAdd() }
+                .buttonStyle(.glassProminent)
+                .controlSize(.large)
+                .frame(maxWidth: .infinity)
+                .padding(Spacing.snug)
+        } else if app.isLaunchable {
             let entryPoint = model.appEntryPoint(for: applicationID)
             HStack(spacing: Spacing.base) {
                 launchButton(app, entryPoint: entryPoint, inDirectMessage: false)
@@ -280,6 +307,7 @@ struct ActivityDetailPage: View {
     /// implies a permission that could be gained, and this is not that kind of
     /// limit. `INVARIANTS.md` §5.5.
     private func canLaunchInDirectMessage(_ entryPoint: ActivityEntryPoint?) -> Bool {
+        guard let channelID else { return false }
         guard let entryPoint, entryPoint.contexts.contains(Self.botDirectMessageContext) else {
             return false
         }
@@ -301,7 +329,7 @@ struct ActivityDetailPage: View {
             Task {
                 if inDirectMessage {
                     await model.sessionController.launchActivityInDirectMessage(app)
-                } else {
+                } else if let channelID {
                     await model.sessionController.launchActivity(
                         app,
                         in: channelID,
@@ -349,14 +377,7 @@ struct ActivityDetailPage: View {
             if model.applicationHasStorefront(applicationID) {
                 Button("Open Store", systemImage: "bag") { onOpenStore() }
             }
-            Button("Add App", systemImage: "plus.app") {
-                model.applicationInstallRequest = ApplicationInstallRequest(
-                    applicationID: applicationID,
-                    name: app?.name ?? "",
-                    iconHash: app?.iconHash,
-                    summary: app?.tagline ?? app?.about ?? ""
-                )
-            }
+            Button("Add App", systemImage: "plus.app") { onAdd() }
             Divider()
             Button("Copy App ID", systemImage: "number") {
                 NSPasteboard.general.clearContents()
@@ -514,6 +535,14 @@ private struct ActivityHero: View {
 /// separates them.
 private struct AppCommandRowView: View {
     var row: AppCommandRow
+    /// Whether pressing the row does anything.
+    ///
+    /// **False in the directory, where there is no channel to act in.** The row
+    /// stays legible and stops being a control — not `.disabled`, which would
+    /// take the description's contrast with it for a row that is doing its job
+    /// perfectly well as a *description*. §5.5: remove the affordance, not the
+    /// legibility.
+    var isActionable = true
     var isSending: Bool
     var onSend: () -> Void
     var onFill: () -> Void
@@ -548,18 +577,27 @@ private struct AppCommandRowView: View {
             .contentShape(.rect(cornerRadius: Radius.row, style: .continuous))
         }
         .buttonStyle(.plain)
-        .onHover { isHovered = $0 }
+        .allowsHitTesting(isActionable)
+        // Guarded rather than written unconditionally — §2. A tracking area on
+        // a row that cannot be pressed is geometry AppKit re-derives for nothing.
+        .onHover { if isActionable, isHovered != $0 { isHovered = $0 } }
         .animation(motion.hover, value: isHovered)
         .disabled(isSending)
         .accessibilityLabel(Text(row.command.name))
+        .accessibilityAddTraits(isActionable ? .isButton : [])
         .accessibilityHint(Text(
-            row.sendsImmediately ? "Runs this command" : "Opens this command in the composer"
+            !isActionable ? "" :
+                row.sendsImmediately ? "Runs this command" : "Opens this command in the composer"
         ))
     }
 
     @ViewBuilder
     private var control: some View {
-        if isSending {
+        if !isActionable {
+            // Nothing at all. A row that is a description has no trailing mark,
+            // and a greyed Send would be the control §5.5 forbids.
+            EmptyView()
+        } else if isSending {
             ProgressView().controlSize(.small)
         } else if row.sendsImmediately {
             // A filled pill rather than a bare glyph: it is the only thing on

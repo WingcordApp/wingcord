@@ -264,14 +264,23 @@ private struct DiscoveryContainer: View {
     var body: some View {
         let state = model.discovery ?? DiscoveryState()
         DiscoveryPane(
-            tab: state.tab,
+            tab: Binding(
+                get: { model.discovery?.tab ?? .servers },
+                set: { model.selectDiscoveryTab($0) }
+            ),
             query: Binding(
                 get: { model.discovery?.query ?? "" },
                 set: { model.setDiscoveryQuery($0) }
             ),
-            categoryID: state.categoryID,
+            categoryID: Binding(
+                get: { model.discovery?.categoryID },
+                set: { model.selectDiscoveryCategory($0) }
+            ),
             categories: model.discoveryCategories,
-            appCategoryID: state.appCategoryID,
+            appCategoryID: Binding(
+                get: { model.discovery?.appCategoryID },
+                set: { model.selectAppCategory($0) }
+            ),
             appCategories: model.appDirectoryCategories,
             cards: model.discoveryCards,
             apps: state.apps,
@@ -280,11 +289,11 @@ private struct DiscoveryContainer: View {
             hasMore: state.tab == .servers
                 ? state.page.guilds.count < state.page.total
                 : state.appPage < state.appPageCount,
-            setTab: { model.selectDiscoveryTab($0) },
-            setCategory: { model.selectDiscoveryCategory($0) },
-            setAppCategory: { model.selectAppCategory($0) },
+            openAppID: state.openAppID,
             openCard: { model.openDiscoveryCard($0) },
             openApp: { model.openDiscoveryApp($0) },
+            closeApp: { model.closeDiscoveryApp() },
+            addApp: { model.addDiscoveredApp($0) },
             loadMore: { model.loadMoreDiscovery() },
             dismiss: { model.closeDiscovery() }
         )

@@ -105,7 +105,11 @@ extension AppModel {
             selectGuild(card.id)
             return
         }
-        closeDiscovery()
+        // **Not closed here.** The lurk can be refused — at the hundred-server
+        // cap it always is — and a page that closed on the click would leave the
+        // reader somewhere they did not ask to be, reading a notice about a
+        // server that is no longer on screen. `previewGuild` closes it once the
+        // preview has actually started.
         sessionController.previewGuild(
             card.id,
             origin: .discovery,
@@ -121,21 +125,37 @@ extension AppModel {
     /// verbatim, capital G and capital D.
     static let discoveryLocation = "Guild Discovery"
 
-    /// Adding an app the directory offered.
+    /// Opens an app's own page, one level inside discovery.
     ///
-    /// **The Add App sheet, not the launcher's detail page.** The detail page
-    /// lives inside the composer's flyout and is scoped to a channel; the
-    /// directory is reached from the rail with no channel in the picture, and
-    /// opening a composer surface from it would be a page about somewhere the
-    /// reader is not. What the directory is *for* is adding the app to a server,
-    /// which is exactly what this sheet does — and it is already built.
+    /// **A page here, not the Add App sheet.** It went to the sheet first, which
+    /// was wrong in the way §5.5 is usually wrong in reverse: it skipped the
+    /// thing the reader was asking for. A directory card is a question — what
+    /// *is* this app — and the answer is the page that carries its screenshots,
+    /// its commands and what data it can read. Adding it is one button on that
+    /// page.
+    ///
+    /// The page is `ActivityDetailPage`, the same one the composer's flyout
+    /// shows, with **no channel**: there is none in the picture here, and the
+    /// controls that need one draw only where there is one. That is what the
+    /// reference client does too — its own directory page has no Launch.
     func openDiscoveryApp(_ app: ActivityApp) {
+        discovery?.openAppID = app.id
+    }
+
+    /// Back to the grid.
+    func closeDiscoveryApp() {
+        discovery?.openAppID = nil
+    }
+
+    /// Adds an app to a server, from its page.
+    func addDiscoveredApp(_ id: ApplicationID) {
+        let app = activityApp(id)
         closeDiscovery()
         applicationInstallRequest = ApplicationInstallRequest(
-            applicationID: app.id,
-            name: app.name,
-            iconHash: app.iconHash,
-            summary: app.tagline ?? app.about
+            applicationID: id,
+            name: app?.name ?? "",
+            iconHash: app?.iconHash,
+            summary: app?.tagline ?? app?.about ?? ""
         )
     }
 
@@ -190,18 +210,33 @@ extension AppModel {
         }
     }
 
-    /// The headings a reader can browse by.
+    /// The headings the picker offers, in the reference client's own order.
     ///
-    /// **The seventeen primary ones only.** The other thirty-two are refinements
-    /// a server picks *in addition* — Theorycraft, LFG, Cryptocurrency — and a
-    /// picker offering all forty-nine is a picker nobody reads to the end of.
-    /// They are still decoded, because a search facet answers with them and a
-    /// bucket nobody can name is a number with no label.
+    /// **Six, not forty-nine and not seventeen.** The route answers forty-nine
+    /// headings of which seventeen are primary; Discord's own tab strip shows
+    /// *five* of them plus Home. That is a curation rather than a limitation,
+    /// and copying it is what makes a segmented control the right instrument —
+    /// see `Self.featuredCategoryIDs`.
+    ///
+    /// The rest stay decoded and are not wasted: a search facet answers in
+    /// category ids, and a bucket nobody can name is a number with no label.
+    /// Reaching one of them is a search rather than a tab, which is the trade —
+    /// and widening it is one line.
     var discoveryCategories: [DiscoveryCategory] {
-        (discovery?.categories ?? [])
-            .filter(\.isPrimary)
-            .sorted { $0.id < $1.id }
+        let byID = Dictionary(
+            (discovery?.categories ?? []).map { ($0.id, $0) },
+            uniquingKeysWith: { first, _ in first }
+        )
+        return Self.featuredCategoryIDs.compactMap { byID[$0] }
     }
+
+    /// Gaming, Music, Entertainment, Science & Tech, Education.
+    ///
+    /// **Ids rather than names, and the names still come from the route** — so a
+    /// reader in another language gets their own. The ids are stable: the same
+    /// five have been these headings for years, and the capture confirms every
+    /// one of them.
+    static let featuredCategoryIDs = [1, 2, 3, 5, 6]
 
     var appDirectoryCategories: [AppDirectoryCategory] {
         (discovery?.appCategories ?? []).sorted { $0.id < $1.id }
