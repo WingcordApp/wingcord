@@ -302,7 +302,15 @@ public enum VerificationLevel: Hashable, Sendable {
 }
 
 /// Whether members are notified about every message or only mentions.
-public enum NotificationLevel: Hashable, Sendable {
+/// `Codable` because `Guild` is, and a guild now carries this.
+///
+/// **Coded as its raw integer, which is what makes an unrecognised value survive
+/// a round trip.** A synthesised conformance over an enum with an associated
+/// value writes a discriminated object; this writes the number Discord sent, so
+/// a level added after this was written comes back out as the same number rather
+/// than as a default. That is the same rule §1 states about a bitfield written
+/// back carrying the bits this client cannot draw.
+public enum NotificationLevel: Hashable, Sendable, Codable {
     case allMessages
     case onlyMentions
     case unrecognised(Int)
@@ -321,6 +329,15 @@ public enum NotificationLevel: Hashable, Sendable {
         case .onlyMentions: 1
         case .unrecognised(let value): value
         }
+    }
+
+    public init(from decoder: any Decoder) throws {
+        self.init(rawValue: try decoder.singleValueContainer().decode(Int.self))
+    }
+
+    public func encode(to encoder: any Encoder) throws {
+        var container = encoder.singleValueContainer()
+        try container.encode(rawValue)
     }
 
     public var title: String {

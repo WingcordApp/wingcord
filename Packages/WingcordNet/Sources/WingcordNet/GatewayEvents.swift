@@ -282,6 +282,14 @@ struct ReadyPayload: Decodable, Sendable {
 struct GuildSettingsDTO: Decodable, Sendable {
     var guild_id: GuildID?
     var muted: Bool?
+    /// The reader's own level for this whole server. `3` means they have not set
+    /// one and the server's own default stands — see `MessageNotificationLevel`.
+    var message_notifications: Int?
+    /// Whether `@everyone` and `@here` are turned off here. Per-server, and
+    /// orthogonal to the level: somebody can want every message *and* not want
+    /// `@everyone`.
+    var suppress_everyone: Bool?
+    var suppress_roles: Bool?
     var channel_overrides: [ChannelOverride]?
 
     struct ChannelOverride: Decodable, Sendable {

@@ -558,6 +558,8 @@ struct GuildDTO: Decodable, Sendable {
     var member_count: Int?
     var rules_channel_id: ChannelID?
     var large: Bool?
+    /// What the server tells a member who has set nothing. 0 all, 1 mentions.
+    var default_message_notifications: Int?
     var roles: [RoleDTO]?
     /// A server's own emoji and stickers. Present on the READY guild objects and
     /// on GUILD_CREATE, which is what keeps the picker's catalog current without
@@ -618,7 +620,10 @@ struct GuildDTO: Decodable, Sendable {
             features: Set(features ?? properties?.features ?? []),
             memberCount: member_count,
             rulesChannelID: rules_channel_id ?? properties?.rules_channel_id,
-            isLarge: large ?? false
+            isLarge: large ?? false,
+            defaultMessageNotifications: NotificationLevel(
+                rawValue: default_message_notifications ?? 0
+            )
         )
     }
 }

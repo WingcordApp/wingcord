@@ -28,6 +28,13 @@ public struct Guild: Hashable, Sendable, Identifiable, Codable {
     /// Whether this guild's member list can be fetched over the lazy-load
     /// subscription. Large guilds only send members on request.
     public var isLarge: Bool
+    /// What this server tells a member who has set nothing of their own.
+    ///
+    /// **The floor under every notification decision here** — see
+    /// `NotificationPolicy.resolvedLevel`. Most large servers set Only
+    /// @mentions, and a client that assumed All Messages would notify on every
+    /// line of a channel with four hundred thousand people in it.
+    public var defaultMessageNotifications: NotificationLevel = .allMessages
 
     public init(
         id: GuildID,
@@ -41,7 +48,8 @@ public struct Guild: Hashable, Sendable, Identifiable, Codable {
         features: Set<String> = [],
         memberCount: Int? = nil,
         rulesChannelID: ChannelID? = nil,
-        isLarge: Bool = false
+        isLarge: Bool = false,
+        defaultMessageNotifications: NotificationLevel = .allMessages
     ) {
         self.id = id
         self.name = name
@@ -55,6 +63,7 @@ public struct Guild: Hashable, Sendable, Identifiable, Codable {
         self.memberCount = memberCount
         self.rulesChannelID = rulesChannelID
         self.isLarge = isLarge
+        self.defaultMessageNotifications = defaultMessageNotifications
     }
 
     public var hasAnimatedIcon: Bool { iconHash?.hasPrefix("a_") ?? false }

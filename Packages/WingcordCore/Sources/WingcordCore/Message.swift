@@ -186,6 +186,10 @@ public struct Message: Hashable, Sendable, Identifiable, Codable {
     /// The message this one carries, when it is a forward.
     public var forwarded: ForwardedMessage? { payload?.forwarded }
     public var mentionedUserIDs: [UserID] { payload?.mentionedUserIDs ?? [] }
+    /// The roles this message pinged. On the payload already — this is the
+    /// accessor that was missing beside its two neighbours, which is why
+    /// `bumpUnread` had only ever counted a *direct* mention.
+    public var mentionedRoleIDs: [RoleID] { payload?.mentionedRoleIDs ?? [] }
     public var mentionsEveryone: Bool { payload?.mentionsEveryone ?? false }
     public var webhookID: UserID? { payload?.webhookID }
     /// The activity an app launched into this channel. Nil for everything else.

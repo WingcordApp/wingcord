@@ -110,7 +110,7 @@ enum SettingsSection: String, CaseIterable, Identifiable, Hashable, Sendable {
         case .expressions: "Emoji, stickers and the tone they are drawn in"
         case .media: "Pictures, video and what plays by itself"
         case .voiceVideo: "Microphone, camera, and how a call sounds"
-        case .notifications: "Unread counts, and what is not built yet"
+        case .notifications: "Banners, sounds and unread counts"
         case .shortcuts: "Every key the app answers to"
         case .account: "Who you are signed in as, on this Mac"
         case .connectedApps: "Linked accounts, and what you've authorized"

@@ -62,3 +62,59 @@ struct DiscoveryEnvelopeTests {
         #expect(page.counts == [3: 2])
     }
 }
+
+// MARK: - Notification settings on READY
+
+/// `user_guild_settings`, which is where the reader's own answer to "tell me
+/// about this" lives.
+///
+/// **Three of the five fields here were on the wire and decoded by nothing.**
+/// `message_notifications` was read on the channel override and dropped;
+/// `suppress_everyone`, `suppress_roles` and the guild-level level were not
+/// decoded at all. Every one of them is a reason somebody would either be
+/// interrupted or not, so a client that ignored them was making the decision on
+/// half the facts.
+@Suite("Guild notification settings")
+struct GuildNotificationSettingsTests {
+
+    @Test("Every field on a settings entry decodes")
+    func settingsDecode() throws {
+        let data = Data("""
+        {"guild_id":"1000","muted":true,"message_notifications":1,
+         "suppress_everyone":true,"suppress_roles":false,
+         "channel_overrides":[
+           {"channel_id":"2000","muted":false,"message_notifications":0,"flags":0},
+           {"channel_id":"2001","muted":true,"message_notifications":2,"flags":0}]}
+        """.utf8)
+        let dto = try JSONDecoder().decode(GuildSettingsDTO.self, from: data)
+        #expect(dto.muted == true)
+        #expect(dto.message_notifications == 1)
+        #expect(dto.suppress_everyone == true)
+        #expect(dto.suppress_roles == false)
+        #expect(dto.channel_overrides?.count == 2)
+        #expect(dto.channel_overrides?.first?.message_notifications == 0)
+    }
+
+    /// A server that has never had its default touched sends `0`, and one that
+    /// has sends `1`. **The floor under every decision** — most large servers
+    /// set Only @mentions, and a client that assumed All Messages would notify
+    /// on every line of a channel with four hundred thousand people in it.
+    @Test("A guild carries the default it tells new members")
+    func guildDefaultDecodes() throws {
+        let quiet = Data("""
+        {"id":"1000","name":"Big","default_message_notifications":1}
+        """.utf8)
+        #expect(
+            try JSONDecoder().decode(GuildDTO.self, from: quiet)
+                .domain.defaultMessageNotifications == .onlyMentions
+        )
+        // Absent is Discord's own default, which is all messages.
+        let bare = Data("""
+        {"id":"1000","name":"Small"}
+        """.utf8)
+        #expect(
+            try JSONDecoder().decode(GuildDTO.self, from: bare)
+                .domain.defaultMessageNotifications == .allMessages
+        )
+    }
+}

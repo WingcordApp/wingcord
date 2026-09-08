@@ -1068,6 +1068,10 @@ public struct ReadySnapshot: Sendable {
     public var settings: ClientSettings
     public var mutedGuildIDs: Set<GuildID>
     public var mutedChannelIDs: Set<ChannelID>
+    /// Everything the reader has said about being interrupted, as one value —
+    /// see `NotificationPreferences`. It carries the two mute sets above as
+    /// well, because the policy takes all of it or none.
+    public var notificationPreferences: NotificationPreferences
     /// Channels and categories the reader has opted into — the checkboxes and
     /// the Follow switches in Browse Channels. See `ChannelSettingsFlags`.
     public var followedChannelIDs: Set<ChannelID>
@@ -1222,15 +1226,28 @@ public struct ReadySnapshot: Sendable {
         var mutedGuildIDs: Set<GuildID> = []
         var mutedChannelIDs: Set<ChannelID> = []
         var followedChannelIDs: Set<ChannelID> = []
+        var guildLevels: [GuildID: MessageNotificationLevel] = [:]
+        var channelLevels: [ChannelID: MessageNotificationLevel] = [:]
+        var suppressEveryone: Set<GuildID> = []
+        var suppressRoles: Set<GuildID> = []
         for entry in payload.user_guild_settings?.entries ?? [] {
-            if entry.muted == true, let guildID = entry.guild_id {
-                mutedGuildIDs.insert(guildID)
+            if let guildID = entry.guild_id {
+                if entry.muted == true { mutedGuildIDs.insert(guildID) }
+                // **Stored even when it is `inherit`.** The policy distinguishes
+                // "the reader chose the server's default" from "the reader chose
+                // nothing", and collapsing them here would throw that away
+                // before it ever reaches the decision.
+                if let level = entry.message_notifications {
+                    guildLevels[guildID] = MessageNotificationLevel(rawValue: level)
+                }
+                if entry.suppress_everyone == true { suppressEveryone.insert(guildID) }
+                if entry.suppress_roles == true { suppressRoles.insert(guildID) }
             }
             for override in entry.channel_overrides ?? [] {
                 guard let channelID = override.channel_id else { continue }
-                // Two independent facts on one override, and a `guard` on the
-                // first used to drop the second: a muted channel is not the only
-                // kind that carries an opt-in bit.
+                // Three independent facts on one override, and a `guard` on the
+                // first used to drop the others: a muted channel is not the only
+                // kind that carries an opt-in bit or a level.
                 if override.muted == true {
                     mutedChannelIDs.insert(channelID)
                     readStates[channelID]?.isMuted = true
@@ -1238,11 +1255,22 @@ public struct ReadySnapshot: Sendable {
                 if (override.flags ?? 0) & ChannelSettingsFlags.followed != 0 {
                     followedChannelIDs.insert(channelID)
                 }
+                if let level = override.message_notifications {
+                    channelLevels[channelID] = MessageNotificationLevel(rawValue: level)
+                }
             }
         }
         self.readStates = readStates
         self.mutedGuildIDs = mutedGuildIDs
         self.mutedChannelIDs = mutedChannelIDs
+        self.notificationPreferences = NotificationPreferences(
+            mutedGuildIDs: mutedGuildIDs,
+            mutedChannelIDs: mutedChannelIDs,
+            guildLevels: guildLevels,
+            channelLevels: channelLevels,
+            suppressEveryoneGuildIDs: suppressEveryone,
+            suppressRoleMentionGuildIDs: suppressRoles
+        )
         self.followedChannelIDs = followedChannelIDs
         // The protobuf first, the JSON second, empty last.
         //

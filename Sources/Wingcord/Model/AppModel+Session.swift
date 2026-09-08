@@ -32,6 +32,9 @@ extension AppModel {
     /// them. `recordChannelVisit` is what refuses a previewed channel.
     func channelDidOpen(_ channelID: ChannelID) {
         recordChannelVisit(channelID)
+        // A banner about a channel the reader is now reading is chrome
+        // describing something they have already done.
+        notifier.clear(channelID)
         sessionController.openChannel(channelID)
     }
 

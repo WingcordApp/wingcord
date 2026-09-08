@@ -434,15 +434,35 @@ private struct NotificationsPane: View {
 
         SettingsGroup("Banners") {
             SettingsCard {
-                SettingsValueRow(
-                    title: "System notifications",
-                    value: "Not yet posted",
-                    help: "Wingcord does not post banners or play sounds. When it does, the controls will be here."
+                SettingsToggle(
+                    title: "Show notifications",
+                    help: "A banner when a message arrives in a channel you are not reading.",
+                    isOn: $settings.postsNotifications
                 )
+                CardDivider()
+                SettingsToggle(
+                    title: "Play a sound",
+                    help: "The system's notification sound.",
+                    isOn: $settings.playsNotificationSound
+                )
+                .disabled(!settings.postsNotifications)
+                CardDivider()
+                SettingsToggle(
+                    title: "Only for mentions",
+                    help: "Ignore each server's own setting and notify only when somebody mentions you.",
+                    isOn: $settings.notifiesOnlyForMentions
+                )
+                .disabled(!settings.postsNotifications)
             }
             SettingsFootnote(
-                "Said plainly rather than offered as a switch that does nothing: a preference whose behaviour is missing is worse than one that is not offered.",
-                symbolName: "info.circle"
+                "Each server's own notification setting is honoured, and a muted server or channel never notifies. "
+                    + "Direct messages always do, unless you have muted the conversation.",
+                symbolName: "bell.badge"
+            )
+            SettingsFootnote(
+                "macOS decides whether Wingcord may interrupt you at all. If nothing appears, look under "
+                    + "Notifications in System Settings.",
+                symbolName: "gear"
             )
         }
     }

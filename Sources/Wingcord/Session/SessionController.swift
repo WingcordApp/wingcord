@@ -335,6 +335,9 @@ final class SessionController {
         model.placeFrecency = [:]
         hasLoadedNavigationFrecency = false
         model.closeQuickSwitch()
+        // The banners belong to the account that earned them.
+        model.notifier.clearAll()
+        model.notificationPreferences = .none
         // Discovery answers per account — the front page is a recommendation
         // and the grid says which servers the reader is already in.
         model.closeDiscovery()
@@ -513,6 +516,7 @@ final class SessionController {
         model.selfStatus = snapshot.settings.status
         model.selfCustomStatus = snapshot.settings.customStatus
         model.mutedGuildIDs = snapshot.mutedGuildIDs
+        model.notificationPreferences = snapshot.notificationPreferences
 
         // Every role the reader holds, plus their own id, as one flat set. A
         // mention test is then one lookup rather than a scan over roles per
@@ -675,6 +679,11 @@ final class SessionController {
             model.channelIndex.patchLastMessage(message.id, in: message.channelID)
             model.messageContentRevision &+= 1
             bumpUnread(for: message)
+            // **After the unread, and it is not the same question.** The unread
+            // is bumped for a channel that is merely not selected; a banner is
+            // posted only for one the reader is not *looking at*, which needs
+            // the window's state as well — see `NotificationPolicy.Subject`.
+            announce(message)
             // A launch this client is still waiting on: the invitation message
             // is the only thing that carries the instance Discord actually
             // minted. See `awaitActivityInstance`.
@@ -898,6 +907,29 @@ final class SessionController {
         }
     }
 
+    /// Posts a banner for a message that earns one.
+    ///
+    /// **The authorisation is asked for HERE**, the first time there is genuinely
+    /// something to tell somebody about, rather than at launch — a permission
+    /// sheet in front of an app nobody has signed into yet is a question about
+    /// something they have not seen.
+    private func announce(_ message: Message) {
+        guard let notice = model.notice(for: message) else { return }
+        let notifier = model.notifier
+        let playsSound = AppSettings.shared.playsNotificationSound
+        Task {
+            await notifier.requestAuthorizationIfNeeded()
+            notifier.post(
+                title: notice.title,
+                subtitle: notice.subtitle,
+                body: notice.body,
+                channelID: notice.channelID,
+                messageID: notice.messageID,
+                playsSound: playsSound
+            )
+        }
+    }
+
     private func bumpUnread(for message: Message) {
         guard message.channelID != model.selectedChannelID else {
             // The reader is looking at it. Acknowledge rather than counting an
@@ -906,8 +938,15 @@ final class SessionController {
             return
         }
         var state = model.readStates[message.channelID] ?? ReadState()
+        // **A role ping is a mention**, and this counted only a direct one —
+        // `mentionedRoleIDs` was on the payload and had no accessor, so the
+        // badge silently missed every `@moderators`. `mentionableIDs` is one
+        // flat set of the reader's roles *and* their own id for exactly this.
+        // `contains(where:)` rather than a trailing closure: after `||` the
+        // parser reads a trailing brace as the start of a block, not a closure.
         if message.mentionsEveryone
             || message.mentionedUserIDs.contains(where: { model.mentionableIDs.contains($0.rawValue) })
+            || message.mentionedRoleIDs.contains(where: { model.mentionableIDs.contains($0.rawValue) })
         {
             state.mentionCount += 1
         }

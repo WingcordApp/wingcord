@@ -851,6 +851,21 @@ final class AppModel {
 
     /// Guilds the account has muted. Their unread never reaches the rail.
     var mutedGuildIDs: Set<GuildID> = []
+    /// Everything the reader has said about being interrupted — the two mute
+    /// sets, the per-server and per-channel levels, and the two suppressions.
+    ///
+    /// **One value rather than five tables**, because the policy takes all of it
+    /// or none: a decision made from four of the five is a decision made with a
+    /// fact missing, and the missing one is always the mute. It carries
+    /// `mutedGuildIDs` as well, which is not duplication — that one is read by
+    /// the rail on every badge and wants to stay a bare `Set` on the hot path.
+    var notificationPreferences: NotificationPreferences = .none
+    /// The one thing that speaks to Notification Center.
+    ///
+    /// `@ObservationIgnored` because it is machinery rather than state: nothing
+    /// observes it, and everything it changes it changes on the reader's screen
+    /// rather than in this store.
+    @ObservationIgnored lazy var notifier = MessageNotifier()
 
     /// Channels and categories the reader has opted into, across every server.
     ///

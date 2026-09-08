@@ -199,6 +199,48 @@ final class AppSettings {
         }
     }
 
+    /// Whether the app posts system notifications at all.
+    ///
+    /// **The reader's own switch, on top of macOS's.** They are two different
+    /// questions and both have to be yes: System Settings decides whether this
+    /// app may ever interrupt, and this decides whether it wants to. A client
+    /// with only the first makes somebody go to System Settings to quieten one
+    /// app, and one with only the second lies about what it can do.
+    var postsNotifications = true {
+        didSet {
+            guard postsNotifications != oldValue else { return }
+            defaults.set(postsNotifications, forKey: Key.postsNotifications)
+        }
+    }
+
+    /// Whether those notifications make a sound.
+    ///
+    /// Its own switch rather than a mode, because the two are genuinely
+    /// independent: somebody working beside other people wants the banner and
+    /// not the noise, and that is the commonest reason anybody touches this at
+    /// all.
+    var playsNotificationSound = true {
+        didSet {
+            guard playsNotificationSound != oldValue else { return }
+            defaults.set(playsNotificationSound, forKey: Key.notificationSound)
+        }
+    }
+
+    /// Whether a message that merely arrives is worth a banner, or only one
+    /// addressed to the reader is.
+    ///
+    /// **A floor under the server's own settings, never a ceiling.** With this
+    /// on, a channel the reader has explicitly set to All Messages still only
+    /// notifies on a mention — which is the point: it is the one control that
+    /// works without going server by server. Off, every per-server choice they
+    /// have made on Discord is honoured exactly.
+    var notifiesOnlyForMentions = false {
+        didSet {
+            guard notifiesOnlyForMentions != oldValue else { return }
+            defaults.set(notifiesOnlyForMentions, forKey: Key.mentionsOnly)
+        }
+    }
+
     // MARK: Chat
 
     /// 24-hour timestamps regardless of locale.
@@ -517,6 +559,9 @@ final class AppSettings {
         lastGuildID = (defaults.object(forKey: Key.lastGuild) as? NSNumber)?.uint64Value
         lastChannelID = (defaults.object(forKey: Key.lastChannel) as? NSNumber)?.uint64Value
         showsUnreadCounts = defaults.object(forKey: Key.showsUnreadCounts) as? Bool ?? true
+        postsNotifications = defaults.object(forKey: Key.postsNotifications) as? Bool ?? true
+        playsNotificationSound = defaults.object(forKey: Key.notificationSound) as? Bool ?? true
+        notifiesOnlyForMentions = defaults.object(forKey: Key.mentionsOnly) as? Bool ?? false
         skinTone = (defaults.object(forKey: Key.skinTone) as? Int)
             .flatMap(UnicodeEmoji.SkinTone.init(rawValue:)) ?? .default
         launchDestination = (defaults.object(forKey: Key.launchDestination) as? String)
@@ -623,6 +668,9 @@ final class AppSettings {
         static let lastGuild = "startup.lastGuildID"
         static let lastChannel = "startup.lastChannelID"
         static let showsUnreadCounts = "notifications.showsUnreadCounts"
+        static let postsNotifications = "notifications.posts"
+        static let notificationSound = "notifications.sound"
+        static let mentionsOnly = "notifications.mentionsOnly"
         static let skinTone = "expressions.skinTone"
         static let mediaVolume = "media.volume"
         static let mutesMedia = "media.muted"

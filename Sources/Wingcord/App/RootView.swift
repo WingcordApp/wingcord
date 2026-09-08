@@ -89,6 +89,21 @@ struct RootView: View {
             } action: { origin in
                 PresentationOrigin.record(origin)
             }
+            // **Installed once, at the root, and it is the only thing that can
+            // navigate.** `MessageNotifier` owns the delegate callback and
+            // nothing else; where a press *goes* is the window's business, and a
+            // closure is what keeps the notifier free of the store.
+            .task {
+                // Captured strongly, deliberately: the store outlives this
+                // view — it is the app's own `@State` — so a weak capture here
+                // would be guarding against a lifetime that cannot end, and
+                // the notifier is held by the store anyway. The cycle it
+                // completes is store → notifier → store, which lasts exactly as
+                // long as the process.
+                model.notifier.open = { channelID, messageID in
+                    model.openNotifiedMessage(channelID, messageID)
+                }
+            }
             .task {
                 MemoryPressureWatcher.shared.start()
                 Breadcrumbs.record("root appeared")
