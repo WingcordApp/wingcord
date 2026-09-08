@@ -111,7 +111,12 @@ public struct DiscoveryPage: Hashable, Sendable {
     ///
     /// The `-1` bucket is the total across all categories rather than a real
     /// category, so a reader that draws it as a chip draws a category that does
-    /// not exist.
+    /// not exist. **It equals `total`** — confirmed in `Show filters.har`, where
+    /// the facet's `-1` is 142 beside a `total_count` of 142 — which is what
+    /// makes it the All row rather than something to be dropped.
+    ///
+    /// **The buckets arrive sorted by count, descending**, and that is the order
+    /// Discord's own Show menu draws them in.
     public var counts: [Int: Int]
 
     public init(

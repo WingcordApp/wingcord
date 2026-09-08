@@ -135,6 +135,26 @@ public enum CDN {
 
     /// The picture behind an invite. The fallback where a server has no
     /// discovery splash of its own.
+    /// A server's Server Guide header — the wide artwork Discord draws behind a
+    /// support-server card.
+    ///
+    /// **`/home-headers/`, plural, at the top level.** Probed against `.fmbot`'s
+    /// support guild: `/guilds/{id}/home-header/` 404s, `/guild-home-headers/`
+    /// answers 403 and this answers 200. The field is `home_header` and the path
+    /// is neither its name nor the shape the neighbouring splashes take, which
+    /// is exactly why it is a function rather than a string at a call site.
+    public static func guildHomeHeader(
+        guildID: GuildID,
+        hash: String,
+        width: CGFloat,
+        scale: CGFloat = 2
+    ) -> URL? {
+        URL(
+            string: "\(host)/home-headers/\(guildID.rawValue)/\(hash).png"
+                + "?size=\(rung(forSide: width, scale: scale))"
+        )
+    }
+
     public static func guildSplash(
         guildID: GuildID,
         hash: String,
@@ -288,6 +308,22 @@ public enum CDN {
         )
     }
 
+    /// What an application with no `icon` is drawn as.
+    ///
+    /// **Not on the CDN host, and not derived from anything.** It is a static
+    /// asset of the web client — `discord.com/assets/aa9bb230adf0286f.png`, a
+    /// 184-pixel blurple disc — and Discord's own directory falls back to it
+    /// rather than to the bot's avatar: OWO Admin has `icon: null` with a
+    /// `bot.avatar` set, and its page draws this.
+    ///
+    /// **It is also what the gradient is derived from** for such an app, which
+    /// is the reason it is a URL here rather than a bundled picture: the palette
+    /// has to quantise the same bytes Discord does. Checked — it answers
+    /// `rgb(107,124,196)` → `rgb(107,196,135)`, which is what Discord's page
+    /// shows.
+    public static let defaultApplicationIcon =
+        URL(string: "https://discord.com/assets/aa9bb230adf0286f.png")
+
     /// The wide artwork above an app's detail page, and behind its tile in the
     /// launcher's featured row.
     ///
@@ -423,6 +459,28 @@ public enum CDN {
     ) -> URL? {
         URL(
             string: "\(host)/app-assets/\(id.rawValue)/game/screenshots/\(hash).png"
+                + "?size=\(rung(forSide: width, scale: scale))"
+        )
+    }
+
+    /// The still the preview loop starts on.
+    ///
+    /// **The same asset id, with `.png` instead of `.mp4`.** Probed live against
+    /// Farm Merge Valley's `1232355776870223923`: `.mp4`, `.png` and `.jpg` all
+    /// answer 200 at that path, and the PNG is 512x288 — the video's own first
+    /// frame at 16:9. Nothing in any capture names it; it was found by asking
+    /// the path the video already lives at for a picture.
+    ///
+    /// It is what a card in the directory grid draws at rest, so the loop that
+    /// starts on hover begins from the frame that was already on screen.
+    public static func activityPreviewPoster(
+        id: ApplicationID,
+        assetID: String,
+        width: CGFloat,
+        scale: CGFloat = 2
+    ) -> URL? {
+        URL(
+            string: "\(host)/app-assets/\(id.rawValue)/store/\(assetID).png"
                 + "?size=\(rung(forSide: width, scale: scale))"
         )
     }

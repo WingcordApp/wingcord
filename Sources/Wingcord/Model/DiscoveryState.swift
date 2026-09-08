@@ -1,4 +1,5 @@
 import Foundation
+import SwiftUI
 import WingcordCore
 
 /// The discovery page, while it is open.
@@ -44,10 +45,36 @@ struct DiscoveryState: Hashable, Sendable {
     /// not a union of them. Labelling it "All" would promise the whole of
     /// discovery, which that route does not answer.
     var categoryID: Int?
-    var categories: [DiscoveryCategory] = []
+    /// The language a search is narrowed to, or nil for every language.
+    ///
+    /// **Search only, because that is the only route captured taking it.**
+    /// `language_code` goes to `/discoverable-guilds/search`; the browse route
+    /// was never seen with one, and offering a filter on a route that may
+    /// ignore it is a control that changes nothing.
+    var languageCode: String?
     var page: DiscoveryPage = .empty
+    /// The per-category counts, and the query text they belong to.
+    ///
+    /// **Kept on the state rather than on the page, because it outlives it.**
+    /// Captured: `with_counts=true` goes out once for a query and every
+    /// refinement of that query — a bucket, a language — sends `false`. So the
+    /// answer that carries the facet is replaced by answers that do not, and a
+    /// facet read off the current page would empty itself the moment somebody
+    /// used it.
+    var facet: Facet?
     var isLoading = false
     var failure: String?
+
+    /// One search's category counts.
+    struct Facet: Hashable, Sendable {
+        /// The query text these counts describe. A different one is a different
+        /// facet, and that is the only thing that re-asks for it.
+        var query: String
+        /// Category id to count. The `-1` bucket is the total across all of
+        /// them — `DiscoveryPage.allCategoriesFacet` — and it is what names the
+        /// All row rather than a category that does not exist.
+        var counts: [Int: Int]
+    }
 
     // MARK: Apps
 
@@ -56,11 +83,16 @@ struct DiscoveryState: Hashable, Sendable {
     /// **A stack of two, and the grid underneath is not thrown away.** Going
     /// back to it must not re-fetch a page somebody has already scrolled.
     var openAppID: ApplicationID?
+    /// The app whose storefront is open, one level inside its page.
+    ///
+    /// **A third level, and the two under it are not thrown away.** The store is
+    /// reached from an app's page and the page from the grid; going back twice
+    /// must not re-fetch either.
+    var openStoreID: ApplicationID?
     /// Which app heading is showing. **Featured by default, and never nil** —
     /// see `AppDirectoryCategory.featuredID`: no category at all is a different
     /// and much narrower search.
     var appCategoryID: Int? = AppDirectoryCategory.featuredID
-    var appCategories: [AppDirectoryCategory] = []
     var apps: [ActivityApp] = []
     var appPage = 1
     var appPageCount = 1
@@ -85,14 +117,28 @@ struct DiscoveryState: Hashable, Sendable {
     /// checks an answer against it before writing, and "did the question change
     /// while this was out" has to be one question.
     var serverRequest: ServerRequest {
-        ServerRequest(query: query.trimmingCharacters(in: .whitespaces), categoryID: categoryID)
+        ServerRequest(
+            query: query.trimmingCharacters(in: .whitespaces),
+            categoryID: categoryID,
+            languageCode: languageCode
+        )
     }
 
     struct ServerRequest: Hashable, Sendable {
         var query: String
         var categoryID: Int?
+        var languageCode: String?
         /// Whether this goes to the search route rather than the browse route.
         var isSearch: Bool { !query.isEmpty }
+    }
+
+    /// Whether this request has to ask for the facet.
+    ///
+    /// **Once per query text, and never for a refinement of it** — which is
+    /// exactly what the two captures show the reference client doing, and what
+    /// keeps a second round trip off every bucket press.
+    func wantsFacet(for request: ServerRequest) -> Bool {
+        request.isSearch && facet?.query != request.query
     }
 
     var appRequest: AppRequest {
@@ -132,4 +178,50 @@ struct DiscoveryCard: Hashable, Sendable, Identifiable {
     /// Whether the account is already in it, so the card says "Joined" rather
     /// than offering to join a server the reader is standing in.
     var isJoined: Bool
+}
+
+/// One app in the directory grid.
+///
+/// A projection for the reason `DiscoveryCard` is one — every URL on it is
+/// resolved from a hash or an asset id, and resolving those in a view body
+/// resolves them again on every scroll. Two extra facts over the launcher's
+/// `ActivityRow`, and both are pictures: the banner across the card's head and
+/// the loop that replaces it under the pointer.
+struct DiscoveryAppCard: Hashable, Sendable, Identifiable {
+    var id: ApplicationID
+    var name: String
+    var subtitle: String
+    var isVerified: Bool
+    /// The directory's own heading for it — "Moderation and Tools". **The line
+    /// Discord draws between the name and the description**, and empty for an
+    /// app the route filed under nothing.
+    var category: String?
+    /// How many servers have added it. Nil where the route did not say.
+    var guildCount: Int?
+    /// The still across the head of the card. Nil is a real state — see
+    /// `AppModel.appBannerURL` — and the card falls back to the accent below.
+    var bannerURL: URL?
+    /// The bot's own profile accent, for an app with no banner. Discord draws a
+    /// flat field of it rather than a hole; nil where the bot set none, and then
+    /// the card's own raised ground stands.
+    var accentColor: Color?
+    /// The preview loop, for the cards that have one. **Only the hovered card
+    /// ever builds a player**: see `DiscoveryAppTile`.
+    var videoURL: URL?
+    /// The launcher's own row projection, so the icon and the monogram are
+    /// resolved once for every surface that draws an app.
+    var row: ActivityRow
+    /// The icon's hash, for the one caller that needs a *different* rendition
+    /// of it than the mark: the palette's 128-pixel WebP. See
+    /// `AppIconGradientStore`.
+    var iconHash: String?
+}
+
+/// One row of the Show menu: a heading, how many of the query's results are
+/// filed under it, and nil for the All row that clears the filter.
+struct DiscoveryFacetBucket: Hashable, Sendable, Identifiable {
+    /// Nil is All — the `-1` bucket, which is a total rather than a category.
+    var id: Int?
+    var name: String
+    var count: Int
 }

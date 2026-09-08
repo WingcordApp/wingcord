@@ -80,3 +80,51 @@ struct MedianCutQuantizerTests {
         #expect(MedianCutQuantizer.palette(of: noise, count: 5).count >= 2)
     }
 }
+
+// MARK: - The partner colours
+
+/// Discord's `Q7`, pinned against two of its own rendered gradients.
+///
+/// **Both are read off the inline style its client writes**, which is the only
+/// place these numbers exist — `bot.banner_color`, `bot.accent_color` and
+/// `user_profile.theme_colors` are null for both apps on every route.
+@Suite("Palette harmony")
+struct PaletteHarmonyTests {
+
+    /// `linear-gradient(45deg, rgb(88,183,233), rgb(110,233,88))` on OwO's page,
+    /// and `linear-gradient(45deg, rgb(123,25,113), rgb(25,64,123))` on
+    /// Roll20's. Neither swatch trips a clamp, so both are the plain −90°.
+    @Test("The first partner matches Discord's own gradient, byte for byte")
+    func partnerMatchesDiscord() {
+        #expect(PaletteHarmony.partners(of: SIMD3(88, 183, 233)).first
+            == SIMD3<UInt8>(110, 233, 88))
+        #expect(PaletteHarmony.partners(of: SIMD3(123, 25, 113)).first
+            == SIMD3<UInt8>(25, 64, 123))
+    }
+
+    /// Three of them, at −90°, −180° and −270°, because the reference asks for
+    /// `360 / (count + 1)` with a default count of three.
+    @Test("There are three partners, a quarter turn apart")
+    func threePartnersAQuarterTurnApart() {
+        let partners = PaletteHarmony.partners(of: SIMD3(88, 183, 233))
+        #expect(partners.count == 3)
+        let hues = ([SIMD3<UInt8>(88, 183, 233)] + partners).map {
+            PaletteHarmony.hsl(of: $0).0
+        }
+        for (earlier, later) in zip(hues, hues.dropFirst()) {
+            #expect(abs((earlier - later + 360).truncatingRemainder(dividingBy: 360) - 90) <= 1)
+        }
+    }
+
+    /// **The three clamps are the module's own**, and each moves only a swatch
+    /// outside its band. A dark swatch keeps its darkness — which is what makes
+    /// Roll20's partner dark rather than the mid-tone a naive rotation gives.
+    @Test("Only a swatch outside the bands is moved")
+    func clampsMoveOnlyWhatIsOutside() throws {
+        let grey = try #require(PaletteHarmony.partners(of: SIMD3(120, 110, 115)).first)
+        #expect(PaletteHarmony.hsl(of: grey).1 > 30)
+
+        let dark = PaletteHarmony.hsl(of: PaletteHarmony.partners(of: SIMD3(123, 25, 113))[0])
+        #expect(abs(dark.2 - 29.0) < 1)
+    }
+}

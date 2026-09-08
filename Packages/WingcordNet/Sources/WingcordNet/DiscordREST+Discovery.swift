@@ -72,6 +72,22 @@ extension DiscordREST {
     ///   and what this controls is `DiscoveryPage.counts`. The reference client
     ///   asks for it once per query and drops it for every refinement of that
     ///   query, which is what the default mirrors.
+    ///
+    /// **Both filters are captured, in one order, and they compose.**
+    /// `Show filters.har` walks the facet a bucket at a time and
+    /// `HAR language code and category_id.har` walks three languages and then
+    /// two categories on top of the last of them:
+    ///
+    /// ```
+    /// search?query=hey&offset=0&limit=12&with_counts=true                       ← the facet
+    /// search?query=hey&category_id=1&offset=0&limit=12&with_counts=false        ← a bucket
+    /// search?query=mid&offset=0&limit=12&language_code=en-US&with_counts=false  ← a language
+    /// search?query=mid&category_id=3&offset=0&limit=12&language_code=en-US&…    ← both
+    /// ```
+    ///
+    /// The keys go out in that order — `query`, `category_id`, `offset`,
+    /// `limit`, `language_code`, `with_counts` — which is why `category_id` is
+    /// appended before the paging rather than after it.
     public func searchDiscoverableGuilds(
         query text: String,
         categoryID: Int? = nil,
@@ -80,14 +96,12 @@ extension DiscordREST {
         offset: Int = 0,
         wantsCounts: Bool = true
     ) async throws -> DiscoveryPage {
-        var query = [
-            URLQueryItem(name: "query", value: text),
-            URLQueryItem(name: "offset", value: String(offset)),
-            URLQueryItem(name: "limit", value: String(limit)),
-        ]
+        var query = [URLQueryItem(name: "query", value: text)]
         if let categoryID {
             query.append(URLQueryItem(name: "category_id", value: String(categoryID)))
         }
+        query.append(URLQueryItem(name: "offset", value: String(offset)))
+        query.append(URLQueryItem(name: "limit", value: String(limit)))
         // Undocumented and captured: the reference client re-runs the same query
         // per language when the reader picks one, with the facet turned off.
         if let languageCode {

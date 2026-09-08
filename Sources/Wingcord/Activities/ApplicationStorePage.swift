@@ -15,6 +15,10 @@ import WingcordCore
 struct ApplicationStorePage: View {
     var applicationID: ApplicationID
     var name: String
+    /// Which surface it is on, and therefore whether it has to make itself a
+    /// column. The flyout *is* one; discovery's detail column is not. The same
+    /// split `ActivityDetailPage.Layout` makes, for the same reason.
+    var layout: ActivityDetailPage.Layout = .flyout
     var onBack: () -> Void
 
     @Environment(AppModel.self) private var model
@@ -84,6 +88,7 @@ struct ApplicationStorePage: View {
                     .padding(.horizontal, Spacing.snug)
                     .padding(.top, Metrics.control + Spacing.group)
                     .padding(.bottom, Spacing.margin)
+                    .storeColumn(layout)
                 }
                 .scrollIndicators(.never)
                 .softScrollEdgesVertical()
@@ -405,5 +410,25 @@ private struct StoreArtwork: View {
         .frame(width: side, height: side)
         .clipShape(.rect(cornerRadius: corner ?? (side * 0.22), style: .continuous))
         .accessibilityHidden(true)
+    }
+}
+
+private extension View {
+    /// The column a store page takes on each of its two surfaces.
+    ///
+    /// **A page, not a strip.** Given discovery's whole detail column the tiles
+    /// ran to fifteen hundred points — the same fault the app page had, and the
+    /// same fix: `Metrics.appPageColumn`, so the store and the page it is opened
+    /// from sit on one measure.
+    @ViewBuilder
+    func storeColumn(_ layout: ActivityDetailPage.Layout) -> some View {
+        switch layout {
+        case .flyout:
+            self
+        case .page:
+            frame(maxWidth: Metrics.appPageColumn)
+                .frame(maxWidth: .infinity, alignment: .center)
+                .padding(.horizontal, Spacing.group)
+        }
     }
 }

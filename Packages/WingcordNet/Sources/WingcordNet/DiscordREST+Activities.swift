@@ -494,6 +494,10 @@ extension DiscordREST {
 
     /// The `guild_id` a DM launch claims. See `authorizeActivity`.
     static let dmLocationGuildID = "10000"
+    /// The same sentinel in the field that holds a channel *type*, for an
+    /// install made from a page with no channel behind it at all. Captured in
+    /// `OwO bot.har`; nothing else in this app sends it.
+    static let noChannelKind = 10_000
 
     private func authorizeQuery(
         application: ApplicationID,
@@ -587,6 +591,69 @@ struct ApplicationDTO: Decodable, Sendable {
     var terms_of_service_url: URL?
     var privacy_policy_url: URL?
     var embedded_activity_config: EmbeddedConfigDTO?
+    /// The application's bot account. **Only its banner is wanted**, which is
+    /// the picture a directory card draws — see `ActivityApp.botBannerHash`.
+    var bot: BotDTO?
+    /// The directory's own headings for this app. See `categoryNames`.
+    var categories: [CategoryDTO]?
+    /// The application's own flags. **Where the privileged gateway intents
+    /// live**, and therefore what the Data Access section is drawn from — see
+    /// `AppDataAccess`.
+    var flags: UInt64?
+    var is_monetized: Bool?
+    /// What the app asks for on a server install. Its `permissions` is the
+    /// Required Permissions list; `.fmbot`'s `275415092288` is the eight its
+    /// page names, checked bit by bit.
+    var install_params: InstallParamsDTO?
+    /// The app's support server, whole. No second fetch is needed for the card.
+    var guild: SupportGuildDTO?
+
+    struct CategoryDTO: Decodable, Sendable {
+        var id: Int?
+        var name: String?
+    }
+
+    struct InstallParamsDTO: Decodable, Sendable {
+        /// A decimal **string**, as every permission bitfield on this wire is —
+        /// it does not fit a JSON number.
+        var permissions: String?
+    }
+
+    struct SupportGuildDTO: Decodable, Sendable {
+        var id: GuildID?
+        var name: String?
+        var icon: String?
+        var description: String?
+        var home_header: String?
+        var splash: String?
+        var discovery_splash: String?
+        var approximate_member_count: Int?
+        var approximate_presence_count: Int?
+
+        var domain: AppSupportGuild? {
+            guard let id, let name, !name.isEmpty else { return nil }
+            return AppSupportGuild(
+                id: id,
+                name: name,
+                iconHash: icon,
+                description: (description?.isEmpty ?? true) ? nil : description,
+                headerHash: home_header,
+                splashHash: splash,
+                discoverySplashHash: discovery_splash,
+                memberCount: approximate_member_count ?? 0,
+                onlineCount: approximate_presence_count ?? 0
+            )
+        }
+    }
+
+    struct BotDTO: Decodable, Sendable {
+        var banner: String?
+        /// Discord sends both and they mean the same thing here: an integer
+        /// RGB. `banner_color` is what a profile sets explicitly and
+        /// `accent_color` is what it derives; both are null on most bots.
+        var banner_color: Int?
+        var accent_color: Int?
+    }
 
     struct EmbeddedConfigDTO: Decodable, Sendable {
         var activity_preview_video_asset_id: String?
@@ -615,6 +682,14 @@ struct ApplicationDTO: Decodable, Sendable {
             name: name,
             iconHash: icon,
             coverHash: cover_image,
+            botBannerHash: bot?.banner,
+            botAccentColor: bot?.banner_color ?? bot?.accent_color,
+            categoryNames: (categories ?? []).compactMap(\.name).filter { !$0.isEmpty },
+            installPermissions: install_params?.permissions
+                .flatMap(UInt64.init).map(Permissions.init(rawValue:)),
+            flags: flags ?? 0,
+            isMonetized: is_monetized ?? false,
+            supportGuild: guild?.domain,
             summary: summary ?? "",
             isVerified: is_verified ?? false,
             about: description ?? "",
@@ -641,6 +716,13 @@ struct DirectoryApplicationDTO: Decodable, Sendable {
         var external_urls: [ExternalURLDTO]?
         /// BCP-47 tags. `["en-US"]` on all three captured apps.
         var supported_locales: [String]?
+        /// The developer's long-form Markdown. See `ActivityApp.detailedDescription`.
+        var detailed_description: String?
+        /// **The five Discord lists under "Popular Slash Commands"**, whole
+        /// command records in the route's own order. Decoded and thrown away
+        /// for two releases: the ids beside them were read and the commands
+        /// were not.
+        var popular_application_commands: [CommandIndexDTO.CommandDTO]?
 
         struct ExternalURLDTO: Decodable, Sendable {
             var name: String?
@@ -701,6 +783,9 @@ struct DirectoryApplicationDTO: Decodable, Sendable {
         app.gallery = directory_entry?.gallery ?? []
         app.externalLinks = (directory_entry?.external_urls ?? []).compactMap(\.domain)
         app.supportedLocales = directory_entry?.supported_locales ?? []
+        app.detailedDescription = directory_entry?.detailed_description
+        app.popularCommands =
+            (directory_entry?.popular_application_commands ?? []).compactMap(\.domain)
         return app
     }
 }
@@ -722,7 +807,21 @@ struct SearchDTO: Decodable, Sendable {
 /// **The command is echoed back inside the interaction, not merely named.**
 /// `data.application_command` repeats the whole record the command index
 /// answered with — id, version, contexts, handler — beside the `id`/`version`
-/// pair one level up. Captured that way; sent that way.
+/// pair one level up. Captured that way; sent that way, and *the index's own
+/// values*: `launch activity.har` shows Wordle's `play` going out with
+/// `handler: 1`, `dm_permission: true` and its real description, where this
+/// client had been sending `2`, `false` and an empty string.
+///
+/// **The launcher and an app's own page send two different shapes**, and
+/// `dank memer.har` has both of them for the same command:
+///
+/// ```
+/// app_launcher  + section_name + source=TEXT   ← the launcher's grid
+/// slash_ui      , neither key present          ← the app's own page
+/// ```
+///
+/// The section is what tells them apart — a launch from a page comes from no
+/// section — so there is no second parameter to keep in step with the first.
 struct LaunchInteraction: Encodable {
     var type = 2
     var application_id: String
@@ -734,9 +833,11 @@ struct LaunchInteraction: Encodable {
     /// vocabulary, sent because the route is shaped around it — and because a
     /// launcher that omitted it would be the one client sending a shape nobody
     /// else sends.
-    var analytics_location = "app_launcher"
+    var analytics_location: String
+    /// **Both absent for a launch from an app's own page.** `Encodable`
+    /// synthesis omits a nil optional, which is exactly the captured shape.
     var section_name: String?
-    var source = "TEXT"
+    var source: String?
 
     struct Data: Encodable {
         var version: String
@@ -753,12 +854,18 @@ struct LaunchInteraction: Encodable {
             var application_id: String
             var version: String
             var name: String
-            var dm_permission = false
+            var dm_permission: Bool
             var contexts: [Int]
             var integration_types: [Int]
-            var handler = 2
-            var description = ""
+            var handler: Int
+            var description: String
             var options: [String] = []
+            /// **Present only where there is a description**, which is the one
+            /// difference between the two captured bodies: Watch Together's
+            /// index record carries no `description` and its launch omits this
+            /// key entirely, while Wordle's carries one and its launch sends
+            /// both. Optional, so the synthesised encoding drops it.
+            var description_localized: String?
             var name_localized: String
         }
     }
@@ -775,6 +882,8 @@ struct LaunchInteraction: Encodable {
         session_id = sessionID
         self.nonce = nonce
         section_name = section
+        analytics_location = section == nil ? Self.pageLocation : Self.launcherLocation
+        source = section == nil ? nil : "TEXT"
         data = Data(
             version: entryPoint.version,
             id: entryPoint.id,
@@ -784,12 +893,23 @@ struct LaunchInteraction: Encodable {
                 application_id: entryPoint.applicationID.description,
                 version: entryPoint.version,
                 name: entryPoint.name,
+                dm_permission: entryPoint.dmPermission,
                 contexts: entryPoint.contexts,
                 integration_types: entryPoint.integrationTypes,
+                // `2` where the index said nothing: it is the ordinary handler,
+                // and an entry point with none is one this client never saw.
+                handler: entryPoint.handler ?? 2,
+                description: entryPoint.summary,
+                description_localized: entryPoint.summary.isEmpty ? nil : entryPoint.summary,
                 name_localized: entryPoint.name
             )
         )
     }
+
+    /// The launcher's grid, which is the only surface that has a section.
+    static let launcherLocation = "app_launcher"
+    /// An app's own page. Captured, and it is not `app_launcher` — see above.
+    static let pageLocation = "slash_ui"
 }
 
 /// `GET /oauth2/authorize`.

@@ -50,10 +50,19 @@ nonisolated enum ProfileThemePalette {
     /// with no usable colour keeps the neutral ground rather than being given a
     /// colour nobody chose.
     static func derive(from image: CGImage) -> [UInt32] {
+        swatches(from: image).map { UInt32($0.x) << 16 | UInt32($0.y) << 8 | UInt32($0.z) }
+    }
+
+    /// The same two swatches, before they are packed into `theme_colors`'
+    /// shape.
+    ///
+    /// **Split out because the app directory needs the swatch itself.** Its
+    /// banner for an app with no artwork is `[primary, Q7(primary)[0]]`, and
+    /// `PaletteHarmony` takes a colour rather than a packed integer — see
+    /// `AppIconGradient`. One sampling and one quantiser for both surfaces.
+    static func swatches(from image: CGImage) -> [SIMD3<UInt8>] {
         guard let pixels = sample(image), !pixels.isEmpty else { return [] }
-        return MedianCutQuantizer.palette(of: pixels, count: swatchCount)
-            .prefix(2)
-            .map { UInt32($0.x) << 16 | UInt32($0.y) << 8 | UInt32($0.z) }
+        return Array(MedianCutQuantizer.palette(of: pixels, count: swatchCount).prefix(2))
     }
 
     /// Discord's `createPixelArray`, exactly.

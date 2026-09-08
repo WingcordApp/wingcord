@@ -147,9 +147,13 @@ extension AppModel {
             subtitle: app.rowSubtitle
                 .replacingOccurrences(of: "\n", with: " ")
                 .trimmingCharacters(in: .whitespacesAndNewlines),
+            // **Discord's own default where the app registered none**, rather
+            // than this app's monogram: an application has a real fallback
+            // picture and every surface Discord draws uses it. See
+            // `CDN.defaultApplicationIcon`.
             iconURL: app.iconHash.flatMap {
                 CDN.applicationIcon(id: app.id, hash: $0, side: Metrics.activityRowIcon)
-            },
+            } ?? CDN.defaultApplicationIcon,
             tileURL: app.tileAssetID.flatMap {
                 CDN.applicationAsset(id: app.id, assetID: $0, side: Metrics.activityTileWidth)
             },

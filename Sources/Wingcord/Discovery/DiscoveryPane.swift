@@ -9,10 +9,12 @@ import WingcordCore
 /// opaque ground, so they are `.structuralSurface()` with a hairline. Glass over
 /// an opaque fill is §4 rule 3 and renders as a flat panel.
 ///
-/// **The bar's controls are regions inside its material, not bodies on it.** The
-/// tab picker is a capsule with a travelling pill — the same shape Channels &
-/// Roles uses, and for the reason stated there: `SegmentedPicker` brings its own
-/// material, and a `GlassEffectContainer` around one is glass on glass.
+/// **The bar is three rows and each one is centred on the same midline.** The
+/// tab picker sits directly above the heading strip, the search field rides the
+/// heading strip's own line at its trailing end, and a third row appears only
+/// while there is something to filter. Both pickers are the system's
+/// `NSSegmentedControl` — §1 — which brings its own material, so neither is
+/// inside a `GlassEffectContainer` and neither carries a `.glassEffect`.
 struct DiscoveryPane: View {
     /// A binding for the same reason `query` is one: a stored closure is a
     /// non-`Sendable` function value where the control's own binding wants a
@@ -29,8 +31,13 @@ struct DiscoveryPane: View {
     var categories: [DiscoveryCategory]
     @Binding var appCategoryID: Int?
     var appCategories: [AppDirectoryCategory]
+    /// The search's own category counts, or empty while there is no search.
+    var facet: [DiscoveryFacetBucket]
+    /// What the Show menu's label says — the selected heading, or All.
+    var facetLabel: String
+    @Binding var languageCode: String?
     var cards: [DiscoveryCard]
-    var apps: [ActivityApp]
+    var appCards: [DiscoveryAppCard]
     var isBusy: Bool
     var emptyLine: String?
     /// Whether there is another page under this one.
@@ -38,20 +45,23 @@ struct DiscoveryPane: View {
 
     /// The app whose own page is open, one level in. Nil is the grid.
     var openAppID: ApplicationID?
+    /// Its storefront, one level deeper again.
+    var openStoreID: ApplicationID?
     var openCard: (DiscoveryCard) -> Void
-    var openApp: (ActivityApp) -> Void
+    var openApp: (ApplicationID) -> Void
     var closeApp: () -> Void
     var addApp: (ApplicationID) -> Void
+    var openStore: (ApplicationID) -> Void
+    var closeStore: () -> Void
+    var openSupportGuild: (GuildID) -> Void
     var loadMore: () -> Void
     var dismiss: () -> Void
 
     @Environment(\.motion) private var motion
 
-    /// Wide enough for three cards at their own minimum with the column's
-    /// margins — the measure Channels & Roles already uses for the one page with
-    /// something beside its content, and the same reason applies: a grid needs
-    /// room a column of prose does not.
-    private static let measure = Proportions.surfaceColumnWide
+    /// The column both the grid and the bar are laid out on. See
+    /// `Metrics.discoveryColumn` for why it is wider than every other surface.
+    private static let measure = Metrics.discoveryColumn
 
     var body: some View {
         // **A stack of two under one view type**, which is the same rule §1
@@ -59,24 +69,42 @@ struct DiscoveryPane: View {
         // under a stable outer type is not a structural swap, and the grid
         // underneath keeps its scroll and its page while a page is open over it.
         Group {
-            if let openAppID {
+            if let openStoreID {
+                ApplicationStorePage(
+                    applicationID: openStoreID,
+                    name: storeName,
+                    layout: .page,
+                    onBack: closeStore
+                )
+                .readingSurface()
+            } else if let openAppID {
                 ActivityDetailPage(
                     applicationID: openAppID,
                     // **No channel here.** The directory is reached from the
-                    // rail with nothing open, so a Launch or a Send would have
-                    // nowhere to act — the page draws its description, its
-                    // commands as a read-only list, and Add App.
+                    // rail with nothing open, so a Send would have nowhere to
+                    // act — the page draws its description, its commands as a
+                    // read-only list, Add App, and a Launch that runs the app in
+                    // its own direct message.
                     channelID: nil,
+                    layout: .page,
                     onBack: closeApp,
                     onLaunched: closeApp,
+                    onOpenStore: { openStore(openAppID) },
                     onAdd: { addApp(openAppID) },
-                    onOpenSimilar: openApp
+                    onOpenSimilar: openApp,
+                    onOpenSupportGuild: openSupportGuild
                 )
                 .readingSurface()
             } else {
                 browse
             }
         }
+    }
+
+    /// What the storefront's own bar is titled. Read from the page's card so
+    /// the store does not have to fetch the application again to name itself.
+    private var storeName: String {
+        appCards.first { $0.id == openStoreID }?.name ?? ""
     }
 
     private var browse: some View {
@@ -90,25 +118,52 @@ struct DiscoveryPane: View {
             .padding(.bottom, Spacing.section)
         }
         .scrollBounceBehavior(.always, axes: .vertical)
+        .softScrollEdgesVertical()
         .readingSurface()
         .floatingTopBar {
             VStack(spacing: Spacing.snug) {
-                DiscoveryBar(tab: $tab, query: $query, dismiss: dismiss)
-                // **Centred on its own row, over the page rather than in it.**
-                // Clock puts its strip at the top of the window with nothing
-                // above the content repeating what it says; this is the same
-                // arrangement, and it is why the page lost the heading that used
-                // to name the category the picker is already naming.
-                headings
-                    .frame(maxWidth: .infinity, alignment: .center)
+                DiscoveryTabRow(tab: $tab, dismiss: dismiss)
+                DiscoveryHeadingRow(query: $query) { middle }
             }
             .surfaceColumn(Self.measure)
             .padding(.bottom, Spacing.base)
         }
         .animation(motion.standard, value: tab)
+        .animation(motion.standard, value: showsFilters)
     }
 
-    // MARK: The heading
+    /// **Servers, and only while something has been typed.** The facet is the
+    /// search route's answer and the language filter is the search route's
+    /// parameter; neither exists on a browse, and a control that cannot change
+    /// the answer is the one §5.5 forbids.
+    private var showsFilters: Bool {
+        tab == .servers && !query.trimmingCharacters(in: .whitespaces).isEmpty
+    }
+
+    /// **The middle of the bar is always the same question — how is this list
+    /// narrowed — and only its instrument changes.**
+    ///
+    /// Browsing, that is the six-heading strip. Searching, it is the facet and
+    /// the language, because a search *has* a facet: the route answers a count
+    /// per category for the query — forty-five buckets, from 142 down to 19 in
+    /// the capture — and neither a count nor forty-five segments fits a
+    /// segmented control. They occupy the strip's own place rather than a third
+    /// row under it: a bar that grew a row when somebody typed would move the
+    /// grid down as they typed into it, and a middle that simply emptied read as
+    /// the bar having broken.
+    @ViewBuilder
+    private var middle: some View {
+        if showsFilters {
+            DiscoveryFilters(
+                buckets: facet,
+                label: facetLabel,
+                categoryID: $categoryID,
+                languageCode: $languageCode
+            )
+        } else {
+            headings
+        }
+    }
 
     // MARK: The headings
 
@@ -122,8 +177,9 @@ struct DiscoveryPane: View {
     /// see `SegmentedPicker` — would be fifteen hundred points wide with all of
     /// them. `AppModel.featuredCategoryIDs` is the curation.
     ///
-    /// Not inside a `GlassEffectContainer` and carrying no `.glassEffect`: the
-    /// control brings its own material.
+    /// **It stands down while there is a search**, because then the category is
+    /// the facet's and the facet has forty-five buckets with counts on them. One
+    /// value, one control at a time: see `DiscoveryFilterRow`.
     @ViewBuilder
     private var headings: some View {
         if tab == .servers {
@@ -148,6 +204,7 @@ struct DiscoveryPane: View {
                 options: appCategories.map { SegmentedPicker.Option($0.id, $0.name) },
                 selection: $appCategoryID
             )
+            .fixedSize()
             .accessibilityLabel(Text("Browse apps by category"))
         }
     }
@@ -155,7 +212,7 @@ struct DiscoveryPane: View {
     // MARK: The grid
 
     /// **Adaptive columns, not a fixed count.** The detail column is resizable
-    /// and the window has a 880-point minimum, so a hard three-up is two cards
+    /// and the window has a 880-point minimum, so a hard four-up is three cards
     /// of empty space on a narrow window and a wall on a wide one.
     private var columns: [GridItem] {
         [GridItem(.adaptive(minimum: Metrics.discoveryCardWidth), spacing: Spacing.margin)]
@@ -164,12 +221,17 @@ struct DiscoveryPane: View {
     @ViewBuilder
     private var grid: some View {
         if let emptyLine {
+            // **Centred, because it stands where the grid would.** Left against
+            // the column's edge under a centred bar it read as a stray caption
+            // rather than as the page's answer.
             Text(emptyLine)
                 .font(.system(.callout))
                 .foregroundStyle(Ink.secondary)
+                .multilineTextAlignment(.center)
                 .fixedSize(horizontal: false, vertical: true)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.vertical, Spacing.group)
+                .frame(maxWidth: Proportions.surfaceColumnMax)
+                .frame(maxWidth: .infinity, alignment: .center)
+                .padding(.top, Spacing.section)
         } else {
             LazyVGrid(columns: columns, alignment: .leading, spacing: Spacing.margin) {
                 if tab == .servers {
@@ -177,8 +239,8 @@ struct DiscoveryPane: View {
                         DiscoveryServerCard(card: card) { openCard(card) }
                     }
                 } else {
-                    ForEach(apps) { app in
-                        DiscoveryAppCard(app: app) { openApp(app) }
+                    ForEach(appCards) { card in
+                        DiscoveryAppTile(card: card) { openApp(card.id) }
                     }
                 }
             }
@@ -210,35 +272,29 @@ struct DiscoveryPane: View {
     }
 }
 
-// MARK: - The bar
+// MARK: - The bar's first row
 
-/// The page's floating bar.
+/// Servers ↔ Apps, on the column's midline, with the one way out at its end.
 ///
-/// **`SegmentedPicker` — the system's own `NSSegmentedControl`, and NOT a
-/// `GlassEffectContainer` around it.** §1 says both halves of that: the control
-/// Clock, Podcasts and Freeform use is the right instrument for two mutually
-/// exclusive halves, and it *brings its own material*, so a container around it
-/// or a `.glassEffect` on it is glass on glass. The full profile's tab strip is
-/// the same call.
-///
-/// The container is gone rather than kept around the other two: it exists to
-/// merge adjacent glass bodies, and with the picker carrying its own and the
-/// field carrying a fill, there was exactly one glass element left in it.
-private struct DiscoveryBar: View {
+/// **Centred rather than parked at the leading edge**, so it sits directly over
+/// the heading strip below it and the two read as one control stack rather than
+/// as a toolbar with a strip under it. The close button is an overlay rather
+/// than a stack member for exactly that reason: a sibling in the row would push
+/// the picker off the midline by its own width.
+private struct DiscoveryTabRow: View {
     @Binding var tab: DiscoveryState.Tab
-    @Binding var query: String
     var dismiss: () -> Void
 
     var body: some View {
-        HStack(spacing: Spacing.base) {
-            SegmentedPicker(
-                options: DiscoveryState.Tab.allCases.map {
-                    SegmentedPicker.Option($0, $0.title)
-                },
-                selection: $tab
-            )
-            DiscoverySearchField(query: $query)
-            Spacer(minLength: 0)
+        SegmentedPicker(
+            options: DiscoveryState.Tab.allCases.map {
+                SegmentedPicker.Option($0, $0.title)
+            },
+            selection: $tab
+        )
+        .fixedSize()
+        .frame(maxWidth: .infinity)
+        .overlay(alignment: .trailing) {
             Button(action: dismiss) {
                 Image(systemName: "xmark")
                     .font(Typeface.controlGlyph)
@@ -255,6 +311,136 @@ private struct DiscoveryBar: View {
         }
     }
 }
+
+// MARK: - The bar's second row
+
+/// The heading strip on the midline, the search field at the trailing end.
+///
+/// **Two arrangements, and the wide one is measured rather than hoped for.**
+/// The app strip is 670 points across at its six headings; centring it with the
+/// field beside it costs the field's width twice, so the row needs
+/// `670 + 2 × (200 + 12)` = 1,094 points and `Metrics.discoveryColumn` is sized
+/// to give it that. Where the window is narrower than that, `ViewThatFits`
+/// takes the second arrangement: the field moves to its own line above and the
+/// strip keeps the midline, which is the half of this that was asked for.
+private struct DiscoveryHeadingRow<Headings: View>: View {
+    @Binding var query: String
+    /// The BUILT view, not the builder — an escaping `@ViewBuilder` stored on a
+    /// view keeps a closure per instance and stops SwiftUI seeing the content as
+    /// structurally stable across updates.
+    @ViewBuilder var headings: Headings
+
+    var body: some View {
+        ViewThatFits(in: .horizontal) {
+            HStack(spacing: Spacing.snug) {
+                // The counterweight. A spacer of the field's own width is what
+                // puts the strip on the column's midline rather than on the
+                // midline of what is left over.
+                Color.clear
+                    .frame(width: Metrics.discoverySearchField, height: 0)
+                Spacer(minLength: Spacing.snug)
+                headings
+                Spacer(minLength: Spacing.snug)
+                field
+            }
+            VStack(spacing: Spacing.base) {
+                field.frame(maxWidth: .infinity, alignment: .trailing)
+                headings
+            }
+        }
+    }
+
+    private var field: some View {
+        DiscoverySearchField(query: $query)
+            .frame(width: Metrics.discoverySearchField)
+    }
+}
+
+// MARK: - What a search puts in the strip's place
+
+/// Show, and the language — the two filters a search has and a browse has not.
+///
+/// **Menus rather than a second strip**, and the facet is the reason: the route
+/// answers a count per category for the query — forty-five buckets in the
+/// capture, from 142 down to 19 — and a segmented control has no room for a
+/// number under a label and no way to hold forty-five segments.
+///
+/// **Show is absent until the facet lands, and the language is always there.**
+/// The facet is an answer and the language is a parameter: one of them can be
+/// offered before the route has said anything and the other cannot, and a menu
+/// of buckets nobody has counted yet is the control §5.5 forbids.
+private struct DiscoveryFilters: View {
+    var buckets: [DiscoveryFacetBucket]
+    var label: String
+    @Binding var categoryID: Int?
+    @Binding var languageCode: String?
+
+    var body: some View {
+        HStack(spacing: Spacing.snug) {
+            if !buckets.isEmpty {
+                Text("Show")
+                    .font(Typeface.rowSubtitle)
+                    .foregroundStyle(Ink.tertiary)
+                Menu {
+                    ForEach(buckets) { bucket in
+                        Button {
+                            categoryID = bucket.id
+                        } label: {
+                            // The count is the whole point of the facet: it is
+                            // what tells somebody that narrowing to Emoji leaves
+                            // nineteen results rather than none.
+                            Text("\(bucket.name)  \(bucket.count.formatted(.number))")
+                        }
+                    }
+                } label: {
+                    FilterMenuLabel(title: label)
+                }
+                .menuStyle(.borderlessButton)
+                .menuIndicator(.hidden)
+                .fixedSize()
+                .accessibilityLabel(Text("Filter by category"))
+            }
+            Menu {
+                Button("Any language") { languageCode = nil }
+                Divider()
+                ForEach(GuildLocale.all) { entry in
+                    Button(entry.title) { languageCode = entry.code }
+                }
+            } label: {
+                FilterMenuLabel(
+                    title: languageCode.flatMap(GuildLocale.named) ?? "Any language"
+                )
+            }
+            .menuStyle(.borderlessButton)
+            .menuIndicator(.hidden)
+            .fixedSize()
+            .accessibilityLabel(Text("Filter by language"))
+        }
+    }
+}
+
+/// One filter menu's label: what is selected, and a mark saying it can change.
+private struct FilterMenuLabel: View {
+    var title: String
+
+    var body: some View {
+        HStack(spacing: Spacing.tight) {
+            Text(title)
+                .font(.system(.caption, weight: .medium))
+                .foregroundStyle(Ink.primary)
+                .lineLimit(1)
+            Image(systemName: "chevron.up.chevron.down")
+                .font(.system(size: 9, weight: .semibold))
+                .foregroundStyle(Ink.tertiary)
+        }
+        .padding(.horizontal, Spacing.base)
+        .padding(.vertical, 5)
+        .background(Palette.surfaceRaised, in: .capsule)
+        .specularEdge(in: Capsule())
+    }
+}
+
+// MARK: - The field
 
 /// The field, in the app's own shape.
 ///
@@ -278,9 +464,9 @@ private struct DiscoverySearchField: View {
                 .font(.system(size: 12, weight: .medium))
                 .foregroundStyle(Ink.tertiary)
             TextField("Search", text: $query)
-            .textFieldStyle(.plain)
-            .font(.system(.body))
-            .focused($isFocused)
+                .textFieldStyle(.plain)
+                .font(.system(.body))
+                .focused($isFocused)
             if !query.isEmpty {
                 Button { query = "" } label: {
                     Image(systemName: "xmark.circle.fill")
@@ -294,7 +480,6 @@ private struct DiscoverySearchField: View {
         }
         .padding(.horizontal, Spacing.snug)
         .frame(height: Metrics.control + Spacing.tight)
-        .frame(maxWidth: 280)
         .background(Palette.surfaceRaised, in: .capsule)
         .specularEdge(in: Capsule())
         .contentShape(.capsule)

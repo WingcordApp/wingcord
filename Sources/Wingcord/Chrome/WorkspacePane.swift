@@ -262,6 +262,7 @@ private struct DiscoveryContainer: View {
     @Environment(AppModel.self) private var model
 
     var body: some View {
+        @Bindable var model = model
         let state = model.discovery ?? DiscoveryState()
         DiscoveryPane(
             tab: Binding(
@@ -282,20 +283,39 @@ private struct DiscoveryContainer: View {
                 set: { model.selectAppCategory($0) }
             ),
             appCategories: model.appDirectoryCategories,
+            facet: model.discoveryFacetBuckets,
+            facetLabel: model.discoveryFacetLabel,
+            languageCode: Binding(
+                get: { model.discovery?.languageCode },
+                set: { model.selectDiscoveryLanguage($0) }
+            ),
             cards: model.discoveryCards,
-            apps: state.apps,
+            appCards: model.discoveryAppCards,
             isBusy: state.isBusy,
             emptyLine: model.discoveryEmptyLine,
             hasMore: state.tab == .servers
                 ? state.page.guilds.count < state.page.total
                 : state.appPage < state.appPageCount,
             openAppID: state.openAppID,
+            openStoreID: state.openStoreID,
             openCard: { model.openDiscoveryCard($0) },
             openApp: { model.openDiscoveryApp($0) },
             closeApp: { model.closeDiscoveryApp() },
             addApp: { model.addDiscoveredApp($0) },
+            openStore: { model.openDiscoveredAppStore($0) },
+            closeStore: { model.closeDiscoveredAppStore() },
+            openSupportGuild: { model.previewSupportGuild($0) },
             loadMore: { model.loadMoreDiscovery() },
             dismiss: { model.closeDiscovery() }
         )
+        // **The install sheet is raised here, not by the launcher.** Adding an
+        // app from the rail has no composer behind it, so the flyout's own
+        // sheet never presented — the button did nothing at all. The page stays
+        // up underneath, which is what the reader came back to.
+        .sheet(item: $model.applicationInstallRequest) { request in
+            AddApplicationSheet(request: request, channelID: nil) {
+                model.applicationInstallRequest = nil
+            }
+        }
     }
 }

@@ -28,9 +28,13 @@ struct ApplicationInstallRequest: Hashable, Sendable, Identifiable {
 /// that grows, because a 388-point popover with a back stack is a maze.
 struct AddApplicationSheet: View {
     var request: ApplicationInstallRequest
-    /// The channel the reader is in. `location_context` names it — see
+    /// The channel the reader is in, if any. `location_context` names it — see
     /// `installApplication`.
-    var channelID: ChannelID
+    ///
+    /// **Nil is a real caller: an app's own page in discovery**, which is
+    /// reached from the rail with nothing open. The captured install from there
+    /// sends the `10000` sentinel in all three of that object's fields.
+    var channelID: ChannelID?
     var onFinished: () -> Void
 
     @Environment(AppModel.self) private var model

@@ -152,50 +152,6 @@ private struct CommunityDescriptionField: View {
     }
 }
 
-/// The languages Discord's own picker offers.
-enum GuildLocale {
-    struct Entry: Identifiable {
-        var id: String { code }
-        var code: String
-        var title: String
-    }
-
-    static let all: [Entry] = [
-        Entry(code: "en-US", title: "English, US"),
-        Entry(code: "en-GB", title: "English, UK"),
-        Entry(code: "bg", title: "Bulgarian"),
-        Entry(code: "zh-CN", title: "Chinese, China"),
-        Entry(code: "zh-TW", title: "Chinese, Taiwan"),
-        Entry(code: "hr", title: "Croatian"),
-        Entry(code: "cs", title: "Czech"),
-        Entry(code: "da", title: "Danish"),
-        Entry(code: "nl", title: "Dutch"),
-        Entry(code: "fi", title: "Finnish"),
-        Entry(code: "fr", title: "French"),
-        Entry(code: "de", title: "German"),
-        Entry(code: "el", title: "Greek"),
-        Entry(code: "hi", title: "Hindi"),
-        Entry(code: "hu", title: "Hungarian"),
-        Entry(code: "id", title: "Indonesian"),
-        Entry(code: "it", title: "Italian"),
-        Entry(code: "ja", title: "Japanese"),
-        Entry(code: "ko", title: "Korean"),
-        Entry(code: "lt", title: "Lithuanian"),
-        Entry(code: "no", title: "Norwegian"),
-        Entry(code: "pl", title: "Polish"),
-        Entry(code: "pt-BR", title: "Portuguese, Brazilian"),
-        Entry(code: "ro", title: "Romanian"),
-        Entry(code: "ru", title: "Russian"),
-        Entry(code: "es-ES", title: "Spanish"),
-        Entry(code: "es-419", title: "Spanish, LATAM"),
-        Entry(code: "sv-SE", title: "Swedish"),
-        Entry(code: "th", title: "Thai"),
-        Entry(code: "tr", title: "Turkish"),
-        Entry(code: "uk", title: "Ukrainian"),
-        Entry(code: "vi", title: "Vietnamese"),
-    ]
-}
-
 // MARK: - Onboarding
 
 /// The questions and default channels a new member starts with.

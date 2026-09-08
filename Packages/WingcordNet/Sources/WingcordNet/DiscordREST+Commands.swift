@@ -129,7 +129,12 @@ extension ApplicationCommand {
             version: version,
             name: name,
             contexts: contexts,
-            integrationTypes: integrationTypes
+            integrationTypes: integrationTypes,
+            // Carried so the launch can echo the index rather than invent a
+            // record — see `ActivityEntryPoint` and `LaunchInteraction`.
+            summary: summary,
+            dmPermission: dmPermission,
+            handler: handler
         )
     }
 }

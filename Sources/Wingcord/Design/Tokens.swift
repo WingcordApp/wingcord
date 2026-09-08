@@ -393,6 +393,28 @@ nonisolated enum Metrics {
     /// place in the app that draws one — the rail, the forward sheet, the tag
     /// card — draws it as a rounded square.
     static let discoveryCardIcon: CGFloat = 44
+    /// An app's own mark on a directory tile. Smaller than a server's, because
+    /// an app icon is a logo rather than a picture and it sits over a banner.
+    static let discoveryAppIcon: CGFloat = 40
+    /// The banner across a tile's head. **16:9, not the server card's 2:1**:
+    /// every `activity_preview_video` in the captures is 16:9, and the loop that
+    /// replaces this on hover has to land in the box the still left.
+    static let discoveryAppArt: CGFloat = (discoveryCardWidth * 9 / 16).rounded()
+
+    /// The widest discovery's own column is drawn.
+    ///
+    /// **Derived from the grid rather than chosen: four cards at their own
+    /// minimum with the grid's own gaps.** It is wider than every other surface
+    /// here for one reason — the bar above it centres a six-segment strip with
+    /// the search field beside it, and that strip measures 670 points. At the
+    /// 940 the server pages use there is no arrangement that centres the strip
+    /// *and* keeps the field on its line; at this measure there is.
+    static let discoveryColumn: CGFloat =
+        discoveryCardWidth * 4 + Spacing.margin * 3
+    /// The search field on discovery's bar. Fixed rather than flexible: the
+    /// strip beside it is centred against a spacer of exactly this width, and a
+    /// field that grew would slide the strip off the midline.
+    static let discoverySearchField: CGFloat = 200
 
     // MARK: Activities
 
@@ -425,6 +447,16 @@ nonisolated enum Metrics {
     static let activityTileArt: CGFloat = activityTileWidth * 9 / 16
     /// The icon over the top of an app's own page, overlapping its hero.
     static let activityHeaderIcon: CGFloat = 64
+    /// An app's own page, when it is a page rather than the composer's flyout.
+    ///
+    /// **Wider than the 680 a page of prose takes**, because this page is not
+    /// only prose: it carries a permission grid three columns across, a facts
+    /// panel two across, and a 16:9 picture on top of both. At 680 the grid fell
+    /// to two columns and the languages line ran to five. What it must not be is
+    /// the detail column's whole width, where the hero became a thousand-point
+    /// banner with the app's name below the fold — the ratio has no ceiling of
+    /// its own, so the column is the ceiling.
+    static let appPageColumn: CGFloat = 760
     /// The app icon on an invitation card in the transcript.
     static let activityInviteIcon: CGFloat = 64
 }

@@ -42,6 +42,21 @@ public struct ActivityApp: Hashable, Sendable, Identifiable {
     /// `embedded_cover` twice — the same name against two assets — and the
     /// newer upload is the live one. Farm Merge Valley is one of them.
     public var tileAssetID: String?
+    /// **The application's own bot account banner, and the picture a directory
+    /// card actually draws.**
+    ///
+    /// Not an application asset at all: it is the *user* banner of the bot the
+    /// application ships, at `/banners/{id}/{hash}`. It is on **180 of the 265**
+    /// apps in `discoverableapps.har` where `cover_image` is on 75 and a
+    /// carousel still on 100, and it is the one Discord's own grid draws — Farm
+    /// Merge Valley's promo card, FlaviBot's purple artwork, `.fmbot`'s blue
+    /// one. A client that reached for `cover_image` first drew a banner for a
+    /// quarter of the directory and an empty band for the rest, which is what
+    /// this was.
+    public var botBannerHash: String?
+    /// The colour the bot's profile falls back to, for the apps with no banner
+    /// at all. Discord draws a flat field of it rather than a hole.
+    public var botAccentColor: Int?
     /// The wide artwork Discord *also* keeps, and does not use here.
     ///
     /// Kept because it is the one asset on this type reachable without the
@@ -65,6 +80,36 @@ public struct ActivityApp: Hashable, Sendable, Identifiable {
     /// Discord's own copy, unedited. The directory rows and the detail page
     /// both draw it; the rows clamp to one line and the page does not.
     public var about: String
+    /// The developer's long-form copy, in Markdown.
+    ///
+    /// **A different field from `about` and a much longer one** —
+    /// `directory_entry.detailed_description`, on 269 of the captured 343. It is
+    /// what Discord's page draws under "Overview", bullets, bold and inline code
+    /// and all, where `description` is the one-paragraph summary a card shows.
+    public var detailedDescription: String?
+    /// The permissions the app asks for on a server install, from
+    /// `install_params.permissions`. Drawn as the "Required Permissions" list.
+    public var installPermissions: Permissions?
+    /// The application's own flags, which is where the privileged gateway
+    /// intents live — see `dataAccess`.
+    public var flags: UInt64 = 0
+    /// Whether the app sells anything. Discord draws "In-App Purchases" under
+    /// the name for one that does.
+    public var isMonetized = false
+    /// The app's support server, when it names one. Discord draws it as a card.
+    public var supportGuild: AppSupportGuild?
+    /// The five commands Discord lists under "Popular Slash Commands", in the
+    /// route's own order — `directory_entry.popular_application_commands`,
+    /// decoded and then thrown away for two releases.
+    public var popularCommands: [ApplicationCommand] = []
+    /// Discord's own headings for the app, in its order — `[{"id": 8, "name":
+    /// "Moderation and Tools"}, {"id": 9, "name": "Social"}]` for FlaviBot.
+    ///
+    /// **Not `tags`, which are the developer's free text.** These are the app
+    /// directory's own five headings and they are the line Discord draws under
+    /// an app's name on a card. Named by the route, so another language gets its
+    /// own; the ids are `AppDirectoryCategory`'s space.
+    public var categoryNames: [String] = []
     /// The developer's own words for what kind of thing this is — "Video
     /// Player", "Watch". Free text, two to five of them, drawn as chips.
     public var tags: [String]
@@ -101,6 +146,15 @@ public struct ActivityApp: Hashable, Sendable, Identifiable {
         iconHash: String? = nil,
         tileAssetID: String? = nil,
         coverHash: String? = nil,
+        botBannerHash: String? = nil,
+        botAccentColor: Int? = nil,
+        categoryNames: [String] = [],
+        detailedDescription: String? = nil,
+        installPermissions: Permissions? = nil,
+        flags: UInt64 = 0,
+        isMonetized: Bool = false,
+        supportGuild: AppSupportGuild? = nil,
+        popularCommands: [ApplicationCommand] = [],
         heroImageURL: URL? = nil,
         tagline: String? = nil,
         guildCount: Int? = nil,
@@ -118,6 +172,15 @@ public struct ActivityApp: Hashable, Sendable, Identifiable {
         self.iconHash = iconHash
         self.tileAssetID = tileAssetID
         self.coverHash = coverHash
+        self.botBannerHash = botBannerHash
+        self.botAccentColor = botAccentColor
+        self.categoryNames = categoryNames
+        self.detailedDescription = detailedDescription
+        self.installPermissions = installPermissions
+        self.flags = flags
+        self.isMonetized = isMonetized
+        self.supportGuild = supportGuild
+        self.popularCommands = popularCommands
         self.heroImageURL = heroImageURL
         self.tagline = tagline
         self.guildCount = guildCount
@@ -171,6 +234,110 @@ public struct ActivityApp: Hashable, Sendable, Identifiable {
     public var rowSubtitle: String {
         if let tagline, !tagline.isEmpty { return tagline }
         return about
+    }
+}
+
+// MARK: - What an app can read
+
+/// One privileged gateway intent, in the words Discord's own page uses.
+///
+/// **Three of them, and each is two bits.** Discord splits every privileged
+/// intent into an *approved* flag and a `_LIMITED` one for an app under the
+/// hundred-server threshold; both mean the app has it, so both are read. Checked
+/// against two captures: `.fmbot`'s `10797056` has bits 14, 15 and 18 and its
+/// page lists **Members** and **Read Messages**; OwO's `10747904` has bit 18
+/// alone and its page lists **Read Messages** and nothing else.
+public struct AppDataAccess: Hashable, Sendable, Identifiable {
+    public var id: String { title }
+    public var title: String
+    public var detail: String
+    /// An SF Symbol for the row. Discord draws its own glyphs; these are the
+    /// nearest system ones, so the list follows the reader's icon settings.
+    public var symbolName: String
+
+    /// What the flags say this app can read, in Discord's own order.
+    public static func all(flags: UInt64) -> [AppDataAccess] {
+        var access: [AppDataAccess] = []
+        if flags & (presence | presenceLimited) != 0 {
+            access.append(AppDataAccess(
+                title: "Presence",
+                detail: "Can see the status and activity of everyone in the server.",
+                symbolName: "circle.circle.fill"
+            ))
+        }
+        if flags & (guildMembers | guildMembersLimited) != 0 {
+            access.append(AppDataAccess(
+                title: "Members",
+                detail: "Can see who's in the server and their roles, nicknames, "
+                    + "and permission changes.",
+                symbolName: "person.2.fill"
+            ))
+        }
+        if flags & (messageContent | messageContentLimited) != 0 {
+            access.append(AppDataAccess(
+                title: "Read Messages",
+                detail: "Can access messages in the server and read their contents.",
+                symbolName: "bubble.left.fill"
+            ))
+        }
+        // Discord's own ordering puts Read Messages first on both captured
+        // pages, above Members. Reversed once rather than written backwards, so
+        // the bit order above still reads as the wire's.
+        return access.reversed()
+    }
+
+    static let presence: UInt64 = 1 << 12
+    static let presenceLimited: UInt64 = 1 << 13
+    static let guildMembers: UInt64 = 1 << 14
+    static let guildMembersLimited: UInt64 = 1 << 15
+    static let messageContent: UInt64 = 1 << 18
+    static let messageContentLimited: UInt64 = 1 << 19
+}
+
+/// An app's support server, as its directory page describes it.
+///
+/// **The whole guild object arrives on the app's own route** — name, icon,
+/// description, features and both counts — so the card needs no second fetch.
+/// It is the one place in this app that draws a server the reader is not in and
+/// has not searched for.
+public struct AppSupportGuild: Hashable, Sendable, Identifiable {
+    public var id: GuildID
+    public var name: String
+    public var iconHash: String?
+    public var description: String?
+    /// The wide artwork behind the card. `home_header` is the newer field and
+    /// the one Discord draws; the splashes are the fallback.
+    public var headerHash: String?
+    public var splashHash: String?
+    public var discoverySplashHash: String?
+    public var memberCount: Int
+    public var onlineCount: Int
+
+    public init(
+        id: GuildID,
+        name: String,
+        iconHash: String? = nil,
+        description: String? = nil,
+        headerHash: String? = nil,
+        splashHash: String? = nil,
+        discoverySplashHash: String? = nil,
+        memberCount: Int = 0,
+        onlineCount: Int = 0
+    ) {
+        self.id = id
+        self.name = name
+        self.iconHash = iconHash
+        self.description = description
+        self.headerHash = headerHash
+        self.splashHash = splashHash
+        self.discoverySplashHash = discoverySplashHash
+        self.memberCount = memberCount
+        self.onlineCount = onlineCount
+    }
+
+    public var monogram: String {
+        let letters = name.split(separator: " ").compactMap(\.first).prefix(2)
+        return letters.isEmpty ? "#" : String(letters).uppercased()
     }
 }
 
@@ -436,6 +603,22 @@ public struct ActivityEntryPoint: Hashable, Sendable {
     public var name: String
     public var contexts: [Int]
     public var integrationTypes: [Int]
+    /// The developer's own one-liner. Echoed back inside the launch rather than
+    /// drawn: see `summary`, `dmPermission` and `handler` below.
+    public var summary: String
+    /// **Three fields the launch echoes and this client used to invent.**
+    ///
+    /// `POST /interactions` repeats the whole command record inside
+    /// `data.application_command`, and `launch activity.har` shows the reference
+    /// client echoing the *index's* values verbatim — Wordle's `play` goes out
+    /// with `handler: 1`, `dm_permission: true` and its real description. This
+    /// client was sending `2`, `false` and an empty string on every launch,
+    /// which is a shape nothing on the wire ever answered with.
+    public var dmPermission: Bool
+    /// `2` is Discord opening the activity itself, `1` is the application
+    /// answering and opening it in its response. **Not a filter** — see
+    /// `CommandIndex.entryPoint` — and not this client's to choose.
+    public var handler: Int?
 
     public init(
         id: String,
@@ -443,7 +626,10 @@ public struct ActivityEntryPoint: Hashable, Sendable {
         version: String,
         name: String,
         contexts: [Int],
-        integrationTypes: [Int]
+        integrationTypes: [Int],
+        summary: String = "",
+        dmPermission: Bool = true,
+        handler: Int? = nil
     ) {
         self.id = id
         self.applicationID = applicationID
@@ -451,6 +637,9 @@ public struct ActivityEntryPoint: Hashable, Sendable {
         self.name = name
         self.contexts = contexts
         self.integrationTypes = integrationTypes
+        self.summary = summary
+        self.dmPermission = dmPermission
+        self.handler = handler
     }
 }
 

@@ -67,17 +67,23 @@ extension DiscordREST {
     /// Adds it. Answers a redirect this client reads nothing out of.
     ///
     /// **`location_context` describes where the reader was**, not where the app
-    /// is going: both captured installs were made from a direct message and both
+    /// is going: the first captured installs were made from a direct message and
     /// carry `{"guild_id": "10000", "channel_id": …, "channel_type": 1}` — the
     /// same `10000` sentinel the activity grant already sends for "no guild".
     /// The server being installed into is `guild_id` at the top level.
+    ///
+    /// **From an app's own page there is no channel at all, and all three fields
+    /// are the sentinel.** `OwO bot.har` is that install, made from discovery:
+    /// `{"guild_id": "10000", "channel_id": "10000", "channel_type": 10000}`.
+    /// So the channel is optional here rather than invented, which is what lets
+    /// the sheet be raised from a surface that has none.
     public func installApplication(
         _ id: ApplicationID,
         integrationType: IntegrationType,
         parameters: InstallParameters,
         guildID: GuildID?,
-        from channelID: ChannelID,
-        channelKind: Int,
+        from channelID: ChannelID?,
+        channelKind: Int?,
         currentGuildID: GuildID?
     ) async throws {
         struct LocationContext: Encodable {
@@ -96,6 +102,9 @@ extension DiscordREST {
             var location_context: LocationContext
         }
         struct Response: Decodable { var location: String? }
+        // The same `10000` the ids use, in the field that holds a channel type.
+        // Captured, not chosen: nothing else in this app sends it.
+
 
         _ = try await request(
             method: "POST",
@@ -111,8 +120,8 @@ extension DiscordREST {
                 integration_type: integrationType.rawValue,
                 location_context: LocationContext(
                     guild_id: currentGuildID?.description ?? Self.dmLocationGuildID,
-                    channel_id: channelID.description,
-                    channel_type: channelKind
+                    channel_id: channelID?.description ?? Self.dmLocationGuildID,
+                    channel_type: channelKind ?? Self.noChannelKind
                 )
             ),
             as: Response.self

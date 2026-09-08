@@ -85,17 +85,21 @@ extension SessionController {
         defer {
             if model.discovery?.serverRequest == request { model.discovery?.isLoading = false }
         }
+        let wantsFacet = offset == 0 && (model.discovery?.wantsFacet(for: request) ?? false)
         do {
             let page: DiscoveryPage
             if request.isSearch {
                 page = try await rest.searchDiscoverableGuilds(
                     query: request.query,
                     categoryID: request.categoryID,
+                    languageCode: request.languageCode,
                     offset: offset,
-                    // The facet is asked for once per question, on its first
-                    // page. Asking again for page two would be the same answer
-                    // at the cost of a wider response.
-                    wantsCounts: offset == 0
+                    // **Once per query text, and never for a refinement of
+                    // it** — which is what both captures show, and what keeps a
+                    // second round trip off every bucket press. Page two never
+                    // asks either: it would be the same answer at the cost of a
+                    // wider response.
+                    wantsCounts: wantsFacet
                 )
             } else {
                 page = try await rest.discoverableGuilds(
@@ -116,6 +120,19 @@ extension SessionController {
                 // A fresh grid is a fresh load, and the id is what ties a click
                 // on one of its cards back to it.
                 model.discovery?.loadID = Self.mintLoadID()
+            }
+            // **Written only where it was asked for.** Every refinement answers
+            // with an empty facet, and storing that would empty the Show menu
+            // the moment somebody used it — see `DiscoveryState.facet`.
+            if wantsFacet {
+                model.discovery?.facet = DiscoveryState.Facet(
+                    query: request.query,
+                    counts: page.counts
+                )
+            } else if !request.isSearch {
+                // A browse has no facet at all, and one left over from the last
+                // search is a menu describing results that are gone.
+                model.discovery?.facet = nil
             }
             Self.trace("discovery: \(page.guilds.count) of \(page.total) servers")
         } catch {
@@ -188,6 +205,14 @@ extension SessionController {
     /// a session — Discord has shipped the same seventeen primary server
     /// headings and the same five app ones for years. A latch each, because one
     /// failing must not cost the other.
+    ///
+    /// **The answers land on the store, not on the page**, and that is a fix
+    /// rather than a preference: `DiscoveryState` is rebuilt every time the
+    /// compass is pressed while these latches are set for the whole session, so
+    /// writing a heading list into the page meant the *second* open had no
+    /// picker — and neither did the first if the reader closed discovery before
+    /// the route answered. It presented as "the categories picker sometimes
+    /// disappears", with nothing failing.
     private func loadDiscoveryCategories() {
         // **`metadata.locale`, never `Locale.current`.** This shipped as
         // `Locale.current.identifier(.bcp47)` and both category routes came back
@@ -204,7 +229,8 @@ extension SessionController {
             Task { [weak self] in
                 guard let self else { return }
                 do {
-                    model.discovery?.categories = try await rest.discoveryCategories(locale: locale)
+                    model.discoveryCategoryIndex =
+                        try await rest.discoveryCategories(locale: locale)
                 } catch {
                     // No notice: the grid works without headings, it simply
                     // cannot be browsed by one.
@@ -218,7 +244,7 @@ extension SessionController {
         Task { [weak self] in
             guard let self else { return }
             do {
-                model.discovery?.appCategories =
+                model.appDirectoryCategoryIndex =
                     try await rest.appDirectoryCategories(locale: locale)
             } catch {
                 hasLoadedAppDirectoryCategories = false

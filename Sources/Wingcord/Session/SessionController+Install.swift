@@ -37,9 +37,9 @@ extension SessionController {
     func installApplication(
         _ install: ApplicationInstall,
         into guildID: GuildID?,
-        from channelID: ChannelID
+        from channelID: ChannelID?
     ) async -> Bool {
-        let channel = model.channelIndex[channelID]
+        let channel = channelID.flatMap { model.channelIndex[$0] }
         do {
             try await rest.installApplication(
                 install.applicationID,
@@ -47,7 +47,10 @@ extension SessionController {
                 parameters: install.parameters,
                 guildID: guildID,
                 from: channelID,
-                channelKind: channel?.kind.rawValue ?? 1,
+                // **Nil, not a guessed `1`, where there is no channel.** The
+                // route takes the sentinel there and the two cases are on the
+                // wire — see `DiscordREST.installApplication`.
+                channelKind: channelID == nil ? nil : (channel?.kind.rawValue ?? 1),
                 currentGuildID: channel?.guildID
             )
         } catch {

@@ -208,3 +208,111 @@ public enum MedianCutQuantizer {
         return nil
     }
 }
+
+// MARK: - The partner colours
+
+/// The colours Discord derives *from* a palette swatch.
+///
+/// **The other half of the same store, and a port rather than a guess.** Where
+/// `MedianCutQuantizer` answers what colour a picture *is*, this answers what
+/// Discord puts next to it — webpack module `998304`, export `Q7`, called on the
+/// first swatch and appended to the palette:
+///
+/// ```js
+/// let t = await getPalette(url);            // 5 swatches, 128px, quality 10
+/// store[url] = [...t.slice(0, 2), ...Q7(t[0])]
+/// ```
+///
+/// The app directory's banner for an app with no artwork then reads
+/// `[primary, secondary, partner] = store[url]` and draws
+/// `linear-gradient(45deg, primary, partner ?? secondary)`.
+///
+/// **Three colours, at −90°, −180° and −270°**, all sharing one saturation and
+/// lightness with the swatch they came from — `360 / (count + 1)` with the
+/// reference's own default of three. The three clamps below are the module's,
+/// and they are the reason a dark swatch stays dark where a naive rotation would
+/// not: only a colour outside the bands is moved.
+///
+/// Verified against two of Discord's own rendered gradients, byte for byte:
+///
+/// ```
+/// OwO     rgb(88,183,233)  → rgb(110,233,88)
+/// Roll20  rgb(123,25,113)  → rgb(25,64,123)
+/// ```
+public enum PaletteHarmony {
+
+    /// How many partners the reference asks for. The *first* is what the
+    /// gradient uses; the other two exist because the same function feeds
+    /// surfaces that want a triad.
+    public static let partnerCount = 3
+
+    /// The partners of one swatch, in the reference's order.
+    public static func partners(
+        of swatch: SIMD3<UInt8>,
+        count: Int = partnerCount
+    ) -> [SIMD3<UInt8>] {
+        guard count > 0 else { return [] }
+        var (hue, saturation, lightness) = hsl(of: swatch)
+        // **The three clamps are the module's own.** A washed-out swatch is
+        // pushed up so the partner is not grey, and one at either end of the
+        // lightness range is pulled back so the pair stays distinguishable
+        // against the page. Anything already inside the bands is left exactly
+        // as it is, which is why a dark swatch keeps its darkness.
+        if saturation < 30 { saturation += 30 }
+        if lightness > 80 { lightness -= 40 }
+        if lightness < 20 { lightness += 15 }
+
+        let step = 360.0 / Double(count + 1)
+        var partners: [SIMD3<UInt8>] = []
+        partners.reserveCapacity(count)
+        while partners.count < count {
+            hue -= step
+            if hue < 0 { hue += 360 }
+            partners.append(rgb(hue: hue, saturation: saturation, lightness: lightness))
+        }
+        return partners
+    }
+
+    /// The reference's `rgbToHsl`: degrees, and percentages rounded to one
+    /// decimal. **The rounding is not cosmetic** — the clamps above compare
+    /// against it, so a swatch at 29.96% saturation is treated as 30.0 and left
+    /// alone where the unrounded value would be pushed.
+    static func hsl(of colour: SIMD3<UInt8>) -> (Double, Double, Double) {
+        let r = Double(colour.x) / 255, g = Double(colour.y) / 255, b = Double(colour.z) / 255
+        let high = max(r, g, b), low = min(r, g, b)
+        let delta = high - low
+        var hue: Double
+        if delta == 0 {
+            hue = 0
+        } else if high == r {
+            hue = ((g - b) / delta).truncatingRemainder(dividingBy: 6)
+        } else if high == g {
+            hue = (b - r) / delta + 2
+        } else {
+            hue = (r - g) / delta + 4
+        }
+        hue = (60 * hue).rounded()
+        if hue < 0 { hue += 360 }
+        let lightness = (high + low) / 2
+        let saturation = delta == 0 ? 0 : delta / (1 - abs(2 * lightness - 1))
+        return (
+            hue,
+            (saturation * 1000).rounded() / 10,
+            (lightness * 1000).rounded() / 10
+        )
+    }
+
+    /// The reference's `hslToRgb`, which is the CSS specification's own form
+    /// rather than the sector-by-sector one. They agree; this is the one the
+    /// rounding was measured through.
+    static func rgb(hue: Double, saturation: Double, lightness: Double) -> SIMD3<UInt8> {
+        let l = lightness / 100
+        let a = saturation * min(l, 1 - l) / 100
+        func channel(_ n: Double) -> UInt8 {
+            let k = (n + hue / 30).truncatingRemainder(dividingBy: 12)
+            let value = l - a * max(min(k - 3, 9 - k, 1), -1)
+            return UInt8(max(0, min(255, (255 * value).rounded())))
+        }
+        return SIMD3(channel(0), channel(8), channel(4))
+    }
+}

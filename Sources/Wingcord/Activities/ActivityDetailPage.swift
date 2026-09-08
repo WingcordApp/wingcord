@@ -23,6 +23,8 @@ struct ActivityDetailPage: View {
     /// screenshots, the commands as a read-only list, and Add App. That is
     /// exactly what the reference client's own directory page shows.
     var channelID: ChannelID?
+    /// Which of the two surfaces this is drawn on.
+    var layout: Layout = .flyout
     var onBack: () -> Void
     var onLaunched: () -> Void
     /// Puts a command into the composer with its first option focused. The page
@@ -33,12 +35,45 @@ struct ActivityDetailPage: View {
     /// Adds this app to a server. The whole action bar where there is no
     /// channel, and a menu row where there is.
     var onAdd: () -> Void = {}
-    /// Opens a neighbour's own page. Nowhere to go in the launcher's flyout,
-    /// which is why it defaults to nothing there.
-    var onOpenSimilar: (ActivityApp) -> Void = { _ in }
+    /// Opens a neighbour's own page.
+    var onOpenSimilar: (ApplicationID) -> Void = { _ in }
+    /// Looks at the app's support server without joining it. The same lurk a
+    /// discovery card opens; nowhere to go from the flyout, which is why it
+    /// defaults to nothing there.
+    var onOpenSupportGuild: (GuildID) -> Void = { _ in }
+
+    /// The two places an app's page is drawn, and the two shapes it takes.
+    ///
+    /// **The difference is a measure, not a set of features.** Both draw the
+    /// same sections in the same order; what changes is that the flyout *is* the
+    /// column — 388 points of panel with the actions pinned to its foot — while
+    /// discovery hands the page a whole detail column and it has to make one for
+    /// itself. Given that column full-bleed the hero became a thousand-point
+    /// banner with the app's name below the fold, which is what
+    /// `Metrics.appPageColumn` fixes.
+    /// Whether this app's page has a picture to head itself with.
+    ///
+    /// **A static function on the page rather than a computed property**, for
+    /// the reason `ProfileTab.available` is one: the decision is invisible in a
+    /// rendered view, and a test has to be able to reach it.
+    nonisolated static func heroHasPicture(_ app: ActivityApp) -> Bool {
+        ActivityHero.hasPicture(app)
+    }
+
+    enum Layout: Hashable, Sendable {
+        /// Inside the composer's launcher. The panel is the column.
+        case flyout
+        /// On a detail column of its own: a centred card, its controls in it
+        /// rather than under it.
+        case page
+    }
 
     @Environment(AppModel.self) private var model
     @Environment(\.motion) private var motion
+    @Environment(\.openURL) private var openURL
+    /// The derived banner, for an app that registered none. Shared with the
+    /// grid, so opening a card's page costs no second decode.
+    private var gradients: AppIconGradientStore { .shared }
     @State private var isLaunching = false
     /// The row currently posting an interaction, by id. One at a time is not
     /// enforced — a bot answers each independently — but a row has to say which
@@ -48,13 +83,12 @@ struct ActivityDetailPage: View {
     private var app: ActivityApp? { model.activityApp(applicationID) }
 
     var body: some View {
-        ZStack(alignment: .top) {
-            if let app {
-                page(app)
-            } else {
-                ProgressView().controlSize(.small).frame(maxHeight: .infinity)
+        surface
+        .task(id: applicationID) {
+            // Idempotent, and a no-op for an app that has real artwork.
+            if let app, !ActivityHero.hasPicture(app) {
+                await gradients.resolve(applicationID, iconHash: app.iconHash)
             }
-            PageChromeBar(onBack: onBack) { overflowMenu }
         }
         .task(id: applicationID) {
             // Sequential: the directory copy is what the page draws first, and
@@ -67,41 +101,225 @@ struct ActivityDetailPage: View {
         }
     }
 
-    private func page(_ app: ActivityApp) -> some View {
-        VStack(spacing: 0) {
-            ScrollView {
-                // **Zero spacing, and the gap is padding on the details.** The
-                // icon overhangs the hero's bottom edge, and an overlay takes
-                // no space — so a stack gap sized for two boxes puts the title
-                // *under* the icon. The clearance has to be measured from the
-                // overhang, which is the one number that decides it.
-                VStack(alignment: .leading, spacing: 0) {
-                    ActivityHero(app: app)
-                    VStack(alignment: .leading, spacing: Spacing.base) {
-                        Text(app.name)
-                            .font(.system(.title3, weight: .bold))
-                            .foregroundStyle(Ink.primary)
-                        chips(app)
-                        Text(app.about)
-                            .font(.system(.subheadline))
-                            .foregroundStyle(Ink.secondary)
-                            .fixedSize(horizontal: false, vertical: true)
-                        footnotes(app)
-                    }
-                    .padding(.horizontal, Spacing.snug)
-                    .padding(.top, ActivityHero.overhang + Spacing.base)
-
-                    gallery(app)
-                    commandList
-                    similar
-                }
-                .padding(.bottom, Spacing.margin)
-            }
-            .scrollIndicators(.never)
-            .softScrollEdgesVertical()
-
-            launchBar(app)
+    @ViewBuilder
+    private var surface: some View {
+        switch layout {
+        case .flyout: flyoutSurface
+        case .page: pageSurface
         }
+    }
+
+    /// The composer's panel: the page fills it, and the actions are a bar
+    /// pinned across its foot.
+    private var flyoutSurface: some View {
+        ZStack(alignment: .top) {
+            VStack(spacing: 0) {
+                ScrollView {
+                    if let app {
+                        sections(for: app, width: ActivityLauncher.width)
+                            .padding(.bottom, Spacing.margin)
+                    } else {
+                        loading
+                    }
+                }
+                .scrollIndicators(.never)
+                .softScrollEdgesVertical()
+
+                if let app {
+                    actions(app)
+                        .padding(Spacing.snug)
+                }
+            }
+            PageChromeBar(onBack: onBack) { overflowMenu }
+        }
+    }
+
+    /// A detail column of its own: one centred card, with the way back and the
+    /// overflow floating over it on the card's own measure.
+    ///
+    /// **A bar, not an overlay** — `floatingTopBar` is `safeAreaBar`, which is
+    /// what registers the chrome so the card passing under it picks up the
+    /// system's scroll-edge blur. §1.
+    private var pageSurface: some View {
+        ScrollView {
+            Group {
+                if let app {
+                    card(app)
+                } else {
+                    loading
+                }
+            }
+            .pageColumn()
+            .padding(.bottom, Spacing.section)
+        }
+        .scrollBounceBehavior(.always, axes: .vertical)
+        .softScrollEdgesVertical()
+        .floatingTopBar {
+            PageChromeBar(onBack: onBack) { overflowMenu }
+                .pageColumn()
+        }
+    }
+
+    private var loading: some View {
+        ProgressView()
+            .controlSize(.small)
+            .frame(maxWidth: .infinity, minHeight: 240)
+    }
+
+    /// The page as one object: the hero clipped into its head, everything else
+    /// under it, and a hairline around the whole of it.
+    ///
+    /// Structure rather than glass — this sits on the opaque reading surface,
+    /// where a material has nothing to lens. §4 rule 3, and the same call every
+    /// card in discovery's grid makes.
+    private func card(_ app: ActivityApp) -> some View {
+        let shape = RoundedRectangle(cornerRadius: Radius.card, style: .continuous)
+        return sections(for: app, width: Metrics.appPageColumn)
+            .padding(.bottom, Spacing.margin)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .clipShape(shape)
+            .structuralSurface(in: shape)
+            .overlay { shape.strokeBorder(Ink.quaternary, lineWidth: 1) }
+    }
+
+    /// Everything both surfaces draw, in the order both draw it.
+    ///
+    /// - Parameter width: the column the hero is 16:9 against. The picture's
+    ///   height is arithmetic off this and nothing else — an `aspectRatio` with
+    ///   no ceiling derives its height from whatever it is handed, which is what
+    ///   put a thousand-point banner on discovery's column.
+    private func sections(for app: ActivityApp, width: CGFloat) -> some View {
+        // **Zero spacing, and the gap is padding on the details.** The icon
+        // overhangs the hero's bottom edge, and an overlay takes no space — so a
+        // stack gap sized for two boxes puts the title *under* the icon. The
+        // clearance has to be measured from the overhang, which is the one
+        // number that decides it.
+        VStack(alignment: .leading, spacing: 0) {
+            // **A picture, or the gradient Discord derives from the icon, or
+            // nothing.** An app with none of the three — which is rare, and
+            // means its icon yielded no palette — was drawing a 380-point band
+            // of flat grey with the icon marooned at the bottom of it.
+            if ActivityHero.hasPicture(app) || gradients.gradient(for: app.id) != nil {
+                ActivityHero(app: app, width: width, gradient: gradients.gradient(for: app.id))
+            }
+            VStack(alignment: .leading, spacing: Spacing.base) {
+                // **The mark rides the hero's seam, or stands on its own.**
+                // With no artwork there is nothing for it to overlap, and a
+                // page that opened straight onto a name was missing the one
+                // thing that says which app this is.
+                if !ActivityHero.hasPicture(app), gradients.gradient(for: app.id) == nil {
+                    ActivityIcon(
+                        row: AppModel.row(for: app),
+                        side: Metrics.activityHeaderIcon
+                    )
+                    .overlay {
+                        RoundedRectangle(
+                            cornerRadius: Metrics.activityHeaderIcon * 0.28,
+                            style: .continuous
+                        )
+                        .strokeBorder(Palette.hoverFill, lineWidth: 1)
+                    }
+                    .padding(.bottom, Spacing.tight)
+                }
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(app.name)
+                        .font(.system(.title3, weight: .bold))
+                        .foregroundStyle(Ink.primary)
+                    // Discord's own subtitle for an app that sells something,
+                    // and it comes off the application object rather than out
+                    // of a store fetch — `is_monetized`.
+                    if app.isMonetized {
+                        Text("In-App Purchases")
+                            .font(Typeface.rowSubtitle)
+                            .foregroundStyle(Ink.tertiary)
+                    }
+                }
+                chips(app)
+                // **The controls sit with the thing they act on.** On the page
+                // they used to be a bar across the foot of the *window*, which
+                // put Add App a screen and a half below the app's name with a
+                // list of somebody else's commands in between.
+                if layout == .page {
+                    actions(app)
+                        .padding(.top, Spacing.tight)
+                        .padding(.bottom, Spacing.tight)
+                }
+                // **The long copy where the developer wrote one.**
+                // `detailed_description` is Markdown and runs to nine bullets
+                // on `.fmbot`; `description` is the paragraph a card shows.
+                // Both were on the wire and only the second was drawn.
+                if layout == .page, let detail = app.detailedDescription, !detail.isEmpty {
+                    AppOverviewSection(markdown: detail)
+                        .padding(.top, Spacing.tight)
+                } else {
+                    Text(app.about)
+                        .font(.system(.subheadline))
+                        .foregroundStyle(Ink.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                if layout == .flyout {
+                    footnotes(app)
+                }
+            }
+            .padding(.horizontal, Spacing.snug)
+            // The icon hangs past the hero by `overhang`, and an overlay takes
+            // no height — so the details clear it by hand. With no hero there is
+            // nothing to clear, and the page's own chrome bar is above.
+            .padding(
+                .top,
+                ActivityHero.hasPicture(app)
+                    ? ActivityHero.overhang + Spacing.base
+                    : Spacing.margin
+            )
+
+            gallery(app)
+            if layout == .page {
+                pageSections(app)
+            }
+            commandList
+            similar
+        }
+    }
+
+    /// The five sections a page carries and the flyout has no room for.
+    ///
+    /// **Each is absent rather than empty**, which is the whole reason they are
+    /// conditional rather than always drawn with a placeholder: an app that
+    /// asks for no permissions has no permission list, and a heading over
+    /// nothing says the page is broken. See `ActivityPageSections.swift`.
+    @ViewBuilder
+    private func pageSections(_ app: ActivityApp) -> some View {
+        let access = AppDataAccess.all(flags: app.flags)
+        VStack(alignment: .leading, spacing: Spacing.group) {
+            AppInformationSection(app: app) { openURL($0) }
+            if app.config?.displaysAdvertisements == true || app.config?.requiresAgeGate == true {
+                VStack(alignment: .leading, spacing: Spacing.tight) {
+                    if app.config?.displaysAdvertisements == true {
+                        footnote("Shows advertisements", systemImage: "megaphone")
+                    }
+                    if app.config?.requiresAgeGate == true {
+                        footnote(
+                            "Asks your age before it runs",
+                            systemImage: "person.badge.shield.exclamationmark"
+                        )
+                    }
+                }
+            }
+            if !app.popularCommands.isEmpty {
+                AppPopularCommands(commands: app.popularCommands)
+            }
+            if let permissions = app.installPermissions, !permissions.isEmpty {
+                AppPermissionsSection(permissions: permissions)
+            }
+            if !access.isEmpty {
+                AppDataAccessSection(access: access, privacyPolicyURL: app.privacyPolicyURL)
+            }
+            if let guild = app.supportGuild {
+                AppSupportServerCard(guild: guild) { onOpenSupportGuild(guild.id) }
+            }
+        }
+        .padding(.horizontal, Spacing.snug)
+        .padding(.top, Spacing.group)
     }
 
     // MARK: The gallery
@@ -152,8 +370,14 @@ struct ActivityDetailPage: View {
                     .textCase(.uppercase)
                     .kerning(0.4)
                     .padding(.leading, Spacing.tight)
+                // **Rows, not the grid's tiles.** A stack of banner cards under
+                // a page is a second directory rather than a suggestion — and
+                // three of them with loops in would be three players under a
+                // page nobody scrolled to. Discord draws rows here too.
                 ForEach(neighbours.prefix(Self.similarShown)) { app in
-                    DiscoveryAppCard(app: app) { onOpenSimilar(app) }
+                    DiscoveryAppRow(card: AppModel.directoryCard(for: app)) {
+                        onOpenSimilar(app.id)
+                    }
                 }
             }
             .padding(.horizontal, Spacing.snug)
@@ -334,7 +558,7 @@ struct ActivityDetailPage: View {
     /// gain. There is none: it is not that kind of app. The bar says so
     /// instead. `INVARIANTS.md` §5.5.
     @ViewBuilder
-    private func launchBar(_ app: ActivityApp) -> some View {
+    private func actions(_ app: ActivityApp) -> some View {
         if channelID == nil {
             directoryBar(app)
         } else if app.isLaunchable {
@@ -345,13 +569,11 @@ struct ActivityDetailPage: View {
                     launchButton(app, entryPoint: entryPoint, inDirectMessage: true)
                 }
             }
-            .padding(Spacing.snug)
         } else {
             Text("This app can't be opened here")
                 .font(Typeface.rowSubtitle)
                 .foregroundStyle(Ink.tertiary)
                 .frame(maxWidth: .infinity)
-                .padding(Spacing.snug)
         }
     }
 
@@ -369,7 +591,6 @@ struct ActivityDetailPage: View {
     private func directoryBar(_ app: ActivityApp) -> some View {
         let entryPoint = model.appEntryPoint(for: applicationID)
         HStack(spacing: Spacing.base) {
-            Spacer(minLength: 0)
             if app.isLaunchable, canLaunchInDirectory(entryPoint) {
                 Button {
                     isLaunching = true
@@ -399,17 +620,20 @@ struct ActivityDetailPage: View {
                 NSPasteboard.general.clearContents()
                 NSPasteboard.general.setString(Self.directoryURL(applicationID), forType: .string)
             } label: {
+                // **No frame of its own.** A 28-point box inside a `.large`
+                // glass button is the glyph's size *plus* the style's own
+                // padding, which drew a slab half again as tall as the Add App
+                // pill beside it. `buttonBorderShape(.circle)` is what makes the
+                // two the same height and this one round.
                 Image(systemName: "link")
-                    .frame(width: Metrics.control, height: Metrics.control)
-                    .contentShape(.circle)
             }
             .buttonStyle(.glass)
+            .buttonBorderShape(.circle)
             .controlSize(.large)
             .help("Copy a link to this app")
             .accessibilityLabel(Text("Copy a link to this app"))
             Spacer(minLength: 0)
         }
-        .padding(Spacing.snug)
     }
 
     /// Whether Launch can work with no channel.
@@ -548,6 +772,20 @@ struct ActivityDetailPage: View {
     }
 }
 
+extension View {
+    /// An app page's own column, centred in whatever it is given.
+    ///
+    /// **The card and its floating bar both take it**, which is the whole reason
+    /// it is a modifier: a bar whose controls sit at the detail column's edges
+    /// while the card they belong to starts two hundred points further in reads
+    /// as two unrelated surfaces. Same measure, same order of modifiers.
+    fileprivate func pageColumn() -> some View {
+        frame(maxWidth: Metrics.appPageColumn)
+            .frame(maxWidth: .infinity, alignment: .center)
+            .padding(.horizontal, Spacing.group)
+    }
+}
+
 /// One circular control over a page's artwork.
 ///
 /// The single definition both ends of `PageChromeBar` are built from — a back
@@ -608,8 +846,12 @@ struct BackControl: View {
 /// this is for — it is a picture that moves, not a video somebody chose to
 /// play — and under Reduce Motion it holds its first frame instead, which is
 /// the still it would otherwise have shown.
-private struct ActivityHero: View {
+struct ActivityHero: View {
     var app: ActivityApp
+    /// The column this is drawn on.
+    var width: CGFloat
+    /// What to fill the band with when the app registered no artwork at all.
+    var gradient: AppIconGradient?
 
     /// How far the icon hangs below the artwork.
     ///
@@ -630,40 +872,74 @@ private struct ActivityHero: View {
         }
     }
 
-    private var stillURL: URL? {
-        app.heroImageURL
-            ?? app.tileAssetID.flatMap {
-                CDN.applicationAsset(id: app.id, assetID: $0, side: ActivityLauncher.width)
-            }
+    /// The picture behind the loop, or instead of it.
+    ///
+    /// **`AppModel.appBanner`, which is the grid's own order** — an activity's
+    /// `embedded_cover`, then the bot's profile banner, then the rest. One
+    /// definition, so a card and the page it opens cannot show different
+    /// pictures.
+    private var banner: AppBanner? {
+        AppModel.appBanner(for: app, width: width)
     }
 
-    /// The tallest this is ever drawn.
-    ///
-    /// **A ceiling, because a ratio alone has none.** `aspectRatio(16/9)` is a
-    /// height *derived from the width*, and this page was written for a 388-point
-    /// flyout where that is 218 points. Put in discovery's own column it became a
-    /// thousand-point banner with the app's name below the fold — the picture was
-    /// not wrong, it was simply given a width nothing had capped. The page's own
-    /// measure fixes it too; this is the belt, because a hero is the one element
-    /// here whose height is somebody else's arithmetic.
-    private static let maximumHeight: CGFloat = 240
+    private var stillURL: URL? { banner?.url }
 
+    /// Whether there is anything at all to draw here.
+    ///
+    /// **Asked by the page above**, because a hero with nothing in it is not a
+    /// short hero — it is a flat band the height of a picture that does not
+    /// exist. `nonisolated` for the reason `overhang` is.
+    nonisolated static func hasPicture(_ app: ActivityApp) -> Bool {
+        app.config?.previewVideoAssetID != nil
+            || app.botBannerHash != nil
+            || app.tileAssetID != nil
+            || app.coverHash != nil
+            || app.heroImageURL != nil
+    }
+
+    /// **The ratio of the thing it is actually drawing**, asked of the resolver
+    /// rather than worked out again here.
+    ///
+    /// A preview loop is 16:9 — every `activity_preview_video` in the captures
+    /// is — and a bot's profile banner is 5:2, which is what Discord authors
+    /// them at. Filling a 16:9 box with a 5:2 banner crops a third of it off the
+    /// sides: `.fmbot`'s reads ".fmbo" at 760 points. `AppBanner` carries the
+    /// shape beside the address for exactly this, so the ratio cannot drift from
+    /// the order the way it did the first time that order changed.
+    private var ratio: CGFloat {
+        if videoURL != nil, !motion.reduceMotion { return 16 / 9 }
+        // A derived gradient stands in for a banner and has no artwork of its
+        // own, so it takes the banner's shape.
+        return banner?.aspectRatio ?? 5 / 2
+    }
 
     var body: some View {
+        // **Off the width it is actually given, with no ceiling.** `aspectRatio`
+        // derives the height from the proposed width, which is right — the bug
+        // it was blamed for was the *column*: this page was written for a
+        // 388-point flyout, where 16:9 is 218 points, and put full-bleed on
+        // discovery's detail column it became a thousand-point banner with the
+        // app's name below the fold. A `maxHeight` ceiling was the first fix and
+        // was the wrong one, because a fit inside a box wider than the ratio
+        // letterboxes the picture. Bounding the column is the fix; the ratio
+        // then tracks a narrow window for free, which a constant computed from
+        // the measure could not.
         Color.clear
-            .aspectRatio(16 / 9, contentMode: .fit)
-            .frame(maxHeight: Self.maximumHeight)
+            .aspectRatio(ratio, contentMode: .fit)
             .overlay {
                 if let videoURL, !motion.reduceMotion {
                     LoopingVideo(url: videoURL)
                 } else if stillURL != nil {
-                    RemoteImage(url: stillURL, side: ActivityLauncher.width, bucket: .artwork) {
+                    RemoteImage(url: stillURL, side: width, bucket: .artwork) {
                         Palette.surfaceRaised
                     }
                     .aspectRatio(contentMode: .fill)
+                } else if let gradient {
+                    gradient.fill
                 } else {
                     Palette.surfaceRaised
                 }
+
             }
             .clipped()
             .overlay(alignment: .bottomLeading) {

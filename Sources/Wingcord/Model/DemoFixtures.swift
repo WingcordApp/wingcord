@@ -1647,7 +1647,9 @@ extension DemoFixtures {
     /// is in, and therefore worth being able to look at.
     static func populateDiscovery(_ model: AppModel) {
         var state = DiscoveryState()
-        state.categories = [
+        // **On the store, not on the state.** Both heading lists outlive the
+        // page — see `AppModel.discoveryCategoryIndex`.
+        model.discoveryCategoryIndex = [
             DiscoveryCategory(id: 1, name: "Gaming", isPrimary: true),
             DiscoveryCategory(id: 2, name: "Music", isPrimary: true),
             DiscoveryCategory(id: 3, name: "Entertainment", isPrimary: true),
@@ -1655,7 +1657,7 @@ extension DemoFixtures {
             DiscoveryCategory(id: 6, name: "Education", isPrimary: true),
             DiscoveryCategory(id: 30, name: "LFG", isPrimary: false),
         ]
-        state.appCategories = [
+        model.appDirectoryCategoryIndex = [
             AppDirectoryCategory(id: 6, name: "Games"),
             AppDirectoryCategory(id: 4, name: "Entertainment"),
             AppDirectoryCategory(id: 8, name: "Moderation and Tools"),

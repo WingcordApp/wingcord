@@ -402,6 +402,12 @@ struct ActivityDecodeTests {
     /// The launch echoes the whole command record back inside the interaction
     /// rather than naming it — captured that way, and the shape the route was
     /// observed to accept.
+    ///
+    /// **Every value below is the index's own.** Watch Together's record in
+    /// `activities123.har` is `{dm_permission: false, handler: 2}` with no
+    /// `description`, and that is exactly what its launch sends; this client
+    /// used to hardcode those three and got them right by coincidence for this
+    /// app and wrong for the next one — see `launchBodyEchoesTheIndex`.
     @Test("A launch interaction carries the command twice")
     func launchBodyShape() throws {
         let entry = ActivityEntryPoint(
@@ -410,7 +416,9 @@ struct ActivityDecodeTests {
             version: "1487256241190708420",
             name: "launch",
             contexts: [0, 2],
-            integrationTypes: [0, 1]
+            integrationTypes: [0, 1],
+            dmPermission: false,
+            handler: 2
         )
         let body = LaunchInteraction(
             entry,
@@ -451,7 +459,58 @@ struct ActivityDecodeTests {
         #expect(command.integration_types == [0, 1])
         #expect(command.dm_permission == false)
         #expect(command.description.isEmpty)
+        // Absent, not empty: the captured body has no such key where the record
+        // carries no description.
+        #expect(command.description_localized == nil)
         #expect(command.name_localized == "launch")
+    }
+
+    /// **The second captured launch, and it disagrees with the first on four
+    /// fields.** `launch activity.har` is Wordle opened from its own page in
+    /// discovery, which lands in the app's direct message: the record goes out
+    /// with `handler: 1`, `dm_permission: true` and its real description, and
+    /// the envelope carries `slash_ui` with **neither** `section_name` nor
+    /// `source`. This client sent `app_launcher`, `2`, `false` and `""` for
+    /// every launch it had ever made.
+    @Test("A launch from an app's own page echoes the index and drops the section")
+    func launchBodyEchoesTheIndex() throws {
+        let entry = ActivityEntryPoint(
+            id: "1310778771156913000",
+            applicationID: ApplicationID(rawValue: 1_211_781_489_931_452_447),
+            version: "1331353749247589708",
+            name: "play",
+            contexts: [0, 1, 2],
+            integrationTypes: [0, 1],
+            summary: "Play today's Wordle",
+            dmPermission: true,
+            handler: 1
+        )
+        let sent = try JSONDecoder().decode(
+            SentLaunch.self,
+            from: JSONEncoder().encode(
+                LaunchInteraction(
+                    entry,
+                    channelID: ChannelID(rawValue: 1_546_838_591_817_422_152),
+                    sessionID: "386e5251ced05a3830bd85e1e0512ee1",
+                    nonce: "1546838594570682368",
+                    // The page has no section, and that is what tells the two
+                    // shapes apart.
+                    section: nil
+                )
+            )
+        )
+
+        #expect(sent.analytics_location == "slash_ui")
+        #expect(sent.section_name == nil)
+        #expect(sent.source == nil)
+
+        let command = sent.data.application_command
+        #expect(command.handler == 1)
+        #expect(command.dm_permission == true)
+        #expect(command.contexts == [0, 1, 2])
+        #expect(command.description == "Play today's Wordle")
+        #expect(command.description_localized == "Play today's Wordle")
+        #expect(command.name_localized == "play")
     }
 
     /// The captured `POST /interactions` body, spelled out. Every name here is
@@ -465,7 +524,7 @@ struct ActivityDecodeTests {
         var nonce: String
         var analytics_location: String
         var section_name: String?
-        var source: String
+        var source: String?
 
         struct Data: Decodable {
             var version: String
@@ -488,6 +547,7 @@ struct ActivityDecodeTests {
                 var handler: Int
                 var description: String
                 var options: [String]
+                var description_localized: String?
                 var name_localized: String
             }
         }

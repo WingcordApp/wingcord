@@ -196,57 +196,75 @@ private struct ServerMark: View {
 
 /// One app in the directory grid.
 ///
-/// **The same card as a server's, one field shorter.** An app has no member
-/// counts and no rosette of its own — what it has is a verified mark and a
-/// tagline — so the footer carries its tags instead. Two card *types* rather
-/// than one with optionals: the two grids never mix, and a single card carrying
-/// both shapes would be a `switch` in a view body that runs per cell.
-struct DiscoveryAppCard: View {
-    var app: ActivityApp
+/// **The same card a server gets, with a moving picture in it.** The banner, the
+/// mark riding its foot, the three-line measure and the counts pinned to the
+/// bottom are all the server card's arrangement — two grids that share a bar
+/// must share a shape — and the one thing an app has that a server has not is a
+/// preview loop.
+///
+/// **Only the hovered tile ever builds a player.** A page of the directory is
+/// forty-eight apps and a third of them carry a video; forty-eight
+/// `AVPlayer`s is forty-eight decoders and forty-eight connections for one
+/// picture anybody is looking at. The loop is created on the pointer arriving
+/// and torn down on it leaving — `LoopingVideo.dismantleNSView` releases the
+/// player, the looper and the layer — and the still stays underneath it, so
+/// nothing flashes black while the first frame is fetched. The still *is* that
+/// frame where the app has no other artwork: see `AppModel.appBannerURL`.
+struct DiscoveryAppTile: View {
+    var card: DiscoveryAppCard
     var open: () -> Void
 
     @Environment(\.motion) private var motion
     @State private var isHovering = false
+    /// Shared, so a grid of forty-eight tiles derives each colour once.
+    private var gradients: AppIconGradientStore { .shared }
 
+    /// Three lines of tagline, reserved whether or not there are three — the
+    /// server card's note applies word for word.
     private static let descriptionLines = 3
 
     private var shape: RoundedRectangle {
         .rect(cornerRadius: Radius.card, style: .continuous)
     }
 
+    /// Whether the loop should be on screen right now.
+    ///
+    /// **Reduce Motion holds the still.** A silent decorative loop is exactly
+    /// the motion that setting exists to stop, and the still underneath is the
+    /// picture it would have shown anyway.
+    private var isPlaying: Bool {
+        isHovering && card.videoURL != nil && !motion.reduceMotion
+    }
+
     var body: some View {
         Button(action: open) {
-            HStack(alignment: .top, spacing: Spacing.snug) {
-                // The launcher's own icon view, fed through the launcher's own
-                // row projection — one resolution of "what does an app look
-                // like", not a second.
-                ActivityIcon(row: AppModel.row(for: app), side: Metrics.activityRowIcon)
-                VStack(alignment: .leading, spacing: Spacing.tight) {
-                    HStack(spacing: Spacing.tight) {
-                        Text(app.name)
-                            .font(.system(.body, weight: .semibold))
-                            .foregroundStyle(Ink.primary)
-                            .lineLimit(1)
-                        if app.isVerified {
-                            Image(systemName: "checkmark.seal.fill")
-                                .font(.system(.caption2))
-                                .foregroundStyle(Palette.presenceOnline)
+            VStack(alignment: .leading, spacing: 0) {
+                artwork
+                VStack(alignment: .leading, spacing: Spacing.base) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        name
+                        // Between the name and the description, which is where
+                        // Discord's own card puts it.
+                        if let category = card.category {
+                            Text(category)
+                                .font(Typeface.metadata)
+                                .foregroundStyle(Ink.tertiary)
+                                .lineLimit(1)
                         }
-                        Spacer(minLength: 0)
                     }
-                    Text(app.rowSubtitle)
+                    Text(card.subtitle)
                         .font(Typeface.rowSubtitle)
                         .foregroundStyle(Ink.secondary)
                         .lineLimit(Self.descriptionLines, reservesSpace: true)
                         .multilineTextAlignment(.leading)
-                    if let guildCount = app.guildCount, guildCount > 0 {
-                        Text("\(guildCount.formatted(.number.notation(.compactName))) servers")
-                            .font(Typeface.metadata)
-                            .foregroundStyle(Ink.tertiary)
-                    }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    Spacer(minLength: Spacing.base)
+                    servers
                 }
+                .padding(.horizontal, Spacing.snug)
+                .padding(.top, Spacing.base)
+                .padding(.bottom, Spacing.snug)
             }
-            .padding(Spacing.snug)
             .frame(maxWidth: .infinity, alignment: .leading)
             .clipShape(shape)
             .structuralSurface(in: shape)
@@ -259,13 +277,202 @@ struct DiscoveryAppCard: View {
             .contentShape(shape)
         }
         .buttonStyle(.plain)
+        // Guarded rather than written unconditionally: `.onHover` compiles to an
+        // AppKit tracking area, and one per card in a scrolling grid is geometry
+        // AppKit re-derives every frame of every scroll. One is unavoidable
+        // here; the guard is on the state write inside it.
         .onHover { hovering in
             guard isHovering != hovering else { return }
             isHovering = hovering
         }
         .animation(motion.hover, value: isHovering)
+        // **Only for a tile with nothing else to draw.** The store is
+        // idempotent, so a cell scrolling back into view costs a dictionary
+        // lookup rather than a second decode.
+        .task(id: card.id) {
+            guard card.bannerURL == nil, card.accentColor == nil else { return }
+            await gradients.resolve(card.id, iconHash: card.iconHash)
+        }
+        .animation(motion.fade, value: gradients.gradient(for: card.id))
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel(Text("\(app.name), \(app.rowSubtitle)"))
+        .accessibilityLabel(Text(accessibilityLabel))
+        .accessibilityAddTraits(.isButton)
+    }
+
+    /// The banner, the loop over it, and the app's mark on the seam.
+    ///
+    /// **A region that reserves its own height**, so an app with no artwork is a
+    /// card of the same size rather than a shorter one. 16:9 rather than the
+    /// server card's 2:1 — every `activity_preview_video` in the captures is
+    /// 16:9, and cropping a video to a shape it was not shot at is the one thing
+    /// here that cannot be corrected later.
+    private var artwork: some View {
+        Rectangle()
+            // The bot's own accent where it set one; otherwise the two stops
+            // Discord derives from the icon — see `AppIconGradient`, which is a
+            // port of its own module and matches its output byte for byte.
+            .fill(card.accentColor ?? Palette.surfaceRaised)
+            .frame(height: Metrics.discoveryAppArt)
+            .overlay {
+                if card.bannerURL == nil, card.accentColor == nil,
+                   let gradient = gradients.gradient(for: card.id)
+                {
+                    gradient.fill.transition(.opacity)
+                }
+            }
+            .overlay {
+                if card.bannerURL != nil {
+                    RemoteImage(
+                        url: card.bannerURL,
+                        side: Metrics.discoveryCardWidth,
+                        bucket: .artwork
+                    ) {
+                        Color.clear
+                    }
+                    .scaledToFill()
+                }
+            }
+            .overlay {
+                if isPlaying, let url = card.videoURL {
+                    LoopingVideo(url: url)
+                        // A fade rather than a cut: the loop starts on the frame
+                        // the still already shows, so the two are the same
+                        // picture and the crossing should not be visible as an
+                        // event.
+                        .transition(.opacity)
+                }
+            }
+            .clipped()
+            .animation(motion.fade, value: isPlaying)
+            .overlay(alignment: .bottomLeading) {
+                // Overlapping the artwork's foot, which is where a mark goes on
+                // every surface in this app that pairs one with a picture.
+                AppMark(row: card.row)
+                    .padding(.leading, Spacing.snug)
+                    .offset(y: Metrics.discoveryAppIcon / 3)
+            }
+            // The mark hangs past the artwork, so the row under it starts lower.
+            .padding(.bottom, Metrics.discoveryAppIcon / 3)
+            .accessibilityHidden(true)
+    }
+
+    private var name: some View {
+        HStack(spacing: Spacing.tight) {
+            Text(card.name)
+                .font(.system(.body, weight: .semibold))
+                .foregroundStyle(Ink.primary)
+                .lineLimit(1)
+            if card.isVerified {
+                Image(systemName: "checkmark.seal.fill")
+                    .font(.system(.caption2))
+                    .foregroundStyle(Palette.presenceOnline)
+            }
+            Spacer(minLength: 0)
+        }
+    }
+
+    /// Where a server card puts two counts, an app has one — and it is the only
+    /// number the directory answers with, so it holds the foot on its own.
+    @ViewBuilder
+    private var servers: some View {
+        if let count = card.guildCount, count > 0 {
+            HStack(spacing: Spacing.tight) {
+                Image(systemName: "server.rack")
+                    .font(.system(.caption2))
+                Text("\(count.formatted(.number.notation(.compactName))) servers")
+                    .font(Typeface.metadata)
+                    .lineLimit(1)
+            }
+            .foregroundStyle(Ink.tertiary)
+        }
+    }
+
+    private var accessibilityLabel: String {
+        var parts = [card.name]
+        if card.isVerified { parts.append("verified") }
+        parts.append(card.subtitle)
+        if let count = card.guildCount, count > 0 { parts.append("in \(count) servers") }
+        return parts.joined(separator: ", ")
+    }
+}
+
+/// An app's mark on a tile: the launcher's own icon with a rim.
+///
+/// The rim is `ServerMark`'s and for its reason — the mark lies on artwork
+/// nobody chose, and a dark icon on a dark picture has no edge at all.
+private struct AppMark: View {
+    var row: ActivityRow
+
+    private var shape: RoundedRectangle {
+        .rect(cornerRadius: Metrics.discoveryAppIcon * 0.28, style: .continuous)
+    }
+
+    var body: some View {
+        ActivityIcon(row: row, side: Metrics.discoveryAppIcon)
+            .overlay { shape.strokeBorder(Palette.canvas, lineWidth: 2) }
+    }
+}
+
+// MARK: - An app in a list
+
+/// One app as a row: a mark, a name and a line.
+///
+/// **The tile's own facts at a tenth of its height**, for the one place an app
+/// appears in a list rather than a grid — "You might also like" under an app's
+/// own page. A stack of banner cards there would be a second directory under the
+/// page instead of a suggestion, which is what Discord draws and why.
+struct DiscoveryAppRow: View {
+    var card: DiscoveryAppCard
+    var open: () -> Void
+
+    @Environment(\.motion) private var motion
+    @State private var isHovered = false
+
+    var body: some View {
+        Button(action: open) {
+            HStack(spacing: Spacing.snug) {
+                ActivityIcon(row: card.row, side: Metrics.activityRowIcon)
+                VStack(alignment: .leading, spacing: 1) {
+                    HStack(spacing: Spacing.tight) {
+                        Text(card.name)
+                            .font(.system(.subheadline, weight: .semibold))
+                            .foregroundStyle(Ink.primary)
+                            .lineLimit(1)
+                        if card.isVerified {
+                            Image(systemName: "checkmark.seal.fill")
+                                .font(.system(.caption2))
+                                .foregroundStyle(Palette.presenceOnline)
+                        }
+                    }
+                    Text(card.subtitle)
+                        .font(Typeface.rowSubtitle)
+                        .foregroundStyle(Ink.tertiary)
+                        .lineLimit(1)
+                }
+                Spacer(minLength: Spacing.base)
+                if let count = card.guildCount, count > 0 {
+                    Text("\(count.formatted(.number.notation(.compactName)))")
+                        .font(Typeface.metadata)
+                        .foregroundStyle(Ink.quaternary)
+                        .monospacedDigit()
+                }
+            }
+            .padding(.horizontal, Spacing.base)
+            .padding(.vertical, Spacing.base)
+            .background(
+                isHovered ? Palette.hoverFill : .clear,
+                in: .rect(cornerRadius: Radius.row, style: .continuous)
+            )
+            .contentShape(.rect(cornerRadius: Radius.row, style: .continuous))
+        }
+        .buttonStyle(.plain)
+        .onHover { hovering in
+            guard isHovered != hovering else { return }
+            isHovered = hovering
+        }
+        .animation(motion.hover, value: isHovered)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(Text("\(card.name), \(card.subtitle)"))
         .accessibilityAddTraits(.isButton)
     }
 }

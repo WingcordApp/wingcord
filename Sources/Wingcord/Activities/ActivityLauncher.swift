@@ -67,7 +67,12 @@ struct ActivityLauncher: View {
                             box.draft = ""
                             box.command = PendingCommand(command: command)
                         }
-                    }
+                    },
+                    // **The flyout has somewhere to go after all.** These rows
+                    // were drawn with no handler passed, so "You might also
+                    // like" was three controls that did nothing — §5.5 — while
+                    // the page they lead to is the one this view already shows.
+                    onOpenSimilar: { model.activityLauncherPage = .app($0) }
                 )
                 .transition(.opacity)
 

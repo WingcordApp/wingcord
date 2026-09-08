@@ -572,6 +572,20 @@ final class AppModel {
     /// checked without content in it. `@ObservationIgnored` because nothing
     /// observes it: it is read once, by `toggleDiscovery`.
     @ObservationIgnored var discoverySeed: DiscoveryState?
+    /// Discovery's two heading lists, held for the session rather than for the
+    /// open page.
+    ///
+    /// **They used to live on `DiscoveryState`, and that lost them.** The state
+    /// is rebuilt from scratch every time the compass is pressed, while the
+    /// fetch behind these is latched to run once per session — so the second
+    /// open drew a page with no picker at all, and so did the first if the
+    /// answer landed after somebody closed it. Both routes answer facts about
+    /// Discord rather than about this page: seventeen primary server headings
+    /// and five app ones, unchanged for years.
+    /// The raw answers. `discoveryCategories` and `appDirectoryCategories` are
+    /// the curated projections over them.
+    var discoveryCategoryIndex: [DiscoveryCategory] = []
+    var appDirectoryCategoryIndex: [AppDirectoryCategory] = []
     /// The quick switcher — nil when it is not up.
     ///
     /// **A layer at the window root, not a presentation**, for the reason the
