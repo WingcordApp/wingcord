@@ -113,6 +113,41 @@ public enum CDN {
         )
     }
 
+    /// The wide artwork a server puts on its discovery card.
+    ///
+    /// **A third path, not a variant of the other two.** A guild's `banner`
+    /// lives under `/banners/`, its `splash` under `/splashes/` and this under
+    /// `/discovery-splashes/` — and the same server very often sends the same
+    /// hash for two of them, which is exactly what makes a wrong path look like
+    /// it works until it meets a server that does not.
+    public static func guildDiscoverySplash(
+        guildID: GuildID,
+        hash: String,
+        width: CGFloat,
+        scale: CGFloat = 2
+    ) -> URL? {
+        let ext = fileExtension(animated: hash.hasPrefix("a_"))
+        return URL(
+            string: "\(host)/discovery-splashes/\(guildID.rawValue)/\(hash).\(ext)"
+                + "?size=\(rung(forSide: width, scale: scale))"
+        )
+    }
+
+    /// The picture behind an invite. The fallback where a server has no
+    /// discovery splash of its own.
+    public static func guildSplash(
+        guildID: GuildID,
+        hash: String,
+        width: CGFloat,
+        scale: CGFloat = 2
+    ) -> URL? {
+        let ext = fileExtension(animated: hash.hasPrefix("a_"))
+        return URL(
+            string: "\(host)/splashes/\(guildID.rawValue)/\(hash).\(ext)"
+                + "?size=\(rung(forSide: width, scale: scale))"
+        )
+    }
+
     public static func userBanner(
         userID: UserID,
         hash: String,

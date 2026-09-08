@@ -44,24 +44,40 @@ extension DiscordREST {
     ///   - sessionID: the **gateway** session, not an HTTP one. Without it the
     ///     route joins the guild for real rather than lurking it.
     ///   - location: Discord's analytics field for where the click came from.
+    ///     `game profile` from an announcement, `Guild Discovery` from the
+    ///     discovery grid — both captured, and the two are spelled differently
+    ///     because Discord spells them differently.
     ///   - source: the `x-context-properties` source, one level finer than
-    ///     `location`. Sent because it was captured; nothing depends on it.
+    ///     `location`. Sent because it was captured; nothing depends on it, and
+    ///     **discovery sends an empty object** rather than a source at all,
+    ///     which is why this is optional rather than defaulted to something
+    ///     plausible.
+    ///   - recommendationLoadID: the id of the discovery load a card was clicked
+    ///     from, so Discord can tie the lurk back to the grid that offered it.
+    ///     Captured on every discovery lurk and on no other; nil elsewhere.
     public func lurkGuild(
         _ guildID: GuildID,
         sessionID: String,
         location: String,
-        source: String
+        source: String?,
+        recommendationLoadID: String? = nil
     ) async throws -> Guild? {
         struct Empty: Encodable {}
+        var query = [
+            URLQueryItem(name: "lurker", value: "true"),
+            URLQueryItem(name: "session_id", value: sessionID),
+        ]
+        if let recommendationLoadID {
+            // Before `location`, which is the capture's own order.
+            query.append(URLQueryItem(name: "recommendation_load_id", value: recommendationLoadID))
+        }
+        query.append(URLQueryItem(name: "location", value: location))
+
         let dto = try await request(
             method: "PUT",
             path: "/guilds/\(guildID.rawValue)/members/@me",
             route: "guilds/{id}/members/@me",
-            query: [
-                URLQueryItem(name: "lurker", value: "true"),
-                URLQueryItem(name: "session_id", value: sessionID),
-                URLQueryItem(name: "location", value: location),
-            ],
+            query: query,
             body: Empty(),
             headers: Self.contextProperties(source: source),
             as: GuildDTO.self
@@ -79,15 +95,30 @@ extension DiscordREST {
     ///
     /// Returns the guild for a first join, or nil where the account was already
     /// a member — the route answers 204 for that, which is not a failure.
-    public func joinGuild(_ guildID: GuildID, location: String) async throws -> Guild? {
+    ///
+    /// **The captured join sends NO `location` at all** — only the context
+    /// source, `Notice - Lurker Mode`, which is the banner the button is on.
+    /// `join discoverable server.har`, twice. So `location` is optional here
+    /// rather than required, and passing one where the capture sends none would
+    /// be inventing a field.
+    ///
+    /// **It is also the request that raises the captcha.** Discord answered this
+    /// exact call with an hCaptcha challenge for a client it does not recognise,
+    /// in the same shape `POST /invites/{code}` does — so the solver already in
+    /// the tree is what carries it, and no route here has to know that.
+    public func joinGuild(
+        _ guildID: GuildID,
+        location: String? = nil,
+        source: String? = nil
+    ) async throws -> Guild? {
         struct Empty: Encodable {}
         let data = try await requestData(
             method: "PUT",
             path: "/guilds/\(guildID.rawValue)/members/@me",
             route: "guilds/{id}/members/@me",
-            query: [URLQueryItem(name: "location", value: location)],
+            query: location.map { [URLQueryItem(name: "location", value: $0)] } ?? [],
             body: Empty(),
-            headers: Self.contextProperties(source: location)
+            headers: Self.contextProperties(source: source ?? location)
         )
         guard !data.isEmpty else { return nil }
         return try? decoder.decode(GuildDTO.self, from: data).domain
@@ -113,10 +144,14 @@ extension DiscordREST {
     /// `x-context-properties`: base64 of a small JSON object.
     ///
     /// Built rather than hard-coded so the source travels with the call site
-    /// that knows it — the discovery tab will send a different one from the same
-    /// route.
-    static func contextProperties(source: String) -> [String: String] {
-        struct Properties: Encodable { var source: String }
+    /// that knows it — discovery sends a different one from the same route.
+    ///
+    /// **Nil is a real value and it is not the same as omitting the header.**
+    /// The captured discovery lurk sends `{}` — an empty object, base64'd — and
+    /// the header is present. Dropping it entirely is a third thing nothing was
+    /// observed doing.
+    static func contextProperties(source: String?) -> [String: String] {
+        struct Properties: Encodable { var source: String? }
         guard let json = try? JSONEncoder().encode(Properties(source: source)) else { return [:] }
         return ["x-context-properties": json.base64EncodedString()]
     }

@@ -296,3 +296,57 @@ struct AddServerRailTile: View {
         .accessibilityAddTraits(.isButton)
     }
 }
+
+/// The compass, under the `+`.
+///
+/// **Its own tile rather than a row in the Add a Server sheet**, because it is a
+/// destination and not an action: it takes the detail column and stays there
+/// while somebody browses, where the sheet is a task with an end. Discord puts
+/// it in the same place, and the shape is the rail's own — the `+` tile with a
+/// different glyph and a different accent, so the two read as a pair of ways to
+/// gain a server rather than as two unrelated controls.
+struct DiscoverRailTile: View {
+    var isSelected: Bool
+    var action: () -> Void
+
+    @Environment(\.motion) private var motion
+    @State private var isHovering = false
+
+    private var side: CGFloat { Metrics.guildTile }
+    /// Lit while discovery is the column, hovered, or neither.
+    private var isLit: Bool { isSelected || isHovering }
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: "safari")
+                .font(.system(size: side * 0.42, weight: .medium))
+                // **The accent, where the `+` above it is green.** The colour
+                // is the difference between the two: green in this rail means
+                // "this makes something new" — the comment on `AddServerRailTile`
+                // says so — and discovery makes nothing. It is a destination, so
+                // it takes the app's one accent, which is what every other
+                // destination-shaped control here uses.
+                .foregroundStyle(isLit ? AnyShapeStyle(.white) : AnyShapeStyle(Palette.accent))
+                .frame(width: side, height: side)
+                .background(isLit ? Palette.accent : Palette.surfaceRaised)
+                // The rail's own squircle-on-hover, which every tile in the
+                // column shares: a circle at rest, a rounded square when it is
+                // the thing being pointed at.
+                .clipShape(.rect(
+                    cornerRadius: isLit ? 17 : side / 2,
+                    style: .continuous
+                ))
+                .frame(width: Proportions.railWidth, height: side)
+                .contentShape(.rect)
+        }
+        .buttonStyle(.plain)
+        .onHover { hovering in
+            guard isHovering != hovering else { return }
+            isHovering = hovering
+        }
+        .animation(motion.hover, value: isLit)
+        .railHoverLabel("Discover", isHovered: isHovering)
+        .accessibilityLabel(Text("Discover"))
+        .accessibilityAddTraits(isSelected ? [.isButton, .isSelected] : .isButton)
+    }
+}

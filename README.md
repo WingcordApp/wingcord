@@ -32,7 +32,7 @@ swift test                                        # layout, painting, viewport
 
 | Flag | What it does |
 | --- | --- |
-| `--demo` | Fixture servers, channels, members and a 220-message transcript, plus one server pinned above the rail's divider that the fixture is **previewing** rather than a member of, and a short navigation history so ⌘K opens onto something. Nothing else reaches it — there is no fallback from a failed sign-in into fixtures. |
+| `--demo` | Fixture servers, channels, members and a 220-message transcript, plus one server pinned above the rail's divider that the fixture is **previewing** rather than a member of, and a short navigation history so ⌘K opens onto something, plus a seeded discovery grid — the one surface whose whole content is a route's answer, and therefore the one that cannot be looked at without fixtures. Nothing else reaches it — there is no fallback from a failed sign-in into fixtures. |
 
 ---
 

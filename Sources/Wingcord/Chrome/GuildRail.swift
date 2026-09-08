@@ -48,6 +48,11 @@ struct GuildRail: View, Equatable {
     var selectGuild: (GuildID) -> Void = { _ in }
     var toggleFolder: (UInt64) -> Void = { _ in }
     var addServer: () -> Void = {}
+    var openDiscovery: () -> Void = {}
+    /// Whether discovery is the detail column, so the tile can say so. Part of
+    /// the value rather than read from the store, because this view holds no
+    /// model reference — that is what `.equatable()` needs.
+    var isDiscoveryShown = false
 
     var body: some View {
         ScrollView {
@@ -91,6 +96,7 @@ struct GuildRail: View, Equatable {
                 }
 
                 AddServerRailTile(action: addServer)
+                DiscoverRailTile(isSelected: isDiscoveryShown, action: openDiscovery)
             }
             .padding(.vertical, Spacing.base)
         }

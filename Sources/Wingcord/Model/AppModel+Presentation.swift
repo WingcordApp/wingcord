@@ -177,6 +177,14 @@ extension AppModel {
     /// constant there is no swap to fire on. Anything added later becomes a case
     /// on `Primary`, never a branch in the view builder.
     var workspacePresentation: WorkspacePresentation {
+        // **Discovery outranks even the gate.** Everything else in this function
+        // answers "what is the selected server showing"; discovery is not about
+        // the selected server at all, so nothing below it can be the right
+        // answer while it is open — including a gate belonging to a server the
+        // reader stepped away from to go looking for another one.
+        if isDiscoveryShown {
+            return WorkspacePresentation(primary: .discovery, supplementary: nil)
+        }
         // **The gate is checked first, and that is what makes it a gate.** It is
         // the server saying the reader may not use it yet, so it outranks every
         // other answer to "what is this column showing" — including a channel
@@ -273,7 +281,7 @@ extension AppModel {
         // the app: naming a channel over it, or offering a roster toggle beside
         // it, describes a window the reader is not in. An empty name is already
         // how this bar draws nothing — see `ChannelToolbar`.
-        if isJoinGateShown { return .none }
+        if isJoinGateShown || isDiscoveryShown { return .none }
         // The pill names whatever the column is showing, which on a server page
         // is the page. Its own branch rather than a nil channel, so the bar has
         // a title there instead of a hole its neighbours slide into.

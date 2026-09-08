@@ -376,6 +376,24 @@ nonisolated enum Metrics {
     /// this *is* the sticker's size.
     static let stickerInline: CGFloat = 160
 
+    // MARK: Discovery
+
+    /// The narrowest a discovery card is drawn before the grid drops a column.
+    ///
+    /// Wide enough for a two-line server name over a three-line description with
+    /// the counts under it — which is what a card carries, and what decides
+    /// whether a grid of them is scannable or a wall.
+    static let discoveryCardWidth: CGFloat = 300
+    /// The wide artwork across a card's head. Two to one, which is the shape
+    /// every `discovery_splash` in the captures is authored at.
+    static let discoveryCardArt: CGFloat = discoveryCardWidth / 2
+    /// The server's own mark, overlapping the artwork's foot.
+    ///
+    /// A squircle rather than a circle: this is a *server*, and every other
+    /// place in the app that draws one — the rail, the forward sheet, the tag
+    /// card — draws it as a rounded square.
+    static let discoveryCardIcon: CGFloat = 44
+
     // MARK: Activities
 
     /// An app's icon on a launcher list row.

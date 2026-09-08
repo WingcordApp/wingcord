@@ -610,6 +610,7 @@ enum DemoFixtures {
         let guideAuthor = userIDs[1]
         model.guilds[firstGuild]?.ownerID = guideAuthor
         populateGuildSurfaces(model, guildRoles: guildRoles, owner: guideAuthor)
+        populateDiscovery(model)
         populateConnectedApps(model)
         populateBoard(model, owner: guideAuthor)
         populatePresence(model, owner: guideAuthor, others: userIDs)
@@ -1627,4 +1628,91 @@ enum DemoFixtures {
         "> a quote, which parses one level in\n> and keeps its second line",
         "- a list\n- with two items",
     ]
+}
+
+// MARK: - Discovery
+
+extension DemoFixtures {
+
+    /// What `--demo` opens the compass onto.
+    ///
+    /// **A grid is the one surface that cannot be checked empty**, and discovery
+    /// has nothing cached behind it — every row is a route's answer. So the
+    /// fixture carries both halves, both category lists, and the two states a
+    /// card has: one server the fixture is already in, and one it is not.
+    ///
+    /// The artwork hashes are fabricated and the CDN answers 404 for them, which
+    /// is the honest outcome for an invented server and leaves each card showing
+    /// its own raised ground — the state a real server with no discovery splash
+    /// is in, and therefore worth being able to look at.
+    static func populateDiscovery(_ model: AppModel) {
+        var state = DiscoveryState()
+        state.categories = [
+            DiscoveryCategory(id: 0, name: "General", isPrimary: true),
+            DiscoveryCategory(id: 1, name: "Gaming", isPrimary: true),
+            DiscoveryCategory(id: 2, name: "Music", isPrimary: true),
+            DiscoveryCategory(id: 3, name: "Entertainment", isPrimary: true),
+            DiscoveryCategory(id: 5, name: "Science & Tech", isPrimary: true),
+            DiscoveryCategory(id: 6, name: "Education", isPrimary: true),
+            DiscoveryCategory(id: 30, name: "LFG", isPrimary: false),
+        ]
+        state.appCategories = [
+            AppDirectoryCategory(id: 6, name: "Games"),
+            AppDirectoryCategory(id: 4, name: "Entertainment"),
+            AppDirectoryCategory(id: 8, name: "Moderation and Tools"),
+            AppDirectoryCategory(id: 9, name: "Social"),
+            AppDirectoryCategory(id: 10, name: "Utilities"),
+        ]
+
+        let specs: [(String, String, Int, Int, Bool)] = [
+            ("Marvel Rivals", "The official Discord server for Marvel Rivals. Find the latest news and discuss the game!", 4_453_182, 880_686, true),
+            ("Midjourney", "The official server for Midjourney, a text-to-image AI where your imagination is the only limit.", 18_617_960, 518_173, true),
+            ("Genshin Impact Official", "Welcome to Teyvat, Traveler! This is the place to discuss with others about your favorite game: Genshin Impact!", 2_583_807, 354_183, true),
+            ("Honkai: Star Rail Official", "A space fantasy RPG by HoYoverse. Hop aboard the Astral Express and explore the galaxy's wonders!", 1_788_357, 328_351, false),
+            ("MINECRAFT", "The official Minecraft Discord!", 4_003_209, 308_780, true),
+            ("HELLDIVERS™ Official Discord", "The official Discord for HELLDIVERS and HELLDIVERS 2!", 1_311_485, 274_038, false),
+            // Deliberately without a description, which is a real state a card
+            // has to reserve room for rather than shrink around.
+            ("The Iris Project", "", 12_408, 1_204, false),
+        ]
+        state.page = DiscoveryPage(
+            guilds: specs.enumerated().map { offset, spec in
+                DiscoverableGuild(
+                    id: GuildID(rawValue: UInt64(9_000 + offset)),
+                    name: spec.0,
+                    description: spec.1.isEmpty ? nil : spec.1,
+                    discoverySplashHash: "demofixturesplash",
+                    features: spec.4
+                        ? ["DISCOVERABLE", "PREVIEW_ENABLED", "VERIFIED", "COMMUNITY"]
+                        : ["DISCOVERABLE", "PREVIEW_ENABLED", "COMMUNITY"],
+                    memberCount: spec.2,
+                    onlineCount: spec.3
+                )
+            },
+            total: 6_459
+        )
+
+        // One of them is a server the fixture is already in, so the "Joined"
+        // state is on screen beside the ones that are not.
+        if let joined = model.guilds.keys.sorted(by: { $0.rawValue < $1.rawValue }).first {
+            state.page.guilds.insert(
+                DiscoverableGuild(
+                    id: joined,
+                    name: model.guilds[joined]?.name ?? "A server",
+                    description: "You are already in this one, so the card takes you to it.",
+                    features: ["DISCOVERABLE", "PREVIEW_ENABLED", "COMMUNITY"],
+                    memberCount: model.guilds[joined]?.memberCount ?? 4_200,
+                    onlineCount: 610
+                ),
+                at: 3
+            )
+        }
+
+        state.apps = model.activityDirectory.apps.values
+            .sorted { $0.name < $1.name }
+            .prefix(9)
+            .map { $0 }
+        state.appPageCount = 3
+        model.discoverySeed = state
+    }
 }

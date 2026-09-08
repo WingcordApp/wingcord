@@ -555,6 +555,23 @@ final class AppModel {
     /// edits the query the panel already holds, so there is nothing else to
     /// carry and a second copy would be a second source of truth.
     var isSearchFiltersShown = false
+    /// The discovery page — nil when it is not open.
+    ///
+    /// **A takeover of the detail column, not a window.** §1: anything added to
+    /// the detail arrives as a case on `WorkspacePresentation.Primary`, never as
+    /// a branch in the builder — and keeping it in the window is what lets the
+    /// rail stay live, so somebody can step away to a channel and come back to
+    /// the grid where they left it.
+    var discovery: DiscoveryState?
+    /// What `--demo` opens discovery onto.
+    ///
+    /// **The one fixture hook in the store, and it is nil in every real
+    /// session.** Discovery is the only surface in the app whose whole content
+    /// is a route's answer with nothing cached behind it, so without this it can
+    /// only be looked at empty — and a grid is the one thing that cannot be
+    /// checked without content in it. `@ObservationIgnored` because nothing
+    /// observes it: it is read once, by `toggleDiscovery`.
+    @ObservationIgnored var discoverySeed: DiscoveryState?
     /// The quick switcher — nil when it is not up.
     ///
     /// **A layer at the window root, not a presentation**, for the reason the

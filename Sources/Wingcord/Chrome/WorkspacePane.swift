@@ -144,6 +144,8 @@ private struct PrimaryPane: View {
             }
         case .joinGate:
             ServerJoinGateContainer()
+        case .discovery:
+            DiscoveryContainer()
         }
     }
 }
@@ -249,5 +251,42 @@ struct PlaceholderPane: View {
                 .foregroundStyle(Ink.tertiary)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+}
+
+/// Discovery, fed from the store.
+///
+/// The container reads and the pane draws — the same split every other surface
+/// here keeps, so a grid arriving cannot invalidate the rail beside it.
+private struct DiscoveryContainer: View {
+    @Environment(AppModel.self) private var model
+
+    var body: some View {
+        let state = model.discovery ?? DiscoveryState()
+        DiscoveryPane(
+            tab: state.tab,
+            query: Binding(
+                get: { model.discovery?.query ?? "" },
+                set: { model.setDiscoveryQuery($0) }
+            ),
+            categoryID: state.categoryID,
+            categories: model.discoveryCategories,
+            appCategoryID: state.appCategoryID,
+            appCategories: model.appDirectoryCategories,
+            cards: model.discoveryCards,
+            apps: state.apps,
+            isBusy: state.isBusy,
+            emptyLine: model.discoveryEmptyLine,
+            hasMore: state.tab == .servers
+                ? state.page.guilds.count < state.page.total
+                : state.appPage < state.appPageCount,
+            setTab: { model.selectDiscoveryTab($0) },
+            setCategory: { model.selectDiscoveryCategory($0) },
+            setAppCategory: { model.selectAppCategory($0) },
+            openCard: { model.openDiscoveryCard($0) },
+            openApp: { model.openDiscoveryApp($0) },
+            loadMore: { model.loadMoreDiscovery() },
+            dismiss: { model.closeDiscovery() }
+        )
     }
 }

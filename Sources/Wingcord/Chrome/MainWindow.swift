@@ -49,9 +49,9 @@ struct MainWindow: View {
                 // there to resize, and a draggable divider over a 68-point strip
                 // is a control that can only make it wrong.
                 .navigationSplitViewColumnWidth(
-                    min: model.isJoinGateShown ? Proportions.railWidth : Proportions.sidebarMin,
-                    ideal: model.isJoinGateShown ? Proportions.railWidth : Proportions.sidebarIdeal,
-                    max: model.isJoinGateShown ? Proportions.railWidth : Proportions.sidebarMax
+                    min: model.isColumnTakenOver ? Proportions.railWidth : Proportions.sidebarMin,
+                    ideal: model.isColumnTakenOver ? Proportions.railWidth : Proportions.sidebarIdeal,
+                    max: model.isColumnTakenOver ? Proportions.railWidth : Proportions.sidebarMax
                 )
         } detail: {
             WorkspacePane(presentation: model.workspacePresentation)
@@ -233,7 +233,7 @@ private struct SidebarColumn: View {
             // stays, deliberately — stepping away to another server and coming
             // back to the gate where you left it is the point of it being a
             // destination rather than a modal.
-            if !model.isJoinGateShown {
+            if !model.isColumnTakenOver {
             ChannelSidebarContainer()
                 .safeAreaBar(edge: .bottom, spacing: 0) {
                     // **Nothing is painted behind these bars, and that is the
@@ -349,7 +349,9 @@ private struct GuildRailContainer: View {
             selectHome: { model.selectGuild(nil) },
             selectGuild: { model.selectGuild($0) },
             toggleFolder: { model.toggleFolder($0) },
-            addServer: { model.joinServerSheet = JoinServerSheetState() }
+            addServer: { model.joinServerSheet = JoinServerSheetState() },
+            openDiscovery: { model.toggleDiscovery() },
+            isDiscoveryShown: model.isDiscoveryShown
         )
         .equatable()
     }

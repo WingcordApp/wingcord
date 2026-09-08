@@ -17,13 +17,21 @@ extension SessionController {
     /// wait is bounded and has a real failure: a server can accept the lurk and
     /// still dispatch nothing the client can read, and a spinner with no end is
     /// worse than a page that says it could not open.
+    /// - Parameters:
+    ///   - channelID: the channel to land on, where the caller has one. **Nil
+    ///     for discovery**, which points at a *server* rather than at something
+    ///     written in it — there the reader lands wherever the server's own
+    ///     first readable channel is, exactly as clicking a rail tile does.
+    ///   - recommendationLoadID: the discovery load a card was clicked from.
+    ///     Nil everywhere else; see `DiscordREST.lurkGuild`.
     func previewGuild(
         _ guildID: GuildID,
-        channelID: ChannelID,
-        messageID: MessageID?,
+        channelID: ChannelID? = nil,
+        messageID: MessageID? = nil,
         origin: GuildPreview.Origin,
         location: String,
-        source: String
+        source: String?,
+        recommendationLoadID: String? = nil
     ) {
         // Already in it, previewing it, or previewing something else — each is
         // a different answer and none of them is a second lurk.
@@ -52,12 +60,18 @@ extension SessionController {
                     guildID,
                     sessionID: sessionID,
                     location: location,
-                    source: source
+                    source: source,
+                    recommendationLoadID: recommendationLoadID
                 )
             } catch {
                 Self.trace("preview \(guildID.rawValue) failed: \(Self.describe(error))")
                 model.guildPreview = nil
                 model.permissionGate.invalidate()
+                // **A refusal here needs words.** The commonest one is the
+                // hundred-server cap — which a *lurk* counts against, captured —
+                // and a card that appears to do nothing is the worst possible
+                // reading of it.
+                model.reportActionFailure(Self.discoveryFailure(error))
                 return
             }
             guard await waitForGuild(guildID) else {
@@ -69,6 +83,11 @@ extension SessionController {
             guard model.guildPreview?.guildID == guildID else { return }
             model.guildPreview?.isStarting = false
             model.permissionGate.invalidate()
+            if channelID == nil {
+                // Selected only now, after `GUILD_CREATE` — before it the guild
+                // is not in the store and `selectGuild` would land on nothing.
+                model.selectGuild(guildID)
+            }
             openPreviewedChannel(channelID, messageID: messageID)
         }
     }
@@ -112,7 +131,13 @@ extension SessionController {
             guard let self else { return }
             defer { model.isJoiningPreviewedGuild = false }
             do {
-                _ = try await rest.joinGuild(preview.guildID, location: "Preview Mode Banner")
+                // **No `location`, and the source is the banner's own name.** Both
+                // captured, twice, in `join discoverable server.har`: the join
+                // from a preview sends `x-context-properties:
+                // {"source":"Notice - Lurker Mode"}` and no location at all.
+                // This used to send `location: "Preview Mode Banner"`, which was
+                // a plausible invention.
+                _ = try await rest.joinGuild(preview.guildID, source: "Notice - Lurker Mode")
             } catch {
                 Self.trace("join \(preview.guildID.rawValue): \(Self.describe(error))")
                 return
@@ -165,7 +190,14 @@ extension SessionController {
     /// from a game profile is the first path that is not — without this the
     /// transcript changes and the rail and the channel list stay on whatever
     /// server was open before.
-    private func openPreviewedChannel(_ channelID: ChannelID, messageID: MessageID?) {
+    /// Lands the reader in the previewed server.
+    ///
+    /// **A nil channel is a real caller, not a missing value.** Discovery points
+    /// at a server, so it selects the guild and lets `selectGuild` find the
+    /// first channel the reader may read — which is the same arithmetic a rail
+    /// click uses, rather than a second answer to "where does a server open".
+    private func openPreviewedChannel(_ channelID: ChannelID?, messageID: MessageID?) {
+        guard let channelID else { return }
         if let guildID = model.channelIndex.guildID(of: channelID) {
             model.selectGuild(guildID)
         }

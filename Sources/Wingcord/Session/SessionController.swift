@@ -130,6 +130,14 @@ final class SessionController {
     var searchTask: Task<Void, Never>?
     /// The invite resolve behind the Add a Server field, replaced per keystroke.
     var inviteLookupTask: Task<Void, Never>?
+    /// Discovery's grid, replaced whenever the tab, the category or the field
+    /// moves. Its page-two fetch is a *second* task: a scroll to the bottom must
+    /// not cancel the request that is filling the grid it is scrolling.
+    var discoveryTask: Task<Void, Never>?
+    var discoveryPageTask: Task<Void, Never>?
+    /// Both category lists, once per session — neither has changed in years.
+    var hasLoadedDiscoveryCategories = false
+    var hasLoadedAppDirectoryCategories = false
     /// The quick switcher's game autocomplete, replaced per keystroke and
     /// debounced inside — see `SessionController+QuickSwitch`.
     var gameSearchTask: Task<Void, Never>?
@@ -327,6 +335,11 @@ final class SessionController {
         model.placeFrecency = [:]
         hasLoadedNavigationFrecency = false
         model.closeQuickSwitch()
+        // Discovery answers per account — the front page is a recommendation
+        // and the grid says which servers the reader is already in.
+        model.closeDiscovery()
+        hasLoadedDiscoveryCategories = false
+        hasLoadedAppDirectoryCategories = false
         model.clearAllMessages()
         // Everything a message action or a person's row holds. **Per-account,
         // every one of them** — a note, a block and a channel's pins all answer

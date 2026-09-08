@@ -307,6 +307,14 @@ struct WorkspacePresentation: Hashable, Sendable {
         /// destination here is one: the column holds one view type, and the rail
         /// stays live so somebody can step away from a gate and come back to it.
         case joinGate(GuildID)
+        /// Discovery — servers and apps the account is not in yet.
+        ///
+        /// **A case here rather than a window or a sheet**, and §1 is why: the
+        /// detail column must never change view *type*, so anything added to it
+        /// arrives as a case on this enum. It also outranks everything else, so
+        /// it carries no payload — what it is showing lives in `DiscoveryState`,
+        /// which survives stepping away to a channel and back.
+        case discovery
     }
 
     enum Supplementary: Hashable, Sendable {

@@ -88,6 +88,17 @@ extension AppModel {
         return gate.guildID == selectedGuildID
     }
 
+    /// Whether the detail column is a **takeover** — a surface that is not a
+    /// page inside a server, and therefore has no channel list to sit beside.
+    ///
+    /// **One name for both cases, because it is one arrangement.** The gate and
+    /// discovery both narrow the sidebar to the rail and both draw no chrome,
+    /// and two flags checked in three places is how one of them ends up leaving
+    /// a two-hundred-point hole beside a full-width page. The rail stays in
+    /// both, deliberately: stepping away to another server and coming back is
+    /// the point of these being destinations rather than modals.
+    var isColumnTakenOver: Bool { isJoinGateShown || isDiscoveryShown }
+
     /// Offers the gate for a server the reader has opened.
     ///
     /// **Called from `guildDidOpen`, and gated three ways.** It must not fire
