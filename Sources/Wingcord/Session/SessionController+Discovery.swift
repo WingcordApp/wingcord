@@ -161,6 +161,25 @@ extension SessionController {
         }
     }
 
+    /// "You Might Also Like", once per app.
+    ///
+    /// **Absent means not asked and empty means asked-and-none**, the same
+    /// distinction every other table in this app draws — collapsing them makes
+    /// the page re-ask on every visit for an app that has no neighbours.
+    func loadSimilarApps(_ id: ApplicationID) {
+        guard model.similarDirectoryApps[id] == nil else { return }
+        Task { [weak self] in
+            guard let self else { return }
+            do {
+                model.similarDirectoryApps[id] =
+                    try await rest.similarApps(to: id, locale: metadata.locale)
+            } catch {
+                model.similarDirectoryApps[id] = []
+                Self.trace("discovery: similar apps for \(id.rawValue) failed")
+            }
+        }
+    }
+
     // MARK: The headings
 
     /// Both category lists, once per session.

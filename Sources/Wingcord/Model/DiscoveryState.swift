@@ -56,7 +56,10 @@ struct DiscoveryState: Hashable, Sendable {
     /// **A stack of two, and the grid underneath is not thrown away.** Going
     /// back to it must not re-fetch a page somebody has already scrolled.
     var openAppID: ApplicationID?
-    var appCategoryID: Int?
+    /// Which app heading is showing. **Featured by default, and never nil** —
+    /// see `AppDirectoryCategory.featuredID`: no category at all is a different
+    /// and much narrower search.
+    var appCategoryID: Int? = AppDirectoryCategory.featuredID
     var appCategories: [AppDirectoryCategory] = []
     var apps: [ActivityApp] = []
     var appPage = 1

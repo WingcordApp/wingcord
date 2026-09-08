@@ -53,6 +53,8 @@ extension AppModel {
 
     func selectAppCategory(_ categoryID: Int?) {
         guard discovery?.tab == .apps, discovery?.appCategoryID != categoryID else { return }
+        // Nil is not a heading here: it is the launcher's own narrowed search.
+        let categoryID = categoryID ?? AppDirectoryCategory.featuredID
         discovery?.appCategoryID = categoryID
         discovery?.appPage = 1
         discovery?.apps = []
@@ -238,8 +240,14 @@ extension AppModel {
     /// one of them.
     static let featuredCategoryIDs = [1, 2, 3, 5, 6]
 
+    /// The app headings, Featured first.
+    ///
+    /// **Featured is prepended rather than fetched**, because the route does not
+    /// send it — see `AppDirectoryCategory.featured`. The rest keep the order
+    /// the route answers in, which is Discord's own.
     var appDirectoryCategories: [AppDirectoryCategory] {
-        (discovery?.appCategories ?? []).sorted { $0.id < $1.id }
+        guard let fetched = discovery?.appCategories, !fetched.isEmpty else { return [] }
+        return [.featured] + fetched.filter { $0.id != AppDirectoryCategory.featuredID }
     }
 
     /// What the page says when it has nothing to show.

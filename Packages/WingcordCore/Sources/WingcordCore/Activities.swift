@@ -75,6 +75,23 @@ public struct ActivityApp: Hashable, Sendable, Identifiable {
     public var maxParticipants: Int?
     public var termsOfServiceURL: URL?
     public var privacyPolicyURL: URL?
+    /// The developer's own links, beside the two Discord requires.
+    ///
+    /// **Named by the developer, so they cannot be a fixed set** — Blazing 8s
+    /// carries one called `FAQ` and the Resident Evil experience carries none.
+    /// A row per entry, drawn from what arrived.
+    public var externalLinks: [ExternalLink] = []
+    /// The locales this app says it speaks, as BCP-47 tags. Discord's page draws
+    /// them under "Supported Languages" and draws the *localised name* rather
+    /// than the tag — `English, US` for `en-US`.
+    public var supportedLocales: [String] = []
+    /// Every picture on the app's own page, in the developer's order.
+    ///
+    /// **The whole strip, where this used to keep only the first.** `heroImageURL`
+    /// is that first item and stays what the banner draws; the rest are the
+    /// gallery Discord pages under the title, and dropping them was decoding a
+    /// list and using one of it.
+    public var gallery: [URL] = []
     /// Present only on applications that actually embed. See the type note.
     public var config: EmbeddedActivityConfig?
 
@@ -136,11 +153,37 @@ public struct ActivityApp: Hashable, Sendable, Identifiable {
         return maxParticipants == 1 ? "1 player" : "\(maxParticipants) players"
     }
 
+    /// The languages this app speaks, named rather than tagged.
+    ///
+    /// `en-US` is a tag and "English, US" is what a person reads; Discord draws
+    /// the second and so does this. An unrecognised tag is shown as itself
+    /// rather than dropped — it is still a true answer.
+    public var languageNames: [String] {
+        supportedLocales.map { tag in
+            Locale.current.localizedString(forIdentifier: tag)
+                ?? Locale.current.localizedString(forLanguageCode: tag)
+                ?? tag
+        }
+    }
+
     /// The line under the name in a directory row: the directory's own short
     /// description where there is one, and the full description otherwise.
     public var rowSubtitle: String {
         if let tagline, !tagline.isEmpty { return tagline }
         return about
+    }
+}
+
+/// One of the developer's own links on an app's directory page.
+public struct ExternalLink: Hashable, Sendable, Identifiable {
+    public var name: String
+    public var url: URL
+
+    public var id: URL { url }
+
+    public init(name: String, url: URL) {
+        self.name = name
+        self.url = url
     }
 }
 

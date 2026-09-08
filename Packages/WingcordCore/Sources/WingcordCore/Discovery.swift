@@ -175,4 +175,20 @@ public struct AppDirectoryCategory: Hashable, Sendable, Identifiable {
         self.id = id
         self.name = name
     }
+
+    /// Featured, and it is **not in the route's own list**.
+    ///
+    /// `/application-directory-static/categories` answers five headings — Games,
+    /// Entertainment, Moderation and Tools, Social, Utilities — and Discord's own
+    /// tab strip shows six. The sixth is Featured, and it is captured:
+    /// `search?query=&category_id=0` answered forty-eight apps in
+    /// `discoverableapps.har`.
+    ///
+    /// **It is a real category, not "no filter".** The same capture has one call
+    /// with no `category_id` at all and it answered *seven* — that is the
+    /// launcher's own narrowed search, not a directory. A tab labelled All with
+    /// no category on it would have been a nearly empty grid that looked like a
+    /// route that had stopped working.
+    public static let featuredID = 0
+    public static let featured = AppDirectoryCategory(id: featuredID, name: "Featured")
 }

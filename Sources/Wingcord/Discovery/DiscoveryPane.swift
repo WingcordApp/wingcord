@@ -69,7 +69,8 @@ struct DiscoveryPane: View {
                     channelID: nil,
                     onBack: closeApp,
                     onLaunched: closeApp,
-                    onAdd: { addApp(openAppID) }
+                    onAdd: { addApp(openAppID) },
+                    onOpenSimilar: openApp
                 )
                 .readingSurface()
             } else {
@@ -81,8 +82,6 @@ struct DiscoveryPane: View {
     private var browse: some View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: Spacing.group) {
-                heading
-                headings
                 grid
                 footer
             }
@@ -93,7 +92,16 @@ struct DiscoveryPane: View {
         .scrollBounceBehavior(.always, axes: .vertical)
         .readingSurface()
         .floatingTopBar {
-            DiscoveryBar(tab: $tab, query: $query, dismiss: dismiss)
+            VStack(spacing: Spacing.snug) {
+                DiscoveryBar(tab: $tab, query: $query, dismiss: dismiss)
+                // **Centred on its own row, over the page rather than in it.**
+                // Clock puts its strip at the top of the window with nothing
+                // above the content repeating what it says; this is the same
+                // arrangement, and it is why the page lost the heading that used
+                // to name the category the picker is already naming.
+                headings
+                    .frame(maxWidth: .infinity, alignment: .center)
+            }
             .surfaceColumn(Self.measure)
             .padding(.bottom, Spacing.base)
         }
@@ -101,30 +109,6 @@ struct DiscoveryPane: View {
     }
 
     // MARK: The heading
-
-    /// What this grid is, in the page's own words.
-    ///
-    /// **The front page is named for what the route actually answers.** It is
-    /// the verified-and-partnered shortlist, not "everything" — calling it All
-    /// would promise the whole of discovery from a route that returns a
-    /// twentieth of it.
-    private var heading: some View {
-        SurfaceHeading(
-            title: headingTitle,
-            detail: tab == .servers
-                ? "Look inside a server before you join it."
-                : "Apps and bots you can add to a server.",
-            badge: nil
-        )
-    }
-
-    private var headingTitle: String {
-        guard tab == .servers else {
-            return appCategories.first { $0.id == appCategoryID }?.name ?? "All apps"
-        }
-        guard let categoryID else { return "Featured servers" }
-        return categories.first { $0.id == categoryID }?.name ?? "Servers"
-    }
 
     // MARK: The headings
 
@@ -149,16 +133,19 @@ struct DiscoveryPane: View {
                         + categories.map { SegmentedPicker.Option($0.id, $0.name) },
                     selection: $categoryID
                 )
+                // **`fixedSize`, or the control is squeezed.** It reports its
+                // `intrinsicContentSize` and SwiftUI is free to propose less;
+                // `.extraLarge` is 36 points tall and the strip was rendering
+                // shorter than Clock's own for that reason alone.
+                .fixedSize()
                 .accessibilityLabel(Text("Browse servers by category"))
             }
         } else if !appCategories.isEmpty {
             SegmentedPicker(
-                // **"All", not "Featured".** For servers the front page is a
-                // genuinely curated shortlist; for apps it is an unfiltered
-                // search, and naming it Featured would be a promise the route
-                // does not keep.
-                options: [SegmentedPicker.Option(nil, "All")]
-                    + appCategories.map { SegmentedPicker.Option($0.id, $0.name) },
+                // **Featured is one of these, not the absence of one.** It is
+                // category `0` and it is prepended by the projection, because the
+                // route does not send it — see `AppDirectoryCategory.featured`.
+                options: appCategories.map { SegmentedPicker.Option($0.id, $0.name) },
                 selection: $appCategoryID
             )
             .accessibilityLabel(Text("Browse apps by category"))

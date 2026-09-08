@@ -118,3 +118,71 @@ struct GuildNotificationSettingsTests {
         )
     }
 }
+
+/// An app's own directory page, and the three fields it carries that the
+/// launcher's copy never needed.
+///
+/// Captured in `blazing 8s.har` and `wordle.har`.
+@Suite("App directory page")
+struct AppDirectoryPageTests {
+
+    private let payload = Data("""
+    {"id":"832025144392635995","name":"Blazing 8s","icon":"a1",
+     "description":"A card game.","summary":"",
+     "directory_entry":{
+       "guild_count":22700,
+       "short_description":"Be the first to zero cards.",
+       "detailed_description":"__WHAT IS BLAZING 8S?__",
+       "supported_locales":["en-US","fr"],
+       "external_urls":[{"name":"FAQ","url":"https://support.discord.com/faq"},
+                        {"name":"Sneaky","url":"http://insecure.example.invalid"}],
+       "carousel_items":[
+         {"type":1,"url":"https://a.example.invalid/1.gif","proxy_url":"https://proxy.example.invalid/1.gif"},
+         {"type":2,"url":"https://youtube.example.invalid/embed"},
+         {"type":1,"url":"https://a.example.invalid/2.png"}]}}
+    """.utf8)
+
+    /// **The whole strip, where this used to keep only the first.** The hero is
+    /// still that first item; the rest are the gallery Discord pages under the
+    /// title, and decoding a list to use one of it is the defect this pins.
+    @Test("The carousel decodes whole, pictures only, proxy preferred")
+    func galleryDecodes() throws {
+        let app = try #require(
+            JSONDecoder().decode(DirectoryApplicationDTO.self, from: payload).domain
+        )
+        // The YouTube embed is filtered: it needs a browser, not an image view.
+        #expect(app.gallery.count == 2)
+        #expect(app.gallery.first?.host == "proxy.example.invalid")
+        #expect(app.heroImageURL == app.gallery.first)
+    }
+
+    /// A developer-supplied address, so the scheme is checked at the wire
+    /// boundary rather than trusted at the call site.
+    @Test("An external link over plain http is dropped")
+    func insecureLinkIsDropped() throws {
+        let app = try #require(
+            JSONDecoder().decode(DirectoryApplicationDTO.self, from: payload).domain
+        )
+        #expect(app.externalLinks.map(\.name) == ["FAQ"])
+    }
+
+    @Test("Supported locales come back as tags and are named for the reader")
+    func localesDecode() throws {
+        let app = try #require(
+            JSONDecoder().decode(DirectoryApplicationDTO.self, from: payload).domain
+        )
+        #expect(app.supportedLocales == ["en-US", "fr"])
+        // Named rather than tagged — the exact wording is the system's.
+        #expect(app.languageNames.count == 2)
+        #expect(app.languageNames.allSatisfy { !$0.isEmpty })
+    }
+
+    @Test("The server count and the two descriptions come off the entry")
+    func entryFieldsDecode() throws {
+        let app = try #require(
+            JSONDecoder().decode(DirectoryApplicationDTO.self, from: payload).domain
+        )
+        #expect(app.guildCount == 22_700)
+        #expect(app.tagline == "Be the first to zero cards.")
+    }
+}

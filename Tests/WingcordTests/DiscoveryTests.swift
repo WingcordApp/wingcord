@@ -186,6 +186,38 @@ struct DiscoveryTests {
         #expect(model.discovery?.categoryID == 1)
     }
 
+    /// **Featured is category `0`, not "no category".** Captured: with
+    /// `category_id=0` the route answered forty-eight apps and with no category
+    /// at all it answered seven — that second one is the launcher's own narrowed
+    /// search. A tab labelled All with no category would have been a nearly empty
+    /// grid that looked like a route which had stopped working.
+    @Test("The app picker opens on Featured, which is a real category")
+    func featuredIsACategory() {
+        let model = model()
+        model.toggleDiscovery()
+        #expect(model.discovery?.appCategoryID == AppDirectoryCategory.featuredID)
+
+        model.discovery?.appCategories = [
+            AppDirectoryCategory(id: 6, name: "Games"),
+            AppDirectoryCategory(id: 9, name: "Social"),
+        ]
+        // Prepended, because the route does not send it.
+        #expect(model.appDirectoryCategories.map(\.name) == ["Featured", "Games", "Social"])
+    }
+
+    /// Nil is not a heading here, so it resolves back to Featured rather than
+    /// becoming the seven-result search.
+    @Test("Clearing the app heading returns to Featured")
+    func clearingAppCategoryReturnsToFeatured() {
+        let model = model()
+        model.toggleDiscovery()
+        model.selectDiscoveryTab(.apps)
+        model.selectAppCategory(6)
+        #expect(model.discovery?.appCategoryID == 6)
+        model.selectAppCategory(nil)
+        #expect(model.discovery?.appCategoryID == AppDirectoryCategory.featuredID)
+    }
+
     /// The two id spaces are different — `6` is Games in the app directory and
     /// Education in server discovery — so the two pickers cannot share a value.
     @Test("The app headings are their own id space")
@@ -194,7 +226,7 @@ struct DiscoveryTests {
         model.toggleDiscovery()
         model.selectDiscoveryCategory(6)
         model.selectDiscoveryTab(.apps)
-        #expect(model.discovery?.appCategoryID == nil)
+        #expect(model.discovery?.appCategoryID == AppDirectoryCategory.featuredID)
         model.selectAppCategory(6)
         #expect(model.discovery?.categoryID == 6)
         #expect(model.discovery?.appCategoryID == 6)

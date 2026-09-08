@@ -119,6 +119,24 @@ extension DiscordREST {
         )
     }
 
+    /// Apps Discord thinks play like this one.
+    ///
+    /// **The same shape one app's own page answers with** — full application
+    /// objects with `directory_entry` beside them — so it decodes through
+    /// `DirectoryApplicationDTO` rather than through a second reader. Captured in
+    /// `wordle.har`: each hit carries its own `guild_count`, which is what the
+    /// row under it says.
+    public func similarApps(to id: ApplicationID, locale: String) async throws -> [ActivityApp] {
+        struct Reply: Decodable, Sendable { var applications: [DirectoryApplicationDTO]? }
+        return try await get(
+            "/application-directory-static/applications/\(id.rawValue)/similar",
+            route: "application-directory-static/applications/{id}/similar",
+            query: [URLQueryItem(name: "locale", value: locale)],
+            as: Reply.self
+        )
+        .applications?.compactMap(\.domain) ?? []
+    }
+
     /// Resolve applications this client knows only by id — what the Recents
     /// row is built from, since frecency stores ids and nothing else.
     ///
@@ -618,6 +636,24 @@ struct DirectoryApplicationDTO: Decodable, Sendable {
         var short_description: String?
         var guild_count: Int?
         var carousel_items: [CarouselItemDTO]?
+        /// The developer's own links — `[{"name":"FAQ","url":"…"}]`. Captured in
+        /// `blazing 8s.har`; absent on an app that declares none, which is most.
+        var external_urls: [ExternalURLDTO]?
+        /// BCP-47 tags. `["en-US"]` on all three captured apps.
+        var supported_locales: [String]?
+
+        struct ExternalURLDTO: Decodable, Sendable {
+            var name: String?
+            var url: URL?
+
+            var domain: ExternalLink? {
+                // A developer-supplied address, so the scheme is checked here
+                // rather than trusted — §5.5, the same rule the transcript's own
+                // links are held to.
+                guard let name, !name.isEmpty, let url, url.scheme == "https" else { return nil }
+                return ExternalLink(name: name, url: url)
+            }
+        }
 
         struct CarouselItemDTO: Decodable, Sendable {
             /// `1` is a picture, `2` a YouTube embed. Only pictures are usable
@@ -632,12 +668,17 @@ struct DirectoryApplicationDTO: Decodable, Sendable {
             var proxy_url: URL?
         }
 
-        var heroImageURL: URL? {
-            (carousel_items ?? []).lazy
+        /// Every picture in the strip, in the developer's order.
+        ///
+        /// **Type 1 only.** A `2` is a YouTube embed URL that needs a browser,
+        /// so it is filtered rather than drawn as a picture that cannot load.
+        var gallery: [URL] {
+            (carousel_items ?? [])
                 .filter { $0.type == 1 }
                 .compactMap { $0.proxy_url ?? $0.url }
-                .first
         }
+
+        var heroImageURL: URL? { gallery.first }
     }
 
     /// The application object is inline rather than nested — the directory
@@ -657,6 +698,9 @@ struct DirectoryApplicationDTO: Decodable, Sendable {
         app.tagline = directory_entry?.short_description
         app.guildCount = directory_entry?.guild_count
         app.heroImageURL = directory_entry?.heroImageURL
+        app.gallery = directory_entry?.gallery ?? []
+        app.externalLinks = (directory_entry?.external_urls ?? []).compactMap(\.domain)
+        app.supportedLocales = directory_entry?.supported_locales ?? []
         return app
     }
 }

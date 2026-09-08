@@ -33,6 +33,9 @@ struct ActivityDetailPage: View {
     /// Adds this app to a server. The whole action bar where there is no
     /// channel, and a menu row where there is.
     var onAdd: () -> Void = {}
+    /// Opens a neighbour's own page. Nowhere to go in the launcher's flyout,
+    /// which is why it defaults to nothing there.
+    var onOpenSimilar: (ActivityApp) -> Void = { _ in }
 
     @Environment(AppModel.self) private var model
     @Environment(\.motion) private var motion
@@ -60,6 +63,7 @@ struct ActivityDetailPage: View {
             await model.sessionController.loadActivityApp(applicationID)
             await model.sessionController.loadAppCommandIndex(for: applicationID)
             await model.sessionController.loadApplicationStorefrontFlag(applicationID)
+            model.sessionController.loadSimilarApps(applicationID)
         }
     }
 
@@ -87,7 +91,9 @@ struct ActivityDetailPage: View {
                     .padding(.horizontal, Spacing.snug)
                     .padding(.top, ActivityHero.overhang + Spacing.base)
 
+                    gallery(app)
                     commandList
+                    similar
                 }
                 .padding(.bottom, Spacing.margin)
             }
@@ -97,6 +103,67 @@ struct ActivityDetailPage: View {
             launchBar(app)
         }
     }
+
+    // MARK: The gallery
+
+    /// The developer's own screenshots, side by side.
+    ///
+    /// **A scroll, not a pager.** Discord draws one at a time with arrows and
+    /// dots; a horizontal strip shows two at this width, needs no control of its
+    /// own, and is what every gallery on this platform does. The first item is
+    /// also the hero above — that is Discord's own arrangement, and it is why the
+    /// strip is drawn whole rather than dropping its first.
+    @ViewBuilder
+    private func gallery(_ app: ActivityApp) -> some View {
+        if app.gallery.count > 1 {
+            ScrollView(.horizontal) {
+                HStack(spacing: Spacing.base) {
+                    ForEach(app.gallery, id: \.self) { url in
+                        RemoteImage(url: url, side: Self.galleryWidth, bucket: .artwork) {
+                            Palette.surfaceRaised
+                        }
+                        .aspectRatio(16 / 9, contentMode: .fill)
+                        .frame(width: Self.galleryWidth, height: Self.galleryWidth * 9 / 16)
+                        .clipShape(.rect(cornerRadius: Radius.chip, style: .continuous))
+                    }
+                }
+                .padding(.horizontal, Spacing.snug)
+            }
+            .scrollIndicators(.never)
+            .padding(.top, Spacing.snug)
+            .accessibilityLabel(Text("Screenshots"))
+        }
+    }
+
+    private static let galleryWidth: CGFloat = 260
+
+    // MARK: You might also like
+
+    /// What Discord puts under the page, and it is the same card the directory
+    /// grid draws — one definition of "an app in a list", not two.
+    @ViewBuilder
+    private var similar: some View {
+        let neighbours = model.similarDirectoryApps[applicationID] ?? []
+        if !neighbours.isEmpty {
+            VStack(alignment: .leading, spacing: Spacing.base) {
+                Text("You might also like")
+                    .font(Typeface.sectionHeader)
+                    .foregroundStyle(Ink.secondary)
+                    .textCase(.uppercase)
+                    .kerning(0.4)
+                    .padding(.leading, Spacing.tight)
+                ForEach(neighbours.prefix(Self.similarShown)) { app in
+                    DiscoveryAppCard(app: app) { onOpenSimilar(app) }
+                }
+            }
+            .padding(.horizontal, Spacing.snug)
+            .padding(.top, Spacing.group)
+        }
+    }
+
+    /// Three, which is what Discord draws. Past that it is a second directory
+    /// under the page rather than a suggestion.
+    private static let similarShown = 3
 
     // MARK: The chips
 
@@ -148,7 +215,15 @@ struct ActivityDetailPage: View {
             if let count = app.guildCount, count > 0 {
                 footnote("In \(Self.compact(count)) servers", systemImage: "server.rack")
             }
-            if app.termsOfServiceURL != nil || app.privacyPolicyURL != nil {
+            if !app.languageNames.isEmpty {
+                footnote(
+                    app.languageNames.formatted(.list(type: .and)),
+                    systemImage: "character.bubble"
+                )
+            }
+            if app.termsOfServiceURL != nil || app.privacyPolicyURL != nil
+                || !app.externalLinks.isEmpty
+            {
                 policyLinks(app)
             }
         }
@@ -163,6 +238,12 @@ struct ActivityDetailPage: View {
 
     private func policyLinks(_ app: ActivityApp) -> some View {
         HStack(spacing: Spacing.base) {
+            // **The developer's own first**, because they are the ones somebody
+            // came looking for — an FAQ is read and a privacy policy is checked.
+            // Their scheme was verified at the wire boundary; see `ExternalLink`.
+            ForEach(app.externalLinks) { link in
+                Link(link.name, destination: link.url)
+            }
             if let terms = app.termsOfServiceURL {
                 Link("Terms", destination: terms)
             }
@@ -255,14 +336,7 @@ struct ActivityDetailPage: View {
     @ViewBuilder
     private func launchBar(_ app: ActivityApp) -> some View {
         if channelID == nil {
-            // **Add App is the whole bar in the directory.** There is nothing to
-            // launch into, and adding the app to a server is what somebody
-            // reading a directory page came to do.
-            Button("Add App", systemImage: "plus.app") { onAdd() }
-                .buttonStyle(.glassProminent)
-                .controlSize(.large)
-                .frame(maxWidth: .infinity)
-                .padding(Spacing.snug)
+            directoryBar(app)
         } else if app.isLaunchable {
             let entryPoint = model.appEntryPoint(for: applicationID)
             HStack(spacing: Spacing.base) {
@@ -279,6 +353,77 @@ struct ActivityDetailPage: View {
                 .frame(maxWidth: .infinity)
                 .padding(Spacing.snug)
         }
+    }
+
+    /// What an app's page offers when it is reached from the directory.
+    ///
+    /// **Launch, Add App and a link** — the reference client's own three, and the
+    /// overflow above already carries the fourth. The one that needed thinking
+    /// about is Launch: there is no channel here, so the ordinary launch has
+    /// nowhere to run. `launchActivityInDirectMessage` does — into the app's own
+    /// conversation — and it is offered exactly where the entry point declares
+    /// the `BOT_DM` context and nowhere else. An app that cannot be launched in a
+    /// DM shows no Launch rather than a greyed one: §5.5, and the reason given
+    /// where `canLaunchInDirectMessage` is defined.
+    @ViewBuilder
+    private func directoryBar(_ app: ActivityApp) -> some View {
+        let entryPoint = model.appEntryPoint(for: applicationID)
+        HStack(spacing: Spacing.base) {
+            Spacer(minLength: 0)
+            if app.isLaunchable, canLaunchInDirectory(entryPoint) {
+                Button {
+                    isLaunching = true
+                    Task {
+                        await model.sessionController.launchActivityInDirectMessage(app)
+                        isLaunching = false
+                        onLaunched()
+                    }
+                } label: {
+                    Group {
+                        if isLaunching {
+                            ProgressView().controlSize(.small)
+                        } else {
+                            Label("Launch", systemImage: "play.fill")
+                        }
+                    }
+                    .frame(minWidth: 96)
+                }
+                .buttonStyle(.glassProminent)
+                .controlSize(.large)
+                .disabled(isLaunching)
+            }
+            Button("Add App", systemImage: "plus.app") { onAdd() }
+                .buttonStyle(.glass)
+                .controlSize(.large)
+            Button {
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString(Self.directoryURL(applicationID), forType: .string)
+            } label: {
+                Image(systemName: "link")
+                    .frame(width: Metrics.control, height: Metrics.control)
+                    .contentShape(.circle)
+            }
+            .buttonStyle(.glass)
+            .controlSize(.large)
+            .help("Copy a link to this app")
+            .accessibilityLabel(Text("Copy a link to this app"))
+            Spacer(minLength: 0)
+        }
+        .padding(Spacing.snug)
+    }
+
+    /// Whether Launch can work with no channel.
+    ///
+    /// The `BOT_DM` half of `canLaunchInDirectMessage`, without the "am I
+    /// already in that conversation" half — which is a question about a channel
+    /// this page does not have.
+    private func canLaunchInDirectory(_ entryPoint: ActivityEntryPoint?) -> Bool {
+        entryPoint?.contexts.contains(Self.botDirectMessageContext) ?? false
+    }
+
+    /// The address Discord's own directory page lives at.
+    nonisolated static func directoryURL(_ id: ApplicationID) -> String {
+        "https://discord.com/discovery/applications/\(id.rawValue)"
     }
 
     /// **The entry point's own name is the button's words.** Dank Memer's is
@@ -379,6 +524,10 @@ struct ActivityDetailPage: View {
             }
             Button("Add App", systemImage: "plus.app") { onAdd() }
             Divider()
+            Button("Copy Link", systemImage: "link") {
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString(Self.directoryURL(applicationID), forType: .string)
+            }
             Button("Copy App ID", systemImage: "number") {
                 NSPasteboard.general.clearContents()
                 NSPasteboard.general.setString(applicationID.description, forType: .string)
@@ -488,9 +637,22 @@ private struct ActivityHero: View {
             }
     }
 
+    /// The tallest this is ever drawn.
+    ///
+    /// **A ceiling, because a ratio alone has none.** `aspectRatio(16/9)` is a
+    /// height *derived from the width*, and this page was written for a 388-point
+    /// flyout where that is 218 points. Put in discovery's own column it became a
+    /// thousand-point banner with the app's name below the fold — the picture was
+    /// not wrong, it was simply given a width nothing had capped. The page's own
+    /// measure fixes it too; this is the belt, because a hero is the one element
+    /// here whose height is somebody else's arithmetic.
+    private static let maximumHeight: CGFloat = 240
+
+
     var body: some View {
         Color.clear
             .aspectRatio(16 / 9, contentMode: .fit)
+            .frame(maxHeight: Self.maximumHeight)
             .overlay {
                 if let videoURL, !motion.reduceMotion {
                     LoopingVideo(url: videoURL)

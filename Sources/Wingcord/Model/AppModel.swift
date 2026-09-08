@@ -684,6 +684,9 @@ final class AppModel {
     /// directory's copy, and only for the ones actually opened.
     @ObservationIgnored var activityDetails: [ApplicationID: ActivityApp] = [:]
     @ObservationIgnored var activitySearchResults: [ActivityApp] = []
+    /// "You Might Also Like", by the app whose page asked. Observed, because it
+    /// lands a beat after the page is already on screen.
+    var similarDirectoryApps: [ApplicationID: [ActivityApp]] = [:]
     /// An invitation card's colour, quantised from the app's own icon.
     ///
     /// **The same mechanism a themeless profile's colours come from** —
