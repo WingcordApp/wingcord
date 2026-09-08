@@ -505,6 +505,38 @@ struct DiscoveryAppCardTests {
         )
     }
 
+    /// **An `a_` bot banner is the hover motion for an app with no preview
+    /// loop**, and Discord offers exactly one of the two: its component passes
+    /// `animatedUrl: undefined` down the video branch.
+    @Test("An animated bot banner hovers, and only where there is no video")
+    func animatedBannerIsTheOtherHoverMotion() throws {
+        var app = ActivityApp(
+            id: id,
+            name: "Nekotina",
+            botBannerHash: "a_5b4d978e173354ec88cba5888a8a457f"
+        )
+        let card = AppModel.directoryCard(for: app)
+        let film = try #require(card.animatedBannerURL)
+        // The same asset as the still: an `a_` hash resolves to `.gif`, and the
+        // still underneath is that file's first frame.
+        #expect(film == card.bannerURL)
+        #expect(film.pathExtension == "gif")
+
+        // A preview loop wins, and the banner's film is not offered beside it.
+        app.config = EmbeddedActivityConfig(previewVideoAssetID: "1232355776870223923")
+        #expect(AppModel.directoryCard(for: app).animatedBannerURL == nil)
+
+        // A still banner has no film at all.
+        app.config = nil
+        app.botBannerHash = "5b4d978e173354ec88cba5888a8a457f"
+        #expect(AppModel.directoryCard(for: app).animatedBannerURL == nil)
+
+        // Neither has an artwork that is not the profile banner.
+        app.botBannerHash = "a_5b4d978e173354ec88cba5888a8a457f"
+        app.tileAssetID = "embeddedcover"
+        #expect(AppModel.directoryCard(for: app).animatedBannerURL == nil)
+    }
+
     /// An app with no `embedded_activity_config` is a bot, and a bot has no
     /// loop — so nothing hovers into a player that cannot exist.
     @Test("An app with no preview has no loop")

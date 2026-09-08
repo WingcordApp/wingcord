@@ -864,6 +864,11 @@ struct ActivityHero: View {
     /// actor, and a guide runs wherever layout does.
     nonisolated static let overhang = Metrics.activityHeaderIcon / 3
 
+    /// What the hero's filmstrip may hold. One banner, on screen for as long as
+    /// the page is, against a 64 MB store — the sidebar banner's own trade at a
+    /// wider column.
+    private static let filmBudget = 20 * 1024 * 1024
+
     @Environment(\.motion) private var motion
 
     private var videoURL: URL? {
@@ -929,11 +934,25 @@ struct ActivityHero: View {
             .overlay {
                 if let videoURL, !motion.reduceMotion {
                     LoopingVideo(url: videoURL)
-                } else if stillURL != nil {
+                } else if let stillURL {
                     RemoteImage(url: stillURL, side: width, bucket: .artwork) {
                         Palette.surfaceRaised
                     }
                     .aspectRatio(contentMode: .fill)
+                    // **A boosted app's banner can be animated, and only then is
+                    // there a second layer at all** — the same stack, and the
+                    // same `canAnimate` gate, the sidebar's banner uses. The
+                    // page plays it outright where the grid waits for a hover:
+                    // a page is the thing being looked at, and its preview loop
+                    // does not wait either.
+                    if CDN.canAnimate(stillURL), !motion.reduceMotion {
+                        AnimatedDecoration(
+                            url: stillURL,
+                            side: width,
+                            gravity: .resizeAspectFill,
+                            byteBudget: Self.filmBudget
+                        )
+                    }
                 } else if let gradient {
                     gradient.fill
                 } else {

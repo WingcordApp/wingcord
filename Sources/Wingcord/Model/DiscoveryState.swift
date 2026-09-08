@@ -208,6 +208,17 @@ struct DiscoveryAppCard: Hashable, Sendable, Identifiable {
     /// The preview loop, for the cards that have one. **Only the hovered card
     /// ever builds a player**: see `DiscoveryAppTile`.
     var videoURL: URL?
+    /// The banner's animated rendition, for an app whose bot banner is an `a_`
+    /// asset and which has no preview loop.
+    ///
+    /// **The same URL `bannerURL` already holds**, because an animated hash
+    /// resolves to `.gif` and `RemoteImage` draws its first frame — the still
+    /// underneath and the film over it are one asset, which is the arrangement
+    /// the sidebar's own banner uses. Nil where the still is anything else, and
+    /// nil where there is a video: Discord's component passes
+    /// `animatedUrl: undefined` down the video branch, so the two hover motions
+    /// are never both offered.
+    var animatedBannerURL: URL?
     /// The launcher's own row projection, so the icon and the monogram are
     /// resolved once for every surface that draws an app.
     var row: ActivityRow

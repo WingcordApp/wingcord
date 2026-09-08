@@ -227,14 +227,47 @@ struct DiscoveryAppTile: View {
         .rect(cornerRadius: Radius.card, style: .continuous)
     }
 
-    /// Whether the loop should be on screen right now.
+    /// Whether anything is moving on this tile right now.
     ///
     /// **Reduce Motion holds the still.** A silent decorative loop is exactly
     /// the motion that setting exists to stop, and the still underneath is the
     /// picture it would have shown anyway.
     private var isPlaying: Bool {
-        isHovering && card.videoURL != nil && !motion.reduceMotion
+        isHovering && !motion.reduceMotion
+            && (card.videoURL != nil || card.animatedBannerURL != nil)
     }
+
+    /// The layer that appears under the pointer.
+    ///
+    /// **The loop, or the banner's own film, never both** — which is Discord's
+    /// own arrangement rather than a choice: its component passes
+    /// `animatedUrl: undefined` down the video branch, so an app with a preview
+    /// video never shows its animated banner. The projection already resolves
+    /// that; this is the pair of layers it decides between.
+    @ViewBuilder
+    private var hoverLayer: some View {
+        if let url = card.videoURL {
+            LoopingVideo(url: url)
+        } else if let url = card.animatedBannerURL {
+            // Stacked over the `RemoteImage` below, which is drawing this same
+            // asset's first frame — the sidebar banner's arrangement exactly.
+            AnimatedDecoration(
+                url: url,
+                side: Metrics.discoveryCardWidth,
+                gravity: .resizeAspectFill,
+                byteBudget: Self.filmBudget
+            )
+        }
+    }
+
+    /// What one tile's filmstrip may hold.
+    ///
+    /// **A banner frame is two orders of magnitude larger than a decoration's**,
+    /// which the default budget is sized for — 300 points wide at 16:9 is around
+    /// 400 KB a frame, so the default would buy a fifteen-frame loop about
+    /// three of them. One tile animates at a time and it is evicted when the
+    /// pointer leaves, so the trade is the sidebar banner's.
+    private static let filmBudget = 12 * 1024 * 1024
 
     var body: some View {
         Button(action: open) {
@@ -333,13 +366,11 @@ struct DiscoveryAppTile: View {
                 }
             }
             .overlay {
-                if isPlaying, let url = card.videoURL {
-                    LoopingVideo(url: url)
-                        // A fade rather than a cut: the loop starts on the frame
-                        // the still already shows, so the two are the same
-                        // picture and the crossing should not be visible as an
-                        // event.
-                        .transition(.opacity)
+                if isPlaying {
+                    // A fade rather than a cut: both films start on the frame
+                    // the still already shows, so the two are the same picture
+                    // and the crossing should not be visible as an event.
+                    hoverLayer.transition(.opacity)
                 }
             }
             .clipped()

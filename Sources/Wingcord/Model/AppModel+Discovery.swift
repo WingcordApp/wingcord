@@ -409,6 +409,12 @@ extension AppModel {
         shelfCover: String? = nil
     ) -> DiscoveryAppCard {
         let video = app.config?.previewVideoAssetID
+        let banner = appBanner(
+            for: app,
+            shelfCover: shelfCover ?? app.tileAssetID,
+            video: video,
+            width: Metrics.discoveryCardWidth
+        )
         return DiscoveryAppCard(
             id: app.id,
             name: app.name,
@@ -418,14 +424,13 @@ extension AppModel {
             isVerified: app.isVerified,
             category: app.categoryNames.first,
             guildCount: app.guildCount,
-            bannerURL: appBanner(
-                for: app,
-                shelfCover: shelfCover ?? app.tileAssetID,
-                video: video,
-                width: Metrics.discoveryCardWidth
-            )?.url,
+            bannerURL: banner?.url,
             accentColor: app.botAccentColor.flatMap(UInt32.init(exactly:)).map { Color(hex: $0) },
             videoURL: video.flatMap { CDN.activityPreviewVideo(id: app.id, assetID: $0) },
+            // **The banner's own film, and only in the one case Discord offers
+            // it**: the still is the bot's profile banner, that banner is an
+            // `a_` asset, and there is no preview loop to show instead.
+            animatedBannerURL: video == nil ? banner?.animatedURL : nil,
             row: row(for: app),
             iconHash: app.iconHash
         )
@@ -523,6 +528,17 @@ enum AppBanner: Hashable, Sendable {
              .previewPoster(let url), .screenshot(let url):
             url
         }
+    }
+
+    /// This artwork's animated rendition, where it has one.
+    ///
+    /// **Only a profile banner ever does**, which is the whole reason the kind
+    /// travels with the address: `embedded_cover` and the rest are stills, and
+    /// an `a_` hash resolves to the `.gif` this returns — the same URL, drawn
+    /// as a first frame by `RemoteImage` and as film by `AnimatedDecoration`.
+    var animatedURL: URL? {
+        guard case .profileBanner(let url) = self, CDN.canAnimate(url) else { return nil }
+        return url
     }
 
     /// The shape the artwork was authored at.
