@@ -69,10 +69,16 @@ struct NameplatePreviewBox: View {
         .frame(height: Self.rowHeight)
         .background {
             if let plate {
-                RemoteImage(url: plate.artworkURL, side: Self.contentsWidth, bucket: .artwork) {
-                    Color.clear
-                }
-                .aspectRatio(contentMode: .fill)
+                // **It moves the whole time this is open**, unlike a plate in a
+                // list. The sheet exists to answer one question — what does
+                // this look like on me — and a still answers half of it.
+                NameplateArtwork(
+                    still: plate.artworkURL,
+                    animated: plate.animatedArtworkURL,
+                    width: Self.contentsWidth,
+                    contentMode: .fill,
+                    isAnimating: true
+                )
             }
         }
         .clipShape(.rect(cornerRadius: Radius.row, style: .continuous))

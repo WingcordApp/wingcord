@@ -30,11 +30,22 @@ struct MainWindow: View {
     /// native item implies: there is no separate "open search" control once the
     /// field is in the toolbar, so the first character is what raises the
     /// results column.
+    ///
+    /// **And closing it is a side effect of clearing**, which is the half that
+    /// was missing. Escape in an `NSSearchField` empties it — that is AppKit's
+    /// behaviour and the field never forwards the key — so a binding that only
+    /// ever opened left the reader pressing Escape at a column that had no way
+    /// of hearing it. There is a button on the panel too; this is the one the
+    /// keyboard reaches.
     private var searchText: Binding<String> {
         Binding(
             get: { model.searchText },
             set: { text in
-                if !text.isEmpty, !model.isSearchShown { model.toggleSearch() }
+                guard !text.isEmpty else {
+                    if model.isSearchShown { model.closeSearch() }
+                    return
+                }
+                if !model.isSearchShown { model.toggleSearch() }
                 model.searchText = text
             }
         )

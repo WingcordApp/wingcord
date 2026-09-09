@@ -71,25 +71,82 @@ struct SearchPanelTests {
         #expect(model.workspacePresentation.supplementary == .search)
     }
 
-    /// The panel follows the rail, not the channel list.
-    @Test("Changing server rebuilds the panel; changing channel leaves it alone")
+    /// A search belongs to its scope, and the scope is the SERVER — which is
+    /// what lets somebody click a hit and land in another channel with the list
+    /// still up.
+    @Test("A search survives a channel inside its server and not a move out of it")
     func scopeGuard() {
         let model = model()
         model.toggleSearch()
         model.searchText = "hey"
         #expect(model.searchScope == .guild(guildID))
 
-        // A channel inside the same server: the results are still about here.
+        // A channel inside the same server: the results are still about here,
+        // and this is the whole reason a hit is clickable at all.
         model.selectChannel(channelID)
         #expect(model.searchText == "hey")
         #expect(model.isSearchShown)
 
-        // Another server: a panel showing this one's hits would be a list about
-        // somewhere else.
+        // Another server. It used to be re-pointed, which threw the results
+        // away and left an empty column in a place the reader had navigated to
+        // for some other reason — nobody moves the rail in order to search
+        // where they are arriving.
         model.selectGuild(otherGuildID)
-        #expect(model.isSearchShown)
+        #expect(!model.isSearchShown)
         #expect(model.searchText.isEmpty)
-        #expect(model.messageSearch?.scope == .guild(otherGuildID))
+        #expect(model.workspacePresentation.supplementary != .search)
+    }
+
+    /// **At Home the conversation IS the scope**, so there is no equivalent of
+    /// "another channel in the same server" — leaving the conversation is
+    /// leaving the search. This is the case that reached a reader: the panel
+    /// only ever closed from `selectGuild`, and switching direct messages never
+    /// goes through it.
+    @Test("Opening a different direct message closes the search")
+    func directMessageScope() {
+        let model = model()
+        let first = ChannelID(rawValue: 3001)
+        let second = ChannelID(rawValue: 3002)
+        var index = model.channelIndex
+        index.replacePrivateChannels([
+            Channel(id: first, kind: .directMessage, guildID: nil, name: "", position: 0),
+            Channel(id: second, kind: .directMessage, guildID: nil, name: "", position: 1),
+        ])
+        model.channelIndex = index
+        model.selectGuild(nil)
+        model.selectChannel(first)
+
+        model.toggleSearch()
+        model.searchText = "hey"
+        #expect(model.searchScope == .channel(first))
+        #expect(model.isSearchShown)
+
+        // The same conversation, which is what clicking one of its own hits
+        // does: nothing moves.
+        model.selectChannel(first)
+        #expect(model.isSearchShown)
+        #expect(model.searchText == "hey")
+
+        model.selectChannel(second)
+        #expect(!model.isSearchShown)
+        #expect(model.workspacePresentation.supplementary != .search)
+    }
+
+    /// The field is the panel's control at both ends.
+    ///
+    /// Escape in an `NSSearchField` empties it and never forwards the key, so a
+    /// binding that only opened on the first character left the reader pressing
+    /// Escape at a column with no way of hearing it.
+    @Test("Clearing the field closes the panel")
+    func clearingClosesIt() {
+        let model = model()
+        model.toggleSearch()
+        model.searchText = "hey"
+        #expect(model.isSearchShown)
+
+        model.closeSearch()
+        #expect(!model.isSearchShown)
+        #expect(model.searchText.isEmpty)
     }
 
     // MARK: Typed versus answered

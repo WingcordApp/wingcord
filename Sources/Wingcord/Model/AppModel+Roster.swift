@@ -148,6 +148,7 @@ extension AppModel {
                     return CDN.guildTagBadge(guildID: guildID, hash: hash)
                 },
                 nameplateURL: user.decoration?.nameplate?.artworkURL,
+                nameplateAnimatedURL: user.decoration?.nameplate?.animatedArtworkURL,
                 nameplatePalette: user.decoration?.nameplate?.palette ?? .none
             )
 
@@ -255,6 +256,7 @@ extension AppModel {
                     return CDN.guildTagBadge(guildID: guildID, hash: hash)
                 },
                 nameplateURL: user.decoration?.nameplate?.artworkURL,
+                nameplateAnimatedURL: user.decoration?.nameplate?.animatedArtworkURL,
                 nameplatePalette: user.decoration?.nameplate?.palette ?? .none,
                 isOwner: userID == channel.ownerID
             )

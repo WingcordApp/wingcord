@@ -36,6 +36,9 @@ struct NowBar: View, Equatable {
 
     @Environment(\.motion) private var motion
     @State private var isMenuOpen = false
+    /// Whether the pointer is on the bar, which is when the reader's own plate
+    /// plays.
+    @State private var isHoveringPlate = false
 
     private var cornerRadius: CGFloat {
         shape.cornerRadius(forHeight: Metrics.nowBarHeight)
@@ -75,10 +78,25 @@ struct NowBar: View, Equatable {
         // strength, so what is behind the window still refracts through.
         .overlay {
             if let url = presentation.nameplateURL {
-                NowBarPlate(url: url, palette: presentation.nameplatePalette)
-                    .clipShape(.rect(cornerRadius: cornerRadius, style: .continuous))
-                    .allowsHitTesting(false)
+                NowBarPlate(
+                    still: url,
+                    animated: presentation.nameplateAnimatedURL,
+                    palette: presentation.nameplatePalette,
+                    // **Under the pointer, like every other plate in the app.**
+                    // This one is on screen for the whole session, so a loop
+                    // that always ran would be a display-link subscriber and
+                    // twelve megabytes of decoded film for as long as the app
+                    // is open — paid by every reader who owns a plate, whether
+                    // or not anybody ever looks at it.
+                    isAnimating: isHoveringPlate
+                )
+                .clipShape(.rect(cornerRadius: cornerRadius, style: .continuous))
+                .allowsHitTesting(false)
             }
+        }
+        .onHover { hovering in
+            guard isHoveringPlate != hovering else { return }
+            isHoveringPlate = hovering
         }
         .specularEdge(in: .rect(cornerRadius: cornerRadius))
         .animation(motion.glassMorph, value: shape)
@@ -275,13 +293,22 @@ struct PresenceDot: View {
 /// It sits *over* the bar's material at low strength rather than behind it: a
 /// fill behind glass is §4 rule 3, and it is what would take the lensing away.
 private struct NowBarPlate: View {
-    var url: URL
+    var still: URL
+    var animated: URL?
     var palette: NameplatePalette
+    var isAnimating: Bool
 
     /// How strongly the plate reads. High enough to be the reader's own
     /// artwork, low enough that the glass underneath still shows what is behind
     /// the window — which is the whole reason the bar is glass.
     private static let strength: Double = 0.55
+
+    /// How wide the strip comes out once it is fitted to the bar's height. See
+    /// `SidebarNameplate.artWidth` for why the box is reserved rather than
+    /// taken from the picture.
+    private static var artWidth: CGFloat {
+        (Metrics.nowBarHeight * Nameplate.artworkAspect).rounded()
+    }
 
     var body: some View {
         ZStack(alignment: .trailing) {
@@ -300,11 +327,13 @@ private struct NowBarPlate: View {
             // is the measured rule — see `MemberRowGeometry.nameplateArtRect`.
             // Aspect-*fill* lands on the width for a wide plate and stretches
             // the strip vertically.
-            RemoteImage(url: url, side: Metrics.nowBarHeight, bucket: .artwork) {
-                Color.clear
-            }
-            .aspectRatio(contentMode: .fit)
-            .frame(height: Metrics.nowBarHeight)
+            NameplateArtwork(
+                still: still,
+                animated: animated,
+                width: Self.artWidth,
+                isAnimating: isAnimating
+            )
+            .frame(width: Self.artWidth, height: Metrics.nowBarHeight)
         }
         .opacity(Self.strength)
         .accessibilityHidden(true)

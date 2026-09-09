@@ -59,6 +59,11 @@ struct SearchPane: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .animation(motion.standard, value: search?.totalResults)
         .animation(motion.standard, value: search?.currentPage)
+        // Escape, when the reader is in the results rather than in the field.
+        // `onExitCommand` rather than a key equivalent: it travels the responder
+        // chain from whatever has focus, so the composer and the quick switcher
+        // keep their own Escape and this one never fires over them.
+        .onExitCommand { model.closeSearch() }
         // **The painter only peeks the image caches**, so the pictures these
         // cards draw have to be fetched by somebody. One pass per page, behind
         // the scroll gate — exactly as the pinned pane does.
@@ -92,6 +97,14 @@ struct SearchPane: View {
                     order: search.order,
                     choose: { model.setSearchSort($0, order: $1) }
                 )
+
+                // **The panel's only visible way out.** Everything else here is
+                // opened from a control that can be pressed again to close it;
+                // this one is raised by typing in a toolbar field, so without
+                // this the column is a one-way door — which is exactly how it
+                // read. Escape reaches it two other ways: clearing the field,
+                // and `onExitCommand` below when the focus is in the list.
+                SearchCloseButton { model.closeSearch() }
             }
 
             // Said out loud rather than left to look like a thin server: the
@@ -542,6 +555,26 @@ private struct SearchPageJump: View {
 // MARK: - Filters
 
 /// The control that opens the sheet, with its badge.
+/// Closes the panel.
+///
+/// The same weight as the two controls beside it — a header control, not a
+/// window chrome button — because it is one of three things the reader can do to
+/// a list of results and not a decoration on the column.
+private struct SearchCloseButton: View {
+    var close: () -> Void
+
+    var body: some View {
+        Button(action: close) {
+            Image(systemName: "xmark")
+                .font(.system(.caption, weight: .semibold))
+                .foregroundStyle(Ink.secondary)
+                .contentShape(.rect)
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(Text("Close search"))
+    }
+}
+
 private struct SearchFiltersButton: View {
     var count: Int
     var open: () -> Void

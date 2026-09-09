@@ -37,20 +37,27 @@ extension AppModel {
         sessionController.cancelSearch()
     }
 
-    /// Keeps the panel pointed at what the reader is looking at.
+    /// Closes the panel when the reader leaves what it was searching.
     ///
-    /// **Called when the selected server changes, not the channel.** Moving
-    /// between channels inside a server must leave the results alone — that is
-    /// the whole point of clicking a result — but a panel still showing another
-    /// server's hits after the rail moved is a list about somewhere else.
+    /// **The scope, not the channel** — and that distinction is the whole of it.
+    /// Inside a server the scope is the *server*, so clicking a result and
+    /// landing in another channel leaves the results exactly where they are,
+    /// which is the one thing this panel exists not to break. At Home there is
+    /// no server and the scope is the conversation, so opening a different
+    /// direct message leaves the search behind and the column goes with it.
+    ///
+    /// **It closes rather than re-points.** It used to build a fresh state for
+    /// the new scope, which discarded the results and cancelled the request
+    /// anyway — so all that survived was an empty three-hundred-point column
+    /// asking the reader to type, in a place they had just navigated to for
+    /// some other reason. Nobody moves the rail in order to search the server
+    /// they are arriving at.
     func searchScopeDidChange() {
-        guard let state = messageSearch, let scope = searchScope else {
-            if messageSearch != nil { closeSearch() }
+        guard let state = messageSearch else { return }
+        guard state.scope == searchScope else {
+            closeSearch()
             return
         }
-        guard state.scope != scope else { return }
-        messageSearch = MessageSearchState(scope: scope)
-        sessionController.cancelSearch()
     }
 
     // MARK: Editing

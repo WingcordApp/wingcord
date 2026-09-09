@@ -175,6 +175,8 @@ struct SidebarChannel: Hashable, Sendable, Identifiable {
     var tagBadgeURL: URL?
     /// The nameplate they wear, and the wash that grounds it.
     var nameplateURL: URL?
+    /// The same artwork moving, played under the pointer.
+    var nameplateAnimatedURL: URL?
     var nameplatePalette: NameplatePalette = .none
     /// The face and effect they chose for their name. Nil is nearly everybody
     /// and costs nothing — see `StyledDisplayName`.
@@ -279,6 +281,8 @@ struct NowBarPresentation: Hashable, Sendable {
     /// grounds it — see `Nameplate` — and drawing only the strip reads as a
     /// picture floating beside a name rather than as a plate behind it.
     var nameplateURL: URL?
+    /// The same artwork moving, played under the pointer.
+    var nameplateAnimatedURL: URL?
     var nameplatePalette: NameplatePalette = .none
 }
 

@@ -45,6 +45,11 @@ nonisolated enum MemberRowPainter {
     ///   `nonisolated` so a draw cannot reach into the model, which is the rule
     ///   `INVARIANTS.md` §4.5 is written around. Nil is the ordinary case and
     ///   means the app's own face.
+    /// - Parameter plateFrame: one frame of the plate's moving form, when this
+    ///   row is the one playing it. **Resolved by the caller** for the same
+    ///   reason `nameFace` is: the filmstrip lives behind a main-actor clock and
+    ///   this painter is deliberately `nonisolated`. Nil is every row but one,
+    ///   and means the still.
     static func drawMember(
         _ entry: MemberEntry,
         in rowFrame: CGRect,
@@ -53,7 +58,8 @@ nonisolated enum MemberRowPainter {
         isHovered: Bool,
         images: ImageStore,
         scale: CGFloat,
-        nameFace: NSFont? = nil
+        nameFace: NSFont? = nil,
+        plateFrame: CGImage? = nil
     ) {
         let plate = MemberRowGeometry.plateRect(in: rowFrame)
         let plateShape = CGPath(
@@ -71,7 +77,8 @@ nonisolated enum MemberRowPainter {
             context: context,
             isHovered: isHovered,
             images: images,
-            scale: scale
+            scale: scale,
+            plateFrame: plateFrame
         )
 
         // 2. Avatar and presence.
@@ -291,17 +298,28 @@ nonisolated enum MemberRowPainter {
         context: CGContext,
         isHovered: Bool,
         images: ImageStore,
-        scale: CGFloat
+        scale: CGFloat,
+        plateFrame: CGImage?
     ) {
-        if let url = entry.nameplateURL,
-           let image = images.cached(
-               ImageStore.Key(
-                   url: url,
-                   maximumPixelSize: Int((MemberRowGeometry.nameplateWidth * scale).rounded(.up))
-               ),
-               bucket: .artwork
-           )
-        {
+        // **The moving frame stands in for the still, in the same rectangle.**
+        // Everything below — the wash, the erasing fade, the clip — is one
+        // treatment applied to whichever picture the row has, so a plate cannot
+        // look like two different objects depending on whether it is moving.
+        //
+        // `??` rather than a resolved pair, so the row that IS moving never
+        // pays for the cache lookup it is not going to use.
+        let image = plateFrame ?? entry.nameplateURL.flatMap { url in
+            images.cached(
+                ImageStore.Key(
+                    url: url,
+                    maximumPixelSize: Int(
+                        (MemberRowGeometry.nameplateArtWidth * scale).rounded(.up)
+                    )
+                ),
+                bucket: .artwork
+            )
+        }
+        if let image {
             // One clip for all three layers. The plate used to save, clip, draw
             // and restore twice over, which is four state operations a row for
             // the same region.

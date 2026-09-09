@@ -388,10 +388,13 @@ struct DisplayNameStyleSheet: View {
         .frame(height: 46)
         .background {
             if let plate = profile.nameplate {
-                RemoteImage(url: plate.artworkURL, side: 320, bucket: .artwork) {
-                    Color.clear
-                }
-                .aspectRatio(contentMode: .fill)
+                NameplateArtwork(
+                    still: plate.artworkURL,
+                    animated: plate.animatedArtworkURL,
+                    width: 320,
+                    contentMode: .fill,
+                    isAnimating: true
+                )
             } else {
                 ink.message
             }

@@ -16,6 +16,8 @@ struct MemberListView: NSViewRepresentable {
     var openProfile: (UserID, CGRect) -> Void = { _, _ in }
     var openMenu: (UserID, CGRect) -> Void = { _, _ in }
 
+    @Environment(\.motion) private var motion
+
     func makeCoordinator() -> MemberListCoordinator {
         MemberListCoordinator()
     }
@@ -27,6 +29,9 @@ struct MemberListView: NSViewRepresentable {
     func updateNSView(_ scrollView: NSScrollView, context: Context) {
         context.coordinator.openProfile = openProfile
         context.coordinator.openMenu = openMenu
+        // The one environment value a drawn canvas cannot read for itself. See
+        // `MemberListCanvas.animatesPlate`.
+        context.coordinator.setAnimatesPlate(!motion.reduceMotion)
         context.coordinator.update(
             sections: sections,
             presentationRevision: presentationRevision,
@@ -72,6 +77,24 @@ final class MemberListCoordinator: NSObject {
         }
         canvas.onWidthChange = { [weak self] _ in
             self?.applyRows()
+        }
+        // **What puts a picture back after the cache dropped it.**
+        //
+        // The painter only ever *peeks* at the image caches — it cannot start a
+        // fetch from inside a draw — so an asset nobody prefetches is an asset
+        // that never arrives. Prefetching ran on the viewport moving and on the
+        // roster being rebuilt, and neither happens while somebody is reading a
+        // settled list: `update(sections:)` returns early when the sections are
+        // unchanged, so an `NSCache` that evicted a nameplate left the plate
+        // blank until the next scroll.
+        //
+        // Hovering is what made that visible, and not by coincidence — it is
+        // the one thing in this list that allocates megabytes, because it
+        // decodes a filmstrip. The pointer crossing a row is also the cheapest
+        // honest moment to re-check: the walk below finds every key already
+        // cached and stops without starting anything.
+        canvas.onHoveredRowChange = { [weak self] in
+            self?.schedulePrefetch()
         }
 
         let document = TimelineDocumentView(frame: .zero)
@@ -150,6 +173,10 @@ final class MemberListCoordinator: NSObject {
         }
     }
 
+    func setAnimatesPlate(_ animates: Bool) {
+        canvas?.animatesPlate = animates
+    }
+
     func tearDown() {
         guard !isTornDown else { return }
         isTornDown = true
@@ -165,9 +192,11 @@ final class MemberListCoordinator: NSObject {
         frameObserver = nil
         scrollBeganObserver = nil
         scrollEndedObserver = nil
+        canvas?.tearDown()
         canvas?.onOpenProfile = nil
         canvas?.onOpenMenu = nil
         canvas?.onWidthChange = nil
+        canvas?.onHoveredRowChange = nil
         canvas = nil
         chrome?.tearDown()
         chrome = nil
@@ -286,8 +315,6 @@ final class MemberListCoordinator: NSObject {
     /// change and behind the scroll gate.
     private func schedulePrefetch() {
         guard !isTornDown, let canvas else { return }
-        prefetchTask?.cancel()
-
         let scale = canvas.window?.backingScaleFactor ?? 2
         var requests: [(ImageStore.Key, ImageStore.Bucket)] = []
         var seen = Set<ImageStore.Key>()
@@ -323,7 +350,7 @@ final class MemberListCoordinator: NSObject {
                 let key = ImageStore.Key(
                     url: url,
                     maximumPixelSize: Int(
-                        (MemberRowGeometry.nameplateWidth * scale).rounded(.up)
+                        (MemberRowGeometry.nameplateArtWidth * scale).rounded(.up)
                     )
                 )
                 if seen.insert(key).inserted,
@@ -333,7 +360,12 @@ final class MemberListCoordinator: NSObject {
                 }
             }
         }
+        // **Cancelled only when there is something new to ask for.** This runs
+        // on every viewport change and on every row the pointer crosses, and a
+        // cancel at the top would let a sweep down the column repeatedly kill
+        // the batch it had just started.
         guard !requests.isEmpty else { return }
+        prefetchTask?.cancel()
 
         prefetchTask = Task { [weak self] in
             await ScrollWorkGate.waitUntilInactive()

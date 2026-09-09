@@ -103,11 +103,12 @@ nonisolated final class AnimatedImageStore: @unchecked Sendable {
         await gate.run {
             do {
                 let data = try await ImageStore.shared.data(for: key.url)
-                // Lottie is the one asset `CGImageSource` cannot open: it is
-                // vector JSON, not a container of bitmaps, so it is rasterised
-                // into the same filmstrip shape instead. Everything past this
-                // point — the cache, the cost, the clock, the draw — is
-                // identical for all three kinds.
+                // Two assets `CGImageSource` cannot open, and each has its own
+                // way in: Lottie is vector JSON rather than a container of
+                // bitmaps, and a WebM is a container ImageIO has never read.
+                // Both are turned into the same filmstrip shape instead, so
+                // everything past this point — the cache, the cost, the clock,
+                // the draw — is identical for all four kinds.
                 let decoded: AnimatedImage?
                 if LottieFilmstrip.handles(key.url) {
                     // On the main actor by necessity — see `LottieFilmstrip` —
@@ -115,6 +116,12 @@ nonisolated final class AnimatedImageStore: @unchecked Sendable {
                     // frames.
                     decoded = await LottieFilmstrip.decode(
                         data, maximumPixelSize: key.maximumPixelSize
+                    )
+                } else if WebMFilmstrip.handles(key.url) {
+                    decoded = WebMFilmstrip.decode(
+                        data,
+                        maximumPixelSize: key.maximumPixelSize,
+                        byteBudget: key.byteBudget
                     )
                 } else {
                     decoded = AnimatedImage.decode(
@@ -133,6 +140,15 @@ nonisolated final class AnimatedImageStore: @unchecked Sendable {
                 cache.setObject(Box(decoded), forKey: key.cacheKey, cost: decoded.cost)
                 return decoded
             } catch {
+                // **A 4xx is remembered and a dropped connection is not.** Not
+                // every asset has an animated form — an older nameplate answers
+                // 404 for its `.webm` — and without this the same missing file
+                // is fetched again on every hover, forever. A transient failure
+                // must stay retryable, so only an answer the server will keep
+                // giving counts as "this is a still".
+                if case ImageStore.Failure.status(let code) = error, (400..<500).contains(code) {
+                    stills.withLock { _ = $0.insert(key) }
+                }
                 Self.log.debug(
                     "animated load failed: \(key.url.absoluteString, privacy: .public)"
                 )

@@ -533,10 +533,18 @@ private struct NameplateEditTile: View {
             // `ZStack` grew past the tile and the outer frame then centred it —
             // which cut the avatar in half at the leading edge. Sizing and
             // clipping here means what the stack sees is already the tile.
-            RemoteImage(url: plate.artworkURL, side: width, bucket: .artwork) {
+            NameplateArtwork(
+                still: plate.artworkURL,
+                animated: plate.animatedArtworkURL,
+                width: width,
+                contentMode: .fill,
+                // The same hover this tile already cross-fades on: the moment
+                // the reader looks at the plate is the moment the identity
+                // layer comes up over it.
+                isAnimating: isHovering
+            ) {
                 Rectangle().fill(Palette.skeletonPlate)
             }
-            .aspectRatio(contentMode: .fill)
             .frame(width: width, height: Self.height)
             .clipped()
         } else {

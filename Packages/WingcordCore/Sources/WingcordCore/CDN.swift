@@ -213,14 +213,32 @@ public enum CDN {
     /// `static.png` answers 200 and `asset.png`, `static.webp` and
     /// `animated.gif` all 404.
     ///
-    /// **The animated form is deliberately not offered.** It exists, at
-    /// `asset.webm`, and it is VP9-with-alpha in a WebM container — which
-    /// AVFoundation cannot demux on any Apple platform. Reaching it would mean
-    /// a hand-written demuxer plus a frame clock per visible roster row, and
-    /// the still is what this client draws.
+    /// The poster, and the frame a plate rests on. `animatedNameplate(asset:)`
+    /// is the same artwork moving.
     public static func nameplate(asset: String) -> URL? {
         guard !asset.isEmpty else { return nil }
         return URL(string: "\(host)/assets/collectibles/\(asset)static.png")
+    }
+
+    /// The moving form of the same strip.
+    ///
+    /// **`asset.webm`, and it is VP9 with alpha in a WebM container** — which
+    /// neither AVFoundation nor `CGImageSource` can open on any Apple platform.
+    /// It is reachable because this client demuxes it: `WebMDemuxer` finds the
+    /// frames, `VP9Decoder` puts them through VideoToolbox's VP9 decoder, and
+    /// the alpha arrives as a second VP9 bitstream beside each one. The result
+    /// is the same filmstrip a GIF becomes.
+    ///
+    /// Confirmed live alongside the negatives already recorded for the still:
+    /// `animated.gif`, `asset.png` and `static.webp` all 404, and this answers
+    /// 200 with `video/webm`. No size rung — the route serves one authored
+    /// 672x126 rendition and ignores a `size` query, exactly as the still does.
+    ///
+    /// **Not every plate has one.** A nameplate whose `.webm` 404s is a still,
+    /// and `AnimatedImageStore` records that answer rather than asking again.
+    public static func animatedNameplate(asset: String) -> URL? {
+        guard !asset.isEmpty else { return nil }
+        return URL(string: "\(host)/assets/collectibles/\(asset)asset.webm")
     }
 
     /// One layer of a profile frame.

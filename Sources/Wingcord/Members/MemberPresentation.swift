@@ -57,6 +57,9 @@ struct MemberEntry: Hashable, Sendable, Identifiable {
     var tagBadgeURL: URL?
     /// Full-row artwork drawn behind everything else.
     var nameplateURL: URL?
+    /// The same artwork moving, played on the row under the pointer and on no
+    /// other. See `MemberListCanvas` for the clock that drives it.
+    var nameplateAnimatedURL: URL?
     /// The colour that artwork names itself with.
     ///
     /// Carried as the palette rather than as a resolved colour so the painter
@@ -187,12 +190,20 @@ nonisolated enum MemberRowGeometry {
         )
     }
 
-    /// The width nameplate art is fetched at.
+    /// The width nameplate art is fetched and drawn at, in points.
     ///
-    /// A plate spans the whole row, so this is a row's width rather than an
-    /// avatar's. Asking for an avatar-sized rendition of a 672px strip and then
-    /// aspect-filling it across the column is how a plate ends up visibly soft.
-    static let nameplateWidth: CGFloat = 400
+    /// **The strip's width at the plate's height**, which is the only number
+    /// that is right: a plate is fitted to its HEIGHT and hung off its trailing
+    /// edge — see `nameplateArtRect` for the measurement that settled it — so
+    /// the strip comes out five and a third times the plate's height and never
+    /// the row's width.
+    ///
+    /// This used to be a flat 400, a row's width, and it over-fetched by 70%:
+    /// the still was decoded at the source's full 672 pixels for a picture
+    /// drawn at 470. It matters more now than it did, because the moving form
+    /// is thirty-nine of those.
+    static let nameplateArtWidth: CGFloat = ((rowHeight - 2) * Nameplate.artworkAspect)
+        .rounded()
 }
 
 /// One flattened row of the member list.

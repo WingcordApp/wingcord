@@ -1,3 +1,4 @@
+import CoreGraphics
 import Foundation
 
 /// The colour a nameplate names itself with.
@@ -87,6 +88,30 @@ public struct Nameplate: Hashable, Sendable, Codable {
     /// `CDN.nameplate(asset:)` through two optionals produces a nested one and
     /// then a `?? nil` to unpick it.
     public var artworkURL: URL? { CDN.nameplate(asset: asset) }
+
+    /// The authored proportions of the strip: 672 wide by 126 tall.
+    ///
+    /// **Measured, and it is what fits a plate to a row.** A nameplate is
+    /// always fitted to the plate's HEIGHT and hung off its trailing edge —
+    /// never to its width — so every surface that draws one needs the ratio to
+    /// know how wide the strip comes out, and both stores need it to decode at
+    /// that width rather than at the row's height. See
+    /// `MemberRowGeometry.nameplateArtRect` for the measurement that settled
+    /// the rule.
+    ///
+    /// A strip authored to other proportions is fitted inside the box this
+    /// gives rather than stretched to it, so this is the size a surface
+    /// reserves and not an assumption it draws on.
+    public static let artworkAspect: CGFloat = 672.0 / 126.0
+
+    /// The same strip, moving.
+    ///
+    /// **A second URL rather than a flag on the first**, because the two are
+    /// different assets in different containers decoded by different paths —
+    /// a PNG through ImageIO and a VP9-in-WebM through `WebMFilmstrip` — and
+    /// they are held in different caches at different sizes. A surface draws
+    /// the still and, where it has somewhere to put motion, plays this over it.
+    public var animatedArtworkURL: URL? { CDN.animatedNameplate(asset: asset) }
 
     public init(
         asset: String,

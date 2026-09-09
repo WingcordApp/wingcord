@@ -86,8 +86,18 @@ struct SidebarChannelRow: View {
                 // pill would cover the one thing that says which conversation is
                 // open.
                 if let url = channel.nameplateURL, isPlateShown {
-                    SidebarNameplate(url: url, palette: channel.nameplatePalette)
-                        .transition(.opacity)
+                    SidebarNameplate(
+                        still: url,
+                        animated: channel.nameplateAnimatedURL,
+                        palette: channel.nameplatePalette,
+                        // **It moves under the pointer and stands still while
+                        // the conversation is merely open.** A selected plate
+                        // is shown because it says whose conversation this is;
+                        // one looping for as long as a DM is read is a moving
+                        // picture behind text nobody asked to have moving.
+                        isAnimating: isHovering
+                    )
+                    .transition(.opacity)
                 }
 
                 RoundedRectangle(cornerRadius: Radius.row, style: .continuous)
@@ -287,8 +297,20 @@ private struct SidebarInlineEmoji: View {
 /// and the artwork is faded *out* rather than painted over. A scrim is a colour,
 /// and a colour can only be the row's own by accident.
 private struct SidebarNameplate: View {
-    var url: URL
+    var still: URL
+    var animated: URL?
     var palette: NameplatePalette
+    var isAnimating: Bool
+
+    /// How wide the strip comes out once it is fitted to the row's height.
+    ///
+    /// **Reserved rather than inferred from the picture.** The box has to be
+    /// this size before the artwork lands, or the strip is centred across the
+    /// whole row for as long as the fetch takes and then jumps to the trailing
+    /// edge when it arrives.
+    private static var artWidth: CGFloat {
+        (Metrics.directMessageRowHeight * Nameplate.artworkAspect).rounded()
+    }
 
     var body: some View {
         ZStack(alignment: .trailing) {
@@ -305,11 +327,13 @@ private struct SidebarNameplate: View {
             }
             // Fitted to the row's HEIGHT and hung off its trailing edge, which
             // is the measured rule — `MemberRowGeometry.nameplateArtRect`.
-            RemoteImage(url: url, side: Metrics.directMessageRowHeight, bucket: .artwork) {
-                Color.clear
-            }
-            .aspectRatio(contentMode: .fit)
-            .frame(height: Metrics.directMessageRowHeight)
+            NameplateArtwork(
+                still: still,
+                animated: animated,
+                width: Self.artWidth,
+                isAnimating: isAnimating
+            )
+            .frame(width: Self.artWidth, height: Metrics.directMessageRowHeight)
             .mask {
                 // Erasing rather than painting: what shows through the leading
                 // half is the row's own background, whatever that happens to be.

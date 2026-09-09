@@ -165,6 +165,9 @@ extension AppModel {
             nameplateURL: AppSettings.shared.showsNameplateInNowBar
                 ? user?.decoration?.nameplate?.artworkURL
                 : nil,
+            nameplateAnimatedURL: AppSettings.shared.showsNameplateInNowBar
+                ? user?.decoration?.nameplate?.animatedArtworkURL
+                : nil,
             nameplatePalette: user?.decoration?.nameplate?.palette ?? .none
         )
     }
@@ -480,6 +483,7 @@ extension AppModel {
                     return CDN.guildTagBadge(guildID: guildID, hash: hash)
                 },
                 nameplateURL: decoration?.nameplate?.artworkURL,
+                nameplateAnimatedURL: decoration?.nameplate?.animatedArtworkURL,
                 nameplatePalette: decoration?.nameplate?.palette ?? .none,
                 nameStyle: decoration?.displayNameStyle,
                 nameColorValue: nil
@@ -747,10 +751,8 @@ extension AppModel {
         } else {
             selectedChannelID = channelIndex.privateChannelIDs().first
         }
-        // **The panel follows the rail, not the channel list.** Moving between
-        // channels inside a server must leave the results alone — that is the
-        // whole point of clicking one — but a panel still showing another
-        // server's hits after the rail moved is a list about somewhere else.
+        // A panel still showing another server's hits after the rail moved is a
+        // list about somewhere else. See `searchScopeDidChange`.
         searchScopeDidChange()
     }
 
@@ -771,6 +773,12 @@ extension AppModel {
         AppSettings.shared.rememberConversation(
             guildID: guildID?.rawValue, channelID: channelID.rawValue
         )
+        // **A no-op inside a server, and the close at Home.** A guild search is
+        // scoped to the guild, so clicking a result and landing in another
+        // channel changes nothing here — which is what keeps the results up.
+        // At Home the conversation IS the scope, so opening a different direct
+        // message leaves that search behind. See `searchScopeDidChange`.
+        searchScopeDidChange()
     }
 
     private func firstReadableChannel(inGuild guildID: GuildID) -> ChannelID? {

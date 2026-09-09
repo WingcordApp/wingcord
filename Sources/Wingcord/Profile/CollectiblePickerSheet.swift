@@ -281,27 +281,7 @@ struct CollectiblePickerSheet: View {
     private func artwork(for item: OwnedCollectible) -> some View {
         switch item.kind {
         case .nameplate:
-            // The whole strip, with the name over it — which is what a nameplate
-            // is. `.fill` inside a short box crops it to a smear of whatever
-            // happens to be in the middle.
-            ZStack(alignment: .leading) {
-                RemoteImage(
-                    url: CDN.nameplate(asset: item.asset),
-                    side: 320,
-                    bucket: .artwork
-                ) {
-                    Rectangle().fill(Palette.skeletonPlate)
-                }
-                .aspectRatio(contentMode: .fill)
-                Text(item.name)
-                    .font(.system(.subheadline, weight: .semibold))
-                    .foregroundStyle(.white)
-                    .shadow(color: .black.opacity(0.55), radius: 3)
-                    .padding(.leading, Spacing.snug)
-            }
-            .frame(maxWidth: .infinity)
-            .frame(height: 42)
-            .clipShape(.rect(cornerRadius: Radius.chip, style: .continuous))
+            PickerNameplate(item: item)
         case .avatarDecoration:
             RemoteImage(
                 url: CDN.avatarDecoration(hash: item.asset),
@@ -333,6 +313,52 @@ struct CollectiblePickerSheet: View {
 }
 
 /// One selectable square in the grid.
+/// One nameplate in the grid.
+///
+/// **Its own view because it has its own hover.** A grid of plates all looping
+/// at once is a page that never settles and a filmstrip resident for every one
+/// of them; the plate under the pointer is the one being considered. `PickerTile`
+/// is shared with three other collectible kinds and none of them has anything to
+/// play, so the state belongs here rather than in the tile.
+private struct PickerNameplate: View {
+    var item: OwnedCollectible
+
+    @State private var isHovering = false
+
+    /// The width the grid gives a strip. Wider than the sheet's 360 so the
+    /// artwork stays sharp at the tile's full bleed.
+    private static let width: CGFloat = 320
+
+    var body: some View {
+        // The whole strip, with the name over it — which is what a nameplate
+        // is. `.fill` inside a short box crops it to a smear of whatever
+        // happens to be in the middle.
+        ZStack(alignment: .leading) {
+            NameplateArtwork(
+                still: CDN.nameplate(asset: item.asset),
+                animated: CDN.animatedNameplate(asset: item.asset),
+                width: Self.width,
+                contentMode: .fill,
+                isAnimating: isHovering
+            ) {
+                Rectangle().fill(Palette.skeletonPlate)
+            }
+            Text(item.name)
+                .font(.system(.subheadline, weight: .semibold))
+                .foregroundStyle(.white)
+                .shadow(color: .black.opacity(0.55), radius: 3)
+                .padding(.leading, Spacing.snug)
+        }
+        .frame(maxWidth: .infinity)
+        .frame(height: 42)
+        .clipShape(.rect(cornerRadius: Radius.chip, style: .continuous))
+        .onHover { hovering in
+            guard isHovering != hovering else { return }
+            isHovering = hovering
+        }
+    }
+}
+
 private struct PickerTile<Content: View>: View {
     var isSelected: Bool
     /// A strip fills its row and sets its own height; a square is a fixed box.

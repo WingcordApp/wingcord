@@ -28,8 +28,28 @@ final class MemberListCanvas: NSView {
             let previous = hoveredRow
             hoveredRow = nil
             invalidateRow(previous)
+            updatePlatePlayback()
         }
     }
+
+    /// Whether a nameplate is allowed to move.
+    ///
+    /// Reduce Motion parks it on the still, which is the loop's own first frame
+    /// — the preference is about movement, and the plate is part of somebody's
+    /// identity rather than decoration the app chose to add.
+    var animatesPlate = true {
+        didSet {
+            guard animatesPlate != oldValue else { return }
+            updatePlatePlayback()
+        }
+    }
+
+    /// The pointer moved to a different row.
+    ///
+    /// The coordinator re-checks what the visible rows need when this fires —
+    /// see `MemberListView`, which explains why a settled list otherwise has no
+    /// moment at which a dropped picture can come back.
+    var onHoveredRowChange: (() -> Void)?
 
     var onOpenProfile: ((UserID, CGRect) -> Void)?
     /// A right-click on a person. Raises the actions rather than the card.
@@ -54,6 +74,26 @@ final class MemberListCanvas: NSView {
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError("not supported") }
 
+    deinit {
+        // **Not belt and braces.** The clock holds the subscription, not this
+        // view — its closure keeps only a weak reference — so a canvas released
+        // without `tearDown` leaves an entry the clock can never drop, and its
+        // display link then runs at twenty-four frames a second for the life of
+        // the process with nobody to call.
+        MainActor.assumeIsolated { AnimationClock.shared.unsubscribe(playToken) }
+    }
+
+    /// Releases the clock and anything in flight. Called by the coordinator that
+    /// owns this view; `deinit` covers the case where nobody does.
+    func tearDown() {
+        onHoveredRowChange = nil
+        plateTask?.cancel()
+        plateTask = nil
+        plateFilm = nil
+        plateKey = nil
+        unsubscribeFromClock()
+    }
+
     override var isFlipped: Bool { true }
     override var isOpaque: Bool { false }
 
@@ -69,6 +109,10 @@ final class MemberListCanvas: NSView {
             offsets.append(running)
         }
         if let hoveredRow, hoveredRow >= rows.count { self.hoveredRow = nil }
+        // The row under the pointer may now be a different person — a presence
+        // flush re-runs this list — so the film has to be re-resolved rather
+        // than left playing on whoever moved into that slot.
+        updatePlatePlayback()
         needsDisplay = true
         return running
     }
@@ -165,12 +209,135 @@ final class MemberListCanvas: NSView {
                         // row that asks for a given face.
                         nameFace: entry.displayNameFont.flatMap {
                             DisplayNameFontRegistry.font($0, size: style.bodyFont.pointSize)
-                        }
+                        },
+                        plateFrame: plateImage(forRow: index)
                     )
                 }
             }
             index += 1
         }
+    }
+
+    // MARK: The plate under the pointer
+
+    // **One plate moves, and it is the one somebody is looking at.** Every
+    // plated row draws its still; the row under the pointer draws a frame of
+    // the loop instead. A roster of forty decorated members playing at once
+    // would be forty filmstrips resident — half a gigabyte at twelve megabytes
+    // each — and a column of moving pictures where a list of people should be.
+    //
+    // The cost of the one that does play is a **row-sized invalidation per
+    // changed frame**: `draw(_:)` already skips every row outside the dirty
+    // rect, so a tick repaints one 235x44 rectangle rather than the column.
+    // Nothing repaints at all on the ticks that resolve to the frame already on
+    // screen, which at twenty-four ticks over a twelve-frame-a-second asset is
+    // half of them.
+
+    /// The filmstrip playing on the hovered row.
+    private var plateFilm: AnimatedImage?
+    /// The slot that film came from. **The identity, not a flag**: a load that
+    /// lands after the pointer has moved on belongs to a row that is no longer
+    /// there, and drawing it would put one person's plate behind another's name.
+    private var plateKey: AnimatedImageStore.Key?
+    /// Which frame is on screen, so a tick that resolves to it costs nothing.
+    private var plateFrame = -1
+    private var plateTask: Task<Void, Never>?
+    private var isPlateSubscribed = false
+
+    /// This view's identity in the shared clock.
+    private var playToken: ObjectIdentifier { ObjectIdentifier(self) }
+
+    /// One frame of the moving plate, for the row that has it.
+    private func plateImage(forRow index: Int) -> CGImage? {
+        guard index == hoveredRow, !isScrolling, let plateFilm,
+              plateFilm.frames.indices.contains(plateFrame)
+        else { return nil }
+        return plateFilm.frames[plateFrame]
+    }
+
+    /// Brings the film in step with whatever the pointer is on.
+    ///
+    /// **Reconciles a key rather than reacting to an event**, so the four things
+    /// that change what should be playing — the pointer moving, a scroll
+    /// starting, the roster being rebuilt under the pointer, and Reduce Motion —
+    /// all funnel through one decision and none of them can leave the previous
+    /// person's plate running.
+    private func updatePlatePlayback() {
+        let wanted: AnimatedImageStore.Key? = {
+            guard animatesPlate, !isScrolling, let index = hoveredRow,
+                  rows.indices.contains(index),
+                  case .member(let entry) = rows[index],
+                  let url = entry.nameplateAnimatedURL
+            else { return nil }
+            return NameplateFilm.key(
+                url: url,
+                width: MemberRowGeometry.nameplateArtWidth,
+                scale: window?.backingScaleFactor ?? 2
+            )
+        }()
+        guard wanted != plateKey else { return }
+
+        plateTask?.cancel()
+        plateTask = nil
+        // A row that had a frame up has to be told to draw its still again.
+        // Three of the four callers invalidate anyway — the pointer moving
+        // repaints both rows, a scroll and a rebuild repaint everything — but
+        // Reduce Motion coming on mid-hover changes nothing else, and without
+        // this the plate would stay frozen on whichever frame it stopped at.
+        let hadFilm = plateFilm != nil
+        plateFilm = nil
+        plateFrame = -1
+        plateKey = wanted
+        if hadFilm { invalidateRow(hoveredRow) }
+
+        guard let wanted else {
+            unsubscribeFromClock()
+            return
+        }
+        // A cached filmstrip starts on this frame rather than after a hop, so a
+        // pointer sweeping back over a row it has already visited does not
+        // flicker through the still on the way.
+        if let hit = AnimatedImageStore.shared.cached(wanted) {
+            install(hit, for: wanted)
+            return
+        }
+        unsubscribeFromClock()
+        // A plate with no animated form is remembered as a still by the store,
+        // so this asks once and never again.
+        guard !AnimatedImageStore.shared.isKnownStill(wanted) else { return }
+        plateTask = Task { [weak self] in
+            let film = await AnimatedImageStore.shared.image(for: wanted)
+            guard let self, !Task.isCancelled else { return }
+            self.install(film, for: wanted)
+        }
+    }
+
+    private func install(_ film: AnimatedImage?, for key: AnimatedImageStore.Key) {
+        guard plateKey == key, let film, film.frameCount > 1 else { return }
+        plateFilm = film
+        // In step with every other animation on screen, because they all read
+        // the same timestamp.
+        plateFrame = film.index(at: AnimationClock.shared.time)
+        subscribeToClock()
+        invalidateRow(hoveredRow)
+    }
+
+    private func subscribeToClock() {
+        guard !isPlateSubscribed else { return }
+        isPlateSubscribed = true
+        AnimationClock.shared.subscribe(playToken) { [weak self] in
+            guard let self, let plateFilm = self.plateFilm else { return }
+            let index = plateFilm.index(at: AnimationClock.shared.time)
+            guard index != self.plateFrame else { return }
+            self.plateFrame = index
+            self.invalidateRow(self.hoveredRow)
+        }
+    }
+
+    private func unsubscribeFromClock() {
+        guard isPlateSubscribed else { return }
+        isPlateSubscribed = false
+        AnimationClock.shared.unsubscribe(playToken)
     }
 
     // MARK: Pointer
@@ -198,6 +365,8 @@ final class MemberListCanvas: NSView {
         hoveredRow = hoverable
         invalidateRow(previous)
         invalidateRow(hoverable)
+        updatePlatePlayback()
+        onHoveredRowChange?()
     }
 
     override func mouseExited(with event: NSEvent) {
@@ -205,6 +374,11 @@ final class MemberListCanvas: NSView {
         let previous = hoveredRow
         hoveredRow = nil
         invalidateRow(previous)
+        updatePlatePlayback()
+        // Leaving the column counts: the filmstrip that just finished decoding
+        // is the allocation most likely to have cost the list its pictures, and
+        // the pointer going away is the last moment anything asks.
+        onHoveredRowChange?()
     }
 
     override func mouseDown(with event: NSEvent) {
