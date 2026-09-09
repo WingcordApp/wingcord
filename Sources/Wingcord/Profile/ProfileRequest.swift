@@ -47,6 +47,17 @@ struct ProfilePresentation: Equatable, Sendable {
     var avatarURL: URL?
     var monogram: String
     var decorationURL: URL?
+    /// The product the avatar decoration came from. The URL above draws it;
+    /// this is what says which one is worn — see `Nameplate.skuID` for the same
+    /// distinction.
+    var avatarDecorationSKU: String?
+    /// The nameplate they wear, whole rather than as a URL.
+    ///
+    /// **The editor needs the sku, not the picture.** A row that only draws one
+    /// can take `artworkURL` and stop; the rail's tile has to say which product
+    /// is current so the picker can mark it, and it has to be able to send that
+    /// sku back.
+    var nameplate: Nameplate?
     var bannerURL: URL?
     /// The profile accent. Nil and zero are different states — zero is a
     /// deliberate black accent — so this stays optional all the way down.

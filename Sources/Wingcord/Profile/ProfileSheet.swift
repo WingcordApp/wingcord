@@ -30,6 +30,15 @@ struct ProfileSheet: View {
     /// The most room the window can spare. The sheet takes the width and as
     /// much of the height as its content actually needs.
     var maximumSize: CGSize
+    /// Non-nil while the reader is editing their own profile. The sheet is the
+    /// preview *and* the surface — see `ProfileEditRail` — so there is no second
+    /// view for edit mode, only a rail beside this one and fields in place of
+    /// some of its labels.
+    var editor: ProfileEditor?
+    var beginEditing: () -> Void
+    var endEditing: () -> Void
+    var saveEdits: () -> Void
+    var presentPicker: (ProfileEditPicker) -> Void
     var dismiss: () -> Void
 
     @Environment(AppModel.self) private var model
@@ -41,17 +50,41 @@ struct ProfileSheet: View {
     /// own banner and avatar stop having room to be a portrait at all.
     private static let minimumHeight: CGFloat = 420
 
+    /// **What every part of this sheet draws from.** While the editor is open
+    /// it is the draft applied to the profile, so a picked avatar, a typed
+    /// pronoun or a chosen nameplate is on screen before anything is saved —
+    /// see `ProfileEditor.applied(to:)`.
+    private var shown: ProfilePresentation {
+        editor?.applied(to: profile) ?? profile
+    }
+
     private var ground: ProfileGround {
-        ProfileGround(themeColorValues: profile.themeColorValues, isDerived: profile.isThemeDerived)
+        ProfileGround(themeColorValues: shown.themeColorValues, isDerived: shown.isThemeDerived)
     }
 
     var body: some View {
         HStack(alignment: .top, spacing: 0) {
+            if let editor {
+                ProfileEditRail(
+                    editor: editor,
+                    profile: shown,
+                    scopes: [.main],
+                    selectScope: { _ in },
+                    collapse: endEditing,
+                    present: presentPicker
+                )
+                .frame(maxHeight: maximumSize.height)
+                .transition(.move(edge: .leading).combined(with: .opacity))
+            }
+
             ProfileIdentityPanel(
-                profile: profile,
+                profile: shown,
                 ground: ground,
                 openEmoji: { inspectedEmoji = $0 },
-                openLink: { model.openLink($0) }
+                openLink: { model.openLink($0) },
+                editor: editor,
+                tagOptions: tagOptions,
+                present: presentPicker
             )
             .frame(maxHeight: maximumSize.height)
 
@@ -73,12 +106,23 @@ struct ProfileSheet: View {
                 .strokeBorder(ground.borderStyle, lineWidth: ground.borderWidth)
         }
         .shadow(color: .black.opacity(0.5), radius: 40, y: 16)
+        // **Over the sheet's foot, not inside its layout.** A bar that took a
+        // strip out of the stack would resize the profile the instant the first
+        // character was typed — and the profile is the thing being looked at.
+        .overlay(alignment: .bottom) {
+            if let editor, editor.isDirty {
+                ProfileEditBar(editor: editor, save: saveEdits)
+                    .padding(Spacing.margin)
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+            }
+        }
+        .animation(motion.panel, value: editor?.isDirty)
         // **After the shadow, and scoped to the panel.** Applied before it, the
         // overhanging artwork would be shadowed too — a drop shadow under a rose
         // hanging in free space, cast by nothing. Scoped to the panel because
         // that is the box the artwork was authored for; given the sheet's width
         // it is the stage's bug again.
-        .profileFrame(profile.frame, over: ProfileIdentityPanel.width)
+        .profileFrame(shown.frame, over: ProfileIdentityPanel.width)
         .presentationBackground(.clear)
         .presentsExpressionInfo(for: $inspectedEmoji)
     }
@@ -87,7 +131,12 @@ struct ProfileSheet: View {
 
     /// Which tabs have anything behind them.
     private var tabs: [ProfileTab] {
-        ProfileTab.available(profile: profile, board: board, activity: activity)
+        ProfileTab.available(
+            profile: profile,
+            board: board,
+            activity: activity,
+            isEditing: editor != nil
+        )
     }
 
     /// The tab actually being drawn.
@@ -101,8 +150,45 @@ struct ProfileSheet: View {
         tabs.contains(selectedTab) ? selectedTab : (tabs.first ?? .mutuals)
     }
 
+    /// The servers whose tag the reader could wear.
+    ///
+    /// **Just the one they are already wearing, and that is the honest list.**
+    /// Discord's own menu shows every server that *has* a tag, and this client
+    /// cannot build that list: `Guild` carries no tag, and nothing captured says
+    /// which of the reader's servers have `GUILD_TAGS` — the field arrives on
+    /// the gateway's guild objects and this app has never decoded it.
+    ///
+    /// So the chooser offers what is knowable: take the tag off, or leave it on.
+    /// Listing every guild instead would offer a switch that answers 403 on most
+    /// of them, which is `INVARIANTS.md` §5.5 — and inventing the list from
+    /// mutual servers would be the same guess with extra steps. Decoding the
+    /// gateway field is the fix, and it needs a capture.
+    private var tagOptions: [ServerTagOption] {
+        guard let tag = profile.guildTag, let guildID = tag.guildID else { return [] }
+        return [
+            ServerTagOption(
+                id: guildID,
+                name: model.guilds[guildID]?.name ?? "This server",
+                tag: tag.text,
+                badgeURL: tag.badgeURL
+            )
+        ]
+    }
+
     /// The handoff's own gutter for this column: 28 at its 1,280-point sheet.
     private static let gutter: CGFloat = 22
+
+    /// What a board card is drawn at, and therefore what this column is worth.
+    ///
+    /// **Discord's own number, measured rather than picked.** Their profile and
+    /// this one, captured on the same screen at the same scale: their widget
+    /// card comes out at 432 points inside a 961-point modal. A widget takes
+    /// whatever column it is given, so the column is derived from the card here
+    /// instead of the card being left to fill what the sheet had spare —
+    /// `ProfilePresenter.maximumWidth` adds the identity panel to this.
+    static let boardWidth: CGFloat = 432
+    /// The column with its two gutters, which is what the sheet reserves.
+    static let contentWidth: CGFloat = boardWidth + gutter * 2
 
     private var contentColumn: some View {
         ScrollView {
@@ -149,7 +235,21 @@ struct ProfileSheet: View {
                 )
             }
             Spacer(minLength: Spacing.base)
-            if !profile.mutualServers.isEmpty {
+            // **Only on the reader's own profile, and only while it is not
+            // already open.** Editing somebody else's is not a thing this
+            // control could ask for, and a button that toggles a rail already on
+            // screen is a second way to say what the rail's own chevron says.
+            if profile.isSelf, editor == nil {
+                editButton
+            }
+            // **Never beside the edit button, and the arithmetic is why.** This
+            // column is 476 points; the picker alone is 264, and a spelled-out
+            // count is another 120. With the pencil as well the row overflows
+            // and the control that loses is whichever SwiftUI decides to
+            // compress — which was the edit button, silently. On the reader's
+            // own profile the count is also the least useful thing here: the
+            // Mutuals tab is already titled with it.
+            if !profile.mutualServers.isEmpty, editor == nil, !profile.isSelf {
                 mutualCount
             }
             closeButton
@@ -180,6 +280,24 @@ struct ProfileSheet: View {
         .accessibilityElement(children: .combine)
     }
 
+    /// **A pencil, not a labelled button**, for the width above. It sits beside
+    /// the close control, which is the corner people already look in for what to
+    /// do with this sheet, and it carries its words in a tooltip and to
+    /// VoiceOver rather than in the row.
+    private var editButton: some View {
+        Button(action: beginEditing) {
+            Image(systemName: "pencil")
+                .font(.system(.caption, weight: .bold))
+                .foregroundStyle(InkColor.primary)
+                .frame(width: Metrics.control, height: Metrics.control)
+                .contentShape(.circle)
+        }
+        .buttonStyle(.plain)
+        .interactiveChromeOverMedia(in: .circle)
+        .help("Edit Profile")
+        .accessibilityLabel(Text("Edit your profile"))
+    }
+
     private var closeButton: some View {
         Button(action: dismiss) {
             Image(systemName: "xmark")
@@ -207,30 +325,34 @@ struct ProfileSheet: View {
         }
     }
 
-    /// The board, packed.
+    /// The board, stacked.
     ///
-    /// **`MasonryLayout` inside a content column, which is where it was always
-    /// right.** It sizes each tile to its own content, so a two-chip detail card
-    /// does not inherit the height of a nine-cover wall. The column count falls
-    /// out of the width, which is the sheet's minus the panel — two at the
-    /// sheet's ceiling, one in a narrow window.
+    /// **One column, and the stack is the whole layout.** A `MasonryLayout` sat
+    /// here to pack tiles that disagree about height into several columns, and a
+    /// span key beside it to let a widget claim the full width. Neither ever
+    /// ran: the column is one board card wide by construction — see
+    /// `boardWidth` — so the pack had a single column to fill at every width
+    /// this sheet can reach, and was a `VStack` with arithmetic in front of it.
+    ///
+    /// Leading-aligned, because a cover wall reports the width its rows actually
+    /// used rather than the one it was offered, and a centred shelf drifts right
+    /// as its last row empties.
     @ViewBuilder
     private var boardPane: some View {
-        if let board {
-            MasonryLayout(columns: boardColumns, spacing: 14) {
+        if let editor {
+            // **The same tab, not a second surface.** The board is what the
+            // reader is editing, so the editor replaces its contents in place —
+            // an editor that opened elsewhere would make them close it to check
+            // their work.
+            BoardEditorPane(editor: editor, board: board, ground: ground)
+        } else if let board {
+            VStack(alignment: .leading, spacing: 14) {
                 ForEach(board.tiles) { tile in
                     BoardSlab(tile: tile, ground: ground, userID: profile.userID)
-                        .masonrySpan(tile.preferredSpan)
                 }
             }
             .padding(.top, Spacing.base)
         }
-    }
-
-    /// A slab is comfortable at 320; the column decides how many fit.
-    private var boardColumns: Int {
-        let usable = maximumSize.width - ProfileIdentityPanel.width - Spacing.group * 2
-        return min(max(Int(usable / 320), 1), 2)
     }
 
     @ViewBuilder
@@ -396,19 +518,24 @@ enum ProfileTab: Hashable, CaseIterable, Sendable {
     ///
     /// This reverses the rule that used to be here, which hid all three. Discord
     /// keeps its own Activity and Mutuals tabs on an empty profile and labels
-    /// them with the count, and it is right: see `docs/PROFILE-DESIGN-SPEC.md`.
+    /// them with the count, and it is right.
     ///
     /// A function on the tab rather than a computed property on the sheet, so
     /// the gating is reachable from a test — the decision it makes is invisible
     /// in a rendered view and would otherwise only be checkable by opening
     /// somebody's profile and counting.
+    /// - Parameter isEditing: **the Board is always offered while editing.**
+    ///   Hiding it on an empty board is right for a reader looking at somebody
+    ///   else — a tab promising a surface that does not exist — and exactly
+    ///   wrong for the person who came to make one.
     static func available(
         profile: ProfilePresentation,
         board: BoardPresentation?,
-        activity: ProfileActivityPresentation
+        activity: ProfileActivityPresentation,
+        isEditing: Bool = false
     ) -> [ProfileTab] {
         var tabs: [ProfileTab] = []
-        if board?.tiles.isEmpty == false { tabs.append(.board) }
+        if isEditing || board?.tiles.isEmpty == false { tabs.append(.board) }
         tabs.append(.activity)
         tabs.append(.mutuals)
         return tabs
@@ -429,21 +556,4 @@ struct ProfileActivityPresentation: Equatable, Sendable {
     var isLoading: Bool = false
 
     var isEmpty: Bool { recent.isEmpty }
-}
-
-extension BoardTile {
-    /// How much of the grid this tile asks for.
-    ///
-    /// **An application widget takes the full width and a cover grid takes what
-    /// it can get.** The first carries hero artwork and six stats across three
-    /// columns; the second is a wall of box art that only reads as a collection
-    /// when it is wide. A detailed list sits in the middle: two columns is
-    /// enough for a cover, a name and a row of badges without wrapping.
-    var preferredSpan: Int {
-        switch content {
-        case .application: 3
-        case .grid: 2
-        case .detailed: 2
-        }
-    }
 }

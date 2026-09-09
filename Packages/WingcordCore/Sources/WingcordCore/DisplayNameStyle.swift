@@ -30,6 +30,28 @@ public enum DisplayNameFont: Int, Hashable, Sendable, Codable, CaseIterable {
     case headbang = 15
     case journal = 16
 
+    /// What the picker calls it, and what a hover tooltip says.
+    ///
+    /// Discord's own names, from their chooser. `default` is gg sans, which this
+    /// app does not ship and does not name as though it did — see the case's own
+    /// note.
+    public var title: String {
+        switch self {
+        case .default: "Default"
+        case .sakura: "Sakura"
+        case .jellybean: "Jellybean"
+        case .modern: "Modern"
+        case .medieval: "Medieval"
+        case .eightBit: "8-Bit"
+        case .vampyre: "Vampyre"
+        case .tempo: "Tempo"
+        case .monkeyBars: "Monkey Bars"
+        case .mainframe: "Mainframe"
+        case .headbang: "Headbang"
+        case .journal: "Journal"
+        }
+    }
+
     /// The PostScript name inside the bundled file. Nil for `.default`, which
     /// resolves to the system face.
     public var postScriptName: String? {
@@ -103,6 +125,19 @@ public enum DisplayNameEffect: Int, Hashable, Sendable, Codable, CaseIterable {
     case pop = 5
     case gummy = 6
     case prism = 7
+
+    /// What the picker calls it. Discord's own names.
+    public var title: String {
+        switch self {
+        case .solid: "Solid"
+        case .gradient: "Gradient"
+        case .neon: "Neon"
+        case .toon: "Toon"
+        case .pop: "Pop"
+        case .gummy: "Gummy"
+        case .prism: "Prism"
+        }
+    }
 
     /// How many colours this effect is chosen with, confirmed against the wells
     /// each picker draws.

@@ -65,6 +65,11 @@ private struct BoardSlabBody: View {
             }
         case .grid(let games):
             GameShelf(title: tile.title, games: games, ground: ground, menu: menu)
+        case .personal(let widget):
+            ProfileBleedSlab(ground: ground) {
+                PersonalWidgetCard(widget: widget, ground: ground)
+            }
+            .overlay(alignment: .topTrailing) { menu?().padding(Spacing.snug) }
         }
     }
 }

@@ -143,6 +143,22 @@ final class PermissionGate {
 
     // MARK: The questions the UI actually asks
 
+    /// Whether the reader may give themselves a nickname in this server.
+    ///
+    /// **`CHANGE_NICKNAME`, and it is withheld more often than it looks.**
+    /// Discord's own editor draws the name as a plain label with a padlock and
+    /// the sentence "You don't have permission to change your nickname in this
+    /// server." rather than a text field that refuses every keystroke — which is
+    /// `INVARIANTS.md` §5.5, and the reason this question is asked before the
+    /// field is drawn rather than after `PATCH /guilds/{id}/members/@me` answers
+    /// 403.
+    ///
+    /// Guild-level rather than channel-level: a nickname is not scoped to a
+    /// channel, so a permission resolved against one would be right by accident.
+    func canChangeNickname(in guildID: GuildID) -> Bool {
+        permissions(inGuild: guildID).contains(.changeNickname)
+    }
+
     /// Whether a channel appears in the list at all.
     ///
     /// A category is visible when *any* of its children is — a category whose

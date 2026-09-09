@@ -40,6 +40,9 @@ public struct ProfileWidget: Hashable, Sendable, Identifiable {
         /// developer authored. Nothing here says what it looks like — that is
         /// the application's `WidgetConfig`, fetched separately.
         case application(ApplicationID)
+        /// A widget the reader made themselves: a heading, a cover, and up to
+        /// four labelled slots. See `PersonalWidget`.
+        case personal(PersonalWidget)
         /// A kind added after this was written. Drawn as nothing rather than as
         /// a broken tile — `INVARIANTS.md` §5.5.
         case unknown(String)
@@ -53,6 +56,7 @@ public struct ProfileWidget: Hashable, Sendable, Identifiable {
         case .playedGames: ProfileWidgetKind.playedGames.rawValue
         case .wantToPlayGames: ProfileWidgetKind.wantToPlayGames.rawValue
         case .application: ProfileWidgetKind.application.rawValue
+        case .personal: ProfileWidgetKind.personal.rawValue
         case .unknown(let name): name
         }
     }
@@ -63,7 +67,7 @@ public struct ProfileWidget: Hashable, Sendable, Identifiable {
         case .favouriteGames(let games), .currentGames(let games),
              .playedGames(let games), .wantToPlayGames(let games):
             games
-        case .application, .unknown:
+        case .application, .personal, .unknown:
             []
         }
     }
@@ -94,6 +98,8 @@ public struct ProfileWidget: Hashable, Sendable, Identifiable {
         case .currentGames: "Games in Rotation"
         case .playedGames: "Games I Like"
         case .wantToPlayGames: "Want to Play"
+        // The reader's own heading, and theirs to leave empty.
+        case .personal(let widget): widget.header
         case .application, .unknown: ""
         }
     }
@@ -111,6 +117,10 @@ public enum ProfileWidgetKind: String, Hashable, Sendable, CaseIterable {
     case playedGames = "played_games"
     case wantToPlayGames = "want_to_play_games"
     case application
+    /// The one kind the reader authors rather than fills in. **Discord calls it
+    /// `personal` on the wire and "Create your own" in the picker**, and it is
+    /// the only widget whose pictures the client has to upload.
+    case personal
 
     /// How many games Discord accepts in this kind. Nil for the application
     /// widget, which holds none.
@@ -123,7 +133,7 @@ public enum ProfileWidgetKind: String, Hashable, Sendable, CaseIterable {
         case .favouriteGames: 1
         case .currentGames: 5
         case .playedGames, .wantToPlayGames: 20
-        case .application: nil
+        case .application, .personal: nil
         }
     }
 
@@ -134,6 +144,7 @@ public enum ProfileWidgetKind: String, Hashable, Sendable, CaseIterable {
         case .playedGames: "Games I Like"
         case .wantToPlayGames: "Want to Play"
         case .application: "Game"
+        case .personal: "Create Your Own"
         }
     }
 }
@@ -304,6 +315,102 @@ public enum GameWidgetTag: Hashable, Sendable {
         case .feeling: 1
         case .social: 2
         case .unknown: 3
+        }
+    }
+}
+
+/// A widget somebody wrote themselves.
+///
+/// **Two sections and a heading, and the shape is Discord's own.** Captured:
+///
+/// ```
+/// {"type":"personal","header":"Widget Name","sections":[
+///   {"type":"cover","title":"Title","subtitle":"Description","image":{…}},
+///   {"type":"fields","fields":[{"title":"lol1","description":"desc1","image":{…}}, …]}]}
+/// ```
+///
+/// Modelled as a cover plus a flat list rather than as an array of sections,
+/// because the wire only ever sends those two, in that order, at most once each
+/// — and a general section list would be machinery for a shape nothing produces.
+/// `sections` is rebuilt on the way out.
+public struct PersonalWidget: Hashable, Sendable {
+    /// The line above the card. Discord's placeholder is "Add Widget Name".
+    public var header: String
+    public var cover: Cover
+    /// **At most four.** The captured editor draws exactly four slots and the
+    /// grid is two by two; a fifth has never been on the wire.
+    public var fields: [Field]
+
+    public static let fieldLimit = 4
+
+    public init(header: String = "", cover: Cover = Cover(), fields: [Field] = []) {
+        self.header = header
+        self.cover = cover
+        self.fields = Array(fields.prefix(Self.fieldLimit))
+    }
+
+    /// The banner across the top: a picture with a title and a line under it.
+    public struct Cover: Hashable, Sendable {
+        public var title: String
+        public var subtitle: String
+        public var image: Asset?
+
+        public init(title: String = "", subtitle: String = "", image: Asset? = nil) {
+            self.title = title
+            self.subtitle = subtitle
+            self.image = image
+        }
+    }
+
+    /// One of the four slots under the cover.
+    public struct Field: Hashable, Sendable, Identifiable {
+        public var id = UUID()
+        public var title: String
+        public var description: String
+        public var image: Asset?
+
+        public init(title: String = "", description: String = "", image: Asset? = nil) {
+            self.title = title
+            self.description = description
+            self.image = image
+        }
+    }
+}
+
+extension PersonalWidget {
+    /// A picture inside a personal widget.
+    ///
+    /// **It is one of two things and never both**, which is why this is an enum
+    /// rather than a struct with two optionals. A picture just uploaded is a
+    /// `filename` — the path Discord's own upload route handed back — and that
+    /// is the only form a *write* accepts. A picture that came down from the
+    /// profile route is a `file_id` with its dimensions, and that is the only
+    /// form a *read* produces. A value carrying both would be one nobody can say
+    /// what to do with.
+    ///
+    /// Nested rather than free-standing: `WidgetConfig.WidgetAsset` already
+    /// exists and means something else entirely — an *application's* template
+    /// artwork, not a picture somebody uploaded.
+    public enum Asset: Hashable, Sendable {
+        /// Staged by `POST /users/@me/widgets/assets/upload`.
+        ///
+        /// **Discord's string, never one this client builds.** The route
+        /// sanitises the name — `WingCord-iOS-Default-128@2x.png` came back as
+        /// `WingCord-iOS-Default-1282x.png` — so the value to send is the one it
+        /// answered with, and rebuilding it from the local file name produces a
+        /// path that does not exist.
+        case staged(filename: String)
+        /// Stored, as the profile route returns it.
+        case stored(fileID: String, width: Int, height: Int, isAnimated: Bool)
+
+        /// What a write sends, or nil for a picture already stored and therefore
+        /// not needing to be re-sent.
+        public var stagedFilename: String? {
+            if case .staged(let filename) = self { filename } else { nil }
+        }
+
+        public var fileID: String? {
+            if case .stored(let id, _, _, _) = self { id } else { nil }
         }
     }
 }

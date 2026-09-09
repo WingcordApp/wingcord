@@ -712,7 +712,54 @@ public actor DiscordREST {
             var message: String?
         }
         let envelope = try? JSONDecoder().decode(ErrorEnvelope.self, from: data)
-        return .api(status: status, code: envelope?.code, message: envelope?.message)
+        // **`message` alone is useless on a 50035.** "Invalid Form Body" says a
+        // field was rejected and not which one; the `errors` object beside it
+        // says exactly which, and it was being thrown away. Diagnosing a
+        // rejected save without it means guessing at four routes' worth of
+        // fields — see `fieldErrors`.
+        let detail = fieldErrors(in: data)
+        let message = [envelope?.message, detail]
+            .compactMap { $0 }
+            .joined(separator: " — ")
+        return .api(
+            status: status,
+            code: envelope?.code,
+            message: message.isEmpty ? nil : message
+        )
+    }
+
+    /// Discord's per-field complaints, flattened to `path: message`.
+    ///
+    /// The shape nests one level per path component and ends in an `_errors`
+    /// array, so a bad widget id arrives as
+    /// `{"widgets":{"0":{"id":{"_errors":[{"message":"Value … is not
+    /// snowflake."}]}}}}`. Walked rather than typed, because the path is the
+    /// request's own shape and every route has a different one.
+    private static func fieldErrors(in data: Data) -> String? {
+        guard let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let errors = root["errors"] as? [String: Any]
+        else { return nil }
+
+        var found: [String] = []
+        func walk(_ node: Any, path: [String]) {
+            // Two at most: a save that broke five fields is still a save the
+            // reader has to fix one field at a time, and a paragraph in a bar is
+            // a paragraph nobody reads.
+            guard found.count < 2 else { return }
+            if let list = (node as? [String: Any])?["_errors"] as? [[String: Any]] {
+                let messages = list.compactMap { $0["message"] as? String }
+                if let first = messages.first {
+                    found.append(path.isEmpty ? first : "\(path.joined(separator: ".")): \(first)")
+                }
+                return
+            }
+            guard let object = node as? [String: Any] else { return }
+            for key in object.keys.sorted() {
+                walk(object[key] as Any, path: path + [key])
+            }
+        }
+        walk(errors, path: [])
+        return found.isEmpty ? nil : found.joined(separator: "; ")
     }
 
     // MARK: Multipart

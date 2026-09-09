@@ -9,7 +9,7 @@ import WingcordCore
 /// place a composition that shape on a 1,400-point landscape surface. Discord's
 /// left column is that shape *because their cosmetics are*, and any client that
 /// sells the same cosmetics inherits the constraint. See
-/// `docs/PROFILE-DESIGN-SPEC.md` §0.
+/// `HANDOFF.md`'s "The profile stage" has the three measurements.
 ///
 /// **Every number below is the design handoff's, scaled once.** The sheet was
 /// drawn at 1,280 points with a 452-point rail; this one is 1,040 with a
@@ -22,6 +22,14 @@ struct ProfileIdentityPanel: View {
     var ground: ProfileGround
     var openEmoji: (EmojiRef) -> Void
     var openLink: ((String) -> Void)?
+    /// Non-nil while the reader is editing their own profile — see
+    /// `ProfileSheet`. The name, the pronouns, the bio and the tag become fields
+    /// in place; the cosmetics stay in the rail, which is where a grid of
+    /// artwork belongs.
+    var editor: ProfileEditor?
+    /// The servers whose tag the reader could wear.
+    var tagOptions: [ServerTagOption] = []
+    var present: ((ProfileEditPicker) -> Void)?
 
     @Environment(AppModel.self) private var model
     @Environment(\.motion) private var motion
@@ -51,6 +59,7 @@ struct ProfileIdentityPanel: View {
             VStack(alignment: .leading, spacing: 0) {
                 banner
                 identity
+                bioSection
                 statusRow
                 memberSince
                 roles
@@ -99,6 +108,90 @@ struct ProfileIdentityPanel: View {
         .clipped()
     }
 
+    /// The pencil over the avatar.
+    ///
+    /// **A menu rather than a jump to the picker**, because the avatar carries
+    /// two cosmetics — the picture and the ring around it — and a click cannot
+    /// know which is meant. Removing either is offered here too: Discord puts
+    /// both removals in this menu and nowhere else, and the picker is the wrong
+    /// place for "take it off".
+    @ViewBuilder
+    private var avatarEditMenu: some View {
+        if let editor {
+            EditOverlayButton(isVisible: true) {
+                Button("Change Avatar") { present?(.avatar) }
+                Button("Change Avatar Decoration") { present?(.decoration) }
+                Divider()
+                Button("Remove Avatar", role: .destructive) { editor.avatar = .removed }
+                // Only offered where there is one to take off.
+                if editor.avatarDecorationSKU != nil {
+                    Button("Remove Avatar Decoration", role: .destructive) {
+                        editor.avatarDecorationSKU = nil
+                        editor.decorationAsset = nil
+                    }
+                }
+            }
+            .padding(.leading, Self.gutter + Self.avatarSide - 34)
+            .padding(.top, Self.bannerHeight - Self.avatarDrop)
+        }
+    }
+
+    /// The pencil over the banner.
+    ///
+    /// The frame is deliberately absent: nothing captured names the field that
+    /// sets one, so a menu item for it would open a grid whose Apply could not
+    /// be written — `INVARIANTS.md` §5.5. See `ProfileEditRail.sections`.
+    @ViewBuilder
+    private var bannerEditMenu: some View {
+        if editor != nil {
+            EditOverlayButton(isVisible: true) {
+                Button("Change Profile Effect") { present?(.effect) }
+            }
+            .padding(Spacing.snug)
+        }
+    }
+
+    /// The bio.
+    ///
+    /// **This column never drew one**, which was a gap rather than a decision —
+    /// the small card shows it and the full profile did not, so the longest
+    /// thing somebody writes about themselves was the one thing the big surface
+    /// left out. Editing made it impossible to ignore.
+    @ViewBuilder
+    private var bioSection: some View {
+        if let editor {
+            VStack(alignment: .leading, spacing: Spacing.tight) {
+                Text("Bio")
+                    .font(Typeface.sectionHeader)
+                    .foregroundStyle(InkColor.tertiary)
+                    .textCase(.uppercase)
+                    .tracking(0.9)
+                EditableBioField(
+                    text: Binding(get: { editor.bio }, set: { editor.bio = $0 })
+                )
+            }
+            .padding(.horizontal, Self.gutter)
+            .padding(.top, Spacing.margin)
+        } else if let bio = profile.bio, !bio.isEmpty {
+            VStack(alignment: .leading, spacing: Spacing.tight) {
+                Text("Bio")
+                    .font(Typeface.sectionHeader)
+                    .foregroundStyle(InkColor.tertiary)
+                    .textCase(.uppercase)
+                    .tracking(0.9)
+                ProseText(
+                    markdown: bio,
+                    font: .system(.subheadline),
+                    color: InkColor.primary,
+                    onEmoji: openEmoji,
+                    onLink: openLink
+                )
+            }
+            .padding(.horizontal, Self.gutter)
+            .padding(.top, Spacing.margin)
+        }
+    }
+
     // MARK: Artwork
 
     private var banner: some View {
@@ -127,6 +220,7 @@ struct ProfileIdentityPanel: View {
                 }
                 .frame(height: Self.bannerHeight)
                 .clipped()
+                .overlay(alignment: .topTrailing) { bannerEditMenu }
                 // The avatar's cut-out is a HOLE in the artwork, not a stroke
                 // painted over it — so what shows in the gap is the panel's own
                 // ground under any theme. See `ProfileAvatar`.
@@ -145,6 +239,7 @@ struct ProfileIdentityPanel: View {
                 side: Self.avatarSide,
                 leading: Self.gutter
             )
+            .overlay(alignment: .topLeading) { avatarEditMenu }
 
             if hasCustomStatus {
                 CustomStatusBubble(
@@ -194,13 +289,25 @@ struct ProfileIdentityPanel: View {
     private var identity: some View {
         VStack(alignment: .leading, spacing: 7) {
             HStack(alignment: .firstTextBaseline, spacing: Spacing.base) {
-                StyledDisplayName(
-                    text: profile.displayName,
-                    style: profile.displayNameStyle,
-                    textStyle: .largeTitle,
-                    weight: .bold
-                )
-                .lineLimit(1)
+                if let editor {
+                    EditableDisplayName(
+                        text: Binding(
+                            get: { editor.displayName },
+                            set: { editor.displayName = $0 }
+                        ),
+                        placeholder: profile.handle,
+                        style: profile.displayNameStyle,
+                        editStyle: { present?(.displayNameStyle) }
+                    )
+                } else {
+                    StyledDisplayName(
+                        text: profile.displayName,
+                        style: profile.displayNameStyle,
+                        textStyle: .largeTitle,
+                        weight: .bold
+                    )
+                    .lineLimit(1)
+                }
                 if profile.isBot { TagChip(text: "APP") }
                 Spacer(minLength: 0)
             }
@@ -217,7 +324,17 @@ struct ProfileIdentityPanel: View {
                         .foregroundStyle(InkColor.secondary)
                         .lineLimit(1)
                 }
-                if let tag = profile.guildTag { GuildTagChip(tag: tag) }
+                if let editor {
+                    ServerTagChooser(
+                        options: tagOptions,
+                        selection: Binding(
+                            get: { editor.primaryGuildID },
+                            set: { editor.primaryGuildID = $0 }
+                        )
+                    )
+                } else if let tag = profile.guildTag {
+                    GuildTagChip(tag: tag)
+                }
                 // A label, never a filter — the route still hands over the
                 // mutual servers the reader can see for themselves.
                 if profile.isProfilePrivate {
@@ -335,9 +452,27 @@ struct ProfileIdentityPanel: View {
 
     @ViewBuilder
     private var connections: some View {
-        if !profile.connections.isEmpty {
+        // **The section appears while editing even with nothing in it**, because
+        // that is where "Add Connection" lives — a reader with no connections is
+        // exactly the one who needs the control.
+        if !profile.connections.isEmpty || editor != nil {
             section("Connections", topGap: 24) {
-                ConnectionDock(connections: profile.connections)
+                VStack(alignment: .leading, spacing: Spacing.base) {
+                    if !profile.connections.isEmpty {
+                        ConnectionDock(connections: profile.connections)
+                    }
+                    if editor != nil {
+                        Button {
+                            present?(.connection)
+                        } label: {
+                            Label("Add Connection", systemImage: "plus")
+                                .font(.system(.subheadline))
+                                .foregroundStyle(InkColor.secondary)
+                                .contentShape(.rect)
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
             }
         }
     }

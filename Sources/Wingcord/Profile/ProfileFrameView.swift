@@ -40,17 +40,27 @@ import WingcordCore
 /// are never swapped for the same `id` and no image is ever torn down.
 private struct FrameLayerFit: ViewModifier {
     var anchor: ProfileFrame.Anchor
-    var width: CGFloat
+    var layout: ProfileFrameLayout
 
     @ViewBuilder
     func body(content: Content) -> some View {
         if anchor == .center {
-            // **No aspect at all.** A border runs the whole height of a card
-            // whose height nothing here knows; its artwork is authored uniform
-            // along y precisely so it can be pulled to fit.
+            // **No aspect, and the card's height rather than the
+            // composition's.** A border's artwork is authored uniform along y
+            // precisely so it can be pulled to fit, and the height nothing here
+            // knows is the card's — but the stack it is stretched inside has
+            // already been grown by the two overflows, so filling that stack
+            // ran the rails up past the artwork meant to cap them. Measured on
+            // Kawaii Cat (`overflow_top: 304`, `overflow_bottom: 135` against
+            // an `inner_width` of 1200): two bare pink rails stood 91 points
+            // above the cat's own head and 41 below its feet, on either side of
+            // nothing. Padding the overflows back off is what puts the border on
+            // the card and leaves the staples to be its caps.
             content
-                .frame(width: width)
+                .frame(width: layout.layerWidth)
                 .frame(maxHeight: .infinity)
+                .padding(.top, layout.top)
+                .padding(.bottom, layout.bottom)
         } else {
             // A staple is a cap and keeps its own aspect, hanging from the edge
             // it names. The width is the card's, and the layer PNG's whole
@@ -58,7 +68,7 @@ private struct FrameLayerFit: ViewModifier {
             // width of every layer captured so far.
             content
                 .aspectRatio(contentMode: .fit)
-                .frame(width: width)
+                .frame(width: layout.layerWidth)
                 .frame(maxHeight: .infinity, alignment: anchor == .top ? .top : .bottom)
         }
     }
@@ -87,15 +97,17 @@ struct ProfileFrameView: View {
                 RemoteImage(url: layer.url, side: layout.layerWidth, bucket: .artwork) {
                     Color.clear
                 }
-                // **A centre-anchored layer stretches; the others keep their
-                // aspect.** A border runs the whole height of a card whose
-                // height nothing here knows, so its artwork is authored uniform
-                // along y and is meant to be pulled to fit. A staple is a cap
-                // and hangs from the edge it names at its own aspect — the
-                // width is the card's, and the layer PNG's whole authored width
-                // maps onto it: 1200 + 56 + 56 = 1312, the pixel width of every
-                // layer captured so far.
-                .modifier(FrameLayerFit(anchor: layer.anchor, width: layout.layerWidth))
+                // **A centre-anchored layer stretches over the card; the
+                // others keep their aspect and hang past it.** A border runs the
+                // card's whole height, so its artwork is authored uniform along
+                // y and is meant to be pulled to fit — the *card's* height, not
+                // the composition's, which is the correction `FrameLayerFit`
+                // records. A staple is a cap and hangs from the edge it names at
+                // its own aspect — the width is the card's plus both overflows,
+                // and the layer PNG's whole authored width maps onto it:
+                // 1200 + 56 + 56 = 1312, the pixel width of every layer captured
+                // so far.
+                .modifier(FrameLayerFit(anchor: layer.anchor, layout: layout))
             }
         }
         .padding(EdgeInsets(

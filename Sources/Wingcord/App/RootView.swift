@@ -43,12 +43,19 @@ struct RootView: View {
             // remove it. It sat over discovery offering to search a server
             // nobody could see. There is nothing else in the bar during a
             // takeover, so the bar goes.
+            // **And hidden under the full profile, which is the third
+            // reason and the only one that is not about what the bar contains.**
+            // See `AppModel.isFullProfileShown`: that surface dims the window
+            // and the toolbar is the one strip a layer in the content view
+            // cannot dim.
             .toolbarVisibility(
-                model.showsWorkspace && !model.isColumnTakenOver ? .automatic : .hidden,
+                model.showsWorkspace && !model.isColumnTakenOver && !model.isFullProfileShown
+                    ? .automatic : .hidden,
                 for: .windowToolbar
             )
             .animation(.easeOut(duration: 0.2), value: model.showsWorkspace)
             .animation(.easeOut(duration: 0.2), value: model.isColumnTakenOver)
+            .animation(.easeOut(duration: 0.2), value: model.isFullProfileShown)
             // A channel becoming the destination is what triggers its history
             // fetch and its roster subscription. Driven from `onChange` rather
             // than from the click handler, so a selection restored at launch,

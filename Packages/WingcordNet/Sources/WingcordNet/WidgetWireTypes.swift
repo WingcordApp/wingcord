@@ -18,6 +18,53 @@ struct ProfileWidgetDTO: Decodable, Sendable {
         var type: String?
         var games: [GameDTO]?
         var application_id: ApplicationID?
+        /// A personal widget's content. Two entries at most — a cover and a
+        /// field list — see `PersonalWidget`.
+        var header: String?
+        var sections: [SectionDTO]?
+    }
+
+    /// One section of a personal widget.
+    ///
+    /// **A tagged union of two shapes in one array**, so `title`/`subtitle`
+    /// belong to the cover and `fields` to the list, and each is absent on the
+    /// other. Decoded by the tag rather than by which keys turned up.
+    struct SectionDTO: Decodable, Sendable {
+        var type: String?
+        var title: String?
+        var subtitle: String?
+        var image: AssetDTO?
+        var fields: [FieldDTO]?
+    }
+
+    struct FieldDTO: Decodable, Sendable {
+        var title: String?
+        var description: String?
+        var image: AssetDTO?
+    }
+
+    /// **A read always answers `file_id`; a write always sends `filename`.**
+    /// Both are decoded because the reply to a write echoes the stored form, and
+    /// a client that only understood one of them would either fail the write's
+    /// reply or lose every picture on the next read.
+    struct AssetDTO: Decodable, Sendable {
+        var file_id: String?
+        var filename: String?
+        var width: Int?
+        var height: Int?
+        var is_animated: Bool?
+
+        var domain: PersonalWidget.Asset? {
+            if let file_id {
+                return .stored(
+                    fileID: file_id,
+                    width: width ?? 0,
+                    height: height ?? 0,
+                    isAnimated: is_animated ?? false
+                )
+            }
+            return filename.map { .staged(filename: $0) }
+        }
     }
 
     struct GameDTO: Decodable, Sendable {
@@ -50,6 +97,27 @@ struct ProfileWidgetDTO: Decodable, Sendable {
         case .application:
             guard let applicationID = data?.application_id else { return nil }
             content = .application(applicationID)
+        case .personal:
+            let sections = data?.sections ?? []
+            let cover = sections.first { $0.type == "cover" }
+            let fields = sections.first { $0.type == "fields" }?.fields ?? []
+            content = .personal(
+                PersonalWidget(
+                    header: data?.header ?? "",
+                    cover: PersonalWidget.Cover(
+                        title: cover?.title ?? "",
+                        subtitle: cover?.subtitle ?? "",
+                        image: cover?.image?.domain
+                    ),
+                    fields: fields.map { field in
+                        PersonalWidget.Field(
+                            title: field.title ?? "",
+                            description: field.description ?? "",
+                            image: field.image?.domain
+                        )
+                    }
+                )
+            )
         case nil:
             content = .unknown(type)
         }
@@ -63,16 +131,63 @@ struct ProfileWidgetDTO: Decodable, Sendable {
 
 /// `PUT /users/@me/widgets`.
 ///
-/// The write side of the board. Nothing in this client calls it yet — there is
-/// no board editor — but the shape is here because it is the *same* shape the
-/// read decodes, and a write type derived from a live read is worth more than
-/// one derived from a doc table later.
+/// The write side of the board, and **the array sent is the board afterwards**:
+/// its order is the order the tiles are drawn in, and a widget left out of it is
+/// deleted.
 ///
-/// `id` is optional on a create and `updated_at` is ignored, so neither is sent.
+/// **The envelope is `{id, data}`, and the `id` is what makes a save an edit
+/// rather than a replacement.** This type used to encode the payload flat and
+/// send no id at all, which was derived from the read's *inner* object and was
+/// wrong on both counts — captured, `widgets order changed + game link
+/// widgets.har`:
+///
+/// ```
+/// PUT /users/@me/widgets
+/// {"widgets":[{"data":{"type":"application","application_id":"1323482066758930452"}},
+///             {"id":"1539974257327743066","data":{"type":"played_games","games":[…]}}]}
+/// ```
+///
+/// and the reply gives the entry with no id a **fresh** id and a new
+/// `updated_at`, while the one that carried its id keeps both. So an editor that
+/// dropped ids would delete and recreate every tile on the board on every save —
+/// which is invisible until something references a widget id, and a report does.
 public struct ProfileWidgetWrite: Encodable, Sendable {
-    var type: String
-    var games: [Game]?
-    var application_id: String?
+    /// The widget being edited, or nil to create one. The server assigns ids.
+    var id: String?
+    var data: Payload
+
+    struct Payload: Encodable, Sendable {
+        var type: String
+        var games: [Game]?
+        var application_id: String?
+        var header: String?
+        var sections: [Section]?
+    }
+
+    /// **Rebuilt on the way out, never carried.** The domain keeps a cover and a
+    /// flat field list because that is the only arrangement the wire has ever
+    /// sent; the array is assembled here so nothing upstream has to know the
+    /// order or the tag strings.
+    public struct Section: Encodable, Sendable {
+        var type: String
+        var title: String?
+        var subtitle: String?
+        var image: Asset?
+        var fields: [Field]?
+    }
+
+    public struct Field: Encodable, Sendable {
+        var title: String
+        var description: String
+        var image: Asset?
+    }
+
+    /// **Only a staged filename is ever written.** A picture already stored is
+    /// left out entirely rather than echoed back as a `file_id`, which the route
+    /// does not accept — see `PersonalWidget.Asset`.
+    public struct Asset: Encodable, Sendable {
+        var filename: String
+    }
 
     public struct Game: Encodable, Sendable {
         var game_id: String
@@ -85,24 +200,80 @@ public struct ProfileWidgetWrite: Encodable, Sendable {
     /// Truncated to the kind's own cap rather than sent long: the route rejects
     /// an over-long list outright, so a save that quietly kept twenty-one games
     /// would lose all twenty-one.
-    public init(kind: ProfileWidgetKind, games: [ProfileWidgetGame]) {
-        type = kind.rawValue
+    public init(id: String? = nil, kind: ProfileWidgetKind, games: [ProfileWidgetGame]) {
+        self.id = id
         let capped = kind.gameLimit.map { Array(games.prefix($0)) } ?? games
-        self.games = capped.map { game in
-            Game(
-                game_id: String(game.gameID.rawValue),
-                comment: game.comment,
-                tags: game.tags.isEmpty ? nil : game.tags.map(\.rawValue)
+        data = Payload(
+            type: kind.rawValue,
+            games: capped.map { game in
+                Game(
+                    game_id: String(game.gameID.rawValue),
+                    // **Empty is nil, and the wire says so.** A game with no
+                    // comment comes back `"comment": null`, never `""`, and a
+                    // blank string is a comment the profile would then draw as
+                    // an empty quotation.
+                    comment: game.comment?.isEmpty == true ? nil : game.comment,
+                    tags: game.tags.isEmpty ? nil : game.tags.map(\.rawValue)
+                )
+            },
+            application_id: nil,
+            header: nil,
+            sections: nil
+        )
+    }
+
+    /// A widget the reader wrote.
+    ///
+    /// A slot whose picture has not been uploaded is sent with no `image` at
+    /// all — the route takes a filename or nothing, and an empty object is a
+    /// 400 on a field nobody filled in.
+    public init(id: String? = nil, personal: PersonalWidget) {
+        self.id = id
+        var sections: [Section] = [
+            Section(
+                type: "cover",
+                title: personal.cover.title,
+                subtitle: personal.cover.subtitle,
+                image: personal.cover.image?.stagedFilename.map(Asset.init(filename:)),
+                fields: nil
+            )
+        ]
+        if !personal.fields.isEmpty {
+            sections.append(
+                Section(
+                    type: "fields",
+                    title: nil,
+                    subtitle: nil,
+                    image: nil,
+                    fields: personal.fields.prefix(PersonalWidget.fieldLimit).map { field in
+                        Field(
+                            title: field.title,
+                            description: field.description,
+                            image: field.image?.stagedFilename.map(Asset.init(filename:))
+                        )
+                    }
+                )
             )
         }
-        application_id = nil
+        data = Payload(
+            type: ProfileWidgetKind.personal.rawValue,
+            games: nil,
+            application_id: nil,
+            header: personal.header,
+            sections: sections
+        )
     }
 
     /// An application widget.
-    public init(applicationID: ApplicationID) {
-        type = ProfileWidgetKind.application.rawValue
-        games = nil
-        application_id = String(applicationID.rawValue)
+    public init(id: String? = nil, applicationID: ApplicationID) {
+        self.id = id
+        data = Payload(
+            type: ProfileWidgetKind.application.rawValue,
+            games: nil,
+            application_id: String(applicationID.rawValue),
+            header: nil,
+            sections: nil
+        )
     }
 }
 

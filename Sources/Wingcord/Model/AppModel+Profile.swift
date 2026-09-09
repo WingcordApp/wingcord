@@ -30,6 +30,8 @@ extension AppModel {
             monogram: user.monogram,
             decorationURL: decoration?.avatarDecorationHash
                 .flatMap { CDN.avatarDecoration(hash: $0) },
+            avatarDecorationSKU: decoration?.avatarDecorationSKU,
+            nameplate: decoration?.nameplate,
             bannerURL: decoration?.bannerHash.flatMap {
                 CDN.userBanner(userID: user.id, hash: $0, width: 512)
             },
@@ -302,4 +304,22 @@ extension AppModel {
         // fires for a person whose profile is already resident.
         if let user = users[userID] { sessionController.deriveTheme(of: user) }
     }
+}
+
+extension AppModel {
+    /// Whether the full profile is the surface that owns the window.
+    ///
+    /// **The window's toolbar cannot be dimmed, so while this is true it is
+    /// taken away instead.** The profile's scrim is a layer in the content view
+    /// and the toolbar's items are drawn above it: measured, the scrim darkened
+    /// the strip's ground and left the channel pill, the three chrome buttons
+    /// and the system's own search field burning at full strength over a dimmed
+    /// window. Nothing dims an `NSToolbar` item, and `.searchable`'s field is
+    /// the system's rather than ours, so there is no version of this where the
+    /// bar stays and looks covered.
+    ///
+    /// The mini card is deliberately not included: it dims nothing — a card
+    /// beside a row does not interrupt the window — so there is nothing for the
+    /// bar to be inconsistent with. See `ProfilePresenter.dismissLayer`.
+    var isFullProfileShown: Bool { profileRequest?.depth == .full }
 }

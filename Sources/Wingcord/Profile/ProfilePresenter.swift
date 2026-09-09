@@ -43,16 +43,33 @@ struct ProfilePresenter: ViewModifier {
     @Environment(AppModel.self) private var model
     @Environment(\.motion) private var motion
 
+    /// The draft, alive only while the reader is editing.
+    ///
+    /// **Here rather than on `AppModel`.** Every keystroke in the bio changes
+    /// it, and on the shared store that would invalidate every view in the
+    /// window; it also has exactly the lifetime of this presentation, so a
+    /// store-held copy is one more thing that has to be remembered to clear.
+    @State private var editor: ProfileEditor?
+    /// Which cosmetic sheet a rail tile raised.
+    @State private var picker: ProfileEditPicker?
+
     /// The card's own width, shared by the card and by the arithmetic that
     /// places it. Two copies is how a card ends up anchored eight points from
     /// where it is drawn.
     private static let cardWidth: CGFloat = 320
     /// The full profile's ceiling, and the air left around it.
     ///
-    /// Wide enough for the 360-point identity panel and two 320-point board
-    /// slabs beside it with the column's own margins — which is where the
-    /// masonry stops adding columns.
-    private static let maximumWidth: CGFloat = 1040
+    /// **The board decides this width, not the sheet.** An application widget is
+    /// the widest thing a profile draws — hero artwork over a three-column stat
+    /// grid — and it stretches to whatever column it is handed. Measured off
+    /// Discord's profile and this one captured on the same screen: their widget
+    /// card is 432 points and ours was 636, which is what turned the header into
+    /// a letterbox with the character standing alone at the far end and printed
+    /// "Valley IV Regional Development Level" on one line where Discord wraps it
+    /// onto two. So the column is sized to the card and the sheet follows from
+    /// it, rather than the card being handed whatever is left over.
+    private static let maximumWidth: CGFloat =
+        ProfileIdentityPanel.width + ProfileSheet.contentWidth
     private static let maximumHeight: CGFloat = 780
     private static let inset: CGFloat = 48
 
@@ -76,6 +93,14 @@ struct ProfilePresenter: ViewModifier {
                 // window observes opens a global transaction and animates every
                 // view that happens to re-lay-out while it runs.
                 .animation(motion.panel, value: model.profileRequest)
+                // **Torn down with the profile it belongs to.** A draft that
+                // survived the sheet closing would be applied to whoever was
+                // opened next — and the id changes for a new subject as well as
+                // for none at all, so both cases land here.
+                .onChange(of: model.profileRequest?.id) {
+                    editor = nil
+                    picker = nil
+                }
             }
         }
     }
@@ -98,6 +123,13 @@ struct ProfilePresenter: ViewModifier {
         .buttonStyle(.plain)
         .cancelAction(unless: model.gameProfileRequest != nil || model.isQuickSwitchShown)
         .accessibilityLabel(Text("Close profile"))
+        // **Past the titlebar, or the scrim stops at the toolbar's foot.** The
+        // window is `fullSizeContentView` and this overlay is laid out inside
+        // its safe area, so without this the chrome strip — the channel name,
+        // the search field, the reader's own banner behind them — stayed at full
+        // brightness over a dimmed window, which reads as the toolbar belonging
+        // to something else. The same call the quick switcher's scrim makes.
+        .ignoresSafeArea()
         .transition(.opacity)
     }
 
@@ -119,18 +151,132 @@ struct ProfilePresenter: ViewModifier {
                 // much of this height as its content actually needs — an
                 // account with a bio and nothing else is a short sheet rather
                 // than four hundred points of void under a name.
+                // **The rail is added to the ceiling, not taken out of it.**
+                // Discord's own modal grows by exactly its rail's width when the
+                // editor opens — 961 points to 1,195 — because the profile has
+                // to stay whole beside the controls that change it.
                 maximumSize: CGSize(
-                    width: min(container.width - Self.inset * 2, Self.maximumWidth),
+                    width: min(
+                        container.width - Self.inset * 2,
+                        Self.maximumWidth + (editor == nil ? 0 : ProfileEditRail.width)
+                    ),
                     height: min(container.height - Self.inset * 2, Self.maximumHeight)
                 ),
+                editor: editor,
+                beginEditing: {
+                    editor = ProfileEditor(
+                        profile: profile,
+                        // The raw board, which is what the write route takes —
+                        // `boardPresentation` has already resolved it into tiles
+                        // and dropped the ids.
+                        widgets: model.profileWidgets[profile.userID] ?? [],
+                        scope: .account
+                    )
+                },
+                endEditing: { editor = nil },
+                saveEdits: { commit(profile) },
+                presentPicker: { picker = $0 },
                 dismiss: { model.profileRequest = nil }
             )
+            .sheet(item: $picker) { picker in
+                if let kind = picker.collectible {
+                    CollectiblePickerSheet(
+                        kind: kind,
+                        profile: profile,
+                        selection: worn(kind),
+                        apply: { chosen in
+                            wear(chosen, kind: kind)
+                            self.picker = nil
+                        },
+                        dismiss: { self.picker = nil }
+                    )
+                } else if picker == .connection {
+                    AddConnectionSheet(dismiss: { self.picker = nil })
+                } else if picker == .displayNameStyle {
+                    DisplayNameStyleSheet(
+                        profile: profile,
+                        current: editor?.displayNameStyle,
+                        apply: { style in
+                            editor?.displayNameStyle = style
+                            self.picker = nil
+                        },
+                        dismiss: { self.picker = nil }
+                    )
+                } else {
+                    AvatarPickerSheet(
+                        profile: profile,
+                        current: editor?.avatar ?? .unchanged,
+                        choose: { edit in
+                            editor?.avatar = edit
+                            self.picker = nil
+                        },
+                        dismiss: { self.picker = nil }
+                    )
+                }
+            }
             // **And then given the whole container to sit in.** The layer's
             // stack is top-leading aligned, so a sized child without this is
             // pinned to the window's corner — which is where the stage was
             // sitting, an 1,080-point sheet jammed against the top-left edge.
             .frame(width: container.width, height: container.height)
             .transition(.materialize)
+        }
+    }
+
+    /// What the draft currently wears of one kind.
+    private func worn(_ kind: CollectibleKind) -> String? {
+        switch kind {
+        case .nameplate: editor?.nameplate?.skuID
+        case .avatarDecoration: editor?.avatarDecorationSKU
+        case .profileEffect: editor?.profileEffectSKU
+        case .profileFrame: nil
+        }
+    }
+
+    /// Puts a choice into the draft. **Into the draft and no further** — nothing
+    /// in the editor writes to Discord except the save bar, which is what makes
+    /// Reset able to take five changes back at once.
+    private func wear(_ chosen: OwnedCollectible?, kind: CollectibleKind) {
+        switch kind {
+        case .nameplate:
+            // Rebuilt as a `Nameplate` so the rail can draw it at once. The
+            // palette is the wash behind a roster row and the purchase carries
+            // it, so it travels with the asset rather than being looked up again.
+            editor?.nameplate = chosen.map { item in
+                Nameplate(
+                    asset: item.asset,
+                    palette: item.palette.flatMap(NameplatePalette.init(rawValue:)) ?? .none,
+                    label: item.label,
+                    skuID: item.skuID
+                )
+            }
+        case .avatarDecoration:
+            editor?.avatarDecorationSKU = chosen?.skuID
+            // The hash, so the rail and the preview can draw it before saving.
+            editor?.decorationAsset = chosen?.asset
+        case .profileEffect: editor?.profileEffectSKU = chosen?.skuID
+        case .profileFrame: break
+        }
+    }
+
+    /// Writes the draft, and reloads the profile from Discord rather than
+    /// trusting the reply.
+    ///
+    /// **The reload is not belt and braces.** The save fans out over up to four
+    /// routes and each answers only for its own fields, so the only thing that
+    /// knows what the profile is afterwards is the profile route. A surface that
+    /// patched its own state from four partial replies would drift from the
+    /// truth in exactly the cases the reader cannot see.
+    private func commit(_ profile: ProfilePresentation) {
+        guard let editor else { return }
+        Task {
+            if await editor.save(using: model.sessionController.rest) {
+                self.editor = nil
+                model.sessionController.loadProfile(
+                    of: profile.userID,
+                    inGuild: model.selectedGuildID
+                )
+            }
         }
     }
 

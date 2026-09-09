@@ -34,15 +34,10 @@ enum DemoFixtures {
     /// that says *where to put it* would otherwise never arrive.
     private static let profileFrame: ProfileFrame? = {
         let sku = "1515124557290410204"
-        let layers: [(String, ProfileFrame.Anchor)] = [
+        let pieces = frameLayers(sku: sku, [
             ("1515124885113012234", .top),
             ("1515124888313266236", .bottom),
-        ]
-        let pieces = layers.compactMap { id, anchor in
-            CDN.profileFrameLayer(sku: sku, layerID: id).map {
-                ProfileFrame.Layer(id: id, url: $0, anchor: anchor, order: .front)
-            }
-        }
+        ])
         guard !pieces.isEmpty else { return nil }
         return ProfileFrame(
             skuID: sku,
@@ -55,6 +50,60 @@ enum DemoFixtures {
             layers: pieces
         )
     }()
+
+    /// Kawaii Cat, exactly as `GET /collectibles-products/{sku}` sent it.
+    ///
+    /// **Here beside Dark Roses rather than instead of it, because it is the
+    /// captured frame with a `center` border** — the layer that is *stretched*
+    /// to the card rather than fitted to its own aspect, and therefore the only
+    /// one whose height is a decision this app makes. With only staples in the
+    /// fixture that decision was never on screen without a live account, and it
+    /// was wrong: the rails ran the whole composition and stood ninety points
+    /// clear of the cat's own head. See `FrameLayerFit`.
+    private static let catFrame: ProfileFrame? = {
+        let sku = "1489396533643448380"
+        let pieces = frameLayers(sku: sku, [
+            ("1511832450052133044", .center),
+            ("1511832453369827559", .top),
+            ("1511832456381071471", .bottom),
+        ])
+        guard !pieces.isEmpty else { return nil }
+        return ProfileFrame(
+            skuID: sku,
+            label: "A soft pink border with cute cat ears, glossy eyes, and a "
+                + "small nose and mouth centered at the top of the profile",
+            innerWidth: 1200,
+            overflowTop: 304,
+            overflowBottom: 135,
+            overflowHorizontal: 56,
+            layers: pieces
+        )
+    }()
+
+    /// Every captured layer is `front`; `back` is in the payload's vocabulary
+    /// and no frame on the shop has ever used it.
+    private static func frameLayers(
+        sku: String,
+        _ layers: [(String, ProfileFrame.Anchor)]
+    ) -> [ProfileFrame.Layer] {
+        layers.compactMap { id, anchor in
+            CDN.profileFrameLayer(sku: sku, layerID: id).map {
+                ProfileFrame.Layer(id: id, url: $0, anchor: anchor, order: .front)
+            }
+        }
+    }
+
+    /// Which frame a roster member wears, if any.
+    ///
+    /// Two of the ten, so a walk down the list reaches a card with a border, a
+    /// card with only staples, and a card with neither.
+    private static func frame(for offset: Int) -> ProfileFrame? {
+        switch offset % 10 {
+        case 2: profileFrame
+        case 7: catFrame
+        default: nil
+        }
+    }
 
     static func populate(_ model: AppModel) {
         model.connectionState = .ready
@@ -109,13 +158,15 @@ enum DemoFixtures {
                         palette: palettes[(offset / 5) % palettes.count],
                         label: "Blue roses with a butterfly."
                     ),
-                    // Every other plated member also wears the frame, so a
-                    // roster click reaches a card with one and a card without.
-                    profileFrameSKU: offset % 10 == 2 ? profileFrame?.skuID : nil
+                    // Some of the plated members also wear a frame, so a roster
+                    // click reaches a card with one and a card without.
+                    profileFrameSKU: frame(for: offset)?.skuID
                 )
             )
         }
-        if let profileFrame { model.profileFrames[profileFrame.skuID] = profileFrame }
+        for worn in [profileFrame, catFrame].compactMap({ $0 }) {
+            model.profileFrames[worn.skuID] = worn
+        }
 
         // Every effect and every face, spread across the roster, so `--demo`
         // reaches all seven and all twelve without an account that owns them.

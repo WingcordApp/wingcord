@@ -382,36 +382,221 @@ struct WidgetDecodeTests {
 
     // MARK: The write side
 
+    private func encoded(_ write: ProfileWidgetWrite) throws -> [String: Any] {
+        try #require(
+            try JSONSerialization.jsonObject(with: JSONEncoder().encode(write)) as? [String: Any]
+        )
+    }
+
+    /// **The shape that shipped for a whole session was wrong, and only a
+    /// capture could say so.** It was derived from the read's *inner* object, so
+    /// it encoded `{type, games}` flat and carried no id — while the route takes
+    /// `{id, data:{type, games}}` and treats a missing id as "make a new one".
+    /// Every save would therefore have deleted and recreated the whole board.
+    @Test("A write is an id beside a data envelope")
+    func writeEnvelope() throws {
+        let write = ProfileWidgetWrite(
+            id: "1539974257327743066",
+            kind: .playedGames,
+            games: [ProfileWidgetGame(gameID: ApplicationID(rawValue: 1_402_416_946_796_227_298))]
+        )
+        let object = try encoded(write)
+        #expect(object["id"] as? String == "1539974257327743066")
+        #expect(object["type"] == nil)
+        let data = try #require(object["data"] as? [String: Any])
+        #expect(data["type"] as? String == "played_games")
+        #expect((data["games"] as? [Any])?.count == 1)
+    }
+
+    /// A widget the reader has just added has no id to send, and the reply is
+    /// where its id comes from.
+    @Test("A new widget sends no id at all")
+    func writeWithoutID() throws {
+        let object = try encoded(ProfileWidgetWrite(kind: .currentGames, games: []))
+        #expect(object["id"] == nil)
+        #expect(object.keys.sorted() == ["data"])
+    }
+
     @Test("A write caps each list at its kind's own limit")
     func writeCaps() throws {
         let games = (1...25).map {
             ProfileWidgetGame(gameID: ApplicationID(rawValue: UInt64($0)), tags: [.skill(.expert)])
         }
-        let write = ProfileWidgetWrite(kind: .playedGames, games: games)
-        let json = try JSONSerialization.jsonObject(with: JSONEncoder().encode(write))
-        let object = try #require(json as? [String: Any])
-        #expect(object["type"] as? String == "played_games")
-        #expect((object["games"] as? [Any])?.count == 20)
+        let data = try #require(
+            try encoded(ProfileWidgetWrite(kind: .playedGames, games: games))["data"]
+                as? [String: Any]
+        )
+        #expect(data["type"] as? String == "played_games")
+        #expect((data["games"] as? [Any])?.count == 20)
     }
 
     @Test("A favourite is capped at one and an application widget sends no games")
     func writeShapes() throws {
-        let favourite = ProfileWidgetWrite(
-            kind: .favouriteGames,
-            games: (1...3).map { ProfileWidgetGame(gameID: ApplicationID(rawValue: UInt64($0))) }
+        let favourite = try encoded(
+            ProfileWidgetWrite(
+                kind: .favouriteGames,
+                games: (1...3).map { ProfileWidgetGame(gameID: ApplicationID(rawValue: UInt64($0))) }
+            )
         )
-        let favouriteJSON = try #require(
-            try JSONSerialization.jsonObject(with: JSONEncoder().encode(favourite))
-                as? [String: Any]
-        )
-        #expect((favouriteJSON["games"] as? [Any])?.count == 1)
+        #expect(((favourite["data"] as? [String: Any])?["games"] as? [Any])?.count == 1)
 
-        let application = ProfileWidgetWrite(applicationID: ApplicationID(rawValue: 7))
-        let applicationJSON = try #require(
-            try JSONSerialization.jsonObject(with: JSONEncoder().encode(application))
-                as? [String: Any]
+        let application = try encoded(ProfileWidgetWrite(applicationID: ApplicationID(rawValue: 7)))
+        let data = try #require(application["data"] as? [String: Any])
+        #expect(data["application_id"] as? String == "7")
+        #expect(data["games"] == nil)
+    }
+
+    /// **A blank comment is not a comment.** The wire sends `null` for a game
+    /// nobody wrote about, and a text field the reader emptied hands back `""` —
+    /// which the board would then draw as a pair of quotation marks around
+    /// nothing.
+    @Test("An emptied comment is sent as null")
+    func writeEmptyComment() throws {
+        let write = ProfileWidgetWrite(
+            kind: .favouriteGames,
+            games: [ProfileWidgetGame(gameID: ApplicationID(rawValue: 1), comment: "")]
         )
-        #expect(applicationJSON["application_id"] as? String == "7")
-        #expect(applicationJSON["games"] == nil)
+        let data = try #require(try encoded(write)["data"] as? [String: Any])
+        let game = try #require((data["games"] as? [[String: Any]])?.first)
+        #expect(game["comment"] == nil)
+    }
+
+    /// **The write's reply is an object, not an array.** Decoding it as a bare
+    /// array threw *after* Discord had already applied the change — the board
+    /// was saved, the editor reported a failure, and pressing Save again sent
+    /// the whole board a second time.
+    @Test("The write's reply is unwrapped from its envelope")
+    func writeReplyEnvelope() throws {
+        let json = """
+        {"widgets":[
+          {"id":"1539974257327743066","updated_at":"2026-08-20T12:28:38.521336+00:00",
+           "data":{"type":"played_games","games":[{"game_id":"1402416946796227298",
+                    "comment":null,"tags":[]}]}}
+        ]}
+        """
+        struct Reply: Decodable { var widgets: [ProfileWidgetDTO]? }
+        let reply = try JSONDecoder().decode(Reply.self, from: Data(json.utf8))
+        // Unwrapped before the map: `#require` cannot expand around an
+        // optional-chained call.
+        let entries = try #require(reply.widgets)
+        let board = entries.compactMap(\.domain)
+        #expect(board.count == 1)
+        #expect(board[0].id == "1539974257327743066")
+    }
+
+    // MARK: The widget somebody wrote
+
+    /// The captured shape, whole.
+    ///
+    /// **Two sections in one array, tagged.** `title`/`subtitle` belong to the
+    /// cover and `fields` to the list, and each is absent on the other — so a
+    /// decoder keying off which properties turned up rather than off `type`
+    /// reads a cover as an empty field list.
+    @Test("A personal widget decodes its cover and its four slots")
+    func personalWidgetDecodes() throws {
+        let json = """
+        {"id":"1547200267473589256","updated_at":"2026-09-09T11:01:29.359041+00:00",
+         "data":{"type":"personal","header":"Widget Name","sections":[
+           {"type":"cover","title":"Title","subtitle":"Description",
+            "image":{"file_id":"1547200273017192144","width":256,"height":108,
+                     "is_animated":false}},
+           {"type":"fields","fields":[
+             {"title":"lol1","description":"desc1",
+              "image":{"file_id":"1547200274128530862","width":256,"height":256,
+                       "is_animated":false}},
+             {"title":"lol2","description":"desc2"}]}]}}
+        """
+        let widget = try #require(
+            try JSONDecoder().decode(ProfileWidgetDTO.self, from: Data(json.utf8)).domain
+        )
+        guard case .personal(let personal) = widget.content else {
+            Issue.record("not a personal widget")
+            return
+        }
+        #expect(personal.header == "Widget Name")
+        #expect(personal.cover.title == "Title")
+        #expect(personal.cover.subtitle == "Description")
+        #expect(personal.cover.image?.fileID == "1547200273017192144")
+        #expect(personal.fields.count == 2)
+        // A slot with no picture is an ordinary slot, not a broken one.
+        #expect(personal.fields[1].image == nil)
+    }
+
+    /// **A write sends `filename` and never `file_id`.** Echoing the stored form
+    /// back is a 400, so a picture that has not been re-uploaded is simply left
+    /// out of its slot.
+    @Test("A personal widget writes filenames, and omits stored pictures")
+    func personalWidgetWrites() throws {
+        let personal = PersonalWidget(
+            header: "Widget Name",
+            cover: PersonalWidget.Cover(
+                title: "Title",
+                subtitle: "Description",
+                image: .staged(filename: "201afde1/WingCord-iOS-Default-1282x.png")
+            ),
+            fields: [
+                PersonalWidget.Field(
+                    title: "lol1",
+                    description: "desc1",
+                    image: .stored(fileID: "999", width: 256, height: 256, isAnimated: false)
+                )
+            ]
+        )
+        let data = try #require(
+            try encoded(ProfileWidgetWrite(personal: personal))["data"] as? [String: Any]
+        )
+        #expect(data["type"] as? String == "personal")
+        #expect(data["header"] as? String == "Widget Name")
+
+        let sections = try #require(data["sections"] as? [[String: Any]])
+        #expect(sections.count == 2)
+        #expect(sections[0]["type"] as? String == "cover")
+        let coverImage = try #require(sections[0]["image"] as? [String: Any])
+        #expect(coverImage["filename"] as? String == "201afde1/WingCord-iOS-Default-1282x.png")
+        #expect(coverImage["file_id"] == nil)
+
+        let fields = try #require(sections[1]["fields"] as? [[String: Any]])
+        #expect(fields[0]["title"] as? String == "lol1")
+        // Already stored, so nothing to re-send.
+        #expect(fields[0]["image"] == nil)
+    }
+
+    /// Discord's editor draws four slots and the wire has never carried a fifth.
+    @Test("A personal widget keeps at most four slots")
+    func personalWidgetFieldCap() {
+        let personal = PersonalWidget(
+            fields: (1...6).map { PersonalWidget.Field(title: "\($0)") }
+        )
+        #expect(personal.fields.count == 4)
+    }
+
+    /// **A block can carry an explicit `null` picture**, and the list is not
+    /// padded to four. Captured off a live profile: a widget with two blocks
+    /// sends two, and the second's `image` is `null` rather than absent.
+    @Test("A personal widget read back keeps only the blocks that exist")
+    func personalWidgetSparseFields() throws {
+        let json = """
+        {"id":"1547211197549790834","updated_at":"2026-09-09T11:47:32.551139+00:00",
+         "data":{"type":"personal","header":"Test widget","sections":[
+           {"type":"cover","title":"Test widgets","subtitle":"",
+            "image":{"file_id":"1547211686811724948","width":256,"height":91,
+                     "is_animated":false}},
+           {"type":"fields","fields":[
+             {"title":"Test","description":"",
+              "image":{"file_id":"1547211860244681699","width":1024,"height":1024,
+                       "is_animated":false}},
+             {"title":"Test","description":"","image":null}]}]}}
+        """
+        let widget = try #require(
+            try JSONDecoder().decode(ProfileWidgetDTO.self, from: Data(json.utf8)).domain
+        )
+        guard case .personal(let personal) = widget.content else {
+            Issue.record("not a personal widget")
+            return
+        }
+        #expect(personal.fields.count == 2)
+        #expect(personal.cover.subtitle.isEmpty)
+        #expect(personal.fields[0].image?.fileID == "1547211860244681699")
+        #expect(personal.fields[1].image == nil)
     }
 }

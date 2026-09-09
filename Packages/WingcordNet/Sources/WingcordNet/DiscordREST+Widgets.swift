@@ -82,13 +82,69 @@ extension DiscordREST {
     @discardableResult
     public func setProfileWidgets(_ widgets: [ProfileWidgetWrite]) async throws -> [ProfileWidget] {
         struct Body: Encodable, Sendable { var widgets: [ProfileWidgetWrite] }
+        // **The reply is wrapped the same way the request is**, and decoding it
+        // as a bare array is a save that lands on Discord and then reports
+        // failure — the widget is gone, the editor says it is not, and pressing
+        // Save again sends the board a second time. Captured:
+        // `{"widgets":[{"id":"1539974257327743066","updated_at":…,"data":{…}}]}`.
+        struct Reply: Decodable, Sendable { var widgets: [ProfileWidgetDTO]? }
         return try await request(
             method: "PUT",
             path: "/users/@me/widgets",
             route: "users/@me/widgets",
             body: Body(widgets: widgets),
-            as: [ProfileWidgetDTO].self
-        ).compactMap(\.domain)
+            as: Reply.self
+        ).widgets?.compactMap(\.domain) ?? []
+    }
+
+    /// Puts one picture where a personal widget can point at it.
+    ///
+    /// **Two requests, and the second one is not Discord's.** `POST
+    /// /users/@me/widgets/assets/upload` answers a *signed Google Cloud Storage
+    /// URL* and the path to quote afterwards; the bytes then go straight to
+    /// Google with a plain `PUT` and no Authorization header at all — the
+    /// signature in the query string is the credential, and attaching the
+    /// account token to a third party's endpoint would be sending it somewhere
+    /// it does not belong. Captured, `Custom widget.har`.
+    ///
+    /// **The returned filename is not the one that was sent.** Discord sanitises
+    /// it: `WingCord-iOS-Default-128@2x.png` came back as
+    /// `WingCord-iOS-Default-1282x.png`. So the value the widget quotes is the
+    /// one this answers with, and a client that rebuilt the path from the local
+    /// file name would point every picture at nothing.
+    ///
+    /// - Returns: the `upload_filename` to put in `PersonalWidget.Asset.staged`.
+    public func uploadWidgetAsset(filename: String, bytes: Data) async throws -> String {
+        struct Body: Encodable, Sendable {
+            var filename: String
+            var file_size: Int
+        }
+        struct Reply: Decodable, Sendable {
+            var upload_url: URL?
+            var upload_filename: String?
+        }
+        let staged = try await post(
+            "/users/@me/widgets/assets/upload",
+            route: "users/@me/widgets/assets/upload",
+            body: Body(filename: filename, file_size: bytes.count),
+            as: Reply.self
+        )
+        guard let url = staged.upload_url, let name = staged.upload_filename else {
+            throw Failure.decoding("upload reply carried no url")
+        }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "PUT"
+        request.setValue("application/octet-stream", forHTTPHeaderField: "Content-Type")
+        let (_, response) = try await session.upload(for: request, from: bytes)
+        guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
+            throw Failure.api(
+                status: (response as? HTTPURLResponse)?.statusCode ?? 0,
+                code: nil,
+                message: "The picture could not be uploaded."
+            )
+        }
+        return name
     }
 
     /// Games Discord suggests for the reader's own board.

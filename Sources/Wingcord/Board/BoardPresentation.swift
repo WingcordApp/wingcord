@@ -34,12 +34,14 @@ struct BoardTile: Hashable, Sendable, Identifiable {
         case grid([BoardGame])
         /// An application's own widget.
         case application(BoardApplicationTile)
+        /// A widget the reader wrote: a cover and up to four labelled slots.
+        case personal(PersonalWidget)
     }
 
     var games: [BoardGame] {
         switch content {
         case .detailed(let games), .grid(let games): games
-        case .application: []
+        case .application, .personal: []
         }
     }
 

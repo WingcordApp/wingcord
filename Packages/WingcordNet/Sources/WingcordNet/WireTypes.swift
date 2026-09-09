@@ -50,6 +50,7 @@ struct UserDTO: Decodable, Sendable {
         // majority who have none.
         let decoration = UserDecoration(
             avatarDecorationHash: avatar_decoration_data?.asset,
+            avatarDecorationSKU: avatar_decoration_data?.sku_id,
             nameplate: collectibles?.nameplate?.domain,
             displayNameStyle: display_name_styles?.domain,
             bannerHash: banner,
@@ -97,6 +98,11 @@ extension UserDTO {
 
 struct AvatarDecorationDTO: Decodable, Sendable {
     var asset: String?
+    /// **On the wire from the start and decoded past for as long.** Nothing that
+    /// only *draws* a decoration needs it — the asset addresses the picture — so
+    /// it went unnoticed until an editor had to say which product is worn. The
+    /// same field, and the same omission, as `NameplateDTO.sku_id`.
+    var sku_id: String?
 }
 
 /// `user.display_name_styles` — `{font_id, effect_id, colors}`.
@@ -142,13 +148,15 @@ struct CollectiblesDTO: Decodable, Sendable {
         /// this list, and an unrecognised name has to cost the wash rather than
         /// the plate.
         var palette: String?
+        var sku_id: String?
 
         var domain: Nameplate? {
             guard let asset, !asset.isEmpty else { return nil }
             return Nameplate(
                 asset: asset,
                 palette: palette.flatMap(NameplatePalette.init(rawValue:)) ?? .none,
-                label: label
+                label: label,
+                skuID: sku_id
             )
         }
     }
@@ -1395,6 +1403,7 @@ struct UserProfileDTO: Decodable, Sendable {
 
         let decoration = UserDecoration(
             avatarDecorationHash: base.decoration?.avatarDecorationHash,
+            avatarDecorationSKU: base.decoration?.avatarDecorationSKU,
             nameplate: base.decoration?.nameplate,
             // Off the nested user object, like the nameplate above — **this
             // route is assigned WHOLE rather than merged**, so a cosmetic it

@@ -17,7 +17,25 @@ struct ApplicationWidgetCard: View {
     var tile: BoardApplicationTile
     var ground: ProfileGround
 
-    private static let headerHeight: CGFloat = 118
+    /// **Discord's own height, measured off their card at the same scale.**
+    /// This was 118, and at 118 a 300 × 450 character is a figure in a
+    /// letterbox with her boots sliced off at the divider.
+    ///
+    /// Fixed, where Discord's is not: their two captured cards come out at 167
+    /// and 147.5 with their text at identical offsets from the top, so the
+    /// height there follows the artwork's natural size. Nothing here can know
+    /// that size — `RemoteImage` draws a `resizable` image and reports no
+    /// intrinsic size — without reading a decode into `@State`, which is a
+    /// measurement that outlives what it measured and a card whose height jumps
+    /// when the picture lands. So: their taller card's number, for every card.
+    private static let headerHeight: CGFloat = 167
+    /// How far the name clears the divider.
+    ///
+    /// Measured the same way: Discord's "Server:" line sits 54 points above it,
+    /// not the 12 the application's own label uses at the top. The room under it
+    /// is where the character's body shows, and pinning the block at 12 instead
+    /// would put the whole of the new height in one void above the name.
+    private static let titleClearance: CGFloat = 52
     /// Three across, which is what makes six stats two rows — the shape both
     /// captured linked games publish.
     private static let statColumns = 3
@@ -63,10 +81,36 @@ struct ApplicationWidgetCard: View {
             // the title instead.
             HStack(spacing: 0) {
                 Spacer(minLength: 0)
-                RemoteImage(url: url, side: Self.headerHeight * 2, bucket: .artwork) {
+                // **Filled into a square of the header's height, anchored to its
+                // top, and that is the correction.** Fitted, a portrait
+                // character shrinks to the header's height and stands as a strip
+                // at the edge — 78 points wide at Arknights' 300 × 450. Discord
+                // fills a box the header's own height instead, so what arrives
+                // is the head and torso at a size worth drawing and the legs go
+                // past the bottom. Measured on their card: 165 points of
+                // character across a 432-point widget, against ours at 78.
+                RemoteImage(url: url, side: Self.headerHeight * 1.5, bucket: .artwork) {
                     Color.clear
                 }
-                .aspectRatio(contentMode: .fit)
+                .aspectRatio(contentMode: .fill)
+                .frame(width: Self.headerHeight, height: Self.headerHeight, alignment: .top)
+                .clipped()
+                // **And the crop is dissolved, not cut.** A figure sliced flat
+                // along the divider reads as a clipping defect whatever is above
+                // it; the same crop under a fade reads as the card ending. The
+                // ramp is over the last quarter, so it starts below the torso
+                // whatever the character is doing with their arms.
+                .mask(
+                    LinearGradient(
+                        stops: [
+                            .init(color: .black, location: 0),
+                            .init(color: .black, location: 0.75),
+                            .init(color: .clear, location: 1),
+                        ],
+                        startPoint: .top,
+                        endPoint: .bottom
+                    )
+                )
             }
             .frame(height: Self.headerHeight)
             // A wash from the leading edge so the title always has ground under
@@ -128,9 +172,10 @@ struct ApplicationWidgetCard: View {
                 }
             }
             .padding(.horizontal, Spacing.snug)
-            .padding(.bottom, Spacing.snug)
-            // The artwork occupies the trailing half of the header, so the text
-            // is held clear of it rather than drawn over the character's face.
+            .padding(.bottom, Self.titleClearance)
+            // The artwork occupies a square of the header's height at the
+            // trailing edge, so the text is held clear of it rather than drawn
+            // over the character's face.
             .padding(.trailing, Self.headerHeight)
         }
     }

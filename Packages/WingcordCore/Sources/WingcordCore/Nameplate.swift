@@ -73,6 +73,12 @@ public struct Nameplate: Hashable, Sendable, Codable {
     public let palette: NameplatePalette
     /// What the plate shows, in Discord's words. The accessibility label.
     public let label: String?
+    /// **The product this plate came from.** On the wire from the start and
+    /// decoded past for as long: nothing that only *draws* a nameplate needs it,
+    /// which is why it went unnoticed — but an editor does, because
+    /// `nameplate_sku_id` is what a save sends and a picker has nothing to mark
+    /// as current without it.
+    public let skuID: String?
 
     /// Where the strip is.
     ///
@@ -82,9 +88,15 @@ public struct Nameplate: Hashable, Sendable, Codable {
     /// then a `?? nil` to unpick it.
     public var artworkURL: URL? { CDN.nameplate(asset: asset) }
 
-    public init(asset: String, palette: NameplatePalette = .none, label: String? = nil) {
+    public init(
+        asset: String,
+        palette: NameplatePalette = .none,
+        label: String? = nil,
+        skuID: String? = nil
+    ) {
         self.asset = asset
         self.palette = palette
         self.label = label
+        self.skuID = skuID
     }
 }

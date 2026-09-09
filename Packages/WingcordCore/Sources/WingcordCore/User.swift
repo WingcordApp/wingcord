@@ -345,6 +345,9 @@ public final class UserDecoration: Hashable, Sendable, Codable {
     /// Avatar decoration asset hash — the ring or frame drawn *around* the
     /// avatar, at 1.2x its diameter and outside its circular mask.
     public let avatarDecorationHash: String?
+    /// The product the decoration came from. Needed only by the editor, which
+    /// sends it as `avatar_decoration_sku_id` and marks it in the picker.
+    public let avatarDecorationSKU: String?
     /// The strip drawn behind a whole roster row, and the colour it grounds
     /// that row with.
     public let nameplate: Nameplate?
@@ -410,6 +413,7 @@ public final class UserDecoration: Hashable, Sendable, Codable {
 
     public init(
         avatarDecorationHash: String? = nil,
+        avatarDecorationSKU: String? = nil,
         nameplate: Nameplate? = nil,
         displayNameStyle: DisplayNameStyle? = nil,
         bannerHash: String? = nil,
@@ -432,6 +436,7 @@ public final class UserDecoration: Hashable, Sendable, Codable {
         primaryGuildID: GuildID? = nil
     ) {
         self.avatarDecorationHash = avatarDecorationHash
+        self.avatarDecorationSKU = avatarDecorationSKU
         self.nameplate = nameplate
         self.displayNameStyle = displayNameStyle
         self.bannerHash = bannerHash
@@ -469,6 +474,8 @@ public final class UserDecoration: Hashable, Sendable, Codable {
         let merged = UserDecoration(
             avatarDecorationHash: incoming.avatarDecorationHash
                 ?? existing.avatarDecorationHash,
+            avatarDecorationSKU: incoming.avatarDecorationSKU
+                ?? existing.avatarDecorationSKU,
             nameplate: incoming.nameplate ?? existing.nameplate,
             displayNameStyle: incoming.displayNameStyle ?? existing.displayNameStyle,
             bannerHash: incoming.bannerHash ?? existing.bannerHash,

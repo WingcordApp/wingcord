@@ -138,6 +138,19 @@ extension AppModel {
                     return nil
                 }
                 return BoardTile(id: widget.id, title: tile.name, content: .application(tile))
+            case .personal(let personal):
+                // **Drawn even when it is nearly empty**, unlike a game list.
+                // An empty game widget is a promise of games somebody has not
+                // chosen; a personal widget with a heading and a cover title is
+                // already the thing they made.
+                guard !personal.header.isEmpty || !personal.cover.title.isEmpty
+                        || personal.cover.image != nil
+                else { return nil }
+                return BoardTile(
+                    id: widget.id,
+                    title: personal.header,
+                    content: .personal(personal)
+                )
             case .unknown:
                 // A widget kind added after this was written draws nothing
                 // rather than an empty frame — `INVARIANTS.md` §5.5.
