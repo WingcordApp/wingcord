@@ -21,9 +21,19 @@ struct MessageActionPresenter: ViewModifier {
         // to be invalidated by — and the delete confirmation's words, the
         // menu's rows and the report's tree all arrive or change while the
         // surface is already up.
-        let menuGroups = model.messageMenu.map {
+        var menuGroups = model.messageMenu.map {
             model.actions(for: $0.messageID, in: $0.channelID).menuGroups
         } ?? []
+        // **Apps is offered only when an app actually has something.** No
+        // permission gates it — see `MessageActionKind.apps` — so the question
+        // is whether the command index holds a MESSAGE command that applies
+        // here, and it is answered where the index lives rather than in the
+        // permission table.
+        if let request = model.messageMenu,
+           !model.contextCommandGroups(.message, in: request.channelID).isEmpty
+        {
+            menuGroups.append([.apps])
+        }
         let deletion = model.deleteRequest
 
         return content
@@ -32,7 +42,14 @@ struct MessageActionPresenter: ViewModifier {
                 attachmentAnchor: .rect(.rect(model.messageMenu?.anchor ?? .zero)),
                 arrowEdge: .bottom
             ) { request in
-                MessageMenu(groups: menuGroups) { kind in
+                MessageMenu(
+                    groups: menuGroups,
+                    // The subject the Apps list runs against. Passed rather
+                    // than rebuilt inside: the menu holds no model reference
+                    // beyond the environment and has no business deciding
+                    // what a right-click was on.
+                    appTarget: .message(request.messageID, in: request.channelID)
+                ) { kind in
                     MessageActionRouter.perform(
                         kind,
                         messageID: request.messageID,

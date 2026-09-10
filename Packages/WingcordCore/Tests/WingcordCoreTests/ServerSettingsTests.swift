@@ -831,3 +831,48 @@ struct ServerDraftTests {
         #expect(ThreadArchiveDuration.title(60) == "1 hour")
     }
 }
+
+/// What `PUT /guilds/{id}/requests/@me` actually answers with.
+@Suite("Member verification outcome")
+struct MemberVerificationOutcomeTests {
+
+    /// **The status a real submit returns, and it was falling through.**
+    ///
+    /// Captured: a `PUT` accepted with 201 replies
+    /// `{"application_status":"SUBMITTED","reviewed_at":null,
+    /// "join_request_id":"1547468630937201550"}`, and Discord's own client then
+    /// says "Your application is pending!". `SUBMITTED` was not in the mapping,
+    /// so it resolved to `.unknown` — a client that cannot tell "accepted, in
+    /// the queue" from "a state I have never seen".
+    ///
+    /// The same string was already known on the *other* side of this feature:
+    /// `GuildJoinRequest.Status.submitted` is what the moderator's list decodes.
+    @Test("SUBMITTED is pending, not unknown")
+    func submittedIsPending() {
+        #expect(
+            MemberVerificationOutcome(status: "SUBMITTED", rejectionReason: nil) == .pending
+        )
+    }
+
+    @Test("The three that were already right stay right")
+    func theRest() {
+        #expect(MemberVerificationOutcome(status: "APPROVED", rejectionReason: nil) == .approved)
+        #expect(MemberVerificationOutcome(status: "PENDING", rejectionReason: nil) == .pending)
+        #expect(MemberVerificationOutcome(status: "STARTED", rejectionReason: nil) == .pending)
+        #expect(
+            MemberVerificationOutcome(status: "REJECTED", rejectionReason: "no")
+                == .rejected("no")
+        )
+    }
+
+    /// A status this client has not seen is reported as unfinished rather than
+    /// guessed at — the set grows, and guessing "approved" misleads in the one
+    /// direction that matters.
+    @Test("An unknown status stays unknown")
+    func unknown() {
+        #expect(
+            MemberVerificationOutcome(status: "MARINATING", rejectionReason: nil)
+                == .unknown("MARINATING")
+        )
+    }
+}

@@ -87,10 +87,21 @@ struct CurrentActivityCard: View {
     /// is the common case and an empty 68-point hole is worse than a mark. The
     /// plate is the ground's own panel fill, so it belongs to the person's
     /// surface rather than being a grey box dropped on it.
+    /// The app's own icon, and the request that fetches it.
+    ///
+    /// Passed in rather than read from the store here: this view holds no
+    /// model reference, which is what lets the pane above it be compared.
+    var applicationIconURL: URL?
+
     private var artwork: some View {
         ZStack(alignment: .bottomTrailing) {
             RemoteImage(
-                url: activity.largeArtworkURL(side: Self.artworkSide),
+                // **The application's own icon where the presence has no
+                // artwork.** Rich presence art is optional and plenty of games
+                // publish none — Roblox publishes a name and nothing else —
+                // which drew a grey plate with a controller in it where
+                // Discord draws the app icon it has for every one of them.
+                url: activity.largeArtworkURL(side: Self.artworkSide) ?? applicationIconURL,
                 side: Self.artworkSide,
                 bucket: .artwork
             ) {
@@ -171,7 +182,11 @@ struct CurrentActivityCard: View {
                     Text(clockLabel(now: context.date, from: startedAt))
                         .font(.system(.caption).monospacedDigit())
                 }
-                .foregroundStyle(ground.accent ?? InkColor.secondary)
+                // **`inkAccent`, not `accent`.** The second is a surface
+                // colour — for a derived theme it is the avatar's own dominant
+                // colour — and setting text in it drew a black clock on a dark
+                // card for anybody with a dark avatar.
+                .foregroundStyle(ground.inkAccent ?? InkColor.secondary)
             }
             .padding(.top, 3)
         }
@@ -240,6 +255,9 @@ struct RecentActivityRow: View {
     /// The game's own box art, once `/games` has answered for it. Nil for a
     /// music row and for a game that has not landed yet.
     var coverURL: URL?
+    /// The application's own icon, which is what an activity that is not a
+    /// tracked game has instead of box art.
+    var applicationIconURL: URL?
     /// Opens the game profile. Nil for a row with no game behind it.
     var openGame: (() -> Void)?
 
@@ -320,7 +338,10 @@ struct RecentActivityRow: View {
 
     private var artworkURL: URL? {
         if case .listening(_, _, let url) = entry.subject { return url }
-        return coverURL
+        // Box art first, then the application's own icon. `/games` answers
+        // only for titles Discord tracks as games, so an activity like Wordle
+        // has no cover and every one of its rows drew the placeholder.
+        return coverURL ?? applicationIconURL
     }
 
     /// The kind glyph, when it happened, and its chips — on one line, because

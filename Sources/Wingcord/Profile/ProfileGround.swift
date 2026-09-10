@@ -151,6 +151,29 @@ enum ProfileGround: Equatable {
     /// this falls back to `Ink`, which is what the rest of the app uses.
     var accent: Color? { pair?.primary }
 
+    /// The same colour, safe to set **text** in.
+    ///
+    /// **A wash colour and an ink colour are not the same value, and treating
+    /// them as one is what drew a black clock on a dark card.** `accent` is a
+    /// surface colour: for a themed profile it is what the person chose, and
+    /// for a derived one it is the dominant colour quantised out of their
+    /// avatar — which for a dark avatar is very nearly black. Laid over the
+    /// canvas at 0.36 it is a perfectly good ground; used as a foreground it
+    /// is black on near-black, which is what the activity card's elapsed
+    /// clock was.
+    ///
+    /// So this floors the brightness and caps the saturation: the result is a
+    /// pastel of the person's own colour — still recognisably theirs, and
+    /// legible on this app's near-black canvas whatever it started as. A
+    /// colour that is already light passes through untouched.
+    ///
+    /// **Not a contrast *calculation*.** A WCAG ratio against a gradient that
+    /// runs two ways under a card is a number with no single answer; a floor
+    /// is honest about being a floor.
+    var inkAccent: Color? {
+        pair?.primary.liftedForInk()
+    }
+
     /// A grouped panel sitting on this ground — an activity card, a row that
     /// answers to the pointer.
     ///

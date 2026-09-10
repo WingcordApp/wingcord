@@ -63,6 +63,21 @@ nonisolated enum TimelineImageRequests {
                 }
             }
 
+            // The badge inside a server tag. Small — eleven points — and the
+            // painter only peeks, so without this every tag in the transcript
+            // draws its letters and a hole where the badge goes.
+            if let url = row.tagBadgeURL {
+                let key = ImageStore.Key(
+                    url: url,
+                    maximumPixelSize: Int(
+                        (MemberRowGeometry.tagBadgeSide * scale).rounded(.up)
+                    )
+                )
+                if seen.insert(key).inserted, ImageStore.shared.cached(key) == nil {
+                    requests.append(Request(key: key, source: .still(.thumbnail)))
+                }
+            }
+
             // The quoted face above a reply. **Requested at the message
             // avatar's size and drawn at sixteen points**, so a reply to
             // somebody already on screen costs nothing at all — the painter

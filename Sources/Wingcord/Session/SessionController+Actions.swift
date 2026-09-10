@@ -375,3 +375,234 @@ extension SessionController {
         String(UInt64(Date.now.timeIntervalSince1970 * 1000))
     }
 }
+
+// MARK: - The wire side of a conversation
+
+extension SessionController {
+
+    /// Pins a direct message, or unpins it.
+    ///
+    /// **The reply replaces the set rather than confirming the bit.** The route
+    /// answers with every override the private-channel pseudo-guild holds, and
+    /// an override with nothing left on it is dropped — so applying the answer
+    /// is both the confirmation and the correction, including for a pin some
+    /// other client made while this one was asking.
+    func writeDirectMessagePin(_ isPinned: Bool, channelID: ChannelID) {
+        let previous = model.pinnedChannelIDs
+        Task { [weak self] in
+            guard let self else { return }
+            defer { model.pinsInFlight.remove(channelID) }
+            do {
+                let pinned = try await rest.setDirectMessagePinned(
+                    isPinned, channelID: channelID
+                )
+                model.applyPinnedChannels(pinned)
+            } catch {
+                Self.trace("pin \(channelID) failed: \(Self.describe(error))")
+                model.applyPinnedChannels(previous)
+                model.reportActionFailure(Self.describe(error))
+            }
+        }
+    }
+
+    func writeDirectMessageMute(_ duration: MuteDuration?, channelID: ChannelID) {
+        let wasMuted = model.notificationPreferences.mutedChannelIDs.contains(channelID)
+        Task { [weak self] in
+            guard let self else { return }
+            do {
+                let muted = try await rest.setDirectMessageMuted(
+                    duration, channelID: channelID
+                )
+                model.applyChannelMute(muted.contains(channelID), channelID: channelID)
+            } catch {
+                Self.trace("mute \(channelID) failed: \(Self.describe(error))")
+                model.applyChannelMute(wasMuted, channelID: channelID)
+                model.reportActionFailure(Self.describe(error))
+            }
+        }
+    }
+
+    /// Closes a conversation.
+    ///
+    /// **No optimistic removal to revert.** The row goes when `CHANNEL_DELETE`
+    /// lands, which it does for the reader's own close as well as for a group
+    /// they were removed from — taking the row out here as well would be two
+    /// codepaths removing one row, and the second would have nothing to remove.
+    func writeCloseDirectMessage(_ channelID: ChannelID) {
+        Task { [weak self] in
+            guard let self else { return }
+            do {
+                try await rest.closeDirectMessage(channelID)
+            } catch {
+                Self.trace("close \(channelID) failed: \(Self.describe(error))")
+                model.reportActionFailure(Self.describe(error))
+            }
+        }
+    }
+
+    func writeFriendNickname(_ nickname: String?, for userID: UserID) {
+        let previous = model.friendNicknames[userID]
+        Task { [weak self] in
+            guard let self else { return }
+            do {
+                try await rest.setRelationshipNickname(nickname, for: userID)
+            } catch {
+                Self.trace("nickname \(userID) failed: \(Self.describe(error))")
+                model.applyFriendNickname(previous, for: userID)
+                model.reportActionFailure(Self.describe(error))
+            }
+        }
+    }
+}
+
+extension SessionController {
+
+    func writeBookmark(_ isSaved: Bool, messageID: MessageID, in channelID: ChannelID) {
+        Task { [weak self] in
+            guard let self else { return }
+            do {
+                try await rest.setMessageSaved(isSaved, messageID: messageID, in: channelID)
+            } catch {
+                Self.trace("bookmark \(messageID) failed: \(Self.describe(error))")
+                model.revertBookmark(!isSaved, messageID: messageID)
+                model.reportActionFailure(Self.describe(error))
+            }
+        }
+    }
+}
+
+// MARK: - The wire side of a stage
+
+extension SessionController {
+
+    /// Raises the reader's hand, or lowers it.
+    ///
+    /// **`Date.now` is computed here, at the moment of sending.** Discord
+    /// refuses a `request_to_speak_timestamp` in the past, so a value taken
+    /// when the button was pressed and sent after an actor hop can lose the
+    /// race with its own request — rarely, and therefore as an intermittent
+    /// failure, which is the worst kind.
+    func writeStageHand(_ isRaised: Bool, inGuild guildID: GuildID, channelID: ChannelID) {
+        Task { [weak self] in
+            guard let self else { return }
+            do {
+                try await rest.setSelfStageState(
+                    inGuild: guildID,
+                    channelID: channelID,
+                    requestToSpeakAt: .some(isRaised ? Date.now : nil)
+                )
+            } catch {
+                Self.trace("stage hand \(channelID): \(Self.describe(error))")
+                model.applySelfStageRequest(isRaised ? nil : Date.now)
+                model.reportActionFailure(Self.describe(error))
+            }
+        }
+    }
+
+    /// Moves somebody between speaker and audience.
+    ///
+    /// **Two routes behind one call**, and the difference is who: `@me` for
+    /// the reader and `{user.id}` for anybody else. They take different bodies
+    /// and hold different permissions — stepping down needs none, and every
+    /// other combination needs `MUTE_MEMBERS` — so the split lives here rather
+    /// than at each call site.
+    func writeStageSuppress(
+        _ suppress: Bool,
+        userID: UserID?,
+        inGuild guildID: GuildID,
+        channelID: ChannelID
+    ) {
+        let subject = userID ?? model.currentUserID
+        Task { [weak self] in
+            guard let self else { return }
+            do {
+                if let userID {
+                    try await rest.setStageSpeaker(
+                        userID,
+                        isSpeaker: !suppress,
+                        inGuild: guildID,
+                        channelID: channelID
+                    )
+                } else {
+                    try await rest.setSelfStageState(
+                        inGuild: guildID, channelID: channelID, suppress: suppress
+                    )
+                }
+            } catch {
+                Self.trace("stage suppress \(channelID): \(Self.describe(error))")
+                if let subject { model.applyStageSuppress(!suppress, for: subject) }
+                model.reportActionFailure(Self.describe(error))
+            }
+        }
+    }
+
+    func writeStartStage(
+        channelID: ChannelID,
+        guildID: GuildID,
+        topic: String,
+        notifyEveryone: Bool
+    ) {
+        Task { [weak self] in
+            guard let self else { return }
+            do {
+                if let stage = try await rest.startStage(
+                    inChannel: channelID, topic: topic, notifyEveryone: notifyEveryone
+                ) {
+                    model.applyStage(stage)
+                }
+            } catch {
+                Self.trace("start stage \(channelID): \(Self.describe(error))")
+                model.reportActionFailure(Self.describe(error))
+            }
+        }
+    }
+
+    func writeStageTopic(_ topic: String, channelID: ChannelID) {
+        Task { [weak self] in
+            guard let self else { return }
+            do {
+                if let stage = try await rest.setStageTopic(topic, inChannel: channelID) {
+                    model.applyStage(stage)
+                }
+            } catch {
+                Self.trace("stage topic \(channelID): \(Self.describe(error))")
+                model.reportActionFailure(Self.describe(error))
+            }
+        }
+    }
+
+    func writeEndStage(channelID: ChannelID) {
+        Task { [weak self] in
+            guard let self else { return }
+            do {
+                try await rest.endStage(inChannel: channelID)
+                model.applyStageEnded(channelID)
+            } catch {
+                Self.trace("end stage \(channelID): \(Self.describe(error))")
+                model.reportActionFailure(Self.describe(error))
+            }
+        }
+    }
+
+    /// Asks whether a stage channel has anything running in it.
+    ///
+    /// **404 is the answer, not a failure** — see
+    /// `DiscordREST.stageInstance`. Asked when a stage channel is opened,
+    /// because READY carries only the stages that were already live and one
+    /// started while this client was elsewhere reaches it no other way if the
+    /// gateway event was missed across a resume.
+    func loadStage(inChannel channelID: ChannelID) {
+        Task { [weak self] in
+            guard let self else { return }
+            do {
+                if let stage = try await rest.stageInstance(inChannel: channelID) {
+                    model.applyStage(stage)
+                } else {
+                    model.applyStageEnded(channelID)
+                }
+            } catch {
+                Self.trace("stage \(channelID): \(Self.describe(error))")
+            }
+        }
+    }
+}

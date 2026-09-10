@@ -304,7 +304,13 @@ struct ProfileIdentityPanel: View {
                         text: profile.displayName,
                         style: profile.displayNameStyle,
                         textStyle: .largeTitle,
-                        weight: .bold
+                        weight: .bold,
+                        // **The panel's own width, stated.** A styled name is
+                        // a drawn view and `.lineLimit(1)` below reaches only
+                        // the plain branch — so without a ceiling a long name
+                        // reported its whole measured width and took the card
+                        // out of the window with it.
+                        maximumWidth: contentWidth - (profile.isBot ? 44 : 0)
                     )
                     .lineLimit(1)
                 }
@@ -424,7 +430,10 @@ struct ProfileIdentityPanel: View {
                 ProfileDateSpan.Moment(
                     date: premium,
                     label: profile.premiumTier.label ?? "Nitro",
-                    symbolName: "sparkles"
+                    // Discord's own mark rather than `sparkles`. An SF Symbol
+                    // standing in for a brand reads as decoration beside the
+                    // two real marks on the same line.
+                    symbolName: BrandMark.nitro
                 )
             )
         }
@@ -883,8 +892,10 @@ struct ProfileDateSpan: View {
             RemoteImage(url: url, side: 13) { Circle().fill(Palette.surfaceRaised) }
                 .frame(width: 13, height: 13)
                 .clipShape(.circle)
-        } else if moment.symbolName == BrandMark.discord {
-            ConnectionMark(service: BrandMark.discord, side: 13)
+        } else if let symbolName = moment.symbolName, BrandMark.mark(for: symbolName) != nil {
+            // Discord's and Nitro's own outlines. Named through the table so a
+            // third one costs an entry rather than a branch.
+            ConnectionMark(service: symbolName, side: 13)
         } else if let symbolName = moment.symbolName {
             Image(systemName: symbolName)
                 .font(.system(size: 9))

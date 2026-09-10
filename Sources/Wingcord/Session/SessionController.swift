@@ -490,10 +490,13 @@ final class SessionController {
         }
 
         model.followedChannelIDs = snapshot.followedChannelIDs
+        model.pinnedChannelIDs = snapshot.pinnedChannelIDs
         model.blockedUserIDs = snapshot.blockedUserIDs
         model.ignoredUserIDs = snapshot.ignoredUserIDs
         model.relationships = snapshot.relationships
+        model.friendNicknames = snapshot.friendNicknames
         model.notes = snapshot.notes
+        model.stageInstances = snapshot.stages
         voice.applyReady(
             voiceStates: snapshot.voiceStates,
             soundboards: snapshot.soundboardsByGuild
@@ -540,6 +543,11 @@ final class SessionController {
         model.presenceRevision &+= 1
         model.identityRevision &+= 1
         model.connectionState = .ready
+        // **Nothing in READY mentions an outstanding application**, so this is
+        // the one fetch that has to follow it: without it a submitted
+        // application is invisible across a relaunch and the tag card offers
+        // to apply again. See `JoinRequestGuild`.
+        loadJoinRequestGuilds()
         voice.gatewayDidReconnect()
 
         restoreNavigation()
@@ -752,9 +760,13 @@ final class SessionController {
 
         case .guildAvailable(
             let guild, let channels, let threads, let roles, let members, let users,
-            let presences, let emojis, let stickers
+            let presences, let emojis, let stickers, let stages
         ):
             model.guilds[guild.id] = guild
+            // The stages already running here. A server arriving mid-session
+            // is the only place they come from besides READY and the three
+            // `STAGE_INSTANCE_*` events.
+            for stage in stages { model.applyStage(stage) }
             model.channelIndex.replaceChannels(channels, inGuild: guild.id)
             // After the channels, never before: `replaceChannels` drops the
             // threads of any parent that did not come back, so threads inserted
@@ -782,6 +794,12 @@ final class SessionController {
             if let emojis { model.guildEmojis[guildID] = emojis.isEmpty ? nil : emojis }
             if let stickers { model.guildStickers[guildID] = stickers.isEmpty ? nil : stickers }
             model.expressionRevision &+= 1
+
+        case .stageChanged(let stage):
+            model.applyStage(stage)
+
+        case .stageEnded(let channelID):
+            model.applyStageEnded(channelID)
 
         case .guildUpdated(let guild):
             model.guilds[guild.id] = guild
@@ -879,6 +897,22 @@ final class SessionController {
         case .currentUserUpdated(let user):
             model.users[user.id] = user.merged(over: model.users[user.id])
             model.identityRevision &+= 1
+
+        case .friendNicknameChanged(let userID, let nickname):
+            // Applied whatever set it: the reader's own rename settles on the
+            // same answer its optimistic write already made, and one made on a
+            // phone reaches this window without a refetch.
+            model.applyFriendNickname(nickname, for: userID)
+
+        case .guildSettingsChanged(let guildID, let pinned, let muted):
+            // **Only the private-channel entry carries pins**, and it is the
+            // one whose `guild_id` is null. A server's entry arriving here
+            // would otherwise clear every pin in the direct-message list,
+            // because its own override set has none in it.
+            if guildID == nil { model.applyPinnedChannels(pinned) }
+            for channelID in model.channelIndex.privateChannelIDs() {
+                model.applyChannelMute(muted.contains(channelID), channelID: channelID)
+            }
 
         case .relationshipChanged(let userID, let kind, let isIgnored, let user):
             // **Applied whatever the client did.** These arrive for the reader's

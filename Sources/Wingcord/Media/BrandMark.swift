@@ -92,7 +92,33 @@ nonisolated enum BrandMark {
     /// brand outline lives.
     static let discord = "discord"
 
+    /// Nitro's own mark.
+    ///
+    /// Not a connection either, and here for the same reason `discord` is: the
+    /// profile's Member Since row names three services and two of them are
+    /// Discord's own. It used to draw `sparkles` there — an SF Symbol standing
+    /// in for a brand, which reads as a decoration rather than as the thing
+    /// being named.
+    ///
+    /// **Converted from Discord's own SVG, not traced.** The source is
+    /// `linkButtonIcon`'s path, which is relative commands and three elliptic
+    /// arcs; this file's parser takes absolute `M/L/C/Z` only — deliberately,
+    /// so it has no arc case to be wrong about. Each arc was resolved to
+    /// quarter-or-less cubic segments and checked against a from-scratch
+    /// circle solve: **worst radial error 0.0009 units on the 24-unit grid**,
+    /// which is 0.0008 points at the size this is drawn.
+    static let nitro = "nitro"
+
     private static let marks: [String: Mark] = [
+        nitro: Mark(
+            outline:
+                "M 16.23 12 C 16.23 13.29 15.28 14.25 14.01 14.25 C 13.414 14.259 12.841 14.023 12.424 13.598 C 12.006 13.173 11.781 12.595 11.8 12 C 11.8 10.71 12.75 9.75 14.02 9.75 C 15.29 9.75 16.24 10.71 16.24 12 Z M 23 12 C 23 17.01 19 21 14.01 21 C 9.84 21.025 6.208 18.161 5.26 14.1 L 3.34 14.1 L 2.44 9.9 L 5.3 9.9 C 5.56 8.94 5.98 8.01 6.51 7.2 L 1.89 7.2 L 1 3 L 13.74 3 C 19.13 3 23 6.99 23 12 Z M 18.74 12 C 18.74 9.33 16.64 7.2 14.01 7.2 C 12.744 7.203 11.532 7.711 10.643 8.613 C 9.755 9.515 9.264 10.734 9.28 12 C 9.28 14.67 11.38 16.8 14.01 16.8 C 15.276 16.797 16.488 16.289 17.377 15.387 C 18.265 14.485 18.756 13.266 18.74 12 Z",
+            // Nitro's brand is a gradient and a mark table holds one colour, so
+            // this is the pink end — the half people recognise, and the one
+            // Discord's own badge leads with.
+            tint: 0xFF73FA,
+            name: "Nitro"
+        ),
         discord: Mark(
             outline:
                 "M20.32 4.37 C18.76 3.66 17.12 3.15 15.43 2.85 C15.4 2.85 15.37 2.86 15.35 2.89 C15.14 3.27 14.91 3.76 14.75 4.14 C12.9 3.86 11.07 3.86 9.26 4.14 C9.09 3.75 8.85 3.27 8.64 2.89 C8.62 2.86 8.59 2.85 8.56 2.85 C6.87 3.15 5.23 3.65 3.68 4.37 C3.66 4.38 3.65 4.39 3.64 4.4 C0.53 9.05 -0.32 13.58 0.1 18.06 C0.1 18.08 0.11 18.1 0.13 18.11 C2.18 19.62 4.17 20.54 6.12 21.14 C6.15 21.15 6.19 21.14 6.21 21.12 C6.67 20.49 7.08 19.82 7.43 19.12 C7.44 19.1 7.44 19.08 7.44 19.06 C7.43 19.04 7.41 19.02 7.39 19.02 C6.74 18.77 6.12 18.47 5.52 18.12 C5.5 18.11 5.48 18.09 5.48 18.06 C5.48 18.04 5.49 18.01 5.51 18 C5.64 17.9 5.76 17.8 5.88 17.7 C5.91 17.69 5.94 17.68 5.96 17.69 C9.89 19.49 14.14 19.49 18.02 17.69 C18.05 17.68 18.08 17.69 18.1 17.7 C18.22 17.8 18.35 17.9 18.47 18 C18.49 18.01 18.51 18.04 18.5 18.06 C18.5 18.09 18.49 18.11 18.47 18.12 C17.87 18.47 17.24 18.77 16.59 19.01 C16.57 19.02 16.56 19.04 16.55 19.06 C16.54 19.08 16.54 19.1 16.55 19.12 C16.91 19.82 17.33 20.48 17.78 21.11 C17.8 21.14 17.83 21.15 17.86 21.14 C19.82 20.54 21.81 19.62 23.87 18.11 C23.88 18.1 23.89 18.08 23.9 18.06 C24.4 12.88 23.06 8.38 20.35 4.4 C20.34 4.39 20.33 4.38 20.32 4.37 Z M8.02 15.33 C6.84 15.33 5.86 14.25 5.86 12.91 C5.86 11.58 6.82 10.49 8.02 10.49 C9.23 10.49 10.2 11.59 10.18 12.91 C10.18 14.25 9.22 15.33 8.02 15.33 Z M15.99 15.33 C14.81 15.33 13.84 14.25 13.84 12.91 C13.84 11.58 14.79 10.49 15.99 10.49 C17.21 10.49 18.17 11.59 18.15 12.91 C18.15 14.25 17.21 15.33 15.99 15.33 Z",

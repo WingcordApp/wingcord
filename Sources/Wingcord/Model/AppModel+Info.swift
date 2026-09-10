@@ -255,9 +255,16 @@ extension AppModel {
                 CDN.guildIcon(guildID: guildID, hash: $0, side: Metrics.avatarProfile)
             },
             monogram: resident?.monogram ?? AppModel.monogram(of: name),
-            bannerURL: (profile?.bannerHash ?? resident?.bannerHash).flatMap {
-                CDN.guildProfileBanner(guildID: guildID, hash: $0, width: 340)
-            },
+            // **Both hashes, because they are two different CDN families** —
+            // see `CDN.guildProfileBanner`. The resident guild's own banner
+            // stands in for a server the reader is already a member of, which
+            // is the one case the profile route may not have been asked for.
+            bannerURL: CDN.guildProfileBanner(
+                guildID: guildID,
+                bannerHash: profile?.bannerHash ?? resident?.bannerHash,
+                customBannerHash: profile?.customBannerHash,
+                width: 340
+            ),
             badgeURL: profile?.badgeHash.flatMap {
                 CDN.guildTagBadge(guildID: guildID, hash: $0)
             },
@@ -271,7 +278,8 @@ extension AppModel {
             traits: profile?.traits ?? [],
             createdAt: guildID.timestamp,
             isJoined: resident != nil,
-            isLoading: guildProfilesLoading.contains(guildID)
+            isLoading: guildProfilesLoading.contains(guildID),
+            entry: guildEntry(for: guildID, profile: profile, isJoined: resident != nil)
         )
     }
 
@@ -334,5 +342,35 @@ extension AppModel {
             return
         }
         NSWorkspace.shared.open(url)
+    }
+}
+
+extension AppModel {
+
+    /// How a reader gets into a server they are looking at from the outside.
+    ///
+    /// **Decided by the server's own feature list, which the profile route
+    /// already carries.** `MEMBER_VERIFICATION_GATE_ENABLED` is the bit that
+    /// turns Join into Apply to Join — both are on the yoho club payload the
+    /// join capture answered with, beside `MEMBER_VERIFICATION_MANUAL_APPROVAL`
+    /// — and the features were being decoded and read by nothing here.
+    ///
+    /// The card used to say "You are not in this server." and stop, on the
+    /// reading that this client had no route for it. It has had one all along:
+    /// `PUT /guilds/{id}/members/@me` is what discovery's own join button
+    /// sends, and the application form is the gate the invite flow already
+    /// draws.
+    func guildEntry(
+        for guildID: GuildID,
+        profile: GuildProfile?,
+        isJoined: Bool
+    ) -> GuildProfilePresentation.Entry {
+        if isJoined { return .none }
+        // Waiting on a moderator beats offering the form again.
+        if pendingJoinRequestGuildIDs.contains(guildID) { return .pending }
+        guard let profile else { return .none }
+        return profile.features.contains("MEMBER_VERIFICATION_GATE_ENABLED")
+            ? .apply
+            : .join
     }
 }

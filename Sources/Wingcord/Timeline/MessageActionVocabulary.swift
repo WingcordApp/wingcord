@@ -16,6 +16,10 @@ enum MessageActionKind: Hashable, Sendable, Identifiable, CaseIterable {
     case unpin
     case markUnread
     case copyLink
+    case bookmark
+    case unbookmark
+    /// Opens the list of what an installed app can do to this message.
+    case apps
     case report
     case delete
     case copyID
@@ -35,6 +39,9 @@ enum MessageActionKind: Hashable, Sendable, Identifiable, CaseIterable {
         case .unpin: "Unpin Message"
         case .markUnread: "Mark Unread"
         case .copyLink: "Copy Message Link"
+        case .bookmark: "Bookmark Message"
+        case .unbookmark: "Remove Bookmark"
+        case .apps: "Apps"
         case .report: "Report Message"
         case .delete: "Delete Message"
         case .copyID: "Copy Message ID"
@@ -53,6 +60,9 @@ enum MessageActionKind: Hashable, Sendable, Identifiable, CaseIterable {
         case .unpin: "pin.slash"
         case .markUnread: "envelope.badge"
         case .copyLink: "link"
+        case .bookmark: "bookmark"
+        case .unbookmark: "bookmark.slash"
+        case .apps: "square.grid.2x2"
         case .report: "flag"
         case .delete: "trash"
         case .copyID: "number"
@@ -69,7 +79,7 @@ enum MessageActionKind: Hashable, Sendable, Identifiable, CaseIterable {
     /// looks different from one that acts.
     var opensSurface: Bool {
         switch self {
-        case .react, .forward, .report: true
+        case .react, .forward, .report, .apps: true
         default: false
         }
     }
@@ -87,6 +97,13 @@ enum MessageActionKind: Hashable, Sendable, Identifiable, CaseIterable {
         case .unpin: .unpin
         case .markUnread: .markUnread
         case .copyLink: .copyLink
+        case .bookmark: .bookmark
+        case .unbookmark: .unbookmark
+        // **Nothing gates it in the permission table.** Whether the row is
+        // offered is whether an app actually has something for a message —
+        // a question about the command index rather than about permissions,
+        // answered by the menu's builder. See `MessageActionPresenter`.
+        case .apps: nil
         case .report: .report
         case .delete: .delete
         case .copyID: .copyID
@@ -130,7 +147,7 @@ extension MessageActions {
         let groups: [[MessageActionKind]] = [
             [.react],
             [.reply, .forward, .edit],
-            [.copyText, .pin, .unpin, .markUnread, .copyLink],
+            [.copyText, .pin, .unpin, .bookmark, .unbookmark, .markUnread, .copyLink],
             [.report],
             [.delete],
             [.copyID],

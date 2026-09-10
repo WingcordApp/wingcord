@@ -180,6 +180,29 @@ extension View {
         scrollEdgeEffectStyle(.soft, for: [.top, .bottom])
     }
 
+    /// The same, for a list whose bottom edge is a floating **glass** bar.
+    ///
+    /// **A scroll edge effect and a glass capsule are two answers to the same
+    /// question, and running both gives the worse one.** The effect blurs the
+    /// rows *before* they reach the material, so the capsule samples a flat
+    /// band instead of moving content — which is the loss §4 rule 3 describes
+    /// for an opaque fill, arriving from the other side. Measured on the now
+    /// bar: with a nameplate's colour in the material the bar read as a painted
+    /// panel, because there was nothing left underneath it to refract.
+    ///
+    /// It is also visible on its own terms. The band is the **column's** width
+    /// and the capsule is inset from it, so the blur runs down both gutters and
+    /// ends on a hard vertical line beside the bar — chrome for a bar that is
+    /// not there.
+    ///
+    /// The top keeps its soft edge: what a list passes under up there is the
+    /// window's own opaque chrome, which is the case the effect exists for.
+    /// This is the same split the transcript already has — `ScrollEdgeBlur` at
+    /// the top, nothing at the composer.
+    func softScrollEdgeTopOnly() -> some View {
+        scrollEdgeEffectStyle(.soft, for: .top)
+            .scrollEdgeEffectHidden(true, for: .bottom)
+    }
 }
 
 // MARK: - Floating bars

@@ -75,6 +75,15 @@ nonisolated struct MessageRow: @unchecked Sendable {
 
     var isBot: Bool
 
+    /// The server tag worn beside the name, and where it sits.
+    ///
+    /// **Reserved at layout time, like the bot badge**, because the timestamp
+    /// is placed after it — a chip measured inside the painter would draw over
+    /// the time or leave a hole where it should be.
+    var tag: String?
+    var tagBadgeURL: URL?
+    var tagRect: CGRect = .zero
+
     /// The message this one forwards, quoted. Nil for everything else, which is
     /// nearly every message.
     var forwarded: ForwardedSlot?
@@ -448,6 +457,15 @@ nonisolated struct TimelineLayoutEngine: Sendable {
         var monogram: String
         var decorationURL: URL?
         var isBot: Bool
+        /// The server tag they wear, beside their name.
+        ///
+        /// **The same fact the roster and the direct-message list already
+        /// draw** — `UserDecoration.primaryGuildTag` — resolved here so the
+        /// three surfaces cannot disagree about what somebody looks like. It
+        /// was on the wire and read by nothing in the transcript.
+        var tag: String?
+        /// The little badge inside the chip, ahead of the letters.
+        var tagBadgeURL: URL?
         /// The styled face, already resolved. Nil is the ordinary case.
         var nameFace: NSFont?
         /// Discord's per-family tracking, in points.
@@ -687,6 +705,7 @@ nonisolated struct TimelineLayoutEngine: Sendable {
             y = slot.rect.maxY + TimelineMetrics.replyGap
         }
 
+        var tagRect = CGRect.zero
         if item.isRunHead {
             avatarRect = CGRect(
                 x: TimelineMetrics.horizontalMargin,
@@ -713,8 +732,27 @@ nonisolated struct TimelineLayoutEngine: Sendable {
                 input.settings.timestampLabel(message.sentAt, calendar: input.calendar),
                 font: input.style.metadataFont
             )
+            // The server tag, in the same chip the roster draws — see
+            // `MemberRowGeometry.tagChipWidth`, which both the reservation and
+            // the draw call so the padding cannot end up pooled on one side.
+            var afterName = authorRect.maxX + (author?.isBot == true ? 34 : 0)
+            if let tag = author?.tag {
+                let width = MemberRowGeometry.tagChipWidth(
+                    textWidth: Self.measure(tag, font: MemberRowGeometry.tagChipFont),
+                    hasBadge: author?.tagBadgeURL != nil
+                )
+                tagRect = CGRect(
+                    x: afterName + 6,
+                    // Centred on the name's own line box rather than pinned to
+                    // its top: the chip is 15 points and the header is taller.
+                    y: y + (TimelineMetrics.headerHeight - MemberRowGeometry.tagChipHeight) / 2,
+                    width: width,
+                    height: MemberRowGeometry.tagChipHeight
+                )
+                afterName = tagRect.maxX
+            }
             timestampRect = CGRect(
-                x: authorRect.maxX + 8 + (author?.isBot == true ? 34 : 0),
+                x: afterName + 8,
                 y: y,
                 width: stampWidth,
                 height: TimelineMetrics.headerHeight
@@ -964,6 +1002,9 @@ nonisolated struct TimelineLayoutEngine: Sendable {
             timestampRect: timestampRect,
             gutterTimestampText: input.settings.time(message.sentAt),
             isBot: author?.isBot ?? false,
+            tag: item.isRunHead ? author?.tag : nil,
+            tagBadgeURL: item.isRunHead ? author?.tagBadgeURL : nil,
+            tagRect: tagRect,
             forwarded: forwarded,
             textBlock: textBlock,
             textOrigin: textOrigin,

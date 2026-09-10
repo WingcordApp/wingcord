@@ -597,3 +597,25 @@ extension SessionController {
         }
     }
 }
+
+extension SessionController {
+
+    /// Resolves applications this client knows only by id.
+    ///
+    /// The same route the Recents strip uses — see
+    /// `DiscordREST.publicApplications` — reached from the two surfaces that
+    /// need an application's *icon* rather than its page: a rich presence with
+    /// no artwork of its own, and a recent-activity row for something
+    /// `/games` does not answer for.
+    func resolveApplications(_ ids: [ApplicationID]) {
+        Task { [weak self] in
+            guard let self else { return }
+            defer { model.applicationsResolving.subtract(ids) }
+            guard let resolved = try? await rest.publicApplications(ids: ids),
+                  !resolved.isEmpty
+            else { return }
+            for app in resolved { model.activityDirectory.apps[app.id] = app }
+            model.activityRevision &+= 1
+        }
+    }
+}

@@ -75,6 +75,10 @@ struct ComposerContainer: View {
             completions: completions,
             completionQuery: completionQuery ?? "",
             commitCompletion: commit,
+            mentionKind: mentionTrigger?.kind,
+            mentionQuery: mentionTrigger?.query ?? "",
+            mentionCandidates: mentionCandidates,
+            commitMention: commitMention,
             onPick: { model.apply($0.pick, in: channelID) },
             onPickGIF: { gif in
                 // A GIF is sent as its URL, which every other client unfurls
@@ -261,10 +265,61 @@ struct ComposerContainer: View {
         Task { await model.sessionController.runCommand(pending, in: channelID) }
     }
 
-    /// The shortcode being typed, if any.
-    private var completionQuery: String? {
+    /// Whichever field the bar is showing. A completion typed while editing
+    /// must be answered against the edit, not the draft behind it.
+    private var activeText: String {
         let box = model.messages(in: channelID)
-        return EmojiAutocomplete.query(in: box?.editing?.text ?? box?.draft ?? "")
+        return box?.editing?.text ?? box?.draft ?? ""
+    }
+
+    /// The shortcode being typed, if any.
+    ///
+    /// **Yields to a later `@` or `#`.** Both scanners look for their own
+    /// sigil and neither can see the other, so `:sob @al` is an open
+    /// shortcode *and* an open mention by each one's own rules. The reader is
+    /// typing whichever sigil is further along; deciding that here is what
+    /// keeps both scanners pure. See `MentionAutocomplete.Trigger.sigilOffset`.
+    private var completionQuery: String? {
+        let text = activeText
+        guard let query = EmojiAutocomplete.query(in: text) else { return nil }
+        if let trigger = mentionTrigger,
+           let colon = text.lastIndex(of: ":"),
+           text.distance(from: text.startIndex, to: colon) < trigger.sigilOffset
+        {
+            return nil
+        }
+        return query
+    }
+
+    /// The `@` or `#` being typed, if any.
+    private var mentionTrigger: MentionAutocomplete.Trigger? {
+        MentionAutocomplete.trigger(in: activeText)
+    }
+
+    /// What to offer for it.
+    ///
+    /// Resolved in the body for the same reason the shortcode matches are: it
+    /// is a prefix search over tables the store already holds, and state would
+    /// need invalidating from every place that can change the answer — a
+    /// member arriving, a channel being created, a permission changing.
+    private var mentionCandidates: [MentionCandidate] {
+        guard let mentionTrigger else { return [] }
+        return model.mentionCandidates(for: mentionTrigger, in: channelID)
+    }
+
+    private func commitMention(_ candidate: MentionCandidate) {
+        guard let kind = mentionTrigger?.kind else { return }
+        model.mutateBox(channelID) { box in
+            if let existing = box.editing?.text {
+                box.editing?.text = MentionAutocomplete.applying(
+                    candidate.token, kind: kind, to: existing
+                )
+            } else {
+                box.draft = MentionAutocomplete.applying(
+                    candidate.token, kind: kind, to: box.draft
+                )
+            }
+        }
     }
 
     /// What to offer for it.

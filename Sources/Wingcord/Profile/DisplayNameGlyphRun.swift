@@ -47,14 +47,50 @@ struct DisplayNameGlyphRun {
     /// - Parameter perGlyph: whether to split the run. Skipped for every effect
     ///   but Gummy, since it is the only one that transforms letters
     ///   independently.
-    init?(text: String, font: NSFont, tracking: CGFloat, perGlyph: Bool) {
+    /// - Parameter maximumWidth: the widest this may come out. Past it the
+    ///   line is truncated with an ellipsis.
+    ///
+    /// **Truncation belongs here, and it is why the full profile broke on a
+    /// long name.** A styled name is an `NSViewRepresentable`, so the
+    /// `.lineLimit(1)` at the call site reaches nothing — it applies to
+    /// `Text`, and this is a layer tree. The representable answered
+    /// `sizeThatFits` with the text's whole measured width whatever it was
+    /// proposed, so a name like "…reWasntA12 (You may Ping…)" reported nine
+    /// hundred points, the header's `HStack` grew to hold it, and the card
+    /// went with it: everything in the panel shifted out of the window.
+    ///
+    /// `CTLineCreateTruncatedLine` rather than a character count: the width
+    /// of a name in one of these faces is not its length, and clipping mid
+    /// glyph reads as a rendering fault rather than as a name that is too
+    /// long.
+    init?(
+        text: String,
+        font: NSFont,
+        tracking: CGFloat,
+        perGlyph: Bool,
+        maximumWidth: CGFloat? = nil
+    ) {
         guard !text.isEmpty else { return nil }
 
         var attributes: [NSAttributedString.Key: Any] = [.font: font]
         if tracking != 0 { attributes[.kern] = tracking }
-        let line = CTLineCreateWithAttributedString(
-            NSAttributedString(string: text, attributes: attributes)
-        )
+        let attributed = NSAttributedString(string: text, attributes: attributes)
+        var line = CTLineCreateWithAttributedString(attributed)
+
+        if let maximumWidth, maximumWidth > 0,
+           CTLineGetTypographicBounds(line, nil, nil, nil) > Double(maximumWidth)
+        {
+            // The token is drawn in the same face, so the ellipsis belongs to
+            // the name rather than arriving in the system font beside it.
+            let token = CTLineCreateWithAttributedString(
+                NSAttributedString(string: "\u{2026}", attributes: attributes)
+            )
+            if let truncated = CTLineCreateTruncatedLine(
+                line, Double(maximumWidth), .end, token
+            ) {
+                line = truncated
+            }
+        }
 
         var ascent: CGFloat = 0
         var descent: CGFloat = 0

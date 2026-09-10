@@ -730,6 +730,40 @@ enum DemoFixtures {
                 isStreaming: streaming
             )
         }
+        // **A live stage beside the call.** The pane's three-way split is
+        // the whole of what it draws, so the fixture seeds one of each: a
+        // couple of speakers, a bench of listeners, and two hands up in the
+        // order they were raised. The reader is in the audience with their
+        // own hand down, which is the state the bar has the most to say
+        // about.
+        if let stageChannelID = index.channelIDs(inGuild: guildID).first(where: {
+            index[$0]?.kind == .stage
+        }) {
+            model.stageInstances[stageChannelID] = StageInstance(
+                id: stageChannelID.rawValue,
+                guildID: guildID,
+                channelID: stageChannelID,
+                topic: "Office hours — ask us anything about the build"
+            )
+            let bench = others.filter { $0 != me }
+            for (offset, userID) in bench.prefix(9).enumerated() {
+                let isSpeaker = offset < 2
+                states[userID] = VoiceState(
+                    userID: userID,
+                    channelID: stageChannelID,
+                    guildID: guildID,
+                    sessionID: "demo",
+                    isSelfMuted: offset == 1,
+                    isSuppressed: !isSpeaker,
+                    // Two hands, raised a minute apart, so the queue's order
+                    // is visible rather than merely asserted.
+                    requestToSpeakAt: offset == 4
+                        ? Date.now.addingTimeInterval(-120)
+                        : offset == 6 ? Date.now.addingTimeInterval(-60) : nil
+                )
+            }
+        }
+
         model.voiceStates = states
         model.connectedVoiceChannelID = voiceChannelID
         model.isVoiceChatShown = true
@@ -1203,6 +1237,12 @@ enum DemoFixtures {
                 ("CHAT", ["general", "referrals", "coding-help", "server-suggestions"]),
                 ("DEV", ["suggestions", "bug-reporting"]),
                 ("DEV WEBHOOKS", ["github-events", "etfkit-events"]),
+                // **A stage, so the pane is reachable in `--demo`.** A stage
+                // channel and a live stage are two things — see
+                // `StageInstance` — and the fixture seeds both, plus an
+                // audience with two hands up, because the three-way split is
+                // the whole of what the surface draws.
+                ("EVENTS", ["stage-office-hours", "vc-hangout"]),
             ]
         ),
         GuildSpec(name: "Flux", hasBanner: false, isCommunity: false, memberCount: 640,
@@ -1229,6 +1269,17 @@ enum DemoFixtures {
         "Release notes land here automatically. Read-only.",
     ]
 
+    /// What a fixture channel's name says it is.
+    ///
+    /// A prefix rather than a table: the names are written in one place above
+    /// and read here, and a second list to keep in step is a second list to
+    /// forget.
+    private static func demoKind(of name: String) -> ChannelKind {
+        if name.hasPrefix("stage-") { return .stage }
+        if name.contains("vc") || name == "lobby" { return .voice }
+        return .text
+    }
+
     private static func channels(for guildID: GuildID, spec: GuildSpec) -> [Channel] {
         var result: [Channel] = []
         var position = 0
@@ -1250,7 +1301,7 @@ enum DemoFixtures {
                 serial += 1
                 result.append(Channel(
                     id: ChannelID(rawValue: guildID.rawValue * 1000 + serial),
-                    kind: name.contains("vc") || name == "lobby" ? .voice : .text,
+                    kind: Self.demoKind(of: name),
                     guildID: guildID,
                     name: name,
                     topic: topics[Int(serial) % topics.count],

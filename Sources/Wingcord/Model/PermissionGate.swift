@@ -277,6 +277,7 @@ final class PermissionGate {
                 isPinned: message.isPinned,
                 isDirectMessage: channel?.kind.isPrivate ?? false,
                 isPreviewing: guildID != nil && guildID == model.guildPreview?.guildID,
+                isBookmarked: model.bookmarkedMessageIDs.contains(message.id),
                 developerMode: AppSettings.shared.developerMode
             )
         )

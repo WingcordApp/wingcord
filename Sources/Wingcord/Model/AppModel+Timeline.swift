@@ -112,6 +112,19 @@ extension AppModel {
                 decorationURL: user.decoration?.avatarDecorationHash
                     .flatMap { CDN.avatarDecoration(hash: $0) },
                 isBot: user.isBot,
+                // **The tag the roster has always drawn, in the transcript at
+                // last.** `primaryGuildTag` and its badge were on the wire and
+                // read by two surfaces out of three: the member list and the
+                // direct-message list drew the chip and the message header did
+                // not. Same fields, same resolution, so a person cannot look
+                // like two people in one window.
+                tag: user.decoration?.primaryGuildTag,
+                tagBadgeURL: user.decoration.flatMap { decoration in
+                    guard let guildID = decoration.primaryGuildID,
+                          let hash = decoration.primaryGuildBadgeHash
+                    else { return nil }
+                    return CDN.guildTagBadge(guildID: guildID, hash: hash)
+                },
                 // Resolved here, on the main actor, and only for authors
                 // actually on screen — which is what keeps a face off the
                 // registry until somebody who wears it is visible.

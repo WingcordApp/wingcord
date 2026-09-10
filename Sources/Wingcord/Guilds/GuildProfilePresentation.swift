@@ -27,4 +27,25 @@ struct GuildProfilePresentation: Equatable, Sendable {
     /// a promise this client cannot keep into a real destination.
     var isJoined: Bool
     var isLoading: Bool
+    /// What the card offers somebody who is not in this server.
+    var entry: Entry
+
+    /// The way in, decided by the server's own feature list.
+    ///
+    /// **A case rather than a Bool, because the two ways in are different
+    /// acts.** An open server is entered with one request; a server that
+    /// reviews applications is *applied to*, and the reader answers a form and
+    /// waits. Discord's own button says Join for the first and Apply to Join
+    /// for the second, and a client that offered Join for both would report
+    /// success on a request that only queued.
+    enum Entry: Equatable, Sendable {
+        /// Nothing to offer: already a member, or the profile has not landed.
+        case none
+        /// `PUT /guilds/{id}/members/@me` and you are in.
+        case join
+        /// The server asks first — `MEMBER_VERIFICATION_GATE_ENABLED`.
+        case apply
+        /// Applied, and waiting on a moderator.
+        case pending
+    }
 }

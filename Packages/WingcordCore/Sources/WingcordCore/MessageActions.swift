@@ -33,6 +33,14 @@ public struct MessageActions: OptionSet, Hashable, Sendable {
     public static let markUnread = MessageActions(rawValue: 1 << 10)
     public static let report = MessageActions(rawValue: 1 << 11)
     public static let copyID = MessageActions(rawValue: 1 << 12)
+    /// Saving a message for later — Discord's "Bookmark Message".
+    ///
+    /// **Nothing gates it but being able to read the message.** It is a note
+    /// to yourself on the account, visible to nobody else and refused by no
+    /// permission, which is why it sits beside `copyLink` rather than behind a
+    /// role check.
+    public static let bookmark = MessageActions(rawValue: 1 << 13)
+    public static let unbookmark = MessageActions(rawValue: 1 << 14)
 
     /// Whether anything at all is offered. A row with no actions draws no pill
     /// and opens no menu, rather than opening an empty one.
@@ -93,6 +101,14 @@ public enum MessageActionPolicy {
         /// three actions that touch the server (react, reply, edit) are already
         /// gated by bits a lurker does not hold; this is the fourth.
         public var isPreviewing: Bool
+        /// Whether this message is already saved to the account.
+        ///
+        /// **Defaulted false and it stays false until an inbox reads the
+        /// list.** Nothing this client has fetched says which messages are
+        /// bookmarked — there is no route captured for reading them back — so
+        /// the menu offers Bookmark and the store remembers what it saved in
+        /// this session. See `AppModel.bookmarkedMessageIDs`.
+        public var isBookmarked: Bool
         /// Whether the reader turned developer mode on.
         public var developerMode: Bool
 
@@ -106,6 +122,7 @@ public enum MessageActionPolicy {
             isPinned: Bool = false,
             isDirectMessage: Bool = false,
             isPreviewing: Bool = false,
+            isBookmarked: Bool = false,
             developerMode: Bool = false
         ) {
             self.permissions = permissions
@@ -117,6 +134,7 @@ public enum MessageActionPolicy {
             self.isPinned = isPinned
             self.isDirectMessage = isDirectMessage
             self.isPreviewing = isPreviewing
+            self.isBookmarked = isBookmarked
             self.developerMode = developerMode
         }
     }
@@ -166,6 +184,13 @@ public enum MessageActionPolicy {
 
         if input.hasText { actions.insert(.copyText) }
         actions.insert(.copyLink)
+
+        // A bookmark is the reader's own note about a message and no
+        // permission touches it — but a *system* event is not a message
+        // anybody would come back to, and Discord does not offer it there.
+        if !input.isSystemEvent {
+            actions.insert(input.isBookmarked ? .unbookmark : .bookmark)
+        }
 
         // Marking unread rewinds the read cursor, which means nothing in a
         // channel whose history the reader cannot load.

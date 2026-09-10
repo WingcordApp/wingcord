@@ -247,9 +247,49 @@ final class MemberListCanvas: NSView {
     /// This view's identity in the shared clock.
     private var playToken: ObjectIdentifier { ObjectIdentifier(self) }
 
+    /// Whose card is open over the roster, if anybody's.
+    ///
+    /// **A profile pins the plate to its own subject.** A card opens *over* the
+    /// row it came from and the pointer lands on the card, not on the row — so
+    /// a plate that only plays under the pointer stops the instant the thing
+    /// showing it appears. See `platedRow`.
+    var profiledUserID: UserID? {
+        didSet {
+            guard profiledUserID != oldValue else { return }
+            let previous = platedRowCache
+            updatePlatePlayback()
+            // The row that had a frame up and the row that now does are both
+            // repainted: neither is the hovered one, so nothing else would.
+            if previous != platedRowCache {
+                invalidateRow(previous)
+                invalidateRow(platedRowCache)
+            }
+        }
+    }
+
+    /// Which row's plate is moving.
+    ///
+    /// **One film at a time, and the open card outranks the pointer.** §4.6:
+    /// a column of them playing at once is a list of artwork rather than a list
+    /// of people, so this resolves to a single row — the card's subject where
+    /// there is a card, and whatever the pointer is on otherwise.
+    private var platedRow: Int? {
+        if let profiledUserID {
+            return rows.firstIndex { row in
+                if case .member(let entry) = row { return entry.userID == profiledUserID }
+                return false
+            }
+        }
+        return hoveredRow
+    }
+
+    /// The last answer `platedRow` gave, so a change can repaint the row it
+    /// left as well as the one it moved to.
+    private var platedRowCache: Int?
+
     /// One frame of the moving plate, for the row that has it.
     private func plateImage(forRow index: Int) -> CGImage? {
-        guard index == hoveredRow, !isScrolling, let plateFilm,
+        guard index == platedRowCache, !isScrolling, let plateFilm,
               plateFilm.frames.indices.contains(plateFrame)
         else { return nil }
         return plateFilm.frames[plateFrame]
@@ -263,8 +303,9 @@ final class MemberListCanvas: NSView {
     /// all funnel through one decision and none of them can leave the previous
     /// person's plate running.
     private func updatePlatePlayback() {
+        platedRowCache = platedRow
         let wanted: AnimatedImageStore.Key? = {
-            guard animatesPlate, !isScrolling, let index = hoveredRow,
+            guard animatesPlate, !isScrolling, let index = platedRowCache,
                   rows.indices.contains(index),
                   case .member(let entry) = rows[index],
                   let url = entry.nameplateAnimatedURL
@@ -288,7 +329,7 @@ final class MemberListCanvas: NSView {
         plateFilm = nil
         plateFrame = -1
         plateKey = wanted
-        if hadFilm { invalidateRow(hoveredRow) }
+        if hadFilm { invalidateRow(platedRowCache) }
 
         guard let wanted else {
             unsubscribeFromClock()
@@ -319,7 +360,7 @@ final class MemberListCanvas: NSView {
         // the same timestamp.
         plateFrame = film.index(at: AnimationClock.shared.time)
         subscribeToClock()
-        invalidateRow(hoveredRow)
+        invalidateRow(platedRowCache)
     }
 
     private func subscribeToClock() {
@@ -330,7 +371,7 @@ final class MemberListCanvas: NSView {
             let index = plateFilm.index(at: AnimationClock.shared.time)
             guard index != self.plateFrame else { return }
             self.plateFrame = index
-            self.invalidateRow(self.hoveredRow)
+            self.invalidateRow(self.platedRowCache)
         }
     }
 

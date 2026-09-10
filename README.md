@@ -129,10 +129,16 @@ predecessor sat at 300–425 MB.
 - Drawn member list: hoist groups, role colours, presence shapes, activity lines,
   and a reserved full-row plate layer so nameplates drop in without reflowing
 - Direct messages and group conversations, with a profile column beside one and a
-  roster beside the other
+  roster beside the other, and a right-click that answers with everything a
+  conversation offers — pin it (and the pin reaches Discord), mute it, name a
+  friend privately, close it, or run what an app has for that person
+- **Stages**: speakers, an audience, a queue of raised hands a moderator can
+  answer, and the topic a live stage is started with
 - Mini and full profiles, and the cards behind a server tag and any expression —
   including the server behind an emoji or sticker from somewhere you are not in
-- Expression picker with Nitro gating, and a `:shortcode` completion
+- Expression picker with Nitro gating, and three composer completions that
+  share one shape: `:shortcode`, `@` for people and `@everyone`, `#` for
+  channels
 - Typing receipts, a status panel on the now bar, and hover flyouts on the rail
 - The three pages a server offers beside its channels: a **Server Guide** with
   the owner's welcome and the rooms worth reading, **Channels & Roles** with the
@@ -158,7 +164,10 @@ predecessor sat at 300–425 MB.
 
 ## What is not
 
-Voice and video, threads, forums, search, notifications, attachments *outbound*,
+**Selecting text in the transcript** — the one large interaction still missing,
+and the reason it is not half-done is in `docs/HANDOFF.md` §"Do this next".
+
+Threads, forums, search, notifications, attachments *outbound*,
 message-component interactions, super reactions, and every Discord commerce
 surface — including
 buying or reconfiguring a game server, which is why that page offers an address

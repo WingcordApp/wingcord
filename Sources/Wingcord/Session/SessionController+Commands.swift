@@ -275,3 +275,56 @@ extension AppModel {
         return id.description
     }
 }
+
+extension SessionController {
+
+    /// Runs a context command on a message or on a person.
+    ///
+    /// **The same banner and the same acknowledgement as a chat-input
+    /// command**, because it is the same interaction: registered before the
+    /// request, since Discord's answer can arrive before the `await` on the
+    /// POST resumes and an answer with nowhere to go is dropped. §S.8 — a 204
+    /// says nothing, and the socket is the only oracle.
+    func runContextCommand(
+        _ command: ApplicationCommand,
+        on target: AppCommandTarget,
+        in channelID: ChannelID
+    ) {
+        Task { [weak self] in
+            guard let self else { return }
+            guard let sessionID = await socketSessionID() else {
+                model.reportActionFailure("Not connected.")
+                return
+            }
+            let nonce = Self.nonce()
+            model.pendingInteractions[nonce] = PendingInteraction(
+                nonce: nonce,
+                channelID: channelID,
+                // No slash: this is not something anybody typed, and calling
+                // it "/Make it a Quote" would name a command that does not
+                // exist in the composer.
+                label: command.name,
+                applicationName: model.commandApplicationName(for: command.applicationID)
+            )
+            do {
+                try await rest.runContextCommand(
+                    ContextCommandInvocation(
+                        command: command,
+                        targetID: target.targetID,
+                        guildID: model.channelIndex[channelID]?.guildID,
+                        channelID: channelID,
+                        sessionID: sessionID,
+                        nonce: nonce
+                    )
+                )
+            } catch {
+                model.pendingInteractions[nonce] = nil
+                model.reportActionFailure(
+                    Self.reason(for: error, verb: "run \(command.name)")
+                )
+                return
+            }
+            await awaitInteraction(nonce: nonce)
+        }
+    }
+}

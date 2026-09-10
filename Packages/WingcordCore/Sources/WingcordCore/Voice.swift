@@ -31,6 +31,13 @@ public struct VoiceState: Hashable, Sendable, Identifiable {
     public var isCameraOn: Bool
     /// A stage channel's audience. Not a mute — they are simply not a speaker.
     public var isSuppressed: Bool
+    /// When this person raised their hand on a stage. Nil is a hand down.
+    ///
+    /// **A timestamp rather than a flag, and that is Discord's design doing
+    /// real work**: the moderator's queue is ordered by when hands went up,
+    /// and a `Bool` cannot order it. It is also how a request is *withdrawn* —
+    /// the field is set to null rather than a second field being set.
+    public var requestToSpeakAt: Date?
 
     public var id: UserID { userID }
 
@@ -45,7 +52,8 @@ public struct VoiceState: Hashable, Sendable, Identifiable {
         isSelfDeafened: Bool = false,
         isStreaming: Bool = false,
         isCameraOn: Bool = false,
-        isSuppressed: Bool = false
+        isSuppressed: Bool = false,
+        requestToSpeakAt: Date? = nil
     ) {
         self.userID = userID
         self.channelID = channelID
@@ -58,6 +66,7 @@ public struct VoiceState: Hashable, Sendable, Identifiable {
         self.isStreaming = isStreaming
         self.isCameraOn = isCameraOn
         self.isSuppressed = isSuppressed
+        self.requestToSpeakAt = requestToSpeakAt
     }
 
     /// Whether anything is stopping this person being heard, for any reason.

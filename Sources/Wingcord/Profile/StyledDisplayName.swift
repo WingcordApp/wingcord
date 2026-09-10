@@ -21,6 +21,14 @@ struct StyledDisplayName: View {
     /// surface runs the one under the pointer and parks the rest on their first
     /// keyframe. Default `true`, so every existing call site is unchanged.
     var animates: Bool = true
+    /// The widest the name may come out.
+    ///
+    /// **Only the styled branch needs it, and only because it is a drawn
+    /// view.** A plain name is a `Text` and `.lineLimit(1)` truncates it; a
+    /// styled one is a layer tree that reports whatever width the letters
+    /// measured, and a surface that cannot afford that has to say so. Nil
+    /// where the name has a line to itself.
+    var maximumWidth: CGFloat?
 
     @Environment(\.motion) private var motion
 
@@ -30,6 +38,7 @@ struct StyledDisplayName: View {
                 text: text,
                 style: style,
                 pointSize: NSFont.preferredFont(forTextStyle: textStyle.nsTextStyle).pointSize,
+                maximumWidth: maximumWidth,
                 // Reduce Motion parks each effect on its own first keyframe
                 // rather than hiding it: the style is part of how someone
                 // chose to be named, and the preference is about movement.
@@ -72,6 +81,7 @@ private struct StyledDisplayNameSurface: NSViewRepresentable {
     var text: String
     var style: DisplayNameStyle
     var pointSize: CGFloat
+    var maximumWidth: CGFloat?
     var animates: Bool
 
     func makeNSView(context: Context) -> StyledDisplayNameView {
@@ -80,16 +90,34 @@ private struct StyledDisplayNameSurface: NSViewRepresentable {
 
     func updateNSView(_ view: StyledDisplayNameView, context: Context) {
         view.configure(
-            .init(text: text, style: style, pointSize: pointSize, animates: animates)
+            .init(
+                text: text,
+                style: style,
+                pointSize: pointSize,
+                animates: animates,
+                maximumWidth: maximumWidth
+            )
         )
     }
 
+    /// **It answers with the proposal where it has one, never with the text's
+    /// own width.** This used to return `contentSize` unconditionally, which
+    /// is a representable telling its parent it needs nine hundred points for
+    /// a long name — and the parent believing it. That is the whole of the
+    /// full profile's overflow: `.lineLimit(1)` at the call site applies to
+    /// `Text` and reaches nothing here.
+    ///
+    /// A proposal is honoured only when it is *narrower*, so a surface with
+    /// room to spare still gets the name at its natural size rather than
+    /// stretched across the column.
     func sizeThatFits(
         _ proposal: ProposedViewSize,
         nsView: StyledDisplayNameView,
         context: Context
     ) -> CGSize? {
-        nsView.contentSize
+        let natural = nsView.contentSize
+        guard let width = proposal.width, width.isFinite, width > 0 else { return natural }
+        return CGSize(width: min(natural.width, width), height: natural.height)
     }
 }
 
@@ -106,6 +134,10 @@ final class StyledDisplayNameView: NSView {
         var style: DisplayNameStyle
         var pointSize: CGFloat
         var animates: Bool
+        /// The widest the name may come out, past which it is truncated.
+        /// Nil is "as wide as it likes", which is right for a surface that
+        /// gives it a line of its own.
+        var maximumWidth: CGFloat?
     }
 
     private var configuration: Configuration?
@@ -181,7 +213,8 @@ final class StyledDisplayNameView: NSView {
             text: configuration.text,
             font: face,
             tracking: configuration.style.font.letterSpacing * configuration.pointSize,
-            perGlyph: configuration.style.effect == .gummy
+            perGlyph: configuration.style.effect == .gummy,
+            maximumWidth: configuration.maximumWidth
         ) else { return invalidateIntrinsicContentSize() }
 
         let built = DisplayNameEffectLayers.build(

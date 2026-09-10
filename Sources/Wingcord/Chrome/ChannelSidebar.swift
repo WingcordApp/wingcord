@@ -43,6 +43,9 @@ struct ChannelSidebar: View, Equatable {
     var openVoiceChat: (ChannelID) -> Void = { _ in }
     var toggleCategory: (ChannelID) -> Void = { _ in }
     var openSurface: (GuildSurface) -> Void = { _ in }
+    /// A secondary click on a conversation, with the row's own rect. Only the
+    /// direct-message list passes one — see `SidebarChannelRow.openMenu`.
+    var openMenu: (ChannelID, CGRect) -> Void = { _, _ in }
 
     @Environment(\.motion) private var motion
     /// Shared namespace so the selection pill *flows* from row to row rather
@@ -195,7 +198,11 @@ struct ChannelSidebar: View, Equatable {
                     : nil,
                 openChat: channel.kind == .voice || channel.kind == .stage
                     ? { openVoiceChat(channel.id) }
-                    : nil
+                    : nil,
+                // A conversation has a menu; a server's channel does not, and
+                // handing it nil is what keeps the catcher out of a
+                // hundred-row list.
+                openMenu: channel.isPerson ? { openMenu(channel.id, $0) } : nil
             )
         case .thread(let thread):
             SidebarThreadRow(
@@ -370,7 +377,12 @@ struct ChannelSidebar: View, Equatable {
             // fires on every scroll tick.
             if abs(scrollOffset - offset) > 0.5 { scrollOffset = offset }
         }
-        .softScrollEdgesVertical()
+        // **Top only.** The now bar is glass, and a scroll edge effect under it
+        // blurs the rows before the capsule can refract them — see
+        // `softScrollEdgeTopOnly`, which carries the measurement. The bar still
+        // registers through `safeAreaBar`; only the blur it was drawing is
+        // gone.
+        .softScrollEdgeTopOnly()
     }
 }
 

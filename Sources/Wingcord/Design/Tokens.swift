@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 import WingcordCore
 
@@ -639,5 +640,46 @@ nonisolated extension PresenceStatus {
         case .doNotDisturb: Palette.presenceDoNotDisturb
         case .offline, .invisible: Palette.presenceOffline
         }
+    }
+}
+
+extension Color {
+    /// This colour, floored so it can be read as text on the app's near-black
+    /// canvas.
+    ///
+    /// **A surface colour is not an ink colour**, and the two are the same
+    /// value often enough that the distinction has to be made somewhere. A
+    /// person's derived theme is the dominant colour of their avatar: over the
+    /// canvas at a third opacity it is a ground, and set straight into a `Text`
+    /// it is whatever their avatar happened to be — black, for a dark one.
+    ///
+    /// Brightness is floored and saturation capped, so what comes back is a
+    /// pastel of the original: still recognisably their colour, and legible
+    /// whatever it started as. Already-light colours pass through unchanged.
+    ///
+    /// `NSColor` rather than arithmetic on components, because a `Color` can be
+    /// a catalog colour or a gradient's resolved value and only the bridge
+    /// knows how to ask it for a hue.
+    nonisolated func liftedForInk(
+        minimumBrightness: CGFloat = 0.72,
+        maximumSaturation: CGFloat = 0.55
+    ) -> Color {
+        guard let srgb = NSColor(self).usingColorSpace(.sRGB) else { return self }
+        var hue: CGFloat = 0
+        var saturation: CGFloat = 0
+        var brightness: CGFloat = 0
+        var alpha: CGFloat = 0
+        srgb.getHue(&hue, saturation: &saturation, brightness: &brightness, alpha: &alpha)
+        guard brightness < minimumBrightness || saturation > maximumSaturation else {
+            return self
+        }
+        return Color(
+            nsColor: NSColor(
+                hue: hue,
+                saturation: min(saturation, maximumSaturation),
+                brightness: max(brightness, minimumBrightness),
+                alpha: alpha
+            )
+        )
     }
 }

@@ -55,6 +55,12 @@ struct Composer: View {
     var completions: [ExpressionItem] = []
     var completionQuery: String = ""
     var commitCompletion: (ExpressionItem) -> Void = { _ in }
+    /// The `@` or `#` list. Nil for the kind is "not completing a mention",
+    /// which is a different state from "completing one and nothing matches".
+    var mentionKind: MentionAutocomplete.Kind?
+    var mentionQuery: String = ""
+    var mentionCandidates: [MentionCandidate] = []
+    var commitMention: (MentionCandidate) -> Void = { _ in }
     /// The picker, opened from the controls at the composer's trailing end.
     var onPick: (ExpressionItem) -> Void = { _ in }
     var onPickGIF: (GIF) -> Void = { _ in }
@@ -110,6 +116,11 @@ struct Composer: View {
     /// make every `switch` over it carry a branch that cannot draw a grid.
     @State private var isShowingApps = false
     @State private var completionSelection = 0
+    @State private var mentionSelection = 0
+    /// The mention query the reader dismissed with Escape. Held so the list
+    /// stays down for *that* token and comes back for the next one — the same
+    /// latch the shortcode and command lists have.
+    @State private var dismissedMentionQuery: String?
     /// The query Escape was pressed on. The list is derived from the draft, so
     /// dismissing it cannot mean clearing a list — it means remembering the one
     /// the reader said no to, until they type something else.
@@ -165,6 +176,16 @@ struct Composer: View {
                     selection: commandSelection,
                     onPick: pickCommand,
                     onHover: { commandSelection = $0 }
+                )
+                .transition(.materialize(from: .bottom))
+            } else if let kind = mentionKind, !visibleMentions.isEmpty {
+                MentionAutocompleteList(
+                    kind: kind,
+                    query: mentionQuery,
+                    items: visibleMentions,
+                    selection: mentionSelection,
+                    onPick: commitMention,
+                    onHover: { mentionSelection = $0 }
                 )
                 .transition(.materialize(from: .bottom))
             } else if !visibleCompletions.isEmpty {
@@ -228,6 +249,7 @@ struct Composer: View {
         .animation(motion.panel, value: isEditing)
         .animation(motion.standard, value: canSend)
         .animation(motion.fadeQuick, value: visibleCompletions.isEmpty)
+        .animation(motion.fadeQuick, value: visibleMentions.isEmpty)
         .animation(motion.panel, value: pendingCommand?.command.id)
         .animation(motion.panel, value: pendingCommand?.focused)
         .animation(motion.fadeQuick, value: visibleCommandQuery == nil)
@@ -236,6 +258,10 @@ struct Composer: View {
         // changed list selects whatever happens to be in that slot, which is how
         // a completion list sends the wrong emoji.
         .onChange(of: completions) { _, _ in completionSelection = 0 }
+        // The selection belongs to a query, not to the list: a new letter is a
+        // new set of matches, and keeping row four selected would move the
+        // choice under the reader.
+        .onChange(of: mentionCandidates) { _, _ in mentionSelection = 0 }
         .onChange(of: commandSections) { _, _ in commandSelection = 0 }
         // …and the same for the option list, which changes on every keystroke
         // while a choice is being filtered.
@@ -333,6 +359,12 @@ struct Composer: View {
 
     private func dismissCompletions() { dismissedQuery = completionQuery }
 
+    /// What the mention list shows: the matches, unless this exact query was
+    /// dismissed.
+    private var visibleMentions: [MentionCandidate] {
+        mentionQuery == dismissedMentionQuery ? [] : mentionCandidates
+    }
+
     /// The `/` query, unless this exact one was dismissed — and never while a
     /// command is already being filled in.
     private var visibleCommandQuery: String? {
@@ -348,7 +380,7 @@ struct Composer: View {
     /// One property rather than a branch at each key handler: the three lists
     /// are mutually exclusive by construction — see `body` — and stating that
     /// once is what stops Up meaning two things.
-    private enum ActiveList { case option(Int), command(Int), completion(Int), none }
+    private enum ActiveList { case option(Int), command(Int), mention(Int), completion(Int), none }
 
     private var activeList: ActiveList {
         if pendingCommand != nil {
@@ -356,6 +388,11 @@ struct Composer: View {
             return count > 0 ? .option(count) : .none
         }
         if visibleCommandQuery != nil, !commandRows.isEmpty { return .command(commandRows.count) }
+        // Before the shortcode list, matching the order `body` draws them in.
+        // The two are mutually exclusive by construction — the container hands
+        // over at most one — and stating the order once is what stops Up
+        // meaning two things.
+        if !visibleMentions.isEmpty { return .mention(visibleMentions.count) }
         if !visibleCompletions.isEmpty { return .completion(visibleCompletions.count) }
         return .none
     }
@@ -391,6 +428,7 @@ struct Composer: View {
         switch activeList {
         case .option(let count): optionSelection = wrapped(optionSelection, count)
         case .command(let count): commandSelection = wrapped(commandSelection, count)
+        case .mention(let count): mentionSelection = wrapped(mentionSelection, count)
         case .completion(let count): completionSelection = wrapped(completionSelection, count)
         case .none: return .ignored
         }
@@ -414,6 +452,11 @@ struct Composer: View {
         case .command:
             guard let row = commandRows[safe: commandSelection] else { return .ignored }
             pickCommand(row)
+            return .handled
+
+        case .mention:
+            guard let item = visibleMentions[safe: mentionSelection] else { return .ignored }
+            commitMention(item)
             return .handled
 
         case .completion:
@@ -444,6 +487,10 @@ struct Composer: View {
             stepCommandOption(1)
             return .handled
         }
+        if let item = visibleMentions[safe: mentionSelection], !visibleMentions.isEmpty {
+            commitMention(item)
+            return .handled
+        }
         guard let item = visibleCompletions[safe: completionSelection] else { return .ignored }
         commitCompletion(item)
         return .handled
@@ -472,6 +519,10 @@ struct Composer: View {
         }
         if visibleCommandQuery != nil {
             dismissedCommandQuery = commandQuery
+            return .handled
+        }
+        if !visibleMentions.isEmpty {
+            dismissedMentionQuery = mentionQuery
             return .handled
         }
         if !visibleCompletions.isEmpty {

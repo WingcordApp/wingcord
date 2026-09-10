@@ -54,20 +54,61 @@ struct EmojiAutocompleteTests {
         #expect(EmojiAutocomplete.applying(custom, to: "yes :par") == "yes \(custom) ")
     }
 
-    @Test("The account's own emoji are offered before Unicode's")
+    /// **The fixture is the catalog, and that is the point of this test.**
+    ///
+    /// It used to pass a lone server section and assert that Unicode appeared
+    /// anyway — which was true because `matches` walked Unicode a second time
+    /// on its own. `EmojiCatalog` has appended the nine Unicode sections for a
+    /// long time, so in the running app that second walk found everything
+    /// twice: `:cry` listed `:cry:`, `:crying_cat_face:` and `:crystal_ball:`
+    /// two times each. A fixture that did not look like the caller's input is
+    /// what let it survive.
+    @Test("The account's own emoji lead, and nothing is listed twice")
     func customEmojiLead() {
-        let section = ExpressionSection(
+        let matches = EmojiAutocomplete.matches(for: "sob", custom: Self.catalog)
+        #expect(matches.first?.name == "sobbing_cat")
+        // Unicode still follows, because the catalog carries it.
+        #expect(matches.contains { $0.name == "sob" })
+        #expect(Set(matches.map(\.name)).count == matches.count)
+    }
+
+    /// The other duplicate, and it is not the same bug: an account in two
+    /// servers that both use `:blobcat:` has two catalog entries with two ids
+    /// and one name. Offering the reader the same picture twice is a choice
+    /// with no difference in it.
+    @Test("The same emoji in two servers is offered once")
+    func duplicateAcrossServers() {
+        let first = ExpressionSection(
+            id: "g1", title: "One", badge: .glyph("😀"),
+            items: [ExpressionItem(
+                id: "1", art: .image(nil, animated: false),
+                name: "blobcat", pick: .insert("<:blobcat:1>")
+            )]
+        )
+        let second = ExpressionSection(
+            id: "g2", title: "Two", badge: .glyph("😀"),
+            items: [ExpressionItem(
+                id: "2", art: .image(nil, animated: false),
+                name: "blobcat", pick: .insert("<:blobcat:2>")
+            )]
+        )
+        let matches = EmojiAutocomplete.matches(for: "blob", custom: [first, second])
+        #expect(matches.filter { $0.name == "blobcat" }.count == 1)
+    }
+
+    /// What the composer actually hands over: the account's own emoji first,
+    /// then Unicode's categories — which is what `EmojiCatalog` builds.
+    private static var catalog: [ExpressionSection] {
+        let server = ExpressionSection(
             id: "g",
             title: "Server",
             badge: .glyph("😀"),
             items: [ExpressionItem(
-                id: "1", art: .image(nil, animated: false), name: "sobbing_cat", pick: .insert("<:sobbing_cat:1>")
+                id: "1", art: .image(nil, animated: false),
+                name: "sobbing_cat", pick: .insert("<:sobbing_cat:1>")
             )]
         )
-        let matches = EmojiAutocomplete.matches(for: "sob", custom: [section])
-        #expect(matches.first?.name == "sobbing_cat")
-        // …and Unicode still fills the rest of the list.
-        #expect(matches.contains { $0.name == "sob" })
+        return [server] + AppModel.unicodeSections(tone: .default)
     }
 
     /// A locked server's emoji cannot be used in this channel, so offering them

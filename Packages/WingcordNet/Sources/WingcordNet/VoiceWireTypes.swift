@@ -20,6 +20,9 @@ struct VoiceStateDTO: Decodable, Sendable {
     var self_stream: Bool?
     var self_video: Bool?
     var suppress: Bool?
+    /// A raised hand on a stage, as an ISO-8601 instant. Null is a hand down —
+    /// which is also how a request is withdrawn.
+    var request_to_speak_timestamp: String?
     var member: MemberDTO?
 
     var domain: VoiceState? {
@@ -37,7 +40,17 @@ struct VoiceStateDTO: Decodable, Sendable {
             isSelfDeafened: self_deaf ?? false,
             isStreaming: self_stream ?? false,
             isCameraOn: self_video ?? false,
-            isSuppressed: suppress ?? false
+            isSuppressed: suppress ?? false,
+            // **Both shapes, because Discord sends both.** The same payload
+            // carries fractional seconds on some fields and not on others —
+            // see `DiscordREST`'s decoder, which pays for exactly this. This
+            // one is decoded by hand because the DTO takes it as a `String`:
+            // null is a hand *down* and a strict `Date?` would be a decode
+            // failure on a value that legitimately is not a date.
+            requestToSpeakAt: request_to_speak_timestamp.flatMap {
+                ISO8601DateFormatter.withFraction.date(from: $0)
+                    ?? ISO8601DateFormatter.plain.date(from: $0)
+            }
         )
     }
 }

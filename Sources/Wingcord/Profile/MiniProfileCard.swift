@@ -443,7 +443,10 @@ struct MiniProfileCard: View {
                 activity: activity,
                 buttonURLs: profile.activityButtonURLs,
                 ground: ground,
-                openGame: openGame(for: activity)
+                openGame: openGame(for: activity),
+                applicationIconURL: model.applicationIconURL(
+                    activity.applicationID, side: Metrics.avatarProfile
+                )
             )
             .padding(.horizontal, Spacing.margin)
             .padding(.bottom, Spacing.snug)

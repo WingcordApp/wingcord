@@ -295,6 +295,13 @@ extension AppModel {
         // current activity too, and their links are a route of their own.
         if let activity = presences[userID]?.primaryActivity {
             sessionController.loadActivityButtons(of: userID, activity: activity)
+            // **And the app's own icon, where the presence publishes no
+            // artwork.** Rich presence art is optional — Roblox sends a name
+            // and nothing else — and the card drew a grey plate with a
+            // controller in it where Discord draws the application icon.
+            if activity.largeImageKey == nil, let id = activity.applicationID {
+                resolveApplications([id])
+            }
         }
         if depth == .full { sessionController.loadRecentActivity(of: userID) }
         // **Started here as well as after the profile route answers**, so a

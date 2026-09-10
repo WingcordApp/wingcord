@@ -22,6 +22,10 @@ struct SidebarChannelRow: View {
     /// accessories from every text row rather than drawing them disabled.
     var join: (() -> Void)?
     var openChat: (() -> Void)?
+    /// A secondary click, with the row's own rect. Nil for every row that has
+    /// no menu — which is every channel in a server — and that is what keeps
+    /// the catcher off a hundred-row list.
+    var openMenu: ((CGRect) -> Void)?
 
     @Environment(\.motion) private var motion
     @State private var isHovering = false
@@ -55,6 +59,16 @@ struct SidebarChannelRow: View {
                         voiceAccessories
                     } else if channel.mentionCount > 0 {
                         UnreadBadge(count: channel.mentionCount, isMuted: channel.isMuted)
+                    } else if channel.isPinned {
+                        // **The mark a pinned conversation carries.** The
+                        // order already says it, but an order only says it
+                        // relative to the rows above — a list whose first
+                        // three are pinned and whose fourth is not looks like
+                        // a list in recency order until you know.
+                        Image(systemName: "pin.fill")
+                            .font(.system(size: 9, weight: .semibold))
+                            .foregroundStyle(Ink.quaternary)
+                            .accessibilityHidden(true)
                     }
                 }
 
@@ -121,6 +135,8 @@ struct SidebarChannelRow: View {
             guard isHovering != hovering else { return }
             isHovering = hovering
         }
+        // Only where there is a menu to raise. See `openMenu`.
+        .modifier(SecondaryClickModifier(openMenu: openMenu))
         .animation(motion.fadeQuick, value: isHovering)
         .animation(motion.standard, value: isSelected)
         // **A press plays the effect once and then stops.** A style is something
@@ -266,6 +282,24 @@ private struct SidebarTagChip: View {
         .frame(height: 15)
         .background { Capsule().fill(Palette.hoverFill) }
         .fixedSize()
+    }
+}
+
+/// Installs the secondary-click catcher, or installs nothing.
+///
+/// **The modifier is guarded, not the closure** — §2. Writing
+/// `.onSecondaryClick` unconditionally and returning early inside still puts
+/// an `NSView` behind every row in a server's hundred-channel list, for the
+/// rows that have no menu at all.
+private struct SecondaryClickModifier: ViewModifier {
+    var openMenu: ((CGRect) -> Void)?
+
+    func body(content: Content) -> some View {
+        if let openMenu {
+            content.onSecondaryClick(perform: openMenu)
+        } else {
+            content
+        }
     }
 }
 

@@ -125,6 +125,8 @@ private struct PrimaryPane: View {
             ForumContainer(channelID: channelID)
         case .voice(let channelID):
             VoiceChannelPane(channelID: channelID)
+        case .stage(let channelID):
+            StagePane(channelID: channelID)
         case .guildSurface(_, let surface):
             // Three view types behind one `switch`, under a stable outer type.
             // That is internal `_ConditionalContent`, not the structural detail

@@ -215,3 +215,58 @@ extension SessionController {
         }
     }
 }
+
+// MARK: - Joining from outside, and taking an application back
+
+extension SessionController {
+
+    /// Joins a server the reader is looking at from its tag card.
+    ///
+    /// **No `location` and no `source`.** Both are analytics fields naming
+    /// where the click came from, and this client has no capture of Discord's
+    /// own client joining from a tag popout — inventing a value is inventing a
+    /// fact. The route does not require either; the preview join sends a
+    /// source because that one *was* captured.
+    func joinGuildDirectly(_ guildID: GuildID) {
+        Task { [weak self] in
+            guard let self else { return }
+            do {
+                _ = try await rest.joinGuild(guildID)
+                model.permissionGate.invalidate()
+                model.railRevision &+= 1
+            } catch {
+                Self.trace("join \(guildID.rawValue): \(Self.describe(error))")
+                model.reportActionFailure(Self.describe(error))
+            }
+        }
+    }
+
+    /// Reads back which applications are still out.
+    ///
+    /// Asked once after READY, because nothing in the bootstrap mentions them
+    /// and a submitted application is otherwise invisible across a relaunch.
+    func loadJoinRequestGuilds() {
+        Task { [weak self] in
+            guard let self else { return }
+            do {
+                model.applyJoinRequestGuilds(try await rest.joinRequestGuilds())
+            } catch {
+                Self.trace("join requests: \(Self.describe(error))")
+            }
+        }
+    }
+
+    func writeWithdrawJoinRequest(_ guildID: GuildID) {
+        Task { [weak self] in
+            guard let self else { return }
+            do {
+                try await rest.withdrawJoinRequest(inGuild: guildID)
+            } catch {
+                Self.trace("withdraw \(guildID.rawValue): \(Self.describe(error))")
+                model.reportActionFailure(Self.describe(error))
+                // Put it back: the application is still out.
+                loadJoinRequestGuilds()
+            }
+        }
+    }
+}

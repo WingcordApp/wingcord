@@ -391,3 +391,41 @@ extension AppModel {
         return isAnswered ? .next : .skip
     }
 }
+
+// MARK: - Getting into a server you are looking at from the outside
+
+extension AppModel {
+
+    /// Joins a server from its tag card, or opens its application form.
+    ///
+    /// **Two acts behind one button**, decided by the server rather than by
+    /// the caller — see `guildEntry`. An open server is entered with the same
+    /// request discovery's own Join sends; a gated one raises the form, and
+    /// nothing is joined until the reader answers it.
+    func enterGuild(_ guildID: GuildID) {
+        guard guilds[guildID] == nil else { return openGuild(guildID) }
+        let profile = guildProfiles[guildID]
+        if profile?.features.contains("MEMBER_VERIFICATION_GATE_ENABLED") == true {
+            openJoinGate(guildID)
+        } else {
+            sessionController.joinGuildDirectly(guildID)
+        }
+    }
+
+    /// Takes an application back.
+    ///
+    /// **The confirmation is the caller's.** Discord asks "Are you sure?" and
+    /// so should whatever draws the control; this is the act, and it is one
+    /// route.
+    func withdrawJoinRequest(inGuild guildID: GuildID) {
+        joinRequestGuilds.removeAll { $0.id == guildID }
+        sessionController.writeWithdrawJoinRequest(guildID)
+    }
+
+    /// Replaces the outstanding-application list with what the route answered.
+    func applyJoinRequestGuilds(_ guilds: [JoinRequestGuild]) {
+        guard joinRequestGuilds != guilds else { return }
+        joinRequestGuilds = guilds
+        railRevision &+= 1
+    }
+}

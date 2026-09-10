@@ -338,6 +338,20 @@ public struct MemberVerification: Hashable, Sendable {
 public enum ChannelSettingsFlags {
     /// `1 << 12`. Set on every channel the reader has opted into.
     public static let followed = 4096
+
+    /// `1 << 11`. A direct message the reader pinned to the top of the list.
+    ///
+    /// **Discord's own name for it is FAVORITED, and its UI calls it Pin.** The
+    /// name is kept as the wire has it so a capture can be read against this
+    /// file; the word a person sees belongs to the menu, not here.
+    ///
+    /// Captured, both directions, on `PATCH /users/@me/guilds/@me/settings`:
+    /// `{"channel_overrides":{"<channel>":{"flags":2048}}}` pins, and `0`
+    /// unpins. **Unpinning removes the override entirely** — the reply comes
+    /// back one entry shorter, exactly as `followed` does — so pinned is
+    /// "an override exists carrying this bit" and absence is the answer, not an
+    /// unknown.
+    public static let favorited = 2048
 }
 
 /// What `PUT /guilds/{id}/requests/@me` answers with.
@@ -359,7 +373,15 @@ public enum MemberVerificationOutcome: Hashable, Sendable {
     public init(status: String?, rejectionReason: String?) {
         switch status?.uppercased() {
         case "APPROVED": self = .approved
-        case "PENDING", "STARTED": self = .pending
+        // **SUBMITTED is what a real application actually answers**, and it
+        // was falling through to `.unknown`. Captured: a `PUT` accepted with
+        // 201 replies `{"application_status":"SUBMITTED", "reviewed_at":null,
+        // "join_request_id":…}`, and Discord's own client then says "Your
+        // application is pending!" — so this is the applicant's spelling of
+        // the state the moderator's list calls `submitted` in
+        // `GuildJoinRequest.Status`. The same string was already known on one
+        // side of the same feature and unread on the other.
+        case "PENDING", "STARTED", "SUBMITTED": self = .pending
         case "REJECTED": self = .rejected(rejectionReason)
         case let other?: self = .unknown(other)
         case nil: self = .unknown("")
@@ -521,4 +543,42 @@ public struct GameServerProduct: Hashable, Sendable {
     }
 
     public var isEmpty: Bool { instructions.isEmpty }
+}
+
+/// A server the reader has applied to and not yet heard back from.
+///
+/// `GET /users/@me/join-request-guilds` answers a **bare array of partial
+/// guilds** — captured — with no request object beside them: an id, a name, an
+/// icon and a description, and nothing about when the application went in or
+/// what it said. So this says *which* servers are outstanding and the
+/// application itself is still `GET /guilds/{id}/member-verification`.
+///
+/// It is what puts a submitted application back in front of the reader after a
+/// relaunch. Without it the request is invisible until they happen to open the
+/// invite again.
+public struct JoinRequestGuild: Hashable, Sendable, Identifiable {
+    public var id: GuildID
+    public var name: String
+    public var iconHash: String?
+    public var description: String?
+
+    public init(
+        id: GuildID,
+        name: String,
+        iconHash: String? = nil,
+        description: String? = nil
+    ) {
+        self.id = id
+        self.name = name
+        self.iconHash = iconHash
+        self.description = description
+    }
+
+    public var iconURL: URL? {
+        iconHash.flatMap { CDN.guildIcon(guildID: id, hash: $0, side: 48) }
+    }
+
+    public var monogram: String {
+        String(name.split(separator: " ").prefix(2).compactMap(\.first)).uppercased()
+    }
 }

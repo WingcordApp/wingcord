@@ -546,3 +546,94 @@ public struct CommandInvocation: Encodable, Sendable {
         }
     }
 }
+
+// MARK: - Running a context command
+
+/// `POST /interactions`, `type: 2`, with a **target** instead of options.
+///
+/// The same interaction the `/` picker sends, and the differences are exactly
+/// three:
+///
+///  - **`data.type` is the command's own kind** — 2 for a person, 3 for a
+///    message — where a chat-input command sends 1.
+///  - **`data.target_id` says what it runs on**, and it is the whole of the
+///    payload: a context command has no options, so nothing else distinguishes
+///    running it on this message from running it on another.
+///  - **`data.options` is empty and stays present.** Discord forbids options
+///    on types 2 and 3, and the reference client still sends the key.
+///
+/// The `application_command` echo is the same record the index answered with,
+/// verbatim, exactly as the chat-input invocation sends it.
+///
+/// **`analytics_location` here is NOT captured.** The two locations this
+/// client knows — `slash_ui` and `app_launcher` — are both from HARs; nothing
+/// has watched Discord invoke a command from a right-click. It is an analytics
+/// field, so a wrong value fails *silently* rather than refusing the command,
+/// which is the whole reason it is called out here: the tell would be a
+/// command that runs perfectly and is attributed to the wrong surface.
+public struct ContextCommandInvocation: Encodable, Sendable {
+    var type = 2
+    var application_id: String
+    var guild_id: String?
+    var channel_id: String
+    var session_id: String
+    var data: Payload
+    var nonce: String
+    var analytics_location: String
+
+    public init(
+        command: ApplicationCommand,
+        targetID: String,
+        guildID: GuildID?,
+        channelID: ChannelID,
+        sessionID: String,
+        nonce: String
+    ) {
+        application_id = command.applicationID.description
+        guild_id = guildID?.description
+        channel_id = channelID.description
+        session_id = sessionID
+        self.nonce = nonce
+        analytics_location = command.kind == .user
+            ? "user_context_menu"
+            : "message_context_menu"
+        data = Payload(command: command, targetID: targetID)
+    }
+
+    struct Payload: Encodable {
+        var version: String
+        var id: String
+        var name: String
+        var type: Int
+        var target_id: String
+        var options: [String] = []
+        var application_command: CommandInvocation.CommandPayload
+        var attachments: [String] = []
+
+        init(command: ApplicationCommand, targetID: String) {
+            version = command.version
+            id = command.id
+            name = command.name
+            type = command.kind.rawValue
+            target_id = targetID
+            application_command = CommandInvocation.CommandPayload(command)
+        }
+    }
+}
+
+extension DiscordREST {
+
+    /// Runs a context command on a message or on a person.
+    ///
+    /// **204 means nothing here**, exactly as it does for a chat-input
+    /// command: the route accepts the interaction and the *socket* is the only
+    /// thing that says whether the application answered. See §S.8.
+    public func runContextCommand(_ invocation: ContextCommandInvocation) async throws {
+        _ = try await requestData(
+            method: "POST",
+            path: "/interactions",
+            route: "interactions",
+            body: invocation
+        )
+    }
+}

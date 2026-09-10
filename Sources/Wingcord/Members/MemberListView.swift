@@ -15,6 +15,9 @@ struct MemberListView: NSViewRepresentable {
     var topInset: CGFloat = 0
     var openProfile: (UserID, CGRect) -> Void = { _, _ in }
     var openMenu: (UserID, CGRect) -> Void = { _, _ in }
+    /// Whose card is open over this roster. See
+    /// `MemberListCanvas.profiledUserID`.
+    var profiledUserID: UserID?
 
     @Environment(\.motion) private var motion
 
@@ -32,6 +35,7 @@ struct MemberListView: NSViewRepresentable {
         // The one environment value a drawn canvas cannot read for itself. See
         // `MemberListCanvas.animatesPlate`.
         context.coordinator.setAnimatesPlate(!motion.reduceMotion)
+        context.coordinator.setProfiledUser(profiledUserID)
         context.coordinator.update(
             sections: sections,
             presentationRevision: presentationRevision,
@@ -175,6 +179,10 @@ final class MemberListCoordinator: NSObject {
 
     func setAnimatesPlate(_ animates: Bool) {
         canvas?.animatesPlate = animates
+    }
+
+    func setProfiledUser(_ userID: UserID?) {
+        canvas?.profiledUserID = userID
     }
 
     func tearDown() {

@@ -358,6 +358,23 @@ extension CommandIndex {
         return result
     }
 
+    /// Every command a **right-click** can run, of one kind.
+    ///
+    /// **The other half of the index, and it was being filtered away.**
+    /// `slashCommands` takes `chatInput` and drops the rest; the rest are the
+    /// context-menu commands, which are the same records with a different
+    /// `type` and no options at all. Both were decoded from the day the index
+    /// was — see `CommandKind` — and nothing read them.
+    ///
+    /// **They are never leaves.** A context command has no subcommands and no
+    /// parameters by construction: Discord forbids options on types 2 and 3,
+    /// because there is nowhere to type one. So this returns the commands
+    /// themselves rather than flattening anything, which is the whole reason
+    /// it is a filter and not a second walk.
+    public func contextCommands(_ kind: CommandKind) -> [ApplicationCommand] {
+        commands.filter { $0.kind == kind }
+    }
+
     private static func appendLeaves(
         of command: ApplicationCommand,
         options: [CommandOption],

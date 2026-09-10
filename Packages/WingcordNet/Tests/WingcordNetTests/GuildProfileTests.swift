@@ -74,12 +74,19 @@ struct GuildProfileTests {
         #expect(profile.badgeColorSecondary == 0x22_F3_3A)
     }
 
-    /// A tag profile's artwork is on `custom_banner_hash`, and the servers that
-    /// carry a tag mostly have no ordinary boost banner at all — so a reader
-    /// that only knows `banner_hash` draws the plate on every one of them.
-    @Test("The custom banner stands in when there is no boost banner")
+    /// **The two banner hashes are kept apart, and this pins that they are.**
+    ///
+    /// They were folded — `banner_hash ?? custom_banner_hash` into one field —
+    /// on the reading that they were one asset seen twice. They are not: no
+    /// path this client can build resolves a custom banner, measured against a
+    /// live CDN in `CDN.guildProfileBanner`, so the fold cost a 404 per tagged
+    /// server and drew the fallback plate anyway. The custom hash is still
+    /// decoded because the Server Profile editor sends it back.
+    @Test("The two banner hashes stay apart")
     func customBanner() throws {
-        #expect(try decode(partnered).bannerHash == "d66c652cf12c5f32560c682b528fe9f5")
+        let profile = try decode(partnered)
+        #expect(profile.bannerHash == nil)
+        #expect(profile.customBannerHash == "d66c652cf12c5f32560c682b528fe9f5")
     }
 
     /// The emoji arrives as a **shortcode**, not a glyph, so the chip is blank

@@ -597,6 +597,13 @@ struct GuildDTO: Decodable, Sendable {
     /// afterwards, so a client that ignores them here shows every voice channel
     /// empty until somebody moves — which on a quiet server is for ever.
     var voice_states: [VoiceStateDTO]?
+    /// The stages **already live** in this server when it arrived.
+    ///
+    /// A stage channel is in `channels` whether or not anything is happening
+    /// in it; this is the small set that is on. Without it a client shows
+    /// every stage channel as dark until somebody starts one while it is
+    /// watching.
+    var stage_instances: [StageInstanceDTO]?
     /// Present on the READY payload's guild objects, absent on a plain fetch.
     var properties: GuildProperties?
 
@@ -1653,10 +1660,14 @@ struct GuildProfileDTO: Decodable, Sendable {
             id: id,
             name: name ?? "Unknown",
             iconHash: icon_hash,
-            // The ordinary boost banner first, the tag profile's own second.
-            // Both are drawn the same way, and a server with neither draws its
-            // plate.
-            bannerHash: banner_hash ?? custom_banner_hash,
+            // **The two are NOT interchangeable, and folding them was a
+            // bug.** `custom_banner_hash` is a different asset family and no
+            // path this client can build resolves it — measured, see
+            // `CDN.guildProfileBanner`. Folded, every tagged server asked the
+            // CDN for a picture that 404s and then drew the plate; kept apart,
+            // it draws the plate without the request. It is still decoded,
+            // because the Server Profile editor writes it back.
+            bannerHash: banner_hash,
             description: description.flatMap { $0.isEmpty ? nil : $0 },
             memberCount: member_count,
             onlineCount: online_count,

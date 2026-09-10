@@ -183,6 +183,13 @@ struct SidebarChannel: Hashable, Sendable, Identifiable {
     var nameStyle: DisplayNameStyle?
     /// Their name's colour, when a role or their own palette gives them one.
     var nameColorValue: UInt32?
+    /// Whether the reader pinned this conversation to the top of the list.
+    ///
+    /// **On the value, because it decides the row's ORDER as well as its
+    /// glyph.** The list is sorted by it before the rows are built, so a view
+    /// that worked it out for itself would be a second copy of a decision the
+    /// order already made.
+    var isPinned = false
 
     /// Whether this row draws the taller, two-line form.
     ///
@@ -298,6 +305,10 @@ struct WorkspacePresentation: Hashable, Sendable {
         case conversation(ChannelID)
         case forum(ChannelID)
         case voice(ChannelID)
+        /// A stage channel. Its own case rather than a flag on `voice`,
+        /// because the surface is a different arrangement of different
+        /// groups — `StagePane`.
+        case stage(ChannelID)
         /// A page about the server rather than about a conversation in it.
         ///
         /// **One case for all of them**, with the surface as a payload. The

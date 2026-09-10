@@ -590,7 +590,8 @@ struct GuildTagChip: View {
                 .popover(isPresented: $isOpen, arrowEdge: .bottom) {
                     GuildProfileCard(
                         profile: model.guildProfilePresentation(of: guildID, tag: tag.text),
-                        openGuild: { model.openGuild($0) }
+                        openGuild: { model.openGuild($0) },
+                        enterGuild: { model.enterGuild($0) }
                     )
                     // The card supplies its own ground, so the popover must
                     // supply none — two materials in series read as frost.

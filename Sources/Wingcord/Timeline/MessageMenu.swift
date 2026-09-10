@@ -15,20 +15,38 @@ import WingcordCore
 /// material rather than two in series.
 struct MessageMenu: View {
     var groups: [[MessageActionKind]]
+    /// What the Apps list would run against. Nil on a surface with no apps
+    /// row, which is every menu built without one.
+    var appTarget: AppCommandTarget?
     var perform: (MessageActionKind) -> Void
 
+    @Environment(AppModel.self) private var model
     @Environment(\.motion) private var motion
     @State private var hovered: MessageActionKind?
+    /// Whether the Apps list has taken over the surface.
+    ///
+    /// **The list swaps rather than a second popover opening**, which is the
+    /// rule every other menu in this app follows: one glass body over the
+    /// transcript at a time. §4 rule 2.
+    @State private var isShowingApps = false
 
     static let width: CGFloat = 232
     private static let rowHeight: CGFloat = 30
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            ForEach(Array(groups.enumerated()), id: \.offset) { index, group in
-                if index > 0 { divider }
-                ForEach(group) { kind in
-                    row(kind)
+            if isShowingApps, let appTarget {
+                ContextCommandList(
+                    target: appTarget,
+                    back: { isShowingApps = false },
+                    run: { model.runContextCommand($0, on: appTarget) }
+                )
+            } else {
+                ForEach(Array(groups.enumerated()), id: \.offset) { index, group in
+                    if index > 0 { divider }
+                    ForEach(group) { kind in
+                        row(kind)
+                    }
                 }
             }
         }
@@ -36,6 +54,7 @@ struct MessageMenu: View {
         .frame(width: Self.width)
         .glassEffect(.clear.tint(Palette.flyoutTint), in: .rect(cornerRadius: Radius.glass))
         .animation(motion.fadeQuick, value: hovered)
+        .animation(motion.standard, value: isShowingApps)
     }
 
     private var divider: some View {
@@ -47,7 +66,10 @@ struct MessageMenu: View {
     }
 
     private func row(_ kind: MessageActionKind) -> some View {
-        Button { perform(kind) } label: {
+        Button {
+            // Apps opens the list in place; everything else acts and closes.
+            if kind == .apps { isShowingApps = true } else { perform(kind) }
+        } label: {
             HStack(spacing: Spacing.snug) {
                 Image(systemName: kind.symbolName)
                     .font(.system(size: 12, weight: .medium))

@@ -90,6 +90,10 @@ struct GatewayFrame: Decodable, Sendable {
         case userUpdate(UserDTO)
         case relationshipAdd(RelationshipDTO)
         case relationshipRemove(RelationshipDTO)
+        case relationshipUpdate(RelationshipDTO)
+        case userGuildSettingsUpdate(GuildSettingsDTO)
+        case stageInstanceUpsert(StageInstanceDTO)
+        case stageInstanceDelete(StageInstanceDTO)
         /// Somebody joined, left or changed a switch in a voice channel. **A
         /// null `channel_id` is the leave** — Discord sends no departure event.
         case voiceStateUpdate(VoiceStateDTO)
@@ -205,6 +209,24 @@ struct GatewayFrame: Decodable, Sendable {
         case "RELATIONSHIP_ADD": payload = .relationshipAdd(try decode(RelationshipDTO.self))
         case "RELATIONSHIP_REMOVE":
             payload = .relationshipRemove(try decode(RelationshipDTO.self))
+        // A friend nickname set, changed or cleared. Its own event rather than
+        // an `ADD` with a nickname on it, so a rename cannot be mistaken for a
+        // relationship arriving.
+        case "RELATIONSHIP_UPDATE":
+            payload = .relationshipUpdate(try decode(RelationshipDTO.self))
+        // A pin, a mute or a notification level changed — here or on the
+        // reader's phone. One entry per guild, and the private-channel
+        // pseudo-guild sends `guild_id: null`.
+        case "USER_GUILD_SETTINGS_UPDATE":
+            payload = .userGuildSettingsUpdate(try decode(GuildSettingsDTO.self))
+        // A stage started, was renamed, or ended. **Create and update are one
+        // case**: the payload is the whole instance either way, so a client
+        // that told them apart would be telling itself something it does not
+        // act on.
+        case "STAGE_INSTANCE_CREATE", "STAGE_INSTANCE_UPDATE":
+            payload = .stageInstanceUpsert(try decode(StageInstanceDTO.self))
+        case "STAGE_INSTANCE_DELETE":
+            payload = .stageInstanceDelete(try decode(StageInstanceDTO.self))
         case "VOICE_STATE_UPDATE": payload = .voiceStateUpdate(try decode(VoiceStateDTO.self))
         case "VOICE_SERVER_UPDATE":
             payload = .voiceServerUpdate(try decode(VoiceServerUpdateDTO.self))
@@ -308,6 +330,13 @@ struct RelationshipDTO: Decodable, Sendable {
     /// Orthogonal to `type`: a friend can be ignored, and a block does not
     /// imply one.
     var is_ignored: Bool?
+    /// What the reader has decided to call this person, 1-32 characters.
+    ///
+    /// **Theirs alone and friends only.** It is not a nickname in a server and
+    /// it is not the person's own display name — it is a private renaming that
+    /// travels with the account, and Discord offers it on FRIEND relationships
+    /// only. Absent on everybody else, and `null` once cleared.
+    var nickname: String?
     var user: UserDTO?
 }
 

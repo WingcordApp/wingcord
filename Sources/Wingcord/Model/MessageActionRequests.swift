@@ -109,6 +109,23 @@ struct UserMenuRequest: Identifiable, Hashable, Sendable {
     var id: UInt64 { userID.rawValue }
 }
 
+/// A conversation's own menu, and where to hang it.
+///
+/// **The channel is the subject, not the person.** Half of what this menu
+/// offers is about the conversation — pin it, mute it, mark it read, close it —
+/// and the other half is about whoever is in it. A group direct message has the
+/// first half and no second half at all, which is exactly why the subject is
+/// the channel and the person is an optional beside it.
+struct DirectMessageMenuRequest: Identifiable, Hashable, Sendable {
+    var channelID: ChannelID
+    /// The other person, for a one-to-one conversation. Nil for a group, which
+    /// has several and therefore none.
+    var userID: UserID?
+    var anchor: CGRect
+
+    var id: UInt64 { channelID.rawValue }
+}
+
 /// What the pointer is resting on in the transcript, and where.
 ///
 /// **Written to the store rather than published through a closure**, for the

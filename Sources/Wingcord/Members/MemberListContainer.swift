@@ -19,7 +19,11 @@ struct MemberListContainer: View {
             },
             openMenu: { userID, frame in
                 model.openUserMenu(for: userID, anchor: frame)
-            }
+            },
+            // A card open over the roster keeps its own subject's plate
+            // moving, whether or not the pointer is still on the row — the
+            // card is what the pointer is on.
+            profiledUserID: model.profileRequest?.userID
         )
     }
 }

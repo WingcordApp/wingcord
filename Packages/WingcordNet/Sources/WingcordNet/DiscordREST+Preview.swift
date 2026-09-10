@@ -156,3 +156,54 @@ extension DiscordREST {
         return ["x-context-properties": json.base64EncodedString()]
     }
 }
+
+// MARK: - Applications the reader has out
+
+extension DiscordREST {
+
+    /// Every server the reader has applied to and not yet heard back from.
+    ///
+    /// `GET /users/@me/join-request-guilds` — captured, and the answer is a
+    /// **bare array of partial guilds**: id, name, icon, description, the two
+    /// splashes and the feature list, with no request object beside them. So
+    /// it says *which* servers are outstanding and nothing about when or why;
+    /// the request itself is `GET /guilds/{id}/member-verification`.
+    ///
+    /// This is what puts a server back in front of the reader after a relaunch.
+    /// Without it a submitted application is invisible until they happen to
+    /// open the invite again.
+    public func joinRequestGuilds() async throws -> [JoinRequestGuild] {
+        struct DTO: Decodable {
+            var id: GuildID
+            var name: String?
+            var icon: String?
+            var description: String?
+        }
+        return try await get(
+            "/users/@me/join-request-guilds",
+            route: "users/@me/join-request-guilds",
+            as: [DTO].self
+        ).map {
+            JoinRequestGuild(
+                id: $0.id,
+                name: $0.name ?? "Unknown",
+                iconHash: $0.icon,
+                description: $0.description.flatMap { $0.isEmpty ? nil : $0 }
+            )
+        }
+    }
+
+    /// Takes an application back.
+    ///
+    /// `DELETE /guilds/{id}/requests/@me` — captured, answers **204 with no
+    /// body**, so there is nothing to read and success is the absence of a
+    /// throw. It is the same path the submit `PUT`s to.
+    public func withdrawJoinRequest(inGuild guildID: GuildID) async throws {
+        _ = try await requestData(
+            method: "DELETE",
+            path: "/guilds/\(guildID.rawValue)/requests/@me",
+            route: "guilds/{id}/requests/@me",
+            body: Optional<String>.none
+        )
+    }
+}

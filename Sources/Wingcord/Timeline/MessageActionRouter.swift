@@ -35,6 +35,12 @@ enum MessageActionRouter {
             model.markUnread(from: messageID, in: channelID)
         case .copyLink:
             model.copyLink(to: messageID, in: channelID)
+        case .bookmark, .unbookmark:
+            model.toggleBookmark(of: messageID, in: channelID)
+        case .apps:
+            // Handled inside the menu, which swaps its own contents rather
+            // than closing and opening a second surface. Nothing to route.
+            break
         case .report:
             model.requestReport(of: messageID, in: channelID)
         case .delete:

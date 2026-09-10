@@ -395,6 +395,7 @@ private struct ChannelSidebarContainer: View {
             },
             toggleCategory: { model.toggleCategory($0) },
             openSurface: { model.openSurface($0) },
+            openMenu: { model.openDirectMessageMenu(for: $0, anchor: $1) },
         )
         .equatable()
     }

@@ -334,6 +334,8 @@ final class AppModel {
     var deleteRequest: DeleteMessageRequest?
     var reportRequest: ReportRequest?
     var userMenu: UserMenuRequest?
+    /// The conversation whose own menu is open, and where to hang it.
+    var directMessageMenu: DirectMessageMenuRequest?
     /// The channel whose pinned messages are on screen.
     var openPinsChannelID: ChannelID?
 
@@ -392,6 +394,32 @@ final class AppModel {
     var notesInFlight: Set<UserID> = []
     /// Relationship writes in flight, so a double press sends once.
     var relationshipsInFlight: Set<UserID> = []
+    /// Messages this session has saved to the account.
+    ///
+    /// **What this session did, not what the account holds.** There is no
+    /// captured route for reading the saved list back, so an inbox is what
+    /// would fill this properly — until then it exists so the menu can say
+    /// Remove Bookmark on a message the reader just bookmarked rather than
+    /// offering to bookmark it twice. It is deliberately not persisted: a
+    /// remembered answer that was never checked against the server is worse
+    /// than no answer.
+    var bookmarkedMessageIDs: Set<MessageID> = []
+    /// Servers the reader has applied to and not yet heard back from.
+    ///
+    /// `GET /users/@me/join-request-guilds`, which is the only thing that puts
+    /// a submitted application back in front of somebody after a relaunch —
+    /// the request itself lives on the server and nothing in READY mentions
+    /// it. See `JoinRequestGuild`.
+    var joinRequestGuilds: [JoinRequestGuild] = []
+    var pendingJoinRequestGuildIDs: Set<GuildID> {
+        Set(joinRequestGuilds.map(\.id))
+    }
+    /// What the reader has privately decided to call somebody.
+    ///
+    /// **Beside `notes` rather than on `User`, and for the same reason.** It is
+    /// the reader's fact about a person, not the person's own — a merge from a
+    /// guild payload owns every field on `User` and would overwrite it.
+    var friendNicknames: [UserID: String] = [:] { didSet { sidebarRevision &+= 1 } }
 
     /// The channel whose read cursor the reader deliberately rewound.
     ///
@@ -819,6 +847,24 @@ final class AppModel {
     /// every inbound message.
     @ObservationIgnored var mentionCache: (key: MentionMemoKey, value: MentionContext)?
     @ObservationIgnored
+    /// Every stage that is live right now, keyed by its channel.
+    ///
+    /// **Keyed by channel and not by the instance's own id**, because that is
+    /// how Discord addresses one: `GET`, `PATCH` and `DELETE` all take the
+    /// channel, and there is at most one stage per channel. See
+    /// `StageInstance`.
+    var stageInstances: [ChannelID: StageInstance] = [:]
+    /// The application whose own page is open as a sheet, if any.
+    ///
+    /// **A third place the page is drawn, and a sheet rather than a flyout.**
+    /// It is reached from a recent-activity row inside the full profile, which
+    /// is already a layer over the window — a popover pointing at a row inside
+    /// it would be a window pointing into a window, and §1 has no transparent
+    /// margin to hang one in anyway.
+    var activityInfoID: ApplicationID?
+    /// Applications a resolve is already in flight for, so a strip of eight
+    /// rows asks once rather than eight times as each of them appears.
+    var applicationsResolving: Set<ApplicationID> = []
     var voicePresentationCache: (key: VoiceMemoKey, value: VoicePresentation?)?
     @ObservationIgnored
     var soundboardCache: (key: SoundboardMemoKey, value: SoundboardPresentation)?
@@ -891,6 +937,20 @@ final class AppModel {
     /// "is this one followed" and gets a hash lookup, where a nested table would
     /// be two.
     var followedChannelIDs: Set<ChannelID> = [] { didSet { followRevision &+= 1 } }
+    /// Conversations pinned to the top of the direct-message list.
+    ///
+    /// **The reader's, and Discord's** — the same set the web client shows,
+    /// because it is one bit on a channel override that this client reads out
+    /// of READY and writes back through the same route. See
+    /// `ChannelSettingsFlags.favorited`.
+    ///
+    /// It bumps the sidebar rather than the follow revision: a pin reorders the
+    /// direct-message list, where a follow changes which channels a *server's*
+    /// list holds.
+    var pinnedChannelIDs: Set<ChannelID> = [] { didSet { sidebarRevision &+= 1 } }
+    /// Pins being written, so a double click sends once and the row can say it
+    /// is busy.
+    var pinsInFlight: Set<ChannelID> = [] { didSet { sidebarRevision &+= 1 } }
     /// Follows being written. Keyed by channel so two rows can be in flight at
     /// once and neither blocks the other.
     var followsInFlight: Set<ChannelID> = [] { didSet { followRevision &+= 1 } }

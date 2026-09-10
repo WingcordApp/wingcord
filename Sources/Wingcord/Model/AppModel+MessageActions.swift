@@ -434,3 +434,36 @@ extension AppModel {
         return "Message"
     }
 }
+
+extension AppModel {
+
+    /// Saves a message for later, or takes the bookmark off.
+    ///
+    /// **The groundwork for an inbox, and it does nothing visible yet.**
+    /// Discord lists saved messages in an inbox this client does not have; what
+    /// exists here is the write, so the surface that lists them later has
+    /// something to list. See `DiscordREST.setMessageSaved`.
+    func toggleBookmark(of messageID: MessageID, in channelID: ChannelID) {
+        let actions = actions(for: messageID, in: channelID)
+        guard !actions.isDisjoint(with: [.bookmark, .unbookmark]) else { return }
+        let isSaved = !bookmarkedMessageIDs.contains(messageID)
+        if isSaved {
+            bookmarkedMessageIDs.insert(messageID)
+        } else {
+            bookmarkedMessageIDs.remove(messageID)
+        }
+        messageContentRevision &+= 1
+        dismissMessageSurfaces()
+        sessionController.writeBookmark(isSaved, messageID: messageID, in: channelID)
+    }
+
+    /// Rolls a bookmark back after the route refused it.
+    func revertBookmark(_ wasSaved: Bool, messageID: MessageID) {
+        if wasSaved {
+            bookmarkedMessageIDs.insert(messageID)
+        } else {
+            bookmarkedMessageIDs.remove(messageID)
+        }
+        messageContentRevision &+= 1
+    }
+}

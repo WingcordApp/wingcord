@@ -16,8 +16,14 @@ import WingcordCore
 struct GuildProfileCard: View {
     var profile: GuildProfilePresentation
     var openGuild: (GuildID) -> Void
+    /// Joins, or opens the server's application form. Nil on a surface with
+    /// nothing to join with, which draws the plain sentence instead — §5.5.
+    var enterGuild: ((GuildID) -> Void)?
 
     @Environment(\.motion) private var motion
+    /// One press, and the button says so. The card can be reopened while the
+    /// request is still out.
+    @State private var isEntering = false
 
     private static let width: CGFloat = 320
     private static let bannerHeight: CGFloat = 118
@@ -187,6 +193,47 @@ struct GuildProfileCard: View {
 
     // MARK: Footer
 
+    /// Join, or apply to join.
+    ///
+    /// **`.glass`, like Open Server above it**, rather than Discord's green
+    /// slab: this card is one of the app's flyouts and the affirmative control
+    /// on it is the same object the joined case already draws. §4 — a second
+    /// material on a surface that already has one is glass on glass.
+    @ViewBuilder
+    private var entryButton: some View {
+        let isApplying = profile.entry == .apply
+        Button { enter() } label: {
+            Label(
+                isApplying ? "Apply to Join" : "Join",
+                systemImage: isApplying ? "square.and.pencil" : "plus"
+            )
+            .font(.system(.subheadline, weight: .semibold))
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, Spacing.base)
+            .contentShape(.rect)
+        }
+        .buttonStyle(.glass)
+        .disabled(isEntering)
+        .padding(.horizontal, Spacing.margin)
+        .padding(.top, Spacing.snug)
+        .padding(.bottom, Spacing.margin)
+    }
+
+    private var notInThisServer: some View {
+        Text("You are not in this server.")
+            .font(Typeface.rowSubtitle)
+            .foregroundStyle(InkColor.tertiary)
+            .padding(.horizontal, Spacing.margin)
+            .padding(.top, Spacing.snug)
+            .padding(.bottom, Spacing.margin)
+    }
+
+    private func enter() {
+        guard !isEntering else { return }
+        isEntering = true
+        enterGuild?(profile.guildID)
+    }
+
     @ViewBuilder
     private var footer: some View {
         if profile.isJoined {
@@ -211,14 +258,29 @@ struct GuildProfileCard: View {
             .padding(.horizontal, Spacing.margin)
             .padding(.vertical, Spacing.snug)
         } else {
-            // A server the reader is not in. Said plainly rather than offered as
-            // an action this client has no route for.
-            Text("You are not in this server.")
-                .font(Typeface.rowSubtitle)
-                .foregroundStyle(InkColor.tertiary)
-                .padding(.horizontal, Spacing.margin)
-                .padding(.top, Spacing.snug)
-                .padding(.bottom, Spacing.margin)
+            // **The way in, and it was there all along.** This used to say
+            // "You are not in this server." and stop, on the reading that the
+            // client had no route for it — it has had one since discovery
+            // shipped. Which of the two acts is offered is the server's own
+            // answer; see `AppModel.guildEntry`.
+            switch profile.entry {
+            case .join, .apply:
+                // **A surface with no opener draws the sentence instead.** An
+                // inert Join is exactly the control §5.5 forbids.
+                if enterGuild == nil { notInThisServer } else { entryButton }
+            case .none:
+                notInThisServer
+            case .pending:
+                // Applied, and waiting. Not a control: withdrawing is a
+                // decision with a confirmation behind it and it belongs beside
+                // the server, not on a hover card.
+                Label("Your application is pending.", systemImage: "hourglass")
+                    .font(Typeface.rowSubtitle)
+                    .foregroundStyle(InkColor.tertiary)
+                    .padding(.horizontal, Spacing.margin)
+                    .padding(.top, Spacing.snug)
+                    .padding(.bottom, Spacing.margin)
+            }
         }
     }
 

@@ -103,6 +103,8 @@ struct WingcordApp: App {
                 // on top of the surface that raised it.
                 .presentsGameProfile()
                 .presentsUserMenu()
+                .presentsDirectMessageMenu()
+                .presentsActivityInfo()
                 .presentsExpressionInfo()
                 .presentsGuildSurfaces()
                 .presentsJoinServer()

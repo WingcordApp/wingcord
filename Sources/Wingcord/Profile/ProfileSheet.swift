@@ -364,7 +364,10 @@ struct ProfileSheet: View {
                         activity: current,
                         buttonURLs: profile.activityButtonURLs,
                         ground: ground,
-                        openGame: gameOpener(for: current)
+                        openGame: gameOpener(for: current),
+                        applicationIconURL: model.applicationIconURL(
+                            current.applicationID, side: Metrics.avatarProfile
+                        )
                     )
                 }
             }
@@ -380,8 +383,23 @@ struct ProfileSheet: View {
                                     entry: entry,
                                     ground: ground,
                                     coverURL: activity.covers[entry.id],
+                                    applicationIconURL: model.applicationIconURL(
+                                        entry.subject.applicationID,
+                                        side: Metrics.activityRecentIcon
+                                    ),
+                                    // **A game opens its game profile; an
+                                    // application opens its own page.** They
+                                    // are two different objects and Discord
+                                    // draws two different surfaces —
+                                    // `/games` answers for Forza and has
+                                    // nothing to say about Wordle, which is
+                                    // an app. Routing both to the game
+                                    // profile opened an empty page for every
+                                    // activity that is not a tracked title.
                                     openGame: entry.subject.applicationID.map { id in
-                                        { model.openGameProfile(id) }
+                                        model.games[id] != nil
+                                            ? { model.openGameProfile(id) }
+                                            : { model.activityInfoID = id }
                                     }
                                 )
                             }

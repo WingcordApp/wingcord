@@ -522,3 +522,41 @@ extension AppModel {
         }
     }
 }
+
+// MARK: - An application's own icon, as the last resort for artwork
+
+extension AppModel {
+
+    /// The icon an application registered, once anything has resolved it.
+    ///
+    /// **The fallback every activity surface was missing.** Rich presence
+    /// artwork is optional — Roblox publishes a name and no `large_image` at
+    /// all — and `/games` answers only for titles Discord tracks as games, so
+    /// Wordle has neither. Both drew a grey plate with a controller in it
+    /// while Discord drew the app's own icon, which it has for every one of
+    /// them.
+    ///
+    /// Read from the directory table the activity shelf already fills, so an
+    /// app resolved for one surface is resolved for all of them.
+    func applicationIconURL(_ id: ApplicationID?, side: CGFloat) -> URL? {
+        guard let id, let hash = activityDirectory.apps[id]?.iconHash else { return nil }
+        return CDN.applicationIcon(id: id, hash: hash, side: side)
+    }
+
+    /// Asks for any of these applications this client cannot yet name.
+    ///
+    /// **One request for the lot.** `GET /applications/public?application_ids=…`
+    /// takes repeated ids — the reference client sends seventy-two at once —
+    /// and a call per row would be a rate-limit slot per row for one strip of
+    /// icons.
+    ///
+    /// Silent on failure: the surfaces that read it already draw a placeholder,
+    /// and an activity list is not worth an error banner.
+    func resolveApplications(_ ids: [ApplicationID]) {
+        let unknown = Set(ids).subtracting(activityDirectory.apps.keys)
+            .subtracting(applicationsResolving)
+        guard !unknown.isEmpty else { return }
+        applicationsResolving.formUnion(unknown)
+        sessionController.resolveApplications(Array(unknown))
+    }
+}

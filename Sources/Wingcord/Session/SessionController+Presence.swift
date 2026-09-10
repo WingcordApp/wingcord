@@ -50,6 +50,22 @@ extension SessionController {
                     return id
                 }
                 if !gameIDs.isEmpty { await loadGames(ids: gameIDs) }
+
+                // **And the applications `/games` will not answer for.** An
+                // activity that is not a tracked game — Wordle, a bot's own
+                // presence — has no box art at all, and its application icon
+                // is the picture Discord draws in the row. Resolved *here*,
+                // where the list lands, rather than from the projection that
+                // reads it: a fetch kicked off inside a computed property runs
+                // during a body evaluation, which is a state write in the
+                // middle of a view update.
+                let unresolved = entries.compactMap { entry -> ApplicationID? in
+                    guard let id = entry.subject.applicationID,
+                          model.games[id] == nil
+                    else { return nil }
+                    return id
+                }
+                if !unresolved.isEmpty { model.resolveApplications(unresolved) }
             } catch {
                 // **An empty list, not an absent one.** Left absent, the tab's
                 // gating would ask again every time the profile opened — and

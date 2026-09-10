@@ -254,6 +254,21 @@ nonisolated enum TimelineRowPainter {
                 )
             }
 
+            // The server tag, in the roster's own chip. `MemberRowPainter`
+            // owns the shape; this owns nothing but where it lands, which the
+            // layout already decided.
+            if let tag = row.tag {
+                drawTagChip(
+                    tag,
+                    in: row.tagRect.offsetBy(dx: rowFrame.minX, dy: rowFrame.minY),
+                    badge: row.tagBadgeURL,
+                    style: style,
+                    images: images,
+                    scale: scale,
+                    context: context
+                )
+            }
+
             drawText(
                 row.timestampText,
                 font: style.metadataFont,
@@ -1445,6 +1460,57 @@ nonisolated enum TimelineRowPainter {
     /// this app is: a hand-picked small radius on a 15pt-tall label is a
     /// *different* shape from the capsules beside it rather than a smaller
     /// version of one.
+    /// A server tag beside a name.
+    ///
+    /// **The roster's chip, drawn here too.** The metrics come from
+    /// `MemberRowGeometry` — the same padding, height, font and badge size the
+    /// member list reserves — so the two surfaces cannot drift apart, and a
+    /// change to the shape is one edit rather than two.
+    static func drawTagChip(
+        _ label: String,
+        in frame: CGRect,
+        badge: URL?,
+        style: MessageTextStyle,
+        images: ImageStore,
+        scale: CGFloat,
+        context: CGContext
+    ) {
+        let corner = frame.height / 2
+        context.addPath(CGPath(
+            roundedRect: frame, cornerWidth: corner, cornerHeight: corner, transform: nil
+        ))
+        context.setFillColor(NSColor.white.withAlphaComponent(0.12).cgColor)
+        context.fillPath()
+
+        var textX = frame.minX + MemberRowGeometry.tagChipPadding
+        if let badge {
+            let side = MemberRowGeometry.tagBadgeSide
+            let glyph = CGRect(
+                x: textX,
+                y: (frame.midY - side / 2).rounded(),
+                width: side,
+                height: side
+            )
+            if let image = images.cached(ImageStore.Key(
+                url: badge,
+                maximumPixelSize: Int((side * scale).rounded(.up))
+            )) {
+                drawFlipped(image, in: glyph, context: context)
+            }
+            textX = glyph.maxX + MemberRowGeometry.tagBadgeGap
+        }
+
+        let font = MemberRowGeometry.tagChipFont
+        drawText(
+            label,
+            font: font,
+            color: style.secondaryColor,
+            at: CGPoint(x: textX, y: capCenteredY(of: font, in: frame)),
+            maxWidth: frame.maxX - MemberRowGeometry.tagChipPadding - textX,
+            context: context
+        )
+    }
+
     private static func drawChip(
         _ label: String,
         in frame: CGRect,

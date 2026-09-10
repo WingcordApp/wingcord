@@ -1075,6 +1075,13 @@ public struct ReadySnapshot: Sendable {
     /// Channels and categories the reader has opted into — the checkboxes and
     /// the Follow switches in Browse Channels. See `ChannelSettingsFlags`.
     public var followedChannelIDs: Set<ChannelID>
+    /// Conversations the reader pinned to the top of the direct-message list.
+    ///
+    /// The same overrides `followedChannelIDs` is read out of, carrying a
+    /// different bit — `ChannelSettingsFlags.favorited`, which Discord's UI
+    /// calls Pin. They arrive under the private-channel pseudo-guild, whose
+    /// entry sends `guild_id: null`.
+    public var pinnedChannelIDs: Set<ChannelID>
     /// People the account has blocked, and people it has ignored.
     ///
     /// **Two independent facts on one list.** A relationship's `type` says
@@ -1087,9 +1094,19 @@ public struct ReadySnapshot: Sendable {
     /// What the account is to each person it has any relationship with.
     /// Absent means `.none`, which is what an empty table already says.
     public var relationships: [UserID: Relationship]
+    /// What the reader has decided to call somebody, privately.
+    ///
+    /// **Not a server nickname and not their display name.** It rides the
+    /// relationship, travels with the account and is visible to nobody else —
+    /// which is why it lives beside `notes` rather than on `User`, where a
+    /// merge from a guild payload would overwrite it.
+    public var friendNicknames: [UserID: String]
     /// The account's private notes about people. READY carries the whole set,
     /// which is why the profile card never has to fetch one.
     public var notes: [UserID: String]
+    /// Every stage that was live when this session connected, keyed by its
+    /// channel. See `StageInstance` for why the channel is the key.
+    public var stages: [ChannelID: StageInstance]
     /// Each server's soundboard, where READY carried one.
     public var soundboardsByGuild: [GuildID: [SoundboardSound]]
     /// Who is already in a voice channel, keyed by the person. One flat table
@@ -1108,6 +1125,7 @@ public struct ReadySnapshot: Sendable {
         var rolesByGuild: [GuildID: [RoleID: Role]] = [:]
         var emojisByGuild: [GuildID: [EmojiRef]] = [:]
         var stickersByGuild: [GuildID: [StickerRef]] = [:]
+        var stages: [ChannelID: StageInstance] = [:]
         var membersByGuild: [GuildID: [UserID: Member]] = [:]
         var users: [UserID: User] = [:]
         var presences: [UserID: Presence] = [:]
@@ -1151,6 +1169,11 @@ public struct ReadySnapshot: Sendable {
                 let usable = stickers.compactMap(\.catalogEntry)
                 if !usable.isEmpty { stickersByGuild[guild.id] = usable }
             }
+            // The stages already running when we connected. Keyed by channel,
+            // because that is how everything addresses a stage.
+            for stage in (guildDTO.stage_instances ?? []).compactMap(\.domain) {
+                stages[stage.channelID] = stage
+            }
             if let members = guildDTO.members {
                 var table: [UserID: Member] = [:]
                 table.reserveCapacity(members.count)
@@ -1187,10 +1210,14 @@ public struct ReadySnapshot: Sendable {
         var blockedUserIDs: Set<UserID> = []
         var ignoredUserIDs: Set<UserID> = []
         var relationships: [UserID: Relationship] = [:]
+        var friendNicknames: [UserID: String] = [:]
         for relationship in payload.relationships ?? [] {
             if let userDTO = relationship.user { users[userDTO.id] = userDTO.domain }
             let kind = Relationship(rawValue: relationship.type ?? 0)
             if kind != .none { relationships[relationship.id] = kind }
+            if let nickname = relationship.nickname, !nickname.isEmpty {
+                friendNicknames[relationship.id] = nickname
+            }
             // Blocked is a relationship *type*; ignoring is a flag beside it.
             // Reading either as the other is how a friend gets hidden or an
             // ignore is silently lifted on every launch.
@@ -1200,6 +1227,7 @@ public struct ReadySnapshot: Sendable {
         self.blockedUserIDs = blockedUserIDs
         self.ignoredUserIDs = ignoredUserIDs
         self.relationships = relationships
+        self.friendNicknames = friendNicknames
         // **A dictionary of ids to strings, straight off READY.** There is no
         // route this client needs for reading one: the whole set arrives with
         // the bootstrap, so a profile card opens with the note already in it.
@@ -1211,6 +1239,7 @@ public struct ReadySnapshot: Sendable {
         self.notes = notes
         self.voiceStates = voiceStates
         self.soundboardsByGuild = soundboardsByGuild
+        self.stages = stages
         self.users = users
         self.presences = presences
 
@@ -1226,6 +1255,7 @@ public struct ReadySnapshot: Sendable {
         var mutedGuildIDs: Set<GuildID> = []
         var mutedChannelIDs: Set<ChannelID> = []
         var followedChannelIDs: Set<ChannelID> = []
+        var pinnedChannelIDs: Set<ChannelID> = []
         var guildLevels: [GuildID: MessageNotificationLevel] = [:]
         var channelLevels: [ChannelID: MessageNotificationLevel] = [:]
         var suppressEveryone: Set<GuildID> = []
@@ -1252,8 +1282,16 @@ public struct ReadySnapshot: Sendable {
                     mutedChannelIDs.insert(channelID)
                     readStates[channelID]?.isMuted = true
                 }
-                if (override.flags ?? 0) & ChannelSettingsFlags.followed != 0 {
+                let flags = override.flags ?? 0
+                if flags & ChannelSettingsFlags.followed != 0 {
                     followedChannelIDs.insert(channelID)
+                }
+                // The pin. It rides the private-channel entry, whose `guild_id`
+                // is null — so it is read here, inside the override loop that
+                // runs for every entry, rather than in the `if let guildID`
+                // above which that entry never enters.
+                if flags & ChannelSettingsFlags.favorited != 0 {
+                    pinnedChannelIDs.insert(channelID)
                 }
                 if let level = override.message_notifications {
                     channelLevels[channelID] = MessageNotificationLevel(rawValue: level)
@@ -1272,6 +1310,7 @@ public struct ReadySnapshot: Sendable {
             suppressRoleMentionGuildIDs: suppressRoles
         )
         self.followedChannelIDs = followedChannelIDs
+        self.pinnedChannelIDs = pinnedChannelIDs
         // The protobuf first, the JSON second, empty last.
         //
         // Discord moved the settings into `user_settings_proto` and stopped
@@ -1321,9 +1360,17 @@ public enum GatewayUpdate: Sendable {
         users: [UserID: User],
         presences: [UserID: Presence],
         emojis: [EmojiRef],
-        stickers: [StickerRef]
+        stickers: [StickerRef],
+        /// The stages that were **already live** when the server arrived. See
+        /// `GuildDTO.stage_instances`.
+        stages: [StageInstance]
     )
     case guildUpdated(Guild)
+    /// A stage went live, or its topic changed.
+    case stageChanged(StageInstance)
+    /// A stage ended. The channel and everybody in it stay; only the stage
+    /// stops being one.
+    case stageEnded(ChannelID)
     /// A server's emoji or sticker set was replaced. `nil` on either side means
     /// that half did not change — the two arrive on separate events, and
     /// treating a missing one as empty would empty the picker.
@@ -1366,6 +1413,21 @@ public enum GatewayUpdate: Sendable {
     /// the same thing the table says by not holding an entry.
     case relationshipChanged(
         UserID, kind: Relationship, isIgnored: Bool, user: User?
+    )
+    /// The reader renamed somebody, or cleared the name — here or elsewhere.
+    ///
+    /// **Its own case rather than a field on `relationshipChanged`.** A rename
+    /// is not a relationship arriving, and folding it in would make every
+    /// nickname change look like one to a store that reconciles on kind.
+    case friendNicknameChanged(UserID, nickname: String?)
+    /// A pin, a mute or a notification level changed for one guild — or, when
+    /// `guildID` is nil, for the direct-message list.
+    ///
+    /// **The sets are complete for that guild, not deltas.** An override with
+    /// nothing left on it is dropped by the server, so what is absent from
+    /// these is off rather than unmentioned.
+    case guildSettingsChanged(
+        guildID: GuildID?, pinned: Set<ChannelID>, muted: Set<ChannelID>
     )
     /// Somebody moved in, out of, or between voice channels. A state whose
     /// `channelID` is nil **is** the departure.
@@ -1463,10 +1525,17 @@ public enum GatewayUpdate: Sendable {
                 users: users,
                 presences: presences,
                 emojis: (dto.emojis ?? []).compactMap(\.catalogEntry),
-                stickers: (dto.stickers ?? []).compactMap(\.catalogEntry)
+                stickers: (dto.stickers ?? []).compactMap(\.catalogEntry),
+                stages: (dto.stage_instances ?? []).compactMap(\.domain)
             )
         case .guildUpdate(let dto):
             self = .guildUpdated(dto.domain)
+        case .stageInstanceUpsert(let dto):
+            guard let stage = dto.domain else { return nil }
+            self = .stageChanged(stage)
+        case .stageInstanceDelete(let dto):
+            guard let channelID = dto.channel_id else { return nil }
+            self = .stageEnded(channelID)
         case .guildEmojisUpdate(let payload):
             self = .guildExpressionsUpdated(payload.guild_id, emojis: payload.catalog, stickers: nil)
         case .guildStickersUpdate(let payload):
@@ -1653,6 +1722,19 @@ public enum GatewayUpdate: Sendable {
             // where the distinction would have to be remembered.
             self = .relationshipChanged(
                 dto.id, kind: .none, isIgnored: false, user: nil
+            )
+        case .relationshipUpdate(let dto):
+            // **Empty is cleared.** The route takes `null` to clear and the
+            // event has been seen to echo either, so both are normalised to
+            // nil here — a nickname of no characters is not a nickname.
+            self = .friendNicknameChanged(
+                dto.id, nickname: dto.nickname?.isEmpty == true ? nil : dto.nickname
+            )
+        case .userGuildSettingsUpdate(let dto):
+            self = .guildSettingsChanged(
+                guildID: dto.guild_id,
+                pinned: DiscordREST.pinned(in: dto),
+                muted: DiscordREST.muted(in: dto)
             )
         default:
             return nil

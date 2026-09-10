@@ -149,6 +149,15 @@ extension AppModel {
     /// a memo over it would cost more in key comparison than the build.
     var nowBarPresentation: NowBarPresentation {
         let user = currentUserID.flatMap { users[$0] }
+        // **Resolved once, so the three halves of one plate cannot disagree.**
+        // The palette used to be read unconditionally while the two URLs were
+        // gated, which was harmless only for as long as nothing but the artwork
+        // drew it — the bar's material now takes the colour, so a reader who
+        // switched the plate off would have kept a violet capsule and lost the
+        // picture.
+        let plate = AppSettings.shared.showsNameplateInNowBar
+            ? user?.decoration?.nameplate
+            : nil
         return NowBarPresentation(
             userID: currentUserID ?? UserID(rawValue: 0),
             displayName: user?.preferredName ?? "Not signed in",
@@ -162,13 +171,9 @@ extension AppModel {
             // Offered only when the reader asked for it. The strip is fetched at
             // the bar's own width, which is what keeps a 672-pixel asset from
             // being decoded at CDN size for a 240-point capsule.
-            nameplateURL: AppSettings.shared.showsNameplateInNowBar
-                ? user?.decoration?.nameplate?.artworkURL
-                : nil,
-            nameplateAnimatedURL: AppSettings.shared.showsNameplateInNowBar
-                ? user?.decoration?.nameplate?.animatedArtworkURL
-                : nil,
-            nameplatePalette: user?.decoration?.nameplate?.palette ?? .none
+            nameplateURL: plate?.artworkURL,
+            nameplateAnimatedURL: plate?.animatedArtworkURL,
+            nameplatePalette: plate?.palette ?? .none
         )
     }
 
@@ -211,7 +216,11 @@ extension AppModel {
         }
         let primary: WorkspacePresentation.Primary = switch channel.kind {
         case .forum, .media: .forum(channelID)
-        case .voice, .stage: .voice(channelID)
+        case .voice: .voice(channelID)
+        // **A stage is its own pane, not the voice pane with a filter.** Two
+        // groups and a queue rather than one group of equals — see
+        // `StagePane`.
+        case .stage: .stage(channelID)
         default: .conversation(channelID)
         }
         return WorkspacePresentation(
@@ -413,7 +422,20 @@ extension AppModel {
     /// recency. That order is already maintained by `patchLastMessage`, so a new
     /// message moves a conversation to the top without this rebuilding anything.
     private func buildDirectMessageSidebar(users userTable: [UserID: User]) -> SidebarPresentation {
-        let channelIDs = channelIndex.privateChannelIDs()
+        // **Pinned first, and the rest keep the order they came in.** That
+        // order is `ChannelIndex`'s own — recency, already maintained by
+        // `patchLastMessage` — so this is a stable partition rather than a
+        // sort: a pinned conversation rises to the top and the pinned ones
+        // stay in recency order among themselves, which is what Discord does.
+        //
+        // Skipped entirely when nothing is pinned, which is most accounts and
+        // every one before the reader has pinned anything.
+        var channelIDs = channelIndex.privateChannelIDs()
+        if !pinnedChannelIDs.isEmpty {
+            let pinned = pinnedChannelIDs
+            channelIDs = channelIDs.filter { pinned.contains($0) }
+                + channelIDs.filter { !pinned.contains($0) }
+        }
         var rows: [SidebarRow] = []
         rows.reserveCapacity(channelIDs.count)
 
@@ -426,7 +448,11 @@ extension AppModel {
                 ? channel.recipientIDs.first { $0 != currentUserID }
                 : nil
             let partner = partnerID.flatMap { userTable[$0] }
-            let name = displayName(of: channel)
+            // **The reader's own name for them beats the one they chose.** A
+            // friend nickname is a private renaming that travels with the
+            // account, and being the name you see is the whole of what it is
+            // for. A group has no single person and therefore no nickname.
+            let name = partnerID.flatMap { friendNicknames[$0] } ?? displayName(of: channel)
 
             // **A group has a face too, and it is the group's own.** A group DM
             // carries an `icon` hash on a CDN path of its own — `/channel-icons`
@@ -486,7 +512,8 @@ extension AppModel {
                 nameplateAnimatedURL: decoration?.nameplate?.animatedArtworkURL,
                 nameplatePalette: decoration?.nameplate?.palette ?? .none,
                 nameStyle: decoration?.displayNameStyle,
-                nameColorValue: nil
+                nameColorValue: nil,
+                isPinned: pinnedChannelIDs.contains(channelID)
             )))
         }
 
