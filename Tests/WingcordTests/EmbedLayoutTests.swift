@@ -151,6 +151,82 @@ struct EmbedLayoutTests {
         #expect(slot.rect.maxY - picture.rect.maxY >= EmbedLayoutEngine.padding)
     }
 
+    // MARK: The star on an unfurled GIF
+
+    /// **The real thing, out of `search messages1.har`.** A Klipy unfurl is
+    /// `type: "gifv"` with a **`.webp`** thumbnail and an `.mp4` beside it — not
+    /// the `.gif` an invented fixture would have used, and the reason the first
+    /// gate here was wrong: `CDN.canAnimate` answers on the extension, so a rule
+    /// written on "does it animate" gave Tenor a star and gave this nothing.
+    private static let klipyGIF = Embed(
+        kind: "gifv",
+        url: "https://klipy.com/gifs/sonion-ring",
+        thumbnail: Embed.Media(
+            url: "https://static.klipy.com/ii/…/C61hYOA7sIGTLuZ9.webp",
+            proxyURL: "https://images-ext-1.discordapp.net/external/…/C61hYOA7sIGTLuZ9.webp",
+            width: 449,
+            height: 480
+        ),
+        video: Embed.Media(
+            url: "https://static.klipy.com/ii/…/RzT4TfvPG9vQ.mp4",
+            proxyURL: "https://images-ext-1.discordapp.net/external/…/RzT4TfvPG9vQ.mp4",
+            width: 450,
+            height: 480
+        ),
+        providerName: "Klipy"
+    )
+
+    @Test("An unfurled GIF can be starred, whatever its thumbnail's extension is")
+    func unfurledGIFIsStarrable() throws {
+        let slot = layout(Self.klipyGIF)
+        let gif = try #require(slot.favorite)
+        // **The page URL is the key**: that is what the message says, what the
+        // favourite is filed under, and what re-sending it puts back.
+        #expect(gif.url.absoluteString == "https://klipy.com/gifs/sonion-ring")
+        // Never the `.mp4` — nothing in the image path can open one, and a
+        // favourite pointing at one is a grey tile in the picker for ever.
+        #expect(gif.previewURL?.pathExtension == "webp")
+        #expect(gif.width == 449)
+    }
+
+    /// The star sits inside the picture, and the hit test and the painter are
+    /// handed the same rect — a control drawn in one place and clicked in
+    /// another is the defect this geometry produces.
+    @Test("The star sits inside the picture it belongs to")
+    func starIsInsideThePicture() {
+        let slot = layout(Self.klipyGIF)
+        #expect(slot.rect.contains(slot.favoriteRect))
+        #expect(slot.favoriteRect.width > 0)
+    }
+
+    /// A photograph has nothing to favourite: the entry is stored as a URL and
+    /// re-sent, and a still is not a GIF. Nil is what keeps the control off it
+    /// rather than drawing it disabled — §5.5.
+    @Test("A still picture has no star")
+    func stillPictureHasNoStar() {
+        let slot = layout(Embed(
+            kind: "image",
+            url: "https://example.test/photo.png",
+            thumbnail: Embed.Media(
+                url: "https://example.test/photo.png", width: 800, height: 600
+            )
+        ))
+        #expect(slot.favorite == nil)
+    }
+
+    /// A card is not a picture. The star belongs on the GIF itself, and a link
+    /// unfurl with a thumbnail in the corner has no picture to put it on.
+    @Test("A card with a thumbnail has no star")
+    func cardHasNoStar() {
+        let slot = layout(Embed(
+            title: "Lounge Act",
+            url: "https://open.spotify.com/track/7glld4kxYHp61zIPtSVHNk",
+            thumbnail: Embed.Media(url: "https://example.test/cover.png"),
+            providerName: "Spotify"
+        ))
+        #expect(slot.favorite == nil)
+    }
+
     /// A thumbnail sits beside the text, so the text has to be narrowed for it —
     /// otherwise the description runs underneath the picture.
     @Test("A thumbnail narrows the text beside it")

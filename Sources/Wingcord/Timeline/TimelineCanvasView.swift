@@ -51,6 +51,10 @@ final class TimelineCanvasView: NSView {
     /// Which attachment the pointer is over. Its own field for the reason
     /// `TimelineRowPainter.State.hoveredAttachment` gives.
     private var hoveredAttachment: Int?
+    /// Which unfurled embed the pointer is over. Its own field beside the
+    /// attachment's, because a message can carry both a pasted `.gif` file and a
+    /// Tenor link and one field would put the star on the wrong one.
+    private var hoveredEmbed: Int?
     private var highlightedMessageID: MessageID?
     private var revealedSpoilers: [MessageID: Set<Int>] = [:]
     /// Which spoilered attachments have been uncovered, keyed the same way and
@@ -519,6 +523,14 @@ final class TimelineCanvasView: NSView {
                         {
                             state.isHoveredAttachmentFavorite = isFavoriteGIF?(gif) ?? false
                         }
+                        state.hoveredEmbed = hoveredEmbed
+                        if let hoveredEmbed,
+                           case .message(let message) = row.kind,
+                           message.embeds.indices.contains(hoveredEmbed),
+                           let gif = message.embeds[hoveredEmbed].favorite
+                        {
+                            state.isHoveredEmbedFavorite = isFavoriteGIF?(gif) ?? false
+                        }
                     }
                 }
                 if case .message(let message) = row.kind,
@@ -609,6 +621,12 @@ final class TimelineCanvasView: NSView {
             guard let gif = row.attachments[attachmentIndex].favorite else { return }
             onToggleFavoriteGIF?(gif)
             invalidateRow(index)
+        case .favoriteEmbedGIF(let embedIndex):
+            guard row.embeds.indices.contains(embedIndex),
+                  let gif = row.embeds[embedIndex].favorite
+            else { return }
+            onToggleFavoriteGIF?(gif)
+            invalidateRow(index)
         case .link(let destination, let rect):
             onOpenLink?(destination, rect)
         case .emoji(let emoji, let rect):
@@ -684,6 +702,9 @@ final class TimelineCanvasView: NSView {
         /// The star on a GIF. Ahead of the picture in the hit test, because it
         /// sits inside it and the picture would otherwise swallow every press.
         case favoriteGIF(index: Int)
+        /// The same star, on a GIF that arrived as an unfurled link rather than
+        /// as a file. A separate case because the two index different arrays.
+        case favoriteEmbedGIF(index: Int)
         case link(MessageText.LinkTarget, CGRect)
         case emoji(EmojiRef, CGRect)
         case sticker(StickerRef, CGRect)
@@ -813,6 +834,14 @@ final class TimelineCanvasView: NSView {
             return .sticker(slot.sticker, slot.rect.offsetBy(dx: frame.minX, dy: frame.minY))
         }
 
+        // An unfurled GIF's star. Only the star: the picture itself has no
+        // click behaviour here, so nothing else in an embed's rect is claimed
+        // and a link inside a card still reaches the text hit test below.
+        for (embedIndex, slot) in row.embeds.enumerated()
+        where slot.favorite != nil && slot.favoriteRect.contains(local) {
+            return .favoriteEmbedGIF(index: embedIndex)
+        }
+
         let revealedHere = revealedAttachments[row.id] ?? []
         for (attachmentIndex, slot) in row.attachments.enumerated()
         where slot.rect.contains(local) {
@@ -897,6 +926,7 @@ final class TimelineCanvasView: NSView {
         var cursor: NSCursor?
         var component: CGPoint?
         var attachment: Int?
+        var embed: Int?
         if let index, rows.indices.contains(index), case .message(let row) = rows[index].kind {
             // **Resolved from the geometry, not from the click target.** The
             // star is drawn on whichever picture the pointer is over, and the
@@ -908,6 +938,12 @@ final class TimelineCanvasView: NSView {
                 y: point.y - rowFrame(at: index).minY
             )
             attachment = row.attachments.firstIndex { $0.rect.contains(local) }
+            // The same rule for an unfurled GIF, and only for the embeds that
+            // have a star at all — a card the pointer crosses has nothing to
+            // reveal, so it must not claim the hover from the picture below it.
+            embed = row.embeds.firstIndex {
+                $0.favorite != nil && $0.rect.contains(local)
+            }
             switch target(in: row, at: point, rowIndex: index) {
             case .component(let url, let customID, let origin):
                 component = origin
@@ -935,6 +971,8 @@ final class TimelineCanvasView: NSView {
                 cursor = target == nil ? nil : .pointingHand
             case .favoriteGIF:
                 cursor = .pointingHand
+            case .favoriteEmbedGIF:
+                cursor = .pointingHand
             case .some:
                 cursor = .pointingHand
             case nil:
@@ -948,11 +986,13 @@ final class TimelineCanvasView: NSView {
         let rowChanged = index != hoveredRow
         let componentChanged = component != hoveredComponent
         let attachmentChanged = attachment != hoveredAttachment
-        guard rowChanged || componentChanged || attachmentChanged else { return }
+        let embedChanged = embed != hoveredEmbed
+        guard rowChanged || componentChanged || attachmentChanged || embedChanged else { return }
         let previous = hoveredRow
         hoveredRow = index
         hoveredComponent = component
         hoveredAttachment = attachment
+        hoveredEmbed = embed
         if rowChanged { invalidateRow(previous) }
         invalidateRow(index)
         if rowChanged { publishHover() }

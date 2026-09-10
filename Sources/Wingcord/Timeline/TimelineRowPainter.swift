@@ -52,6 +52,14 @@ nonisolated enum TimelineRowPainter {
         /// Whether the account has already starred the hovered GIF, so the badge
         /// says which way the click goes.
         var isHoveredAttachmentFavorite = false
+        /// Which unfurled embed the pointer is over, if any.
+        ///
+        /// **A second index rather than a reuse of the attachment's.** A message
+        /// can carry both — a pasted `.gif` file *and* a Tenor link — and one
+        /// field for both would put the star on whichever the pointer was not
+        /// on.
+        var hoveredEmbed: Int?
+        var isHoveredEmbedFavorite = false
         /// The shared animation clock's current time.
         ///
         /// Passed in rather than read here: the painter is `nonisolated` so a
@@ -371,7 +379,7 @@ nonisolated enum TimelineRowPainter {
             )
         }
 
-        for slot in row.embeds {
+        for (index, slot) in row.embeds.enumerated() {
             drawEmbed(
                 slot,
                 offset: CGPoint(x: rowFrame.minX, y: rowFrame.minY),
@@ -379,7 +387,12 @@ nonisolated enum TimelineRowPainter {
                 style: style,
                 images: images,
                 scale: scale,
-                clock: state.animationTime
+                clock: state.animationTime,
+                // A hover control, exactly as the attachment's is: it exists on
+                // the picture the pointer is on and nowhere else.
+                favorite: state.hoveredEmbed == index
+                    ? (state.isHoveredEmbedFavorite ? .starred : .unstarred)
+                    : nil
             )
         }
 
@@ -912,7 +925,11 @@ nonisolated enum TimelineRowPainter {
     /// over a moving picture churns its sampled blur every frame and leaves the
     /// glyph illegible on a bright one — the same rule the play badge follows.
     /// Boxy rather than round, because it is a control rather than a mark.
-    private static func drawFavoriteBadge(
+    /// Internal rather than private: `EmbedPainter` is an extension on this type
+    /// in another file and draws the same badge on an unfurled GIF. One painter
+    /// for one control — two copies is two places for the star to stop agreeing
+    /// with itself.
+    static func drawFavoriteBadge(
         _ state: FavoriteBadge,
         in frame: CGRect,
         context: CGContext

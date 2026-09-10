@@ -28,6 +28,28 @@ public struct GIF: Hashable, Sendable, Identifiable {
     /// Width over height, for a masonry column that has to reserve height
     /// before the image arrives. Square is the safe answer when the route
     /// omits the dimensions.
+    /// The first candidate this app can turn into pixels.
+    ///
+    /// **A video rendition is dropped rather than preferred: there is no player
+    /// anywhere in the image path**, so an MP4 is a placeholder that never
+    /// resolves — which is what made every tile in the picker a grey square the
+    /// first time the search decode preferred `src`.
+    ///
+    /// Here rather than beside the search decode because two surfaces build a
+    /// `GIF` now: a Tenor result, and an unfurled link in the transcript. A
+    /// second copy of this list is a second place for a `.webm` to slip through
+    /// into somebody's favourites.
+    public static func drawable(_ candidates: URL?...) -> URL? {
+        drawable(candidates)
+    }
+
+    public static func drawable(_ candidates: [URL?]) -> URL? {
+        let video: Set<String> = ["mp4", "m4v", "mov", "webm"]
+        return candidates
+            .compactMap(\.self)
+            .first { !video.contains($0.pathExtension.lowercased()) }
+    }
+
     public var aspectRatio: CGFloat {
         guard let width, let height, width > 0, height > 0 else { return 1 }
         return CGFloat(width) / CGFloat(height)

@@ -1010,10 +1010,7 @@ struct GIFDTO: Decodable, Sendable {
     /// resolves — which is what made every tile in the picker a grey square the
     /// first time this preferred `src`.
     static func drawable(_ candidates: URL?...) -> URL? {
-        let video: Set<String> = ["mp4", "m4v", "mov", "webm"]
-        return candidates
-            .compactMap(\.self)
-            .first { !video.contains($0.pathExtension.lowercased()) }
+        GIF.drawable(candidates)
     }
 }
 

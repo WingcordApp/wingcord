@@ -34,6 +34,19 @@ nonisolated struct EmbedSlot: Sendable {
     var images: [EmbedImage]
     /// Rules drawn inside the card — a Components V2 separator.
     var rules: [CGRect] = []
+    /// The GIF this embed would star, when it is one the account can keep.
+    ///
+    /// **A Tenor link and an uploaded `.gif` are the same feature and were not
+    /// the same code.** The star was built on `AttachmentSlot` only, so a GIF
+    /// somebody pasted — which is most of them — had no star at all: not
+    /// disabled, not empty, absent. The value is built the way the picker's own
+    /// results are, so a favourite made here and one made there are the same
+    /// entry: the page URL is the key, because that is what gets re-sent and
+    /// what every other client unfurls, and the preview is the drawable
+    /// rendition rather than a video nothing in the image path can open.
+    var favorite: GIF?
+    /// Where the star sits inside the picture. Only meaningful with `favorite`.
+    var favoriteRect: CGRect = .zero
 }
 
 nonisolated struct EmbedText: Sendable {
@@ -92,7 +105,7 @@ nonisolated enum EmbedLayoutEngine {
         // with twelve points of padding around a photograph is a frame nobody
         // asked for — `Embed.isBareImage` exists to name exactly this case.
         if let media = embed.bareMedia {
-            return bareImage(media, origin: origin, availableWidth: availableWidth)
+            return bareImage(media, in: embed, origin: origin, availableWidth: availableWidth)
         }
 
         let cardWidth = min(Metrics.embedMaxWidth, availableWidth)
@@ -276,6 +289,7 @@ nonisolated enum EmbedLayoutEngine {
     /// one here is a second place for it to drift.
     private static func bareImage(
         _ media: Embed.Media,
+        in embed: Embed,
         origin: CGPoint,
         availableWidth: CGFloat
     ) -> EmbedSlot {
@@ -314,7 +328,41 @@ nonisolated enum EmbedLayoutEngine {
                 decodeWidth: width,
                 isArtwork: true,
                 isAnimated: isAnimated
-            )]
+            )],
+            favorite: favorite(for: embed, media: media, animates: isAnimated),
+            favoriteRect: TimelineLayoutEngine.favoriteBadgeRect(in: rect)
+        )
+    }
+
+    /// The GIF an unfurled embed would be starred as.
+    ///
+    /// **`gifv` is a declaration, not an observation, and gating on whether the
+    /// picture animates was wrong.** A captured Klipy unfurl —
+    /// `search messages1.har` — is `type: "gifv"` with a **`.webp`** thumbnail
+    /// and an `.mp4` beside it, and `CDN.canAnimate` answers on the extension
+    /// alone, so that GIF would have had no star while Tenor's `.gif` did. What
+    /// makes something starrable is that Discord called it a GIF.
+    ///
+    /// **The embed's own URL is the key**, not the picture's: that is the link
+    /// in the message, it is what `setFavorite` files the entry under, and it is
+    /// what re-sending a favourite puts back in a channel. Storing the CDN
+    /// rendition instead would favourite a picture nobody could unfurl.
+    ///
+    /// The preview is the drawable rendition — the `.mp4` a `gifv` carries is a
+    /// tile that never resolves in the picker this favourite lands in.
+    private static func favorite(
+        for embed: Embed, media: Embed.Media, animates: Bool
+    ) -> GIF? {
+        guard embed.kind == "gifv" || animates else { return nil }
+        guard let link = embed.url.flatMap(URL.init(string:)), link.scheme == "https"
+        else { return nil }
+        return GIF(
+            url: link,
+            previewURL: GIF.drawable([
+                URL(string: media.proxyURL ?? media.url), URL(string: media.url),
+            ]),
+            width: media.width,
+            height: media.height
         )
     }
 

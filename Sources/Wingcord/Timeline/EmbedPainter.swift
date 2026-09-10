@@ -31,7 +31,10 @@ nonisolated extension TimelineRowPainter {
         style: MessageTextStyle,
         images: ImageStore,
         scale: CGFloat,
-        clock: Double
+        clock: Double,
+        /// The star, when the pointer is on this embed. Nil is every embed the
+        /// pointer is not on, which is all of them nearly all of the time.
+        favorite: FavoriteBadge? = nil
     ) {
         let frame = slot.rect.offsetBy(dx: offset.x, dy: offset.y)
         let corner = EmbedLayoutEngine.corner
@@ -86,6 +89,16 @@ nonisolated extension TimelineRowPainter {
                 images: images,
                 scale: scale,
                 clock: clock
+            )
+        }
+
+        // Over the picture, last, and only while the pointer is on it. The same
+        // control the attachment painter draws, from the same function.
+        if let favorite, slot.favorite != nil {
+            drawFavoriteBadge(
+                favorite,
+                in: slot.favoriteRect.offsetBy(dx: offset.x, dy: offset.y),
+                context: context
             )
         }
     }
