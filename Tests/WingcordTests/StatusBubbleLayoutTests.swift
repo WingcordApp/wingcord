@@ -24,31 +24,56 @@ struct StatusBubbleLayoutTests {
         )
     }
 
-    /// **The relationship the trail rests on.** The large disc has to sit on the
-    /// same line as the bubble, or the tail reads as two dots parked above the
-    /// thing they belong to — which is exactly how the first version looked.
-    @Test("The large disc's centre is level with the bubble's")
-    func largeDiscIsOnTheBubblesLine() {
+    /// **Sharing a colour is not enough — they have to fuse.** The large disc
+    /// straddles the bubble's top edge, twelve of its twenty points inside it,
+    /// which is what makes the two read as one shape rather than a disc parked
+    /// against a box. Discord's own `top: -8px` on a 20px circle.
+    @Test("The large disc straddles the bubble's top edge")
+    func largeDiscStraddlesTheBubble() {
         let value = layout(drop: 34)
-        #expect(value.largeDotCenterY == value.centerY)
+        #expect(value.largeDotOrigin.y < 0, "it has to break the edge")
+        #expect(value.largeDotOrigin.y + value.dotLarge > 0, "and stay attached to it")
     }
 
-    /// A vertical column has no direction. The trail has to climb.
-    @Test("The discs climb: small above and to the left of large")
+    /// A vertical column has no direction. The trail has to climb — up and to
+    /// the left, toward the face it is coming out of.
+    @Test("The discs climb away from the bubble, small furthest")
     func discsClimbDiagonally() {
         let value = layout(drop: 34)
         #expect(value.dotSmall < value.dotLarge)
-        #expect(value.dotStagger > 0)
-        // The small disc's own centre sits above the large one's.
-        let smallCenter = value.dotSmall / 2
-        #expect(smallCenter < value.largeDotCenterY)
+        #expect(value.smallDotOrigin.y < value.largeDotOrigin.y, "further up")
+        #expect(value.smallDotOrigin.x < value.largeDotOrigin.x, "and further left")
     }
 
-    /// Sharing a colour is not enough — they have to touch, or they read as a
-    /// disc beside a capsule rather than as one shape.
-    @Test("The large disc runs under the bubble")
-    func discOverlapsTheBubble() {
-        #expect(layout(drop: 34).overlap > 0)
+    /// **The two caps in Discord's sheet are one number stated twice.** A bubble
+    /// is its content plus two paddings plus the border on each side, and 181
+    /// is exactly 155 + 24 + 2 — which is how the pair is known to be measured
+    /// rather than picked.
+    @Test("The bubble's cap is its content's cap plus its own chrome")
+    func capsAgree() {
+        let value = layout(drop: 34)
+        #expect(
+            value.bubbleWidthCap
+                == value.contentWidthCap + value.bubbleHorizontalPadding * 2 + 2
+        )
+    }
+
+    /// The discs hang past the bubble on two sides, and the cluster reserves
+    /// room for them: a background is not clipped by its own parent, but any
+    /// ancestor that clips would take them.
+    @Test("The overhangs cover everything the discs reach")
+    func overhangsCoverTheDiscs() {
+        let value = layout(drop: 34)
+        #expect(value.topOverhang >= -value.smallDotOrigin.y)
+        #expect(value.leadingOverhang >= -value.smallDotOrigin.x)
+    }
+
+    /// A bubble holding one emoji is still a bubble, not a circle — Discord's
+    /// own `min-width: 42px`.
+    @Test("A tiny status still draws a bubble")
+    func minimumWidthHolds() {
+        let value = layout(drop: 34)
+        #expect(value.bubbleWidth(contentWidth: 4) == value.minimumBubbleWidth)
     }
 
     /// **The bug this whole value exists to prevent.** The card lives in a
@@ -61,9 +86,10 @@ struct StatusBubbleLayoutTests {
     )
     func clusterFitsTheCard(_ cardWidth: CGFloat) {
         let value = layout(drop: 34, cardWidth: cardWidth)
-        // The widest a bubble can ever draw, plus everything to its left.
+        // The widest a bubble can ever draw, plus everything to its left —
+        // the avatar and its gap, and the room the discs hang into.
         let total = value.leadingInset
-            + (value.tailWidth - value.overlap)
+            + value.leadingOverhang
             + value.bubbleWidth(contentWidth: .greatestFiniteMagnitude)
         #expect(total <= cardWidth)
     }
@@ -78,8 +104,10 @@ struct StatusBubbleLayoutTests {
             // Measured down from the artwork's lower edge: the avatar's centre,
             // and the cluster's.
             let avatarCenter = drop - value.avatarSide / 2
-            let bubbleCenter = value.verticalOffset - value.centerY
-            #expect(abs((bubbleCenter - avatarCenter) - value.dropBelowCentre) < 0.001)
+            // The bubble's own top, which is the cluster's top plus the room
+            // reserved above it for the discs.
+            let bubbleTop = value.verticalOffset - value.topOverhang
+            #expect(abs((bubbleTop - avatarCenter) - value.dropBelowCentre) < 0.001)
         }
     }
 
@@ -89,8 +117,11 @@ struct StatusBubbleLayoutTests {
     @Test("A bubble holding one emoji hugs it")
     func emojiOnlyBubbleHugs() {
         let value = layout(drop: 34)
-        let width = value.bubbleWidth(contentWidth: value.emojiSide)
-        #expect(width == value.emojiSide + value.bubbleHorizontalPadding * 2)
+        // Wide enough to clear the minimum, so this measures the hug rather
+        // than the floor.
+        let content = value.minimumBubbleWidth
+        let width = value.bubbleWidth(contentWidth: content)
+        #expect(width == content + value.bubbleHorizontalPadding * 2)
         #expect(width < value.maximumBubbleWidth)
     }
 

@@ -53,6 +53,10 @@ struct CustomStatusBubble: View {
     /// The gutter the avatar is inset by, for the same reason.
     var margin: CGFloat = Spacing.margin
 
+    @Environment(\.motion) private var motion
+    /// Whether the pointer is on it, which lifts the two-line clamp.
+    @State private var isExpanded = false
+
     /// Where every piece goes. See `StatusBubbleLayout` — the numbers are
     /// measured off a reference, and they live in one value so a test can hold
     /// them to the relationships that make this read as speech.
@@ -68,19 +72,33 @@ struct CustomStatusBubble: View {
     }
 
     var body: some View {
-        HStack(alignment: .center, spacing: -layout.overlap) {
-            tail
-            bubble
-        }
-        .padding(.leading, layout.leadingInset)
+        bubble
+            // **Behind the bubble, not beside it.** The large disc straddles its
+            // top edge, and a disc drawn *over* it would show its own rim
+            // crossing the bubble's face; underneath, only the part that
+            // protrudes is ever seen, which is the arc Discord draws.
+            .background(alignment: .topLeading) { tail }
+            // The overhang is reserved so the discs are inside this view's own
+            // frame — a background is not clipped by its parent, but an
+            // ancestor that clips would take them.
+            .padding(.top, layout.topOverhang)
+            .padding(.leading, layout.leadingInset + layout.leadingOverhang)
         // Placed from the avatar's own drop, so the cluster leaves the face at
         // the same angle on both surfaces.
         .offset(y: layout.verticalOffset)
-        // The whole sentence on hover, and **only when there is more of it to
-        // see**. A status is one line here because a second line pushes the name
-        // it belongs to off its own banner; the rest is a question the reader
-        // can ask by pointing at it.
-        .modifier(TruncatedStatusFlyout(text: isTruncated ? text : nil))
+        // **The clamp lifts under the pointer, in place.** Discord expands the
+        // bubble itself rather than opening a second surface to read it in, and
+        // the flyout this replaces was answering a question by putting the
+        // answer somewhere else.
+        //
+        // Unconditional on purpose: a status that already fits in two lines is
+        // unchanged by lifting a limit it never reached, so there is no
+        // "is it truncated" to measure and get wrong.
+        .onHover { hovering in
+            guard isExpanded != hovering else { return }
+            isExpanded = hovering
+        }
+        .animation(motion.hover, value: isExpanded)
         .accessibilityElement(children: .ignore)
         // VoiceOver gets the WHOLE status regardless of what is drawn. A visual
         // truncation is a layout decision, not a decision about what the status
@@ -88,13 +106,18 @@ struct CustomStatusBubble: View {
         .accessibilityLabel(Text(accessibilityLabel))
     }
 
-    /// Two discs climbing from the face toward the bubble.
+    /// Two discs climbing out of the bubble's top-left corner, toward the face.
+    ///
+    /// **Placed from the bubble's own corner**, which is how the stylesheet
+    /// states them — both are absolutely positioned against it. Their offsets
+    /// are negative upward, so this reads the same way the CSS does.
     private var tail: some View {
-        VStack(alignment: .leading, spacing: layout.dotGap) {
+        ZStack(alignment: .topLeading) {
+            disc(layout.dotLarge)
+                .offset(x: layout.largeDotOrigin.x, y: layout.largeDotOrigin.y)
             disc(layout.dotSmall)
-            disc(layout.dotLarge).padding(.leading, layout.dotStagger)
+                .offset(x: layout.smallDotOrigin.x, y: layout.smallDotOrigin.y)
         }
-        .padding(.bottom, layout.tailBottomPadding)
     }
 
     private func disc(_ side: CGFloat) -> some View {
@@ -115,9 +138,14 @@ struct CustomStatusBubble: View {
                     // against a scrim over artwork nobody chose, and vibrancy
                     // there resolves against the picture instead of the panel.
                     .foregroundStyle(.white)
-                    // One line, cut at the edge. See the flyout above.
-                    .lineLimit(1)
-                    .truncationMode(.tail)
+                    // **Two lines, then it clamps** — Discord's own
+                    // `-webkit-line-clamp: 2` — and hovering lifts the clamp
+                    // rather than opening a second surface to read it in. The
+                    // bubble is positioned by an offset, so growing it moves
+                    // nothing else on the card.
+                    .lineLimit(isExpanded ? nil : layout.collapsedLineLimit)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .multilineTextAlignment(.leading)
             }
         }
         .padding(.horizontal, layout.bubbleHorizontalPadding)
@@ -150,17 +178,6 @@ struct CustomStatusBubble: View {
     /// The face the status is drawn in, resolved once for measurement.
     private static var textFont: NSFont { .preferredFont(forTextStyle: .subheadline) }
 
-    /// Whether the sentence is longer than the one line it gets.
-    ///
-    /// **Measured, and the flyout is conditional on it.** A status that already
-    /// fits has nothing to reveal, and a popover that opens to repeat what is
-    /// visibly on screen is noise the reader learns to move away from. One
-    /// `CTLine` measurement per bubble, not per frame — the bubble is built when
-    /// a card opens.
-    private var isTruncated: Bool {
-        guard let text, !text.isEmpty else { return false }
-        return contentWidth > layout.maximumContentWidth
-    }
 
     private var accessibilityLabel: String {
         let spoken = [emoji.map { UnicodeEmoji.shortcode(for: $0.name) ?? $0.name }, text]
@@ -193,29 +210,6 @@ struct ExpressionGlyph: View {
             Text(emoji.name)
                 .font(.system(size: side * 0.86))
                 .frame(width: side, height: side)
-        }
-    }
-}
-
-/// Reveals a status that did not fit, and installs nothing when it did.
-///
-/// **The modifier is guarded, not the closure.** `.onHover` compiles to an
-/// AppKit tracking area and a `.popover` to a presentation node; writing both
-/// unconditionally and returning early inside still pays for them on every
-/// bubble in the app, including the great majority whose status fits on its
-/// line — see `INVARIANTS.md` §2.
-private struct TruncatedStatusFlyout: ViewModifier {
-    var text: String?
-
-    /// What the revealed sentence wraps at. Wide enough for a paragraph, narrow
-    /// enough that a long status is a block rather than a ribbon.
-    private static let width: CGFloat = 260
-
-    func body(content: Content) -> some View {
-        if let text {
-            content.hoverFlyout(text, edge: .top, wrapsAt: Self.width)
-        } else {
-            content
         }
     }
 }
