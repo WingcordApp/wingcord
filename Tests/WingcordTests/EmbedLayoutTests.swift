@@ -120,6 +120,37 @@ struct EmbedLayoutTests {
         }
     }
 
+    /// **The shape a real link unfurl takes**, and the one the enclosure test
+    /// above could not see: Discord's Spotify embed is a title, a provider and a
+    /// 300x300 thumbnail with *no description at all*. The card's height came
+    /// from the text alone, so it was drawn about forty points tall with an
+    /// eighty-point picture in it and the cover hung out of the bottom edge.
+    ///
+    /// Captured, `spotify embed.har`:
+    ///
+    /// ```json
+    /// { "type": "link", "title": "Lounge Act",
+    ///   "provider": { "name": "Spotify" },
+    ///   "thumbnail": { "width": 300, "height": 300, … } }
+    /// ```
+    @Test("A card with a thumbnail and one line of text still encloses the picture")
+    func shortCardEnclosesItsThumbnail() {
+        let slot = layout(Embed(
+            title: "Lounge Act",
+            url: "https://open.spotify.com/track/7glld4kxYHp61zIPtSVHNk",
+            thumbnail: Embed.Media(url: "https://example.test/cover.png"),
+            providerName: "Spotify"
+        ))
+        #expect(!slot.images.isEmpty)
+        for image in slot.images {
+            #expect(image.rect.maxY <= slot.rect.maxY)
+        }
+        // And the picture is not merely inside it — the card has the padding
+        // below it that every other card has.
+        let picture = slot.images[0]
+        #expect(slot.rect.maxY - picture.rect.maxY >= EmbedLayoutEngine.padding)
+    }
+
     /// A thumbnail sits beside the text, so the text has to be narrowed for it —
     /// otherwise the description runs underneath the picture.
     @Test("A thumbnail narrows the text beside it")

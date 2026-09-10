@@ -244,7 +244,19 @@ nonisolated enum EmbedLayoutEngine {
 
         // The last part contributed a trailing gap; the card's bottom padding
         // replaces it.
-        let height = max(padding * 2, y - gap - origin.y + padding)
+        var height = max(padding * 2, y - gap - origin.y + padding)
+        // **And the card has to be tall enough for the PICTURE, which no part of
+        // `y` knows about.** The thumbnail is placed against the card's own top
+        // edge rather than after the text — that is the whole point of it — so a
+        // card whose text is shorter than eighty points was drawn shorter than
+        // the picture inside it, and the picture hung out of the bottom.
+        //
+        // Any `type: "link"` unfurl with a title and no description does this,
+        // which is every Spotify track, every bare article link, and most of
+        // what a transcript actually contains. The older enclosure test missed
+        // it because its fixture had twenty lines of description — a fixture
+        // unlike the caller's input guards the bug rather than catching it.
+        if hasThumbnail { height = max(height, padding * 2 + thumbnailSide) }
         return EmbedSlot(
             rect: CGRect(x: origin.x, y: origin.y, width: cardWidth, height: height),
             accent: embed.colorValue.flatMap { $0 == 0 ? nil : NSColor(Color(hex: $0)) },
