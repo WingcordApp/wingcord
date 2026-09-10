@@ -128,6 +128,9 @@ predecessor sat at 300–425 MB.
   from, and a message link scrolls to its target and lights it
 - Drawn member list: hoist groups, role colours, presence shapes, activity lines,
   and a reserved full-row plate layer so nameplates drop in without reflowing
+- A guild rail that says where the noise is: a mark set *into* the tile when a
+  server's rooms are busy, and a hover chip that names who is in voice and who is
+  worth watching
 - **Voice channels that show who is in them**: every face, the custom status they
   are wearing, a LIVE chip, the mark of the game they are playing, their mute and
   deafen switches, the room's own label with its custom emoji, how full it is and
