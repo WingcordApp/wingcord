@@ -122,7 +122,7 @@ extension AppModel {
             connectedVoiceGuild: connectedVoiceChannelID.flatMap {
                 channelIndex.guildID(of: $0)
             },
-            liveGuilds: guildsWithLiveVoice
+            voiceMarks: voiceMarksByGuild
         )
         railCache = (key, value)
         return value
@@ -383,13 +383,13 @@ extension AppModel {
         expanded: Set<UInt64>,
         badge: (GuildID) -> (mentions: Int, unread: Bool, muted: Bool),
         connectedVoiceGuild: GuildID?,
-        /// Every server with somebody sharing a screen or on camera in it.
+        /// What each server's voice channels are doing.
         ///
-        /// **Resolved once by the caller and handed in as a set.** A test per
+        /// **Resolved once by the caller and handed in as a table.** A test per
         /// tile over the whole voice table is ninety-seven passes over five
         /// hundred states, in a memo that rebuilds whenever any message arrives
         /// anywhere in the account.
-        liveGuilds: Set<GuildID>
+        voiceMarks: [GuildID: RailVoiceMark]
     ) -> [RailItem] {
         var items: [RailItem] = []
         items.reserveCapacity(folders.count)
@@ -407,7 +407,7 @@ extension AppModel {
                 hasUnread: state.unread,
                 isMuted: state.muted,
                 isConnectedToVoice: connectedVoiceGuild == guildID,
-                hasLiveVoice: liveGuilds.contains(guildID)
+                voiceMark: voiceMarks[guildID]
             )
         }
 

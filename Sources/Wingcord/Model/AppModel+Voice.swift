@@ -438,24 +438,41 @@ extension AppModel {
             let user = users[state.userID]
             return RailHoverPresence.Face(
                 id: state.userID,
-                avatarURL: user.flatMap { avatarURL(for: $0, side: Metrics.avatarInline) },
+                // **Guild-aware**, so somebody wearing a different face in this
+                // server is drawn with it — the same answer the roster and the
+                // sidebar give, rather than a third one.
+                avatarURL: avatarURL(
+                    forUserID: state.userID,
+                    inGuild: state.guildID,
+                    side: Metrics.avatarInline
+                ),
                 monogram: user?.monogram ?? "?"
             )
         }
     }
 
-    /// Every server with somebody sharing a screen or on camera in it, in one
-    /// pass.
+    /// What each server's voice channels are doing, in one pass.
     ///
-    /// **Computed once per rail rebuild and read as a set**, never per tile: a
-    /// containment test per guild over the whole voice table is ninety-seven
-    /// passes over five hundred states, on a memo that rebuilds whenever any
-    /// message arrives anywhere.
-    var guildsWithLiveVoice: Set<GuildID> {
-        var found: Set<GuildID> = []
-        for state in voiceStates.values where state.isStreaming || state.isCameraOn {
+    /// **Computed once per rail rebuild and read as a table**, never per tile: a
+    /// test per guild over the whole voice table is ninety-seven passes over
+    /// five hundred states, on a memo that rebuilds whenever any message
+    /// arrives anywhere in the account.
+    ///
+    /// A server with anybody in a room gets a mark. **That is the whole
+    /// correction**: this used to answer only for servers with a stream in
+    /// them, so every busy server where nobody happened to be sharing — which
+    /// is most of them — carried nothing.
+    var voiceMarksByGuild: [GuildID: RailVoiceMark] {
+        var found: [GuildID: RailVoiceMark] = [:]
+        for state in voiceStates.values {
             guard let guildID = state.guildID, state.channelID != nil else { continue }
-            found.insert(guildID)
+            if state.isStreaming || state.isCameraOn {
+                found[guildID] = .live
+            } else if found[guildID] == nil {
+                // Never over a `.live` already found: the more specific fact
+                // wins whichever order the table happens to be walked in.
+                found[guildID] = .voice
+            }
         }
         return found
     }

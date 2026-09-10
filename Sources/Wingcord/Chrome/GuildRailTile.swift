@@ -82,6 +82,10 @@ struct GuildRailTile: View {
                     }
                 }
                 .clipShape(.rect(cornerRadius: cornerRadius, style: .continuous))
+                // **Before the badges, after the clip.** What is cut is the
+                // artwork; the mark that fills the hole is drawn over the top of
+                // it a line below and must not be cut with it.
+                .railTileNotch(isCut: guild.voiceMark != nil)
                 .overlay(alignment: .bottomTrailing) {
                     if guild.mentionCount > 0 {
                         UnreadBadge(count: guild.mentionCount, isMuted: guild.isMuted)
@@ -92,8 +96,9 @@ struct GuildRailTile: View {
                 // two say unrelated things and a tile can carry both: one is
                 // about you, the other is about the room.
                 .overlay(alignment: .topTrailing) {
-                    if guild.hasLiveVoice {
-                        LiveVoiceMark().offset(x: 4, y: -4)
+                    if let mark = guild.voiceMark {
+                        LiveVoiceMark(mark: mark)
+                            .offset(x: LiveVoiceMark.inset.x, y: LiveVoiceMark.inset.y)
                     }
                 }
                 .opacity(guild.isMuted && !isSelected ? 0.55 : 1)
@@ -371,10 +376,31 @@ struct DiscoverRailTile: View {
 /// artwork, and a monochrome symbol laid straight on it disappears against half
 /// the servers on the rail.
 struct LiveVoiceMark: View {
-    private static let side: CGFloat = 16
+    var mark: RailVoiceMark
+
+    static let side: CGFloat = 16
+    /// How far the mark hangs past the tile's own corner.
+    static let inset = CGPoint(x: 4, y: -4)
+    /// The ring of bare rail cleared around it.
+    ///
+    /// **The mark is not laid on the icon, it is set INTO it** — Discord punches
+    /// a hole and this does the same. A white plate dropped straight on somebody's
+    /// artwork reads as a sticker; the same plate with the rail showing through
+    /// around it reads as part of the tile. See `railTileNotch`.
+    static let gap: CGFloat = 3
+    /// What the notch takes out. Derived here so the hole and the thing filling
+    /// it cannot drift — the defect that geometry split across two views always
+    /// produces.
+    static var cutSide: CGFloat { side + gap * 2 }
 
     var body: some View {
-        Image(systemName: "rectangle.inset.filled.on.rectangle")
+        // A speaker means there are people in a room; a screen means one of
+        // them is worth watching. Two facts, two glyphs.
+        Image(
+            systemName: mark == .live
+                ? "rectangle.inset.filled.on.rectangle"
+                : "speaker.wave.2.fill"
+        )
             .font(.system(size: 8, weight: .bold))
             .foregroundStyle(Palette.canvas)
             .frame(width: Self.side, height: Self.side)
@@ -385,5 +411,55 @@ struct LiveVoiceMark: View {
             // It reports what is happening; the tile under it is the control.
             .allowsHitTesting(false)
             .accessibilityHidden(true)
+    }
+}
+
+/// Takes a bite out of a rail tile where the live mark sits.
+///
+/// **A mask, not a ring drawn under the badge.** A ring in the rail's own colour
+/// is only right while the thing behind the tile is that colour — and behind
+/// this one is the wallpaper, through a column with no background of its own. A
+/// hole is correct whatever is back there.
+///
+/// **The modifier is guarded rather than the mask** — §2. Applied
+/// unconditionally with an empty cut, every tile on the rail would carry a
+/// compositing group and an extra offscreen pass, for the one or two that have
+/// anything to cut.
+private struct RailTileNotch: ViewModifier {
+    var isCut: Bool
+
+    func body(content: Content) -> some View {
+        if isCut {
+            content.mask {
+                Rectangle()
+                    .overlay(alignment: .topTrailing) {
+                        Circle()
+                            .frame(
+                                width: LiveVoiceMark.cutSide,
+                                height: LiveVoiceMark.cutSide
+                            )
+                            // Centred on the mark. Solved once, from the mark's
+                            // own numbers: the hole and the badge share every
+                            // constant, so there is no pair to keep in step.
+                            .offset(
+                                x: LiveVoiceMark.gap + LiveVoiceMark.inset.x,
+                                y: -LiveVoiceMark.gap + LiveVoiceMark.inset.y
+                            )
+                            .blendMode(.destinationOut)
+                    }
+                    // Without it the subtraction composites against the window
+                    // rather than against the mask, and the whole tile goes.
+                    .compositingGroup()
+            }
+        } else {
+            content
+        }
+    }
+}
+
+extension View {
+    /// Clears a circle of this tile where the live mark sits.
+    func railTileNotch(isCut: Bool) -> some View {
+        modifier(RailTileNotch(isCut: isCut))
     }
 }

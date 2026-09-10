@@ -41,13 +41,30 @@ struct RailGuild: Hashable, Sendable, Identifiable {
     var isMuted: Bool
     /// Whether a voice channel in this guild currently has the reader in it.
     var isConnectedToVoice: Bool
-    /// Whether somebody in this server is sharing a screen or on camera.
+    /// What is happening in this server's voice channels, if anything.
     ///
-    /// **A `Bool` resolved from one pass, not a lookup per tile** — see
-    /// `AppModel.guildsWithLiveVoice`. It draws the mark Discord puts on the
-    /// tile itself, which is the only thing on the rail that says there is
-    /// something to watch without hovering anything.
-    var hasLiveVoice: Bool = false
+    /// **Nil is silence, and silence is the common case.** Resolved from one
+    /// pass over the whole account rather than a lookup per tile — see
+    /// `AppModel.voiceMarksByGuild`. It draws the mark Discord puts on the tile
+    /// itself, which is the only thing on the rail that says a room is busy
+    /// without hovering anything.
+    var voiceMark: RailVoiceMark?
+}
+
+/// What a rail tile's voice mark says.
+///
+/// **Two states, because Discord draws two glyphs and they mean different
+/// things**: a speaker says there are people in a room, and a screen says one of
+/// them is worth watching. The first version of this drew the screen only, so
+/// every busy server with nobody streaming — which is most of them — carried no
+/// mark at all.
+enum RailVoiceMark: Hashable, Sendable {
+    /// Somebody is in a voice channel here.
+    case voice
+    /// ...and somebody is sharing a screen or on camera. **Wins over `voice`**:
+    /// a room with a stream in it is still a room with people in it, and the
+    /// more specific fact is the one worth a glyph.
+    case live
 }
 
 /// Who is in voice in one server, for the chip that names it.

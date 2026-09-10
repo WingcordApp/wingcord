@@ -107,17 +107,44 @@ struct RailHoverPresenceTests {
         model.voiceStates[UserID(rawValue: 20)]?.channelID = nil
 
         #expect(model.railHoverPresence(for: here).isEmpty)
-        #expect(model.guildsWithLiveVoice.isEmpty)
+        #expect(model.voiceMarksByGuild.isEmpty)
     }
 
-    /// The tile's own mark, which is resolved once for the whole rail rather
-    /// than per tile — the set is the shape that makes that true.
-    @Test("The live set names every server with something to watch, and no other")
-    func liveSet() {
+    /// **The correction this suite was extended for.** The first version marked
+    /// a tile only when somebody was streaming, so every busy server where
+    /// nobody happened to be sharing — which is most of them — carried nothing,
+    /// while Discord draws a speaker on all of them.
+    @Test("A server with anybody in a room is marked, streaming or not")
+    func quietRoomsAreStillMarked() {
         let model = model()
         join(model, 20, guild: here)
         join(model, 21, guild: elsewhere, streaming: true)
 
-        #expect(model.guildsWithLiveVoice == [elsewhere])
+        let marks = model.voiceMarksByGuild
+        #expect(marks[here] == .voice)
+        #expect(marks[elsewhere] == .live)
+    }
+
+    /// **Whichever order the table is walked in.** It is a dictionary, so the
+    /// order is not stable across runs, and a rule written as "last writer wins"
+    /// would draw a speaker on a server with a stream in it about half the time.
+    @Test("A stream wins over a quiet room in the same server")
+    func liveWinsOverVoice() {
+        let model = model()
+        // The streamer joins first, so a naive later write would overwrite it.
+        join(model, 20, guild: here, streaming: true)
+        for id in 21..<40 { join(model, UInt64(id), guild: here) }
+
+        #expect(model.voiceMarksByGuild[here] == .live)
+    }
+
+    /// A server nobody is in has no mark at all — nil rather than a `.voice`
+    /// for everything, which would put a speaker on the whole rail.
+    @Test("A silent server carries no mark")
+    func silenceIsNoMark() {
+        let model = model()
+        join(model, 20, guild: elsewhere)
+
+        #expect(model.voiceMarksByGuild[here] == nil)
     }
 }
