@@ -892,10 +892,29 @@ struct ProfileDateSpan: View {
             RemoteImage(url: url, side: 13) { Circle().fill(Palette.surfaceRaised) }
                 .frame(width: 13, height: 13)
                 .clipShape(.circle)
-        } else if let symbolName = moment.symbolName, BrandMark.mark(for: symbolName) != nil {
+        } else if let symbolName = moment.symbolName,
+                  let mark = BrandMark.mark(for: symbolName) {
             // Discord's and Nitro's own outlines. Named through the table so a
             // third one costs an entry rather than a branch.
-            ConnectionMark(service: symbolName, side: 13)
+            //
+            // **Bare, in the brand's own colour — not the plate the connection
+            // dock draws.** There the colour has to be the ground, because four
+            // of those brands are black and a black glyph on a near-black card
+            // is an empty square. Here it is a mark on a line of dates beside
+            // two dates and a server's round icon, and a filled tile among them
+            // reads as a button. Discord draws them bare too.
+            //
+            // A brand too dark to be ink still gets the plate, so a mark added
+            // to this line later cannot be the one that comes out invisible —
+            // the rule is the colour's own luminance rather than an exception
+            // for the two that happen to be here today.
+            if BrandMark.readsAsInk(mark.tint) {
+                BrandGlyph(service: symbolName)
+                    .fill(Color(hex: mark.tint))
+                    .frame(width: 13, height: 13)
+            } else {
+                ConnectionMark(service: symbolName, side: 13)
+            }
         } else if let symbolName = moment.symbolName {
             Image(systemName: symbolName)
                 .font(.system(size: 9))

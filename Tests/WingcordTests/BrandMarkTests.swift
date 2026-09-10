@@ -98,4 +98,52 @@ nonisolated struct BrandMarkTests {
         #expect(box.width == 10)
         #expect(box.height == 5)
     }
+    // MARK: Colour, as ground and as ink
+
+    /// **Two tests over the same luminance, and confusing them put a pink tile
+    /// behind Nitro on the profile's date line.**
+    ///
+    /// `prefersLightGlyph` answers "which glyph reads *on* this colour" — the
+    /// question the connection dock asks, where the brand colour is the ground.
+    /// `readsAsInk` answers "does this colour read *on the card*" — the question
+    /// a bare mark asks. Nitro at 0.404 is bright enough for both: it wants a
+    /// dark glyph laid on it, and it is perfectly legible as ink with nothing
+    /// under it at all. The plate was never about legibility here.
+    @Test("Nitro is bright enough to be ink, and to take a dark glyph on it")
+    func nitroReadsBothWays() throws {
+        let nitro = try #require(BrandMark.mark(for: BrandMark.nitro))
+        #expect(BrandMark.readsAsInk(nitro.tint))
+        #expect(!BrandMark.prefersLightGlyph(on: nitro.tint))
+    }
+
+    /// Blurple is dim and saturated — exactly the shape of colour the ink floor
+    /// must not reject, since Discord sets type in it on dark surfaces itself.
+    @Test("A dim but saturated brand still reads as ink")
+    func blurpleIsInk() throws {
+        let discord = try #require(BrandMark.mark(for: BrandMark.discord))
+        #expect(BrandMark.readsAsInk(discord.tint))
+    }
+
+    /// **What the floor exists to reject.** Four brands in this table are black,
+    /// and bare ink in their colour on this app's near-black card is an empty
+    /// square — those are the ones that still need a plate.
+    @Test("Black is not ink")
+    func blackIsNotInk() {
+        #expect(!BrandMark.readsAsInk(0x000000))
+        #expect(!BrandMark.readsAsInk(0x0A0A0C))
+        #expect(BrandMark.readsAsInk(0xFFFFFF))
+    }
+
+    /// **The connection dock's own premise, checked.** Its doc says the colour
+    /// has to be the ground because several of these brands are black — so at
+    /// least one of them must actually fail the ink floor, or the plate is
+    /// solving a problem the table does not have.
+    @Test("Some brands really are too dark to be ink, which is why the plate exists")
+    func someBrandsNeedThePlate() {
+        let tooDark = Self.services
+            .compactMap(BrandMark.mark(for:))
+            .filter { !BrandMark.readsAsInk($0.tint) }
+        #expect(!tooDark.isEmpty)
+    }
+
 }

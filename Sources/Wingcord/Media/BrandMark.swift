@@ -64,18 +64,43 @@ nonisolated enum BrandMark {
     /// calls Spotify's green dark and PayPal's blue light, and both come out
     /// unreadable.
     static func prefersLightGlyph(on tint: UInt32) -> Bool {
+        // 0.4 rather than 0.5: white-on-mid is more legible than black-on-mid at
+        // the sizes these are drawn, because the glyphs are thin.
+        luminance(of: tint) < 0.4
+    }
+
+    /// Whether this brand's colour can be drawn as **ink on the reading
+    /// surface**, rather than needing a plate to sit on.
+    ///
+    /// **A different question from `prefersLightGlyph`.** That one answers
+    /// "which glyph reads *on* this colour", which is what the connection dock
+    /// needs, because there the colour is the ground. This answers "does this
+    /// colour read as ink on a near-black card" — and a surface that asked the
+    /// first when it meant the second is what put a pink tile behind Nitro on
+    /// the profile's date line.
+    ///
+    /// Measured: Nitro `#FF73FA` is **0.404**, the reading surface is 0.003, and
+    /// Discord's blurple is **0.178**. The floor is deliberately far below all
+    /// three. What it exists to reject is a brand whose mark is black — several
+    /// in this table are — where bare ink on this app's near-black surface is an
+    /// empty square; blurple is exactly the dim-but-saturated case that must
+    /// pass, since Discord sets type in it on dark surfaces itself.
+    static func readsAsInk(_ tint: UInt32) -> Bool {
+        luminance(of: tint) >= 0.05
+    }
+
+    /// Relative luminance, sRGB. One copy, because two tests over the same
+    /// number is two places for the curve to be got wrong.
+    private static func luminance(of tint: UInt32) -> Double {
         func linear(_ byte: UInt32) -> Double {
             let channel = Double(byte) / 255
             return channel <= 0.04045
                 ? channel / 12.92
                 : pow((channel + 0.055) / 1.055, 2.4)
         }
-        let luminance = 0.2126 * linear((tint >> 16) & 0xFF)
+        return 0.2126 * linear((tint >> 16) & 0xFF)
             + 0.7152 * linear((tint >> 8) & 0xFF)
             + 0.0722 * linear(tint & 0xFF)
-        // 0.4 rather than 0.5: white-on-mid is more legible than black-on-mid at
-        // the sizes these are drawn, because the glyphs are thin.
-        return luminance < 0.4
     }
 
     /// Discord ships a staging variant of one service under its own type, and a
