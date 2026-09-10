@@ -81,11 +81,17 @@ struct GuildRailTile: View {
                         .allowsHitTesting(false)
                     }
                 }
-                .clipShape(.rect(cornerRadius: cornerRadius, style: .continuous))
-                // **Before the badges, after the clip.** What is cut is the
-                // artwork; the mark that fills the hole is drawn over the top of
-                // it a line below and must not be cut with it.
-                .railTileNotch(isCut: guild.voiceMark != nil)
+                // **The clip and the notch are one shape.** Cutting the corner
+                // was a second mask over this until it took the whole tile with
+                // it — see `NotchedRailTile`. The badges below are overlaid
+                // after it and are not cut with it.
+                .clipShape(
+                    NotchedRailTile(
+                        cornerRadius: cornerRadius,
+                        isNotched: guild.voiceMark != nil
+                    ),
+                    style: FillStyle(eoFill: true)
+                )
                 .overlay(alignment: .bottomTrailing) {
                     if guild.mentionCount > 0 {
                         UnreadBadge(count: guild.mentionCount, isMuted: guild.isMuted)
@@ -98,7 +104,7 @@ struct GuildRailTile: View {
                 .overlay(alignment: .topTrailing) {
                     if let mark = guild.voiceMark {
                         LiveVoiceMark(mark: mark)
-                            .offset(x: LiveVoiceMark.inset.x, y: LiveVoiceMark.inset.y)
+                            .offset(x: RailMarkGeometry.inset.x, y: RailMarkGeometry.inset.y)
                     }
                 }
                 .opacity(guild.isMuted && !isSelected ? 0.55 : 1)
@@ -378,21 +384,6 @@ struct DiscoverRailTile: View {
 struct LiveVoiceMark: View {
     var mark: RailVoiceMark
 
-    static let side: CGFloat = 16
-    /// How far the mark hangs past the tile's own corner.
-    static let inset = CGPoint(x: 4, y: -4)
-    /// The ring of bare rail cleared around it.
-    ///
-    /// **The mark is not laid on the icon, it is set INTO it** — Discord punches
-    /// a hole and this does the same. A white plate dropped straight on somebody's
-    /// artwork reads as a sticker; the same plate with the rail showing through
-    /// around it reads as part of the tile. See `railTileNotch`.
-    static let gap: CGFloat = 3
-    /// What the notch takes out. Derived here so the hole and the thing filling
-    /// it cannot drift — the defect that geometry split across two views always
-    /// produces.
-    static var cutSide: CGFloat { side + gap * 2 }
-
     var body: some View {
         // A speaker means there are people in a room; a screen means one of
         // them is worth watching. Two facts, two glyphs.
@@ -403,7 +394,7 @@ struct LiveVoiceMark: View {
         )
             .font(.system(size: 8, weight: .bold))
             .foregroundStyle(Palette.canvas)
-            .frame(width: Self.side, height: Self.side)
+            .frame(width: RailMarkGeometry.side, height: RailMarkGeometry.side)
             .background {
                 RoundedRectangle(cornerRadius: 5, style: .continuous)
                     .fill(Ink.primary)
@@ -414,52 +405,72 @@ struct LiveVoiceMark: View {
     }
 }
 
-/// Takes a bite out of a rail tile where the live mark sits.
+/// Where the live mark sits on a tile, and what it clears around itself.
 ///
-/// **A mask, not a ring drawn under the badge.** A ring in the rail's own colour
-/// is only right while the thing behind the tile is that colour — and behind
-/// this one is the wallpaper, through a column with no background of its own. A
-/// hole is correct whatever is back there.
+/// **One set of numbers, read by both halves.** The mark is a view and the hole
+/// is a shape, and a shape in this module cannot reach a view's constants — the
+/// app target is main-actor by default and a `Shape` conformance is not. Split
+/// across the two, these would be a pair to keep in step, which is exactly the
+/// defect a badge drawn in one place and cut in another produces.
 ///
-/// **The modifier is guarded rather than the mask** — §2. Applied
-/// unconditionally with an empty cut, every tile on the rail would carry a
-/// compositing group and an extra offscreen pass, for the one or two that have
-/// anything to cut.
-private struct RailTileNotch: ViewModifier {
-    var isCut: Bool
+/// **The mark is not laid on the icon, it is set INTO it** — Discord punches a
+/// hole and this does the same. A white plate dropped straight on somebody's
+/// artwork reads as a sticker; the same plate with the rail showing through
+/// around it reads as part of the tile.
+nonisolated enum RailMarkGeometry {
+    static let side: CGFloat = 16
+    /// How far the mark hangs past the tile's own corner.
+    static let inset = CGPoint(x: 4, y: -4)
+    /// The ring of bare rail cleared around it.
+    static let gap: CGFloat = 3
+    /// What the notch takes out.
+    static var cutSide: CGFloat { side + gap * 2 }
 
-    func body(content: Content) -> some View {
-        if isCut {
-            content.mask {
-                Rectangle()
-                    .overlay(alignment: .topTrailing) {
-                        Circle()
-                            .frame(
-                                width: LiveVoiceMark.cutSide,
-                                height: LiveVoiceMark.cutSide
-                            )
-                            // Centred on the mark. Solved once, from the mark's
-                            // own numbers: the hole and the badge share every
-                            // constant, so there is no pair to keep in step.
-                            .offset(
-                                x: LiveVoiceMark.gap + LiveVoiceMark.inset.x,
-                                y: -LiveVoiceMark.gap + LiveVoiceMark.inset.y
-                            )
-                            .blendMode(.destinationOut)
-                    }
-                    // Without it the subtraction composites against the window
-                    // rather than against the mask, and the whole tile goes.
-                    .compositingGroup()
-            }
-        } else {
-            content
-        }
+    /// Where the bite goes, in the tile's own space.
+    static func notch(in rect: CGRect) -> CGRect {
+        let centre = CGPoint(
+            x: rect.maxX - side / 2 + inset.x,
+            y: rect.minY + side / 2 + inset.y
+        )
+        return CGRect(
+            x: centre.x - cutSide / 2,
+            y: centre.y - cutSide / 2,
+            width: cutSide,
+            height: cutSide
+        )
     }
 }
 
-extension View {
-    /// Clears a circle of this tile where the live mark sits.
-    func railTileNotch(isCut: Bool) -> some View {
-        modifier(RailTileNotch(isCut: isCut))
+/// A rail tile's silhouette: its rounded square, with a bite taken out of the
+/// corner where the live mark sits.
+///
+/// **One shape with a hole in it, not a mask laid over the tile.** The mask this
+/// replaces used `.destinationOut` inside a `.mask`, and it took the whole tile
+/// with it: the notch hangs *past* the tile's corner by design, so the mask
+/// view's own bounds grew larger than the thing it was masking, and a mask
+/// bigger than its content is aligned against it rather than laid on it. The
+/// icon vanished and only the badge was left.
+///
+/// Even-odd filling has none of that. A rect containing an ellipse fills to a
+/// rect with a hole in it, the shape's bounds are the tile's, and it replaces
+/// the clip the tile already had rather than adding an offscreen pass to it.
+///
+/// **A hole rather than a ring in the rail's colour**, because behind this
+/// column is the wallpaper: a painted ring is only right for as long as whatever
+/// is back there happens to be the colour it was painted.
+nonisolated struct NotchedRailTile: Shape {
+    var cornerRadius: CGFloat
+    /// Whether the corner is cut at all. Nothing else about the shape changes.
+    var isNotched: Bool
+
+    func path(in rect: CGRect) -> Path {
+        var path = Path(
+            roundedRect: rect, cornerRadius: cornerRadius, style: .continuous
+        )
+        // The second subpath is what the even-odd rule subtracts. Drawn even
+        // where it falls outside the tile: the parts of it that do simply have
+        // nothing to take away.
+        if isNotched { path.addEllipse(in: RailMarkGeometry.notch(in: rect)) }
+        return path
     }
 }

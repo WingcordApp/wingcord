@@ -1,4 +1,5 @@
 import Foundation
+import SwiftUI
 import Testing
 import WingcordCore
 @testable import Wingcord
@@ -136,6 +137,79 @@ struct RailHoverPresenceTests {
         for id in 21..<40 { join(model, UInt64(id), guild: here) }
 
         #expect(model.voiceMarksByGuild[here] == .live)
+    }
+
+    // MARK: The hole the mark sits in
+
+    /// **The bite is centred on the badge, and that is the whole contract.**
+    /// The hole is cut by a `Shape` and filled by a `View`, which cannot see
+    /// each other's numbers — so if these two ever disagree the mark sits beside
+    /// its own hole, which looks like a rendering fault rather than a constant.
+    @Test("The notch is centred exactly where the mark is drawn")
+    func notchIsCentredOnTheMark() {
+        let tile = CGRect(x: 0, y: 0, width: 44, height: 44)
+        let notch = RailMarkGeometry.notch(in: tile)
+
+        // Where the overlay actually puts the mark: top-trailing, then offset.
+        let markCentre = CGPoint(
+            x: tile.maxX - RailMarkGeometry.side / 2 + RailMarkGeometry.inset.x,
+            y: tile.minY + RailMarkGeometry.side / 2 + RailMarkGeometry.inset.y
+        )
+        #expect(notch.midX == markCentre.x)
+        #expect(notch.midY == markCentre.y)
+    }
+
+    /// The hole has to be bigger than the thing in it, or there is no ring of
+    /// rail between them and the mark reads as printed on the icon again.
+    @Test("The notch clears a ring around the mark")
+    func notchClearsARing() {
+        #expect(RailMarkGeometry.cutSide > RailMarkGeometry.side)
+        #expect(
+            RailMarkGeometry.cutSide - RailMarkGeometry.side
+                == RailMarkGeometry.gap * 2
+        )
+    }
+
+    /// **The defect this shape replaced, stated as behaviour.** The mask it
+    /// supersedes erased the whole tile; what is wanted is that the corner under
+    /// the mark stops being filled and everything else carries on being filled.
+    ///
+    /// Tested with `contains(_:eoFill:)` rather than against a bounding box: the
+    /// ellipse deliberately hangs past the tile, so the *bounds* grow and it does
+    /// not matter — a clip shape changes no layout, and the parts outside have
+    /// nothing to take away. What matters is which points survive.
+    @Test("The notch clears its own corner and leaves the rest of the tile")
+    func notchClearsOnlyItsCorner() {
+        // Selected geometry, so the corner under the mark is filled to begin
+        // with — at rest the tile is a circle and that corner is already empty.
+        let tile = CGRect(x: 0, y: 0, width: 44, height: 44)
+        let cut = NotchedRailTile(cornerRadius: 14, isNotched: true).path(in: tile)
+        let plain = NotchedRailTile(cornerRadius: 14, isNotched: false).path(in: tile)
+
+        // A point inside both the tile and the bite.
+        let inTheBite = CGPoint(x: 36, y: 8)
+        #expect(plain.contains(inTheBite, eoFill: true))
+        #expect(!cut.contains(inTheBite, eoFill: true))
+
+        // And the tile itself is untouched everywhere else.
+        for point in [CGPoint(x: 22, y: 22), CGPoint(x: 8, y: 8), CGPoint(x: 22, y: 40)] {
+            #expect(cut.contains(point, eoFill: true))
+        }
+    }
+
+    /// An unnotched tile is exactly the rounded square it always was — nothing
+    /// about the shape changes for the servers with nobody in voice, which is
+    /// nearly all of them.
+    @Test("No mark leaves the tile exactly as it was")
+    func unnotchedTileIsUnchanged() {
+        let tile = CGRect(x: 0, y: 0, width: 44, height: 44)
+        let plain = NotchedRailTile(cornerRadius: 14, isNotched: false).path(in: tile)
+        #expect(
+            plain.boundingRect
+                == Path(roundedRect: tile, cornerRadius: 14, style: .continuous)
+                    .boundingRect
+        )
+        #expect(plain.contains(CGPoint(x: 36, y: 8), eoFill: true))
     }
 
     /// A server nobody is in has no mark at all — nil rather than a `.voice`
