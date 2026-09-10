@@ -442,6 +442,14 @@ nonisolated struct TimelineLayoutEngine: Sendable {
         /// revision, never read from the store here: this type is `nonisolated`
         /// and runs off the main actor.
         var settings: TimelineSettings
+        /// The cards behind whatever Spotify links these messages carry, keyed
+        /// by `kind/id`.
+        ///
+        /// **Handed in like everything else, because this type cannot reach the
+        /// store.** Usually empty: it holds an entry only for links the reader
+        /// has actually seen, so a channel with no music in it carries an empty
+        /// dictionary and pays a lookup that never fires.
+        var spotify: [String: SpotifyUnfurl] = [:]
     }
 
     /// `@unchecked` for the same reason `MessageTextStyle` is: it carries a
@@ -496,6 +504,14 @@ nonisolated struct TimelineLayoutEngine: Sendable {
         /// What the mention table was at, which is also what a name, a nickname
         /// and a role colour move with — all three are drawn into the row.
         var identityToken: UInt64
+        /// What the Spotify table was at.
+        ///
+        /// **A card resolves *after* the row is already laid out**, and it is a
+        /// different height from the link unfurl it replaces — so unlike an
+        /// activity's accent, which resolves late and only repaints, this cannot
+        /// live on the paint state. Without it, the first layout of a message
+        /// carrying a Spotify link is the only one it ever gets.
+        var spotifyRevision: UInt64
         var isRunHead: Bool
         var message: Message
         var row: MessageRow
@@ -505,17 +521,34 @@ nonisolated struct TimelineLayoutEngine: Sendable {
             width: Int,
             presentationRevision: UInt64,
             identityToken: UInt64,
+            spotifyRevision: UInt64,
             isRunHead: Bool
         ) -> Bool {
             self.width == width
                 && self.presentationRevision == presentationRevision
                 && self.identityToken == identityToken
+                && self.spotifyRevision == spotifyRevision
                 && self.isRunHead == isRunHead
                 && self.message == message
         }
     }
 
     var presentationRevision: UInt64
+    /// Moves when a Spotify card lands. See `CacheEntry.spotifyRevision`.
+    var spotifyRevision: UInt64 = 0
+
+    /// The resolved card behind an embed, if it is a Spotify link and Spotify's
+    /// own page has answered for it.
+    ///
+    /// **Gated on the provider before the URL is parsed.** Discord unfurled the
+    /// link and said whose it was, so the overwhelming majority of embeds in a
+    /// transcript are rejected by one string compare rather than by a URL parse.
+    static func spotifyCard(for embed: Embed, in input: Input) -> SpotifyUnfurl? {
+        guard !input.spotify.isEmpty, embed.providerName == "Spotify",
+              let link = embed.url, let address = SpotifyLink.parse(link)
+        else { return nil }
+        return input.spotify["\(address.kind.rawValue)/\(address.id)"]
+    }
 
     /// Lays out every item, reusing what `cache` already holds.
     ///
@@ -584,6 +617,7 @@ nonisolated struct TimelineLayoutEngine: Sendable {
                        width: width,
                        presentationRevision: presentationRevision,
                        identityToken: input.mentions.token,
+                       spotifyRevision: spotifyRevision,
                        isRunHead: message.isRunHead
                    )
                 {
@@ -599,6 +633,7 @@ nonisolated struct TimelineLayoutEngine: Sendable {
                     width: width,
                     presentationRevision: presentationRevision,
                     identityToken: input.mentions.token,
+                    spotifyRevision: spotifyRevision,
                     isRunHead: message.isRunHead,
                     message: message.message,
                     row: row
@@ -886,7 +921,8 @@ nonisolated struct TimelineLayoutEngine: Sendable {
                 availableWidth: contentWidth,
                 style: input.style,
                 mentions: input.mentions,
-                parser: parser
+                parser: parser,
+                spotify: Self.spotifyCard(for: embed, in: input)
             )
             embeds.append(slot)
             y = slot.rect.maxY
@@ -1547,7 +1583,8 @@ nonisolated struct TimelineLayoutEngine: Sendable {
                     availableWidth: contentWidth,
                     style: style,
                     mentions: input.mentions,
-                    parser: parser
+                    parser: parser,
+                    spotify: Self.spotifyCard(for: embed, in: input)
                 )
                 embeds.append(slot)
                 y = slot.rect.maxY

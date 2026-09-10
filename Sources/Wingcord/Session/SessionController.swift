@@ -100,6 +100,17 @@ final class SessionController {
     /// Stream-thumbnail requests in flight, by stream key. Read from
     /// `SessionController+Presence`.
     var streamPreviewFetches: Set<String> = []
+    /// Spotify's own embed page, read for the card behind a link. Its own client
+    /// and its own session: it goes to a host that is not Discord, so it must
+    /// never be handed the account's token. See `SpotifyEmbedClient`.
+    let spotify = SpotifyEmbedClient()
+    /// Spotify unfurls in flight, and the ones Spotify has refused.
+    ///
+    /// **The refusals are remembered for the session**, which is what stops a
+    /// private playlist in somebody's backlog being asked for on every page of
+    /// history. Read from `SessionController+Spotify`.
+    var spotifyFetches: Set<String> = []
+    var spotifyRefusals: Set<String> = []
     private var expressionSourceFetches: Set<UInt64> = []
     /// Widget-template fetches in flight, by application. Read from
     /// `SessionController+Board`.
@@ -511,6 +522,7 @@ final class SessionController {
         model.stageInstances = snapshot.stages
         model.voiceChannelInfo = snapshot.voiceChannelInfo
         voiceInfoRequestedGuildIDs.removeAll(keepingCapacity: true)
+        spotifyRefusals.removeAll(keepingCapacity: true)
         voice.applyReady(
             voiceStates: snapshot.voiceStates,
             soundboards: snapshot.soundboardsByGuild
@@ -771,6 +783,7 @@ final class SessionController {
             // is the only thing that carries the instance Discord actually
             // minted. See `awaitActivityInstance`.
             resolveActivityLaunch(with: message)
+            resolveSpotifyUnfurls(in: [message])
 
         case .messageUpdated(let message):
             // An edit arrives as a PARTIAL message: only the fields that changed
@@ -1167,6 +1180,7 @@ final class SessionController {
                     box.hasMoreHistory = page.messages.count >= DiscordREST.historyPageSize
                 }
                 model.messageContentRevision &+= 1
+                resolveSpotifyUnfurls(in: page.messages)
             } catch {
                 Self.trace(
                     "history \(channelID) FAILED (attempt \(attempt)): \(Self.describe(error))"
@@ -1449,6 +1463,7 @@ final class SessionController {
                     box.hasMoreHistory = page.messages.count >= DiscordREST.historyPageSize
                 }
                 model.messageContentRevision &+= 1
+                resolveSpotifyUnfurls(in: page.messages)
                 model.requestJump(to: messageID, in: channelID)
             } catch {
                 Self.trace("jump \(messageID) failed: \(Self.describe(error))")

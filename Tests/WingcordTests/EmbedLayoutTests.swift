@@ -151,6 +151,105 @@ struct EmbedLayoutTests {
         #expect(slot.rect.maxY - picture.rect.maxY >= EmbedLayoutEngine.padding)
     }
 
+    // MARK: A music card
+
+    /// The card behind a Spotify link, from the fields Spotify's own embed page
+    /// answers with — none of which are in the embed Discord sends.
+    private let loungeAct = SpotifyUnfurl(
+        kind: .track,
+        id: "7glld4kxYHp61zIPtSVHNk",
+        title: "Lounge Act",
+        subtitle: "Nirvana",
+        coverURL: URL(string: "https://i.scdn.co/image/300.jpg"),
+        accentValue: 0x00_52_99,
+        isExplicit: true,
+        durationMilliseconds: 156_426,
+        previewURL: URL(string: "https://p.scdn.co/mp3-preview/c4eb66")
+    )
+
+    private func spotifyEmbed() -> Embed {
+        Embed(
+            title: "Lounge Act",
+            kind: "link",
+            url: "https://open.spotify.com/track/7glld4kxYHp61zIPtSVHNk",
+            thumbnail: Embed.Media(url: "https://example.test/cover.png"),
+            providerName: "Spotify"
+        )
+    }
+
+    @Test("A resolved card replaces the link unfurl and carries its own controls")
+    func musicCard() throws {
+        let slot = EmbedLayoutEngine.layout(
+            spotifyEmbed(),
+            origin: .zero,
+            availableWidth: 400,
+            style: style,
+            mentions: MentionContext(),
+            parser: MarkdownParser(),
+            spotify: loungeAct
+        )
+        // The rule takes the colour Spotify quantised from the artwork.
+        #expect(slot.accent != nil)
+        #expect(slot.previewURL?.host() == "p.scdn.co")
+        #expect(slot.chips.contains { $0.kind == .preview })
+        #expect(slot.chips.contains { $0.kind == .explicit })
+        // The cover, at the card's own square.
+        #expect(slot.images.count == 1)
+        #expect(slot.images[0].rect.width == EmbedLayoutEngine.coverSide)
+    }
+
+    /// **The whole reason the card has a height rule of its own.** A track with
+    /// a short name has less text than the cover is tall, and a card measured by
+    /// its text alone would hang the artwork out of the bottom — which is
+    /// exactly the defect the link unfurl had.
+    @Test("The card encloses its cover even when the text is shorter")
+    func musicCardEnclosesItsCover() {
+        let slot = EmbedLayoutEngine.layout(
+            spotifyEmbed(),
+            origin: .zero,
+            availableWidth: 400,
+            style: style,
+            mentions: MentionContext(),
+            parser: MarkdownParser(),
+            spotify: SpotifyUnfurl(kind: .artist, id: "a", title: "X")
+        )
+        for image in slot.images {
+            #expect(image.rect.maxY <= slot.rect.maxY)
+        }
+        #expect(slot.rect.height >= EmbedLayoutEngine.coverSide)
+    }
+
+    /// **Nil is the ordinary state**: before the fetch lands, and for ever if
+    /// Spotify's page changes shape. The transcript keeps the card Discord sent,
+    /// which is quieter and correct.
+    @Test("An unresolved Spotify link draws the link unfurl Discord sent")
+    func unresolvedSpotifyLinkFallsBack() {
+        let slot = layout(spotifyEmbed())
+        #expect(slot.chips.isEmpty)
+        #expect(slot.previewURL == nil)
+        // Still a proper card: title, and a thumbnail it encloses.
+        #expect(slot.drawsCard)
+        for image in slot.images {
+            #expect(image.rect.maxY <= slot.rect.maxY)
+        }
+    }
+
+    /// An entity with no clip has no chip rather than a dead one — §5.5.
+    @Test("A card with no preview offers no Preview")
+    func noPreviewNoChip() {
+        let slot = EmbedLayoutEngine.layout(
+            spotifyEmbed(),
+            origin: .zero,
+            availableWidth: 400,
+            style: style,
+            mentions: MentionContext(),
+            parser: MarkdownParser(),
+            spotify: SpotifyUnfurl(kind: .artist, id: "a", title: "Nirvana")
+        )
+        #expect(!slot.chips.contains { $0.kind == .preview })
+        #expect(slot.previewURL == nil)
+    }
+
     // MARK: The star on an unfurled GIF
 
     /// **The real thing, out of `search messages1.har`.** A Klipy unfurl is

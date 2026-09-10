@@ -25,6 +25,12 @@ struct TimelineContainer: View {
             activityInviteStatuses: model.activityInviteStatuses(in: channelID),
             topInset: topInset,
             bottomInset: bottomInset,
+            // Read here for the reason the accents are: the transcript is a
+            // drawn canvas, and a card that resolved without something SwiftUI
+            // owns changing would never be told to draw it.
+            spotifyRevision: model.spotifyRevision,
+            playingPreview: model.spotifyPreviewURL,
+
             // Read narrowly: a jump for a different channel is not this
             // transcript's business, and passing it would restart the
             // coordinator's update for nothing.

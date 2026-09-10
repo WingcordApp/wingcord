@@ -34,7 +34,10 @@ nonisolated extension TimelineRowPainter {
         clock: Double,
         /// The star, when the pointer is on this embed. Nil is every embed the
         /// pointer is not on, which is all of them nearly all of the time.
-        favorite: FavoriteBadge? = nil
+        favorite: FavoriteBadge? = nil,
+        /// Whether this card's own clip is the one currently playing, so the
+        /// chip says which way the click goes.
+        isPlayingPreview: Bool = false
     ) {
         let frame = slot.rect.offsetBy(dx: offset.x, dy: offset.y)
         let corner = EmbedLayoutEngine.corner
@@ -70,6 +73,17 @@ nonisolated extension TimelineRowPainter {
             context.fill(rule.offsetBy(dx: offset.x, dy: offset.y))
         }
 
+        // Under the labels, because a chip's own text sits on it.
+        for chip in slot.chips {
+            drawEmbedChip(
+                chip,
+                in: chip.rect.offsetBy(dx: offset.x, dy: offset.y),
+                context: context,
+                style: style,
+                isPlaying: isPlayingPreview
+            )
+        }
+
         for text in slot.texts {
             drawTextFrame(
                 text.block,
@@ -98,6 +112,68 @@ nonisolated extension TimelineRowPainter {
             drawFavoriteBadge(
                 favorite,
                 in: slot.favoriteRect.offsetBy(dx: offset.x, dy: offset.y),
+                context: context
+            )
+        }
+    }
+
+    /// One small control or badge on a card.
+    ///
+    /// **No text of its own.** The label was framesetted at layout time and is
+    /// drawn with every other text frame; this fills the shape under it and puts
+    /// the glyph in. A painter that laid out a string here would be doing
+    /// CoreText work inside a repaint, which is the whole thing this surface is
+    /// built to avoid.
+    private static func drawEmbedChip(
+        _ chip: EmbedChip,
+        in frame: CGRect,
+        context: CGContext,
+        style: MessageTextStyle,
+        isPlaying: Bool
+    ) {
+        switch chip.kind {
+        case .preview:
+            context.addPath(CGPath(
+                roundedRect: frame,
+                cornerWidth: frame.height / 2,
+                cornerHeight: frame.height / 2,
+                transform: nil
+            ))
+            context.setFillColor(NSColor.white.withAlphaComponent(0.12).cgColor)
+            context.fillPath()
+            let side = frame.height * 0.5
+            drawSymbol(
+                isPlaying ? "stop.fill" : "play.fill",
+                tint: style.primaryColor,
+                in: CGRect(
+                    x: frame.minX + (frame.height - side) / 2,
+                    y: frame.midY - side / 2,
+                    width: side,
+                    height: side
+                ),
+                context: context
+            )
+
+        case .explicit:
+            // Discord's own mark, and Spotify's: a filled square with an E in
+            // it, quiet rather than a warning. It says a fact about the track,
+            // not something the reader has to act on.
+            context.addPath(CGPath(
+                roundedRect: frame.insetBy(dx: 2, dy: 2),
+                cornerWidth: 4,
+                cornerHeight: 4,
+                transform: nil
+            ))
+            context.setFillColor(NSColor.white.withAlphaComponent(0.35).cgColor)
+            context.fillPath()
+            let font = NSFont.systemFont(ofSize: frame.height * 0.5, weight: .bold)
+            drawText(
+                "E",
+                font: font,
+                color: NSColor.black.withAlphaComponent(0.75),
+                at: CGPoint(x: frame.minX, y: capCenteredY(of: font, in: frame)),
+                maxWidth: frame.width,
+                alignment: .center,
                 context: context
             )
         }

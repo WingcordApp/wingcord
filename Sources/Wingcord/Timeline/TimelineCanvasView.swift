@@ -118,6 +118,20 @@ final class TimelineCanvasView: NSView {
     var onOpenAttachment: ((MessageID, Int, [CGFloat]) -> Void)?
     /// Stars or un-stars a GIF in the transcript.
     var onToggleFavoriteGIF: ((GIF) -> Void)?
+    /// Starts or stops a music card's thirty-second clip.
+    var onTogglePreview: ((URL) -> Void)?
+    /// Which clip is playing, so the chip that started it can offer to stop it.
+    ///
+    /// **Applied like the activity accents, not read from a store**: this view
+    /// is a drawn `NSView` and holds no model reference, so anything that has to
+    /// reach it is handed to it.
+    private var playingPreview: URL?
+
+    func apply(playingPreview url: URL?) {
+        guard playingPreview != url else { return }
+        playingPreview = url
+        needsDisplay = true
+    }
     /// Whether the account already keeps this one, asked at paint time.
     ///
     /// **A closure, not a set copied into the canvas.** The favourites live on
@@ -509,6 +523,7 @@ final class TimelineCanvasView: NSView {
                     state.showsGutterTimestamp = true
                 }
                 state.animationTime = AnimationClock.shared.time
+                state.playingPreviewURL = playingPreview
                 if let messageID = row.messageID {
                     state.isHighlighted = messageID == highlightedMessageID
                     state.revealedSpoilers = revealedSpoilers[messageID] ?? []
@@ -621,6 +636,8 @@ final class TimelineCanvasView: NSView {
             guard let gif = row.attachments[attachmentIndex].favorite else { return }
             onToggleFavoriteGIF?(gif)
             invalidateRow(index)
+        case .previewClip(let url):
+            onTogglePreview?(url)
         case .favoriteEmbedGIF(let embedIndex):
             guard row.embeds.indices.contains(embedIndex),
                   let gif = row.embeds[embedIndex].favorite
@@ -705,6 +722,8 @@ final class TimelineCanvasView: NSView {
         /// The same star, on a GIF that arrived as an unfurled link rather than
         /// as a file. A separate case because the two index different arrays.
         case favoriteEmbedGIF(index: Int)
+        /// The Preview chip on a music card.
+        case previewClip(URL)
         case link(MessageText.LinkTarget, CGRect)
         case emoji(EmojiRef, CGRect)
         case sticker(StickerRef, CGRect)
@@ -832,6 +851,17 @@ final class TimelineCanvasView: NSView {
 
         for slot in row.stickers where slot.rect.contains(local) {
             return .sticker(slot.sticker, slot.rect.offsetBy(dx: frame.minX, dy: frame.minY))
+        }
+
+        // A music card's Preview chip. Ahead of the star below, because the two
+        // never share an embed and checking a usually-empty array first costs a
+        // count.
+        for slot in row.embeds where !slot.chips.isEmpty {
+            guard let url = slot.previewURL else { continue }
+            for chip in slot.chips
+            where chip.kind == .preview && chip.rect.contains(local) {
+                return .previewClip(url)
+            }
         }
 
         // An unfurled GIF's star. Only the star: the picture itself has no
@@ -971,7 +1001,7 @@ final class TimelineCanvasView: NSView {
                 cursor = target == nil ? nil : .pointingHand
             case .favoriteGIF:
                 cursor = .pointingHand
-            case .favoriteEmbedGIF:
+            case .favoriteEmbedGIF, .previewClip:
                 cursor = .pointingHand
             case .some:
                 cursor = .pointingHand

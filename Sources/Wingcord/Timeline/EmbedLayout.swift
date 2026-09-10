@@ -34,6 +34,16 @@ nonisolated struct EmbedSlot: Sendable {
     var images: [EmbedImage]
     /// Rules drawn inside the card — a Components V2 separator.
     var rules: [CGRect] = []
+    /// A Spotify card's own controls, when this embed is one.
+    ///
+    /// **A chip is a rect and a kind, resolved at layout time like everything
+    /// else here** — the painter fills a shape and draws a glyph, and the hit
+    /// test reads the same rects, so a control drawn in one place and clicked in
+    /// another is impossible by construction.
+    var chips: [EmbedChip] = []
+    /// The thirty-second clip the Preview chip plays. Nil for a card whose
+    /// entity has none, which is why the chip is absent rather than disabled.
+    var previewURL: URL?
     /// The GIF this embed would star, when it is one the account can keep.
     ///
     /// **A Tenor link and an uploaded `.gif` are the same feature and were not
@@ -47,6 +57,19 @@ nonisolated struct EmbedSlot: Sendable {
     var favorite: GIF?
     /// Where the star sits inside the picture. Only meaningful with `favorite`.
     var favoriteRect: CGRect = .zero
+}
+
+/// One small control or badge on an embed's card.
+nonisolated struct EmbedChip: Sendable {
+    enum Kind: Sendable {
+        /// Plays the thirty-second clip. The only one that takes a click.
+        case preview
+        /// The `E` Spotify puts on an explicit track. A mark, not a control.
+        case explicit
+    }
+
+    var rect: CGRect
+    var kind: Kind
 }
 
 nonisolated struct EmbedText: Sendable {
@@ -91,15 +114,30 @@ nonisolated enum EmbedLayoutEngine {
     /// How many inline fields share a row, which is Discord's own.
     static let fieldsPerRow = 3
 
+    /// The square cover on a music card.
+    static let coverSide: CGFloat = 76
+    /// A chip on one, and the `E` badge beside it.
+    static let chipHeight: CGFloat = 20
+
     /// Lays one embed out at `origin`, inside `availableWidth`.
+    ///
+    /// - Parameter spotify: the card Spotify's own embed page answered with, if
+    ///   this link is one and it has been resolved. **Nil is the ordinary
+    ///   state** — before the fetch lands, and for ever if it fails — and it
+    ///   falls through to the link unfurl Discord sent, which is a correct card
+    ///   that says less.
     static func layout(
         _ embed: Embed,
         origin: CGPoint,
         availableWidth: CGFloat,
         style: MessageTextStyle,
         mentions: MentionContext,
-        parser: MarkdownParser
+        parser: MarkdownParser,
+        spotify: SpotifyUnfurl? = nil
     ) -> EmbedSlot {
+        if let spotify {
+            return musicCard(spotify, origin: origin, availableWidth: availableWidth, style: style)
+        }
         // **An embed that is nothing but a picture gets no card at all.** That
         // is what a pasted image link unfurls into, and drawing a bordered box
         // with twelve points of padding around a photograph is a frame nobody
@@ -275,6 +313,155 @@ nonisolated enum EmbedLayoutEngine {
             accent: embed.colorValue.flatMap { $0 == 0 ? nil : NSColor(Color(hex: $0)) },
             texts: texts,
             images: images
+        )
+    }
+
+    // MARK: A music card
+
+    /// The card behind a Spotify link.
+    ///
+    /// **Wingcord's own card, not a copy of Discord's blue slab.** It is the
+    /// same object every other embed here is — a rounded ground with an accent
+    /// rule down its leading edge — and what Spotify's page contributes is the
+    /// *colour* of that rule, quantised from the artwork rather than the brand's
+    /// green. A square cover, a name, whoever made it, and a row of small
+    /// controls under them.
+    ///
+    /// Its height is the cover's or its text's, whichever is taller, so a track
+    /// with a long title and one with none are the same card.
+    private static func musicCard(
+        _ card: SpotifyUnfurl,
+        origin: CGPoint,
+        availableWidth: CGFloat,
+        style: MessageTextStyle
+    ) -> EmbedSlot {
+        let cardWidth = min(Metrics.embedMaxWidth, availableWidth)
+        let contentX = origin.x + ruleWidth + padding
+        let textX = contentX + coverSide + gap
+        let textWidth = max(40, origin.x + cardWidth - padding - textX)
+
+        var texts: [EmbedText] = []
+        var chips: [EmbedChip] = []
+        var y = origin.y + padding
+
+        // What kind of thing it is, above the name. Small and quiet: it is the
+        // answer to "why is there a card here", which the reader only needs
+        // once.
+        let kindBlock = plainBlock(
+            card.kind.label.uppercased(),
+            font: NSFont.systemFont(ofSize: style.metadataFont.pointSize - 1, weight: .semibold),
+            color: style.tertiaryColor,
+            width: textWidth,
+            link: nil,
+            style: style
+        )
+        texts.append(EmbedText(block: kindBlock, origin: CGPoint(x: textX, y: y)))
+        y += kindBlock.size.height + 2
+
+        let titleBlock = plainBlock(
+            card.title,
+            font: NSFont.systemFont(ofSize: style.bodyFont.pointSize, weight: .bold),
+            color: style.primaryColor,
+            width: textWidth,
+            link: nil,
+            style: style
+        )
+        texts.append(EmbedText(block: titleBlock, origin: CGPoint(x: textX, y: y)))
+        y += titleBlock.size.height + 1
+
+        if let subtitle = card.subtitle, !subtitle.isEmpty {
+            let block = plainBlock(
+                subtitle,
+                font: style.bodyFont,
+                color: style.secondaryColor,
+                width: textWidth,
+                link: nil,
+                style: style
+            )
+            texts.append(EmbedText(block: block, origin: CGPoint(x: textX, y: y)))
+            y += block.size.height
+        }
+
+        // The controls, on one line under the name. Everything on it is
+        // optional and the row collapses to nothing when none of it applies —
+        // an artist page has no clip, no rating and no length.
+        y += gap
+        var chipX = textX
+        if card.previewURL != nil {
+            let label = plainBlock(
+                "Preview",
+                font: NSFont.systemFont(ofSize: style.metadataFont.pointSize, weight: .semibold),
+                color: style.primaryColor,
+                width: textWidth,
+                link: nil,
+                style: style
+            )
+            // Room for the glyph, the label and the padding either side.
+            let width = label.size.width + chipHeight + padding
+            chips.append(EmbedChip(
+                rect: CGRect(x: chipX, y: y, width: width, height: chipHeight),
+                kind: .preview
+            ))
+            texts.append(EmbedText(
+                block: label,
+                origin: CGPoint(
+                    x: chipX + chipHeight,
+                    y: y + (chipHeight - label.size.height) / 2
+                )
+            ))
+            chipX += width + Spacing.tight
+        }
+        if card.isExplicit {
+            chips.append(EmbedChip(
+                rect: CGRect(x: chipX, y: y, width: chipHeight, height: chipHeight),
+                kind: .explicit
+            ))
+            chipX += chipHeight + Spacing.tight
+        }
+        if let duration = card.durationLabel {
+            let block = plainBlock(
+                duration,
+                font: style.metadataFont,
+                color: style.tertiaryColor,
+                width: textWidth,
+                link: nil,
+                style: style
+            )
+            texts.append(EmbedText(
+                block: block,
+                origin: CGPoint(
+                    x: chipX, y: y + (chipHeight - block.size.height) / 2
+                )
+            ))
+            chipX += block.size.width
+        }
+        // Only where something was actually put on it.
+        let hasControls = !chips.isEmpty || card.durationLabel != nil
+        y += hasControls ? chipHeight : -gap
+
+        var images: [EmbedImage] = []
+        let coverRect = CGRect(
+            x: contentX, y: origin.y + padding, width: coverSide, height: coverSide
+        )
+        images.append(EmbedImage(
+            rect: coverRect,
+            url: card.coverURL,
+            isCircle: false,
+            corner: corner,
+            decodeWidth: coverSide,
+            isArtwork: true
+        ))
+
+        // The taller of the two columns decides the card, so artwork never hangs
+        // out of the bottom — the defect a link unfurl with a short title had.
+        let height = max(coverSide, y - origin.y - padding) + padding * 2
+        return EmbedSlot(
+            rect: CGRect(x: origin.x, y: origin.y, width: cardWidth, height: height),
+            accent: card.accentValue.map { NSColor(Color(hex: $0)) },
+            texts: texts,
+            images: images,
+            chips: chips,
+            previewURL: card.previewURL
         )
     }
 

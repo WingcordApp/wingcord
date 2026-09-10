@@ -939,6 +939,37 @@ final class AppModel {
     /// The account's favourite GIFs, from its settings blob. Read-only here —
     /// this client has no route that writes one back.
     var favoriteGIFs: [GIF] = []
+    /// The card behind a Spotify link, once Spotify's own embed page has
+    /// answered for it. Keyed by `kind/id`.
+    ///
+    /// **Discord's embed for a Spotify link is a title, a provider and a
+    /// thumbnail** — captured, `spotify embed.har` — so the artist, the colour,
+    /// the explicit flag, the length and the preview clip have no other source.
+    /// An absent entry is a card that draws as Discord sent it, which is why
+    /// nothing here has an error state.
+    var spotifyUnfurls: [String: SpotifyUnfurl] = [:]
+    /// Moves when one of those lands.
+    ///
+    /// **Part of the transcript's layout cache key**, because a Spotify card is
+    /// a different *height* from the link unfurl it replaces — unlike an
+    /// activity's accent, which resolves late and only repaints. A row already
+    /// laid out would otherwise keep the quiet card for the life of the
+    /// session. See `TimelineLayoutEngine.CacheEntry`.
+    var spotifyRevision: UInt64 = 0
+    /// The preview clip currently playing, if any. Drawn by the card whose chip
+    /// started it, so the chip can offer to stop it.
+    var spotifyPreviewURL: URL?
+    /// The one player, for the whole app.
+    ///
+    /// `@ObservationIgnored` because nothing observes the *player* — what a view
+    /// needs is `spotifyPreviewURL`, which the player writes back through its
+    /// own callback. Observing an `AVPlayer` owner would invalidate readers on
+    /// every internal change it makes.
+    @ObservationIgnored lazy var spotifyPreview: SpotifyPreviewPlayer = {
+        let player = SpotifyPreviewPlayer()
+        player.onChange = { [weak self] url in self?.spotifyPreviewURL = url }
+        return player
+    }()
 
     /// Guilds the account has muted. Their unread never reaches the rail.
     var mutedGuildIDs: Set<GuildID> = []

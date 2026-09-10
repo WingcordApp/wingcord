@@ -60,6 +60,9 @@ nonisolated enum TimelineRowPainter {
         /// on.
         var hoveredEmbed: Int?
         var isHoveredEmbedFavorite = false
+        /// The preview clip playing anywhere in the app, so the one card that
+        /// started it draws a stop glyph and every other draws a play.
+        var playingPreviewURL: URL?
         /// The shared animation clock's current time.
         ///
         /// Passed in rather than read here: the painter is `nonisolated` so a
@@ -392,7 +395,9 @@ nonisolated enum TimelineRowPainter {
                 // the picture the pointer is on and nowhere else.
                 favorite: state.hoveredEmbed == index
                     ? (state.isHoveredEmbedFavorite ? .starred : .unstarred)
-                    : nil
+                    : nil,
+                isPlayingPreview: slot.previewURL != nil
+                    && slot.previewURL == state.playingPreviewURL
             )
         }
 

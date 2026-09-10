@@ -33,6 +33,17 @@ struct TimelineView: NSViewRepresentable {
     /// The message the transcript has been asked to go to, if any. An INPUT
     /// rather than a call, so a jump raised from anywhere in the app — a link, a
     /// reply header — reaches the one object that owns the scroll view.
+    /// Moves when a Spotify card lands.
+    ///
+    /// **A prop rather than a store read inside the coordinator**, because the
+    /// canvas is a drawn `NSView` and only what SwiftUI re-evaluates ever
+    /// reaches it — the same reason `activityAccents` is read by the container.
+    /// A card that resolved without this would sit in the store and never be
+    /// drawn.
+    var spotifyRevision: UInt64
+    /// The clip playing anywhere in the app, so the chip that started it offers
+    /// to stop it. Read by the container for the reason the accents are.
+    var playingPreview: URL?
     var jump: MessageJump?
     var model: AppModel
 
@@ -53,7 +64,9 @@ struct TimelineView: NSViewRepresentable {
             activityInviteStatuses: activityInviteStatuses,
             topInset: topInset,
             bottomInset: bottomInset,
-            jump: jump
+            jump: jump,
+            spotifyRevision: spotifyRevision,
+            playingPreview: playingPreview
         )
     }
 
@@ -88,6 +101,8 @@ final class TimelineCoordinator: NSObject {
     /// move together and are invalidated by the same counter.
     private var settings: TimelineSettings = PresentationRevision.shared.timeline
     private var presentationRevision: UInt64 = 0
+    /// What the Spotify table was at when the rows were last laid out.
+    private var spotifyRevision: UInt64 = 0
 
     /// Laid-out message rows, reused across passes. Swept by the engine.
     private var rowCache: [MessageID: TimelineLayoutEngine.CacheEntry] = [:]
@@ -154,6 +169,9 @@ final class TimelineCoordinator: NSObject {
         }
         canvas.onToggleFavoriteGIF = { [weak self] gif in
             self?.model.sessionController.toggleFavorite(gif)
+        }
+        canvas.onTogglePreview = { [weak self] url in
+            self?.model.spotifyPreview.toggle(url)
         }
         canvas.isFavoriteGIF = { [weak self] gif in
             self?.model.sessionController.isFavorite(gif) ?? false
@@ -395,6 +413,7 @@ final class TimelineCoordinator: NSObject {
         canvas?.onOpenSticker = nil
         canvas?.onOpenAttachment = nil
         canvas?.onToggleFavoriteGIF = nil
+        canvas?.onTogglePreview = nil
         canvas?.isFavoriteGIF = nil
         canvas?.onVote = nil
         canvas?.onPlayActivity = nil
@@ -433,9 +452,12 @@ final class TimelineCoordinator: NSObject {
         activityInviteStatuses: [ApplicationID: ActivityInviteStatus],
         topInset: CGFloat,
         bottomInset: CGFloat,
-        jump: MessageJump?
+        jump: MessageJump?,
+        spotifyRevision: UInt64,
+        playingPreview: URL?
     ) {
         canvas?.apply(activityAccents: activityAccents)
+        canvas?.apply(playingPreview: playingPreview)
         canvas?.apply(activityInviteStatuses: activityInviteStatuses)
         if let scrollView,
            abs(scrollView.contentInsets.bottom - bottomInset) > 0.5
@@ -485,6 +507,14 @@ final class TimelineCoordinator: NSObject {
             if !items.isEmpty { runLayout(preservingPosition: true) }
         }
 
+        // A card landing changes a row's HEIGHT, so it is a relayout rather than
+        // a repaint — and only the rows carrying that link are rebuilt, because
+        // the cache matches on the revision and everything else still hits.
+        if spotifyRevision != self.spotifyRevision {
+            self.spotifyRevision = spotifyRevision
+            if !items.isEmpty { runLayout(preservingPosition: true) }
+        }
+
         let channelChanged = channelID != self.channelID
         if channelChanged {
             // A different conversation shares nothing with the previous one, and
@@ -492,6 +522,10 @@ final class TimelineCoordinator: NSObject {
             // of a channel nobody is looking at.
             rowCache.removeAll(keepingCapacity: true)
             layoutTask?.cancel()
+            // **A clip does not follow the reader out of the channel.** The chip
+            // that started it is about to stop existing, so the only way to stop
+            // the sound would be to come back and find it.
+            model.spotifyPreview.stop()
             isNearBottom = true
             // A jump aimed at the channel the reader has just left is stale.
             // Cleared BEFORE the block below records a new one, so a jump that
@@ -596,7 +630,10 @@ final class TimelineCoordinator: NSObject {
         let anchor = preservingPosition ? currentAnchor() : nil
         let wasNearBottom = isNearBottom
 
-        let engine = TimelineLayoutEngine(presentationRevision: presentationRevision)
+        let engine = TimelineLayoutEngine(
+            presentationRevision: presentationRevision,
+            spotifyRevision: spotifyRevision
+        )
         let channel = channelID.flatMap { model.channelIndex[$0] }
         let input = TimelineLayoutEngine.Input(
             items: items,
@@ -608,7 +645,8 @@ final class TimelineCoordinator: NSObject {
             channelTopic: channel?.topic,
             authors: model.authorInfo(for: items, authorFont: style.authorFont),
             calendar: .current,
-            settings: settings
+            settings: settings,
+            spotify: model.spotifyUnfurls
         )
 
         isApplyingUpdate = true
