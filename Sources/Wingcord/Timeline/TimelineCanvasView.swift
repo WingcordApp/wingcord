@@ -120,6 +120,8 @@ final class TimelineCanvasView: NSView {
     var onToggleFavoriteGIF: ((GIF) -> Void)?
     /// Starts or stops a music card's thirty-second clip.
     var onTogglePreview: ((URL) -> Void)?
+    /// Raises Spotify's own player beside the card, with the card's rect.
+    var onOpenMusicPlayer: ((SpotifyUnfurl, CGRect) -> Void)?
     /// Which clip is playing, so the chip that started it can offer to stop it.
     ///
     /// **Applied like the activity accents, not read from a store**: this view
@@ -638,6 +640,8 @@ final class TimelineCanvasView: NSView {
             invalidateRow(index)
         case .previewClip(let url):
             onTogglePreview?(url)
+        case .openMusicPlayer(let card, let rect):
+            onOpenMusicPlayer?(card, rect)
         case .favoriteEmbedGIF(let embedIndex):
             guard row.embeds.indices.contains(embedIndex),
                   let gif = row.embeds[embedIndex].favorite
@@ -724,6 +728,9 @@ final class TimelineCanvasView: NSView {
         case favoriteEmbedGIF(index: Int)
         /// The Preview chip on a music card.
         case previewClip(URL)
+        /// The Open chip, which raises Spotify's own player. Carries the card's
+        /// rect so the panel can be anchored to it — §1.
+        case openMusicPlayer(SpotifyUnfurl, CGRect)
         case link(MessageText.LinkTarget, CGRect)
         case emoji(EmojiRef, CGRect)
         case sticker(StickerRef, CGRect)
@@ -857,10 +864,21 @@ final class TimelineCanvasView: NSView {
         // never share an embed and checking a usually-empty array first costs a
         // count.
         for slot in row.embeds where !slot.chips.isEmpty {
-            guard let url = slot.previewURL else { continue }
-            for chip in slot.chips
-            where chip.kind == .preview && chip.rect.contains(local) {
-                return .previewClip(url)
+            for chip in slot.chips where chip.rect.contains(local) {
+                switch chip.kind {
+                case .preview:
+                    if let url = slot.previewURL { return .previewClip(url) }
+                case .open:
+                    if let card = slot.spotify {
+                        return .openMusicPlayer(
+                            card, slot.rect.offsetBy(dx: frame.minX, dy: frame.minY)
+                        )
+                    }
+                case .explicit:
+                    // A mark, not a control. It still swallows the click rather
+                    // than letting it fall through to the card behind it.
+                    return nil
+                }
             }
         }
 
@@ -1001,7 +1019,7 @@ final class TimelineCanvasView: NSView {
                 cursor = target == nil ? nil : .pointingHand
             case .favoriteGIF:
                 cursor = .pointingHand
-            case .favoriteEmbedGIF, .previewClip:
+            case .favoriteEmbedGIF, .previewClip, .openMusicPlayer:
                 cursor = .pointingHand
             case .some:
                 cursor = .pointingHand

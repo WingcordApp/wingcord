@@ -959,6 +959,42 @@ final class AppModel {
     /// The preview clip currently playing, if any. Drawn by the card whose chip
     /// started it, so the chip can offer to stop it.
     var spotifyPreviewURL: URL?
+    /// The full Spotify player, while one is open. Nil is the ordinary state.
+    ///
+    /// **A session rather than a view**, and exactly one at a time: it owns a
+    /// `WKWebView`, which is a `WebContent` process, and closing it is the only
+    /// thing that gives that process back. See `SpotifyPlayerSession`.
+    @ObservationIgnored private(set) var spotifyPlayerStorage: SpotifyPlayerSession?
+    /// Moves when the player opens, closes, or navigates between the embed and
+    /// Spotify's site — the session itself is not observable.
+    var spotifyPlayerRevision: UInt64 = 0
+
+    var spotifyPlayer: SpotifyPlayerSession? {
+        access(keyPath: \.spotifyPlayerRevision)
+        return spotifyPlayerStorage
+    }
+
+    /// Raises the full player beside a card.
+    ///
+    /// **Replaces whatever was open.** Two players is two songs and two
+    /// `WebContent` processes, and there is no arrangement in which somebody
+    /// wanted either.
+    func openSpotifyPlayer(_ card: SpotifyUnfurl, anchor: CGRect) {
+        spotifyPlayerStorage?.stop()
+        // The drawn preview and the real player are two ways to hear the same
+        // thing, so one starting stops the other.
+        spotifyPreview.stop()
+        spotifyPlayerStorage = SpotifyPlayerSession(card: card, anchor: anchor)
+        spotifyPlayerRevision &+= 1
+    }
+
+    func closeSpotifyPlayer() {
+        guard spotifyPlayerStorage != nil else { return }
+        spotifyPlayerStorage?.stop()
+        spotifyPlayerStorage = nil
+        spotifyPlayerRevision &+= 1
+    }
+
     /// The one player, for the whole app.
     ///
     /// `@ObservationIgnored` because nothing observes the *player* — what a view

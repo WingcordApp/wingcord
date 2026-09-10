@@ -102,6 +102,7 @@ struct WingcordApp: App {
                 // is opened from a tile inside the full profile and has to sit
                 // on top of the surface that raised it.
                 .presentsGameProfile()
+                .presentsSpotifyPlayer()
                 .presentsUserMenu()
                 .presentsDirectMessageMenu()
                 .presentsActivityInfo()

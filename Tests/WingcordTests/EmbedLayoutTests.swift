@@ -196,6 +196,54 @@ struct EmbedLayoutTests {
         // The cover, at the card's own square.
         #expect(slot.images.count == 1)
         #expect(slot.images[0].rect.width == EmbedLayoutEngine.coverSide)
+        // The way into Spotify's own player — the only route to a full track
+        // and to the library, neither of which this client can offer.
+        #expect(slot.chips.contains { $0.kind == .open })
+        #expect(slot.spotify?.id == "7glld4kxYHp61zIPtSVHNk")
+    }
+
+    /// Every chip is inside the card it belongs to, and none of them overlaps
+    /// another — the hit test reads these rects, so an overlap is a control that
+    /// answers for its neighbour.
+    @Test("The controls sit inside the card and do not overlap")
+    func chipsDoNotOverlap() {
+        let slot = EmbedLayoutEngine.layout(
+            spotifyEmbed(),
+            origin: .zero,
+            availableWidth: 400,
+            style: style,
+            mentions: MentionContext(),
+            parser: MarkdownParser(),
+            spotify: loungeAct
+        )
+        for chip in slot.chips {
+            #expect(slot.rect.contains(chip.rect))
+        }
+        for (index, chip) in slot.chips.enumerated() {
+            for other in slot.chips[(index + 1)...] {
+                #expect(!chip.rect.intersects(other.rect))
+            }
+        }
+    }
+
+    /// A narrow column is where a control row runs into the trailing chip. The
+    /// row wins: a control drawn over a duration is two things in one place.
+    @Test("A card too narrow for the Open chip simply has none")
+    func narrowCardDropsTheOpenChip() {
+        let slot = EmbedLayoutEngine.layout(
+            spotifyEmbed(),
+            origin: .zero,
+            availableWidth: 190,
+            style: style,
+            mentions: MentionContext(),
+            parser: MarkdownParser(),
+            spotify: loungeAct
+        )
+        for (index, chip) in slot.chips.enumerated() {
+            for other in slot.chips[(index + 1)...] {
+                #expect(!chip.rect.intersects(other.rect))
+            }
+        }
     }
 
     /// **The whole reason the card has a height rule of its own.** A track with
@@ -340,3 +388,4 @@ struct EmbedLayoutTests {
         #expect(narrowTitle < wideTitle)
     }
 }
+

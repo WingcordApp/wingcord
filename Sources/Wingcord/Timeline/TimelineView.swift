@@ -526,6 +526,9 @@ final class TimelineCoordinator: NSObject {
             // that started it is about to stop existing, so the only way to stop
             // the sound would be to come back and find it.
             model.spotifyPreview.stop()
+            // And neither does a panel anchored to a row that is about to stop
+            // existing — it would hang over the new channel pointing at nothing.
+            model.closeSpotifyPlayer()
             isNearBottom = true
             // A jump aimed at the channel the reader has just left is stale.
             // Cleared BEFORE the block below records a new one, so a jump that

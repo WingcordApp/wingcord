@@ -154,6 +154,28 @@ nonisolated extension TimelineRowPainter {
                 context: context
             )
 
+        case .open:
+            context.addPath(CGPath(
+                roundedRect: frame,
+                cornerWidth: frame.height / 2,
+                cornerHeight: frame.height / 2,
+                transform: nil
+            ))
+            context.setFillColor(NSColor.white.withAlphaComponent(0.12).cgColor)
+            context.fillPath()
+            let side = frame.height * 0.5
+            drawSymbol(
+                "arrow.up.forward",
+                tint: style.secondaryColor,
+                in: CGRect(
+                    x: frame.midX - side / 2,
+                    y: frame.midY - side / 2,
+                    width: side,
+                    height: side
+                ),
+                context: context
+            )
+
         case .explicit:
             // Discord's own mark, and Spotify's: a filled square with an E in
             // it, quiet rather than a warning. It says a fact about the track,

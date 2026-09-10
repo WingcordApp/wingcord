@@ -44,6 +44,10 @@ nonisolated struct EmbedSlot: Sendable {
     /// The thirty-second clip the Preview chip plays. Nil for a card whose
     /// entity has none, which is why the chip is absent rather than disabled.
     var previewURL: URL?
+    /// The card the Open chip raises Spotify's own player for. Carried whole
+    /// because the panel needs its title, its kind and its id — and the kind is
+    /// what decides the panel's height.
+    var spotify: SpotifyUnfurl?
     /// The GIF this embed would star, when it is one the account can keep.
     ///
     /// **A Tenor link and an uploaded `.gif` are the same feature and were not
@@ -66,6 +70,11 @@ nonisolated struct EmbedChip: Sendable {
         case preview
         /// The `E` Spotify puts on an explicit track. A mark, not a control.
         case explicit
+        /// Raises Spotify's own player beside the card — the full track for
+        /// anybody signed in there, and the library controls this client cannot
+        /// offer. See `SpotifyPlayerSession` for what it costs and why it is
+        /// asked for rather than always present.
+        case open
     }
 
     var rect: CGRect
@@ -388,16 +397,25 @@ nonisolated enum EmbedLayoutEngine {
         y += gap
         var chipX = textX
         if card.previewURL != nil {
+            let font = NSFont.systemFont(
+                ofSize: style.metadataFont.pointSize, weight: .semibold
+            )
+            // **Measured, not proposed.** A `TimelineTextBlock`'s size is the
+            // width it was *given* — which is right for a paragraph that wraps
+            // and useless for a label on a chip: asked for at the column's
+            // width, "Preview" reports 288 points and the row walks off the
+            // card. Every inline element here is measured first and framesetted
+            // at that width, so the block and the shape under it agree.
+            let labelWidth = Self.measuredWidth(of: "Preview", font: font)
+            let width = labelWidth + chipHeight + padding
             let label = plainBlock(
                 "Preview",
-                font: NSFont.systemFont(ofSize: style.metadataFont.pointSize, weight: .semibold),
+                font: font,
                 color: style.primaryColor,
-                width: textWidth,
+                width: labelWidth,
                 link: nil,
                 style: style
             )
-            // Room for the glyph, the label and the padding either side.
-            let width = label.size.width + chipHeight + padding
             chips.append(EmbedChip(
                 rect: CGRect(x: chipX, y: y, width: width, height: chipHeight),
                 kind: .preview
@@ -405,7 +423,7 @@ nonisolated enum EmbedLayoutEngine {
             texts.append(EmbedText(
                 block: label,
                 origin: CGPoint(
-                    x: chipX + chipHeight,
+                    x: chipX + chipHeight - Spacing.hair,
                     y: y + (chipHeight - label.size.height) / 2
                 )
             ))
@@ -419,11 +437,12 @@ nonisolated enum EmbedLayoutEngine {
             chipX += chipHeight + Spacing.tight
         }
         if let duration = card.durationLabel {
+            let width = Self.measuredWidth(of: duration, font: style.metadataFont)
             let block = plainBlock(
                 duration,
                 font: style.metadataFont,
                 color: style.tertiaryColor,
-                width: textWidth,
+                width: width,
                 link: nil,
                 style: style
             )
@@ -433,8 +452,24 @@ nonisolated enum EmbedLayoutEngine {
                     x: chipX, y: y + (chipHeight - block.size.height) / 2
                 )
             ))
-            chipX += block.size.width
+            chipX += width
         }
+        // The way into Spotify's own player, at the trailing edge of the
+        // control row. **Always offered**, because it is the only route to a
+        // full track and to the library, and neither depends on anything this
+        // client can see in advance.
+        let openRect = CGRect(
+            x: origin.x + cardWidth - padding - chipHeight,
+            y: y,
+            width: chipHeight,
+            height: chipHeight
+        )
+        // Unless the row has already run into it, in which case the row wins:
+        // a control drawn over a duration is two things in one place.
+        if chipX + Spacing.tight < openRect.minX {
+            chips.append(EmbedChip(rect: openRect, kind: .open))
+        }
+
         // Only where something was actually put on it.
         let hasControls = !chips.isEmpty || card.durationLabel != nil
         y += hasControls ? chipHeight : -gap
@@ -461,8 +496,23 @@ nonisolated enum EmbedLayoutEngine {
             texts: texts,
             images: images,
             chips: chips,
-            previewURL: card.previewURL
+            previewURL: card.previewURL,
+            spotify: card
         )
+    }
+
+    /// How wide a short label actually is.
+    ///
+    /// **`TimelineTextBlock` cannot answer this**: its size is the width it was
+    /// proposed, because it exists to lay out paragraphs that wrap. Anything
+    /// laid out *in a row* — a chip, a badge, a duration — has to be measured
+    /// before it is placed, or the row is arranged against a number that is the
+    /// column's width rather than the text's.
+    static func measuredWidth(of text: String, font: NSFont) -> CGFloat {
+        (text as NSString)
+            .size(withAttributes: [.font: font])
+            .width
+            .rounded(.up)
     }
 
     /// A picture with nothing around it.
