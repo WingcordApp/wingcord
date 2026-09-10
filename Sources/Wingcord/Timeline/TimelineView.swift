@@ -173,6 +173,10 @@ final class TimelineCoordinator: NSObject {
         canvas.onTogglePreview = { [weak self] url in
             self?.model.spotifyPreview.toggle(url)
         }
+        canvas.onOpenMusicPlayer = { [weak self] card, rect in
+            guard let self, let canvas = self.canvas else { return }
+            self.model.openSpotifyPlayer(card, anchor: canvas.anchorInHostingRoot(rect))
+        }
         canvas.isFavoriteGIF = { [weak self] gif in
             self?.model.sessionController.isFavorite(gif) ?? false
         }
@@ -414,6 +418,7 @@ final class TimelineCoordinator: NSObject {
         canvas?.onOpenAttachment = nil
         canvas?.onToggleFavoriteGIF = nil
         canvas?.onTogglePreview = nil
+        canvas?.onOpenMusicPlayer = nil
         canvas?.isFavoriteGIF = nil
         canvas?.onVote = nil
         canvas?.onPlayActivity = nil
