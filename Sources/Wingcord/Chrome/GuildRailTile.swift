@@ -88,6 +88,14 @@ struct GuildRailTile: View {
                             .offset(x: 3, y: 3)
                     }
                 }
+                // **The opposite corner from the mention count**, because the
+                // two say unrelated things and a tile can carry both: one is
+                // about you, the other is about the room.
+                .overlay(alignment: .topTrailing) {
+                    if guild.hasLiveVoice {
+                        LiveVoiceMark().offset(x: 4, y: -4)
+                    }
+                }
                 .opacity(guild.isMuted && !isSelected ? 0.55 : 1)
                 .frame(maxWidth: .infinity, alignment: .center)
             }
@@ -127,7 +135,7 @@ struct GuildRailTile: View {
         // and it has to arrive while the reader is still asking. One chip is
         // drawn for the whole rail and travels between tiles; see
         // `RailHoverLabel`.
-        .railHoverLabel(guild.name, isHovered: isHovering)
+        .railHoverLabel(guild.name, guildID: guild.id, isHovered: isHovering)
         .accessibilityLabel(Text(guild.name))
         .accessibilityAddTraits(isSelected ? [.isButton, .isSelected] : .isButton)
     }
@@ -348,5 +356,34 @@ struct DiscoverRailTile: View {
         .railHoverLabel("Discover", isHovered: isHovering)
         .accessibilityLabel(Text("Discover"))
         .accessibilityAddTraits(isSelected ? [.isButton, .isSelected] : .isButton)
+    }
+}
+
+/// The mark on a rail tile that says somebody in that server is sharing a
+/// screen or on camera.
+///
+/// **The one thing on the rail that says there is something to watch without
+/// being hovered.** Everything else a tile carries is about the reader — an
+/// unread, a mention, the call they are in; this is about the room, which is
+/// why it takes the opposite corner rather than competing for the same one.
+///
+/// A filled plate rather than a bare glyph: the tile behind it is somebody's
+/// artwork, and a monochrome symbol laid straight on it disappears against half
+/// the servers on the rail.
+struct LiveVoiceMark: View {
+    private static let side: CGFloat = 16
+
+    var body: some View {
+        Image(systemName: "rectangle.inset.filled.on.rectangle")
+            .font(.system(size: 8, weight: .bold))
+            .foregroundStyle(Palette.canvas)
+            .frame(width: Self.side, height: Self.side)
+            .background {
+                RoundedRectangle(cornerRadius: 5, style: .continuous)
+                    .fill(Ink.primary)
+            }
+            // It reports what is happening; the tile under it is the control.
+            .allowsHitTesting(false)
+            .accessibilityHidden(true)
     }
 }

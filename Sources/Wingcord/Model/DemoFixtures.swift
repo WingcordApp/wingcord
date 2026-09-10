@@ -757,6 +757,26 @@ enum DemoFixtures {
                 sessionStartedAt: Date.now.addingTimeInterval(-3 * 3600 - 185)
             )
         }
+        // **A crowd in a server the reader is not looking at**, so the rail's
+        // hover chip has a row to draw and one tile carries the live mark.
+        // Without it the chip is only ever its name in `--demo`, which is the
+        // state it already had.
+        if let neighbour = model.orderedGuildIDs.first(where: { $0 != guildID }),
+           let room = index.channelIDs(inGuild: neighbour).first(where: {
+               index[$0]?.kind == .voice
+           }) {
+            for (offset, userID) in others.filter({ $0 != me }).prefix(8).enumerated() {
+                states[userID] = VoiceState(
+                    userID: userID,
+                    channelID: room,
+                    guildID: neighbour,
+                    sessionID: "demo",
+                    isStreaming: offset == 1,
+                    isCameraOn: offset == 3
+                )
+            }
+        }
+
         // And a label on the room the reader is in, so the status line is
         // visible above a strip as well as beside an empty one.
         model.voiceChannelInfo[voiceChannelID] = VoiceChannelInfo(

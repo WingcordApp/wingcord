@@ -41,6 +41,47 @@ struct RailGuild: Hashable, Sendable, Identifiable {
     var isMuted: Bool
     /// Whether a voice channel in this guild currently has the reader in it.
     var isConnectedToVoice: Bool
+    /// Whether somebody in this server is sharing a screen or on camera.
+    ///
+    /// **A `Bool` resolved from one pass, not a lookup per tile** — see
+    /// `AppModel.guildsWithLiveVoice`. It draws the mark Discord puts on the
+    /// tile itself, which is the only thing on the rail that says there is
+    /// something to watch without hovering anything.
+    var hasLiveVoice: Bool = false
+}
+
+/// Who is in voice in one server, for the chip that names it.
+///
+/// **Resolved on hover, for one server, and never carried on `RailGuild`.** The
+/// rail's memo rebuilds on every inbound message in the account; putting a face
+/// list on all ninety-seven tiles would resolve avatars for every server on the
+/// rail to draw them for the one under the pointer.
+struct RailHoverPresence: Hashable, Sendable {
+
+    struct Face: Hashable, Sendable, Identifiable {
+        var id: UserID
+        var avatarURL: URL?
+        var monogram: String
+    }
+
+    /// Everybody in a voice channel here, capped.
+    var voice: [Face] = []
+    /// How many more there are than the row can hold. Zero draws nothing.
+    var voiceOverflow: Int = 0
+    /// The subset sharing a screen or on camera. **A separate row rather than a
+    /// mark on a face**, because it answers a different question — "is there
+    /// something to watch" rather than "who is here" — and Discord splits them
+    /// for the same reason.
+    var live: [Face] = []
+    var liveOverflow: Int = 0
+
+    /// The most faces a row draws before it starts counting.
+    static let faceLimit = 5
+
+    var isEmpty: Bool { voice.isEmpty && live.isEmpty }
+    /// How many rows the chip grows by. Pure arithmetic, so the host can centre
+    /// the chip on its tile without measuring it — §2.
+    var rowCount: Int { (voice.isEmpty ? 0 : 1) + (live.isEmpty ? 0 : 1) }
 }
 
 struct RailFolder: Hashable, Sendable, Identifiable {

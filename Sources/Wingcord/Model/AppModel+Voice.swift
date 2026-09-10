@@ -393,3 +393,70 @@ extension AppModel {
         sessionController.loadStreamPreview(key: key)
     }
 }
+
+// MARK: - Who is in voice in a server, for the rail
+
+extension AppModel {
+
+    /// The faces the rail's hover chip draws for one server.
+    ///
+    /// **Asked for one server at a time, while the pointer is on it.** The whole
+    /// account's voice states are one flat table, so this is a single pass over
+    /// it with a guild comparison — cheap enough to run per hover, and far
+    /// cheaper than carrying a face list on every tile in a memo that rebuilds
+    /// on every inbound message.
+    ///
+    /// **Ordered by join time, which is what the id encodes.** Sorting by name
+    /// would reshuffle the row whenever somebody was renamed, and sorting by
+    /// nothing reshuffles it on every dictionary rehash — which reads as the
+    /// faces twitching while the chip is open.
+    func railHoverPresence(for guildID: GuildID) -> RailHoverPresence {
+        var voice: [VoiceState] = []
+        var live: [VoiceState] = []
+        for state in voiceStates.values where state.guildID == guildID {
+            guard state.channelID != nil else { continue }
+            voice.append(state)
+            if state.isStreaming || state.isCameraOn { live.append(state) }
+        }
+        guard !voice.isEmpty else { return RailHoverPresence() }
+        voice.sort { $0.userID.rawValue < $1.userID.rawValue }
+        live.sort { $0.userID.rawValue < $1.userID.rawValue }
+
+        let limit = RailHoverPresence.faceLimit
+        return RailHoverPresence(
+            voice: faces(voice.prefix(limit)),
+            voiceOverflow: max(0, voice.count - limit),
+            live: faces(live.prefix(limit)),
+            liveOverflow: max(0, live.count - limit)
+        )
+    }
+
+    private func faces(
+        _ states: some Sequence<VoiceState>
+    ) -> [RailHoverPresence.Face] {
+        states.map { state in
+            let user = users[state.userID]
+            return RailHoverPresence.Face(
+                id: state.userID,
+                avatarURL: user.flatMap { avatarURL(for: $0, side: Metrics.avatarInline) },
+                monogram: user?.monogram ?? "?"
+            )
+        }
+    }
+
+    /// Every server with somebody sharing a screen or on camera in it, in one
+    /// pass.
+    ///
+    /// **Computed once per rail rebuild and read as a set**, never per tile: a
+    /// containment test per guild over the whole voice table is ninety-seven
+    /// passes over five hundred states, on a memo that rebuilds whenever any
+    /// message arrives anywhere.
+    var guildsWithLiveVoice: Set<GuildID> {
+        var found: Set<GuildID> = []
+        for state in voiceStates.values where state.isStreaming || state.isCameraOn {
+            guard let guildID = state.guildID, state.channelID != nil else { continue }
+            found.insert(guildID)
+        }
+        return found
+    }
+}

@@ -14,6 +14,15 @@ struct RailMemoKey: Hashable, Sendable {
     /// builder: a memo whose inputs it does not carry is a memo that keeps
     /// answering with the badges the reader just turned off.
     var showsUnreadCounts: Bool
+    /// Moves when somebody joins, leaves, or changes a switch in any voice
+    /// channel in the account. A tile draws whether there is something to watch
+    /// in its server, so the rail depends on it.
+    ///
+    /// **`voiceRevision`, not the narrower `voicePresenceRevision` the sidebar
+    /// uses.** That one moves on a *presence* — what somebody is playing — which
+    /// no tile draws; this one moves on a voice state, which is exactly what the
+    /// mark is about.
+    var voiceRevision: UInt64
 }
 
 struct SidebarMemoKey: Hashable, Sendable {
@@ -94,7 +103,8 @@ extension AppModel {
             roleRevision: roleRevision,
             selectedGuildID: selectedGuildID,
             expandedFolders: expandedFolderIDs,
-            showsUnreadCounts: AppSettings.shared.showsUnreadCounts
+            showsUnreadCounts: AppSettings.shared.showsUnreadCounts,
+            voiceRevision: voiceRevision
         )
         // Reading `guilds` and `folders` here — not inside the builder — is what
         // registers the dependency on a cache hit. Arrays and dictionaries are
@@ -111,7 +121,8 @@ extension AppModel {
             badge: { [self] guildID in guildBadge(for: guildID) },
             connectedVoiceGuild: connectedVoiceChannelID.flatMap {
                 channelIndex.guildID(of: $0)
-            }
+            },
+            liveGuilds: guildsWithLiveVoice
         )
         railCache = (key, value)
         return value
@@ -371,11 +382,17 @@ extension AppModel {
         guilds: [GuildID: Guild],
         expanded: Set<UInt64>,
         badge: (GuildID) -> (mentions: Int, unread: Bool, muted: Bool),
-        connectedVoiceGuild: GuildID?
+        connectedVoiceGuild: GuildID?,
+        /// Every server with somebody sharing a screen or on camera in it.
+        ///
+        /// **Resolved once by the caller and handed in as a set.** A test per
+        /// tile over the whole voice table is ninety-seven passes over five
+        /// hundred states, in a memo that rebuilds whenever any message arrives
+        /// anywhere in the account.
+        liveGuilds: Set<GuildID>
     ) -> [RailItem] {
         var items: [RailItem] = []
         items.reserveCapacity(folders.count)
-
         func makeGuild(_ guildID: GuildID) -> RailGuild? {
             guard let guild = guilds[guildID] else { return nil }
             let state = badge(guildID)
@@ -389,7 +406,8 @@ extension AppModel {
                 mentionCount: state.mentions,
                 hasUnread: state.unread,
                 isMuted: state.muted,
-                isConnectedToVoice: connectedVoiceGuild == guildID
+                isConnectedToVoice: connectedVoiceGuild == guildID,
+                hasLiveVoice: liveGuilds.contains(guildID)
             )
         }
 
