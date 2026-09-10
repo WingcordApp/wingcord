@@ -20,6 +20,9 @@ struct SpotifyPlayerPresenter: ViewModifier {
     func body(content: Content) -> some View {
         content.overlay {
             if let session = model.spotifyPlayer {
+                let _ = DiagnosticLog.trace(
+                    "spotify", "panel presenting \(session.card.key) anchor=\(session.anchor)"
+                )
                 GeometryReader { proxy in
                     ZStack(alignment: .topLeading) {
                         // Outside-click and Escape, with no event monitor and
@@ -36,10 +39,9 @@ struct SpotifyPlayerPresenter: ViewModifier {
                         panel(session, container: proxy.size)
                     }
                 }
-                .transition(.opacity.combined(with: .scale(scale: 0.98, anchor: .top)))
             }
         }
-        .animation(motion.panel, value: model.spotifyPlayer?.card.id)
+        .animation(motion.panel, value: model.spotifyPlayerRevision)
     }
 
     private func panel(_ session: SpotifyPlayerSession, container: CGSize) -> some View {
@@ -63,10 +65,13 @@ struct SpotifyPlayerPresenter: ViewModifier {
         }
         .clipShape(.rect(cornerRadius: Radius.glass, style: .continuous))
         .shadow(color: .black.opacity(0.45), radius: 24, y: 12)
-        .offset(x: placement.cardX)
-        .alignmentGuide(.top) { box in
-            -placement.cardY(forHeight: box.height)
-        }
+        // **Both axes by alignment guide, never one by `.offset`.** An offset
+        // does not participate in layout, so mixing the two places the panel
+        // against two different origins — `ProfilePresenter` solves the same
+        // problem with the same pair and this has to match it.
+        .alignmentGuide(.leading) { _ in -placement.cardX }
+        .alignmentGuide(.top) { box in -placement.cardY(forHeight: box.height) }
+        .transition(.materialize(from: placement.growthAnchor))
     }
 
     /// The panel's own strip: what is playing, the way back and forth between

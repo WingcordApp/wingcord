@@ -641,6 +641,9 @@ final class TimelineCanvasView: NSView {
         case .previewClip(let url):
             onTogglePreview?(url)
         case .openMusicPlayer(let card, let rect):
+            DiagnosticLog.trace(
+                "spotify", "open chip hit \(card.key) wired=\(onOpenMusicPlayer != nil)"
+            )
             onOpenMusicPlayer?(card, rect)
         case .favoriteEmbedGIF(let embedIndex):
             guard row.embeds.indices.contains(embedIndex),
