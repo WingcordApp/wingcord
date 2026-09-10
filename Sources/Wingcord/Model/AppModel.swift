@@ -209,6 +209,22 @@ final class AppModel {
     /// the guild is a property of the row and "am I in a call" is one lookup
     /// instead of a sweep.
     var voiceStates: [UserID: VoiceState] = [:]
+    /// What each voice channel says about itself: its status line, and when the
+    /// session in it started.
+    ///
+    /// **Beside the channel index rather than inside it**, exactly as the stages
+    /// are and for the same reason — neither fact is on the channel object any
+    /// REST route answers with, so a field on `Channel` would be erased by the
+    /// next plain object to arrive. See `VoiceChannelInfo`.
+    var voiceChannelInfo: [ChannelID: VoiceChannelInfo] = [:]
+    /// Bumped when the presence of somebody in a voice channel changes.
+    ///
+    /// **A second, narrower presence counter, and it earns its place.** The
+    /// sidebar's voice rows draw what their people are playing; keying them on
+    /// `presenceRevision` would rebuild the whole channel tree on every
+    /// presence flush, which on a large account is several times a second for
+    /// an answer that did not move. See `SidebarMemoKey.voicePresenceRevision`.
+    var voicePresenceRevision: UInt64 = 0
     /// Bumped when a voice state moves. Every voice memo keys on this and on
     /// nothing that a message can move.
     var voiceRevision: UInt64 = 0
@@ -231,6 +247,18 @@ final class AppModel {
     /// state: it opens a second socket, joins a second MLS group and costs a
     /// decode, so it lasts exactly as long as somebody is looking at it.
     var watchedStreamUserID: UserID?
+    /// The newest thumbnail of somebody's screen share, by stream key.
+    ///
+    /// **A URL, not a picture.** Discord answers the preview route with an
+    /// address on its CDN and rotates the hash as the stream moves, so the
+    /// *address* is what has to be re-asked for and the picture behind it is
+    /// then an ordinary cached image like any other. See
+    /// `DiscordREST.streamPreview`.
+    ///
+    /// Written only while somebody is pointing at a live row, and never cleared
+    /// on a miss: a stale frame is a better answer than a hole while the next
+    /// one is in flight.
+    var streamPreviews: [String: URL] = [:]
     /// Who the reader pinned to the stage. A share fills it by itself.
     var spotlightUserID: UserID?
     var voiceQuality: VoiceQuality = .idle

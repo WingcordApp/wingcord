@@ -485,6 +485,78 @@ final class VoiceController {
         model.soundboardRevision &+= 1
     }
 
+    /// The voice states out of `READY_SUPPLEMENTAL`.
+    ///
+    /// **Assigned, not merged.** These describe the account at the moment this
+    /// gateway session was built, and nothing else can have written a voice
+    /// state yet — a merge would carry a state from the *previous* session over
+    /// a reconnect, which is how somebody stays in a room they left while the
+    /// socket was down.
+    ///
+    /// Our own state is the one exception and it is deliberately included: if
+    /// the reader is already in a call on another device, this is what tells the
+    /// sidebar so.
+    func applyReadySupplemental(voiceStates: [UserID: VoiceState]) {
+        guard !voiceStates.isEmpty || !model.voiceStates.isEmpty else { return }
+        model.voiceStates = voiceStates
+        model.voiceRevision &+= 1
+        model.sidebarRevision &+= 1
+    }
+
+    /// One guild's voice states, out of a passive update.
+    ///
+    /// **A delta, and the departures are ids.** This is the one event where
+    /// leaving is a bare user id rather than a state with a null channel, so the
+    /// two halves are applied separately — reading the removals as states would
+    /// leave everybody in the room for ever, which is the same failure a null
+    /// channel causes when it is read as "unknown".
+    ///
+    /// Silent: no join or leave sound. By definition this describes a guild the
+    /// reader is not subscribed to, which is every guild except the one on
+    /// screen — a sound per arrival across ninety servers is a metronome.
+    func applyPassive(
+        guildID: GuildID,
+        states: [VoiceState],
+        departedUserIDs: [UserID],
+        members: [UserID: Member],
+        users: [UserID: User]
+    ) {
+        var moved = false
+        for userID in departedUserIDs where model.voiceStates[userID] != nil {
+            model.voiceStates[userID] = nil
+            model.speakingUserIDs.remove(userID)
+            model.liveVideoUserIDs.remove(userID)
+            moved = true
+        }
+        for state in states {
+            guard state.channelID != nil else {
+                if model.voiceStates[state.userID] != nil {
+                    model.voiceStates[state.userID] = nil
+                    moved = true
+                }
+                continue
+            }
+            guard model.voiceStates[state.userID] != state else { continue }
+            model.voiceStates[state.userID] = state
+            moved = true
+        }
+
+        if !members.isEmpty {
+            model.members[guildID, default: [:]].merge(members) { _, new in new }
+            model.memberRevision &+= 1
+        }
+        if !users.isEmpty {
+            // Merged over, never replaced: a member payload's user carries no
+            // bio and no badges, and writing one across a profile-fetched
+            // record wipes the card the reader may be looking at.
+            model.users.merge(users) { existing, new in new.merged(over: existing) }
+            model.identityRevision &+= 1
+        }
+        guard moved else { return }
+        model.voiceRevision &+= 1
+        model.sidebarRevision &+= 1
+    }
+
     /// Everything READY said about calls and soundboards.
     func applyReady(
         voiceStates: [UserID: VoiceState],

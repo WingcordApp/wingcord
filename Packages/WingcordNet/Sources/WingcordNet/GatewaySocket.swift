@@ -41,6 +41,11 @@ public actor GatewaySocket {
     public enum Event: Sendable {
         case connecting
         case ready(ReadySnapshot)
+        /// The rest of the bootstrap, a beat after `ready`. Its own event
+        /// rather than a delayed field on the first: READY is what brings the
+        /// window up, and holding it back until the second half arrives would
+        /// trade a working sidebar for a filled one.
+        case readySupplemental(ReadySupplementalSnapshot)
         case resumed
         case update(GatewayUpdate)
         case disconnected(reason: String, willRetry: Bool)
@@ -54,6 +59,10 @@ public actor GatewaySocket {
     private var session: URLSession
     private var task: URLSessionWebSocketTask?
     private var inflater: ZlibInflater?
+
+    /// The order READY listed the account's guilds in. See the note where it is
+    /// written; it is only ever read by `READY_SUPPLEMENTAL`, which follows.
+    private var readyGuildIDs: [GuildID] = []
 
     private var heartbeatTask: Task<Void, Never>?
     private var receiveTask: Task<Void, Never>?
@@ -428,7 +437,24 @@ public actor GatewaySocket {
             sessionID = ready.session_id
             resumeURL = ready.resume_gateway_url
             currentUserID = ready.user.id
+            // **The order the merged arrays in `READY_SUPPLEMENTAL` are indexed
+            // against.** Kept here rather than derived there, because that
+            // payload's own guild list is a different array that happens to
+            // agree — see `ReadySupplementalSnapshot`.
+            readyGuildIDs = (ready.guilds ?? []).map(\.id)
             continuation?.yield(.ready(ReadySnapshot(payload: ready)))
+
+        case .readySupplemental(let supplemental):
+            let snapshot = ReadySupplementalSnapshot(
+                payload: supplemental, guildOrder: readyGuildIDs
+            )
+            Self.trace(
+                "READY_SUPPLEMENTAL voice=\(snapshot.voiceStates.count) "
+                + "members=\(snapshot.membersByGuild.values.reduce(0) { $0 + $1.count }) "
+                + "presences=\(snapshot.presences.count) "
+                + "dms=\(snapshot.privateChannels.count)"
+            )
+            continuation?.yield(.readySupplemental(snapshot))
 
         case .resumed:
             reconnectAttempt = 0
@@ -521,6 +547,35 @@ public actor GatewaySocket {
             guild_id: guildID.description,
             channels: [channelID.description: ranges]
         )))
+    }
+
+    /// Asks for the status line and session clock of every voice channel in a
+    /// guild.
+    ///
+    /// **Opcode 43, and the only route to either fact for a guild the reader
+    /// has been away from.** A status arrives on the READY guild's channel
+    /// objects and then only as `VOICE_CHANNEL_STATUS_UPDATE`, which Discord
+    /// sends for *subscribed* guilds — so a label somebody set in a server the
+    /// reader had not opened this session is invisible until this is asked.
+    /// The session clock has no other source at all: no channel object anywhere
+    /// carries it.
+    ///
+    /// Opcode 36 does half of this and is deprecated in favour of it. The answer
+    /// comes back as `CHANNEL_INFO`.
+    public func requestChannelInfo(guildID: GuildID) {
+        struct Request: Encodable {
+            var op = 43
+            var d: Data
+
+            struct Data: Encodable {
+                var guild_id: String
+                /// **Both, always.** The answer is treated as authoritative for
+                /// every field it was asked for — see `GatewayUpdate` — and
+                /// asking for one would make it authoritative for one.
+                var fields = ["status", "voice_start_time"]
+            }
+        }
+        send(Request(d: .init(guild_id: guildID.description)))
     }
 
     /// Joins, moves between, or leaves a voice channel.
@@ -1115,6 +1170,14 @@ public struct ReadySnapshot: Sendable {
     /// than a partition of it — and "am I in a call" is then one lookup instead
     /// of a sweep over ninety servers.
     public var voiceStates: [UserID: VoiceState]
+    /// The label each voice channel is wearing, for the ones wearing any.
+    ///
+    /// **Harvested off the channel objects rather than mapped onto them.** The
+    /// gateway's guild object is the only place `status` appears — no REST
+    /// channel route answers with it — so putting it on `Channel` would mean the
+    /// next plain channel object to arrive silently erased it. See
+    /// `VoiceChannelInfo`.
+    public var voiceChannelInfo: [ChannelID: VoiceChannelInfo]
 
     init(payload: ReadyPayload) {
         currentUser = payload.user.domain
@@ -1130,6 +1193,7 @@ public struct ReadySnapshot: Sendable {
         var users: [UserID: User] = [:]
         var presences: [UserID: Presence] = [:]
         var voiceStates: [UserID: VoiceState] = [:]
+        var voiceChannelInfo: [ChannelID: VoiceChannelInfo] = [:]
         var soundboardsByGuild: [GuildID: [SoundboardSound]] = [:]
 
         users[currentUser.id] = currentUser
@@ -1140,6 +1204,10 @@ public struct ReadySnapshot: Sendable {
 
             if let channels = guildDTO.channels {
                 channelsByGuild[guild.id] = channels.map { $0.domain(guildID: guild.id) }
+                for channelDTO in channels {
+                    guard let status = channelDTO.status, !status.isEmpty else { continue }
+                    voiceChannelInfo[channelDTO.id] = VoiceChannelInfo(status: status)
+                }
             }
             if let threads = guildDTO.threads, !threads.isEmpty {
                 threadsByGuild[guild.id] = threads.map { $0.domain(guildID: guild.id) }
@@ -1238,6 +1306,7 @@ public struct ReadySnapshot: Sendable {
         }
         self.notes = notes
         self.voiceStates = voiceStates
+        self.voiceChannelInfo = voiceChannelInfo
         self.soundboardsByGuild = soundboardsByGuild
         self.stages = stages
         self.users = users
@@ -1348,6 +1417,9 @@ public enum GatewayUpdate: Sendable {
     case guildAvailable(
         Guild,
         channels: [Channel],
+        /// The labels those channels are wearing. **Only ever on this object** —
+        /// see `ReadySnapshot.voiceChannelInfo`.
+        voiceChannelInfo: [ChannelID: VoiceChannelInfo],
         /// The threads the account follows in this guild.
         ///
         /// Beside the channels rather than among them: a thread's `parentID` is
@@ -1435,6 +1507,21 @@ public enum GatewayUpdate: Sendable {
     /// Where our media session lives. Half a credential — see `VoiceServer`.
     case voiceServerChanged(VoiceServer)
     case voiceEffect(VoiceChannelEffect)
+    /// A voice channel's own two facts moved: its status line, its session
+    /// clock, or both. **One case for three events**, because all three answer
+    /// the same question and a store that told them apart would be telling
+    /// itself something it does not act on. A field left nil is one this event
+    /// said nothing about — see `VoiceChannelPatch`.
+    case voiceChannelInfoChanged(GuildID?, patches: [ChannelID: VoiceChannelPatch])
+    /// One guild the client is not subscribed to, in a periodic delta.
+    case passiveGuildUpdate(
+        GuildID,
+        voiceStates: [VoiceState],
+        departedUserIDs: [UserID],
+        members: [UserID: Member],
+        users: [UserID: User],
+        unreads: [(channelID: ChannelID, lastMessageID: MessageID?)]
+    )
     case callChanged(DirectCall)
     case callEnded(ChannelID)
     case soundboardSoundsChanged(GuildID?, sounds: [SoundboardSound])
@@ -1516,9 +1603,15 @@ public enum GatewayUpdate: Sendable {
                 guard let presence = presenceDTO.domain else { continue }
                 presences[presence.userID] = presence
             }
+            var voiceChannelInfo: [ChannelID: VoiceChannelInfo] = [:]
+            for channelDTO in dto.channels ?? [] {
+                guard let status = channelDTO.status, !status.isEmpty else { continue }
+                voiceChannelInfo[channelDTO.id] = VoiceChannelInfo(status: status)
+            }
             self = .guildAvailable(
                 guild,
                 channels: (dto.channels ?? []).map { $0.domain(guildID: guild.id) },
+                voiceChannelInfo: voiceChannelInfo,
                 threads: (dto.threads ?? []).map { $0.domain(guildID: guild.id) },
                 roles: roles,
                 members: members,
@@ -1683,6 +1776,58 @@ public enum GatewayUpdate: Sendable {
             self = .voiceServerChanged(server)
         case .voiceChannelEffect(let dto):
             self = .voiceEffect(dto.domain)
+        case .voiceChannelStatusUpdate(let dto):
+            self = .voiceChannelInfoChanged(
+                dto.guild_id, patches: [dto.id: VoiceChannelPatch(status: .some(dto.status))]
+            )
+        case .voiceChannelStartTimeUpdate(let dto):
+            self = .voiceChannelInfoChanged(
+                dto.guild_id,
+                patches: [dto.id: VoiceChannelPatch(sessionStartedAt: .some(dto.voice_start_time?.date))]
+            )
+        case .channelInfo(let payload):
+            // **Authoritative for both fields, and only because both are always
+            // asked for together.** Opcode 43 answers with the fields the
+            // request named, so a channel listed here with no `status` key has
+            // no status — not an unsaid one. Setting rather than merging is what
+            // clears a label somebody took down while this client was away,
+            // which no other event would ever tell it about.
+            var patches: [ChannelID: VoiceChannelPatch] = [:]
+            for entry in payload.channels ?? [] {
+                patches[entry.id] = VoiceChannelPatch(
+                    status: .some(entry.status),
+                    sessionStartedAt: .some(entry.voice_start_time?.date)
+                )
+            }
+            guard !patches.isEmpty else { return nil }
+            self = .voiceChannelInfoChanged(payload.guild_id, patches: patches)
+        case .passiveUpdate(let dto):
+            var states: [VoiceState] = []
+            var members: [UserID: Member] = [:]
+            var users: [UserID: User] = [:]
+            for stateDTO in dto.updated_voice_states ?? [] {
+                guard var state = stateDTO.domain else { continue }
+                state.guildID = state.guildID ?? dto.guild_id
+                states.append(state)
+            }
+            for memberDTO in dto.updated_members ?? [] {
+                guard let id = memberDTO.user?.id ?? memberDTO.user_id else { continue }
+                members[id] = memberDTO.domain(userID: id)
+                if let userDTO = memberDTO.user { users[id] = userDTO.domain }
+            }
+            let departed = dto.removed_voice_states ?? []
+            let unreads = (dto.updated_channels ?? []).map {
+                (channelID: $0.id, lastMessageID: $0.last_message_id)
+            }
+            guard !states.isEmpty || !departed.isEmpty || !unreads.isEmpty else { return nil }
+            self = .passiveGuildUpdate(
+                dto.guild_id,
+                voiceStates: states,
+                departedUserIDs: departed,
+                members: members,
+                users: users,
+                unreads: unreads
+            )
         case .callCreate(let dto), .callUpdate(let dto):
             self = .callChanged(dto.domain)
         case .callDelete(let dto):

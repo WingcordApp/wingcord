@@ -69,17 +69,74 @@ extension AppModel {
     }
 
     /// The chips drawn under a voice channel's row in the sidebar.
-    func voiceChips(in channelID: ChannelID) -> [VoiceMemberChip] {
-        voiceStates(in: channelID).map { state in
+    ///
+    /// **Everything is resolved here**, once per rebuild: the name, the face,
+    /// the switches, the custom status and the mark of whatever they are
+    /// playing. The row is then a function of its chip and reaches nothing.
+    ///
+    /// The guild is passed rather than read from `selectedGuildID` so the answer
+    /// is the same whichever list is asking — a nickname resolved against the
+    /// *selected* server would be the wrong nickname the moment anything but the
+    /// open sidebar called this.
+    func voiceChips(in channelID: ChannelID, guildID: GuildID?) -> [VoiceMemberChip] {
+        let states = voiceStates(in: channelID)
+        guard !states.isEmpty else { return [] }
+        var chips: [VoiceMemberChip] = []
+        chips.reserveCapacity(states.count)
+        for state in states {
             let user = users[state.userID]
-            return VoiceMemberChip(
+            let presence = presences[state.userID]
+            let status = presence?.customStatus
+            let game = presence?.primaryActivity
+            chips.append(VoiceMemberChip(
                 id: state.userID,
-                name: voiceName(of: state.userID, inGuild: selectedGuildID),
-                avatarURL: user.flatMap { avatarURL(for: $0, side: Metrics.avatarInline) },
+                name: voiceName(of: state.userID, inGuild: guildID),
+                avatarURL: user.flatMap { avatarURL(for: $0, side: Metrics.avatarVoiceRow) },
+                monogram: user?.monogram ?? "?",
                 isSpeaking: speakingUserIDs.contains(state.userID),
-                isMuted: state.isSilenced
-            )
+                // **Our own microphone is the engine's, not the server's.** Our
+                // state on the wire lags a mute by a round trip, and a row that
+                // takes half a second to cross out its own microphone reads as
+                // the button not having worked.
+                isMuted: state.userID == currentUserID ? isSelfMuted : state.isSilenced,
+                isDeafened: state.userID == currentUserID
+                    ? isSelfDeafened
+                    : (state.isSelfDeafened || state.isServerDeafened),
+                isStreaming: state.userID == currentUserID ? isScreenSharing : state.isStreaming,
+                isCameraOn: state.userID == currentUserID ? isCameraOn : state.isCameraOn,
+                statusEmoji: status?.emoji,
+                // A custom status is `state`, never `name` — the name of a
+                // custom activity is the literal string "Custom Status".
+                statusText: status?.state.flatMap { $0.isEmpty ? nil : $0 },
+                gameIconURL: gameMarkURL(for: game),
+                gameName: game?.name,
+                streamKey: state.isStreaming
+                    ? GoLiveKey.make(
+                        guildID: guildID, channelID: channelID, userID: state.userID
+                    )
+                    : nil
+            ))
         }
+        return chips
+    }
+
+    /// The small square mark of whatever somebody is doing.
+    ///
+    /// **The game's own icon first, then the application's.** `/games` answers
+    /// for titles Discord tracks and carries the art Discord itself draws; every
+    /// other application — a bot, Wordle, a music client — has only the icon it
+    /// registered, which is the picture Discord falls back to. An activity with
+    /// neither draws nothing rather than a grey square: a row that ends in a
+    /// placeholder for everybody says less than one that ends in nothing.
+    private func gameMarkURL(for activity: Activity?) -> URL? {
+        guard let activity, activity.kind != .custom,
+              let applicationID = activity.applicationID
+        else { return nil }
+        if let game = games[applicationID],
+           let url = gameArtURL(game, kind: .mark, side: Metrics.voiceGameMark) {
+            return url
+        }
+        return applicationIconURL(applicationID, side: Metrics.voiceGameMark)
     }
 
     /// Whether the reader is in this channel's call.
@@ -315,4 +372,24 @@ struct SoundboardMemoKey: Hashable, Sendable {
     var revision: UInt64
     var guildID: GuildID?
     var hasNitro: Bool
+}
+
+// MARK: - A picture of somebody's screen share
+
+extension AppModel {
+
+    /// Asks Discord for the newest frame of a stream.
+    ///
+    /// **Only ever from a hover, and that is the whole design.** Discord does
+    /// not push previews; a client that wanted a live thumbnail on every LIVE
+    /// row in a busy server would be polling a REST route once per row per few
+    /// seconds, which is a rate-limit slot spent on pictures nobody is looking
+    /// at. One request while the pointer rests, repeated for as long as it does,
+    /// costs a request per hover.
+    ///
+    /// Fire-and-forget and silent: a stream that has just ended answers 404, and
+    /// the flyout already draws a plate when there is no picture.
+    func requestStreamPreview(key: String) {
+        sessionController.loadStreamPreview(key: key)
+    }
 }

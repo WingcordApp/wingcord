@@ -30,6 +30,10 @@ struct GatewayFrame: Decodable, Sendable {
         case reconnect
         case invalidSession(resumable: Bool)
         case ready(ReadyPayload)
+        /// The rest of the bootstrap. **Where the voice states are** — see
+        /// `ReadySupplementalPayload` for the capability bit that put them
+        /// there and for what else moved with them.
+        case readySupplemental(ReadySupplementalPayload)
         case resumed
         case messageCreate(MessageDTO)
         /// The server acknowledging an interaction this client sent.
@@ -102,6 +106,15 @@ struct GatewayFrame: Decodable, Sendable {
         case voiceServerUpdate(VoiceServerUpdateDTO)
         /// A soundboard press, or a reaction thrown into a voice channel.
         case voiceChannelEffect(VoiceChannelEffectDTO)
+        /// The room's own label changed — set by anybody sitting in it.
+        case voiceChannelStatusUpdate(VoiceChannelStatusDTO)
+        /// The room's current session started, or ended.
+        case voiceChannelStartTimeUpdate(VoiceChannelStartTimeDTO)
+        /// The answer to opcode 43: the status and session clock of every voice
+        /// channel in one guild.
+        case channelInfo(ChannelInfoPayload)
+        /// A guild the client is not subscribed to, in one periodic delta.
+        case passiveUpdate(PassiveUpdateDTO)
         /// A direct-message call started, changed who it is ringing, or ended.
         case callCreate(CallDTO)
         case callUpdate(CallDTO)
@@ -165,6 +178,8 @@ struct GatewayFrame: Decodable, Sendable {
 
         switch name {
         case "READY": payload = .ready(try decode(ReadyPayload.self))
+        case "READY_SUPPLEMENTAL":
+            payload = .readySupplemental(try decode(ReadySupplementalPayload.self))
         case "RESUMED": payload = .resumed
         case "MESSAGE_CREATE": payload = .messageCreate(try decode(MessageDTO.self))
         case "INTERACTION_SUCCESS":
@@ -232,6 +247,12 @@ struct GatewayFrame: Decodable, Sendable {
             payload = .voiceServerUpdate(try decode(VoiceServerUpdateDTO.self))
         case "VOICE_CHANNEL_EFFECT_SEND":
             payload = .voiceChannelEffect(try decode(VoiceChannelEffectDTO.self))
+        case "VOICE_CHANNEL_STATUS_UPDATE":
+            payload = .voiceChannelStatusUpdate(try decode(VoiceChannelStatusDTO.self))
+        case "VOICE_CHANNEL_START_TIME_UPDATE":
+            payload = .voiceChannelStartTimeUpdate(try decode(VoiceChannelStartTimeDTO.self))
+        case "CHANNEL_INFO": payload = .channelInfo(try decode(ChannelInfoPayload.self))
+        case "PASSIVE_UPDATE_V2": payload = .passiveUpdate(try decode(PassiveUpdateDTO.self))
         case "CALL_CREATE": payload = .callCreate(try decode(CallDTO.self))
         case "CALL_UPDATE": payload = .callUpdate(try decode(CallDTO.self))
         case "CALL_DELETE": payload = .callDelete(try decode(CallDeleteDTO.self))

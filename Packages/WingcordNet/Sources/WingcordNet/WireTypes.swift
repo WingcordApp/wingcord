@@ -220,6 +220,15 @@ struct RoleColorsDTO: Decodable, Sendable {
 
 struct MemberDTO: Decodable, Sendable {
     var user: UserDTO?
+    /// The person, when the payload has already sent their user object
+    /// somewhere else.
+    ///
+    /// **`DEDUPE_USER_OBJECTS` is why this exists.** The capability this client
+    /// identifies with hoists every user object into READY's own `users` array
+    /// and leaves an id behind in each member — so a member from
+    /// `merged_members` or a passive update carries `user_id` and no `user`,
+    /// and a decoder that only knows `user` reads every one of them as nobody.
+    var user_id: UserID?
     var nick: String?
     var avatar: String?
     var roles: [RoleID]?
@@ -300,6 +309,13 @@ struct ChannelDTO: Decodable, Sendable {
     /// `Channel.bitrate`.
     var bitrate: Int?
     var user_limit: Int?
+    /// What the room has been labelled with, by anybody sitting in it.
+    ///
+    /// **Only ever on the gateway's own guild object.** No REST channel route
+    /// answers with it, which is why it is harvested into `VoiceChannelInfo`
+    /// here rather than mapped into `Channel` — a field on the domain value
+    /// would be wiped by the next plain channel object to arrive.
+    var status: String?
     var thread_metadata: ThreadMetadataDTO?
     var applied_tags: [ForumTagID]?
     var available_tags: [ForumTagDTO]?
@@ -1082,6 +1098,10 @@ struct MessageDTO: Decodable, Sendable {
 
 struct PresenceDTO: Decodable, Sendable {
     var user: PartialUser?
+    /// The same dedupe the member objects get — see `MemberDTO.user_id`. A
+    /// presence out of `merged_presences` names its person here and nowhere
+    /// else.
+    var user_id: UserID?
     var status: String?
     var activities: [ActivityDTO]?
     var client_status: ClientStatus?
@@ -1095,7 +1115,7 @@ struct PresenceDTO: Decodable, Sendable {
     }
 
     var domain: Presence? {
-        guard let userID = user?.id else { return nil }
+        guard let userID = user?.id ?? user_id else { return nil }
         let list = activities?.compactMap(\.domain) ?? []
         return Presence(
             userID: userID,

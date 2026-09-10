@@ -90,6 +90,16 @@ final class SessionController {
     /// Server-tag fetches in flight. A busy channel can show one tag on twenty
     /// consecutive rows; every one of them must share a single request.
     private var guildProfileFetches: Set<GuildID> = []
+    /// Servers whose voice-channel labels and clocks have been asked for on this
+    /// gateway session. See `requestVoiceChannelInfo`.
+    ///
+    /// **Cleared by READY, not by navigation.** A new socket is a new
+    /// subscription state, so the answer has to be asked for again; leaving
+    /// somewhere and coming back on the same socket does not.
+    private var voiceInfoRequestedGuildIDs: Set<GuildID> = []
+    /// Stream-thumbnail requests in flight, by stream key. Read from
+    /// `SessionController+Presence`.
+    var streamPreviewFetches: Set<String> = []
     private var expressionSourceFetches: Set<UInt64> = []
     /// Widget-template fetches in flight, by application. Read from
     /// `SessionController+Board`.
@@ -421,6 +431,8 @@ final class SessionController {
             // frame with a server in it that nothing can open.
             dropPreviewForNewSession()
             applyReady(snapshot)
+        case .readySupplemental(let snapshot):
+            applyReadySupplemental(snapshot)
         case .resumed:
             model.connectionState = .ready
             // A call that was up when the socket blipped has to ask again —
@@ -497,6 +509,8 @@ final class SessionController {
         model.friendNicknames = snapshot.friendNicknames
         model.notes = snapshot.notes
         model.stageInstances = snapshot.stages
+        model.voiceChannelInfo = snapshot.voiceChannelInfo
+        voiceInfoRequestedGuildIDs.removeAll(keepingCapacity: true)
         voice.applyReady(
             voiceStates: snapshot.voiceStates,
             soundboards: snapshot.soundboardsByGuild
@@ -551,6 +565,67 @@ final class SessionController {
         voice.gatewayDidReconnect()
 
         restoreNavigation()
+    }
+
+    /// Applies what a voice channel just said about itself.
+    ///
+    /// Writes nothing when nothing changed: three gateway events feed this and
+    /// one of them — the opcode-43 answer — restates a whole server's channels
+    /// every time a guild is opened, so an unconditional write would invalidate
+    /// the sidebar on every navigation for an answer that is usually identical.
+    private func applyVoiceChannelInfo(_ patches: [ChannelID: VoiceChannelPatch]) {
+        var changed = false
+        for (channelID, patch) in patches {
+            var info = model.voiceChannelInfo[channelID] ?? VoiceChannelInfo()
+            let before = info
+            info.apply(patch)
+            guard info != before else { continue }
+            model.voiceChannelInfo[channelID] = info.isEmpty ? nil : info
+            changed = true
+        }
+        guard changed else { return }
+        model.sidebarCache = nil
+        model.sidebarRevision &+= 1
+    }
+
+    /// The half of the bootstrap that arrives second.
+    ///
+    /// **This is where the people in voice channels come from.** READY carries
+    /// none: the `PRIORITIZED_READY_PAYLOAD` capability this client identifies
+    /// with moves every guild's `voice_states` out of it and into this event,
+    /// which the app had never read — so every voice channel in the sidebar drew
+    /// empty until somebody happened to move while the reader was watching.
+    ///
+    /// **Merged, never assigned.** It lands a beat after READY and the reader
+    /// may already have opened a channel by then, so a member-list answer or a
+    /// presence flush can be in the store before this arrives. The voice states
+    /// are the exception: nothing else can have written one yet, and a merge
+    /// there would keep a state from a *previous* gateway session alive.
+    private func applyReadySupplemental(_ snapshot: ReadySupplementalSnapshot) {
+        Self.trace(
+            "applying READY_SUPPLEMENTAL: voice=\(snapshot.voiceStates.count) "
+            + "presences=\(snapshot.presences.count)"
+        )
+        if !snapshot.privateChannels.isEmpty {
+            for channel in snapshot.privateChannels { model.channelIndex.upsert(channel) }
+        }
+        for (guildID, table) in snapshot.membersByGuild {
+            model.members[guildID, default: [:]].merge(table) { _, new in new }
+        }
+        // **Anything already in the table wins**, and the rule is that simple
+        // because of when this lands: READY assigns a fresh presence table a
+        // moment earlier, so the only entries that can already be here came
+        // from something *later* — a `PRESENCE_UPDATE`, or the member-list
+        // answer for a channel `restoreNavigation` has already opened. Both are
+        // fresher and more complete than a bootstrap-age subset.
+        model.presences.merge(snapshot.presences) { existing, _ in existing }
+        voice.applyReadySupplemental(voiceStates: snapshot.voiceStates)
+        refreshVoiceActivityIcons()
+
+        if !snapshot.membersByGuild.isEmpty { model.memberRevision &+= 1 }
+        if !snapshot.presences.isEmpty { model.presenceRevision &+= 1 }
+        model.sidebarCache = nil
+        model.sidebarRevision &+= 1
     }
 
     /// The rail's order.
@@ -720,12 +795,45 @@ final class SessionController {
 
         case .voiceStateChanged(let state, let member, let user):
             voice.apply(state: state, member: member, user: user)
+            refreshVoiceActivityIcons()
 
         case .voiceServerChanged(let server):
             voice.apply(server: server)
 
         case .voiceEffect(let effect):
             voice.apply(effect: effect)
+
+        case .voiceChannelInfoChanged(_, let patches):
+            applyVoiceChannelInfo(patches)
+
+        case .passiveGuildUpdate(
+            let guildID, let states, let departed, let members, let users, let unreads
+        ):
+            // **The unreads are half of this event and cost two lines**, so
+            // they are read here rather than left as a field on the wire that
+            // nothing looks at. `PASSIVE_GUILD_UPDATE_V2` is what Discord sends
+            // *instead of* `CHANNEL_UNREAD_UPDATE` for an unsubscribed guild —
+            // a client that enables the capability and reads only the voice half
+            // has asked to stop being told about new messages in every server it
+            // is not currently looking at.
+            for entry in unreads {
+                guard let messageID = entry.lastMessageID else { continue }
+                model.channelIndex.patchLastMessage(messageID, in: entry.channelID)
+            }
+            voice.applyPassive(
+                guildID: guildID,
+                states: states,
+                departedUserIDs: departed,
+                members: members,
+                users: users
+            )
+            refreshVoiceActivityIcons()
+            if !unreads.isEmpty {
+                model.sidebarCache = nil
+                model.railCache = nil
+                model.railRevision &+= 1
+                model.sidebarRevision &+= 1
+            }
 
         case .callChanged(let call):
             voice.apply(call: call)
@@ -759,10 +867,11 @@ final class SessionController {
             )
 
         case .guildAvailable(
-            let guild, let channels, let threads, let roles, let members, let users,
-            let presences, let emojis, let stickers, let stages
+            let guild, let channels, let voiceChannelInfo, let threads, let roles,
+            let members, let users, let presences, let emojis, let stickers, let stages
         ):
             model.guilds[guild.id] = guild
+            model.voiceChannelInfo.merge(voiceChannelInfo) { _, new in new }
             // The stages already running here. A server arriving mid-session
             // is the only place they come from besides READY and the three
             // `STAGE_INSTANCE_*` events.
@@ -1004,9 +1113,19 @@ final class SessionController {
     private func flushPresences() {
         presenceFlushTask = nil
         guard !pendingPresences.isEmpty else { return }
+        // **Checked before the merge, over the pending set only.** The sidebar's
+        // voice rows draw what their people are playing, and this is what tells
+        // them to — a dictionary lookup per flushed presence, against a scan
+        // over every voice state in the account or a rebuild of the whole
+        // channel tree on every flush.
+        let touchesVoice = pendingPresences.keys.contains { model.voiceStates[$0] != nil }
         model.presences.merge(pendingPresences) { _, new in new }
         pendingPresences.removeAll(keepingCapacity: true)
         model.presenceRevision &+= 1
+        if touchesVoice {
+            model.voicePresenceRevision &+= 1
+            refreshVoiceActivityIcons()
+        }
     }
 
     // MARK: Requests
@@ -1145,6 +1264,27 @@ final class SessionController {
             return
         }
         Task { await socket.subscribeToMemberList(guildID: guildID, channelID: channelID) }
+        requestVoiceChannelInfo(inGuild: guildID)
+        // The server on screen just changed, and with it the set of people whose
+        // games the sidebar has to draw a mark for.
+        refreshVoiceActivityIcons()
+    }
+
+    /// Asks a server for the labels and session clocks on its voice channels.
+    ///
+    /// **Once per server per session, on the first channel opened in it.** The
+    /// statuses arrive on READY and are then kept current by
+    /// `VOICE_CHANNEL_STATUS_UPDATE` for as long as the guild is subscribed —
+    /// which it is from this moment on. What this closes is the gap before it:
+    /// anything set while the reader was elsewhere, and the session clock, which
+    /// no channel object anywhere carries.
+    ///
+    /// A repeat per navigation would restate a whole server's channels on every
+    /// click for an answer that cannot have changed since the subscription
+    /// started, so the guild is remembered rather than the request debounced.
+    private func requestVoiceChannelInfo(inGuild guildID: GuildID) {
+        guard let socket, voiceInfoRequestedGuildIDs.insert(guildID).inserted else { return }
+        Task { await socket.requestChannelInfo(guildID: guildID) }
     }
 
     /// Fills in the parts of somebody that only the profile route answers with.

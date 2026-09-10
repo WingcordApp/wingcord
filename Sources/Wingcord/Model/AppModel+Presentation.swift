@@ -38,6 +38,15 @@ struct SidebarMemoKey: Hashable, Sendable {
     /// its own rather than `railRevision`, which moves on every inbound message
     /// in the account and would rebuild the whole tree several times a second.
     var voiceRevision: UInt64
+    /// Moves when the presence of somebody **who is in a voice channel** does.
+    ///
+    /// A voice row draws what its person is playing and the status they set, so
+    /// the list depends on presence — but keying it on `presenceRevision` would
+    /// rebuild every channel in the server five times a second on a busy
+    /// account, for rows that almost never change. This counter moves only when
+    /// a flushed presence belongs to somebody sitting in a room, which on most
+    /// flushes is nobody. See `SessionController.flushPresences`.
+    var voicePresenceRevision: UInt64
     /// Who is talking, which lights a chip under a row. Part of the key for the
     /// same reason the follow set is: the answer is drawn.
     var speakingIDs: Set<UserID>
@@ -119,6 +128,7 @@ extension AppModel {
             collapsedCategories: collapsedCategoryIDs,
             followRevision: followRevision,
             voiceRevision: voiceRevision,
+            voicePresenceRevision: voicePresenceRevision,
             speakingIDs: speakingUserIDs,
             hiddenSelection: hiddenSelectedChannelID,
             surfaceRows: selectedGuildID.map(guildSurfaceRows(for:)) ?? [],
@@ -648,6 +658,22 @@ extension AppModel {
 
     private func makeSidebarChannel(_ channel: Channel) -> SidebarChannel {
         let state = unreadState(of: channel)
+        // **Only for a voice channel**, and the guard is not decoration: the
+        // lookup is a filter over every voice state in the account, and running
+        // it for each of a server's five hundred text channels is five hundred
+        // passes for five hundred empty arrays.
+        guard channel.kind == .voice || channel.kind == .stage else {
+            return SidebarChannel(
+                id: channel.id,
+                name: channel.name,
+                kind: channel.kind,
+                isUnread: state.unread,
+                mentionCount: state.mentions,
+                isMuted: state.muted,
+                voiceMembers: []
+            )
+        }
+        let info = voiceChannelInfo[channel.id]
         return SidebarChannel(
             id: channel.id,
             name: channel.name,
@@ -655,13 +681,12 @@ extension AppModel {
             isUnread: state.unread,
             mentionCount: state.mentions,
             isMuted: state.muted,
-            // **Only for a voice channel**, and the guard is not decoration: the
-            // lookup is a filter over every voice state in the account, and
-            // running it for each of a server's five hundred text channels is
-            // five hundred passes for five hundred empty arrays.
-            voiceMembers: channel.kind == .voice || channel.kind == .stage
-                ? voiceChips(in: channel.id)
-                : []
+            voiceMembers: voiceChips(in: channel.id, guildID: channel.guildID),
+            voiceStatus: info?.status.map(VoiceChannelStatus.runs) ?? [],
+            // Nil and zero both mean "no limit" on the wire, and the row draws
+            // no counter for either — see `SidebarChannel.voiceLimit`.
+            voiceLimit: channel.userLimit ?? 0,
+            voiceStartedAt: info?.sessionStartedAt
         )
     }
 

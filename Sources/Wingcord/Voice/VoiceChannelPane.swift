@@ -83,7 +83,7 @@ struct VoiceChannelPane: View {
     /// — so a grid of black rectangles promising video would be four inert
     /// controls, which §5.5 is about.
     private var lobby: some View {
-        let chips = model.voiceChips(in: channelID)
+        let chips = model.voiceChips(in: channelID, guildID: model.channelIndex[channelID]?.guildID)
         return VStack(spacing: Spacing.group) {
             Spacer(minLength: 0)
 

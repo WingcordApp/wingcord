@@ -14,6 +14,10 @@ import WingcordCore
 struct SidebarChannelRow: View {
     var channel: SidebarChannel
     var isSelected: Bool
+    /// The server this row belongs to. Carried only so a voice row can build the
+    /// address of somebody's screen share — see `GoLiveKey`, whose two grammars
+    /// differ by exactly this field being present.
+    var guildID: GuildID?
     /// Whether the reader is in this channel's call.
     var isConnected = false
     var namespace: Namespace.ID
@@ -58,7 +62,13 @@ struct SidebarChannelRow: View {
                     if isHovering, join != nil {
                         voiceAccessories
                     } else if channel.mentionCount > 0 {
+                        // **Above the room's own numbers**, because a voice
+                        // channel has a text chat in it and somebody naming you
+                        // there outranks how full the room is. One slot, and
+                        // the more urgent fact takes it.
                         UnreadBadge(count: channel.mentionCount, isMuted: channel.isMuted)
+                    } else if channel.kind == .voice || channel.kind == .stage {
+                        voiceOccupancy
                     } else if channel.isPinned {
                         // **The mark a pinned conversation carries.** The
                         // order already says it, but an order only says it
@@ -72,9 +82,21 @@ struct SidebarChannelRow: View {
                     }
                 }
 
+                // What somebody in the room called it. Under the name and
+                // above the faces, which is the order the two are read in:
+                // what this room is for, then who is in it.
+                if !channel.voiceStatus.isEmpty {
+                    VoiceStatusLine(runs: channel.voiceStatus)
+                        .padding(.leading, Metrics.voiceStripInset)
+                }
+
                 if !channel.voiceMembers.isEmpty {
-                    VoiceMemberStrip(members: channel.voiceMembers)
-                        .padding(.leading, 24)
+                    VoiceMemberStrip(
+                        members: channel.voiceMembers,
+                        channelID: channel.id,
+                        guildID: guildID
+                    )
+                    .padding(.leading, Metrics.voiceStripInset)
                 }
             }
             .padding(.horizontal, Spacing.base)
@@ -137,6 +159,11 @@ struct SidebarChannelRow: View {
         }
         // Only where there is a menu to raise. See `openMenu`.
         .modifier(SecondaryClickModifier(openMenu: openMenu))
+        // And only where the room is actually full. **The modifier is guarded,
+        // not its label** — an unconditional `hoverFlyout` would put a second
+        // hover tracker and a popover behind every row in a hundred-channel
+        // list, for the one or two that have anything to say.
+        .modifier(FullChannelNotice(isFull: isFull))
         .animation(motion.fadeQuick, value: isHovering)
         .animation(motion.standard, value: isSelected)
         // **A press plays the effect once and then stops.** A style is something
@@ -156,6 +183,42 @@ struct SidebarChannelRow: View {
             }
             if let openChat { Button("Open the chat", action: openChat) }
         }
+    }
+
+    /// How full the room is, and how long it has been going.
+    ///
+    /// **The counter is only drawn where there is a limit**, because zero and
+    /// nil both mean "no limit" on the wire and `03 / 00` is not a fact. Two
+    /// digits a side and monospaced: a room filling up must not shift the rows
+    /// beside it, and Discord's own pill reads `05 / 05` for the same reason.
+    @ViewBuilder
+    private var voiceOccupancy: some View {
+        let count = channel.voiceMembers.count
+        if channel.voiceLimit > 0 || channel.voiceStartedAt != nil {
+            HStack(spacing: Spacing.tight) {
+                if let startedAt = channel.voiceStartedAt {
+                    VoiceSessionClock(startedAt: startedAt)
+                }
+                if channel.voiceLimit > 0 {
+                    Text(
+                        "\(Self.occupancy(count)) / \(Self.occupancy(channel.voiceLimit))"
+                    )
+                    .font(Typeface.voiceChannelClock)
+                    .foregroundStyle(count >= channel.voiceLimit ? Ink.tertiary : Ink.quaternary)
+                    .padding(.horizontal, 6)
+                    .frame(height: 17)
+                    .floatingChrome()
+                }
+            }
+            .fixedSize()
+            .accessibilityHidden(true)
+        }
+    }
+
+    /// `05`, not `5`. A counter whose width changes as it counts is a counter
+    /// that nudges the row beside it on every join.
+    private static func occupancy(_ value: Int) -> String {
+        value < 10 ? "0\(value)" : String(value)
     }
 
     /// The two things a voice row offers beyond opening.
@@ -183,6 +246,16 @@ struct SidebarChannelRow: View {
             }
         }
         .transition(.opacity.combined(with: .offset(x: 6)))
+    }
+
+    /// Whether the room has no room left.
+    ///
+    /// **`>=`, not `==`.** A moderator can move somebody into a full channel and
+    /// a limit can be lowered under the people already in it — Discord's own
+    /// list draws `06 / 05` — so a test for equality would call an over-full
+    /// room joinable.
+    private var isFull: Bool {
+        channel.voiceLimit > 0 && channel.voiceMembers.count >= channel.voiceLimit
     }
 
     private var nameStyle: AnyShapeStyle {
@@ -220,7 +293,7 @@ struct SidebarChannelRow: View {
                 if let subtitle = channel.subtitle {
                     HStack(spacing: Spacing.hair) {
                         if let emoji = channel.subtitleEmoji {
-                            SidebarInlineEmoji(emoji: emoji, side: 11)
+                            InlineEmojiMark(emoji: emoji, side: 11)
                         }
                         Text(subtitle)
                             .font(Typeface.rowSubtitle)
@@ -285,6 +358,23 @@ private struct SidebarTagChip: View {
     }
 }
 
+/// Says a room is full while the pointer rests on it, or installs nothing.
+///
+/// The same shape as `SecondaryClickModifier` below and for the same reason: a
+/// modifier written unconditionally and short-circuited inside has still been
+/// applied to every row in the list.
+private struct FullChannelNotice: ViewModifier {
+    var isFull: Bool
+
+    func body(content: Content) -> some View {
+        if isFull {
+            content.hoverFlyout("This channel is full.", edge: .top)
+        } else {
+            content
+        }
+    }
+}
+
 /// Installs the secondary-click catcher, or installs nothing.
 ///
 /// **The modifier is guarded, not the closure** — §2. Writing
@@ -303,25 +393,6 @@ private struct SecondaryClickModifier: ViewModifier {
     }
 }
 
-/// One emoji beside a custom status.
-private struct SidebarInlineEmoji: View {
-    var emoji: EmojiRef
-    var side: CGFloat
-
-    var body: some View {
-        if let id = emoji.id {
-            RemoteImage(
-                url: CDN.emoji(id: id, animated: emoji.isAnimated, side: side),
-                side: side
-            ) { Color.clear }
-            .frame(width: side, height: side)
-        } else {
-            Text(emoji.name)
-                .font(.system(size: side))
-                .lineLimit(1)
-        }
-    }
-}
 
 /// The nameplate behind a direct-message row.
 ///
@@ -572,36 +643,6 @@ private struct RowAccessory: View {
         .animation(motion.hover, value: isHovering)
         .help(label)
         .accessibilityLabel(Text(label))
-    }
-}
-
-/// Who is in a voice channel, drawn beneath its row.
-struct VoiceMemberStrip: View {
-    var members: [VoiceMemberChip]
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 1) {
-            ForEach(members) { member in
-                HStack(spacing: Spacing.tight) {
-                    AvatarView(url: member.avatarURL, monogram: "", side: 16)
-                        .overlay {
-                            if member.isSpeaking {
-                                Circle().strokeBorder(Palette.presenceOnline, lineWidth: 1.5)
-                            }
-                        }
-                    Text(member.name)
-                        .font(Typeface.rowSubtitle)
-                        .foregroundStyle(Ink.tertiary)
-                        .lineLimit(1)
-                    if member.isMuted {
-                        Image(systemName: "mic.slash.fill")
-                            .font(.system(.caption2))
-                            .foregroundStyle(Palette.destructive)
-                    }
-                }
-            }
-        }
-        .accessibilityElement(children: .combine)
     }
 }
 

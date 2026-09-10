@@ -187,6 +187,7 @@ struct ChannelSidebar: View, Equatable {
             SidebarChannelRow(
                 channel: channel,
                 isSelected: target == .channel(channel.id),
+                guildID: presentation.header?.guildID,
                 isConnected: connectedVoiceChannelID == channel.id,
                 namespace: selectionNamespace,
                 action: { selectChannel(channel.id) },

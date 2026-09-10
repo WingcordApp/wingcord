@@ -21,6 +21,32 @@ extension SessionController {
         loadActivityButtons(of: userID, activity: activity)
     }
 
+    /// Resolves the marks for the games people in voice channels are playing.
+    ///
+    /// **Resolved where the data lands, never from the projection that draws
+    /// it.** A fetch started inside a computed property runs during a body
+    /// evaluation, which is a state write in the middle of a view update — the
+    /// same rule the recent-activity list is held to below.
+    ///
+    /// Scoped to the server on screen. A busy account has people in voice
+    /// channels in ninety servers and the sidebar draws one of them; resolving
+    /// the rest would be a batch request for icons nothing is going to ask for.
+    /// `resolveApplications` filters what it already knows, so a repeat costs a
+    /// set subtraction and no request.
+    func refreshVoiceActivityIcons() {
+        guard let guildID = model.selectedGuildID else { return }
+        var wanted: [ApplicationID] = []
+        for state in model.voiceStates.values where state.guildID == guildID {
+            guard let activity = model.presences[state.userID]?.primaryActivity,
+                  let applicationID = activity.applicationID,
+                  model.games[applicationID] == nil
+            else { continue }
+            wanted.append(applicationID)
+        }
+        guard !wanted.isEmpty else { return }
+        model.resolveApplications(wanted)
+    }
+
     /// Somebody's recent activity.
     ///
     /// **Cached for the session and never refreshed.** An inventory entry is a
@@ -107,6 +133,33 @@ extension SessionController {
                 // is the inert control `INVARIANTS.md` §5.5 forbids.
                 model.activityButtonURLs[session] = []
                 Self.trace("activity metadata \(session) failed: \(Self.describe(error))")
+            }
+        }
+    }
+}
+
+// MARK: - Stream previews
+
+extension SessionController {
+
+    /// Fetches the address of a stream's newest thumbnail.
+    ///
+    /// **One request in flight per stream, and the answer replaces the last
+    /// one.** The caller is a hover that repeats every few seconds, so without
+    /// the in-flight guard a slow answer would stack requests behind a pointer
+    /// that has not moved.
+    func loadStreamPreview(key: String) {
+        guard streamPreviewFetches.insert(key).inserted else { return }
+        Task { [weak self] in
+            guard let self else { return }
+            defer { streamPreviewFetches.remove(key) }
+            do {
+                guard let url = try await rest.streamPreview(key: key) else { return }
+                model.streamPreviews[key] = url
+            } catch {
+                // A stream that ended answers 404, which is an answer rather
+                // than a fault. The flyout draws its plate either way.
+                Self.trace("stream preview \(key) failed: \(Self.describe(error))")
             }
         }
     }

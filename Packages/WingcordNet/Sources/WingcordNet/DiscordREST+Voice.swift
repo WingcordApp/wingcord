@@ -97,6 +97,37 @@ extension DiscordREST {
         )
     }
 
+    /// Where a Go Live stream's latest thumbnail lives.
+    ///
+    /// **A URL to a picture, not the picture** — the route answers
+    /// `{"url": "https://cdn.discordapp.com/streams/<key>/<hash>"}` and the CDN
+    /// serves the frame. The hash changes as the stream moves, which is why
+    /// there is a cache-buster on the request rather than on the image: the
+    /// *address* is what has to be re-asked for, and the answer is then a URL
+    /// the image cache can key on like any other.
+    ///
+    /// `version` is that cache-buster, and it is milliseconds since the epoch —
+    /// captured as `preview?version=1789047652058` against a live stream. It is
+    /// generated here rather than taken as a parameter so no caller can forget
+    /// it and quietly get a frozen frame.
+    ///
+    /// Requires `CONNECT` in the stream's channel; a stream that has ended
+    /// answers 404, which the caller files as "no picture" rather than an error.
+    public func streamPreview(key: String) async throws -> URL? {
+        struct Answer: Decodable { var url: String? }
+        // **The key goes in raw.** `appending(path:)` encodes what it is handed,
+        // and a capture's `guild%3A…` is the browser's encoding rather than the
+        // API's — §5.55, which cost a live refusal to learn once already.
+        let version = UInt64(Date().timeIntervalSince1970 * 1000)
+        let answer = try await get(
+            "/streams/\(key)/preview",
+            route: "streams/{key}/preview",
+            query: [URLQueryItem(name: "version", value: String(version))],
+            as: Answer.self
+        )
+        return answer.url.flatMap(URL.init(string:))
+    }
+
     /// The clip's bytes.
     ///
     /// **Straight to the CDN, with no token and no rate limiter.** The CDN is a

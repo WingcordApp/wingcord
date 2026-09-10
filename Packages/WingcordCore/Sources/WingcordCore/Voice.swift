@@ -307,3 +307,130 @@ public struct DirectCall: Hashable, Sendable {
         self.region = region
     }
 }
+
+// MARK: - What a voice channel says about itself
+
+/// The two facts a voice channel carries that are not on the channel object
+/// every route answers with.
+///
+/// **A table beside the channel index rather than fields on `Channel`**, and
+/// the reason is the same one that put stages there: `status` reaches this
+/// client on the READY guild's channel objects and on two gateway events, and
+/// on *no* REST route. A field on `Channel` would therefore be silently erased
+/// the next time any route — a channel fetch, a settings save, a `CHANNEL_UPDATE`
+/// carrying the plain object — upserted that channel, and the status would
+/// disappear from the sidebar with nothing in the trace to say why.
+public struct VoiceChannelInfo: Hashable, Sendable {
+    /// The line anybody in the room can set: "9k+ eu prem", "NA COMP 6+". Up to
+    /// 500 characters, and it may carry custom emoji in Discord's `<:name:id>`
+    /// markup — see `VoiceChannelStatus`.
+    public var status: String?
+    /// When the room's current session began. Nil is a **silent** channel, not
+    /// an unknown one: the event that carries this sends null to say the
+    /// session ended.
+    public var sessionStartedAt: Date?
+
+    public init(status: String? = nil, sessionStartedAt: Date? = nil) {
+        self.status = status
+        self.sessionStartedAt = sessionStartedAt
+    }
+
+    public var isEmpty: Bool { status == nil && sessionStartedAt == nil }
+
+    /// Applies what one event said, leaving what it did not mention alone.
+    public mutating func apply(_ patch: VoiceChannelPatch) {
+        if let status = patch.status { self.status = status }
+        if let startedAt = patch.sessionStartedAt { sessionStartedAt = startedAt }
+    }
+}
+
+/// A change to one voice channel's own facts.
+///
+/// **Doubly optional, and that is the point.** Three separate gateway events
+/// write these two fields and each carries only its own: the outer `nil` means
+/// *this event said nothing about it*, and `.some(nil)` means *it said the
+/// value is now gone* — a status cleared, a session ended. Collapsing the two
+/// would make a status update that mentions no clock stop every timer in the
+/// server.
+public struct VoiceChannelPatch: Hashable, Sendable {
+    public var status: String??
+    public var sessionStartedAt: Date??
+
+    public init(status: String?? = nil, sessionStartedAt: Date?? = nil) {
+        self.status = status
+        self.sessionStartedAt = sessionStartedAt
+    }
+}
+
+/// A voice channel's status, split into what a row has to draw.
+///
+/// **Emoji only, and deliberately not the markdown parser.** A status is one
+/// short line and Discord renders no emphasis, no links and no mentions in it —
+/// running `MarkdownParser` over five hundred sidebar rows to find two emoji
+/// would be a tree per row for an answer this scanner reaches in one pass over
+/// the bytes.
+public enum VoiceChannelStatus {
+
+    /// One piece of a status line.
+    public enum Run: Hashable, Sendable {
+        case text(String)
+        case emoji(EmojiRef)
+    }
+
+    /// Splits `<:name:id>` and `<a:name:id>` out of a status, leaving
+    /// everything else — Unicode emoji included — as text.
+    ///
+    /// Returns a single `.text` run for the overwhelming majority of statuses,
+    /// which carry no custom emoji at all, and allocates one array either way.
+    public static func runs(_ status: String) -> [Run] {
+        guard status.contains("<") else {
+            return status.isEmpty ? [] : [.text(status)]
+        }
+        var runs: [Run] = []
+        var literal = ""
+        var rest = Substring(status)
+
+        while let open = rest.firstIndex(of: "<") {
+            // Everything before the bracket is text whatever follows turns out
+            // to be — including a bracket that opens nothing.
+            literal += rest[rest.startIndex..<open]
+            let body = rest[rest.index(after: open)...]
+            guard let close = body.firstIndex(of: ">"),
+                  let emoji = emoji(inside: body[body.startIndex..<close])
+            else {
+                literal.append("<")
+                rest = body
+                continue
+            }
+            if !literal.isEmpty {
+                runs.append(.text(literal))
+                literal = ""
+            }
+            runs.append(.emoji(emoji))
+            rest = body[body.index(after: close)...]
+        }
+        literal += rest
+        if !literal.isEmpty { runs.append(.text(literal)) }
+        return runs
+    }
+
+    /// `:name:id` or `a:name:id`, without the brackets.
+    private static func emoji(inside body: Substring) -> EmojiRef? {
+        var rest = body
+        var animated = false
+        if rest.first == "a" {
+            rest = rest.dropFirst()
+            animated = true
+        }
+        guard rest.first == ":" else { return nil }
+        rest = rest.dropFirst()
+        guard let colon = rest.firstIndex(of: ":") else { return nil }
+        let name = rest[rest.startIndex..<colon]
+        guard !name.isEmpty else { return nil }
+        let digits = rest[rest.index(after: colon)...]
+        guard !digits.isEmpty, digits.allSatisfy(\.isNumber),
+              let id = UInt64(digits)
+        else { return nil }
+        return EmojiRef(id: EmojiID(rawValue: id), name: String(name), isAnimated: animated)
+    }
+}

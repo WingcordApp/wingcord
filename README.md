@@ -128,6 +128,11 @@ predecessor sat at 300–425 MB.
   from, and a message link scrolls to its target and lights it
 - Drawn member list: hoist groups, role colours, presence shapes, activity lines,
   and a reserved full-row plate layer so nameplates drop in without reflowing
+- **Voice channels that show who is in them**: every face, the custom status they
+  are wearing, a LIVE chip, the mark of the game they are playing, their mute and
+  deafen switches, the room's own label with its custom emoji, how full it is and
+  how long the session has run — and a hover card over anybody sharing a screen
+  with the actual frame in it
 - Direct messages and group conversations, with a profile column beside one and a
   roster beside the other, and a right-click that answers with everything a
   conversation offers — pin it (and the pin reaches Discord), mute it, name a

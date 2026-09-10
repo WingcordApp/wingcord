@@ -730,6 +730,40 @@ enum DemoFixtures {
                 isStreaming: streaming
             )
         }
+        // **A second room, with nobody the reader knows in it.** This is the
+        // state the sidebar exists for and the one that cannot be seen from
+        // inside a call: a room you are *not* in, drawn with its label, its
+        // counter and its people. Two of them are doing something, so the
+        // trailing cluster and the hover card have material.
+        let voiceChannelIDs = index.channelIDs(inGuild: guildID).filter {
+            index[$0]?.kind == .voice
+        }
+        if voiceChannelIDs.count > 1 {
+            let elsewhere = voiceChannelIDs[1]
+            let bench = others.filter { $0 != me }.dropFirst(4).prefix(3)
+            for (offset, userID) in bench.enumerated() {
+                states[userID] = VoiceState(
+                    userID: userID,
+                    channelID: elsewhere,
+                    guildID: guildID,
+                    sessionID: "demo",
+                    isSelfMuted: offset == 2,
+                    isSelfDeafened: offset == 2,
+                    isStreaming: offset == 0
+                )
+            }
+            model.voiceChannelInfo[elsewhere] = VoiceChannelInfo(
+                status: "shipping the sidebar 🚀",
+                sessionStartedAt: Date.now.addingTimeInterval(-3 * 3600 - 185)
+            )
+        }
+        // And a label on the room the reader is in, so the status line is
+        // visible above a strip as well as beside an empty one.
+        model.voiceChannelInfo[voiceChannelID] = VoiceChannelInfo(
+            status: "pairing on the voice list",
+            sessionStartedAt: Date.now.addingTimeInterval(-742)
+        )
+
         // **A live stage beside the call.** The pane's three-way split is
         // the whole of what it draws, so the fixture seeds one of each: a
         // couple of speakers, a bench of listeners, and two hands up in the
@@ -1315,7 +1349,13 @@ enum DemoFixtures {
                     lastMessageID: MessageID(
                         rawValue: (recentMilliseconds - UInt64(serial) * 5_400_000
                             - Snowflake<MessageTag>.epochMilliseconds) << 22
-                    )
+                    ),
+                    // **A ceiling on every voice room, because the counter only
+                    // exists where there is one.** Five is Discord's own most
+                    // common limit and it is small enough that the fixture's
+                    // cast fills a room — which is the state that draws the
+                    // "this channel is full" notice.
+                    userLimit: Self.demoKind(of: name) == .voice ? 5 : nil
                 ))
                 position += 1
             }

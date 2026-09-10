@@ -148,6 +148,23 @@ struct SidebarChannel: Hashable, Sendable, Identifiable {
     /// People currently in this voice channel, drawn beneath the row so you can
     /// see who is in a call without joining it.
     var voiceMembers: [VoiceMemberChip]
+    /// The label anybody in the room can put on it, already split into what the
+    /// row draws.
+    ///
+    /// **Split here rather than in the body.** A status may carry custom emoji
+    /// in `<:name:id>` markup, and scanning for them is work that belongs in the
+    /// memo — a hundred voice rows re-scanning their own status on every
+    /// evaluation is a hundred passes for an answer that changes when somebody
+    /// retypes it. Empty is a channel with no label, which is nearly all of
+    /// them and costs one empty array.
+    var voiceStatus: [VoiceChannelStatus.Run] = []
+    /// How many people the room holds. **Zero is no limit**, which is what
+    /// Discord means by it and what removes the counter rather than drawing
+    /// `03 / 00`.
+    var voiceLimit: Int = 0
+    /// When the session in this room began, for the clock Discord runs beside
+    /// the name. Nil is a silent channel.
+    var voiceStartedAt: Date?
     /// A conversation's face, for the rows that have one. A DM is identified by
     /// **who** it is with, so it takes an avatar where a guild channel takes a
     /// glyph in the same gutter — same row, same metrics, different leading
@@ -208,7 +225,10 @@ extension SidebarChannel {
         isUnread: Bool,
         mentionCount: Int,
         isMuted: Bool,
-        voiceMembers: [VoiceMemberChip]
+        voiceMembers: [VoiceMemberChip],
+        voiceStatus: [VoiceChannelStatus.Run] = [],
+        voiceLimit: Int = 0,
+        voiceStartedAt: Date? = nil
     ) {
         self.init(
             id: id,
@@ -218,6 +238,9 @@ extension SidebarChannel {
             mentionCount: mentionCount,
             isMuted: isMuted,
             voiceMembers: voiceMembers,
+            voiceStatus: voiceStatus,
+            voiceLimit: voiceLimit,
+            voiceStartedAt: voiceStartedAt,
             avatarURL: nil,
             monogram: nil,
             status: nil
@@ -225,12 +248,53 @@ extension SidebarChannel {
     }
 }
 
+/// One person sitting in a voice channel, as the sidebar draws them.
+///
+/// Everything on it is a **resolved value**: the store answers the presence, the
+/// role and the application table once per rebuild, and the row draws what it is
+/// handed. A chip that held a user id and looked things up would do those
+/// lookups inside a body evaluation, for every person in every room in the
+/// server.
 struct VoiceMemberChip: Hashable, Sendable, Identifiable {
     var id: UserID
     var name: String
     var avatarURL: URL?
+    var monogram: String
     var isSpeaking: Bool
+    /// Anything stopping them being *heard* — their own switch, or a
+    /// moderator's. One flag because the row draws one crossed-out microphone
+    /// for both; which of the two it is belongs on a profile, not in a list.
     var isMuted: Bool
+    /// Deafened, which is a **second** glyph beside the first rather than a
+    /// different one: somebody who cannot hear also cannot be heard, and
+    /// Discord draws both marks because they are two different facts about the
+    /// same person.
+    var isDeafened: Bool
+    /// Sharing a screen. Draws the LIVE chip, and is what makes a hover worth
+    /// asking Discord for a picture of — see `AppModel.streamPreview`.
+    var isStreaming: Bool
+    var isCameraOn: Bool
+    /// The custom status they set, as the little pill Discord puts after the
+    /// name. Either half may be absent — a status can be one emoji.
+    var statusEmoji: EmojiRef?
+    var statusText: String?
+    /// The mark of the game they are in, at the size the row draws it.
+    ///
+    /// **The application's own icon, not the presence's artwork.** Rich presence
+    /// art is a 512-point key screen; what belongs at the end of a 20-point row
+    /// is the small square mark people recognise, which is the icon the
+    /// application registered.
+    var gameIconURL: URL?
+    /// What that icon is of, for the label VoiceOver reads and the flyout.
+    var gameName: String?
+    /// The address of their screen share, when there is one. Built by the
+    /// viewer — see `GoLiveKey`.
+    var streamKey: String?
+
+    /// Whether anything is drawn in the row's trailing cluster.
+    var hasAccessories: Bool {
+        isStreaming || isMuted || isDeafened || gameIconURL != nil
+    }
 }
 
 /// A destination a server offers that is not a channel.

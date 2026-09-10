@@ -283,6 +283,18 @@ nonisolated enum Metrics {
     /// different ways in one column.
     static let directMessageRowHeight: CGFloat = 46
 
+    /// How far the strip of people under a voice channel is indented.
+    ///
+    /// Lined up so a face sits under the *name* rather than under the speaker
+    /// glyph: the row's own leading padding plus the glyph's slot. A strip
+    /// indented to the glyph reads as a second column of icons.
+    static let voiceStripInset: CGFloat = 22
+
+    /// One person in the strip under a voice channel. Tight against the 20-point
+    /// face it holds: the strip is a nested list and every point of slack in it
+    /// is a point the channel rows above are pushed apart by.
+    static let voiceMemberRowHeight: CGFloat = 24
+
     /// A category disclosure header. Shorter than a row: it is a label, not a
     /// destination.
     static let categoryMinHeight: CGFloat = 24
@@ -329,6 +341,15 @@ nonisolated enum Metrics {
     static let avatarMessage: CGFloat = 38
     /// Inline in a reply quote or a preview.
     static let avatarInline: CGFloat = 16
+    /// A face in the strip of people under a voice channel. Between the inline
+    /// mark and a row's own avatar: the strip is a list of *people*, so it needs
+    /// more than a glyph, and it is nested under a row, so it must not out-weigh
+    /// the channel it belongs to.
+    static let avatarVoiceRow: CGFloat = 20
+    /// The mark of the game somebody in a voice channel is playing, at the end
+    /// of their row. Square, and the same height as the microphone glyph beside
+    /// it so the trailing cluster sits on one line.
+    static let voiceGameMark: CGFloat = 16
     /// The profile card's hero.
     static let avatarProfile: CGFloat = 80
 
@@ -582,6 +603,14 @@ nonisolated enum Typeface {
     static let rowTitleUnread = Font.system(.body, weight: .semibold)
     /// A message preview, a custom status, an activity line.
     static let rowSubtitle = Font.system(.caption)
+    /// Somebody's name in the strip under a voice channel. One step down from a
+    /// row title, because the strip is nested inside a row and must not compete
+    /// with the channel it belongs to.
+    static let voiceMemberName = Font.system(.subheadline)
+    /// A voice channel's own status line, and the clock beside it. The clock is
+    /// monospaced so a running second does not shift the row.
+    static let voiceChannelStatus = Font.system(.caption)
+    static let voiceChannelClock = Font.system(.caption2, weight: .semibold).monospacedDigit()
     /// Timestamps and other trailing metadata.
     static let metadata = Font.system(.caption)
     /// Message body text.
