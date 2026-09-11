@@ -42,10 +42,16 @@ nonisolated enum TimelineImageRequests {
     ///   from the same icon this fetches, so the derivation is kicked off beside
     ///   the fetch rather than waiting for a second trigger. A callback because
     ///   this type must not reach the store.
+    /// - Parameter playsAnimatedEmoji: whether an animated custom emoji is
+    ///   worth a multi-frame decode. Passed in rather than read here because
+    ///   this type is `nonisolated` and the answer is two main-actor reads —
+    ///   see `AnimationClock.playsAnimatedEmoji`. A still emoji is unaffected:
+    ///   the tag says which kind it is.
     static func requests(
         for rows: [MessageRow],
         scale: CGFloat,
         loadsArtwork: Bool,
+        playsAnimatedEmoji: Bool = true,
         onActivityIcon: ((ActivityInvite) -> Void)? = nil
     ) -> [Request] {
         var requests: [Request] = []
@@ -267,7 +273,22 @@ nonisolated enum TimelineImageRequests {
                         url: url,
                         maximumPixelSize: Int((entry.rect.width * scale).rounded(.up))
                     )
-                    if seen.insert(key).inserted, ImageStore.shared.cached(key) == nil {
+                    guard seen.insert(key).inserted else { continue }
+                    // **An animated emoji needs the strip, not the still.** The
+                    // tag says which kind it is — `<a:name:id>` — so a still one
+                    // costs no multi-frame decode and no clock subscription
+                    // spent discovering an answer that arrived with the text.
+                    // Without this rung the painter peeks a filmstrip that
+                    // nothing ever asked for and every custom emoji in the
+                    // transcript sits on frame zero.
+                    if entry.emoji.isAnimated, playsAnimatedEmoji {
+                        let film = AnimatedImageStore.Key(
+                            url: url, maximumPixelSize: key.maximumPixelSize
+                        )
+                        if AnimatedImageStore.shared.cached(film) == nil {
+                            requests.append(Request(key: key, source: .film))
+                        }
+                    } else if ImageStore.shared.cached(key) == nil {
                         requests.append(Request(key: key, source: .still(.thumbnail)))
                     }
                 }

@@ -84,6 +84,87 @@ struct MessageCard: Identifiable, Sendable {
             accessibilityLabel: label
         )
     }
+
+    /// Several messages as **one continuous excerpt**, run-grouped.
+    ///
+    /// **Not `card(for:)` in a loop, and the difference is most of the height of
+    /// the inbox's Unreads tab.** A card stands alone, so it forces
+    /// `[.head, .tail]` and draws the avatar, the author and the full timestamp
+    /// on every message. Four consecutive lines from one person then repeat that
+    /// header four times — which is what shipped, and what "the padding sucks"
+    /// was looking at.
+    ///
+    /// `TimelineReducer` is the app's single definition of a run, shared with
+    /// the transcript so the two cannot disagree. Its framing rows are dropped
+    /// here: an excerpt has no beginning-of-conversation marker and no history
+    /// runway, because it is a window onto the middle of a channel rather than
+    /// the channel itself.
+    ///
+    /// - Parameter unreadAnchor: the reader's cursor, so the excerpt carries the
+    ///   same unread divider the channel does.
+    static func excerpt(
+        of messages: [Message],
+        unreadAnchor: MessageID?,
+        width: CGFloat,
+        engine: TimelineLayoutEngine,
+        style: MessageTextStyle,
+        settings: TimelineSettings,
+        mentions: MentionContext,
+        mentionedIDs: Set<UInt64>,
+        channelName: String,
+        authors: [UserID: TimelineLayoutEngine.AuthorInfo]
+    ) -> MessageCard? {
+        guard let first = messages.first else { return nil }
+        let items = TimelineReducer.rows(
+            messages: messages,
+            unreadAnchor: unreadAnchor,
+            mentionedIDs: mentionedIDs,
+            hasMoreHistory: false
+        )
+        .filter { item in
+            switch item {
+            case .message, .daySeparator, .unreadDivider: true
+            // `conversationStart`, the skeletons, the loading row and the
+            // failure row are all statements about a whole channel's history.
+            // In an excerpt they are false.
+            case .conversationStart, .historySkeleton, .loadingFirstPage,
+                 .historyUnavailable: false
+            }
+        }
+        guard !items.isEmpty else { return nil }
+
+        var cache: [MessageID: TimelineLayoutEngine.CacheEntry] = [:]
+        let rows = engine.layout(
+            TimelineLayoutEngine.Input(
+                items: items,
+                width: width,
+                style: style,
+                mentions: mentions,
+                channelName: channelName,
+                authors: authors,
+                calendar: .current,
+                settings: settings
+            ),
+            cache: &cache
+        )
+        // One node for the whole excerpt. Reading four messages out as four
+        // unrelated nodes is worse for VoiceOver than one that says what the
+        // block is, and the group's header already names the channel.
+        let label = rows.compactMap { row -> String? in
+            if case .message(let message) = row.kind { return message.accessibilityLabel }
+            return nil
+        }.joined(separator: ". ")
+
+        return MessageCard(
+            // The oldest message in the excerpt: what clicking it jumps to, and
+            // what the canvas compares against to decide it need not repaint.
+            id: first.id,
+            rows: rows,
+            height: rows.reduce(0) { $0 + $1.height },
+            accessibilityLabel: label
+        )
+    }
+
 }
 
 /// Paints a `MessageCard`.
@@ -129,6 +210,36 @@ final class MessageCardView: NSView {
     private var drawnHeight: CGFloat = -1
     private var style = MessageTextStyle.current()
 
+    // MARK: Moving pictures
+    //
+    // **The card read the clock and never subscribed to it**, so a GIF, an
+    // animated sticker and an animated custom emoji all sat on whichever frame
+    // happened to be decoded when the card was last laid out. `draw` took
+    // `AnimationClock.shared.time` and the policy is `.onSetNeedsDisplay`, so
+    // nothing ever asked for the next frame. Every surface built on this — the
+    // pinned pane, and now the inbox — was still.
+    //
+    // The transcript's own canvas invalidates per box because it is a viewport
+    // over hundreds of rows. A card is one message or one short excerpt, so it
+    // repaints whole; what it keeps from that design is the **gate**: the clock
+    // runs at up to 24 fps and film is authored at 10-20, so most ticks resolve
+    // to the pictures already on screen and must cost a few dictionary lookups
+    // rather than a repaint.
+
+    /// The frame index each filmstrip in this card is currently showing.
+    private var shownFilmFrames: [FilmSlot: Int] = [:]
+    private var isAnimating = false
+    private var animationToken: ObjectIdentifier { ObjectIdentifier(self) }
+
+    /// Names one moving picture inside the card. The message plus its position,
+    /// never the asset's own id — the same GIF twice is two boxes.
+    private struct FilmSlot: Hashable {
+        enum Kind: UInt8 { case sticker, attachment, embed, emoji }
+        var messageID: MessageID
+        var kind: Kind
+        var index: Int
+    }
+
     override var isFlipped: Bool { true }
 
     override init(frame frameRect: NSRect) {
@@ -166,6 +277,115 @@ final class MessageCardView: NSView {
         drawnID = id
         drawnHeight = height
         needsDisplay = true
+        refreshAnimation()
+    }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        // A card that outlives its window as a clock subscriber is a retain
+        // cycle with a display link in it.
+        refreshAnimation()
+    }
+
+    deinit {
+        MainActor.assumeIsolated { AnimationClock.shared.unsubscribe(animationToken) }
+    }
+
+    /// Subscribes while something in the card is moving, and stops the moment
+    /// nothing is. Idempotent, so every caller may call it freely.
+    private func refreshAnimation() {
+        let wanted = window != nil && hasFilm
+        guard wanted != isAnimating else { return }
+        isAnimating = wanted
+        if wanted {
+            AnimationClock.shared.subscribe(animationToken) { [weak self] in
+                self?.advanceFilm()
+            }
+        } else {
+            AnimationClock.shared.unsubscribe(animationToken)
+            shownFilmFrames.removeAll(keepingCapacity: true)
+        }
+    }
+
+    /// Whether anything here is a filmstrip. Four kinds, and the message says
+    /// which it is without a fetch or a decode.
+    private var hasFilm: Bool {
+        for row in rows {
+            guard case .message(let message) = row.kind else { continue }
+            if message.stickers.contains(where: \.isAnimated) { return true }
+            if message.attachments.contains(where: \.isAnimated) { return true }
+            for embed in message.embeds where embed.images.contains(where: \.isAnimated) {
+                return true
+            }
+            if AnimationClock.playsAnimatedEmoji,
+               message.textBlock?.emojiRects.contains(where: { $0.emoji.isAnimated }) == true
+            {
+                return true
+            }
+        }
+        return false
+    }
+
+    /// One clock tick: repaint only if a frame actually moved.
+    private func advanceFilm() {
+        let time = AnimationClock.shared.time
+        let scale = window?.backingScaleFactor ?? 2
+        var moved = false
+
+        func advance(url: URL?, decodeWidth: CGFloat, key: FilmSlot) {
+            guard let url else { return }
+            let film = AnimatedImageStore.Key(
+                url: url, maximumPixelSize: Int((decodeWidth * scale).rounded(.up))
+            )
+            guard let strip = AnimatedImageStore.shared.cached(film) else { return }
+            let next = strip.index(at: time)
+            guard shownFilmFrames[key] != next else { return }
+            shownFilmFrames[key] = next
+            moved = true
+        }
+
+        for row in rows {
+            guard case .message(let message) = row.kind else { continue }
+            for (offset, slot) in message.stickers.enumerated() where slot.isAnimated {
+                advance(
+                    url: slot.url,
+                    decodeWidth: slot.rect.width,
+                    key: FilmSlot(messageID: message.id, kind: .sticker, index: offset)
+                )
+            }
+            for (offset, slot) in message.attachments.enumerated() where slot.isAnimated {
+                advance(
+                    url: slot.url,
+                    decodeWidth: slot.decodeWidth,
+                    key: FilmSlot(messageID: message.id, kind: .attachment, index: offset)
+                )
+            }
+            var embedImage = 0
+            for embed in message.embeds {
+                for slot in embed.images {
+                    defer { embedImage += 1 }
+                    guard slot.isAnimated else { continue }
+                    advance(
+                        url: slot.url,
+                        decodeWidth: slot.decodeWidth,
+                        key: FilmSlot(messageID: message.id, kind: .embed, index: embedImage)
+                    )
+                }
+            }
+            if let block = message.textBlock {
+                for (offset, entry) in block.emojiRects.enumerated()
+                where entry.emoji.isAnimated {
+                    advance(
+                        url: entry.emoji.id.flatMap {
+                            CDN.emoji(id: $0, animated: true, side: entry.rect.width)
+                        },
+                        decodeWidth: entry.rect.width,
+                        key: FilmSlot(messageID: message.id, kind: .emoji, index: offset)
+                    )
+                }
+            }
+        }
+        if moved { needsDisplay = true }
     }
 
     override func draw(_ dirtyRect: NSRect) {

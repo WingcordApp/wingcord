@@ -122,10 +122,21 @@ struct InboxGroup: Identifiable {
     var rows: [InboxRow]
 }
 
-/// A group's identity: the channel, and the first thing in it.
+/// A group's identity: the channel, and which run of it this is.
+///
+/// **`occurrence`, not the first message's id — and that was a bug with teeth.**
+/// Keyed on the lead message, a group's identity *changed the moment its
+/// messages arrived*: SwiftUI saw a different row, threw the view away, built a
+/// new one, and re-ran its `.task` — which asked for the messages again. Every
+/// group in the list churned on every fetch that completed, which is what "it
+/// starts to load all the messages and glitches out" was.
+///
+/// The occurrence is the index of this run among runs for the same channel, so
+/// two separated runs of `#general` still differ while neither moves when its
+/// content fills in.
 struct InboxGroupID: Hashable {
     var channelID: ChannelID
-    var leadID: UInt64
+    var occurrence: Int
 }
 
 /// One drawn row inside a group.

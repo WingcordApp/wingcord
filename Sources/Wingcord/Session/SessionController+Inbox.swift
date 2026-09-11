@@ -15,6 +15,14 @@ import WingcordNet
 
 extension SessionController {
 
+    /// How many unread groups may be fetching their messages at once.
+    ///
+    /// Three, because roughly that many groups fit in the flyout at its tallest
+    /// and the reader cannot be reading a fourth. Higher spends the rate-limit
+    /// bucket on rows nobody has scrolled to; lower makes scrolling feel like it
+    /// is waiting.
+    static let concurrentUnreadFetches = 3
+
     /// Fetches one tab's list.
     ///
     /// The "ask once" decision is the store's (`AppModel.loadInboxTab`); this
@@ -215,6 +223,14 @@ extension SessionController {
         // Already loaded, or being loaded by the transcript. `hasMoreHistory`
         // is not consulted — any page at all is enough for a summary.
         guard model.messages(in: channelID)?.messages.isEmpty != false else { return }
+        // **A ceiling on how many run at once, and it is what stops the storm.**
+        // `LazyVStack` materialises rows ahead of the viewport, so on an account
+        // with sixty unread channels a dozen groups can appear in one pass and
+        // ask together — a dozen history pages through one rate-limit bucket,
+        // each landing and invalidating the list. Past the cap a group simply
+        // draws its header with nothing under it and asks again the next time it
+        // appears, which is what scrolling to it does.
+        guard unreadGroupFetches.count < Self.concurrentUnreadFetches else { return }
         guard unreadGroupFetches.insert(channelID).inserted else { return }
         Task { [weak self] in
             guard let self else { return }

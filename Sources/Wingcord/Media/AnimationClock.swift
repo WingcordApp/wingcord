@@ -37,6 +37,26 @@ final class AnimationClock {
     /// image resolves its current frame against.
     private(set) var time: Double = 0
 
+    /// Whether animated emoji play at all.
+    ///
+    /// **Both answers, resolved together**, which is the rule `ProseText`
+    /// already follows: `playsAnimatedContent` is the reader's battery
+    /// preference — its own label is "Play animated emoji and avatars" — and
+    /// Reduce Motion is the system's. Either one turns them off.
+    ///
+    /// Named here rather than restated at each call site because it is asked in
+    /// three places that have no SwiftUI environment to read `\.motion` from:
+    /// the prefetch that decides whether to decode a filmstrip at all, and the
+    /// two drawn canvases that decide whether to subscribe to this clock for it.
+    ///
+    /// **Scoped to emoji.** Stickers and GIF attachments in the transcript have
+    /// always played regardless, and quietly changing that is a behaviour change
+    /// nobody asked for; the setting's own label names emoji and avatars.
+    static var playsAnimatedEmoji: Bool {
+        AppSettings.shared.playsAnimatedContent
+            && !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+    }
+
     private var link: CADisplayLink?
     private var subscribers: [ObjectIdentifier: Subscriber] = [:]
 

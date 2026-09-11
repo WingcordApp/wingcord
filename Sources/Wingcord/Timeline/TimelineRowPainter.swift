@@ -318,6 +318,7 @@ nonisolated enum TimelineRowPainter {
                 style: style,
                 images: images,
                 scale: scale,
+                time: state.animationTime,
                 revealedSpoilers: state.revealedSpoilers
             )
         }
@@ -508,6 +509,9 @@ nonisolated enum TimelineRowPainter {
         style: MessageTextStyle,
         images: ImageStore,
         scale: CGFloat,
+        /// The shared clock, so an animated custom emoji resolves to the frame
+        /// every other moving picture on this canvas is showing.
+        time: Double,
         revealedSpoilers: Set<Int>
     ) {
         context.saveGState()
@@ -523,11 +527,20 @@ nonisolated enum TimelineRowPainter {
             guard let url = entry.emoji.id.flatMap({
                 CDN.emoji(id: $0, animated: entry.emoji.isAnimated, side: frame.width)
             }) else { continue }
-            let key = ImageStore.Key(
-                url: url,
-                maximumPixelSize: Int((frame.width * scale).rounded(.up))
-            )
-            if let image = images.cached(key) {
+            let pixels = Int((frame.width * scale).rounded(.up))
+            let key = ImageStore.Key(url: url, maximumPixelSize: pixels)
+            // **The filmstrip first for an animated one**, exactly as a sticker
+            // resolves — see `stickerFrame`. Without this every `<a:name:id>` in
+            // the transcript sat on frame zero forever: the URL was already the
+            // `.gif`, and `ImageStore` decodes one frame of it. The still below
+            // is still the fallback, because it is what is on screen while the
+            // strip decodes.
+            let animated: CGImage? = entry.emoji.isAnimated
+                ? AnimatedImageStore.shared
+                    .cached(AnimatedImageStore.Key(url: url, maximumPixelSize: pixels))
+                    .map { $0.frames[$0.index(at: time)] }
+                : nil
+            if let image = animated ?? images.cached(key) {
                 // **Flipped, like every other picture this file draws.** Core
                 // Graphics origins an image bottom-left and the canvas is
                 // top-left, so an unflipped `draw` puts every custom emoji in

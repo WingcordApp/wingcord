@@ -32,13 +32,19 @@ struct InboxFlyout: View {
     /// laid-out row in every surface for it. See `PinnedMessagesPane`.
     @State private var artworkGeneration: UInt64 = 0
 
-    /// Wide enough that an embed gets its natural width.
+    /// Wide enough for the tab strip, which is what actually sets this.
     ///
-    /// `Metrics.embedMaxWidth` is 432, and a card laid out narrower than that
-    /// squeezes every embed in the list — which is most of what a bot posts, and
-    /// most of what an inbox holds. 520 leaves 472 for the card after both sets
-    /// of insets, which clears it.
-    static let width: CGFloat = 520
+    /// **Measured against the control, not chosen.** `SegmentedPicker` sizes each
+    /// segment as its rendered label plus a fixed 40 points of air; the five
+    /// titles here come to roughly 310 points of text, so the strip wants about
+    /// 510 and the panel has to clear that plus its own 32 points of margin.
+    /// At 520 it overflowed and the strip drew flush to both edges, which is
+    /// what shipped.
+    ///
+    /// It comfortably clears the other constraint too: `Metrics.embedMaxWidth`
+    /// is 432, and a card laid out narrower squeezes every embed in the list —
+    /// which is most of what a bot posts and most of what an inbox holds.
+    static let width: CGFloat = 580
     /// See the note on the frame below.
     private static let minimumHeight: CGFloat = 360
     private static let maximumHeight: CGFloat = 560
@@ -281,7 +287,8 @@ struct InboxFlyout: View {
         let requests = TimelineImageRequests.requests(
             for: rows,
             scale: 2,
-            loadsArtwork: AppSettings.shared.loadsImagesAutomatically
+            loadsArtwork: AppSettings.shared.loadsImagesAutomatically,
+            playsAnimatedEmoji: AnimationClock.playsAnimatedEmoji
         )
         guard !requests.isEmpty else { return }
         await ScrollWorkGate.waitUntilInactive()

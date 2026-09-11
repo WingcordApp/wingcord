@@ -241,24 +241,51 @@ extension AppModel {
         let engine = TimelineLayoutEngine(presentationRevision: presentationRevision)
         let mentions = mentionContext()
 
-        return channels.compactMap { channel in
+        return channels.enumerated().compactMap { index, channel in
             // **Only what is actually unread, and only what is already loaded.**
             // The bodies come from the transcript's own box when the channel has
             // been opened this session and are fetched otherwise — by the row,
             // when it appears. A tab that fetched every unread channel up front
             // would make sixty requests on open.
-            let acknowledged = readStates[channel.id]?.lastAcknowledgedID?.rawValue ?? 0
+            let anchor = readStates[channel.id]?.lastAcknowledgedID
+            // **`prefix`, not `suffix` — the OLDEST unread first.** Checked
+            // against `unreads.har`: Discord anchors its `?around=` on the read
+            // cursor and reads forward from it, so the first thing under the
+            // header is the first message the reader has not seen. Taking the
+            // last twelve instead shows the newest and silently hides the gap
+            // the reader opened the tab to close.
             let unread = (messageBoxes[channel.id]?.messages ?? [])
-                .filter { $0.id.rawValue > acknowledged }
-                .suffix(Self.unreadsPerChannel)
-            return group(
-                for: channel,
-                rows: Array(unread),
+                .filter { $0.id.rawValue > (anchor?.rawValue ?? 0) }
+                .prefix(Self.unreadsPerChannel)
+
+            // **One excerpt, not one card per message.** A card stands alone and
+            // forces `[.head, .tail]`, so four consecutive lines from one person
+            // repeat the avatar, the name and the timestamp four times. The
+            // excerpt runs them through `TimelineReducer`, which is the app's
+            // one definition of a run.
+            let card = MessageCard.excerpt(
+                of: Array(unread),
+                unreadAnchor: anchor,
                 width: width,
                 engine: engine,
                 style: style,
                 settings: settings,
-                mentions: mentions
+                mentions: mentions,
+                mentionedIDs: mentionableIDs,
+                channelName: displayName(of: channel),
+                authors: authorInfo(
+                    for: unread.map {
+                        TimelineItem.message(TimelineMessage(message: $0, flags: []))
+                    },
+                    authorFont: style.authorFont
+                )
+            )
+            return header(
+                for: channel,
+                occurrence: index,
+                rows: card.map {
+                    [InboxRow(id: $0.id, card: $0, channelID: channel.id)]
+                } ?? []
             )
         }
     }
@@ -270,6 +297,13 @@ extension AppModel {
 
     // MARK: Building a group
 
+    /// A run of independent messages — mentions — each as its own card.
+    ///
+    /// **Standalone cards here, an excerpt in Unreads**, and the split is what
+    /// each tab needs rather than an inconsistency: a mention carries a per-row
+    /// action and is usually the only message from its author in the run, so it
+    /// earns its own header; an unread channel is a stretch of transcript and
+    /// wants the transcript's run grouping.
     private func messageGroups(
         _ runs: [[Message]],
         width: CGFloat,
@@ -280,17 +314,24 @@ extension AppModel {
         let settings = PresentationRevision.shared.timeline
         let engine = TimelineLayoutEngine(presentationRevision: presentationRevision)
         let mentions = mentionContext()
+        var seen: [ChannelID: Int] = [:]
         return runs.compactMap { run in
             guard let first = run.first else { return nil }
-            return group(
-                for: channelIndex[first.channelID],
-                fallbackChannelID: first.channelID,
-                rows: run,
-                width: width,
-                engine: engine,
-                style: style,
-                settings: settings,
-                mentions: mentions
+            let channelID = first.channelID
+            let occurrence = seen[channelID, default: 0]
+            seen[channelID] = occurrence + 1
+            return header(
+                for: channelIndex[channelID],
+                fallbackChannelID: channelID,
+                occurrence: occurrence,
+                rows: cards(
+                    for: run,
+                    width: width,
+                    engine: engine,
+                    style: style,
+                    settings: settings,
+                    mentions: mentions
+                )
             )
         }
     }
@@ -305,38 +346,40 @@ extension AppModel {
         let settings = PresentationRevision.shared.timeline
         let engine = TimelineLayoutEngine(presentationRevision: presentationRevision)
         let mentions = mentionContext()
+        var seen: [ChannelID: Int] = [:]
         return runs.compactMap { run in
             guard let first = run.first else { return nil }
             let channelID = first.saveData.channelID
-            let channel = channelIndex[channelID]
-            var built = group(
-                for: channel,
-                fallbackChannelID: channelID,
-                rows: run.compactMap(\.message),
+            let occurrence = seen[channelID, default: 0]
+            seen[channelID] = occurrence + 1
+            // **Built from the saves, not from the messages.** A save whose
+            // message is gone has nothing to lay out and must still be drawn —
+            // it is the only place the reader can take the bookmark off.
+            let laidOut = cards(
+                for: run.compactMap(\.message),
                 width: width,
                 engine: engine,
                 style: style,
                 settings: settings,
                 mentions: mentions
             )
-            // **Re-built from the saves, not from the messages**, because a
-            // save whose message is gone has no message to build a row from and
-            // must still be drawn — it is the only place it can be removed.
-            var rows: [InboxRow] = []
-            rows.reserveCapacity(run.count)
-            for item in run {
-                let card = built?.rows.first { $0.id == item.id }?.card
-                rows.append(
+            let byID = Dictionary(
+                laidOut.map { ($0.id, $0.card) },
+                uniquingKeysWith: { first, _ in first }
+            )
+            return header(
+                for: channelIndex[channelID],
+                fallbackChannelID: channelID,
+                occurrence: occurrence,
+                rows: run.map { item in
                     InboxRow(
                         id: item.id,
-                        card: card,
+                        card: byID[item.id] ?? nil,
                         channelID: channelID,
                         dueAt: item.saveData.dueAt
                     )
-                )
-            }
-            built?.rows = rows
-            return built
+                }
+            )
         }
     }
 
@@ -353,19 +396,15 @@ extension AppModel {
                 runs.append([message])
             }
         }
+        var seen: [ChannelID: Int] = [:]
         return runs.compactMap { run in
             guard let first = run.first else { return nil }
-            let channel = channelIndex[first.channelID]
-            return InboxGroup(
-                id: InboxGroupID(channelID: first.channelID, leadID: first.id.rawValue),
-                channelID: first.channelID,
-                name: channel.map(displayName(of:)) ?? "Unknown channel",
-                symbolName: headerSymbol(for: channel),
-                breadcrumb: channel.flatMap(breadcrumb(for:)),
-                iconURL: channel.flatMap(headerIcon(for:)),
-                monogram: channel.map(headerMonogram(for:)) ?? "?",
-                mentionCount: 0,
-                canOpen: channel != nil,
+            let occurrence = seen[first.channelID, default: 0]
+            seen[first.channelID] = occurrence + 1
+            return header(
+                for: channelIndex[first.channelID],
+                fallbackChannelID: first.channelID,
+                occurrence: occurrence,
                 rows: run.map {
                     InboxRow(
                         id: $0.id,
@@ -380,47 +419,56 @@ extension AppModel {
         }
     }
 
-    /// One header plus its laid-out messages.
+    /// One standalone card per message.
     ///
     /// - Parameter engine: shared across the whole list, so the pass pays for
     ///   one engine rather than one per group.
-    private func group(
-        for channel: Channel?,
-        fallbackChannelID: ChannelID? = nil,
-        rows: [Message],
+    private func cards(
+        for messages: [Message],
         width: CGFloat,
         engine: TimelineLayoutEngine,
         style: MessageTextStyle,
         settings: TimelineSettings,
         mentions: MentionContext
-    ) -> InboxGroup? {
-        guard let channelID = channel?.id ?? fallbackChannelID else { return nil }
+    ) -> [InboxRow] {
+        guard let channelID = messages.first?.channelID else { return [] }
         // **The channel name is per group, not per list.** The pins pane can
         // resolve one name for its whole set because every pin is in one
         // channel; an inbox spans dozens, and a single name would label every
         // `#channel` chip in the flyout with whichever one came first.
-        let channelName = channel.map(displayName(of:)) ?? ""
-        let items = rows.map {
+        let channelName = channelIndex[channelID].map(displayName(of:)) ?? ""
+        let items = messages.map {
             TimelineItem.message(TimelineMessage(message: $0, flags: [.head, .tail]))
         }
         let authors = authorInfo(for: items, authorFont: style.authorFont)
-        let cards = rows.map { message in
-            MessageCard.card(
-                for: message,
-                width: width,
-                engine: engine,
-                style: style,
-                settings: settings,
-                mentions: mentions,
-                channelName: channelName,
-                authors: authors
+        return messages.map { message in
+            InboxRow(
+                id: message.id,
+                card: MessageCard.card(
+                    for: message,
+                    width: width,
+                    engine: engine,
+                    style: style,
+                    settings: settings,
+                    mentions: mentions,
+                    channelName: channelName,
+                    authors: authors
+                ),
+                channelID: message.channelID
             )
         }
+    }
+
+    /// The header over a group, with rows the caller has already built.
+    private func header(
+        for channel: Channel?,
+        fallbackChannelID: ChannelID? = nil,
+        occurrence: Int,
+        rows: [InboxRow]
+    ) -> InboxGroup? {
+        guard let channelID = channel?.id ?? fallbackChannelID else { return nil }
         return InboxGroup(
-            id: InboxGroupID(
-                channelID: channelID,
-                leadID: rows.first?.id.rawValue ?? 0
-            ),
+            id: InboxGroupID(channelID: channelID, occurrence: occurrence),
             channelID: channelID,
             name: channel.map(displayName(of:)) ?? "Unknown channel",
             symbolName: headerSymbol(for: channel),
@@ -429,9 +477,7 @@ extension AppModel {
             monogram: channel.map(headerMonogram(for:)) ?? "?",
             mentionCount: readStates[channelID].map { $0.isMuted ? 0 : $0.mentionCount } ?? 0,
             canOpen: channel != nil,
-            rows: zip(rows, cards).map { message, card in
-                InboxRow(id: message.id, card: card, channelID: channelID)
-            }
+            rows: rows
         )
     }
 

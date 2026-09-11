@@ -9,10 +9,11 @@ import WingcordCore
 /// exists. What changes per tab is the trailing control and the row's own
 /// accessory, and both are switched on `tab` in one place each.
 ///
-/// **Structure, not glass.** This sits on the panel's ground rather than
-/// floating over content, so it takes `.structuralSurface()` with a hairline —
-/// `INVARIANTS.md` §4 rule 3, and the same treatment the discovery cards get.
-/// Glass here would be a material over a material.
+/// **A flat fill and a hairline — not glass, and not a material either.** This
+/// sits on the popover's own backdrop, so `.glassEffect` would be glass on glass
+/// (§4 rule 2) and `.structuralSurface()` would be two materials in series. The
+/// discovery cards take the material because they sit on the opaque reading
+/// surface, where there is no first one. See `Palette.groupedFill`.
 struct InboxGroupCard: View {
     var group: InboxGroup
     var tab: InboxTab
@@ -301,11 +302,14 @@ struct InboxMessageRow: View {
                 }
             case .unreads:
                 // Marking read is the group's act, not the message's — Discord
-                // has no per-message read cursor.
-                Color.clear
+                // has no per-message read cursor. **Nothing, and no reserved
+                // column either**: the excerpt below is one block for the whole
+                // channel, so a 24-point gutter beside it is 24 points taken off
+                // every embed in the tab for a control that does not exist.
+                EmptyView()
             }
         }
-        .frame(width: 24, height: 24)
+        .frame(width: tab == .unreads ? 0 : 24, height: 24)
         .opacity(isHovering ? 1 : 0)
         .animation(motion.fadeQuick, value: isHovering)
         // Hidden from the pointer as well as from the eye, so an invisible

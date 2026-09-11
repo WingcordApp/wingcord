@@ -911,6 +911,7 @@ final class TimelineCoordinator: NSObject {
             for: rows,
             scale: canvas.window?.backingScaleFactor ?? 2,
             loadsArtwork: AppSettings.shared.loadsImagesAutomatically,
+            playsAnimatedEmoji: AnimationClock.playsAnimatedEmoji,
             onActivityIcon: { [weak model] in model?.sessionController.deriveActivityAccent($0) }
         )
     }

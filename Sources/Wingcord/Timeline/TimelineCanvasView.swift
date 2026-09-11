@@ -190,7 +190,7 @@ final class TimelineCanvasView: NSView {
     /// first one's repaint mark the second as up to date — so the second would
     /// sit on whichever frame it happened to land on.
     struct FilmSlot: Hashable {
-        enum Kind: UInt8 { case sticker, attachment, embed }
+        enum Kind: UInt8 { case sticker, attachment, embed, emoji }
         var messageID: MessageID
         var kind: Kind
         var index: Int
@@ -327,6 +327,16 @@ final class TimelineCanvasView: NSView {
             for embed in row.embeds where embed.images.contains(where: \.isAnimated) {
                 return true
             }
+            // **Custom emoji in the message body, which used not to count.**
+            // They were the one moving picture the transcript drew as a still —
+            // documented as out of scope at the time and asked for since. The
+            // tag carries `isAnimated`, so a message of ordinary Unicode emoji
+            // costs nothing here.
+            if AnimationClock.playsAnimatedEmoji,
+               row.textBlock?.emojiRects.contains(where: { $0.emoji.isAnimated }) == true
+            {
+                return true
+            }
         }
         return false
     }
@@ -383,6 +393,24 @@ final class TimelineCanvasView: NSView {
                     key: FilmSlot(messageID: row.id, kind: .attachment, index: offset),
                     rowOrigin: origin
                 )
+            }
+            if let block = row.textBlock {
+                let textOrigin = CGPoint(
+                    x: origin.x + row.textOrigin.x,
+                    y: origin.y + row.textOrigin.y
+                )
+                for (offset, entry) in block.emojiRects.enumerated()
+                where entry.emoji.isAnimated {
+                    advance(
+                        url: entry.emoji.id.flatMap {
+                            CDN.emoji(id: $0, animated: true, side: entry.rect.width)
+                        },
+                        box: entry.rect,
+                        decodeWidth: entry.rect.width,
+                        key: FilmSlot(messageID: row.id, kind: .emoji, index: offset),
+                        rowOrigin: textOrigin
+                    )
+                }
             }
             var embedImage = 0
             for embed in row.embeds {

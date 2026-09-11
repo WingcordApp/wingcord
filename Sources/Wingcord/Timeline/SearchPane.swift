@@ -196,7 +196,8 @@ struct SearchPane: View {
         let requests = TimelineImageRequests.requests(
             for: cards.flatMap(\.card.messageRows),
             scale: 2,
-            loadsArtwork: AppSettings.shared.loadsImagesAutomatically
+            loadsArtwork: AppSettings.shared.loadsImagesAutomatically,
+            playsAnimatedEmoji: AnimationClock.playsAnimatedEmoji
         )
         guard !requests.isEmpty else { return }
         await ScrollWorkGate.waitUntilInactive()
