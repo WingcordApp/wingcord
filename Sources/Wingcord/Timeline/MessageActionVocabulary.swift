@@ -18,6 +18,9 @@ enum MessageActionKind: Hashable, Sendable, Identifiable, CaseIterable {
     case copyLink
     case bookmark
     case unbookmark
+    /// Sets a time to be nudged about a message. The same act as a bookmark
+    /// with one field set — see `MessageActions.remindMe`.
+    case remindMe
     /// Opens the list of what an installed app can do to this message.
     case apps
     case report
@@ -41,6 +44,7 @@ enum MessageActionKind: Hashable, Sendable, Identifiable, CaseIterable {
         case .copyLink: "Copy Message Link"
         case .bookmark: "Bookmark Message"
         case .unbookmark: "Remove Bookmark"
+        case .remindMe: "Create Reminder"
         case .apps: "Apps"
         case .report: "Report Message"
         case .delete: "Delete Message"
@@ -62,6 +66,7 @@ enum MessageActionKind: Hashable, Sendable, Identifiable, CaseIterable {
         case .copyLink: "link"
         case .bookmark: "bookmark"
         case .unbookmark: "bookmark.slash"
+        case .remindMe: "bell"
         case .apps: "square.grid.2x2"
         case .report: "flag"
         case .delete: "trash"
@@ -79,7 +84,7 @@ enum MessageActionKind: Hashable, Sendable, Identifiable, CaseIterable {
     /// looks different from one that acts.
     var opensSurface: Bool {
         switch self {
-        case .react, .forward, .report, .apps: true
+        case .react, .forward, .report, .apps, .remindMe: true
         default: false
         }
     }
@@ -99,6 +104,7 @@ enum MessageActionKind: Hashable, Sendable, Identifiable, CaseIterable {
         case .copyLink: .copyLink
         case .bookmark: .bookmark
         case .unbookmark: .unbookmark
+        case .remindMe: .remindMe
         // **Nothing gates it in the permission table.** Whether the row is
         // offered is whether an app actually has something for a message —
         // a question about the command index rather than about permissions,
@@ -147,7 +153,7 @@ extension MessageActions {
         let groups: [[MessageActionKind]] = [
             [.react],
             [.reply, .forward, .edit],
-            [.copyText, .pin, .unpin, .bookmark, .unbookmark, .markUnread, .copyLink],
+            [.copyText, .pin, .unpin, .bookmark, .unbookmark, .remindMe, .markUnread, .copyLink],
             [.report],
             [.delete],
             [.copyID],

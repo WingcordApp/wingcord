@@ -93,6 +93,20 @@ nonisolated enum Palette {
     /// painted panel, which is the thing it is being rescued from.
     static let flyoutTint = Color.white.opacity(0.08)
 
+    /// A grouped container *inside* a presentation — the inbox's channel cards.
+    ///
+    /// **A flat fill, and deliberately not `.structuralSurface()`.** That
+    /// modifier is `.ultraThinMaterial`, which is right on the opaque reading
+    /// surface where the discovery cards live and wrong here for two reasons:
+    /// a popover already paints a material behind the whole of its content
+    /// (§1), so a second one is two in series; and a material inside a subtree
+    /// an animation rasterises paints black (§1.5), which a scrolling list of
+    /// hoverable cards is a good way to discover.
+    ///
+    /// Below `hoverFill` (0.07) on purpose, so hovering a card still reads as a
+    /// step up from its own ground rather than as a change of shade.
+    static let groupedFill = Color.white.opacity(0.04)
+
     /// The ground under a custom status bubble, and under its tail.
     ///
     /// **A fixed scrim rather than a material.** It sits over a banner the

@@ -1169,7 +1169,7 @@ extension DiscordREST {
         guard (200..<300).contains(status) else {
             throw Self.apiFailure(status: status, data: data)
         }
-        let payload = try decoder.decode(MemberSearchDTO.self, from: data)
+        let payload = try Self.decoder.decode(MemberSearchDTO.self, from: data)
         return (payload.members?.compactMap(\.domain) ?? [], payload.total_result_count ?? 0)
     }
 

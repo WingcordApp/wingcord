@@ -91,7 +91,7 @@ extension DiscordREST {
         // this body as a page yields zero results and no error at all, which is
         // the client telling somebody their server is empty.
         if status == 202 {
-            let notice = try? decoder.decode(SearchIndexingDTO.self, from: data)
+            let notice = try? Self.decoder.decode(SearchIndexingDTO.self, from: data)
             throw SearchIndexing(
                 retryAfter: notice?.retry_after ?? 1,
                 documentsIndexed: notice?.documents_indexed
@@ -102,7 +102,7 @@ extension DiscordREST {
         }
 
         do {
-            return try decoder.decode(MessageSearchDTO.self, from: data).domain
+            return try Self.decoder.decode(MessageSearchDTO.self, from: data).domain
         } catch {
             throw Failure.decoding(String(describing: error))
         }

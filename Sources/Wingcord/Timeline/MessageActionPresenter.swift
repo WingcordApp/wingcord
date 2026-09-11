@@ -48,16 +48,28 @@ struct MessageActionPresenter: ViewModifier {
                     // than rebuilt inside: the menu holds no model reference
                     // beyond the environment and has no business deciding
                     // what a right-click was on.
-                    appTarget: .message(request.messageID, in: request.channelID)
-                ) { kind in
-                    MessageActionRouter.perform(
-                        kind,
-                        messageID: request.messageID,
-                        channelID: request.channelID,
-                        model: model,
-                        anchor: request.anchor
-                    )
-                }
+                    appTarget: .message(request.messageID, in: request.channelID),
+                    perform: { kind in
+                        MessageActionRouter.perform(
+                            kind,
+                            messageID: request.messageID,
+                            channelID: request.channelID,
+                            model: model,
+                            anchor: request.anchor
+                        )
+                    },
+                    // Passed rather than routed through `MessageActionRouter`,
+                    // because it carries a value the router's signature has no
+                    // room for: the router turns a *kind* into a call, and a
+                    // reminder needs the duration that was chosen.
+                    setReminder: { preset in
+                        model.setReminder(
+                            preset,
+                            on: request.messageID,
+                            in: request.channelID
+                        )
+                    }
+                )
                 // The menu carries its own material, so the popover must carry
                 // none — two in series read as frost rather than as glass.
                 .presentationBackground(.clear)

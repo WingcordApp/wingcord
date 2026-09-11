@@ -1252,17 +1252,25 @@ public struct ClientSettings: Sendable {
     public var guildPositions: [GuildID] = []
     public var status: PresenceStatus
     public var customStatus: String?
+    /// Which inbox tab the account had open last, across every client.
+    ///
+    /// Defaults to `.fallback` rather than being optional: an account that has
+    /// never opened the inbox has no stored tab, and "none" and "Unreads" are
+    /// the same answer to the only question anybody asks of this.
+    public var inboxTab: InboxTab = .fallback
 
     public init(
         folders: [GuildFolder],
         guildPositions: [GuildID] = [],
         status: PresenceStatus,
-        customStatus: String?
+        customStatus: String?,
+        inboxTab: InboxTab = .fallback
     ) {
         self.folders = folders
         self.guildPositions = guildPositions
         self.status = status
         self.customStatus = customStatus
+        self.inboxTab = inboxTab
     }
 }
 

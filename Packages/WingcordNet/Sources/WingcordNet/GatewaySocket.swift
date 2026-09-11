@@ -104,20 +104,13 @@ public actor GatewaySocket {
     private var continuation: AsyncStream<Event>.Continuation?
     public private(set) var events: AsyncStream<Event>!
 
-    private let decoder: JSONDecoder = {
-        let decoder = JSONDecoder()
-        decoder.dateDecodingStrategy = .custom { decoder in
-            let container = try decoder.singleValueContainer()
-            let text = try container.decode(String.self)
-            if let date = ISO8601DateFormatter.withFraction.date(from: text) { return date }
-            if let date = ISO8601DateFormatter.plain.date(from: text) { return date }
-            throw DecodingError.dataCorruptedError(
-                in: container,
-                debugDescription: "unrecognised timestamp: \(text)"
-            )
-        }
-        return decoder
-    }()
+    /// **`DiscordREST`'s, not a second one.** This was a byte-identical copy of
+    /// that decoder — the same two-spelling date strategy, for the same reason —
+    /// and two definitions of how Discord's timestamps are read is one more than
+    /// can be kept in step. The socket and the REST client decode the same
+    /// objects off the same API; a fix to one that missed the other would show
+    /// up as a field that parses over HTTP and not over the socket.
+    private var decoder: JSONDecoder { DiscordREST.decoder }
 
     public init(metadata: ClientMetadata = ClientMetadata()) {
         self.metadata = metadata
@@ -1156,6 +1149,13 @@ public struct ReadySnapshot: Sendable {
     /// which is why it lives beside `notes` rather than on `User`, where a
     /// merge from a guild payload would overwrite it.
     public var friendNicknames: [UserID: String]
+    /// When each outstanding request was made, and Discord's two flags on it.
+    ///
+    /// **Sparse on purpose.** Only relationships with something to say carry an
+    /// entry — see `RelationshipFacts.isNoteworthy` — so an account with two
+    /// thousand friends and one pending request stores one row rather than two
+    /// thousand and one.
+    public var relationshipFacts: [UserID: RelationshipFacts]
     /// The account's private notes about people. READY carries the whole set,
     /// which is why the profile card never has to fetch one.
     public var notes: [UserID: String]
@@ -1279,10 +1279,12 @@ public struct ReadySnapshot: Sendable {
         var ignoredUserIDs: Set<UserID> = []
         var relationships: [UserID: Relationship] = [:]
         var friendNicknames: [UserID: String] = [:]
+        var relationshipFacts: [UserID: RelationshipFacts] = [:]
         for relationship in payload.relationships ?? [] {
             if let userDTO = relationship.user { users[userDTO.id] = userDTO.domain }
             let kind = Relationship(rawValue: relationship.type ?? 0)
             if kind != .none { relationships[relationship.id] = kind }
+            if let facts = relationship.facts { relationshipFacts[relationship.id] = facts }
             if let nickname = relationship.nickname, !nickname.isEmpty {
                 friendNicknames[relationship.id] = nickname
             }
@@ -1296,6 +1298,7 @@ public struct ReadySnapshot: Sendable {
         self.ignoredUserIDs = ignoredUserIDs
         self.relationships = relationships
         self.friendNicknames = friendNicknames
+        self.relationshipFacts = relationshipFacts
         // **A dictionary of ids to strings, straight off READY.** There is no
         // route this client needs for reading one: the whole set arrives with
         // the bootstrap, so a profile card opens with the note already in it.
@@ -1481,10 +1484,19 @@ public enum GatewayUpdate: Sendable {
     case memberListUpdated(GuildID, members: [UserID: Member], users: [UserID: User], presences: [UserID: Presence])
     case channelAcknowledged(ChannelID, messageID: MessageID?, mentionCount: Int)
     case currentUserUpdated(User)
+    /// A mention was acknowledged somewhere. The inbox drops the row.
+    case recentMentionDeleted(MessageID)
+    /// A message was bookmarked or a reminder set — here, or elsewhere.
+    ///
+    /// Carries the author because the saved message arrives whole, and a
+    /// bookmark set on a phone points at a message this window may never have
+    /// loaded: without the author the row draws "Unknown" over a grey circle.
+    case savedMessageAdded(SavedMessage, author: User?)
+    case savedMessageRemoved(channelID: ChannelID, messageID: MessageID)
     /// A relationship arrived or went. `kind` is `.none` for a removal, which is
     /// the same thing the table says by not holding an entry.
     case relationshipChanged(
-        UserID, kind: Relationship, isIgnored: Bool, user: User?
+        UserID, kind: Relationship, isIgnored: Bool, user: User?, facts: RelationshipFacts?
     )
     /// The reader renamed somebody, or cleared the name — here or elsewhere.
     ///
@@ -1756,12 +1768,24 @@ public enum GatewayUpdate: Sendable {
             )
         case .userUpdate(let dto):
             self = .currentUserUpdated(dto.domain)
+        case .recentMentionDelete(let dto):
+            self = .recentMentionDeleted(dto.message_id)
+        case .savedMessageCreate(let dto):
+            // A save whose `save_data` could not be read is dropped rather than
+            // invented: without the channel there is nothing to address the
+            // unsave route with, and a row that cannot be removed is worse than
+            // a row that never appeared.
+            guard let resolved = dto.domain() else { return nil }
+            self = .savedMessageAdded(resolved.saved, author: resolved.author)
+        case .savedMessageDelete(let dto):
+            self = .savedMessageRemoved(channelID: dto.channel_id, messageID: dto.message_id)
         case .relationshipAdd(let dto):
             self = .relationshipChanged(
                 dto.id,
                 kind: Relationship(rawValue: dto.type ?? 0),
                 isIgnored: dto.is_ignored ?? false,
-                user: dto.user?.domain
+                user: dto.user?.domain,
+                facts: dto.facts
             )
         case .voiceStateUpdate(let dto):
             guard let state = dto.domain else { return nil }
@@ -1866,7 +1890,7 @@ public enum GatewayUpdate: Sendable {
             // event is normalised to `.none` here rather than at the store,
             // where the distinction would have to be remembered.
             self = .relationshipChanged(
-                dto.id, kind: .none, isIgnored: false, user: nil
+                dto.id, kind: .none, isIgnored: false, user: nil, facts: nil
             )
         case .relationshipUpdate(let dto):
             // **Empty is cleared.** The route takes `null` to clear and the

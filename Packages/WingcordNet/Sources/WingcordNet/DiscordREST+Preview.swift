@@ -121,7 +121,7 @@ extension DiscordREST {
             headers: Self.contextProperties(source: source ?? location)
         )
         guard !data.isEmpty else { return nil }
-        return try? decoder.decode(GuildDTO.self, from: data).domain
+        return try? Self.decoder.decode(GuildDTO.self, from: data).domain
     }
 
     /// Stops previewing, or leaves for real.

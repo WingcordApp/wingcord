@@ -388,6 +388,14 @@ final class AppModel {
     /// one: the pinned pane and the search panel are open at the same time on a
     /// wide window, and one cache would be cleared by whichever drew last.
     var searchCardCache: (key: SearchCardKey, messages: [Message], value: [SearchResultCard])?
+    /// The inbox's five lists, the pane it is on, and what it has fetched.
+    /// See `InboxState`.
+    var inbox = InboxState()
+    /// The inbox's laid-out groups, memoised. `@ObservationIgnored` for the
+    /// reason every other memo here is: it is derived, and publishing it would
+    /// invalidate the flyout on the write that fills it.
+    @ObservationIgnored
+    var inboxCardCache: (key: InboxCardKey, value: [InboxGroup])?
 
     /// Reactions being written, as `(message, emoji)`. Keyed so two chips on one
     /// message can be pressed in either order without one cancelling the other.
@@ -414,6 +422,15 @@ final class AppModel {
     /// entry is `.none`, which is what the table already says — storing every
     /// stranger as `.none` would be a row per person the reader has ever seen.
     var relationships: [UserID: Relationship] = [:]
+    /// When each outstanding friend request was made, and Discord's two flags
+    /// on it.
+    ///
+    /// **Beside `relationships` rather than folded into it**, exactly as
+    /// `notes` and `friendNicknames` are: the relationship is one slot compared
+    /// and switched on by the thousand, and these are three facts that matter
+    /// on one surface for the handful of people with a request outstanding.
+    /// Sparse — only relationships with something to say hold a row.
+    var relationshipFacts: [UserID: RelationshipFacts] = [:]
     /// The reader's private notes, straight off READY. Nobody else can see one,
     /// and no route is needed to read one back.
     var notes: [UserID: String] = [:]

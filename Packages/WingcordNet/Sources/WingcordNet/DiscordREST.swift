@@ -53,7 +53,20 @@ public actor DiscordREST {
     /// `JSONDecoder` is not cheap to construct — it builds a date strategy and a
     /// key strategy each time — and a history page decode that allocates one per
     /// call pays for it on every page.
-    let decoder: JSONDecoder = {
+    ///
+    /// **`static`, so it really is one for the process** rather than one per
+    /// client, and so the decode tests can use the same instance production
+    /// does. That second reason is not convenience: the date strategy below is
+    /// the only thing that reads Discord's two timestamp spellings, and a test
+    /// that reached for a bare `JSONDecoder()` would be asserting against a
+    /// decoder the app never uses — passing on fixtures the client cannot
+    /// actually read.
+    ///
+    /// No `nonisolated(unsafe)`: `JSONDecoder` is `Sendable` under the current
+    /// SDK, and the compiler rejects the annotation as unnecessary on a
+    /// constant of a `Sendable` type. Nothing mutates its strategies after this
+    /// closure returns, which is what makes sharing it safe either way.
+    public static let decoder: JSONDecoder = {
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .custom { decoder in
             let container = try decoder.singleValueContainer()
@@ -281,28 +294,13 @@ public actor DiscordREST {
         // response is the only place this client ever learns who wrote an old
         // message: READY carries the reader's own member record and their
         // friends, and nothing else. Dropping them leaves every name in the
-        // transcript reading "Unknown" over a "?" avatar.
-        var authors: [UserID: User] = [:]
-        for dto in page {
-            if let author = dto.author { authors[author.id] = author.domain }
-            // **And whoever each reply quotes.** The quoted author is often on
-            // no page the reader loaded and in no roster the guild sent, and
-            // without them the reply header draws "Unknown" over a grey circle.
-            // Never *over* a real author record — a quoted user object is as
-            // thin as a roster one.
-            if let quoted = dto.quotedAuthor, authors[quoted.id] == nil {
-                authors[quoted.id] = quoted.domain
-            }
-        }
-
+        // transcript reading "Unknown" over a "?" avatar. Whoever each reply
+        // quotes comes too — see `page(from:reversed:)`.
+        //
         // Discord returns newest first; the store keeps oldest first, and
-        // reversing here means no surface ever has to remember which way round
+        // reversing there means no surface ever has to remember which way round
         // a page arrived.
-        return MessagePage(
-            messages: page.reversed().map(\.domain),
-            authors: authors,
-            threads: page.compactMap { $0.thread?.domain() }
-        )
+        return Self.page(from: page, reversed: true)
     }
 
     /// - Parameter stickerIDs: Stickers to send. Discord accepts a message with
@@ -519,7 +517,7 @@ public actor DiscordREST {
         // unknown. See `traceProfileShape`.
         if route == "users/{id}/profile" { Self.traceProfileShape(data) }
         do {
-            return try decoder.decode(T.self, from: data)
+            return try Self.decoder.decode(T.self, from: data)
         } catch {
             Self.log.error("decode failed for \(route, privacy: .public): \(error)")
             throw Failure.decoding(String(describing: error))
@@ -850,7 +848,7 @@ public actor DiscordREST {
             }
         }
         do {
-            return try decoder.decode(T.self, from: data)
+            return try Self.decoder.decode(T.self, from: data)
         } catch {
             Self.log.error("decode failed for \(route, privacy: .public): \(error)")
             throw Failure.decoding(String(describing: error))
@@ -1109,7 +1107,7 @@ extension DiscordREST {
         )
         guard !data.isEmpty else { return ServerGuide(guildID: guildID, isEnabled: false) }
         do {
-            return try decoder.decode(NewMemberWelcomeDTO.self, from: data).domain(guildID: guildID)
+            return try Self.decoder.decode(NewMemberWelcomeDTO.self, from: data).domain(guildID: guildID)
         } catch {
             throw Failure.decoding(String(describing: error))
         }
@@ -1182,7 +1180,7 @@ extension DiscordREST {
             route: "guilds/{id}/onboarding-responses",
             body: OnboardingResponsesBody(responses: optionIDs, prompts: prompts)
         )
-        return (try? decoder.decode(OnboardingResponsesDTO.self, from: data))?.responses
+        return (try? Self.decoder.decode(OnboardingResponsesDTO.self, from: data))?.responses
             ?? optionIDs
     }
 
@@ -1251,7 +1249,7 @@ extension DiscordREST {
             ])
         )
 
-        let settings = (try? decoder.decode([GuildSettingsDTO].self, from: data)) ?? []
+        let settings = (try? Self.decoder.decode([GuildSettingsDTO].self, from: data)) ?? []
         var followed: Set<ChannelID> = []
         for entry in settings where entry.guild_id == guildID {
             for override in entry.channel_overrides ?? [] {
@@ -1291,7 +1289,7 @@ extension DiscordREST {
             route: "guilds/{id}/requests/@me",
             body: body
         )
-        return (try? decoder.decode(JoinRequestDTO.self, from: data))?.outcome
+        return (try? Self.decoder.decode(JoinRequestDTO.self, from: data))?.outcome
             // A 2xx with a body this client cannot read is still a request the
             // server accepted, and the gateway's member update is what settles
             // it either way.

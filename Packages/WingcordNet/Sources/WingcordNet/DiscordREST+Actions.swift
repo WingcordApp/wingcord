@@ -370,37 +370,4 @@ extension DiscordREST {
 // MARK: - Saved messages
 
 extension DiscordREST {
-
-    /// Saves a message to the account, or takes it off.
-    ///
-    /// `PUT /users/@me/saved-messages/{channel}/{message}` with
-    /// `{"source":"context_menu"}` — captured, and the source is an analytics
-    /// field naming where the reader clicked from rather than anything the
-    /// server acts on. It is sent because Discord's own client sends it: a
-    /// field this client invents a value for is a field nobody can check.
-    ///
-    /// The reply carries the whole message back plus a `save_data` record —
-    /// `saved_at`, three empty summary strings, `notes` and a `due_at` — which
-    /// is the row an inbox would list. **Nothing reads it yet**: this client
-    /// has no route captured for *reading* the saved list back, so the answer
-    /// is discarded and the store remembers what this session saved. See
-    /// `AppModel.bookmarkedMessageIDs`.
-    ///
-    /// **The DELETE is not captured.** The PUT is, both the request and the
-    /// reply; removing a bookmark is the same path with `DELETE`, which is the
-    /// convention every other paired route here follows and is still a guess
-    /// until somebody watches it answer.
-    public func setMessageSaved(
-        _ isSaved: Bool,
-        messageID: MessageID,
-        in channelID: ChannelID
-    ) async throws {
-        struct Body: Encodable { var source: String }
-        _ = try await requestData(
-            method: isSaved ? "PUT" : "DELETE",
-            path: "/users/@me/saved-messages/\(channelID.rawValue)/\(messageID.rawValue)",
-            route: "users/@me/saved-messages/{channel}/{message}",
-            body: isSaved ? Body(source: "context_menu") : nil
-        )
-    }
 }

@@ -37,6 +37,27 @@ struct ChannelToolbar: ToolbarContent {
     /// every navigation.
     var threadsContent: () -> AnyView = { AnyView(EmptyView()) }
 
+    // MARK: The inbox
+    //
+    // **Not on `chrome`, and that is the point.** Every other control in this
+    // bar is about the channel the reader is standing in, and `ChannelChrome`
+    // is what resolves that. The inbox is about the account: it is the same
+    // control in every channel, on a server page, and with nothing selected at
+    // all. Putting it on the chrome would tie a global surface to a per-channel
+    // projection and make it vanish wherever that projection is `.none`.
+    //
+    // **Deliberately unbadged.** Discord does not badge it either, and the
+    // reason here is mechanical: a count would have to be summed over
+    // `readStates`, which would make this bar — evaluated on every navigation —
+    // depend on a table every inbound message writes. The counts live on the
+    // rail and on each group's own header, where they already are.
+    var isInboxShown: Bool = false
+    var toggleInbox: () -> Void = {}
+    /// The flyout's contents. A closure for the reason `pinsContent` is one:
+    /// the bar is evaluated on every navigation and the panel is opened a few
+    /// times a session, so a store read here would run constantly.
+    var inboxContent: () -> AnyView = { AnyView(EmptyView()) }
+
     private var callTitle: String {
         if chrome.isInCall { return "Leave the Call" }
         return chrome.isCallOngoing ? "Join the Call" : "Start a Call"
@@ -156,6 +177,36 @@ struct ChannelToolbar: ToolbarContent {
                 .help(chrome.isUserProfileShown ? "Hide user profile" : "Show user profile")
             }
         }
+
+        // **Its own group, because it is not about this channel.** A spacer
+        // between toolbar items breaks the glass platter they share, which is
+        // how a Liquid Glass bar says "these belong together and that one does
+        // not" — and every item before this one is scoped to the channel while
+        // the inbox is scoped to the account.
+        ToolbarSpacer(.fixed)
+
+        // The third and last inline presentation in this app, under the same
+        // scoped exception the pins and threads panes take: one toolbar item,
+        // evaluated once, pointing its popover at the control that opened it.
+        ToolbarItem(placement: .primaryAction) {
+            Button(action: toggleInbox) {
+                Label("Inbox", systemImage: "tray")
+            }
+            .help("Inbox")
+            .popover(isPresented: inboxBinding, arrowEdge: .bottom) {
+                inboxContent()
+            }
+        }
+    }
+
+    /// Same rule as `pinsBinding`: the setter may only clear when the store is
+    /// still showing it, so a dismissal arriving while something else is
+    /// opening cannot take the new one down with it.
+    private var inboxBinding: Binding<Bool> {
+        Binding(
+            get: { isInboxShown },
+            set: { if !$0, isInboxShown { toggleInbox() } }
+        )
     }
 
     /// **The setter may only clear when the store is still showing this one.**

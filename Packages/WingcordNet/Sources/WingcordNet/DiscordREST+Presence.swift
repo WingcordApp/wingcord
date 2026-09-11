@@ -38,7 +38,7 @@ extension DiscordREST {
             body: Optional<Never>.none
         )
         guard !data.isEmpty else { return ActivityMetadata() }
-        let payload = try decoder.decode(ActivityMetadataDTO.self, from: data)
+        let payload = try Self.decoder.decode(ActivityMetadataDTO.self, from: data)
         return ActivityMetadata(
             buttonURLs: (payload.button_urls ?? []).compactMap(URL.init(string:))
         )

@@ -42,6 +42,17 @@ public struct MessageActions: OptionSet, Hashable, Sendable {
     public static let bookmark = MessageActions(rawValue: 1 << 13)
     public static let unbookmark = MessageActions(rawValue: 1 << 14)
 
+    /// Setting a time to be nudged about a message — Discord's "Create
+    /// Reminder".
+    ///
+    /// **The same act as a bookmark with one field set.** One route,
+    /// `PUT /users/@me/saved-messages/{channel}/{message}`, and a `due_at` is
+    /// the whole of the difference — which is why this is gated exactly as
+    /// `bookmark` is, and why it is offered *alongside* Remove Bookmark rather
+    /// than instead of it: putting a time on a message already saved is how a
+    /// bookmark becomes a reminder.
+    public static let remindMe = MessageActions(rawValue: 1 << 15)
+
     /// Whether anything at all is offered. A row with no actions draws no pill
     /// and opens no menu, rather than opening an empty one.
     public var isEmpty: Bool { rawValue == 0 }
@@ -103,11 +114,12 @@ public enum MessageActionPolicy {
         public var isPreviewing: Bool
         /// Whether this message is already saved to the account.
         ///
-        /// **Defaulted false and it stays false until an inbox reads the
-        /// list.** Nothing this client has fetched says which messages are
-        /// bookmarked — there is no route captured for reading them back — so
-        /// the menu offers Bookmark and the store remembers what it saved in
-        /// this session. See `AppModel.bookmarkedMessageIDs`.
+        /// **Answered by the account once the inbox has been opened, and by
+        /// this session alone before that.** `GET /users/@me/saved-messages`
+        /// is the authority and the inbox is what fetches it, so until the
+        /// flyout has been opened this is only as good as what the reader
+        /// bookmarked in this run — which is what it was built for. See
+        /// `AppModel.bookmarkedMessageIDs` and `SessionController.loadInbox`.
         public var isBookmarked: Bool
         /// Whether the reader turned developer mode on.
         public var developerMode: Bool
@@ -190,6 +202,11 @@ public enum MessageActionPolicy {
         // anybody would come back to, and Discord does not offer it there.
         if !input.isSystemEvent {
             actions.insert(input.isBookmarked ? .unbookmark : .bookmark)
+            // **Offered in both states**, because a reminder is a bookmark with
+            // a time on it: a message already saved can still have one set, and
+            // hiding the row there would make "remind me" reachable only by
+            // un-bookmarking first.
+            actions.insert(.remindMe)
         }
 
         // Marking unread rewinds the read cursor, which means nothing in a

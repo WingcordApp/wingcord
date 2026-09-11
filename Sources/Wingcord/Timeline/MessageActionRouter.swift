@@ -37,9 +37,11 @@ enum MessageActionRouter {
             model.copyLink(to: messageID, in: channelID)
         case .bookmark, .unbookmark:
             model.toggleBookmark(of: messageID, in: channelID)
-        case .apps:
-            // Handled inside the menu, which swaps its own contents rather
-            // than closing and opening a second surface. Nothing to route.
+        case .apps, .remindMe:
+            // Both are handled inside the menu, which swaps its own contents
+            // rather than closing and opening a second surface. Nothing to
+            // route — and a reminder could not be routed here anyway, because
+            // it carries a duration and this switch only has a kind.
             break
         case .report:
             model.requestReport(of: messageID, in: channelID)

@@ -180,6 +180,16 @@ struct MainWindow: View {
                                     }
                                 }
                             )
+                        },
+                        isInboxShown: model.isInboxShown,
+                        toggleInbox: { model.toggleInbox() },
+                        inboxContent: {
+                            // Built only while presented, which is what keeps
+                            // five lists and a relationship walk out of the
+                            // toolbar's own body — the bar is evaluated on
+                            // every navigation and this is opened a few times
+                            // a session.
+                            AnyView(InboxFlyout())
                         }
                     )
                 }

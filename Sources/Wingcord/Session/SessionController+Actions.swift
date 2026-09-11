@@ -457,11 +457,26 @@ extension SessionController {
 
 extension SessionController {
 
-    func writeBookmark(_ isSaved: Bool, messageID: MessageID, in channelID: ChannelID) {
+    /// Bookmarks a message from the transcript's own menu, or takes it off.
+    ///
+    /// - Parameter dueAt: set to make it a reminder instead. **The same route
+    ///   either way** — `due_at` is the only thing that separates a bookmark
+    ///   from a reminder, so Create Reminder and Bookmark Message are one write
+    ///   with one argument different.
+    func writeBookmark(
+        _ isSaved: Bool,
+        messageID: MessageID,
+        in channelID: ChannelID,
+        dueAt: Date? = nil
+    ) {
         Task { [weak self] in
             guard let self else { return }
             do {
-                try await rest.setMessageSaved(isSaved, messageID: messageID, in: channelID)
+                if isSaved {
+                    try await rest.saveMessage(messageID, in: channelID, dueAt: dueAt)
+                } else {
+                    try await rest.unsaveMessage(messageID, in: channelID)
+                }
             } catch {
                 Self.trace("bookmark \(messageID) failed: \(Self.describe(error))")
                 model.revertBookmark(!isSaved, messageID: messageID)

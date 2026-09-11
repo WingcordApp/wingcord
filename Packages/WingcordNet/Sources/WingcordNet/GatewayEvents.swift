@@ -91,6 +91,14 @@ struct GatewayFrame: Decodable, Sendable {
         case guildMembersChunk(MembersChunkPayload)
         case guildMemberListUpdate(MemberListUpdatePayload)
         case messageAck(MessageAckPayload)
+        /// A mention was acknowledged — here, or on the reader's phone. The
+        /// inbox's Mentions tab is a server-side list, so this is the only
+        /// signal that a row somebody dismissed elsewhere has gone.
+        case recentMentionDelete(RecentMentionDeletePayload)
+        /// A message was bookmarked, or a reminder set on one. The inner
+        /// payload is a whole saved message, so nothing has to be refetched.
+        case savedMessageCreate(SavedMessageDTO)
+        case savedMessageDelete(SavedMessageDeletePayload)
         case userUpdate(UserDTO)
         case relationshipAdd(RelationshipDTO)
         case relationshipRemove(RelationshipDTO)
@@ -217,6 +225,15 @@ struct GatewayFrame: Decodable, Sendable {
         case "GUILD_MEMBER_LIST_UPDATE":
             payload = .guildMemberListUpdate(try decode(MemberListUpdatePayload.self))
         case "MESSAGE_ACK": payload = .messageAck(try decode(MessageAckPayload.self))
+        // The inbox's three. A bookmark put on from a phone, a reminder that
+        // came due, a mention dismissed in another client — each reaches this
+        // window without the flyout refetching anything.
+        case "RECENT_MENTION_DELETE":
+            payload = .recentMentionDelete(try decode(RecentMentionDeletePayload.self))
+        case "SAVED_MESSAGE_CREATE":
+            payload = .savedMessageCreate(try decode(SavedMessageDTO.self))
+        case "SAVED_MESSAGE_DELETE":
+            payload = .savedMessageDelete(try decode(SavedMessageDeletePayload.self))
         case "USER_UPDATE": payload = .userUpdate(try decode(UserDTO.self))
         // A friend request sent, accepted, declined or withdrawn — and a block
         // put on or taken off. All four arrive as these two events, which is
@@ -359,6 +376,28 @@ struct RelationshipDTO: Decodable, Sendable {
     /// only. Absent on everybody else, and `null` once cleared.
     var nickname: String?
     var user: UserDTO?
+    /// When the request was made.
+    ///
+    /// **The only ordering a friend-requests list has.** Absent on a
+    /// relationship that was never a request, which is why `RelationshipFacts`
+    /// holds it as an optional rather than defaulting it to the epoch.
+    var since: Date?
+    /// Discord's own spam flag on an incoming request. Not a guess this client
+    /// makes, and not implied by `stranger_request`.
+    var is_spam_request: Bool?
+    /// They share no mutual friend and no small mutual server with the reader.
+    /// Ordinary, and deliberately distinct from spam.
+    var stranger_request: Bool?
+
+    /// The three facts above, or nil when there is nothing remarkable to store.
+    var facts: RelationshipFacts? {
+        let facts = RelationshipFacts(
+            since: since,
+            isSpam: is_spam_request ?? false,
+            isStranger: stranger_request ?? false
+        )
+        return facts.isNoteworthy ? facts : nil
+    }
 }
 
 struct MessageDeletePayload: Decodable, Sendable {

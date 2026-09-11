@@ -75,7 +75,7 @@ extension DiscordREST {
             body: Body(session_id: sessionID),
             headers: Self.contextProperties(source: source)
         )
-        guard let dto = try? decoder.decode(InviteDTO.self, from: data),
+        guard let dto = try? Self.decoder.decode(InviteDTO.self, from: data),
               let guildID = dto.guildID
         else { throw Failure.decoding("invite accept carried no guild") }
         return InviteAcceptance(

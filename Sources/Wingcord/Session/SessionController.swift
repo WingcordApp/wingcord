@@ -170,6 +170,13 @@ final class SessionController {
     var lastConfirmedOnboarding: [GuildID: Set<UInt64>] = [:]
     /// Channels whose transcript is being re-anchored around a linked message.
     private var jumpFetches: Set<ChannelID> = []
+    /// Unread groups whose message bodies the inbox is fetching.
+    ///
+    /// Its own set rather than `jumpFetches`: both fetch the same route for the
+    /// same channel, but a jump is the reader waiting on a transcript and this
+    /// is a summary filling in behind a flyout. Sharing the set would let a
+    /// scrolling inbox suppress the jump the reader actually asked for.
+    var unreadGroupFetches: Set<ChannelID> = []
     /// When the reader was last reported as typing, per channel.
     ///
     /// Discord's own indicator lasts ten seconds, so the client re-posts at
@@ -517,6 +524,7 @@ final class SessionController {
         model.blockedUserIDs = snapshot.blockedUserIDs
         model.ignoredUserIDs = snapshot.ignoredUserIDs
         model.relationships = snapshot.relationships
+        model.relationshipFacts = snapshot.relationshipFacts
         model.friendNicknames = snapshot.friendNicknames
         model.notes = snapshot.notes
         model.stageInstances = snapshot.stages
@@ -544,6 +552,10 @@ final class SessionController {
         )
         model.selfStatus = snapshot.settings.status
         model.selfCustomStatus = snapshot.settings.customStatus
+        // The tab the account was last on, in any client. Seeded rather than
+        // assigned wholesale: `InboxState` also holds what this session fetched,
+        // and a reconnect must not throw that away underneath an open flyout.
+        model.inbox.tab = snapshot.settings.inboxTab
         model.mutedGuildIDs = snapshot.mutedGuildIDs
         model.notificationPreferences = snapshot.notificationPreferences
 
@@ -1036,7 +1048,34 @@ final class SessionController {
                 model.applyChannelMute(muted.contains(channelID), channelID: channelID)
             }
 
-        case .relationshipChanged(let userID, let kind, let isIgnored, let user):
+        case .recentMentionDeleted(let messageID):
+            // Dismissed here, or on another client. Applied either way: the
+            // optimistic set already holds it for our own act, and `insert`
+            // makes the echo a no-op.
+            model.inbox.dismissedMentionIDs.insert(messageID)
+            model.inbox.revision &+= 1
+
+        case .savedMessageAdded(let saved, let author):
+            if let author, model.users[author.id] == nil { model.users[author.id] = author }
+            // **Upsert, not append.** Discord re-sends this when a reminder's
+            // date is changed, so a blind append would draw the same bookmark
+            // twice — and the second one would be the one the reader sees.
+            if let index = model.inbox.saved?.firstIndex(where: { $0.id == saved.id }) {
+                model.inbox.saved?[index] = saved
+            } else if model.inbox.saved != nil {
+                model.inbox.saved?.append(saved)
+            }
+            model.bookmarkedMessageIDs.insert(saved.id)
+            model.inbox.revision &+= 1
+            model.messageContentRevision &+= 1
+
+        case .savedMessageRemoved(_, let messageID):
+            model.inbox.saved?.removeAll { $0.id == messageID }
+            model.bookmarkedMessageIDs.remove(messageID)
+            model.inbox.revision &+= 1
+            model.messageContentRevision &+= 1
+
+        case .relationshipChanged(let userID, let kind, let isIgnored, let user, let facts):
             // **Applied whatever the client did.** These arrive for the reader's
             // own acts as well as for somebody else's, so the optimistic write
             // and the echo settle on the same answer — and a request accepted
@@ -1044,10 +1083,16 @@ final class SessionController {
             if let user, model.users[userID] == nil { model.users[userID] = user }
             if kind == .none {
                 model.relationships[userID] = nil
+                model.relationshipFacts[userID] = nil
                 model.blockedUserIDs.remove(userID)
                 model.ignoredUserIDs.remove(userID)
             } else {
                 model.relationships[userID] = kind
+                // **Only when the event carried some.** A relationship update
+                // with nothing remarkable on it must not erase the `since` a
+                // pending request already has — that date is the friend-request
+                // list's only ordering.
+                if let facts { model.relationshipFacts[userID] = facts }
                 if kind == .blocked {
                     model.blockedUserIDs.insert(userID)
                 } else {

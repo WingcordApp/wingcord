@@ -947,7 +947,7 @@ extension DiscordREST {
         guard (200..<300).contains(status) else {
             throw Self.apiFailure(status: status, data: data)
         }
-        let dto = try decoder.decode(IdentityDTO.self, from: data)
+        let dto = try Self.decoder.decode(IdentityDTO.self, from: data)
         guard let user = dto.user?.domain else {
             throw Failure.decoding("oauth2/@me answered with no user")
         }

@@ -19,6 +19,9 @@ struct MessageMenu: View {
     /// row, which is every menu built without one.
     var appTarget: AppCommandTarget?
     var perform: (MessageActionKind) -> Void
+    /// Chosen from the reminder list, which takes over the surface exactly as
+    /// the Apps list does. Nil on a surface that does not offer reminders.
+    var setReminder: ((ReminderPreset) -> Void)?
 
     @Environment(AppModel.self) private var model
     @Environment(\.motion) private var motion
@@ -29,6 +32,11 @@ struct MessageMenu: View {
     /// rule every other menu in this app follows: one glass body over the
     /// transcript at a time. §4 rule 2.
     @State private var isShowingApps = false
+    /// Whether the reminder durations have taken over the surface. Same rule as
+    /// `isShowingApps`, and the two are mutually exclusive because each is only
+    /// reachable from the root list.
+    @State private var isShowingReminders = false
+    @State private var hoveredPreset: ReminderPreset?
 
     static let width: CGFloat = 232
     private static let rowHeight: CGFloat = 30
@@ -41,6 +49,8 @@ struct MessageMenu: View {
                     back: { isShowingApps = false },
                     run: { model.runContextCommand($0, on: appTarget) }
                 )
+            } else if isShowingReminders, let setReminder {
+                reminderList(setReminder)
             } else {
                 ForEach(Array(groups.enumerated()), id: \.offset) { index, group in
                     if index > 0 { divider }
@@ -55,6 +65,82 @@ struct MessageMenu: View {
         .glassEffect(.clear.tint(Palette.flyoutTint), in: .rect(cornerRadius: Radius.glass))
         .animation(motion.fadeQuick, value: hovered)
         .animation(motion.standard, value: isShowingApps)
+        .animation(motion.standard, value: isShowingReminders)
+    }
+
+    /// The durations, over the same surface.
+    ///
+    /// The cap is checked here as well as at the act: a free account with a
+    /// reminder already set can still open this list, and dimming every row
+    /// with a line saying why is a better answer than six rows that all refuse.
+    private func reminderList(_ choose: @escaping (ReminderPreset) -> Void) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Button { isShowingReminders = false } label: {
+                HStack(spacing: Spacing.snug) {
+                    Image(systemName: "chevron.left")
+                        .font(.system(size: 10, weight: .semibold))
+                        .frame(width: 16)
+                    Text("Remind Me")
+                        .font(.system(.subheadline, weight: .semibold))
+                    Spacer(minLength: 0)
+                }
+                .foregroundStyle(Ink.secondary)
+                .padding(.horizontal, Spacing.snug)
+                .frame(height: Self.rowHeight)
+                .contentShape(.rect)
+            }
+            .buttonStyle(.plain)
+
+            divider
+
+            if let notice = model.inboxLimitNotice(for: .reminders) {
+                Text(notice)
+                    .font(.system(.caption))
+                    .foregroundStyle(Ink.tertiary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.horizontal, Spacing.snug)
+                    .padding(.vertical, Spacing.base)
+            } else {
+                ForEach(ReminderPreset.allCases) { preset in
+                    presetRow(preset, choose: choose)
+                }
+            }
+        }
+    }
+
+    private func presetRow(
+        _ preset: ReminderPreset,
+        choose: @escaping (ReminderPreset) -> Void
+    ) -> some View {
+        Button { choose(preset) } label: {
+            HStack(spacing: Spacing.snug) {
+                Image(systemName: "clock")
+                    .font(.system(size: 12, weight: .medium))
+                    .frame(width: 16)
+                Text(preset.title)
+                    .font(.system(.subheadline))
+                    .lineLimit(1)
+                Spacer(minLength: Spacing.base)
+            }
+            .foregroundStyle(hoveredPreset == preset ? Ink.primary : Ink.secondary)
+            .padding(.horizontal, Spacing.snug)
+            .frame(height: Self.rowHeight)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background {
+                if hoveredPreset == preset {
+                    RoundedRectangle(cornerRadius: Radius.row, style: .continuous)
+                        .fill(Palette.hoverFill)
+                        .padding(.horizontal, Spacing.tight)
+                }
+            }
+            .contentShape(.rect)
+        }
+        .buttonStyle(.plain)
+        .onHover { isInside in
+            let next = isInside ? preset : (hoveredPreset == preset ? nil : hoveredPreset)
+            guard next != hoveredPreset else { return }
+            hoveredPreset = next
+        }
     }
 
     private var divider: some View {
@@ -68,7 +154,13 @@ struct MessageMenu: View {
     private func row(_ kind: MessageActionKind) -> some View {
         Button {
             // Apps opens the list in place; everything else acts and closes.
-            if kind == .apps { isShowingApps = true } else { perform(kind) }
+            // Both of these open a list in place rather than acting; every
+            // other row acts and closes.
+            switch kind {
+            case .apps: isShowingApps = true
+            case .remindMe where setReminder != nil: isShowingReminders = true
+            default: perform(kind)
+            }
         } label: {
             HStack(spacing: Spacing.snug) {
                 Image(systemName: kind.symbolName)
