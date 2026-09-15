@@ -218,7 +218,7 @@ struct ProfileSheet: View {
         // `ProfileGround.derived`, fitted against Discord's own card. Anything
         // that reaches past it for the picture again is answering a question
         // that has already been answered.
-        .modifier(ProfileGroundFill(ground: ground, corner: 0))
+        .modifier(ProfileGroundFill(ground: ground, corner: 0, strength: .full))
     }
 
     private var topBar: some View {

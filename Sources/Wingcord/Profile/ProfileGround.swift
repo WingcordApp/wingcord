@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 /// What a profile surface is made of.
@@ -75,6 +76,33 @@ enum ProfileGround: Equatable {
             // A single colour is still a deliberate theme, just a flat one.
             self = .themed(Color(hex: first), Color(hex: first))
         }
+    }
+
+    /// Whether a surface painting this ground at full strength needs **dark**
+    /// ink on it.
+    ///
+    /// **The one question a derived theme forces and a chosen one rarely
+    /// does.** Somebody who picks their own colours picks them against
+    /// Discord's dark card; a quantiser picks whatever the picture had, and a
+    /// cat photographed on a white sofa quantises to `#d5d4d3`. Discord's full
+    /// profile for that account is a *light card with dark text* — it is not
+    /// tinting a dark surface, it has adopted the colour.
+    ///
+    /// Rec. 709 luma, thresholded at the middle. Not a contrast ratio: the body
+    /// is a ramp between two colours and a ratio against a ramp has no single
+    /// answer — §4.8. The threshold is on the colour the ink actually sits over,
+    /// which is the foot.
+    var wantsDarkInk: Bool {
+        guard let pair else { return false }
+        return Self.luma(of: pair.secondary) > 0.5
+    }
+
+    static func luma(of colour: Color) -> Double {
+        let components = NSColor(colour).usingColorSpace(.sRGB)
+        guard let components else { return 0 }
+        return 0.2126 * Double(components.redComponent)
+            + 0.7152 * Double(components.greenComponent)
+            + 0.0722 * Double(components.blueComponent)
     }
 
     /// The card's edge.
@@ -254,10 +282,42 @@ struct ProfileGroundFill: ViewModifier {
     /// view's identity.
     var paints: Bool = true
 
+    /// How much of the theme the surface actually becomes.
+    ///
+    /// **Discord's own two answers, and they are two surfaces rather than two
+    /// preferences.** Its profile *popout* and its DM sidebar tint a dark card;
+    /// its full-profile *modal* adopts the colours outright — for an account
+    /// whose derived pair is `#89867d` / `#d5d4d3` the modal is a light card
+    /// with dark text, and the popout beside it stays dark. Same palette, same
+    /// person, two treatments.
+    enum Strength {
+        /// A wash over the app's near-black. The card has a colour.
+        case wash
+        /// The colours as the surface. The card IS the colour.
+        case full
+    }
+
+    var strength: Strength = .wash
+
     @ViewBuilder
     func body(content: Content) -> some View {
         if !paints {
             content
+        } else if strength == .full, let pair = ground.accentPair {
+            // **The colour scheme goes with the ground.** Every `Ink` in this
+            // app is a hierarchical style, so flipping the scheme is what makes
+            // a whole subtree legible on a light card — one environment value
+            // rather than a light variant of every label, divider and control
+            // in the profile. It is also what the system's own controls read.
+            content
+                .background {
+                    LinearGradient(
+                        colors: [pair.primary, pair.secondary],
+                        startPoint: .top,
+                        endPoint: .bottom
+                    )
+                }
+                .environment(\.colorScheme, ground.wantsDarkInk ? .light : .dark)
         } else {
             fill(content)
         }

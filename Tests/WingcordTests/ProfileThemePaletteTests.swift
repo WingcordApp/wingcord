@@ -1,4 +1,5 @@
 import CoreGraphics
+import SwiftUI
 import Foundation
 import Testing
 @testable import Wingcord
@@ -130,5 +131,42 @@ struct ProfileThemePaletteTests {
             UInt32($0.x) << 16 | UInt32($0.y) << 8 | UInt32($0.z)
         }
         #expect(Array(palette.suffix(3)) == partners)
+    }
+}
+
+/// Which way the ink goes on a themed surface.
+///
+/// **A derived theme is the case that forces this and a chosen one rarely
+/// does.** Somebody who picks their own colours picks them against a dark card;
+/// a quantiser picks whatever the picture had, and a cat photographed on a white
+/// sofa quantises to `#d5d4d3`. Discord's full profile for that account is a
+/// light card with dark text.
+@MainActor
+@Suite("Profile ground ink")
+struct ProfileGroundInkTests {
+
+    @Test("A light body asks for dark ink; a dark one does not")
+    func inkFollowsTheBody() {
+        // The captured pair for the test avatar: a warm grey banner over a
+        // near-white body.
+        let light = ProfileGround(themeColorValues: [0x89_86_7D, 0xD5_D4_D3], isDerived: true)
+        #expect(light.wantsDarkInk)
+
+        // The same shape with the body dark — which is what most avatars give.
+        let dark = ProfileGround(themeColorValues: [0x46_1F_63, 0x2B_35_39], isDerived: true)
+        #expect(!dark.wantsDarkInk)
+    }
+
+    @Test("An unthemed ground never asks, because it is the app's own near-black")
+    func neutralKeepsTheAppsInk() {
+        #expect(!ProfileGround(themeColorValues: []).wantsDarkInk)
+    }
+
+    @Test("Luma is Rec. 709, not an average")
+    func lumaIsWeighted() {
+        // Green carries most of the perceived brightness, which is why a
+        // mid-green body needs dark ink and a mid-blue one does not.
+        #expect(ProfileGround.luma(of: Color(hex: 0x00_FF_00)) > 0.5)
+        #expect(ProfileGround.luma(of: Color(hex: 0x00_00_FF)) < 0.5)
     }
 }

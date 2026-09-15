@@ -90,7 +90,7 @@ struct ProfileIdentityPanel: View {
         // light catching the glass; this one is opaque paint already fitted
         // against Discord's own card, and the same wash there just makes a
         // themed profile paler than the colours it was given.
-        .modifier(ProfileGroundFill(ground: ground, corner: 0))
+        .modifier(ProfileGroundFill(ground: ground, corner: 0, strength: .full))
         .overlay(alignment: .bottom) { footDock }
         .overlay(alignment: .trailing) {
             Rectangle().fill(.white.opacity(0.10)).frame(width: 1)
