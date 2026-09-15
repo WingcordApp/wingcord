@@ -105,6 +105,19 @@ enum ProfileGround: Equatable {
             + 0.0722 * Double(components.blueComponent)
     }
 
+    /// What a full-strength body is at its head — the colour the banner has to
+    /// dissolve into.
+    ///
+    /// **The banner's fade used to name `Palette.canvas` outright**, which is
+    /// correct for every surface that tints a dark card and is a black smear
+    /// across the top of one that has adopted a light colour. The fade's job is
+    /// "end in the body rather than in a line"; the body is what it has to be
+    /// told.
+    var bodyHead: Color {
+        guard let pair else { return Palette.canvas }
+        return pair.secondary
+    }
+
     /// The card's edge.
     ///
     /// **A lit rim in the person's own colours, not a hairline.** In the theme's
@@ -309,10 +322,27 @@ struct ProfileGroundFill: ViewModifier {
             // a whole subtree legible on a light card — one environment value
             // rather than a light variant of every label, divider and control
             // in the profile. It is also what the system's own controls read.
+            // **The body is the SECONDARY, and the primary is only the banner
+            // plate.** Ramping primary to secondary across the whole card was
+            // the first attempt and it comes out muddy: the two colours meet in
+            // the middle, so most of the surface is a blend of neither and the
+            // light colour never actually appears. Discord's card starts at the
+            // secondary immediately below the banner and only lightens from
+            // there — the primary has a home already, and using it twice is
+            // what turned a near-white body into a brown-grey one.
+            //
+            // The foot moves away from the ink rather than toward a fixed
+            // white: a light body lightens, a dark one darkens, so one rule
+            // covers both and neither loses contrast with the text on it.
             content
                 .background {
                     LinearGradient(
-                        colors: [pair.primary, pair.secondary],
+                        colors: [
+                            pair.secondary,
+                            ground.wantsDarkInk
+                                ? pair.secondary.mix(with: .white, by: 0.45)
+                                : pair.secondary.mix(with: .black, by: 0.25),
+                        ],
                         startPoint: .top,
                         endPoint: .bottom
                     )

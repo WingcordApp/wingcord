@@ -211,8 +211,8 @@ struct ProfileIdentityPanel: View {
                     LinearGradient(
                         stops: [
                             .init(color: .clear, location: 0.3),
-                            .init(color: Palette.canvas.opacity(0.55), location: 0.78),
-                            .init(color: Palette.canvas.opacity(0.9), location: 1),
+                            .init(color: ground.bodyHead.opacity(0.55), location: 0.78),
+                            .init(color: ground.bodyHead.opacity(0.9), location: 1),
                         ],
                         startPoint: .top,
                         endPoint: .bottom
