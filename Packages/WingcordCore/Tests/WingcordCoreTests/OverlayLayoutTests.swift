@@ -146,6 +146,51 @@ struct OverlayLayoutTests {
         #expect(restored.placement(for: .voice).centre == CGPoint(x: 0.25, y: 0.75))
     }
 
+    // MARK: The reading surfaces
+
+    @Test("The three reading surfaces are unpinned, because a locked overlay cannot take a click")
+    func readingSurfacesAreUnpinned() {
+        // A roster, a transcript and a composer are things somebody reads and
+        // types into. A locked overlay is click-through by construction, so a
+        // pinned one of these would be a surface nobody could use.
+        for kind in [OverlayWidgetKind.friends, .chat, .quickActions] {
+            #expect(!kind.isPinnedByDefault, "\(kind.rawValue)")
+        }
+        // The tile widgets are pinned, because watching somebody's screen while
+        // you play is the entire point of them.
+        for kind in [OverlayWidgetKind.streams, .videoTiles] {
+            #expect(kind.isPinnedByDefault, "\(kind.rawValue)")
+        }
+    }
+
+    @Test("Panels are drawn under chrome, because a chat window must not cover the mute button")
+    func panelsSortBeforeChrome() throws {
+        let order = OverlayWidgetKind.allCases
+        let panels = [OverlayWidgetKind.friends, .chat, .streams, .videoTiles]
+        let chrome = [OverlayWidgetKind.quickActions, .notifications, .clips]
+        let lastPanel = try #require(panels.compactMap(order.firstIndex(of:)).max())
+        let firstChrome = try #require(chrome.compactMap(order.firstIndex(of:)).min())
+        #expect(panels.count == panels.compactMap(order.firstIndex(of:)).count)
+        #expect(chrome.count == chrome.compactMap(order.firstIndex(of:)).count)
+        #expect(lastPanel < firstChrome)
+    }
+
+    @Test("Every widget has a place, a title and a persistence key of its own")
+    func everyKindIsComplete() {
+        var keys: Set<String> = []
+        var centres: Set<String> = []
+        for kind in OverlayWidgetKind.allCases {
+            #expect(keys.insert(kind.rawValue).inserted, "duplicate key \(kind.rawValue)")
+            #expect(!kind.title.isEmpty)
+            let centre = kind.defaultCentre
+            #expect(centre.x >= 0 && centre.x <= 1)
+            #expect(centre.y >= 0 && centre.y <= 1)
+            // Two widgets landing on the same point would open a fresh install
+            // with one hidden behind another.
+            #expect(centres.insert("\(centre.x),\(centre.y)").inserted, "\(kind.rawValue)")
+        }
+    }
+
     @Test("A widget missing from a stored layout falls back to its own default")
     func missingWidgetFallsBack() {
         // A new widget added in a later version finds nothing in the reader's

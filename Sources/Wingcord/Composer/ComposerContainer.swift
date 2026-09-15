@@ -28,6 +28,7 @@ struct ComposerContainer: View {
         let _ = model.roleRevision
         Composer(
             channelName: model.channelIndex[channelID].map(model.displayName(of:)) ?? "",
+            channelSigil: model.channelIndex[channelID]?.kind.isPrivate == true ? "@" : "#",
             shape: settings.composerShape,
             canSend: model.permissionGate.canSend(in: channelID),
             replyingToAuthor: replyingToAuthor,

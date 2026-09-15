@@ -1,5 +1,6 @@
 import SwiftUI
 import WingcordCore
+import WingcordVoice
 
 // MARK: - What you can do while you are in a call
 //
@@ -16,6 +17,25 @@ import WingcordCore
 struct VoiceControlBar: View {
     var presentation: VoicePresentation
     var isCompact = false
+    /// Whether the ground behind the bar is a picture rather than the reading
+    /// surface.
+    ///
+    /// **It decides the material, and the app's own rule decides it for us**:
+    /// `.regular` over a reading surface, `.clear` wherever there is media or a
+    /// lit ground behind the chrome — a server banner, a photograph, a video
+    /// frame. A game is the most lit ground there is, and the overlay's first
+    /// capture showed exactly what the wrong answer looks like: the toolbar read
+    /// as four flat dark pills sitting on the screen rather than as glass
+    /// floating over it.
+    var isOverMedia = false
+    /// Whether the input, output and camera controls carry a chevron that opens
+    /// the device list.
+    ///
+    /// Off everywhere but the overlay, and that is not an oversight: in the
+    /// window the same lists are two clicks away in Settings › Voice & Video,
+    /// where they have room for a level meter and a test tone. Over a game there
+    /// is no second surface to send anybody to.
+    var showsDeviceMenus = false
 
     var toggleMute: () -> Void = {}
     var toggleDeafen: () -> Void = {}
@@ -49,6 +69,7 @@ struct VoiceControlBar: View {
                         isCompact: isCompact,
                         action: toggleMute
                     )
+                    if showsDeviceMenus { VoiceDeviceChevron(kind: .input, isCompact: isCompact) }
                     VoiceControl(
                         systemImage: presentation.isDeafened ? "headphones.slash" : "headphones",
                         label: presentation.isDeafened ? "Undeafen" : "Deafen",
@@ -57,6 +78,7 @@ struct VoiceControlBar: View {
                         isCompact: isCompact,
                         action: toggleDeafen
                     )
+                    if showsDeviceMenus { VoiceDeviceChevron(kind: .output, isCompact: isCompact) }
                 }
 
                 capsule {
@@ -68,6 +90,7 @@ struct VoiceControlBar: View {
                         isCompact: isCompact,
                         action: toggleCamera
                     )
+                    if showsDeviceMenus { VoiceDeviceChevron(kind: .camera, isCompact: isCompact) }
                     VoiceControl(
                         systemImage: "rectangle.inset.filled.on.rectangle",
                         label: presentation.isScreenSharing ? "Stop Sharing" : "Share Screen",
@@ -107,10 +130,14 @@ struct VoiceControlBar: View {
         HStack(spacing: 2) { content() }
             .padding(.horizontal, Spacing.tight + 1)
             .padding(.vertical, Spacing.tight)
-            // `.regular`, because the bar floats over the reading surface. Over
-            // media it would be `.clear` — see the DM overlay, which is exactly
-            // that case and takes the other material.
-            .glassEffect(.regular, in: .capsule)
+            // See `isOverMedia`. `.interactive()` in both cases: it is what
+            // produces the native pointer-down highlight and lensing, and it is
+            // also how this bar satisfies "respond on press, never on release"
+            // for free.
+            .glassEffect(
+                isOverMedia ? .clear.interactive() : .regular.interactive(),
+                in: .capsule
+            )
     }
 
     /// The one emphasised control, and it is destructive.
@@ -308,5 +335,170 @@ struct VoiceQualityLine: View {
         case .fair: Palette.presenceIdle
         case .poor: Palette.destructive
         }
+    }
+}
+
+// MARK: - The device chevron
+
+/// The little chevron beside the microphone, the headphones and the camera.
+///
+/// **A region inside the cluster's material, never a second glass body** — §4
+/// rule 2, the same contract `VoiceControl` is built on. It is narrow rather
+/// than square, because it belongs to the control on its left and a second
+/// full-width disc beside that control would read as two buttons of equal
+/// weight.
+///
+/// **The list is read when the popover opens and at no other time.** Building it
+/// in the bar's own body would be three CoreAudio enumerations and an
+/// `AVCaptureDevice` discovery session on every evaluation — and this bar is
+/// evaluated every time somebody in the call starts or stops talking. The
+/// soundboard button one group over makes the same argument in the same words.
+struct VoiceDeviceChevron: View {
+    enum Kind {
+        case input
+        case output
+        case camera
+
+        var title: String {
+            switch self {
+            case .input: "Microphone"
+            case .output: "Output"
+            case .camera: "Camera"
+            }
+        }
+    }
+
+    var kind: Kind
+    var isCompact: Bool
+
+    @Environment(AppModel.self) private var model
+    @State private var isOpen = false
+    @State private var isHovering = false
+    @Environment(\.motion) private var motion
+
+    var body: some View {
+        Button { isOpen.toggle() } label: {
+            Image(systemName: "chevron.down")
+                .font(.system(size: isCompact ? 7 : 8, weight: .black))
+                .foregroundStyle(Ink.secondary)
+                .frame(width: isCompact ? 12 : 14, height: side)
+                .background { Capsule().fill(.white.opacity(isHovering ? 0.14 : 0)) }
+                .contentShape(.capsule)
+        }
+        .buttonStyle(.plain)
+        .onHover { hovering in
+            guard isHovering != hovering else { return }
+            isHovering = hovering
+        }
+        .animation(motion.hover, value: isHovering)
+        .popover(isPresented: $isOpen, arrowEdge: .top) {
+            VoiceDeviceList(kind: kind) { isOpen = false }
+                // The list carries its own ground; a second material here would
+                // be glass on glass.
+                .presentationBackground(.clear)
+        }
+        .help("Choose a \(kind.title.lowercased())")
+        .accessibilityLabel(Text("Choose a \(kind.title.lowercased())"))
+    }
+
+    private var side: CGFloat {
+        isCompact ? Metrics.compactControl : Metrics.control + 4
+    }
+}
+
+/// What the chevron opens: the machine's devices, and which one is in use.
+///
+/// **"System default" is a row, not the absence of one.** A preference of nil
+/// means "follow whatever the Mac is doing", which is a different answer from
+/// naming the device the Mac happens to be using right now — unplug a headset
+/// and the two diverge. A list that only named devices could not express it.
+private struct VoiceDeviceList: View {
+    var kind: VoiceDeviceChevron.Kind
+    var dismiss: () -> Void
+
+    @Environment(AppModel.self) private var model
+    @State private var settings = AppSettings.shared
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Text(kind.title.uppercased())
+                .font(Typeface.categoryHeader)
+                .foregroundStyle(Ink.tertiary)
+                .padding(.horizontal, Spacing.snug)
+                .padding(.vertical, Spacing.base)
+
+            row(title: "System default", isSelected: selection == nil) { choose(nil) }
+            ForEach(devices, id: \.id) { device in
+                row(title: device.name, isSelected: selection == device.id) {
+                    choose(device.id)
+                }
+            }
+        }
+        .padding(.bottom, Spacing.base)
+        .frame(width: 240, alignment: .leading)
+        .background(Palette.surface)
+    }
+
+    /// One device. Resolved to `(id, name)` here so the three kinds share one
+    /// row rather than growing three copies of it.
+    private var devices: [(id: String, name: String)] {
+        switch kind {
+        case .input:
+            AudioDeviceCatalog.inputs().map { ($0.uniqueID, $0.name) }
+        case .output:
+            AudioDeviceCatalog.outputs().map { ($0.uniqueID, $0.name) }
+        case .camera:
+            CameraCapture.devices().map { ($0.id, $0.name) }
+        }
+    }
+
+    private var selection: String? {
+        switch kind {
+        case .input: settings.voiceInputDeviceID
+        case .output: settings.voiceOutputDeviceID
+        case .camera: settings.cameraDeviceID
+        }
+    }
+
+    /// Writes the choice and hands it to a call already running.
+    ///
+    /// **Applied live, which is the whole reason this control is on the
+    /// overlay.** A device picker that only takes effect on the next call is a
+    /// picker nobody would open mid-game.
+    private func choose(_ id: String?) {
+        switch kind {
+        case .input: settings.voiceInputDeviceID = id
+        case .output: settings.voiceOutputDeviceID = id
+        case .camera: settings.cameraDeviceID = id
+        }
+        model.voicePreferencesChanged()
+        dismiss()
+    }
+
+    private func row(
+        title: String,
+        isSelected: Bool,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            HStack(spacing: Spacing.base) {
+                Image(systemName: "checkmark")
+                    .font(.system(size: 10, weight: .bold))
+                    .foregroundStyle(Palette.accent)
+                    .opacity(isSelected ? 1 : 0)
+                    .frame(width: 12)
+                Text(title)
+                    .font(.system(size: 12))
+                    .foregroundStyle(Ink.primary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, Spacing.snug)
+            .frame(height: Metrics.rowMinHeight)
+            .contentShape(.rect)
+        }
+        .buttonStyle(.plain)
+        .accessibilityAddTraits(isSelected ? [.isSelected, .isButton] : .isButton)
     }
 }

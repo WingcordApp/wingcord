@@ -20,6 +20,15 @@ import WingcordCore
 /// here, and only once there is something to send.
 struct Composer: View {
     var channelName: String
+    /// What the placeholder puts in front of that name.
+    ///
+    /// **A conversation is not a channel.** Discord says "Message @somebody" in
+    /// a direct message and "Message #general" in a server, and this bar said
+    /// `#` in both — so every DM in the app invited the reader to write to a
+    /// channel named after a person. Passed in rather than derived here for the
+    /// reason `shape` is: this view reaches for nothing observable, and the
+    /// settings preview draws it with no channel behind it at all.
+    var channelSigil: String = "#"
     /// The silhouette. Passed in rather than read from `AppSettings`, so the
     /// settings preview can show a shape the reader has not committed to yet —
     /// and so this view still reaches for nothing observable.
@@ -338,7 +347,7 @@ struct Composer: View {
             return option.summary.isEmpty ? option.name : option.summary
         }
         if pendingCommand != nil { return "Press Return to run" }
-        return isEditing ? "Edit this message" : "Message #\(channelName)"
+        return isEditing ? "Edit this message" : "Message \(channelSigil)\(channelName)"
     }
 
     /// Whether there is something to send. A command that has every required

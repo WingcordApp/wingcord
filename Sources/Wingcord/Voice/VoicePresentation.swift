@@ -55,6 +55,11 @@ struct VoiceParticipant: Hashable, Sendable, Identifiable {
     var canWatch: Bool { isStreaming && !isSelf }
     /// Whether the tile draws a picture rather than a face.
     var showsVideo: Bool { hasLiveVideo && (isCameraOn || isStreaming) }
+    /// Whether anything about them is worth a glyph beside their name.
+    ///
+    /// Read by the overlay's roster, which draws its marks *inside* the name
+    /// capsule — so a person with marks and no name still needs the capsule.
+    var hasMarks: Bool { isCameraOn || isStreaming || isSilenced || isDeafened }
 }
 
 /// The whole call, as one value.

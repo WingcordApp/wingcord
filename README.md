@@ -33,6 +33,7 @@ swift test                                        # layout, painting, viewport
 | Flag | What it does |
 | --- | --- |
 | `--demo` | Fixture servers, channels, members and a 220-message transcript, plus one server pinned above the rail's divider that the fixture is **previewing** rather than a member of, and a short navigation history so ⌘K opens onto something, plus a seeded discovery grid — the one surface whose whole content is a route's answer, and therefore the one that cannot be looked at without fixtures. Nothing else reaches it — there is no fallback from a failed sign-in into fixtures. |
+| `--overlay` | Pretends a game is running, so the in-game overlay can be drawn without one: it resets the widget arrangement to its defaults, unlocks, opens a conversation as a chat window and raises one notification toast with its reply field open. Its own flag rather than part of `--demo` because the panel presents at shield level and covers the menu bar. Pair it with `--demo`. |
 
 ---
 

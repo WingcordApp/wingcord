@@ -413,6 +413,15 @@ struct OverlayPane: View {
                     + "overlay's own arrange button.",
                 symbolName: "pin"
             )
+            // **The way back, and it has to be here rather than on the
+            // overlay.** A layout somebody has made a mess of is hardest to fix
+            // from inside the thing they made a mess of.
+            SettingsCard {
+                SettingsControlRow("Arrangement") {
+                    Button("Reset") { model.overlay.resetLayout() }
+                        .controlSize(.small)
+                }
+            }
         }
     }
 

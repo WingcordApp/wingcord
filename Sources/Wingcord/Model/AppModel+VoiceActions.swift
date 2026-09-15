@@ -42,7 +42,12 @@ extension AppModel {
         voice.join(channelID: channelID, guildID: nil)
     }
 
-    func leaveVoice() { voice.leave() }
+    func leaveVoice() {
+        // The local mutes belong to the call, not to the account — see
+        // `locallyMutedUserIDs`.
+        locallyMutedUserIDs = []
+        voice.leave()
+    }
 
     func declineCall(in channelID: ChannelID) { voice.decline(channelID: channelID) }
 
@@ -100,6 +105,43 @@ extension AppModel {
             if watchedStreamUserID != nil { voice.stopWatchingStream() }
             voice.watchStream(owner: userID)
         }
+    }
+
+    /// Silences one person for the rest of this call, or lets them back.
+    ///
+    /// **The engine already had the knob and nothing was turning it.**
+    /// `VoiceController.setVolume(_:forUser:)` reaches the mixer's per-stream
+    /// gain, which is the one honest thing a speaker button on a stream tile can
+    /// mean: a client cannot stop Discord sending the audio, only stop playing
+    /// it, and saying so with a local gain is better than a control that
+    /// pretends to reach the other end.
+    func toggleLocalMute(_ userID: UserID) {
+        guard userID != currentUserID else { return }
+        let muted = locallyMutedUserIDs.contains(userID)
+        if muted {
+            locallyMutedUserIDs.remove(userID)
+        } else {
+            locallyMutedUserIDs.insert(userID)
+        }
+        voice.setVolume(muted ? 1 : 0, forUser: userID)
+    }
+
+    func isLocallyMuted(_ userID: UserID) -> Bool { locallyMutedUserIDs.contains(userID) }
+
+    /// The address of somebody's share, for the thumbnail route.
+    ///
+    /// Built rather than stored, because it is a pure function of three ids —
+    /// see `GoLiveKey`. Nil for anybody who is not sharing, which is what keeps
+    /// a tile from asking Discord for a picture of nothing.
+    func streamKey(for userID: UserID) -> String? {
+        guard let channelID = connectedVoiceChannelID,
+              voiceStates[userID]?.isStreaming == true
+        else { return nil }
+        return GoLiveKey.make(
+            guildID: channelIndex[channelID]?.guildID,
+            channelID: channelID,
+            userID: userID
+        )
     }
 
     func setPushToTalkHeld(_ held: Bool) { voice.setPushToTalkHeld(held) }

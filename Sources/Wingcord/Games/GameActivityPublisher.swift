@@ -20,6 +20,45 @@ private struct GameActivityPublisher: ViewModifier {
 
     func body(content: Content) -> some View {
         content
+            // **`--overlay` seeds a game before anything is listening for one.**
+            // The real arming happens in the detector's own callback, which no
+            // fixture reaches, so the flag has to do by hand what a detection
+            // would have done — and then unlock, because locked is the state
+            // with the fewest widgets in it and looking at the thing is the
+            // whole reason the flag exists. Escape leaves, as it does over a
+            // real game.
+            .task {
+                guard LaunchOptions.current.pretendsAGameIsRunning else { return }
+                // **From the default arrangement, every time.** The flag exists
+                // to be photographed, and a capture whose widget positions come
+                // out of whatever the last session dragged them to is a capture
+                // that cannot be compared with the one before it. Nobody who is
+                // not photographing this passes the flag.
+                model.overlay.resetLayout()
+                model.refreshOverlay()
+                model.overlay.toggle()
+                // **And a conversation open in it**, because the chat window is
+                // the most expensive widget on this overlay and the only one
+                // whose resting state is nothing at all — a flag that draws
+                // every widget but that one leaves the expensive half of the
+                // surface unlookable. The X in its header closes it.
+                if let channelID = model.channelIndex.privateChannelIDs().first {
+                    model.overlay.openChat(channelID)
+                    // **And one toast**, for the same reason: the notification
+                    // widget's resting state is nothing, so the reply field
+                    // inside it — the pause, the send, the hold on the
+                    // auto-dismiss — could not be looked at without waiting for
+                    // somebody to write to the account mid-game.
+                    let notice = DemoFixtures.notice(in: channelID, model: model)
+                    model.overlay.show(notice)
+                    // **And its reply field open**, which is also what stops the
+                    // toast retiring seven seconds into the launch: a reply in
+                    // progress holds the auto-dismiss, so the one state worth
+                    // photographing is the one that stays put. The resting form
+                    // is one click away — the X closes the field.
+                    model.overlay.beginReply(to: notice)
+                }
+            }
             // `initial: false`: the first publish is the session's own, and
             // sending a second one at launch is a wasted frame on the socket.
             .onChange(of: settings.sharesGameActivity) { _, _ in

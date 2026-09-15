@@ -68,6 +68,9 @@ struct WingcordApp: App {
         if LaunchOptions.current.usesDemoFixtures {
             DemoFixtures.populate(model)
         }
+        if LaunchOptions.current.pretendsAGameIsRunning {
+            DemoFixtures.populateDetectedGame(model)
+        }
         _model = State(initialValue: model)
         PerformanceMonitor.shared.model = model
         MemoryPressureWatcher.shared.model = model
@@ -245,9 +248,22 @@ struct WingcordCommands: Commands {
 /// a second code path.
 struct LaunchOptions: Sendable {
     var usesDemoFixtures = false
+    /// Pretends a game is in front, so the overlay comes up without one.
+    ///
+    /// **The overlay could not be looked at at all before this.** Every widget
+    /// on it is gated on `detectedGame != nil`, and there is no fixture for a
+    /// running process — so the one surface in this app that is only ever drawn
+    /// over somebody else's window had no way to be drawn over anything. It is
+    /// its own flag rather than part of `--demo` because it takes the screen:
+    /// the panel presents at shield level and covers the menu bar, which is
+    /// right over a game and wrong over a desktop somebody is working on.
+    var pretendsAGameIsRunning = false
 
     static let current: LaunchOptions = {
         let arguments = Set(ProcessInfo.processInfo.arguments)
-        return LaunchOptions(usesDemoFixtures: arguments.contains("--demo"))
+        return LaunchOptions(
+            usesDemoFixtures: arguments.contains("--demo"),
+            pretendsAGameIsRunning: arguments.contains("--overlay")
+        )
     }()
 }

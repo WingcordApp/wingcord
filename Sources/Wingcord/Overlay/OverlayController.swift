@@ -63,8 +63,47 @@ final class OverlayController {
         }
     }
 
+    /// Which of the sidebar's three lists is showing.
+    ///
+    /// **Persisted.** Reopening the overlay onto a tab the reader did not choose
+    /// is the surface forgetting something it watched them do, and the overlay
+    /// is dismissed and rebuilt every time a game quits.
+    var sidebarTab: OverlaySidebarTab = OverlayLayoutStore.loadSidebarTab() {
+        didSet {
+            guard sidebarTab != oldValue else { return }
+            // **The query does not survive the tab.** "cyn" typed to find a
+            // friend filters the voice list to nothing, and an empty list under
+            // a field somebody has stopped looking at reads as there being no
+            // rooms rather than as a filter still being on.
+            sidebarQuery = ""
+            OverlayLayoutStore.saveSidebarTab(sidebarTab)
+        }
+    }
+
+    /// What the sidebar's field is narrowing by. Not persisted: a query is a
+    /// thing somebody is doing, not a thing they chose.
+    var sidebarQuery = ""
+
+    /// Conversations open as chat windows. **The first is the one drawn**; the
+    /// rest are the faces on the rail beside it.
+    ///
+    /// Written only by `OverlayController+Chat`, which is where every rule about
+    /// the order lives — `private(set)` would be the honest spelling and Swift
+    /// scopes it to this *file*, so it would lock that extension out of the one
+    /// property it exists to maintain.
+    var chatChannelIDs: [ChannelID] = []
+
     /// Toasts on screen right now. See `OverlayNotice`.
     var notices: [OverlayNotice] = []
+
+    /// The toast a reply is being typed into, and what is in it so far.
+    ///
+    /// **On the controller rather than in the toast's own `@State`**, because
+    /// the auto-dismiss timer is here and the two are one fact: a toast with a
+    /// half-typed reply in it is a toast that must not vanish. See
+    /// `OverlayController.holdsNotice`.
+    var replyingToNoticeID: UUID?
+    var replyDraft = ""
 
     /// What the clip key just did, if anything.
     var clipFeedback: ClipFeedback?
@@ -75,9 +114,31 @@ final class OverlayController {
     /// The last thing that went wrong, for the settings pane to show.
     private(set) var lastFailure: String?
 
+    /// The LIVE row the pointer is resting on, and where that row is.
+    ///
+    /// **Raised at the scene's root rather than by the row** — §2's rule about
+    /// presentation modifiers in a list, and the only way the card can hang
+    /// outside the voice widget without that widget growing to contain it.
+    private(set) var streamHover: OverlayStreamHover?
+
+    /// Cameras the reader has switched OFF in the video widget.
+    ///
+    /// **An exclusion rather than a selection**, and that is what makes the
+    /// default right: a video widget that starts empty reads as broken, so
+    /// "shown" is the absence of an entry. It also decides the decode — an
+    /// unchecked tile installs no sink at all — so it is a fact about cost as
+    /// well as about layout. See `OverlayVideoTilesWidget`.
+    private(set) var hiddenVideoUserIDs: Set<UserID> = []
+
+    /// Toasts whose lifetime ran out while a reply was open on them.
+    /// See `OverlayController.releaseNoticeHold`.
+    var expiredNoticeIDs: Set<UUID> = []
+
     private let panel = OverlayPanel()
     private var peekMonitor: Any?
     private var escapeMonitor: Any?
+    /// Whether the reader's own profile has been asked for this run.
+    private var hasRequestedIdentity = false
     private weak var model: AppModel?
 
     init(model: AppModel? = nil) {
@@ -87,6 +148,28 @@ final class OverlayController {
 
     func attach(model: AppModel) {
         self.model = model
+    }
+
+    /// Asks for the reader's own profile, once.
+    ///
+    /// **The banner and the theme colours live ONLY on
+    /// `GET /users/{id}/profile`** — the user objects on READY and on the
+    /// member-list op carry neither — and every existing caller of that route is
+    /// somebody opening *somebody else's* card. So the one account whose
+    /// cosmetics this client had never fetched was the reader's own, and the
+    /// sidebar is the first surface that wants them.
+    ///
+    /// Asked once per run rather than per appearance: the answer cannot change
+    /// without the reader editing their profile, and the overlay is presented
+    /// and dismissed every time a game starts and stops. The derivation for an
+    /// account that set no colours rides on the same answer — `loadProfile`
+    /// finishes by calling `deriveTheme`, which is gated on Nitro full rather
+    /// than on having paid at all (`PremiumTier.derivesProfileTheme`: Basic is a
+    /// paid tier that Discord leaves grey).
+    func prepareIdentity() {
+        guard !hasRequestedIdentity, let model, let userID = model.currentUserID else { return }
+        hasRequestedIdentity = true
+        model.sessionController.loadProfile(of: userID, inGuild: nil)
     }
 
     // MARK: What decides whether it is up at all
@@ -126,6 +209,7 @@ final class OverlayController {
         isPresented = false
         isEditingLayout = false
         isLocked = true
+        clearTransientState()
         removeMonitors()
         panel.dismiss()
     }
@@ -136,6 +220,52 @@ final class OverlayController {
         isPresented = false
         isLocked = true
         isEditingLayout = false
+        clearTransientState()
+    }
+
+    /// Everything that belongs to *this* appearance of the overlay.
+    ///
+    /// **Open chats survive the lock and not the dismissal.** Locking is the
+    /// reader going back to the game with the same conversations waiting;
+    /// dismissal is the game quitting, and a chat window left open across two
+    /// different sessions of two different games is a surface remembering
+    /// something nobody asked it to. A half-typed reply is cleared for the
+    /// stronger version of the same reason — it belongs to a toast that is gone.
+    /// The pointer came to rest on somebody's LIVE row.
+    func hoverStream(_ userID: UserID, anchor: CGRect) {
+        guard anchor != .zero else { return }
+        // A `@State`-shaped write of an equal value still invalidates, and this
+        // one invalidates the whole scene — §2.
+        guard streamHover?.userID != userID || streamHover?.anchor != anchor else { return }
+        streamHover = OverlayStreamHover(userID: userID, anchor: anchor)
+    }
+
+    /// The pointer left a row.
+    ///
+    /// **Only clears the card that row opened.** Sweeping down a roster fires
+    /// the leave for one row after the enter for the next, so an unconditional
+    /// clear would close the card that had just opened.
+    func endStreamHover(_ userID: UserID) {
+        guard streamHover?.userID == userID else { return }
+        streamHover = nil
+    }
+
+    func toggleVideoTile(_ userID: UserID) {
+        if hiddenVideoUserIDs.contains(userID) {
+            hiddenVideoUserIDs.remove(userID)
+        } else {
+            hiddenVideoUserIDs.insert(userID)
+        }
+    }
+
+    private func clearTransientState() {
+        chatChannelIDs = []
+        hiddenVideoUserIDs = []
+        streamHover = nil
+        notices = []
+        replyingToNoticeID = nil
+        replyDraft = ""
+        sidebarQuery = ""
     }
 
     // MARK: The lock
@@ -176,6 +306,18 @@ final class OverlayController {
     /// reached.
     func backgroundClicked() {
         setLocked(true)
+    }
+
+    /// Puts every widget back where it started.
+    ///
+    /// **The reference has one (`resetDefaultLayout`) and this did not**, which
+    /// matters more here than there: a widget dragged off the edge of a display
+    /// that is no longer attached is clamped back into view on the next resolve,
+    /// but a layout somebody has made a mess of over a game has no other way
+    /// out — the only control that could fix it is the arrange mode they would
+    /// have to find first.
+    func resetLayout() {
+        layout = .default
     }
 
     func setEditingLayout(_ editing: Bool) {
@@ -266,6 +408,7 @@ final class OverlayController {
 
 enum OverlayLayoutStore {
     private static let key = "overlay.layout"
+    private static let tabKey = "overlay.sidebarTab"
 
     static func load() -> OverlayLayout {
         guard let data = UserDefaults.standard.data(forKey: key),
@@ -277,5 +420,17 @@ enum OverlayLayoutStore {
     static func save(_ layout: OverlayLayout) {
         guard let data = try? JSONEncoder().encode(layout) else { return }
         UserDefaults.standard.set(data, forKey: key)
+    }
+
+    /// Stored by **name**, so reordering the enum cannot silently change which
+    /// list a returning reader lands on — the rule the rest of `AppSettings`
+    /// already follows.
+    static func loadSidebarTab() -> OverlaySidebarTab {
+        UserDefaults.standard.string(forKey: tabKey)
+            .flatMap(OverlaySidebarTab.init(rawValue:)) ?? .friends
+    }
+
+    static func saveSidebarTab(_ tab: OverlaySidebarTab) {
+        UserDefaults.standard.set(tab.rawValue, forKey: tabKey)
     }
 }

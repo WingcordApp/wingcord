@@ -307,12 +307,28 @@ extension SessionController {
     /// trip this client did not make. It is `POST /users/@me/channels`, it is
     /// idempotent — called for somebody already written to it answers with the
     /// existing channel — and `sendInvite` has been using it all along.
-    func openConversation(with userID: UserID) {
+    /// Where a resolved conversation is opened.
+    ///
+    /// **One resolver, two destinations.** The route that makes a DM is
+    /// idempotent and is the only place that may make one; a second copy of it
+    /// for the overlay would be a second place for a conversation to be created
+    /// twice. What differs is a single line at the end, so it is a parameter.
+    enum ConversationDestination {
+        /// The main window navigates to it.
+        case window
+        /// It opens as a chat window on the overlay, over whatever is running.
+        case overlay
+    }
+
+    func openConversation(with userID: UserID, to destination: ConversationDestination = .window) {
         Task { [weak self] in
             guard let self else { return }
             do {
                 let channelID = try await resolveDirectMessage(with: userID)
-                model.openDirectMessage(channelID)
+                switch destination {
+                case .window: model.openDirectMessage(channelID)
+                case .overlay: model.overlay.openChat(channelID)
+                }
             } catch {
                 Self.trace("open DM \(userID) failed: \(Self.describe(error))")
                 model.reportActionFailure(Self.describe(error))

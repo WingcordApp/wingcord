@@ -454,6 +454,29 @@ enum DemoFixtures {
         }
         model.roles[firstGuild] = guildRoles
 
+        // **`@everyone` in every OTHER fixture server too**, and it is a gap
+        // rather than a flourish: the gate resolves an unknown to *no*
+        // permission, so a server with no roles at all hides its own channels.
+        // Every surface that lists channels across the account — the switcher,
+        // the forward sheet, the overlay's Voice tab — could therefore only ever
+        // show the one server this block had filled in, which reads as those
+        // surfaces being broken rather than as the fixture being thin.
+        for guildID in guilds.keys where guildID != firstGuild {
+            let everyone = RoleID(rawValue: guildID.rawValue)
+            model.roles[guildID] = [
+                everyone: Role(
+                    id: everyone,
+                    name: "@everyone",
+                    position: 0,
+                    permissions: [
+                        .viewChannel, .readMessageHistory, .sendMessages,
+                        .addReactions, .connect, .speak,
+                    ]
+                ),
+            ]
+            model.members[guildID] = [me: Member(userID: me, roleIDs: [])]
+        }
+
         var guildMembers: [UserID: Member] = [:]
         var presences: [UserID: Presence] = [:]
         let hoistIDs = roleSpecs.indices.map { RoleID(rawValue: 2000 + UInt64($0)) }
@@ -673,12 +696,161 @@ enum DemoFixtures {
         // the early return and the demo has never once shown a call. That is
         // why `HANDOFF.md` §0.3 says nobody has ever looked at the encryption
         // indicator: `--demo` could not draw the surface it lives on.
-        let voiceGuildID = model.guilds.keys.first { guildID in
+        // **From the rail's order, not from a dictionary's.** `guilds.keys` is
+        // unordered, so which server the reader's call was in — and therefore
+        // whether the stage below found a channel at all — changed from launch
+        // to launch. A fixture that is different every run is a fixture nobody
+        // can photograph twice.
+        let voiceGuildID = model.orderedGuildIDs.first { guildID in
             index.channelIDs(inGuild: guildID).contains { index[$0]?.kind == .voice }
         }
         populateVoice(
             model, index: index, guildID: voiceGuildID ?? first, me: me, others: userIDs
         )
+        populateConversations(model, me: me, users: users, userIDs: userIDs)
+    }
+
+    /// A game in front, for `--overlay`.
+    ///
+    /// **A pid of zero, deliberately.** The clip buffer arms against a real
+    /// process and there is none here, so `arm` fails the way it is built to —
+    /// swallowed, with `isArmed == false`. Anything else would be a fixture
+    /// pretending a capture exists.
+    static func populateDetectedGame(_ model: AppModel) {
+        model.detectedGame = DetectedGame(
+            id: Self.battlefield,
+            name: "Battlefield 6",
+            // Long enough ago that the elapsed clock has two digits in every
+            // field, which is the only state in which it can be read wrong.
+            startedAt: Date.now.addingTimeInterval(-347),
+            isLauncher: false,
+            isTranslated: false,
+            processIdentifier: 0
+        )
+    }
+
+    /// One toast, for `--overlay`.
+    static func notice(in channelID: ChannelID, model: AppModel) -> OverlayNotice {
+        let partner = model.channelIndex[channelID]?.recipientIDs
+            .first { $0 != model.currentUserID }
+            .flatMap { model.users[$0] }
+        return OverlayNotice(
+            title: partner?.preferredName ?? "someone",
+            body: "get on for some gaming",
+            monogram: partner?.monogram ?? "?",
+            avatarURL: partner.flatMap { model.avatarURL(for: $0, side: 30) },
+            channelID: channelID,
+            messageID: model.channelIndex[channelID]?.lastMessageID
+                ?? MessageID(rawValue: 1)
+        )
+    }
+
+    // MARK: Friends, and the conversations with them
+    //
+    // **`--demo` had neither, and two whole surfaces could therefore only ever
+    // be looked at empty**: the direct-message home in the main window, and all
+    // three tabs of the overlay's sidebar. Everything below is a shape a real
+    // session receives — a `RELATIONSHIP_ADD`, a private channel on READY, a
+    // channel override with FAVORITED set — written straight into the same
+    // tables.
+    private static func populateConversations(
+        _ model: AppModel,
+        me: UserID,
+        users: [UserID: User],
+        userIDs: [UserID]
+    ) {
+        let friends = userIDs.filter { $0 != me }.prefix(14)
+        guard !friends.isEmpty else { return }
+
+        var relationships: [UserID: Relationship] = [:]
+        for userID in friends { relationships[userID] = .friend }
+        // **Not everybody is a friend**, and the two states that are not have to
+        // exist or the Friends tab's own filter is never exercised: a request
+        // the reader has not answered, and one they sent.
+        if userIDs.count > friends.count + 2 {
+            relationships[userIDs[friends.count]] = .incomingRequest
+            relationships[userIDs[friends.count + 1]] = .outgoingRequest
+        }
+        model.relationships = relationships
+
+        // A nickname on one of them, because the reader's own name for somebody
+        // is supposed to beat the one they chose — and a fixture where the two
+        // are never different proves nothing about that.
+        model.friendNicknames[friends[friends.startIndex]] = "roomie"
+
+        // One conversation per friend, plus a group. The ids are real snowflake
+        // magnitudes with a descending timestamp, so `privateChannelIDs()` comes
+        // back in recency order the way a real READY does.
+        var privateChannels: [Channel] = []
+        for (offset, userID) in friends.enumerated() {
+            privateChannels.append(Channel(
+                id: ChannelID(rawValue: 800_000_000_000_000_000 + UInt64(offset) * 4_194_304),
+                kind: .directMessage,
+                name: "",
+                lastMessageID: MessageID(
+                    rawValue: (recentMilliseconds - UInt64(offset) * 1_800_000
+                        - Snowflake<MessageTag>.epochMilliseconds) << 22
+                ),
+                // **Discord's `recipients` EXCLUDES the reader**, and a
+                // fixture that includes them is the one thing a fixture may not
+                // be: unlike the caller's real input. `displayName(of:)` joins
+                // the list for a channel with no name of its own, so the first
+                // capture of the chat window had "alex, Blåhaj" in its header —
+                // the reader's own name, in the title of a conversation with
+                // somebody else.
+                recipientIDs: [userID]
+            ))
+        }
+        privateChannels.append(Channel(
+            id: ChannelID(rawValue: 800_000_000_000_000_000 - 4_194_304),
+            kind: .groupDirectMessage,
+            name: "the lab",
+            lastMessageID: MessageID(
+                rawValue: (recentMilliseconds - 600_000
+                    - Snowflake<MessageTag>.epochMilliseconds) << 22
+            ),
+            recipientIDs: Array(friends.prefix(3))
+        ))
+        var index = model.channelIndex
+        index.replacePrivateChannels(privateChannels)
+        model.channelIndex = index
+
+        // **Two favourites, because the bit decides ORDER as well as a glyph.**
+        // A fixture with one cannot show that favourites keep recency order
+        // among themselves. The newest is one of them, so the pair at the top of
+        // the list is a favourite WITH a transcript behind it and one without —
+        // which is the difference between the preview line and its fallback.
+        model.pinnedChannelIDs = [privateChannels[0].id, privateChannels[5].id]
+
+        // Transcripts for the newest two, so the Messages tab's preview line has
+        // something to fold — and so the overlay's chat window opens onto a
+        // conversation rather than onto a failed fetch. The rest keep the handle
+        // as their second line, which is the honest state for a conversation
+        // this session has not opened.
+        //
+        // **Two, because `residentChannelLimit` is three.** Seeding four evicted
+        // the first one seeded — which is the one `privateChannelIDs().first`
+        // hands the chat window — and the capture showed "Messages did not load.
+        // Not authorised." over a conversation the fixture had filled. A fixture
+        // that exceeds the store's own cache bound is a fixture that deletes
+        // itself.
+        for channel in privateChannels.prefix(2) {
+            model.setMessages(transcript(in: channel.id, users: users), in: channel.id)
+        }
+
+        // **A read state per conversation, because READY carries one.** Without
+        // them `unreadState` has nothing to compare `lastMessageID` against and
+        // answers "unread" for everything — so the first capture of the Messages
+        // tab had a dot on every single row, which is the fixture lying about
+        // the one thing that list is scanned for.
+        //
+        // Two are left waiting, and one of those carries mentions.
+        for (offset, channel) in privateChannels.enumerated() {
+            model.readStates[channel.id] = ReadState(
+                lastAcknowledgedID: offset < 2 ? nil : channel.lastMessageID,
+                mentionCount: offset == 1 ? 3 : 0
+            )
+        }
     }
 
     // MARK: A call in progress
@@ -704,6 +876,28 @@ enum DemoFixtures {
             index[$0]?.kind == .voice
         }) else { return }
 
+        // **One pool, one cursor, and every seat taken from it in turn.**
+        //
+        // This block seats people in four different places — the reader's call,
+        // a second room, a room in another server, and a stage — and every one
+        // of them used to take its own slice off the front of the same list.
+        // `states` is keyed by person, so the last write won: the call's cast of
+        // four were all re-seated in the stage, and `--demo` has never once
+        // drawn the call this file spends four paragraphs describing. Three
+        // separate sections of it assert a cast of five; the tell was the
+        // overlay's voice widget showing a single face, twice, on two different
+        // days.
+        //
+        // `take(_:)` is the fix and it is the whole fix: a seat is filled by
+        // asking for people, not by indexing into a list somebody else is also
+        // indexing into.
+        var pool = others.filter { $0 != me }[...]
+        func take(_ count: Int) -> [UserID] {
+            let taken = Array(pool.prefix(count))
+            pool = pool.dropFirst(count)
+            return taken
+        }
+
         var states: [UserID: VoiceState] = [:]
         states[me] = VoiceState(
             userID: me,
@@ -713,13 +907,21 @@ enum DemoFixtures {
         )
         // Four other people, each in a different state, so every mark on a tile
         // is on screen at once: somebody talking, somebody muted, somebody
-        // deafened, and somebody sharing a screen.
-        let cast: [(UserID, Bool, Bool, Bool)] = zip(
-            others.filter { $0 != me }.prefix(4),
-            [(false, false, false), (true, false, false), (true, true, false), (false, false, true)]
-        ).map { ($0, $1.0, $1.1, $1.2) }
+        // deafened, somebody sharing a screen — and, since the overlay grew a
+        // widget for them, **somebody with a camera on**. Without that last one
+        // `OverlayVideoTilesWidget` has no state but its empty one, and a widget
+        // that can only be looked at empty is a widget nobody has looked at.
+        let cast: [(UserID, Bool, Bool, Bool, Bool)] = zip(
+            take(4),
+            [
+                (false, false, false, true),
+                (true, false, false, false),
+                (true, true, false, false),
+                (false, false, true, true),
+            ]
+        ).map { ($0, $1.0, $1.1, $1.2, $1.3) }
 
-        for (userID, muted, deafened, streaming) in cast {
+        for (userID, muted, deafened, streaming, camera) in cast {
             states[userID] = VoiceState(
                 userID: userID,
                 channelID: voiceChannelID,
@@ -727,9 +929,33 @@ enum DemoFixtures {
                 sessionID: "demo",
                 isSelfMuted: muted,
                 isSelfDeafened: deafened,
-                isStreaming: streaming
+                isStreaming: streaming,
+                isCameraOn: camera
             )
         }
+        // **A rich presence behind the share**, because the LIVE hover card's
+        // whole body is `details`, `state` and the gap since `startedAt` — and
+        // a sharer with no activity draws the card's one-line fallback, which
+        // is the half of it least worth looking at. The shapes are the ones
+        // Discord's own article photographs.
+        if let sharer = cast.first(where: { $0.3 })?.0 {
+            model.presences[sharer] = Presence(
+                userID: sharer,
+                status: .online,
+                activities: PresenceActivities(list: [
+                    Activity(
+                        kind: .playing,
+                        name: "SUPERVIVE",
+                        state: "Squads (4 of 4)",
+                        details: "In Match",
+                        applicationID: Self.battlefield,
+                        startedAt: Date.now.addingTimeInterval(-347)
+                    ),
+                ])
+            )
+            model.presenceRevision &+= 1
+        }
+
         // **A second room, with nobody the reader knows in it.** This is the
         // state the sidebar exists for and the one that cannot be seen from
         // inside a call: a room you are *not* in, drawn with its label, its
@@ -740,8 +966,7 @@ enum DemoFixtures {
         }
         if voiceChannelIDs.count > 1 {
             let elsewhere = voiceChannelIDs[1]
-            let bench = others.filter { $0 != me }.dropFirst(4).prefix(3)
-            for (offset, userID) in bench.enumerated() {
+            for (offset, userID) in take(3).enumerated() {
                 states[userID] = VoiceState(
                     userID: userID,
                     channelID: elsewhere,
@@ -761,11 +986,28 @@ enum DemoFixtures {
         // hover chip has a row to draw and one tile carries the live mark.
         // Without it the chip is only ever its name in `--demo`, which is the
         // state it already had.
-        if let neighbour = model.orderedGuildIDs.first(where: { $0 != guildID }),
-           let room = index.channelIDs(inGuild: neighbour).first(where: {
-               index[$0]?.kind == .voice
-           }) {
-            for (offset, userID) in others.filter({ $0 != me }).prefix(8).enumerated() {
+        //
+        // **The first neighbour WITH a room in it, not simply the first
+        // neighbour.** This asked the first other server for a voice channel and
+        // gave up if it had none — and only two fixture servers have one at all,
+        // so which server the crowd landed in was decided by an unordered
+        // dictionary's first key. Most launches drew no crowd anywhere, which is
+        // why the overlay's Voice tab could only ever list the one room the
+        // reader was standing in.
+        if let neighbourRoom = model.orderedGuildIDs
+            .filter({ $0 != guildID })
+            .lazy
+            .compactMap({ neighbour -> (GuildID, ChannelID)? in
+                guard let room = index.channelIDs(inGuild: neighbour).first(where: {
+                    index[$0]?.kind == .voice
+                }) else { return nil }
+                return (neighbour, room)
+            })
+            .first
+        {
+            let neighbour = neighbourRoom.0
+            let room = neighbourRoom.1
+            for (offset, userID) in take(8).enumerated() {
                 states[userID] = VoiceState(
                     userID: userID,
                     channelID: room,
@@ -790,22 +1032,30 @@ enum DemoFixtures {
         // order they were raised. The reader is in the audience with their
         // own hand down, which is the state the bar has the most to say
         // about.
-        if let stageChannelID = index.channelIDs(inGuild: guildID).first(where: {
-            index[$0]?.kind == .stage
-        }) {
+        // **Wherever the stage actually is**, which is not necessarily the
+        // server the call is in: only one fixture guild has a stage channel and
+        // only two have a voice channel, so asking the call's own guild for one
+        // found nothing on half the launches and the stage pane was seeded on
+        // the other half. Same class of fault as the crowd's, one guild over.
+        let stage = model.orderedGuildIDs.lazy.compactMap { candidate -> (GuildID, ChannelID)? in
+            guard let channelID = index.channelIDs(inGuild: candidate).first(where: {
+                index[$0]?.kind == .stage
+            }) else { return nil }
+            return (candidate, channelID)
+        }.first
+        if let (stageGuildID, stageChannelID) = stage {
             model.stageInstances[stageChannelID] = StageInstance(
                 id: stageChannelID.rawValue,
-                guildID: guildID,
+                guildID: stageGuildID,
                 channelID: stageChannelID,
                 topic: "Office hours — ask us anything about the build"
             )
-            let bench = others.filter { $0 != me }
-            for (offset, userID) in bench.prefix(9).enumerated() {
+            for (offset, userID) in take(9).enumerated() {
                 let isSpeaker = offset < 2
                 states[userID] = VoiceState(
                     userID: userID,
                     channelID: stageChannelID,
-                    guildID: guildID,
+                    guildID: stageGuildID,
                     sessionID: "demo",
                     isSelfMuted: offset == 1,
                     isSuppressed: !isSpeaker,
@@ -1370,12 +1620,15 @@ enum DemoFixtures {
                         rawValue: (recentMilliseconds - UInt64(serial) * 5_400_000
                             - Snowflake<MessageTag>.epochMilliseconds) << 22
                     ),
-                    // **A ceiling on every voice room, because the counter only
-                    // exists where there is one.** Five is Discord's own most
-                    // common limit and it is small enough that the fixture's
-                    // cast fills a room — which is the state that draws the
-                    // "this channel is full" notice.
-                    userLimit: Self.demoKind(of: name) == .voice ? 5 : nil
+                    // **A ceiling on ONE of the two voice rooms**, because the
+                    // counter only exists where there is one and both states are
+                    // worth seeing. Five is Discord's own most common limit and
+                    // is small enough that the fixture's cast fills the room —
+                    // which is what draws the "this channel is full" notice. The
+                    // other room has no ceiling, which is the ordinary case and
+                    // the one where a client must print a count rather than
+                    // `8 / 0`.
+                    userLimit: Self.demoKind(of: name) == .voice && name == "lobby" ? 5 : nil
                 ))
                 position += 1
             }

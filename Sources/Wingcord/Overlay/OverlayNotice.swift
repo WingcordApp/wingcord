@@ -60,17 +60,56 @@ extension OverlayController {
     func show(_ notice: OverlayNotice) {
         guard isPresented, AppSettings.shared.overlayShowsNotifications else { return }
         notices.append(notice)
-        if notices.count > Self.noticeLimit { notices.removeFirst(notices.count - Self.noticeLimit) }
-        // One task per notice rather than a repeating timer: a timer has to be
-        // owned, cancelled and reasoned about at teardown, and there is at most
-        // `noticeLimit` of these alive.
+        if notices.count > Self.noticeLimit {
+            // Dropping the oldest must drop its reply field with it, or the
+            // hold outlives the toast it was holding and nothing else ever
+            // retires.
+            let dropped = notices.prefix(notices.count - Self.noticeLimit)
+            for notice in dropped where replyingToNoticeID == notice.id { cancelReply() }
+            notices.removeFirst(notices.count - Self.noticeLimit)
+        }
+        armRetirement(for: notice)
+    }
+
+    /// Starts one toast's clock.
+    ///
+    /// One task per notice rather than a repeating timer: a timer has to be
+    /// owned, cancelled and reasoned about at teardown, and there is at most
+    /// `noticeLimit` of these alive.
+    ///
+    /// **A toast being replied to does not retire, and does not poll either.**
+    /// The clock still runs; when it fires against a held toast it files the id
+    /// and stops, and releasing the hold arms a fresh one. That is the whole of
+    /// the pause the reference draws as a button — expressed as a fact about
+    /// the reply field rather than as a second control somebody has to press
+    /// before they start typing.
+    private func armRetirement(for notice: OverlayNotice) {
         Task { [weak self] in
             try? await Task.sleep(for: Self.noticeLifetime)
-            self?.dismiss(notice)
+            guard let self else { return }
+            guard !holdsNotice(notice.id) else {
+                expiredNoticeIDs.insert(notice.id)
+                return
+            }
+            dismiss(notice)
         }
     }
 
+    /// Lets a held toast start dying again.
+    ///
+    /// **A fresh lifetime rather than an immediate dismissal**: somebody who
+    /// opened a reply field and closed it again is still looking at the toast,
+    /// and snatching it away at the moment they cancelled would read as the
+    /// cancel having done something else.
+    func releaseNoticeHold(_ id: UUID) {
+        guard expiredNoticeIDs.remove(id) != nil else { return }
+        guard let notice = notices.first(where: { $0.id == id }) else { return }
+        armRetirement(for: notice)
+    }
+
     func dismiss(_ notice: OverlayNotice) {
+        if replyingToNoticeID == notice.id { cancelReply() }
+        expiredNoticeIDs.remove(notice.id)
         notices.removeAll { $0.id == notice.id }
     }
 

@@ -20,11 +20,27 @@ import Foundation
 /// One thing the overlay can draw.
 ///
 /// The raw value is the persistence key and must not change.
+///
+/// **The declaration order IS the z-order**, because `visibleWidgets` returns
+/// the list in `allCases` order and the scene stacks it. Discord stores a
+/// `zIndex` per widget; a stored one is a number two widgets can tie on and a
+/// reader can never see, where an ordering written here is settled at compile
+/// time and reads as what it is. Panels first, chrome last: a chat window that
+/// covered the toolbar would hide the mute button behind the thing somebody
+/// opened in order to keep playing.
 public enum OverlayWidgetKind: String, CaseIterable, Hashable, Sendable, Codable, Identifiable {
-    /// The call's own controls — mute, deafen, camera, share, disconnect.
-    case quickActions
+    /// Friends, conversations and rooms worth joining — the reading surface.
+    case friends
+    /// One conversation, whole: transcript, embeds and composer.
+    case chat
+    /// Screen shares in the call, as tiles.
+    case streams
+    /// Cameras in the call, as tiles, with a checkbox choosing which show.
+    case videoTiles
     /// Who is in the voice channel, and who is talking.
     case voice
+    /// The call's own controls — mute, deafen, camera, share, disconnect.
+    case quickActions
     /// Toasts for messages that arrive while a game is in front.
     case notifications
     /// The clip that was just taken, and the keybind reminder behind it.
@@ -34,8 +50,12 @@ public enum OverlayWidgetKind: String, CaseIterable, Hashable, Sendable, Codable
 
     public var title: String {
         switch self {
-        case .quickActions: "Controls"
+        case .friends: "Friends"
+        case .chat: "Chat"
+        case .streams: "Streams"
+        case .videoTiles: "Video Tiles"
         case .voice: "Voice"
+        case .quickActions: "Controls"
         case .notifications: "Notifications"
         case .clips: "Clips"
         }
@@ -46,10 +66,23 @@ public enum OverlayWidgetKind: String, CaseIterable, Hashable, Sendable, Codable
     /// Chosen to match the arrangement Discord ships, which is the arrangement
     /// people who have used one will look for: controls top centre, voice down
     /// the left, notifications top left.
+    ///
+    /// **The four added later were placed by photographing them, not by
+    /// reasoning about them.** Streams began at `(0.86, 0.72)` — the reference's
+    /// own bottom-right — and the first capture of the two together showed it
+    /// sitting across the foot of the Friends panel, because that panel is 468
+    /// points tall and the reference has no sidebar open in the shot the corner
+    /// came from. Eight widgets cannot all miss each other on one screen; what
+    /// has to miss is the pair that are up at the same time, and Friends and
+    /// Streams are that pair.
     public var defaultCentre: CGPoint {
         switch self {
-        case .quickActions: CGPoint(x: 0.5, y: 0.06)
+        case .friends: CGPoint(x: 0.88, y: 0.50)
+        case .chat: CGPoint(x: 0.38, y: 0.52)
+        case .streams: CGPoint(x: 0.63, y: 0.82)
+        case .videoTiles: CGPoint(x: 0.07, y: 0.76)
         case .voice: CGPoint(x: 0.08, y: 0.40)
+        case .quickActions: CGPoint(x: 0.5, y: 0.06)
         case .notifications: CGPoint(x: 0.14, y: 0.08)
         case .clips: CGPoint(x: 0.88, y: 0.88)
         }
@@ -61,10 +94,16 @@ public enum OverlayWidgetKind: String, CaseIterable, Hashable, Sendable, Codable
     /// visible while the overlay is asleep and the reader is playing — which is
     /// the whole point of the voice panel and the notification toast, and
     /// exactly wrong for a toolbar nobody can click.
+    ///
+    /// The three reading surfaces are unpinned for that reason and not as a
+    /// preference: a roster, a transcript and a composer are things somebody
+    /// *reads and types into*, and there is no reading a transcript that
+    /// cannot take a click. The two tile widgets are pinned, because watching
+    /// somebody's screen while you play is the entire point of them.
     public var isPinnedByDefault: Bool {
         switch self {
-        case .quickActions: false
-        case .voice, .notifications, .clips: true
+        case .quickActions, .friends, .chat: false
+        case .streams, .videoTiles, .voice, .notifications, .clips: true
         }
     }
 }

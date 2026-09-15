@@ -247,6 +247,15 @@ final class AppModel {
     /// state: it opens a second socket, joins a second MLS group and costs a
     /// decode, so it lasts exactly as long as somebody is looking at it.
     var watchedStreamUserID: UserID?
+
+    /// People the reader has silenced for this call.
+    ///
+    /// **Local, and only for as long as the call lasts.** Discord stores a
+    /// per-user volume on the account; this is the cheaper half of that idea and
+    /// the half a stream tile's speaker button actually means — "not this
+    /// person, not right now". Cleared on leaving, so nothing has to be
+    /// re-applied to a session that has not been built yet.
+    var locallyMutedUserIDs: Set<UserID> = []
     /// The newest thumbnail of somebody's screen share, by stream key.
     ///
     /// **A URL, not a picture.** Discord answers the preview route with an
@@ -987,6 +996,11 @@ final class AppModel {
     /// a walk of the account per character typed.
     @ObservationIgnored
     var quickSwitchCache: (key: QuickSwitchMemoKey, value: [QuickSwitchCandidate])?
+    /// The overlay's three lists. Memoized because its reader is a panel drawn
+    /// over a running game, and a roster rebuilt per frame there is the one cost
+    /// this surface may not have — see `AppModel+OverlaySidebar`.
+    @ObservationIgnored
+    var overlaySidebarCache: (key: OverlaySidebarMemoKey, value: OverlaySidebarPresentation)?
 
     /// Asks the session for a page of history above what is loaded.
     ///

@@ -83,6 +83,62 @@ extension AppModel {
 
     // MARK: Notifications over the game
 
+    /// Opens a conversation as a chat window on the overlay.
+    func openOverlayChat(_ channelID: ChannelID) {
+        guard canOpen(channelID) else { return }
+        overlay.openChat(channelID)
+    }
+
+    /// The same, for somebody the reader may not have written to yet.
+    ///
+    /// **The conversation is created rather than the row being inert.** It is
+    /// `POST /users/@me/channels`, it is idempotent, and the profile's Message
+    /// control has been going through it since the profile rebuild — a friends
+    /// list that only opened conversations which already existed would leave
+    /// most rows doing nothing, which is §5.5's inert control with a friendly
+    /// face on it.
+    func openOverlayChat(with userID: UserID) {
+        guard userID != currentUserID else { return }
+        if let existing = directMessageChannel(with: userID) {
+            overlay.openChat(existing)
+            return
+        }
+        sessionController.openConversation(with: userID, to: .overlay)
+    }
+
+    /// Joins a room the sidebar offered.
+    ///
+    /// **Two entry points, because a guild room and a direct call are two
+    /// different acts.** `joinVoice` is gated on `CONNECT`, which a direct call
+    /// has no bit for; `joinCall` rings nobody, which is what joining a call
+    /// already in progress has to do — a ring there is a phone going off in the
+    /// ear of somebody already on it.
+    func joinOverlayRoom(_ channelID: ChannelID) {
+        guard connectedVoiceChannelID != channelID else { return }
+        if channelIndex[channelID]?.guildID != nil {
+            joinVoice(channelID)
+        } else {
+            joinCall(in: channelID)
+        }
+    }
+
+    /// Answers a toast, in the conversation it came from.
+    ///
+    /// **A reply to the message, not a line in the channel.** The toast names
+    /// one message and the reader is answering that one; sending it unanchored
+    /// would drop the only piece of context a person mid-game has.
+    ///
+    /// It also acknowledges: somebody who has just answered a message has
+    /// plainly read it, and leaving it bold would mean coming back to a badge
+    /// for a conversation they already dealt with.
+    func replyFromOverlay(_ text: String, to notice: OverlayNotice) {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        sessionController.send(trimmed, in: notice.channelID, replyingTo: notice.messageID)
+        sessionController.acknowledge(notice.messageID, in: notice.channelID)
+        overlay.dismiss(notice)
+    }
+
     /// Shows a message on the overlay instead of in Notification Center.
     ///
     /// **One or the other, never both.** A system banner behind a full-screen

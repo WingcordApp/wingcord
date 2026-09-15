@@ -33,8 +33,22 @@ struct OverlayScene: View {
                     }
                 }
                 chrome(in: surface)
+                // Presented once, at the root, rather than per row — §2. It is
+                // also the only way a card can hang OUTSIDE the widget that
+                // raised it without that widget growing to contain it, which
+                // would move every other widget's slot as a pointer crossed a
+                // row.
+                OverlayStreamHoverCard(controller: controller, surface: surface)
             }
             .frame(width: surface.width, height: surface.height)
+            // **Registered, and it had never been.** The drag gesture has asked
+            // for `.named(OverlaySpace.name)` since the overlay landed and
+            // nothing declared it, so SwiftUI was resolving those points in a
+            // fallback space — which happened to agree because this panel covers
+            // the whole screen and global therefore equals surface. It stops
+            // agreeing the moment anything insets this view, and the symptom
+            // would be a widget that jumps on mouse-down.
+            .coordinateSpace(.named(OverlaySpace.name))
             .animation(motion.standard, value: controller.isLocked)
             .animation(motion.hover, value: controller.isPeeking)
         }
@@ -247,6 +261,12 @@ private struct OverlayWidgetHost: View {
 }
 
 /// The coordinate space every widget's drag is measured in.
-enum OverlaySpace {
+///
+/// **`nonisolated`, because the app target inverts Swift's default.** A bare
+/// enum here is main-actor isolated, and `onGeometryChange`'s transform is a
+/// `Sendable` closure — so a row asking for its frame in this space could not
+/// name it without a warning. The value is a `let String`; there is nothing for
+/// the isolation to protect.
+nonisolated enum OverlaySpace {
     static let name = "overlay.surface"
 }
