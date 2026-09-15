@@ -83,13 +83,52 @@ struct ProfileThemePaletteTests {
         #expect(abs(b - 40) <= 8)
     }
 
-    @Test("The rendition size is the CDN rung the URL builder asks for")
+    @Test("Each rendition size is the CDN rung its URL builder asks for")
     func sizeMatchesTheRung() {
-        // Two numbers that must agree: quantising the same picture at another
-        // size picks a different swatch outright, so the size the URL requests
-        // and the size the decode is capped at cannot drift apart.
-        #expect(CDN.rung(
-            forSide: CGFloat(ProfileThemePalette.pixelSize) / 2, scale: 2
-        ) == ProfileThemePalette.pixelSize)
+        // Two numbers that must agree, per surface: quantising the same picture
+        // at another size picks a different swatch outright, so the size the URL
+        // requests and the size the decode is capped at cannot drift apart.
+        for size in [ProfileThemePalette.profilePixelSize,
+                     ProfileThemePalette.applicationPixelSize] {
+            #expect(CDN.rung(forSide: CGFloat(size) / 2, scale: 2) == size, "\(size)")
+        }
+    }
+
+    @Test("A profile is quantised at 80, which is the rung Discord's own palette used")
+    func profileRungIsEighty() {
+        // Driven against a capture of Discord's `S4` output for a known avatar —
+        // `#89867d` then `#d5d4d3`. At 64, 128 and 256 this client's quantiser
+        // puts the near-black behind the subject in second place and the light
+        // colour third; at 80 the pair and the ORDER are Discord's, with the
+        // secondary exact. See `ProfileThemePalette` for the sweep.
+        #expect(ProfileThemePalette.profilePixelSize == 80)
+        // And the application path keeps its own, which was verified byte for
+        // byte against two gradients Discord rendered.
+        #expect(ProfileThemePalette.applicationPixelSize == 128)
+    }
+
+    @Test("A derived palette is five colours in Discord's own order")
+    func paletteIsFive() {
+        // `[...t.slice(0, 2), ...Q7(t[0])]`, read off the store's own action.
+        // The surfaces split on that array — the full profile takes [0] and [1],
+        // the sidebar keeps only [0] — so the shape is the answer.
+        let palette = ProfileThemePalette.derive(
+            from: image(colour: (200, 40, 40), whiteFraction: 0.1)
+        )
+        // **Two raw boxes plus three partners — where there ARE two boxes.** A
+        // picture of one colour quantises to one, and inventing a second would
+        // be the client deciding a body colour nobody's artwork contains. The
+        // shape that always holds is the tail.
+        #expect(palette.count == min(2, palette.count - 3) + 3)
+        #expect(palette.count >= 4)
+        let primary = SIMD3<UInt8>(
+            UInt8(palette[0] >> 16 & 0xFF),
+            UInt8(palette[0] >> 8 & 0xFF),
+            UInt8(palette[0] & 0xFF)
+        )
+        let partners = PaletteHarmony.partners(of: primary).map {
+            UInt32($0.x) << 16 | UInt32($0.y) << 8 | UInt32($0.z)
+        }
+        #expect(Array(palette.suffix(3)) == partners)
     }
 }

@@ -1670,7 +1670,7 @@ final class SessionController {
             guard let self else { return }
             defer { paletteFetches.remove(url) }
             let key = ImageStore.Key(
-                url: url, maximumPixelSize: ProfileThemePalette.pixelSize
+                url: url, maximumPixelSize: ProfileThemePalette.profilePixelSize
             )
             guard let image = await ImageStore.shared.image(for: key, bucket: .artwork)
             else { return }

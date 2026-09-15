@@ -123,7 +123,7 @@ extension SessionController {
               let url = CDN.applicationIcon(
                   id: invite.applicationID,
                   hash: hash,
-                  side: CGFloat(ProfileThemePalette.pixelSize),
+                  side: CGFloat(ProfileThemePalette.applicationPixelSize),
                   scale: 1
               ),
               activityAccentFetches.insert(invite.applicationID).inserted
@@ -132,7 +132,7 @@ extension SessionController {
         Task { [weak self] in
             guard let self else { return }
             defer { activityAccentFetches.remove(invite.applicationID) }
-            let key = ImageStore.Key(url: url, maximumPixelSize: ProfileThemePalette.pixelSize)
+            let key = ImageStore.Key(url: url, maximumPixelSize: ProfileThemePalette.applicationPixelSize)
             guard let image = await ImageStore.shared.image(for: key, bucket: .thumbnail)
             else { return }
             let palette = await Task.detached(priority: .utility) {

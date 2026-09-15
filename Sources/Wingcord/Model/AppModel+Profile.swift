@@ -177,14 +177,14 @@ extension AppModel {
     /// `!= .none` spends a fetch and a decode to colour a profile Discord
     /// leaves grey — see `PremiumTier.derivesProfileTheme`.
     ///
-    /// The size is `ProfileThemePalette.pixelSize`, and it is not a rendering
+    /// The size is `ProfileThemePalette.profilePixelSize`, and it is not a rendering
     /// choice: quantise the same picture at a different size and a different
     /// swatch wins. `rung(forSide:scale:)` rounds 64 at 2x to exactly that.
     func themeArtworkURL(of user: User, _ decoration: UserDecoration?) -> URL? {
         guard let decoration, decoration.premiumTier.derivesProfileTheme,
               decoration.themeColorValues?.isEmpty ?? true
         else { return nil }
-        let side = CGFloat(ProfileThemePalette.pixelSize) / 2
+        let side = CGFloat(ProfileThemePalette.profilePixelSize) / 2
         if let hash = decoration.bannerHash {
             return CDN.userBanner(userID: user.id, hash: hash, width: side)
         }

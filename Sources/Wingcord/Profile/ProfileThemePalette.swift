@@ -22,35 +22,91 @@ import WingcordCore
 /// established by measuring what Discord renders rather than assumed:
 ///
 ///  - **WebP, not PNG.** Lossy, so the pixels genuinely differ.
-///  - **128 pixels.** At 256 a different swatch wins outright — on one test
-///    profile the answer moves 157 units, from his face to the near-black
-///    behind his head.
+///  - **80 pixels**, and this is a correction. It was 128, on a measurement
+///    taken against a single dark avatar where only the *first* swatch was
+///    checkable. Driven against a capture of Discord's own `S4` output —
+///    `[137,134,125]` then `[213,212,211]` for a known avatar — the rungs
+///    disagree about the **second** box, which is the one the card body is
+///    painted with:
+///
+///    ```
+///    src=64   #8c8982  #2e2f2d  #d8d8d4
+///    src=80   #87847c  #d5d4d3  #2b2c2b   <- Discord's pair, in Discord's order
+///    src=128  #8d8b84  #2f3130  #d8d8d5
+///    src=256  #8d8b84  #2f3232  #d9d8d6
+///    ```
+///
+///    At every rung but 80 the near-black behind the subject wins second place
+///    and the light colour falls to third. `HANDOFF.md` recorded that as a
+///    property of derived palettes — "the second of those is very often the
+///    near-black *behind* the subject" — and it was a property of asking for
+///    the wrong picture. 80 is the rung the profile surfaces themselves
+///    request, and the palette store is keyed by the URL, so it is the rung
+///    Discord quantises.
 ///  - **Every tenth pixel.** Discord's `quality` argument, and it changes which
 ///    box the median cut lands in.
+///  - **No resample.** The image is quantised at the size it arrives. Redrawing
+///    the 80-pixel rendition into a 128-pixel canvas keeps the ordering but
+///    moves both swatches by two or three units (`#8b8982 #d6d6d5`), because
+///    the interpolation invents pixels the histogram then counts.
 ///
-/// Verified against three live profiles, on the two whose derived colour is
-/// directly measurable: within **3 and 4 units of 255**. The remainder is this
-/// client's WebP decode against Chrome's, plus the display-profile conversion
-/// in the screenshots the targets came from — not the algorithm.
+/// Verified against the captured pair above: the secondary is **exact**, and
+/// the primary is within **2 units** on every channel. The remainder is this
+/// client's WebP decode against Chrome's, not the algorithm.
 nonisolated enum ProfileThemePalette {
-    /// The rendition to quantise, in pixels. Also the CDN rung, so this is one
-    /// number rather than two that can drift apart.
-    static let pixelSize = 128
+    /// The rendition a **profile** is quantised from, in pixels. Also the CDN
+    /// rung it is fetched at, so one number rather than two that can drift
+    /// apart. See the note above for what it cost to get wrong.
+    static let profilePixelSize = 80
+
+    /// The rendition an **application icon** is quantised from.
+    ///
+    /// **A second number, and the instinct to collapse the two is the trap.**
+    /// Discord's palette store is keyed by the *URL*, and a URL carries its
+    /// size — so a surface that renders an avatar at 80 and one that renders an
+    /// icon at 128 do not share a palette, they compute different ones from
+    /// different pictures. There is no single answer for a person; there is an
+    /// answer per rendition.
+    ///
+    /// 128 is verified for this one, byte for byte, against two gradients
+    /// Discord actually rendered — see `AppIconGradient` and
+    /// `PaletteHarmonyTests`. Changing it to match the profile's 80 would throw
+    /// that away for a tidiness that is not true.
+    static let applicationPixelSize = 128
     /// Discord's `quality`: take every Nth pixel.
     static let stride = 10
-    /// How many boxes the quantiser is asked for. Only the first two are used,
-    /// but asking for fewer changes where every cut lands.
+    /// How many boxes the quantiser is asked for. Only the first two survive
+    /// into the palette, but asking for fewer changes where every cut lands.
     static let swatchCount = 5
 
-    /// The primary and secondary, as the 24-bit values `theme_colors` would
-    /// have carried — so a derived theme and a chosen one reach the surfaces
-    /// through exactly the same path and cannot diverge in treatment.
+    /// The whole palette, as the 24-bit values `theme_colors` would have
+    /// carried — so a derived theme and a chosen one reach the surfaces through
+    /// exactly the same path and cannot diverge in treatment.
+    ///
+    /// **Five, and the shape is Discord's own:** the first two raw boxes,
+    /// followed by three partners synthesised from the *first* of them. Read
+    /// straight off the store's action:
+    ///
+    /// ```js
+    /// let t = await S4(url), n = Q7(t[0]);
+    /// palette: { ...i.palette, [e]: [...t.slice(0, 2), ...n] }
+    /// ```
+    ///
+    /// The two consumers split on that array and are why the order matters: the
+    /// full profile takes `[0]` for the banner and `[1]` for the card body,
+    /// while the sidebar destructures `[i] = …` and keeps only `[0]`. Nothing
+    /// in this client draws the three partners yet; they are here because the
+    /// palette is one value and half of one is how a surface ends up inventing
+    /// the rest.
     ///
     /// Empty when the artwork yields nothing, which is a real answer: a profile
     /// with no usable colour keeps the neutral ground rather than being given a
     /// colour nobody chose.
     static func derive(from image: CGImage) -> [UInt32] {
-        swatches(from: image).map { UInt32($0.x) << 16 | UInt32($0.y) << 8 | UInt32($0.z) }
+        let pair = swatches(from: image)
+        guard let primary = pair.first else { return [] }
+        return (pair + PaletteHarmony.partners(of: primary))
+            .map { UInt32($0.x) << 16 | UInt32($0.y) << 8 | UInt32($0.z) }
     }
 
     /// The same two swatches, before they are packed into `theme_colors`'

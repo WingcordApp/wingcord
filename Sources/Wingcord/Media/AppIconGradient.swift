@@ -105,14 +105,14 @@ final class AppIconGradientStore {
                 // **The palette's own rendition, not the mark's.** 128 pixels
                 // and WebP are two of the three things `MedianCutQuantizer`
                 // says are load-bearing: at 256 a different swatch wins.
-                side: CGFloat(ProfileThemePalette.pixelSize),
+                side: CGFloat(ProfileThemePalette.applicationPixelSize),
                 scale: 1
             )
         } ?? CDN.defaultApplicationIcon
         guard let url = resolved else { return }
         inFlight.insert(id)
         defer { inFlight.remove(id) }
-        let key = ImageStore.Key(url: url, maximumPixelSize: ProfileThemePalette.pixelSize)
+        let key = ImageStore.Key(url: url, maximumPixelSize: ProfileThemePalette.applicationPixelSize)
         guard let image = await ImageStore.shared.image(for: key),
               let gradient = AppIconGradient.derive(from: image)
         else { return }

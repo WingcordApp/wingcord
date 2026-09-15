@@ -102,6 +102,25 @@ struct PaletteHarmonyTests {
             == SIMD3<UInt8>(25, 64, 123))
     }
 
+    /// **All three, against a capture of `Q7` itself rather than of a gradient.**
+    /// Run in Discord's own console — `Q7(rawMMCQ[0])` for a known avatar whose
+    /// first box is `[137,134,125]` — the module answered
+    /// `[[174,88,153],[88,110,174],[88,174,110]]`. This swatch is the useful
+    /// one: at 4.8% saturation it *trips* the `< 30` clamp, which neither of the
+    /// gradient vectors above does, and the clamp is worth exactly one unit on
+    /// two channels. Reproducing it needs the percentages rounded to one decimal
+    /// before the comparison — see `PaletteHarmony.hsl`. Without that rounding
+    /// the answer is `[[174,88,153],[88,109,174],[88,174,109]]`, which is how
+    /// this was found.
+    @Test("Every partner matches a capture of Q7 itself, including the clamp")
+    func partnersMatchCapturedQ7() {
+        #expect(PaletteHarmony.partners(of: SIMD3(137, 134, 125)) == [
+            SIMD3<UInt8>(174, 88, 153),
+            SIMD3<UInt8>(88, 110, 174),
+            SIMD3<UInt8>(88, 174, 110),
+        ])
+    }
+
     /// Three of them, at −90°, −180° and −270°, because the reference asks for
     /// `360 / (count + 1)` with a default count of three.
     @Test("There are three partners, a quarter turn apart")

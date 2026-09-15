@@ -37,21 +37,21 @@ enum ProfileGround: Equatable {
     case themed(Color, Color)
     /// No theme. A plain structural ground, like every other panel in the app.
     case neutral
-    /// No theme of their own, so one was quantised out of their artwork.
+    /// No theme of their own, so the pair was quantised out of their artwork.
     ///
-    /// **One colour, not a pair, and that is the whole reason this is its own
-    /// case.** A chosen theme is two colours somebody picked to sit together; a
-    /// derived one is the first two boxes a median cut happened to produce, and
-    /// the second of those is very often the near-black *behind* the subject —
-    /// a photograph's background. Fed into the themed gradient as its foot, that
-    /// swatch inverts it: the surface gathers toward black where it should
-    /// gather toward colour, and the card comes out darker at the bottom than at
-    /// the top. Measured, before this case existed: 28 to 22 down the card,
-    /// where Discord runs 56 to 86.
+    /// **A pair, and it used to be one colour.** The argument for dropping the
+    /// second swatch was that it "is very often the near-black *behind* the
+    /// subject", measured as a card running 28 to 22 where Discord ran 56 to 86.
+    /// That was true of the palette this client was computing and false of
+    /// Discord's: the near-black wins second place at every CDN rung **except**
+    /// the one Discord actually quantises. At rung 80 the second box for the
+    /// test avatar is `#d5d4d3` — exactly what Discord paints the card body
+    /// with — and the ramp runs the right way on its own. See
+    /// `ProfileThemePalette`.
     ///
-    /// So the derived ground is a wash of the PRIMARY at two strengths, and the
-    /// second swatch is not drawn at all.
-    case derived(Color)
+    /// It stays a case of its own because the *rim* is drawn differently, and
+    /// that measurement was never in doubt.
+    case derived(Color, Color)
 
     /// - Parameter isDerived: whether these colours were quantised out of the
     ///   person's artwork rather than chosen by them. The two are drawn
@@ -62,7 +62,13 @@ enum ProfileGround: Equatable {
             return
         }
         if isDerived {
-            self = .derived(Color(hex: first))
+            // The second box where there is one. A palette with a single entry
+            // is a picture that quantised to one colour, and the flat form is
+            // the honest answer there.
+            self = .derived(
+                Color(hex: first),
+                Color(hex: themeColorValues.count >= 2 ? themeColorValues[1] : first)
+            )
         } else if themeColorValues.count >= 2 {
             self = .themed(Color(hex: first), Color(hex: themeColorValues[1]))
         } else {
@@ -93,7 +99,7 @@ enum ProfileGround: Equatable {
         switch self {
         case .neutral:
             AnyShapeStyle(Color.white.opacity(0.10))
-        case .derived(let primary):
+        case .derived(let primary, _):
             // **Measured, and a third of the way is the whole answer.** Discord
             // rims a derived card at #D8D7D6 where that person's colour is
             // 139,137,129 — which is that colour mixed one third into white,
@@ -124,7 +130,7 @@ enum ProfileGround: Equatable {
     private var pair: (primary: Color, secondary: Color)? {
         switch self {
         case .themed(let primary, let secondary): (primary, secondary)
-        case .derived(let primary): (primary, primary)
+        case .derived(let primary, _): (primary, primary)
         case .neutral: nil
         }
     }
@@ -212,7 +218,7 @@ enum ProfileGround: Equatable {
     /// because both surfaces drew that gradient and only one of them would have
     /// been fixed.
     func plateStyle(accentColorValue: UInt32?) -> AnyShapeStyle {
-        if case .derived(let primary) = self { return AnyShapeStyle(primary) }
+        if case .derived(let primary, _) = self { return AnyShapeStyle(primary) }
         let seed = pair?.primary
             ?? accentColorValue.map { Color(hex: $0) }
             ?? Palette.surfaceRaised
@@ -293,7 +299,7 @@ struct ProfileGroundFill: ViewModifier {
                 )
                 .background(Palette.canvas)
             }
-        case .derived(let primary):
+        case .derived(let primary, let secondary):
             // **Fitted against Discord's own DARK mode, which is the only fair
             // reference for a dark app.** Measured on an account whose derived
             // colour is 139,137,129: Discord runs its card body from 56,56,52
@@ -302,12 +308,17 @@ struct ProfileGroundFill: ViewModifier {
             // numbers are a solved equation rather than a preference, and the
             // result lands within two units of Discord on every channel.
             //
-            // The direction matters as much as the strength. Colour GATHERS
-            // downward here, where the pair the themed case is given would have
-            // run the other way — see `ProfileGround.derived`.
+            // **The foot is the SECOND swatch now, at the same strength.** That
+            // measurement was taken with one colour used twice, because the
+            // second colour this client computed was the near-black behind the
+            // subject — a wrong-rung artefact rather than a fact about derived
+            // palettes. With the right rung the pair is what Discord paints
+            // with, and the ramp that needed one colour twice is the ordinary
+            // themed one: colour still gathers downward, and it gathers toward
+            // the colour the body is meant to be.
             content.background {
                 LinearGradient(
-                    colors: [primary.opacity(0.36), primary.opacity(0.59)],
+                    colors: [primary.opacity(0.36), secondary.opacity(0.59)],
                     startPoint: .top,
                     endPoint: .bottom
                 )

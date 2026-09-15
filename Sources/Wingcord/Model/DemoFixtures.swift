@@ -303,7 +303,7 @@ enum DemoFixtures {
             )
             if let url = CDN.avatar(
                 userID: derivedID, hash: derivedAvatarHash,
-                side: CGFloat(ProfileThemePalette.pixelSize) / 2
+                side: CGFloat(ProfileThemePalette.profilePixelSize) / 2
             ) {
                 model.derivedPalettes[url] = [0xC9_9C_8A, 0x2B_35_39]
             }
