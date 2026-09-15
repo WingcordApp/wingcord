@@ -1259,18 +1259,37 @@ public struct ClientSettings: Sendable {
     /// the same answer to the only question anybody asks of this.
     public var inboxTab: InboxTab = .fallback
 
+    /// Where the account shares what it is playing. See `ActivityPrivacy`.
+    public var activityPrivacy = ActivityPrivacy()
+
+    /// The `privacy` and `status` sub-messages, **exactly as they arrived**.
+    ///
+    /// Kept so a write can change one field and re-emit every other byte
+    /// untouched — the argument is in `ActivityPrivacyProto.replacing`, and it
+    /// is the difference between a settings write and a settings loss. Nil for
+    /// an account whose blob carried neither, which is an account that has
+    /// never opened the pane.
+    public var privacyRaw: Data?
+    public var statusRaw: Data?
+
     public init(
         folders: [GuildFolder],
         guildPositions: [GuildID] = [],
         status: PresenceStatus,
         customStatus: String?,
-        inboxTab: InboxTab = .fallback
+        inboxTab: InboxTab = .fallback,
+        activityPrivacy: ActivityPrivacy = ActivityPrivacy(),
+        privacyRaw: Data? = nil,
+        statusRaw: Data? = nil
     ) {
         self.folders = folders
         self.guildPositions = guildPositions
         self.status = status
         self.customStatus = customStatus
         self.inboxTab = inboxTab
+        self.activityPrivacy = activityPrivacy
+        self.privacyRaw = privacyRaw
+        self.statusRaw = statusRaw
     }
 }
 

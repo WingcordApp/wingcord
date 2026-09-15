@@ -2,7 +2,7 @@ import AppKit
 import Carbon.HIToolbox
 import SwiftUI
 
-// MARK: - The shortcut the whole machine answers to
+// MARK: - The shortcuts the whole machine answers to
 //
 // `RegisterEventHotKey` rather than a global `NSEvent` monitor, and the
 // difference is not stylistic: a global monitor needs the accessibility
@@ -14,32 +14,121 @@ import SwiftUI
 // It is Carbon, and it is the current API. There is no Cocoa replacement in
 // macOS 27 — `NSApplication` has no equivalent — and `HIToolbox` ships in the
 // SDK for exactly this.
+//
+// **A TABLE, not one binding.** It was one until the overlay arrived; Discord's
+// own keybind enum carries `TOGGLE_OVERLAY` and `TOGGLE_OVERLAY_INPUT_LOCK` as
+// two separate actions, and `SAVE_CLIP` and `SAVE_SCREENSHOT` as two more. Each
+// gets its own `EventHotKeyID`, so unregistering one leaves the rest standing.
+
+/// Something the machine can do from anywhere.
+///
+/// The raw value is the defaults key suffix and must not change: it is what a
+/// reader's stored binding is filed under.
+enum GlobalAction: String, CaseIterable, Identifiable, Sendable {
+    /// Bring Wingcord forward, or send it away. The app's original binding.
+    case toggleWindow
+    /// Open the in-game overlay, or send it back to sleep.
+    case toggleOverlay
+    /// Hand the overlay the mouse, or give it back to the game.
+    case toggleOverlayLock
+    /// Keep the last fifteen seconds.
+    case saveClip
+    /// Keep the frame that is on screen.
+    case saveScreenshot
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .toggleWindow: "Show Wingcord"
+        case .toggleOverlay: "Toggle overlay"
+        case .toggleOverlayLock: "Lock or unlock the overlay"
+        case .saveClip: "Save a clip"
+        case .saveScreenshot: "Save a screenshot"
+        }
+    }
+
+    var help: String {
+        switch self {
+        case .toggleWindow:
+            "Brings the window forward from anywhere, and hides it if it is already in front."
+        case .toggleOverlay:
+            "Shows the overlay over whatever is running, and takes the mouse so you can use it."
+        case .toggleOverlayLock:
+            "Gives the mouse back to the game without dismissing the overlay."
+        case .saveClip:
+            "Writes the last fifteen seconds to a file. Nothing is recorded until you press it."
+        case .saveScreenshot:
+            "Writes the frame that is on screen to a file."
+        }
+    }
+
+    /// The binding a fresh install gets.
+    ///
+    /// **Each one is checked against what macOS and common apps already
+    /// claim**, the way the original ⌃⌘W was: a global hotkey shadows its
+    /// combination in *every* application.
+    ///
+    /// The clip and screenshot bindings are deliberately **not** Discord's
+    /// ALT+C and F12. A bare F12 eats the key everywhere on the machine —
+    /// `Hotkey.isValid` would allow it, and that is exactly the defect the
+    /// validity rule exists to prevent for letters — and ⌥C types `ç`.
+    var defaultHotkey: Hotkey? {
+        switch self {
+        case .toggleWindow:
+            Hotkey(keyCode: UInt16(kVK_ANSI_W), modifiers: [.control, .command])
+        case .toggleOverlay:
+            Hotkey(keyCode: UInt16(kVK_ANSI_Grave), modifiers: [.control, .command])
+        case .toggleOverlayLock:
+            Hotkey(keyCode: UInt16(kVK_ANSI_L), modifiers: [.control, .command])
+        case .saveClip:
+            Hotkey(keyCode: UInt16(kVK_ANSI_C), modifiers: [.control, .command, .shift])
+        case .saveScreenshot:
+            Hotkey(keyCode: UInt16(kVK_ANSI_S), modifiers: [.control, .command, .shift])
+        }
+    }
+}
 
 @MainActor
 final class GlobalHotkey {
 
     static let shared = GlobalHotkey()
 
-    /// Run when the shortcut fires. Set once, at launch.
-    var action: (() -> Void)?
+    /// What each action does when its key fires. Set once, at launch.
+    private var actions: [GlobalAction: () -> Void] = [:]
 
-    private var reference: EventHotKeyRef?
+    private var references: [GlobalAction: EventHotKeyRef] = [:]
     private var handler: EventHandlerRef?
-    /// Distinguishes this app's hot key from any other in the process. Four
+    /// Distinguishes this app's hot keys from any other in the process. Four
     /// characters, as the Carbon API expects: 'WGCD'.
     private static let signature = OSType(0x5747_4344)
-    private static let identifier: UInt32 = 1
 
     private init() {}
 
-    /// Install `hotkey`, replacing whatever was registered before.
+    /// The id Carbon files a registration under. Stable across launches because
+    /// it is derived from the case's position, and the cases are append-only.
+    private static func identifier(for action: GlobalAction) -> UInt32 {
+        UInt32(GlobalAction.allCases.firstIndex(of: action) ?? 0) + 1
+    }
+
+    private static func action(for identifier: UInt32) -> GlobalAction? {
+        let index = Int(identifier) - 1
+        guard GlobalAction.allCases.indices.contains(index) else { return nil }
+        return GlobalAction.allCases[index]
+    }
+
+    func setAction(_ body: @escaping () -> Void, for action: GlobalAction) {
+        actions[action] = body
+    }
+
+    /// Install `hotkey` for `action`, replacing whatever was registered before.
     ///
     /// - Returns: whether the system accepted it. `false` means another
     ///   application already owns the combination, which is a fact worth showing
     ///   rather than swallowing.
     @discardableResult
-    func register(_ hotkey: Hotkey?) -> Bool {
-        unregister()
+    func register(_ hotkey: Hotkey?, for action: GlobalAction) -> Bool {
+        unregister(action)
         guard let hotkey, hotkey.isValid else { return true }
 
         installHandlerIfNeeded()
@@ -48,24 +137,27 @@ final class GlobalHotkey {
         let status = RegisterEventHotKey(
             UInt32(hotkey.keyCode),
             hotkey.carbonModifiers,
-            EventHotKeyID(signature: Self.signature, id: Self.identifier),
+            EventHotKeyID(signature: Self.signature, id: Self.identifier(for: action)),
             GetApplicationEventTarget(),
             0,
             &reference
         )
         guard status == noErr, let reference else {
-            Breadcrumbs.record("hotkey: register failed \(status)")
+            Breadcrumbs.record("hotkey: register \(action.rawValue) failed \(status)")
             return false
         }
-        self.reference = reference
-        Breadcrumbs.record("hotkey: registered \(hotkey.displayString)")
+        references[action] = reference
+        Breadcrumbs.record("hotkey: \(action.rawValue) = \(hotkey.displayString)")
         return true
     }
 
-    func unregister() {
-        guard let reference else { return }
+    func unregister(_ action: GlobalAction) {
+        guard let reference = references.removeValue(forKey: action) else { return }
         UnregisterEventHotKey(reference)
-        self.reference = nil
+    }
+
+    func unregisterAll() {
+        for action in references.keys { unregister(action) }
     }
 
     // MARK: The handler
@@ -98,10 +190,10 @@ final class GlobalHotkey {
                     nil,
                     &id
                 )
-                guard status == noErr, id.signature == GlobalHotkey.signature else {
-                    return OSStatus(eventNotHandledErr)
-                }
-                MainActor.assumeIsolated { GlobalHotkey.shared.action?() }
+                guard status == noErr, id.signature == GlobalHotkey.signature,
+                      let action = GlobalHotkey.action(for: id.id)
+                else { return OSStatus(eventNotHandledErr) }
+                MainActor.assumeIsolated { GlobalHotkey.shared.actions[action]?() }
                 return noErr
             },
             1,
@@ -112,7 +204,7 @@ final class GlobalHotkey {
     }
 }
 
-// MARK: - What it does
+// MARK: - What the window one does
 
 extension GlobalHotkey {
 
@@ -140,10 +232,10 @@ extension GlobalHotkey {
     }
 }
 
-// MARK: - Installing it, once
+// MARK: - Installing them, once
 
-/// Registers the stored shortcut at launch and keeps the registration in step
-/// with the setting.
+/// Registers the stored shortcuts at launch and keeps every registration in step
+/// with its setting.
 ///
 /// A modifier at the window root rather than a call in `WingcordApp.init`, for
 /// the reason written up on `AppSettings`: every `didSet` in that store fires
@@ -151,13 +243,28 @@ extension GlobalHotkey {
 /// reach the system from there. By the time a view body runs, the store has
 /// finished loading and `GlobalHotkey` can be told the truth.
 private struct GlobalHotkeyInstaller: ViewModifier {
+    @Environment(AppModel.self) private var model
     @State private var settings = AppSettings.shared
 
     func body(content: Content) -> some View {
         content
-            .onChange(of: settings.globalHotkey, initial: true) { _, hotkey in
-                GlobalHotkey.shared.action = GlobalHotkey.toggleFrontmost
-                GlobalHotkey.shared.register(hotkey)
+            .onChange(of: settings.globalHotkeys, initial: true) { _, table in
+                let overlay = model.overlay
+                GlobalHotkey.shared.setAction(GlobalHotkey.toggleFrontmost, for: .toggleWindow)
+                GlobalHotkey.shared.setAction({ overlay.toggle() }, for: .toggleOverlay)
+                GlobalHotkey.shared.setAction({ overlay.toggleInputLock() }, for: .toggleOverlayLock)
+                GlobalHotkey.shared.setAction({ model.saveClip() }, for: .saveClip)
+                GlobalHotkey.shared.setAction({ model.saveScreenshot() }, for: .saveScreenshot)
+                // **`settings.hotkey(for:)`, never the table directly.** The
+                // table only holds what the reader has *changed*; a missing key
+                // means "use the default". Reading `table[action] ?? nil`
+                // flattens those two into nil and registers nothing at all —
+                // which showed up as a shortcuts pane listing five bindings of
+                // which none did anything.
+                _ = table
+                for action in GlobalAction.allCases {
+                    GlobalHotkey.shared.register(settings.hotkey(for: action), for: action)
+                }
             }
     }
 }

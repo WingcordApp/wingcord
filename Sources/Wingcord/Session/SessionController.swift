@@ -47,6 +47,14 @@ final class SessionController {
     private var eventTask: Task<Void, Never>?
     private var isTornDown = false
 
+    /// What this Mac is running, and the thing that publishes it.
+    ///
+    /// **Owned by the session rather than the model**, because it is a
+    /// connection-shaped thing: it starts when an account connects, stops when
+    /// one signs out, and its whole output is a presence write. The model holds
+    /// the *result* so views can read it.
+    let games = GameDetector()
+
     /// Presence updates arriving between flushes.
     ///
     /// **Coalesced deliberately.** A large guild delivers presence changes
@@ -310,6 +318,7 @@ final class SessionController {
         Self.trace("connecting gateway")
         teardownConnection()
         isTornDown = false
+        startGameDetection()
         let socket = GatewaySocket(metadata: metadata)
         self.socket = socket
         voice.attach(socket: socket)
@@ -422,6 +431,7 @@ final class SessionController {
 
     private func teardownConnection() {
         isTornDown = true
+        stopGameDetection()
         eventTask?.cancel()
         eventTask = nil
         presenceFlushTask?.cancel()
@@ -556,6 +566,11 @@ final class SessionController {
         // assigned wholesale: `InboxState` also holds what this session fetched,
         // and a reconnect must not throw that away underneath an open flyout.
         model.inbox.tab = snapshot.settings.inboxTab
+        // Where the account shares what it is playing, and the raw bytes a
+        // write has to preserve. See `ActivityPrivacyProto`.
+        model.activityPrivacy = snapshot.settings.activityPrivacy
+        model.activityPrivacyRaw = snapshot.settings.privacyRaw
+        model.activityStatusRaw = snapshot.settings.statusRaw
         model.mutedGuildIDs = snapshot.mutedGuildIDs
         model.notificationPreferences = snapshot.notificationPreferences
 
@@ -1116,6 +1131,21 @@ final class SessionController {
     /// something they have not seen.
     private func announce(_ message: Message) {
         guard let notice = model.notice(for: message) else { return }
+        // **The overlay first, and then nothing else.** A system banner behind
+        // a full-screen game is a banner nobody sees, and a reader who got both
+        // would be told twice about one message.
+        if model.announceOverOverlay(
+            OverlayNotice(
+                title: notice.title,
+                body: notice.body,
+                monogram: String(notice.title.prefix(1)).uppercased(),
+                avatarURL: model.users[message.authorID]?.avatarHash.flatMap {
+                    CDN.avatar(userID: message.authorID, hash: $0, side: 30)
+                },
+                channelID: notice.channelID,
+                messageID: notice.messageID
+            )
+        ) { return }
         let notifier = model.notifier
         let playsSound = AppSettings.shared.playsNotificationSound
         Task {
@@ -1578,16 +1608,18 @@ final class SessionController {
         let status = model.selfStatus.rawValue
         let text = model.selfCustomStatus
         let emoji = model.selfCustomStatusEmoji
-        // **The activity rides along.** `activities` is one array and the write
-        // replaces all of it, so publishing a status without the running
-        // activity would erase it from everybody's roster.
-        let activity = model.publishedActivity
+        // **The activities ride along.** `activities` is one array and the
+        // write replaces all of it, so publishing a status without the running
+        // game and the running activity would erase both from everybody's
+        // roster. `publishedActivities` composes them and applies the sharing
+        // preference.
+        let activities = model.publishedActivities
         Task {
             await socket.updatePresence(
                 status: status,
                 customStatus: text,
                 customEmoji: emoji,
-                activity: activity
+                activities: activities
             )
         }
     }

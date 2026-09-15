@@ -774,14 +774,15 @@ public actor GatewaySocket {
     /// Publishes the reader's presence.
     ///
     /// **`activities` is an ARRAY and the whole array is replaced.** A custom
-    /// status is one entry (type 4) and a rich presence is another; sending
-    /// either alone erases the other, which is why both cross here together
-    /// rather than through two calls that would fight.
+    /// status is one entry (type 4), a running game is another (type 0) and an
+    /// embedded activity is a third; sending any one alone erases the rest,
+    /// which is why they all cross here together rather than through calls that
+    /// would fight.
     public func updatePresence(
         status: String,
         customStatus: String?,
         customEmoji: String?,
-        activity: RichPresenceActivity? = nil
+        activities richPresences: [RichPresenceActivity] = []
     ) {
         struct Update: Encodable {
             var op = 3
@@ -844,7 +845,7 @@ public actor GatewaySocket {
                 emoji: customEmoji.flatMap { $0.isEmpty ? nil : Update.Emoji(name: $0) }
             ))
         }
-        if let activity {
+        for activity in richPresences {
             activities.append(Update.Activity(
                 name: activity.name,
                 type: activity.type,

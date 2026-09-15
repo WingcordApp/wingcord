@@ -340,13 +340,23 @@ extension AppModel {
     /// "Nothing right now" about an activity the reader is looking at. The
     /// write is mirrored locally for the same reason an optimistic message row
     /// exists.
+    /// Re-mirrors the reader's own presence from outside this file.
+    ///
+    /// The private one below is the implementation; this is the seam the
+    /// session uses when a *game* changes, which is the one writer that does
+    /// not go through `publishedActivity`.
+    func reflectOwnPresenceNow() { reflectOwnPresence() }
+
     private func reflectOwnPresence() {
         guard let userID = currentUserID else { return }
         var list = (presences[userID]?.activities?.list ?? [])
             // Everything except a previously mirrored activity of ours. A
             // custom status is somebody's own text and must survive this.
             .filter { $0.kind == .custom }
-        if let activity = publishedActivity {
+        // **Everything this client publishes, not just the embedded one** —
+        // otherwise a reader looking at their own profile sees "Nothing right
+        // now" while their roster row says Playing.
+        for activity in publishedActivities {
             list.append(Activity(
                 kind: Activity.Kind(rawValue: activity.type),
                 name: activity.name,

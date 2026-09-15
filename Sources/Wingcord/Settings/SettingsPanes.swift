@@ -35,6 +35,9 @@ struct SettingsPaneContent: View {
             case .media: MediaPane()
             case .voiceVideo: VoiceVideoPane()
             case .notifications: NotificationsPane()
+            case .activity: ActivityPane()
+            case .overlay: OverlayPane()
+            case .clips: ClipsPane()
             case .account: AccountPane()
             case .connectedApps: ConnectedAppsPane()
             case .privacy: PrivacyPane()
@@ -756,19 +759,25 @@ private struct ShortcutsPane: View {
     @State private var settings = AppSettings.shared
 
     var body: some View {
-        // The one shortcut on this page that is not a menu item, and the only
-        // one the reader can change: it is registered with the whole machine,
-        // not with this app's responder chain, so it is a control rather than a
-        // line in the table below.
+        // The shortcuts on this page that are not menu items, and the only ones
+        // the reader can change: they are registered with the whole machine,
+        // not with this app's responder chain, so they are controls rather than
+        // lines in the table below.
         SettingsCard {
-            HotkeyRecorderRow(
-                title: "Show Wingcord",
-                help: "Brings Wingcord forward from any application, and sends it away again if it is already in front.",
-                hotkey: $settings.globalHotkey
-            )
+            ForEach(Array(GlobalAction.allCases.enumerated()), id: \.element.id) { index, action in
+                if index > 0 { CardDivider() }
+                HotkeyRecorderRow(
+                    title: action.title,
+                    help: action.help,
+                    hotkey: Binding(
+                        get: { settings.hotkey(for: action) },
+                        set: { settings.setHotkey($0, for: action) }
+                    )
+                )
+            }
         }
         SettingsFootnote(
-            "A global shortcut takes its combination away from every other application, which is why there is only one and why it can be cleared with ⌫ while recording.",
+            "A global shortcut takes its combination away from every other application, which is why there are only a few and why each can be cleared with ⌫ while recording.",
             symbolName: "globe"
         )
 

@@ -866,6 +866,62 @@ final class AppModel {
     /// showing a game that ended.
     var publishedActivity: RichPresenceActivity?
 
+    /// The in-game overlay: its window, its lock and its widgets.
+    let overlay = OverlayController()
+
+    /// The rolling clip buffer. Armed only while a detected game is in front.
+    let clipRecorder = ClipRecorder()
+
+    /// Bumped whenever a clip is written or deleted, so the library redraws.
+    ///
+    /// A revision rather than the list itself: `ClipLibrary` walks the folder,
+    /// because the reader can delete a file in Finder and a cached list would
+    /// then show something that is not there.
+    var clipsRevision: UInt64 = 0
+
+    /// Where the account shares what it is playing.
+    ///
+    /// **The account's answer, not this Mac's.** It arrives with READY and is
+    /// written back through `settings-proto/1`, so it follows the reader to
+    /// every client — unlike the overlay's own preferences, which describe a
+    /// machine's windows and stay local.
+    var activityPrivacy = ActivityPrivacy()
+
+    /// The `privacy` and `status` sub-messages as they arrived, kept so a write
+    /// can change one field and re-emit every other byte untouched.
+    @ObservationIgnored var activityPrivacyRaw: Data?
+    @ObservationIgnored var activityStatusRaw: Data?
+
+    /// What this Mac is running, or nil.
+    ///
+    /// Written by `GameDetector` and read by `publishedActivities` below. Kept
+    /// on the model rather than read from the detector at the point of use so
+    /// that the roster, the profile card and the presence write all see the
+    /// same value in the same frame.
+    var detectedGame: DetectedGame?
+
+    /// Everything this client is broadcasting, in the order Discord's own
+    /// client sends it.
+    ///
+    /// **A running game and an embedded activity are both live at once**, and
+    /// `activities` is one array that replaces all of it — so they are composed
+    /// here rather than at either writer. Somebody playing a game while Watch
+    /// Together is open publishes two entries, which is what Discord does.
+    ///
+    /// The game is gated on the preference. A reader who turned activity
+    /// sharing off must broadcast nothing about what they are running, and the
+    /// gate belongs here — at the one point every publish goes through — rather
+    /// than at the detector, which still has to know what is running so the
+    /// Registered Games pane can show it.
+    var publishedActivities: [RichPresenceActivity] {
+        var list: [RichPresenceActivity] = []
+        if AppSettings.shared.sharesGameActivity, let detectedGame {
+            list.append(detectedGame.activity)
+        }
+        if let publishedActivity { list.append(publishedActivity) }
+        return list
+    }
+
     // MARK: Memo storage
     //
     // `@ObservationIgnored` so writing a cache does not itself invalidate
@@ -1083,7 +1139,14 @@ final class AppModel {
     /// cannot arise here.
     var followRevision: UInt64 = 0
 
-    init() {}
+    init() {
+        // **The overlay needs its model before any keybind can reach it.** It is
+        // a stored property, so it cannot be handed `self` at construction; and
+        // attaching it lazily from `refreshOverlay` meant the overlay hotkey did
+        // nothing at all until a game happened to launch — which is a keybind
+        // that silently does not work, found by pressing it.
+        overlay.attach(model: self)
+    }
 
     // MARK: Message boxes
 

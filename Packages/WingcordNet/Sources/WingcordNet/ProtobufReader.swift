@@ -41,6 +41,14 @@ struct ProtobufReader {
         var value: UInt64 = 0
         /// Set for length-delimited fields.
         var range: Range<Int> = 0..<0
+        /// Where the field's own tag began, and where the whole field ended.
+        ///
+        /// **The framing, not the payload**, and it exists so a message can be
+        /// rewritten one field at a time without re-serialising the fields this
+        /// client cannot name — see `ActivityPrivacyProto.replacing`. A writer
+        /// that rebuilds a message it only partly understands does not fail
+        /// loudly; it deletes what it could not read.
+        var wholeRange: Range<Int> = 0..<0
     }
 
     var isAtEnd: Bool { index >= end }
@@ -51,6 +59,7 @@ struct ProtobufReader {
     /// to this message constantly, and the failure this must never have is
     /// "one unrecognised byte and the account has no servers".
     mutating func next() -> Field? {
+        let start = index
         guard index < end, let key = varint() else { return nil }
         let wireType = Int(key & 7)
         let number = Int(key >> 3)
@@ -59,24 +68,41 @@ struct ProtobufReader {
         switch wireType {
         case 0:
             guard let value = varint() else { return nil }
-            return Field(number: number, wireType: wireType, value: value)
+            return Field(
+                number: number, wireType: wireType, value: value, wholeRange: start..<index
+            )
         case 1:
             guard let value = fixed(8) else { return nil }
-            return Field(number: number, wireType: wireType, value: value)
+            return Field(
+                number: number, wireType: wireType, value: value, wholeRange: start..<index
+            )
         case 5:
             guard let value = fixed(4) else { return nil }
-            return Field(number: number, wireType: wireType, value: value)
+            return Field(
+                number: number, wireType: wireType, value: value, wholeRange: start..<index
+            )
         case 2:
             guard let length = varint(), let count = Int(exactly: length),
                   count >= 0, index + count <= end
             else { return nil }
             let range = index..<(index + count)
             index += count
-            return Field(number: number, wireType: wireType, range: range)
+            return Field(
+                number: number, wireType: wireType, range: range, wholeRange: start..<index
+            )
         default:
             // Groups (3, 4) are long dead and anything else is corruption.
             return nil
         }
+    }
+
+    /// One field's complete bytes — its tag, its length and its payload.
+    ///
+    /// The unit a partial rewrite moves around. See `Field.wholeRange`.
+    func rawField(_ field: Field) -> Data? {
+        guard field.wholeRange.lowerBound >= 0, field.wholeRange.upperBound <= bytes.count
+        else { return nil }
+        return Data(bytes[field.wholeRange])
     }
 
     /// A reader over a length-delimited field's contents.

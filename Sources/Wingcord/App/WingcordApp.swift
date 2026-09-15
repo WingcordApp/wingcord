@@ -117,6 +117,7 @@ struct WingcordApp: App {
                 // it was summoned from would be invisible.
                 .presentsQuickSwitcher()
                 .watchesPushToTalk()
+                .publishesGameActivity()
                 .resolvesMotion()
                 .environment(model)
                 .frame(

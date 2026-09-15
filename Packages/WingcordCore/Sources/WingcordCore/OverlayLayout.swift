@@ -1,0 +1,196 @@
+import CoreGraphics
+import Foundation
+
+// MARK: - Where the overlay's widgets sit
+//
+// **Stored normalised and resolved against the surface every time**, which is
+// the one thing Discord's own overlay does that a Mac build needs even more
+// than Windows does: the game can move between displays with different sizes
+// and different scale factors in the middle of a session, and a layout stored
+// in points would put the toolbar off-screen the moment it did.
+//
+// The normalisation is a **centre point**, not a rect, and that is a deliberate
+// difference from the reference. A normalised rect stretches: a toolbar stored
+// as 0.3–0.7 of the width would be 420 points wide on one display and 700 on
+// another, which is a toolbar that changes size when you unplug a monitor. A
+// normalised centre with a fixed point size keeps a control the size the
+// pointer expects and still keeps it where the reader put it — centred stays
+// centred, and hard against the right edge stays hard against the right edge.
+
+/// One thing the overlay can draw.
+///
+/// The raw value is the persistence key and must not change.
+public enum OverlayWidgetKind: String, CaseIterable, Hashable, Sendable, Codable, Identifiable {
+    /// The call's own controls — mute, deafen, camera, share, disconnect.
+    case quickActions
+    /// Who is in the voice channel, and who is talking.
+    case voice
+    /// Toasts for messages that arrive while a game is in front.
+    case notifications
+    /// The clip that was just taken, and the keybind reminder behind it.
+    case clips
+
+    public var id: String { rawValue }
+
+    public var title: String {
+        switch self {
+        case .quickActions: "Controls"
+        case .voice: "Voice"
+        case .notifications: "Notifications"
+        case .clips: "Clips"
+        }
+    }
+
+    /// Where it starts life, as a normalised centre.
+    ///
+    /// Chosen to match the arrangement Discord ships, which is the arrangement
+    /// people who have used one will look for: controls top centre, voice down
+    /// the left, notifications top left.
+    public var defaultCentre: CGPoint {
+        switch self {
+        case .quickActions: CGPoint(x: 0.5, y: 0.06)
+        case .voice: CGPoint(x: 0.08, y: 0.40)
+        case .notifications: CGPoint(x: 0.14, y: 0.08)
+        case .clips: CGPoint(x: 0.88, y: 0.88)
+        }
+    }
+
+    /// Whether it survives into the locked state by default.
+    ///
+    /// **Pinning is not a favourite.** It is the declaration that a widget is
+    /// visible while the overlay is asleep and the reader is playing — which is
+    /// the whole point of the voice panel and the notification toast, and
+    /// exactly wrong for a toolbar nobody can click.
+    public var isPinnedByDefault: Bool {
+        switch self {
+        case .quickActions: false
+        case .voice, .notifications, .clips: true
+        }
+    }
+}
+
+/// One widget's place on the surface.
+public struct OverlayPlacement: Hashable, Sendable, Codable {
+    /// The widget's centre, in the unit square. `(0,0)` is the top left.
+    public var centre: CGPoint
+    /// Whether it is drawn while the overlay is locked.
+    public var isPinned: Bool
+    /// Whether the reader has switched it off entirely.
+    public var isEnabled: Bool
+
+    public init(centre: CGPoint, isPinned: Bool, isEnabled: Bool = true) {
+        self.centre = OverlayPlacement.clamped(centre)
+        self.isPinned = isPinned
+        self.isEnabled = isEnabled
+    }
+
+    /// A centre is always inside the surface.
+    ///
+    /// **Clamped on the way in, not on the way out.** A widget dragged past the
+    /// edge and released has to come back; storing the out-of-range value and
+    /// correcting it at draw time means the *stored* layout is wrong, and the
+    /// next resolution change resolves it from the wrong number.
+    static func clamped(_ point: CGPoint) -> CGPoint {
+        CGPoint(
+            x: min(max(point.x, 0), 1),
+            y: min(max(point.y, 0), 1)
+        )
+    }
+}
+
+/// Every widget's placement, and the arithmetic that puts them on a surface.
+public struct OverlayLayout: Hashable, Sendable, Codable {
+
+    public private(set) var placements: [OverlayWidgetKind: OverlayPlacement]
+
+    /// The arrangement a fresh install gets.
+    public static var `default`: OverlayLayout {
+        OverlayLayout(
+            placements: Dictionary(
+                uniqueKeysWithValues: OverlayWidgetKind.allCases.map { kind in
+                    (kind, OverlayPlacement(
+                        centre: kind.defaultCentre,
+                        isPinned: kind.isPinnedByDefault
+                    ))
+                }
+            )
+        )
+    }
+
+    public init(placements: [OverlayWidgetKind: OverlayPlacement] = [:]) {
+        self.placements = placements
+    }
+
+    public func placement(for kind: OverlayWidgetKind) -> OverlayPlacement {
+        placements[kind]
+            ?? OverlayPlacement(centre: kind.defaultCentre, isPinned: kind.isPinnedByDefault)
+    }
+
+    // MARK: Resolving
+
+    /// Where `kind` goes on a surface of `size`, given how big it wants to be.
+    ///
+    /// **Kept whole on the surface.** The centre is nudged so the widget's own
+    /// box fits — a panel whose centre is at `x: 0.98` would otherwise hang
+    /// nine tenths of itself off the right edge, and a widget you cannot reach
+    /// is a widget you cannot drag back.
+    public func frame(
+        for kind: OverlayWidgetKind,
+        size widgetSize: CGSize,
+        in surface: CGSize
+    ) -> CGRect {
+        let centre = placement(for: kind).centre
+        // A widget larger than the surface is pinned to the origin rather than
+        // centred off both edges.
+        let halfWidth = min(widgetSize.width, surface.width) / 2
+        let halfHeight = min(widgetSize.height, surface.height) / 2
+        let x = min(max(centre.x * surface.width, halfWidth), surface.width - halfWidth)
+        let y = min(max(centre.y * surface.height, halfHeight), surface.height - halfHeight)
+        return CGRect(
+            x: x - widgetSize.width / 2,
+            y: y - widgetSize.height / 2,
+            width: widgetSize.width,
+            height: widgetSize.height
+        )
+    }
+
+    /// The normalised centre a point on the surface corresponds to.
+    public static func normalised(_ point: CGPoint, in surface: CGSize) -> CGPoint {
+        guard surface.width > 0, surface.height > 0 else { return .zero }
+        return OverlayPlacement.clamped(
+            CGPoint(x: point.x / surface.width, y: point.y / surface.height)
+        )
+    }
+
+    // MARK: Editing
+
+    public mutating func move(_ kind: OverlayWidgetKind, to centre: CGPoint) {
+        var placement = placement(for: kind)
+        placement.centre = OverlayPlacement.clamped(centre)
+        placements[kind] = placement
+    }
+
+    public mutating func setPinned(_ pinned: Bool, for kind: OverlayWidgetKind) {
+        var placement = placement(for: kind)
+        placement.isPinned = pinned
+        placements[kind] = placement
+    }
+
+    public mutating func setEnabled(_ enabled: Bool, for kind: OverlayWidgetKind) {
+        var placement = placement(for: kind)
+        placement.isEnabled = enabled
+        placements[kind] = placement
+    }
+
+    /// The widgets that should be drawn right now, in a stable order.
+    ///
+    /// The rule that decides everything about the locked state, and it is one
+    /// line: **a locked overlay draws only what is pinned.**
+    public func visibleWidgets(locked: Bool) -> [OverlayWidgetKind] {
+        OverlayWidgetKind.allCases.filter { kind in
+            let placement = placement(for: kind)
+            guard placement.isEnabled else { return false }
+            return locked ? placement.isPinned : true
+        }
+    }
+}

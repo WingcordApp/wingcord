@@ -130,6 +130,151 @@ final class AppSettings {
         didSet { defaults.set(showsMemberListByDefault, forKey: Key.showsMemberList) }
     }
 
+    /// Whether a detected game is broadcast as a presence.
+    ///
+    /// Discord calls this **"Share my activity"**, and on the wire it is
+    /// `status.show_current_game` — field 3 of field 11 in
+    /// `PreloadedUserSettings`, walked out of a capture 2026-09-14 and written
+    /// up in `docs/OVERLAY.md`.
+    ///
+    /// **Local-only for now, and that is a gap rather than a decision.** This
+    /// client does not yet read or write that protobuf field, so the preference
+    /// governs what *this* Mac publishes and does not follow the account to
+    /// another client. It still reaches the app — see `publishedActivities` —
+    /// so it is a setting that does something, which is the bar `INVARIANTS.md`
+    /// sets.
+    var sharesGameActivity = true {
+        didSet {
+            guard sharesGameActivity != oldValue else { return }
+            defaults.set(sharesGameActivity, forKey: Key.sharesGameActivity)
+        }
+    }
+
+    // MARK: The overlay, and clips
+    /// Games the reader added by hand, because Discord's database does not
+    /// know them.
+    ///
+    /// **Keyed on the executable path**, which is what the detector matches on
+    /// and the only thing about a process that is stable across launches. The
+    /// id is synthetic — these applications have no Discord snowflake — and is
+    /// derived from the path so adding the same thing twice is one entry.
+    private(set) var manualGames: [ManualGame] = []
+
+    struct ManualGame: Hashable, Sendable, Codable, Identifiable {
+        var name: String
+        var path: String
+        var id: UInt64
+    }
+
+    func addManualGame(name: String, path: String, id: ApplicationID) {
+        manualGames.removeAll { $0.path == path }
+        manualGames.append(ManualGame(name: name, path: path, id: id.rawValue))
+        persistManualGames()
+    }
+
+    func removeManualGame(at path: String) {
+        manualGames.removeAll { $0.path == path }
+        persistManualGames()
+    }
+
+    private func persistManualGames() {
+        guard let data = try? JSONEncoder().encode(manualGames) else { return }
+        defaults.set(data, forKey: Key.manualGames)
+    }
+
+    //
+    // Everything on this surface is **local to this Mac**. Discord keeps the
+    // overlay's own settings out of the account blob too — they describe a
+    // machine's windows and its keyboard, not a person — so this is the
+    // reference's shape rather than a gap.
+
+    /// Whether the overlay comes up at all when a game is detected.
+    var isOverlayEnabled = true {
+        didSet { defaults.set(isOverlayEnabled, forKey: Key.overlayEnabled) }
+    }
+
+    /// Whether a pinned widget can be clicked while the overlay is asleep.
+    ///
+    /// **Off by default, and the default is the safe one.** With it on, a
+    /// widget sitting over the game swallows any click that lands on it — which
+    /// is right for somebody who wants to mute without opening the overlay, and
+    /// wrong for somebody whose crosshair happens to be there.
+    var overlayHasClickableRegions = false {
+        didSet {
+            defaults.set(overlayHasClickableRegions, forKey: Key.overlayClickableRegions)
+        }
+    }
+
+    /// Whether messages appear over the game.
+    var overlayShowsNotifications = true {
+        didSet { defaults.set(overlayShowsNotifications, forKey: Key.overlayNotifications) }
+    }
+
+    /// Which corner the toasts stack in.
+    var overlayNotificationCorner: OverlayCorner = .topLeading {
+        didSet {
+            defaults.set(overlayNotificationCorner.rawValue, forKey: Key.overlayCorner)
+        }
+    }
+
+    /// When a name is drawn beside a face in the voice widget.
+    var overlayVoiceNames: OverlayNameDisplay = .whileSpeaking {
+        didSet { defaults.set(overlayVoiceNames.rawValue, forKey: Key.overlayVoiceNames) }
+    }
+
+    /// How big those faces are.
+    var overlayAvatarSize: OverlayAvatarSize = .small {
+        didSet { defaults.set(overlayAvatarSize.rawValue, forKey: Key.overlayAvatarSize) }
+    }
+
+    /// How many people the voice widget will draw before it stops.
+    ///
+    /// A computed facade over private storage, because clamping in a `didSet`
+    /// re-enters the setter — see the note at the top of this type.
+    var overlayVoiceLimit: Int {
+        get { storedOverlayVoiceLimit }
+        set {
+            let clamped = min(max(newValue, 1), 20)
+            guard clamped != storedOverlayVoiceLimit else { return }
+            storedOverlayVoiceLimit = clamped
+            defaults.set(clamped, forKey: Key.overlayVoiceLimit)
+        }
+    }
+
+    private var storedOverlayVoiceLimit = 8
+
+    /// Whether the clip key does anything.
+    ///
+    /// **Off by default.** Clips runs a capture and an encoder for as long as a
+    /// game is in front, and arming that without being asked is not a decision
+    /// this client gets to make on somebody's behalf.
+    var clipsEnabled = false {
+        didSet { defaults.set(clipsEnabled, forKey: Key.clipsEnabled) }
+    }
+
+    var clipLength: ClipLength = .fifteenSeconds {
+        didSet { defaults.set(clipLength.rawValue, forKey: Key.clipLength) }
+    }
+
+    var clipResolution: ClipResolution = .p1080 {
+        didSet { defaults.set(clipResolution.rawValue, forKey: Key.clipResolution) }
+    }
+
+    var clipFrameRate: ClipFrameRate = .fps60 {
+        didSet { defaults.set(clipFrameRate.rawValue, forKey: Key.clipFrameRate) }
+    }
+
+    /// Where clips are written. Nil means the default, which is resolved
+    /// lazily — `~/Movies/Wingcord Clips`, matching where Discord puts its own.
+    var clipsFolder: URL? {
+        didSet { defaults.set(clipsFolder?.path, forKey: Key.clipsFolder) }
+    }
+
+    /// Whether the overlay says so after a clip is taken.
+    var clipsShowsFeedback = true {
+        didSet { defaults.set(clipsShowsFeedback, forKey: Key.clipsFeedback) }
+    }
+
     /// The shortcut that brings Wingcord forward from anywhere on the machine.
     ///
     /// Optional, and nil is a real value: a global shortcut is registered with
@@ -141,13 +286,37 @@ final class AppSettings {
     /// another singleton from a `didSet` is the deadlock written up at the top of
     /// this file — `isLoaded` is the guard, and `GlobalHotkey` is installed by
     /// the app root once the store has finished loading.
-    var globalHotkey: Hotkey? = .default {
+    /// Every global shortcut, by what it does.
+    ///
+    /// **A table since the overlay arrived**, where it was one binding before.
+    /// The value is a double optional on purpose: a missing key means "this
+    /// install has never been asked and gets the default", and a present `nil`
+    /// means "the reader deliberately cleared it". Collapsing those two is what
+    /// makes a cleared binding come back on the next launch.
+    ///
+    /// Registration happens in `GlobalHotkeyInstaller`, never here — see the
+    /// note at the top of this type about `didSet` and `init`.
+    var globalHotkeys: [GlobalAction: Hotkey?] = [:] {
         didSet {
-            guard globalHotkey != oldValue else { return }
-            defaults.set(globalHotkey?.storageValue ?? Self.noHotkey, forKey: Key.globalHotkey)
-            guard isLoaded else { return }
-            GlobalHotkey.shared.register(globalHotkey)
+            guard globalHotkeys != oldValue else { return }
+            for action in GlobalAction.allCases {
+                let key = Key.hotkey(action)
+                guard let binding = globalHotkeys[action] else {
+                    defaults.removeObject(forKey: key)
+                    continue
+                }
+                defaults.set(binding?.storageValue ?? Self.noHotkey, forKey: key)
+            }
         }
+    }
+
+    /// The binding for one action, resolved through its default.
+    func hotkey(for action: GlobalAction) -> Hotkey? {
+        globalHotkeys[action] ?? action.defaultHotkey
+    }
+
+    func setHotkey(_ hotkey: Hotkey?, for action: GlobalAction) {
+        globalHotkeys[action] = .some(hotkey)
     }
 
     /// What a *deliberately cleared* hotkey looks like in defaults.
@@ -525,8 +694,44 @@ final class AppSettings {
             defaults.object(forKey: Key.userColorSaturation) as? Double ?? 1
         isCompactMode = defaults.object(forKey: Key.compactMode) as? Bool ?? false
         showsMemberListByDefault = defaults.object(forKey: Key.showsMemberList) as? Bool ?? true
-        globalHotkey = (defaults.object(forKey: Key.globalHotkey) as? Int)
-            .map { $0 == Self.noHotkey ? nil : Hotkey(storageValue: $0) } ?? Hotkey.default
+        sharesGameActivity = defaults.object(forKey: Key.sharesGameActivity) as? Bool ?? true
+        isOverlayEnabled = defaults.object(forKey: Key.overlayEnabled) as? Bool ?? true
+        overlayHasClickableRegions =
+            defaults.object(forKey: Key.overlayClickableRegions) as? Bool ?? false
+        overlayShowsNotifications =
+            defaults.object(forKey: Key.overlayNotifications) as? Bool ?? true
+        overlayNotificationCorner = (defaults.string(forKey: Key.overlayCorner))
+            .flatMap(OverlayCorner.init(rawValue:)) ?? .topLeading
+        overlayVoiceNames = (defaults.string(forKey: Key.overlayVoiceNames))
+            .flatMap(OverlayNameDisplay.init(rawValue:)) ?? .whileSpeaking
+        overlayAvatarSize = (defaults.string(forKey: Key.overlayAvatarSize))
+            .flatMap(OverlayAvatarSize.init(rawValue:)) ?? .small
+        storedOverlayVoiceLimit =
+            min(max(defaults.object(forKey: Key.overlayVoiceLimit) as? Int ?? 8, 1), 20)
+        clipsEnabled = defaults.object(forKey: Key.clipsEnabled) as? Bool ?? false
+        clipLength = (defaults.string(forKey: Key.clipLength))
+            .flatMap(ClipLength.init(rawValue:)) ?? .fifteenSeconds
+        clipResolution = (defaults.string(forKey: Key.clipResolution))
+            .flatMap(ClipResolution.init(rawValue:)) ?? .p1080
+        clipFrameRate = (defaults.string(forKey: Key.clipFrameRate))
+            .flatMap(ClipFrameRate.init(rawValue:)) ?? .fps60
+        clipsFolder = (defaults.string(forKey: Key.clipsFolder)).map { URL(fileURLWithPath: $0) }
+        clipsShowsFeedback = defaults.object(forKey: Key.clipsFeedback) as? Bool ?? true
+        manualGames = (defaults.data(forKey: Key.manualGames))
+            .flatMap { try? JSONDecoder().decode([ManualGame].self, from: $0) } ?? []
+        var table: [GlobalAction: Hotkey?] = [:]
+        for action in GlobalAction.allCases {
+            // The window's binding moved key when the table arrived. Read the
+            // old one once so an existing install keeps the shortcut its reader
+            // chose; the new key is written the first time anything changes.
+            let stored = defaults.object(forKey: Key.hotkey(action)) as? Int
+                ?? (action == .toggleWindow
+                    ? defaults.object(forKey: Key.legacyGlobalHotkey) as? Int
+                    : nil)
+            guard let stored else { continue }
+            table[action] = stored == Self.noHotkey ? .some(nil) : .some(Hotkey(storageValue: stored))
+        }
+        globalHotkeys = table
         uses24HourTime = defaults.object(forKey: Key.use24Hour) as? Bool
             ?? Locale.current.usesTwentyFourHourClock
         showsEmbeds = defaults.object(forKey: Key.showsEmbeds) as? Bool ?? true
@@ -654,7 +859,27 @@ final class AppSettings {
         static let userColorSaturation = "accessibility.userColorSaturation"
         static let compactMode = "appearance.compactMode"
         static let showsMemberList = "appearance.showsMemberList"
-        static let globalHotkey = "shortcuts.globalHotkey"
+        static let sharesGameActivity = "activity.sharesGameActivity"
+        static let overlayEnabled = "overlay.enabled"
+        static let overlayClickableRegions = "overlay.clickableRegions"
+        static let overlayNotifications = "overlay.notifications"
+        static let overlayCorner = "overlay.notificationCorner"
+        static let overlayVoiceNames = "overlay.voiceNames"
+        static let overlayAvatarSize = "overlay.avatarSize"
+        static let overlayVoiceLimit = "overlay.voiceLimit"
+        static let clipsEnabled = "clips.enabled"
+        static let clipLength = "clips.length"
+        static let clipResolution = "clips.resolution"
+        static let clipFrameRate = "clips.frameRate"
+        static let clipsFolder = "clips.folder"
+        static let clipsFeedback = "clips.feedback"
+        static let manualGames = "activity.manualGames"
+        /// Where the window's binding lived before the table. Read once, for
+        /// migration, and never written again.
+        static let legacyGlobalHotkey = "shortcuts.globalHotkey"
+        static func hotkey(_ action: GlobalAction) -> String {
+            "shortcuts.hotkey.\(action.rawValue)"
+        }
         static let use24Hour = "chat.use24HourTime"
         static let showsEmbeds = "chat.showsEmbeds"
         static let playsAnimated = "chat.playsAnimatedContent"

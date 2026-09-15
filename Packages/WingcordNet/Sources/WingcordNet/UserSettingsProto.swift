@@ -141,12 +141,22 @@ enum UserSettingsProto {
             }
         }
 
+        // **A second pass, deliberately.** Activity privacy is two sub-messages
+        // this walk does not otherwise open, and its decoder has to keep their
+        // raw bytes as well as their values — see `ActivityPrivacyProto`. Two
+        // passes over a blob this size is microseconds, and one pass that tried
+        // to do both would put the splice's safety argument in the middle of the
+        // folder decode.
+        let privacy = ActivityPrivacyProto.decode(data)
         return ClientSettings(
             folders: folders,
             guildPositions: guildPositions,
             status: status,
             customStatus: nil,
-            inboxTab: inboxTab
+            inboxTab: inboxTab,
+            activityPrivacy: privacy.privacy,
+            privacyRaw: privacy.raw,
+            statusRaw: privacy.statusRaw
         )
     }
 
