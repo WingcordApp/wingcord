@@ -42,8 +42,14 @@ private struct GameActivityPublisher: ViewModifier {
                 // whose resting state is nothing at all — a flag that draws
                 // every widget but that one leaves the expensive half of the
                 // surface unlookable. The X in its header closes it.
-                if let channelID = model.channelIndex.privateChannelIDs().first {
-                    model.overlay.openChat(channelID)
+                // **Two conversations, not one.** The rail down the chat
+                // window's leading edge only exists when something else is open
+                // behind it, so a flag that opened one left a whole sub-surface
+                // undrawable. Opened oldest first, so the newest ends up the one
+                // on screen.
+                let conversations = model.channelIndex.privateChannelIDs().prefix(2).reversed()
+                for channelID in conversations { model.overlay.openChat(channelID) }
+                if let channelID = conversations.last {
                     // **And one toast**, for the same reason: the notification
                     // widget's resting state is nothing, so the reply field
                     // inside it — the pause, the send, the hold on the
