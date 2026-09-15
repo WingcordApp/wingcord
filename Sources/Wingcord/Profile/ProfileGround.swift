@@ -118,6 +118,22 @@ enum ProfileGround: Equatable {
         return pair.secondary
     }
 
+    /// And what it is at its FOOT — the colour a scrim over the bottom of the
+    /// card has to end in.
+    ///
+    /// **One value, because three layers have to agree.** The body's own ramp,
+    /// the banner's fade and the foot dock's scrim are one surface; three
+    /// private copies of the arithmetic is how each stays individually
+    /// defensible while the result is wrong — §2. The dock's ramp named
+    /// `Palette.canvas` and put a near-black band across the bottom of a light
+    /// card, which is the same fault the banner's fade had one layer up.
+    var bodyFoot: Color {
+        guard let pair else { return Palette.canvas }
+        return wantsDarkInk
+            ? pair.secondary.mix(with: .white, by: 0.45)
+            : pair.secondary.mix(with: .black, by: 0.25)
+    }
+
     /// The card's edge.
     ///
     /// **A lit rim in the person's own colours, not a hairline.** In the theme's
@@ -316,7 +332,7 @@ struct ProfileGroundFill: ViewModifier {
     func body(content: Content) -> some View {
         if !paints {
             content
-        } else if strength == .full, let pair = ground.accentPair {
+        } else if strength == .full, ground.accentPair != nil {
             // **The colour scheme goes with the ground.** Every `Ink` in this
             // app is a hierarchical style, so flipping the scheme is what makes
             // a whole subtree legible on a light card — one environment value
@@ -337,12 +353,7 @@ struct ProfileGroundFill: ViewModifier {
             content
                 .background {
                     LinearGradient(
-                        colors: [
-                            pair.secondary,
-                            ground.wantsDarkInk
-                                ? pair.secondary.mix(with: .white, by: 0.45)
-                                : pair.secondary.mix(with: .black, by: 0.25),
-                        ],
+                        colors: [ground.bodyHead, ground.bodyFoot],
                         startPoint: .top,
                         endPoint: .bottom
                     )

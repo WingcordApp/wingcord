@@ -564,7 +564,7 @@ struct ProfileIdentityPanel: View {
                 // The ramp the dock sits in, so content scrolling under it
                 // fades out rather than being cut by its edge.
                 LinearGradient(
-                    colors: [.clear, Palette.canvas.opacity(0.78)],
+                    colors: [.clear, ground.bodyFoot.opacity(0.78)],
                     startPoint: .top,
                     endPoint: .bottom
                 )
