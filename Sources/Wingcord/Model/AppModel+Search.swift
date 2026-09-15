@@ -401,7 +401,14 @@ extension AppModel {
         }
         // One resolve for the whole page rather than one per card: results very
         // often repeat an author, and the lookups are over the same tables.
-        let authors = authorInfo(for: items, authorFont: style.authorFont)
+        // A search is scoped to one server or to one conversation, so the
+        // whole page shares an answer — and a conversation's is nil, which is
+        // the point: results from a DM must not wear the open server's roles.
+        let authors = authorInfo(
+            for: items,
+            inGuild: state?.scope.guildID,
+            authorFont: style.authorFont
+        )
         let mentions = mentionContext()
 
         let value = messages.map { message in

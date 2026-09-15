@@ -85,11 +85,13 @@ extension OverlayController {
 
     /// Opens the reply field inside a toast.
     ///
-    /// **Unlocks, for the reason a chat window does.** The hint on the resting
-    /// toast names the keybind precisely because the overlay has to be awake
-    /// before anybody can type into it.
+    /// **It does NOT unlock, and that is the point.** Answering a notification
+    /// is the one thing on this overlay somebody does without leaving the game;
+    /// waking the whole surface for it would dim the screen and draw eight
+    /// widgets over a match. The panel takes the keyboard for as long as the
+    /// field is open and gives it back when it closes — see
+    /// `OverlayController.applyInputState`.
     func beginReply(to notice: OverlayNotice) {
-        setLocked(false)
         guard replyingToNoticeID != notice.id else { return }
         replyingToNoticeID = notice.id
         replyDraft = ""

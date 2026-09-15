@@ -59,6 +59,12 @@ final class OverlayPanel {
     /// The panel exists and is on screen.
     var isVisible: Bool { panel?.isVisible ?? false }
 
+    /// Where the panel is, in screen coordinates.
+    ///
+    /// Read by the click-zone monitor to turn a pointer position into a point
+    /// in the overlay's own space — see `OverlayController.pointerMoved`.
+    var frameInScreen: CGRect { panel?.frame ?? .zero }
+
     // MARK: Presenting
 
     /// Puts the overlay up on `screen`, building the window if it is not there.
@@ -76,10 +82,10 @@ final class OverlayPanel {
         // Replacing the root view rather than the hosting view: a new
         // `NSHostingView` per present drops every piece of SwiftUI state the
         // widgets hold, which on a toolbar mid-animation is a visible snap.
-        if let hosting = panel.contentView as? NSHostingView<AnyView> {
+        if let hosting = panel.contentView as? FirstMouseHostingView {
             hosting.rootView = AnyView(content)
         } else {
-            let hosting = NSHostingView(rootView: AnyView(content))
+            let hosting = FirstMouseHostingView(rootView: AnyView(content))
             // The hosting view must not paint a ground of its own, or the
             // window is opaque everywhere and nothing falls through.
             hosting.layer?.backgroundColor = .clear
@@ -206,4 +212,20 @@ final class OverlayPanel {
 private final class KeyablePanel: NSPanel {
     override var canBecomeKey: Bool { true }
     override var canBecomeMain: Bool { false }
+}
+
+/// The hosting view, which is where the answer actually lives.
+///
+/// **The first click has to reach the control, not merely arrive.** A click on a
+/// window that is not key is consumed by AppKit as the one that focuses it; the
+/// view under the pointer never sees it. That is right for an ordinary window
+/// and exactly wrong here — the overlay is never key while somebody is playing,
+/// so *every* click on it is a first click. It is what made the unlock button
+/// and the notification toast look inert even once the window had been told to
+/// take mouse events at all.
+///
+/// It is asked of the **view**, not the window, which is why this subclass
+/// exists at all.
+private final class FirstMouseHostingView: NSHostingView<AnyView> {
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 }

@@ -121,9 +121,32 @@ struct OverlayLayoutTests {
     @Test("Pinning a widget puts it in the locked state and leaves the rest alone")
     func pinning() {
         var layout = OverlayLayout.default
-        layout.setPinned(true, for: .quickActions)
-        #expect(layout.visibleWidgets(locked: true).contains(.quickActions))
+        layout.setPinned(true, for: .chat)
+        #expect(layout.visibleWidgets(locked: true).contains(.chat))
         #expect(layout.placement(for: .voice).isPinned)
+    }
+
+    @Test("The controls cannot be pinned, because a locked overlay cannot be clicked")
+    func controlsRefusePinning() {
+        // Five buttons nobody can press, sitting over the game, doing nothing.
+        var layout = OverlayLayout.default
+        layout.setPinned(true, for: .quickActions)
+        #expect(!layout.placement(for: .quickActions).isPinned)
+        #expect(!layout.visibleWidgets(locked: true).contains(.quickActions))
+    }
+
+    @Test("A stored pin from an older build cannot resurrect the refused one")
+    func storedPinIsNormalised() {
+        // Refused on the way in AND normalised on the way out, or a layout
+        // written by a build that allowed it leaves a pin the reader now has no
+        // control to clear.
+        let stored = OverlayLayout(placements: [
+            .quickActions: OverlayPlacement(
+                centre: OverlayWidgetKind.quickActions.defaultCentre, isPinned: true
+            ),
+        ])
+        #expect(!stored.placement(for: .quickActions).isPinned)
+        #expect(!stored.visibleWidgets(locked: true).contains(.quickActions))
     }
 
     @Test("The order is stable, because a widget that reorders itself flickers")

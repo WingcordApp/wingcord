@@ -307,6 +307,12 @@ extension AppModel {
         var occupants: [ChannelID: [VoiceState]] = [:]
         for state in voiceStates.values {
             guard let channelID = state.channelID else { continue }
+            // **A stage is not a voice channel**, and the tab says Voice. Joining
+            // one puts you in an audience, suppressed, with a hand to raise —
+            // which is a different act with a whole pane of its own in the
+            // window. A row that said "join" and did that would be the list
+            // answering a question nobody asked it.
+            if channelIndex[channelID]?.kind == .stage { continue }
             occupants[channelID, default: []].append(state)
         }
         guard !occupants.isEmpty else { return [] }

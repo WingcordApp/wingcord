@@ -49,6 +49,23 @@ struct OverlayScene: View {
             // agreeing the moment anything insets this view, and the symptom
             // would be a widget that jumps on mouse-down.
             .coordinateSpace(.named(OverlaySpace.name))
+            // **Always drawn as the active window, because it never is one.**
+            //
+            // The overlay lives in a `.nonactivatingPanel` over somebody else's
+            // game — Wingcord is deliberately *not* frontmost, which is the
+            // whole point of the panel. macOS renders every material and every
+            // control in its inactive variant in that state: Liquid Glass falls
+            // back to a flat opaque plate and controls go grey. So the one
+            // surface in this app that can never be in an active window was the
+            // one drawing itself as though it had been abandoned — the unlock
+            // button came out as a solid disc with no glass in it at all, and
+            // the voice roster read as a dimmed panel.
+            //
+            // `controlActiveState` is the switch AppKit's own
+            // `NSVisualEffectView.state = .active` sets, reached from SwiftUI.
+            // It is scoped to this scene and nothing else in the app reads it,
+            // so no window that *can* be inactive is affected.
+            .environment(\.controlActiveState, .active)
             .animation(motion.standard, value: controller.isLocked)
             .animation(motion.hover, value: controller.isPeeking)
         }
@@ -105,6 +122,12 @@ struct OverlayScene: View {
         }
         .buttonStyle(.plain)
         .interactiveChromeOverMedia(in: .circle)
+        // **The one control that exists in the locked state**, so it is the one
+        // click zone that always exists — without it the button drawn to get out
+        // of the locked state could not be pressed, which is what it was.
+        .onGeometryChange(for: CGRect.self) { proxy in
+            proxy.frame(in: .named(OverlaySpace.name))
+        } action: { controller.setChromeZone($0) }
         .help("Click to unlock the overlay")
         .accessibilityLabel("Unlock the overlay")
     }
@@ -192,7 +215,19 @@ private struct OverlayWidgetHost: View {
 
     var body: some View {
         OverlayWidget(kind: kind, controller: controller)
+            // **The locked state belongs to the game.** The panel as a whole
+            // takes clicks while a toast is up, so every other pinned widget has
+            // to refuse them here or a click aimed at the game would be
+            // swallowed by the voice roster it happened to cross.
+            .allowsHitTesting(controller.acceptsHits(kind))
             .onGeometryChange(for: CGSize.self) { $0.size } action: { size = $0 }
+            // Published for the click-zone monitor, which is what lets a pinned
+            // widget answer a click while the rest of the screen still belongs
+            // to the game — see `OverlayController.pointerMoved`.
+            .onGeometryChange(for: CGRect.self) { proxy in
+                proxy.frame(in: .named(OverlaySpace.name))
+            } action: { controller.setClickZone($0, for: kind) }
+            .onDisappear { controller.clearClickZone(for: kind) }
             .overlay { if isEditing { editingChrome } }
             .offset(x: frame.minX, y: frame.minY)
             .gesture(isEditing ? drag : nil)
@@ -238,19 +273,24 @@ private struct OverlayWidgetHost: View {
             HStack(spacing: Spacing.tight) {
                 Text(kind.title)
                     .font(.system(size: 11, weight: .semibold))
-                Button {
-                    var layout = controller.layout
-                    layout.setPinned(!layout.placement(for: kind).isPinned, for: kind)
-                    controller.layout = layout
-                } label: {
-                    Image(systemName: controller.layout.placement(for: kind).isPinned
-                        ? "pin.fill" : "pin.slash")
-                        .font(.system(size: 10, weight: .semibold))
+                // Absent where pinning is not offered — see
+                // `OverlayWidgetKind.canBePinned`. A disabled pin would be a
+                // control describing a state nobody can reach.
+                if kind.canBePinned {
+                    Button {
+                        var layout = controller.layout
+                        layout.setPinned(!layout.placement(for: kind).isPinned, for: kind)
+                        controller.layout = layout
+                    } label: {
+                        Image(systemName: controller.layout.placement(for: kind).isPinned
+                            ? "pin.fill" : "pin.slash")
+                            .font(.system(size: 10, weight: .semibold))
+                    }
+                    .buttonStyle(.plain)
+                    .help(controller.layout.placement(for: kind).isPinned
+                        ? "Shown while you are playing"
+                        : "Hidden while you are playing")
                 }
-                .buttonStyle(.plain)
-                .help(controller.layout.placement(for: kind).isPinned
-                    ? "Shown while you are playing"
-                    : "Hidden while you are playing")
             }
             .padding(.horizontal, Spacing.base)
             .frame(height: 22)

@@ -329,7 +329,8 @@ struct OverlayPane: View {
                 SettingsToggle(
                     title: "Let pinned widgets be clicked",
                     help: "Pinned widgets take clicks even while the overlay is asleep. Handy "
-                        + "for muting; awkward if your crosshair is over one.",
+                        + "for muting; awkward if your crosshair is over one. A message toast "
+                        + "answers a click either way.",
                     isOn: $settings.overlayHasClickableRegions
                 )
                 CardDivider()
@@ -439,26 +440,11 @@ private struct WidgetRow: View {
     var body: some View {
         SettingsControlRow(kind.title) {
             HStack(spacing: Spacing.snug) {
-                Button {
-                    var layout = controller.layout
-                    layout.setPinned(!layout.placement(for: kind).isPinned, for: kind)
-                    controller.layout = layout
-                } label: {
-                    Image(systemName: isPinned ? "pin.fill" : "pin.slash")
-                        .font(.system(size: 12))
-                        // Secondary rather than tertiary when unpinned: measured
-                        // against the card it sat on, tertiary was too close to
-                        // the ground to read as a control at all.
-                        .foregroundStyle(
-                            isPinned ? AnyShapeStyle(Palette.accent) : AnyShapeStyle(Ink.secondary)
-                        )
-                        .frame(width: 22, height: 22)
-                        .contentShape(.rect)
-                }
-                .buttonStyle(.plain)
-                .help(isPinned ? "Shown while you play" : "Only when the overlay is open")
-                .accessibilityLabel(isPinned ? "Unpin \(kind.title)" : "Pin \(kind.title)")
-
+                // **Absent rather than disabled where pinning is refused** — see
+                // `OverlayWidgetKind.canBePinned`. A greyed pin is a control
+                // describing a state nobody can reach, which reads as a feature
+                // that is missing rather than one that does not apply.
+                if kind.canBePinned { pinButton }
                 Toggle(
                     "",
                     isOn: Binding(
@@ -476,6 +462,28 @@ private struct WidgetRow: View {
                 .accessibilityLabel(kind.title)
             }
         }
+    }
+
+    private var pinButton: some View {
+        Button {
+            var layout = controller.layout
+            layout.setPinned(!isPinned, for: kind)
+            controller.layout = layout
+        } label: {
+            Image(systemName: isPinned ? "pin.fill" : "pin.slash")
+                .font(.system(size: 12))
+                // Secondary rather than tertiary when unpinned: measured
+                // against the card it sat on, tertiary was too close to the
+                // ground to read as a control at all.
+                .foregroundStyle(
+                    isPinned ? AnyShapeStyle(Palette.accent) : AnyShapeStyle(Ink.secondary)
+                )
+                .frame(width: 22, height: 22)
+                .contentShape(.rect)
+        }
+        .buttonStyle(.plain)
+        .help(isPinned ? "Shown while you play" : "Only when the overlay is open")
+        .accessibilityLabel(isPinned ? "Unpin \(kind.title)" : "Pin \(kind.title)")
     }
 
     private var isPinned: Bool { controller.layout.placement(for: kind).isPinned }

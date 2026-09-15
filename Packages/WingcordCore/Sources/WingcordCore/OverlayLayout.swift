@@ -106,6 +106,22 @@ public enum OverlayWidgetKind: String, CaseIterable, Hashable, Sendable, Codable
         case .streams, .videoTiles, .voice, .notifications, .clips: true
         }
     }
+
+    /// Whether pinning this one is even offered.
+    ///
+    /// **The controls are not, and it is not a preference.** Pinning means "draw
+    /// this while the overlay is asleep", and a sleeping overlay is
+    /// click-through by construction — so a pinned toolbar is five buttons
+    /// nobody can press, sitting over the game, doing nothing. A control that
+    /// cannot work is worse than an absent one, so the switch that produces it
+    /// is not drawn at all.
+    ///
+    /// The two reading surfaces are a softer case and keep theirs: a pinned
+    /// chat window is a transcript left up to be *read* while playing, which is
+    /// a real thing to want even though it cannot be scrolled.
+    public var canBePinned: Bool {
+        self != .quickActions
+    }
 }
 
 /// One widget's place on the surface.
@@ -161,8 +177,13 @@ public struct OverlayLayout: Hashable, Sendable, Codable {
     }
 
     public func placement(for kind: OverlayWidgetKind) -> OverlayPlacement {
-        placements[kind]
+        var placement = placements[kind]
             ?? OverlayPlacement(centre: kind.defaultCentre, isPinned: kind.isPinnedByDefault)
+        // **Normalised on the way out as well as refused on the way in**, so a
+        // layout stored by a build that allowed it cannot resurrect a pin the
+        // reader now has no control to clear.
+        if !kind.canBePinned { placement.isPinned = false }
+        return placement
     }
 
     // MARK: Resolving
@@ -210,6 +231,7 @@ public struct OverlayLayout: Hashable, Sendable, Codable {
     }
 
     public mutating func setPinned(_ pinned: Bool, for kind: OverlayWidgetKind) {
+        guard kind.canBePinned else { return }
         var placement = placement(for: kind)
         placement.isPinned = pinned
         placements[kind] = placement

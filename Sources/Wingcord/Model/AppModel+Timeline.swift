@@ -46,8 +46,24 @@ extension AppModel {
     /// - Parameter authorFont: the face names are set in, so a styled one can be
     ///   resolved at the same size. Taken rather than rebuilt, because there is
     ///   exactly one right answer and `MessageTextStyle` already holds it.
+    /// - Parameter guildID: the server whose roles, nicknames and per-guild
+    ///   avatars these authors are resolved against — **the server the messages
+    ///   are IN**, which is not always the one the rail is pointing at.
+    ///
+    ///   This used to be `selectedChannelID`'s guild, and in the main window the
+    ///   two are the same by construction: a direct message is only ever open at
+    ///   Home. Three surfaces broke that and the overlay broke it visibly — a
+    ///   chat window over a game draws a conversation while a server is
+    ///   selected, so every author in that DM wore the selected server's role
+    ///   colour, its nickname for them and their per-guild face. The inbox and
+    ///   the search pane had the same fault more quietly: both list messages
+    ///   from servers other than the open one.
+    ///
+    ///   Nil means no server — a direct message — and resolves to the account's
+    ///   own name, colour and avatar, which is the correct answer there.
     func authorInfo(
         for items: [TimelineItem],
+        inGuild guildID: GuildID?,
         authorFont: NSFont
     ) -> [UserID: TimelineLayoutEngine.AuthorInfo] {
         let authorPointSize = authorFont.pointSize
@@ -56,7 +72,6 @@ extension AppModel {
         // while one is being laid out.
         let saturation = userColorSaturation
         var result: [UserID: TimelineLayoutEngine.AuthorInfo] = [:]
-        let guildID = selectedChannelID.flatMap { channelIndex.guildID(of: $0) }
         let guildRoles = guildID.flatMap { roles[$0] } ?? [:]
 
         for item in items {
@@ -295,7 +310,11 @@ extension AppModel {
         }
         // One resolve for the whole set rather than one per card: the lookups
         // are over the same tables and most pins share authors.
-        let authors = authorInfo(for: items, authorFont: style.authorFont)
+        let authors = authorInfo(
+            for: items,
+            inGuild: channelIndex.guildID(of: channelID),
+            authorFont: style.authorFont
+        )
         let mentions = mentionContext()
         let channelName = channelIndex[channelID].map(displayName(of:)) ?? ""
         let value = messages.map { message in

@@ -211,6 +211,23 @@ struct OverlaySidebarTests {
 
     // MARK: Voice
 
+    @Test("A stage is not a voice channel, whoever is standing in it")
+    func stagesAreNotRooms() {
+        let model = self.model()
+        var index = model.channelIndex
+        index.upsert(Channel(
+            id: ChannelID(rawValue: 13), kind: .stage, guildID: guildID,
+            name: "office hours", position: 2
+        ))
+        model.channelIndex = index
+        model.voiceStates[friendOffline] = VoiceState(
+            userID: friendOffline, channelID: ChannelID(rawValue: 13),
+            guildID: guildID, sessionID: "c"
+        )
+        let rooms = model.overlaySidebarPresentation.rooms
+        #expect(!rooms.contains { $0.id == ChannelID(rawValue: 13) })
+    }
+
     @Test("A room with nobody in it is not a row")
     func onlyOccupiedRooms() {
         let rooms = model().overlaySidebarPresentation.rooms
@@ -350,5 +367,50 @@ struct OverlayChatTests {
         #expect(controller.streamHover?.userID == UserID(rawValue: 2))
         controller.endStreamHover(UserID(rawValue: 2))
         #expect(controller.streamHover == nil)
+    }
+}
+
+/// Who may take a click while the overlay is asleep.
+///
+/// **The locked state belongs to the game**, and the toast is the one exception:
+/// its own hint promises a click will reply, and answering a notification is the
+/// single thing on this overlay somebody does without leaving the match.
+@MainActor
+@Suite("Overlay click-through")
+struct OverlayHitTestingTests {
+
+    private func controller() -> OverlayController { OverlayController() }
+
+    @Test("Asleep, only the toast takes a click")
+    func lockedPassesEverythingButTheToast() {
+        let controller = self.controller()
+        #expect(controller.isLocked)
+        #expect(controller.acceptsHits(.notifications))
+        for kind in [OverlayWidgetKind.voice, .streams, .videoTiles, .clips, .friends] {
+            #expect(!controller.acceptsHits(kind), "\(kind.rawValue)")
+        }
+    }
+
+    @Test("Awake, everything takes a click")
+    func unlockedAcceptsEverything() {
+        let controller = self.controller()
+        controller.setLocked(false)
+        #expect(OverlayWidgetKind.allCases.allSatisfy(controller.acceptsHits))
+    }
+
+    @Test("Replying does not wake the overlay")
+    func replyingKeepsTheLock() {
+        // Unlocking to type one line would dim the screen and draw eight
+        // widgets over a match.
+        let controller = self.controller()
+        let notice = OverlayNotice(
+            title: "alex", body: "hey", monogram: "A",
+            channelID: ChannelID(rawValue: 1), messageID: MessageID(rawValue: 5)
+        )
+        controller.beginReply(to: notice)
+        #expect(controller.isLocked)
+        #expect(controller.isReplying)
+        controller.cancelReply()
+        #expect(!controller.isReplying)
     }
 }

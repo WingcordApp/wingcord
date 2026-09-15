@@ -1628,7 +1628,13 @@ enum DemoFixtures {
                     // other room has no ceiling, which is the ordinary case and
                     // the one where a client must print a count rather than
                     // `8 / 0`.
-                    userLimit: Self.demoKind(of: name) == .voice && name == "lobby" ? 5 : nil
+                    // `vc-hangout` rather than `lobby`, because `orderedGuildIDs`
+                    // puts the reader's own call in the first server with a
+                    // room in it and that is this one — so the ceiling lands on
+                    // the five-person cast and reads `5 / 5`, where on the
+                    // other room it read `8 / 5`.
+                    userLimit: Self.demoKind(of: name) == .voice
+                        && name == "vc-hangout" ? 5 : nil
                 ))
                 position += 1
             }

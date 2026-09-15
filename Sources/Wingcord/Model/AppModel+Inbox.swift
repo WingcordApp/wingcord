@@ -277,6 +277,7 @@ extension AppModel {
                     for: unread.map {
                         TimelineItem.message(TimelineMessage(message: $0, flags: []))
                     },
+                    inGuild: channel.guildID,
                     authorFont: style.authorFont
                 )
             )
@@ -440,7 +441,11 @@ extension AppModel {
         let items = messages.map {
             TimelineItem.message(TimelineMessage(message: $0, flags: [.head, .tail]))
         }
-        let authors = authorInfo(for: items, authorFont: style.authorFont)
+        let authors = authorInfo(
+            for: items,
+            inGuild: channelIndex.guildID(of: channelID),
+            authorFont: style.authorFont
+        )
         return messages.map { message in
             InboxRow(
                 id: message.id,

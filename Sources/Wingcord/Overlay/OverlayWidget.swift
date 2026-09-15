@@ -345,15 +345,21 @@ private struct OverlayToast: View {
                         .font(.system(size: 12))
                         .foregroundStyle(Ink.secondary)
                         .lineLimit(2)
-                    // **The keybind, on the toast.** It is how anybody finds out
-                    // the overlay is there at all — Discord puts the same line on
-                    // theirs, and a toast that only reports a message teaches
-                    // nothing. Absent while the field is open, where it would be
+                    // **Two facts, and the first one has to be true.** The line
+                    // used to read "Click here or press ⌃⌘` to reply" while a
+                    // sleeping overlay ignored every click — so the half of the
+                    // sentence somebody would actually try was the half that did
+                    // nothing. Clicking now replies without waking the surface;
+                    // the keybind is a *different* act and is named as one,
+                    // because it is still how anybody finds out the overlay is
+                    // there at all.
+                    //
+                    // Absent while the field is open, where it would be
                     // instructions for something already done.
                     if !isReplying, let keys = AppSettings.shared.hotkey(for: .toggleOverlay)?
                         .displayString
                     {
-                        Text("Click here or press \(keys) to reply")
+                        Text("Click to reply · \(keys) for the overlay")
                             .font(.system(size: 10, weight: .medium))
                             .foregroundStyle(Ink.tertiary)
                             .padding(.top, 2)

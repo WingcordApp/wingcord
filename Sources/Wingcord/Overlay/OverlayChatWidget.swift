@@ -74,7 +74,13 @@ struct OverlayChatWidget: View {
             // material. Measured rather than assumed — the composer grows with a
             // reply banner and with a wrapped line, and a constant clearance is
             // wrong in both directions the moment either happens.
+            //
+            // **The panel's bottom margin is HERE, outside the scroll view.**
+            // The composer floats above it; the transcript stops where the
+            // margin starts. Inside, it would be a strip of the panel that the
+            // transcript scrolls into and the bar does not cover.
             OverlayChatBody(channelID: channelID)
+                .padding(.bottom, Spacing.snug)
         }
         .frame(width: Self.width, height: Self.height)
         // §1: a reading surface is opaque. Over a game it is the whole point.
@@ -255,6 +261,17 @@ private struct OverlayChatBody: View {
             // The one composed thing over the drawn transcript, and there is
             // exactly one of it at a time.
             .overlay { MessageActionBarOverlay(channelID: channelID) }
+            // **The transcript runs to the panel's foot, UNDER the composer**,
+            // and this one modifier is the whole of "the composer floats".
+            //
+            // Left inset by the bar, the scroll view stops above it — so what
+            // sits behind the composer's material is the window's own opaque
+            // canvas and there is nothing to refract, which is the flat black
+            // band it looked like. Extending underneath and paying for it with
+            // a content inset is what puts moving rows beneath the glass.
+            // `ConversationPane` has carried this note since the composer
+            // landed; the overlay's copy was missing the line it describes.
+            .ignoresSafeArea(.container, edges: .bottom)
             // `safeAreaBar`, not `safeAreaInset`: the composer has to REGISTER
             // as a bar, which is what the scroll edge effect keys off.
             .safeAreaBar(edge: .bottom, spacing: 0) {
@@ -264,14 +281,15 @@ private struct OverlayChatBody: View {
                 }
                 // **Floating, not flush.** The window is a rounded panel and a
                 // composer running edge to edge into its corners reads as a
-                // strip welded across the bottom of it — the transcript stops
-                // being something the bar floats over and starts being something
-                // it is bolted to. The inset is what lets the rows pass
-                // underneath and lens through the material, which is the whole
-                // reason the transcript is extended beneath the bar and paid for
-                // with a content inset rather than stopped above it.
+                // strip welded across the bottom of it.
+                //
+                // Horizontal only. The gap *below* it belongs to the panel and
+                // is applied outside the scroll view — see the note on the body
+                // below. Put here it would extend the transcript past the bar
+                // into the panel's own margin, and the capture showed exactly
+                // that: the last line of the newest message sitting under the
+                // composer with nothing over it.
                 .padding(.horizontal, Spacing.snug)
-                .padding(.bottom, Spacing.snug)
                 .background {
                     GeometryReader { proxy in
                         Color.clear

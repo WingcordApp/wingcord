@@ -96,6 +96,21 @@ final class TimelineCoordinator: NSObject {
     private var channelID: ChannelID?
     private var items: [TimelineItem] = []
     private var layoutWidth: CGFloat = 0
+    /// The viewport height the transcript was last positioned against.
+    ///
+    /// **A viewport that GROWS while somebody is at the bottom has to be put
+    /// back at the bottom**, which is the same rule the content inset already
+    /// states and a different moment. It is the geometry change, not the inset
+    /// change, that actually lands last: the inset is written during
+    /// `updateNSView`, and the clip view is not resized until the layout pass
+    /// after it — so a `scrollToBottom` fired from the inset is measured against
+    /// the viewport the bar had not yet been carved out of.
+    ///
+    /// Nobody could see it in the window because the composer is measured while
+    /// the first page is still in flight. The overlay's chat window opens onto a
+    /// transcript that is already resident, so both landed in the same pass and
+    /// the newest message sat behind the composer.
+    private var lastViewportHeight: CGFloat = 0
     private var style: MessageTextStyle
     /// The settings half of the presentation, refreshed with the style — they
     /// move together and are invalidated by the same counter.
@@ -651,7 +666,14 @@ final class TimelineCoordinator: NSObject {
             channelName: channel.map { model.displayName(of: $0) } ?? "",
             channelSymbol: channel?.kind.symbolName ?? "number",
             channelTopic: channel?.topic,
-            authors: model.authorInfo(for: items, authorFont: style.authorFont),
+            // **The channel being drawn, not the one that is selected.** See
+            // `AppModel.authorInfo` — an overlay chat window is open while a
+            // server is selected, and that is what exposed it.
+            authors: model.authorInfo(
+                for: items,
+                inGuild: channelID.flatMap { model.channelIndex.guildID(of: $0) },
+                authorFont: style.authorFont
+            ),
             calendar: .current,
             settings: settings,
             spotify: model.spotifyUnfurls
@@ -731,6 +753,14 @@ final class TimelineCoordinator: NSObject {
             documentHeight: canvas.contentHeight,
             wasNearBottom: isNearBottom
         )
+        // See `lastViewportHeight`. Not while a gesture is in flight: the
+        // reader's own hand owns the position then, and the height does not
+        // change during one anyway.
+        if abs(viewport.height - lastViewportHeight) > 0.5 {
+            let grew = viewport.height > lastViewportHeight
+            lastViewportHeight = viewport.height
+            if grew, isNearBottom, !canvas.isScrolling { scrollToBottom() }
+        }
         positionCanvas()
         requestEarlierHistoryIfNeeded(viewport: viewport)
         schedulePrefetch()
