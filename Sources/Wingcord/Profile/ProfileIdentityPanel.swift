@@ -204,19 +204,30 @@ struct ProfileIdentityPanel: View {
                     Rectangle().fill(ground.plateStyle(accentColorValue: profile.accentColorValue))
                 }
                 .overlay { bannerArtwork }
-                // The handoff's fade: the artwork dissolves into the rail rather
+                // The handoff's fade: the artwork dissolves into the body rather
                 // than ending in a line, which is what keeps the banner and the
                 // body reading as one surface.
+                //
+                // **Only where there IS artwork.** A person with no banner gets
+                // a flat plate of their primary colour, and a colour block has
+                // nothing to dissolve — fading one into the body just erases
+                // it. Measured against Discord's own card for an account whose
+                // pair is `#89867d` / `#d5d4d3`: its plate is that colour flat,
+                // edge to edge, ending in a hard line against the body. Ours
+                // was washing out to within a few units of the body and the
+                // banner had effectively disappeared.
                 .overlay {
-                    LinearGradient(
-                        stops: [
-                            .init(color: .clear, location: 0.3),
-                            .init(color: ground.bodyHead.opacity(0.55), location: 0.78),
-                            .init(color: ground.bodyHead.opacity(0.9), location: 1),
-                        ],
-                        startPoint: .top,
-                        endPoint: .bottom
-                    )
+                    if profile.bannerURL != nil {
+                        LinearGradient(
+                            stops: [
+                                .init(color: .clear, location: 0.3),
+                                .init(color: ground.bodyHead.opacity(0.55), location: 0.78),
+                                .init(color: ground.bodyHead.opacity(0.9), location: 1),
+                            ],
+                            startPoint: .top,
+                            endPoint: .bottom
+                        )
+                    }
                 }
                 .frame(height: Self.bannerHeight)
                 .clipped()
