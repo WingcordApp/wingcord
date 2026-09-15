@@ -65,7 +65,6 @@ struct OverlayChatWidget: View {
                 controller: controller,
                 title: model.channelIndex[channelID].map { model.displayName(of: $0) } ?? "",
                 isFavorite: model.pinnedChannelIDs.contains(channelID),
-                isPinned: controller.layout.placement(for: .chat).isPinned,
                 isInCall: model.connectedVoiceChannelID == channelID
             )
             Divider().opacity(0.4)
@@ -127,7 +126,6 @@ private struct OverlayChatHeader: View {
     @Bindable var controller: OverlayController
     var title: String
     var isFavorite: Bool
-    var isPinned: Bool
     var isInCall: Bool
 
     @Environment(AppModel.self) private var model
@@ -164,19 +162,13 @@ private struct OverlayChatHeader: View {
                 }
             }
 
-            // **The widget's pin, not a second kind of pin.** It is the one
-            // declaration this app already has for "stays on screen while you
-            // are playing", and a chat window is exactly the thing somebody
-            // wants left up — read-only, because a locked overlay is
-            // click-through by construction.
-            headerButton(
-                symbol: isPinned ? "pin.fill" : "pin",
-                help: isPinned ? "Shown while you are playing" : "Hidden while you are playing"
-            ) {
-                var layout = controller.layout
-                layout.setPinned(!isPinned, for: .chat)
-                controller.layout = layout
-            }
+            // **No pin, and the reference has one.** Theirs keeps the window up
+            // while the overlay sleeps; a sleeping overlay here answers clicks
+            // only inside its click zones, and a transcript that cannot be
+            // scrolled over a composer that cannot be typed into is five
+            // hundred points of opaque panel held over a match for nothing.
+            // `OverlayWidgetKind.canBePinned` refuses it at the model, so there
+            // is no state for a button here to show.
 
             // **Discord calls this FAVORITED and stores it on the reader's
             // channel override**, so it is the same bit the DM list's star

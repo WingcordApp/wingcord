@@ -121,32 +121,41 @@ struct OverlayLayoutTests {
     @Test("Pinning a widget puts it in the locked state and leaves the rest alone")
     func pinning() {
         var layout = OverlayLayout.default
-        layout.setPinned(true, for: .chat)
-        #expect(layout.visibleWidgets(locked: true).contains(.chat))
+        layout.setPinned(true, for: .friends)
+        #expect(layout.visibleWidgets(locked: true).contains(.friends))
         #expect(layout.placement(for: .voice).isPinned)
     }
 
-    @Test("The controls cannot be pinned, because a locked overlay cannot be clicked")
-    func controlsRefusePinning() {
-        // Five buttons nobody can press, sitting over the game, doing nothing.
+    @Test("The controls and the chat window cannot be pinned at all")
+    func twoWidgetsRefusePinning() {
+        // A locked overlay answers clicks only inside its click zones, and
+        // neither of these is one: the toolbar would be five buttons nobody can
+        // press, and the chat window a transcript that cannot be scrolled over a
+        // composer that cannot be typed into.
         var layout = OverlayLayout.default
-        layout.setPinned(true, for: .quickActions)
-        #expect(!layout.placement(for: .quickActions).isPinned)
-        #expect(!layout.visibleWidgets(locked: true).contains(.quickActions))
+        for kind in [OverlayWidgetKind.quickActions, .chat] {
+            layout.setPinned(true, for: kind)
+            #expect(!layout.placement(for: kind).isPinned, "\(kind.rawValue)")
+            #expect(!layout.visibleWidgets(locked: true).contains(kind), "\(kind.rawValue)")
+        }
+        // The sidebar keeps its pin, and the difference is that it is a roster:
+        // complete without interaction, like the voice widget beside it.
+        #expect(OverlayWidgetKind.friends.canBePinned)
     }
 
-    @Test("A stored pin from an older build cannot resurrect the refused one")
+    @Test("A stored pin from an older build cannot resurrect a refused one")
     func storedPinIsNormalised() {
         // Refused on the way in AND normalised on the way out, or a layout
         // written by a build that allowed it leaves a pin the reader now has no
-        // control to clear.
-        let stored = OverlayLayout(placements: [
-            .quickActions: OverlayPlacement(
-                centre: OverlayWidgetKind.quickActions.defaultCentre, isPinned: true
-            ),
-        ])
-        #expect(!stored.placement(for: .quickActions).isPinned)
-        #expect(!stored.visibleWidgets(locked: true).contains(.quickActions))
+        // control to clear. The chat window is exactly that case: it WAS
+        // pinnable, and a reader who pinned it has that byte on disk.
+        for kind in [OverlayWidgetKind.quickActions, .chat] {
+            let stored = OverlayLayout(placements: [
+                kind: OverlayPlacement(centre: kind.defaultCentre, isPinned: true),
+            ])
+            #expect(!stored.placement(for: kind).isPinned, "\(kind.rawValue)")
+            #expect(!stored.visibleWidgets(locked: true).contains(kind), "\(kind.rawValue)")
+        }
     }
 
     @Test("The order is stable, because a widget that reorders itself flickers")

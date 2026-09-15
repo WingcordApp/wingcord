@@ -109,18 +109,24 @@ public enum OverlayWidgetKind: String, CaseIterable, Hashable, Sendable, Codable
 
     /// Whether pinning this one is even offered.
     ///
-    /// **The controls are not, and it is not a preference.** Pinning means "draw
-    /// this while the overlay is asleep", and a sleeping overlay is
-    /// click-through by construction — so a pinned toolbar is five buttons
-    /// nobody can press, sitting over the game, doing nothing. A control that
-    /// cannot work is worse than an absent one, so the switch that produces it
-    /// is not drawn at all.
+    /// **Two are not, and it is not a preference.** Pinning means "draw this
+    /// while the overlay is asleep", and a sleeping overlay is click-through by
+    /// construction — only the click zones answer, and neither of these is one.
+    /// A control that cannot work is worse than an absent one, so the switch
+    /// that would produce it is not drawn at all.
     ///
-    /// The two reading surfaces are a softer case and keep theirs: a pinned
-    /// chat window is a transcript left up to be *read* while playing, which is
-    /// a real thing to want even though it cannot be scrolled.
+    /// - The **controls** would be five buttons nobody can press.
+    /// - The **chat window** is worse, because it is the largest surface here: a
+    ///   transcript that cannot be scrolled and a composer that cannot be typed
+    ///   into, holding five hundred points of opaque reading surface over a
+    ///   match. Everything that makes it worth having needs a click.
+    ///
+    /// The other reading surface keeps its pin, and the difference is real
+    /// rather than a line drawn somewhere: the sidebar is a **roster**. Who is
+    /// online and who is in a room is legible at a glance and complete without
+    /// interaction, which is the same thing the voice widget is pinned for.
     public var canBePinned: Bool {
-        self != .quickActions
+        self != .quickActions && self != .chat
     }
 }
 
