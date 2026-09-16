@@ -61,8 +61,8 @@ public enum MedianCutQuantizer {
 
         let root = Box(lower: lower, upper: upper, count: pixels.count)
         var boxes = [root]
-        split(&boxes, histogram, by: .population, until: Int(populationFraction * Double(count)))
-        split(&boxes, histogram, by: .volume, until: count)
+        split(&boxes, histogram, by: .population, until: populationFraction * Double(count))
+        split(&boxes, histogram, by: .volume, until: Double(count - boxes.count))
         boxes.sort { $0.count * $0.volume < $1.count * $1.volume }
         return boxes.reversed().map { $0.average(histogram) }
     }
@@ -123,11 +123,18 @@ public enum MedianCutQuantizer {
         _ boxes: inout [Box],
         _ histogram: [Int],
         by kind: Priority,
-        until target: Int
+        until target: Double
     ) {
-        var colors = boxes.count
+        // **Boxes PRODUCED by this pass, starting at one, not boxes in the
+        // queue** — the reference's `o`, and the difference is a whole split.
+        // Its first pass runs until `o >= 0.75 * count`, which for five colours
+        // is `o >= 3.75` and therefore FOUR boxes; a truncated `Int(3.75)`
+        // compared against the queue's size stops at three, and the fourth
+        // split then happens in the second pass under the other priority. Five
+        // boxes either way, and a different five.
+        var colors = 1.0
         var iterations = 0
-        while iterations < maxIterations, colors < target {
+        while iterations < maxIterations {
             boxes.sort { $0.priority(kind) < $1.priority(kind) }
             let box = boxes.removeLast()
             guard box.count > 0 else {
@@ -145,6 +152,7 @@ public enum MedianCutQuantizer {
                 colors += 1
             }
             iterations += 1
+            if colors >= target { return }
         }
     }
 

@@ -112,4 +112,56 @@ struct UserProfileDecodeTests {
         #expect(style.effect == .solid)
         #expect(style.colors == [0xFF_00_00])
     }
+
+    /// **One boolean in one service's metadata cost a whole profile**, and the
+    /// symptom was nowhere near the cause: a mini profile drew a single badge,
+    /// no bio and no Nitro crest, because the response it all arrives in threw
+    /// on `connected_accounts[9].metadata.verified` and the card fell back to
+    /// what the gateway's user object alone can say.
+    ///
+    /// The bag is `[String: String]` for every service that was ever captured —
+    /// PayPal and Twitter both send `"verified": "0"` — and TikTok sends a JSON
+    /// boolean for the same key. Taken from a live popout response.
+    @Test("A boolean in a connection's metadata does not cost the profile")
+    func metadataTolerates() throws {
+        let user = try decode("""
+        { "user": { "id": "1", "username": "a", "discriminator": "0" },
+          "premium_type": 2,
+          "badges": [{ "id": "hypesquad_house_3", "description": "HypeSquad Balance",
+                       "icon": "3aa41de486fa12454c3761e8e223442e" },
+                     { "id": "quest_completed", "description": "Completed a Quest",
+                       "icon": "cbe5d371909a84f9ee59a037e8a9cf8b" }],
+          "connected_accounts": [
+            { "id": "p", "type": "paypal", "name": "p", "verified": true,
+              "metadata": { "verified": "0", "created_at": "2019-07-11T00:00:00+00:00" } },
+            { "id": "t", "type": "tiktok", "name": "t", "verified": true,
+              "metadata": { "verified": false, "follower_count": "84" } } ] }
+        """)
+        // The badges and the tier are the fields the throw was actually
+        // costing, and they are in a different part of the response entirely.
+        #expect(user.decoration?.badges.map(\.id) == ["hypesquad_house_3", "quest_completed"])
+        #expect(user.decoration?.premiumTier == .nitro)
+        // A boolean renders the way the same field arrives from the services
+        // that send it as a string, so `ConnectionFact` reads one flag rule.
+        let tiktok = try #require(user.decoration?.connectedAccounts.first { $0.service == "tiktok" })
+        #expect(tiktok.metadata["verified"] == "0")
+        #expect(tiktok.metadata["follower_count"] == "84")
+    }
+
+    /// A number arrives as a number on nothing captured so far, and the point of
+    /// the tolerant decoder is that it does not have to.
+    @Test("A number renders without a decimal point, and null is dropped")
+    func metadataRendersScalars() throws {
+        let user = try decode("""
+        { "user": { "id": "1", "username": "a", "discriminator": "0" },
+          "connected_accounts": [
+            { "id": "s", "type": "steam", "name": "s",
+              "metadata": { "game_count": 16, "ratio": 1.5, "missing": null } } ] }
+        """)
+        let steam = try #require(user.decoration?.connectedAccounts.first)
+        #expect(steam.metadata["game_count"] == "16")
+        #expect(steam.metadata["ratio"] == "1.5")
+        #expect(steam.metadata["missing"] == nil)
+    }
+
 }

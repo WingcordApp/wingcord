@@ -3,282 +3,302 @@ import SwiftUI
 
 /// What a profile surface is made of.
 ///
-/// **Only a real `theme_colors` pair tints the body.** This used to fall back to
-/// `accent_color`, and that is wrong in the exact case it fires most: Discord
-/// derives an account's accent from its banner, so a person with a red banner
-/// and no theme got a card flooded red — banner colour bleeding into a surface
-/// that should have stayed neutral. Discord's own client keeps the banner red
-/// and the body a plain material, and that is correct behaviour rather than a
-/// stylistic preference: the banner is artwork the person chose, the accent is a
-/// number derived from it, and only the theme is a decision they made about the
-/// card.
+/// **One themed case, and there used to be two.** A pair the person chose and a
+/// pair quantised out of their artwork were drawn differently here for a whole
+/// session, on a measurement that turned out to be a coincidence: Discord rims
+/// a derived card at `#D8D7D6` where that person's colour is `#8C8981`, which is
+/// that colour two thirds of the way into white — and is also, exactly, the
+/// SECOND swatch of their palette. There was never a rule; there was one
+/// account whose two numbers happened to agree. Discord's own client cannot
+/// tell the two apart either: `getPreviewThemeColors() ?? quantised` is one
+/// value by the time anything draws it. See `ProfileThemeColors`.
 ///
-/// So: themed profiles get their gradient; everyone else gets a neutral ground.
+/// **A profile carries its own light or dark theme, decided by the PRIMARY
+/// colour alone**, and that is independent of the app's. A cat photographed on a
+/// white sofa quantises to `#8C8981` / `#D8D7D6`, and Discord draws that account
+/// as a near-white card with dark text in a dark client. Somebody who picked a
+/// navy gets a near-black one. The same palette produces the same card in every
+/// surface — popout, sidebar and full profile — so there is no "the card has a
+/// colour here and IS the colour there": there is one treatment for a card and
+/// a second for the full profile's own base, and both are in `ProfileThemeColors`.
 ///
 /// **Both are opaque, and the unthemed one used not to be.** It was
 /// `.glassEffect(.regular)` on the belief that a card supplies its own material
 /// and the presentation behind it supplies none. The second half was false — a
 /// popover and a sheet each paint a backdrop, and the card's glass had been
 /// compositing over it all along, which is why it read as a solid mid-grey panel
-/// rather than as the near-transparent material it actually was. Presenting the
-/// card as a layer in the window took that backdrop away and the transcript
-/// began reading straight through somebody's roles.
+/// rather than as the near-transparent material it actually was.
 ///
 /// A profile card carries prose — a bio, roles, dates — so §1's rule wins over
 /// §4's: **a reading surface is opaque.** It is also cheaper, because a
 /// card-sized `.glassEffect` is a sampled backdrop blur recomputed for every
 /// frame the transcript scrolls behind it.
-///
-/// **Shared by the card and the full profile**, because the two are the same
-/// person one click apart. Two copies of these opacities is how a profile comes
-/// out one colour in a popover and another in a sheet, and the numbers below are
-/// fitted rather than picked — see `ProfileGroundFill`.
 enum ProfileGround: Equatable {
-    /// The person themed themselves. Primary and secondary.
-    case themed(Color, Color)
-    /// No theme. A plain structural ground, like every other panel in the app.
+    /// The person's pair — chosen by them, or quantised out of their artwork.
+    /// Packed 24-bit sRGB, because every derivation below is arithmetic and a
+    /// `Color` cannot be asked for its channels without a bridge.
+    /// - Parameter followsAppTheme: whether this surface takes the APP's theme
+    ///   instead of the profile's. See `isDark`.
+    case themed(primary: UInt32, secondary: UInt32, followsAppTheme: Bool)
+    /// No pair at all. A plain structural ground, like every other panel in the
+    /// app — and the right answer rather than a colour invented on somebody's
+    /// behalf.
     case neutral
-    /// No theme of their own, so the pair was quantised out of their artwork.
-    ///
-    /// **A pair, and it used to be one colour.** The argument for dropping the
-    /// second swatch was that it "is very often the near-black *behind* the
-    /// subject", measured as a card running 28 to 22 where Discord ran 56 to 86.
-    /// That was true of the palette this client was computing and false of
-    /// Discord's: the near-black wins second place at every CDN rung **except**
-    /// the one Discord actually quantises. At rung 80 the second box for the
-    /// test avatar is `#d5d4d3` — exactly what Discord paints the card body
-    /// with — and the ramp runs the right way on its own. See
-    /// `ProfileThemePalette`.
-    ///
-    /// It stays a case of its own because the *rim* is drawn differently, and
-    /// that measurement was never in doubt.
-    case derived(Color, Color)
 
-    /// - Parameter isDerived: whether these colours were quantised out of the
-    ///   person's artwork rather than chosen by them. The two are drawn
-    ///   differently and cannot be told apart from the values alone.
-    init(themeColorValues: [UInt32], isDerived: Bool = false) {
+    /// - Parameter followsAppTheme: true on the surfaces that stay dark
+    ///   whatever the person's colours are — see `isDark`.
+    init(themeColorValues: [UInt32], followsAppTheme: Bool = false) {
         guard let first = themeColorValues.first else {
             self = .neutral
             return
         }
-        if isDerived {
-            // The second box where there is one. A palette with a single entry
-            // is a picture that quantised to one colour, and the flat form is
-            // the honest answer there.
-            self = .derived(
-                Color(hex: first),
-                Color(hex: themeColorValues.count >= 2 ? themeColorValues[1] : first)
-            )
-        } else if themeColorValues.count >= 2 {
-            self = .themed(Color(hex: first), Color(hex: themeColorValues[1]))
-        } else {
-            // A single colour is still a deliberate theme, just a flat one.
-            self = .themed(Color(hex: first), Color(hex: first))
-        }
+        // A single colour is still a theme, just a flat one.
+        self = .themed(
+            primary: first,
+            secondary: themeColorValues.count >= 2 ? themeColorValues[1] : first,
+            followsAppTheme: followsAppTheme
+        )
     }
 
-    /// Whether a surface painting this ground at full strength needs **dark**
-    /// ink on it.
+    /// The pair, or nil where there is none.
     ///
-    /// **The one question a derived theme forces and a chosen one rarely
-    /// does.** Somebody who picks their own colours picks them against
-    /// Discord's dark card; a quantiser picks whatever the picture had, and a
-    /// cat photographed on a white sofa quantises to `#d5d4d3`. Discord's full
-    /// profile for that account is a *light card with dark text* — it is not
-    /// tinting a dark surface, it has adopted the colour.
-    ///
-    /// Rec. 709 luma, thresholded at the middle. Not a contrast ratio: the body
-    /// is a ramp between two colours and a ratio against a ramp has no single
-    /// answer — §4.8. The threshold is on the colour the ink actually sits over,
-    /// which is the foot.
-    var wantsDarkInk: Bool {
-        guard let pair else { return false }
-        return Self.luma(of: pair.secondary) > 0.5
-    }
-
-    static func luma(of colour: Color) -> Double {
-        let components = NSColor(colour).usingColorSpace(.sRGB)
-        guard let components else { return 0 }
-        return 0.2126 * Double(components.redComponent)
-            + 0.7152 * Double(components.greenComponent)
-            + 0.0722 * Double(components.blueComponent)
-    }
-
-    /// What a full-strength body is at its head — the colour the banner has to
-    /// dissolve into.
-    ///
-    /// **The banner's fade used to name `Palette.canvas` outright**, which is
-    /// correct for every surface that tints a dark card and is a black smear
-    /// across the top of one that has adopted a light colour. The fade's job is
-    /// "end in the body rather than in a line"; the body is what it has to be
-    /// told.
-    var bodyHead: Color {
-        guard let pair else { return Palette.canvas }
-        return pair.secondary
-    }
-
-    /// And what it is at its FOOT — the colour a scrim over the bottom of the
-    /// card has to end in.
-    ///
-    /// **One value, because three layers have to agree.** The body's own ramp,
-    /// the banner's fade and the foot dock's scrim are one surface; three
-    /// private copies of the arithmetic is how each stays individually
-    /// defensible while the result is wrong — §2. The dock's ramp named
-    /// `Palette.canvas` and put a near-black band across the bottom of a light
-    /// card, which is the same fault the banner's fade had one layer up.
-    var bodyFoot: Color {
-        guard let pair else { return Palette.canvas }
-        return wantsDarkInk
-            ? pair.secondary.mix(with: .white, by: 0.45)
-            : pair.secondary.mix(with: .black, by: 0.25)
-    }
-
-    /// The card's edge.
-    ///
-    /// **A lit rim in the person's own colours, not a hairline.** In the theme's
-    /// primary at 55% over a near-black body it resolved to something barely
-    /// separable from the shadow behind it, so the card had no edge at all: it
-    /// read as a dark shape fading into a dark window rather than as an object
-    /// lying on top of one.
-    ///
-    /// So it is a *gradient*, running the same way the body's wash does —
-    /// primary at the head, secondary at the foot — which is what makes the rim
-    /// and the fill read as one surface lit from one direction rather than as a
-    /// border drawn around a fill. It is nearly opaque, because an edge is the
-    /// one part of a card that is allowed to be the brightest thing in it.
-    ///
-    /// White is still wrong here, and for the original reason: a white rim on a
-    /// saturated ground reads as a sticker cut out and pasted down. Over glass
-    /// there is no theme to borrow from, so it keeps the neutral hairline every
-    /// other floating surface in the app uses.
-    var borderStyle: AnyShapeStyle {
+    /// **Nil is an answer, not a missing value**: an unthemed profile has no
+    /// colours of its own, and the correct treatment is the app's own neutral.
+    private var pair: (primary: UInt32, secondary: UInt32)? {
         switch self {
-        case .neutral:
-            AnyShapeStyle(Color.white.opacity(0.10))
-        case .derived(let primary, _):
-            // **Measured, and a third of the way is the whole answer.** Discord
-            // rims a derived card at #D8D7D6 where that person's colour is
-            // 139,137,129 — which is that colour mixed one third into white,
-            // predicting 216,215,213 against the 216,215,214 on screen. All
-            // three channels, within a unit.
-            //
-            // A rim this light on a dark card looks wrong written down and is
-            // right on screen, for the reason the themed rim already gives: an
-            // edge is the one part of a card allowed to be the brightest thing
-            // in it.
-            AnyShapeStyle(primary.mix(with: .white, by: 0.667))
-        case .themed(let primary, let secondary):
-            AnyShapeStyle(LinearGradient(
-                colors: [primary.opacity(0.95), secondary.opacity(0.8)],
-                startPoint: .top,
-                endPoint: .bottom
-            ))
-        }
-    }
-
-    /// The two colours this ground lends its chrome, or nil where it has none.
-    ///
-    /// **A derived ground answers with its one colour twice.** Everything below
-    /// the body fill — the rim, the accent, a panel's wash — wants "the
-    /// person's colour" rather than a gradient's two ends, and collapsing the
-    /// distinction here is what keeps those treatments from growing a third
-    /// branch each.
-    private var pair: (primary: Color, secondary: Color)? {
-        switch self {
-        case .themed(let primary, let secondary): (primary, secondary)
-        case .derived(let primary, _): (primary, primary)
+        case .themed(let primary, let secondary, _): (primary, secondary)
         case .neutral: nil
         }
     }
 
-    /// The two colours this ground lends a ramp — the date span's rule, the
-    /// friend pill's fill.
+    /// Whether this surface takes the app's theme rather than the profile's.
+    private var followsAppTheme: Bool {
+        if case .themed(_, _, let follows) = self { return follows }
+        return true
+    }
+
+    /// Whether this surface draws itself dark.
     ///
-    /// **Nil is an answer, not a missing value**: an unthemed profile has no
-    /// colours of its own, and the correct treatment for it is the app's own
-    /// neutral rather than a pair invented on its behalf.
-    var accentPair: (primary: Color, secondary: Color)? { pair }
+    /// **Discord decides this per SURFACE, not once per person**, and measuring
+    /// three of them is the only way it was ever going to be found. The full
+    /// profile and the popout take the *profile's* own theme — `themeFromColor`
+    /// on the primary, so a pale palette gives a near-white card in a dark
+    /// client. The **DM sidebar does not**: it hands
+    /// `useProfileThemeStyle` a `themeOverride` of the app's theme, so it stays
+    /// dark for the same account whose modal beside it is white.
+    ///
+    /// Measured on Discord's own sidebar for two accounts, and the overlay is
+    /// still the 0.6 one rather than the 0.8 that `forceUserTheme` would have
+    /// brought with it — which is how the two mechanisms are told apart:
+    ///
+    /// ```
+    /// robinresting  #8c8981 / #d8d7d6   predicted 56,55,52 → 86,86,86
+    ///                                      measured 57,56,54 → 85,85,84
+    /// spiwal          #07adea / #4f003b   predicted  3,69,94 → 32, 0,24
+    ///                                      measured 15,66,90 → 32, 6,28   (P3)
+    /// ```
+    ///
+    /// An unthemed card follows the app too, which is dark at every preset this
+    /// app ships.
+    var isDark: Bool {
+        guard let pair, !followsAppTheme else { return true }
+        return ProfileThemeColors.isDark(pair.primary)
+    }
+
+    /// Whether a surface painting this ground needs **dark** ink on it.
+    ///
+    /// One environment value is the whole ink fix, because every `Ink` in this
+    /// app is a hierarchical style — a light card needs `.colorScheme(.light)`
+    /// rather than a light variant of every label, divider and control in the
+    /// profile. It is also what the system's own controls read.
+    var wantsDarkInk: Bool { pair != nil && !isDark }
+
+    // MARK: The card
+
+    /// A card's body at its head — the colour held under the banner.
+    ///
+    /// The person's primary under Discord's overlay: **black at 60 % on a dark
+    /// profile, white at 60 % on a light one**. Also what the banner's fade has
+    /// to dissolve into, which is why it is a property rather than a private
+    /// number inside the fill: the body's ramp, the banner's fade and the foot
+    /// dock's scrim are one surface, and three private copies of the arithmetic
+    /// is how each stays individually defensible while the result is wrong (§2).
+    var bodyHead: Color {
+        guard let pair else { return Palette.canvas }
+        return Color(hex: ProfileThemeColors.veiled(pair.primary, dark: isDark))
+    }
+
+    /// And at its foot — the secondary under the same overlay.
+    var bodyFoot: Color {
+        guard let pair else { return Palette.canvas }
+        return Color(hex: ProfileThemeColors.veiled(pair.secondary, dark: isDark))
+    }
+
+    // MARK: The full profile
+
+    /// The full profile's own base — everything the identity card does not
+    /// cover.
+    ///
+    /// **A different colour from the card's, and that is not a stylistic
+    /// split.** Discord's modal paints a clamped Lab midpoint of the pair
+    /// rather than the pair itself, so the page around the identity card is a
+    /// quiet near-white or near-black carrying the person's hue while the card
+    /// beside it carries their actual colours. Drawing the card's own ramp
+    /// across both is what made this client's full profile one flat slab of
+    /// somebody's theme.
+    var modalBase: Color {
+        guard let pair else { return Palette.canvas }
+        let base = ProfileThemeColors.modalBackground(
+            primary: pair.primary,
+            secondary: pair.secondary
+        )
+        return Color(hex: ProfileThemeColors.modalRamp(over: base, dark: isDark, fraction: 0.2))
+    }
+
+    /// What that base starts at, before it settles into `modalBase`.
+    var modalHead: Color {
+        guard let pair else { return Palette.canvas }
+        let base = ProfileThemeColors.modalBackground(
+            primary: pair.primary,
+            secondary: pair.secondary
+        )
+        return Color(hex: ProfileThemeColors.modalRamp(over: base, dark: isDark, fraction: 0.8))
+    }
+
+    /// How far the modal's ramp runs before it is flat. **Absolute, not a
+    /// fraction** — Discord's stop is `300px`, so a taller window gets more
+    /// flat colour rather than a longer fade.
+    static let modalRampHeight: CGFloat = 300
+
+    // MARK: Chrome
+
+    /// The card's edge.
+    ///
+    /// **The RAW pair, at full strength.** It is Discord's outer element
+    /// showing through its inner's padding — the one part of the card the 60 %
+    /// overlay never reaches, which is why a rim reads so much more saturated
+    /// than the body it surrounds. The opacities this replaced were fitted
+    /// against a body that was drawn wrong.
+    ///
+    /// White is still wrong here: a white rim on a saturated ground reads as a
+    /// sticker cut out and pasted down. Over glass there is no theme to borrow
+    /// from, so it keeps the neutral hairline every other floating surface uses.
+    var borderStyle: AnyShapeStyle {
+        guard let pair else { return AnyShapeStyle(Color.white.opacity(0.10)) }
+        return AnyShapeStyle(LinearGradient(
+            colors: [Color(hex: pair.primary), Color(hex: pair.secondary)],
+            startPoint: .top,
+            endPoint: .bottom
+        ))
+    }
 
     /// How heavy that edge is drawn. A themed rim is a light source and needs
     /// body; a neutral hairline is a separation and must stay a hairline.
     var borderWidth: CGFloat { pair == nil ? 1 : 1.5 }
 
-    /// The colour this surface lends to its own chrome — a selected tab, the
+    /// The two colours this ground lends a ramp — the date span's rule, the
+    /// friend pill's fill.
+    var accentPair: (primary: Color, secondary: Color)? {
+        guard let pair else { return nil }
+        return (Color(hex: pair.primary), Color(hex: pair.secondary))
+    }
+
+    /// The colour this surface lends its own chrome — a selected tab, the
     /// underline that travels between them, a symbol that should belong to the
     /// person rather than to the app.
-    ///
-    /// **Nil is not a missing value, it is an answer**: an unthemed profile has
-    /// no colour of its own, and the correct accent for it is the app's own
-    /// hierarchy rather than a colour invented on its behalf. Every reader of
-    /// this falls back to `Ink`, which is what the rest of the app uses.
-    var accent: Color? { pair?.primary }
+    var accent: Color? { pair.map { Color(hex: $0.primary) } }
 
     /// The same colour, safe to set **text** in.
     ///
-    /// **A wash colour and an ink colour are not the same value, and treating
-    /// them as one is what drew a black clock on a dark card.** `accent` is a
-    /// surface colour: for a themed profile it is what the person chose, and
-    /// for a derived one it is the dominant colour quantised out of their
-    /// avatar — which for a dark avatar is very nearly black. Laid over the
-    /// canvas at 0.36 it is a perfectly good ground; used as a foreground it
-    /// is black on near-black, which is what the activity card's elapsed
-    /// clock was.
+    /// **A wash colour and an ink colour are not the same value, and which way
+    /// to move depends on the card.** On a dark card the primary is floored and
+    /// desaturated into a pastel; on a light one the same treatment would make
+    /// it invisible, so it takes `buttonFill` instead — the person's colour
+    /// darkened until it carries against white, which is the same question.
     ///
-    /// So this floors the brightness and caps the saturation: the result is a
-    /// pastel of the person's own colour — still recognisably theirs, and
-    /// legible on this app's near-black canvas whatever it started as. A
-    /// colour that is already light passes through untouched.
-    ///
-    /// **Not a contrast *calculation*.** A WCAG ratio against a gradient that
-    /// runs two ways under a card is a number with no single answer; a floor
-    /// is honest about being a floor.
+    /// **Not a contrast *calculation*** on the dark side: a WCAG ratio against
+    /// a gradient that runs two ways under a card is a number with no single
+    /// answer, and a floor is honest about being a floor.
     var inkAccent: Color? {
-        pair?.primary.liftedForInk()
+        guard let pair else { return nil }
+        return wantsDarkInk
+            ? Color(hex: ProfileThemeColors.buttonFill(pair.primary))
+            : Color(hex: pair.primary).liftedForInk()
+    }
+
+    /// The fill of a primary control on this card — Discord's
+    /// `--profile-gradient-button-color`.
+    ///
+    /// The person's primary darkened until its contrast against white lands in
+    /// `7...10`, so white text on it is legible whatever they chose. Measured
+    /// off Discord for two accounts and reproduced within a unit on both:
+    /// `#35332C` for a grey profile, `#005287` for a cyan one.
+    var buttonFill: Color? {
+        pair.map { Color(hex: ProfileThemeColors.buttonFill($0.primary)) }
+    }
+
+    /// And the fill of a secondary one beside it — `--control-secondary-*`,
+    /// which is white at 72 % on a light card and at 8 % on a dark one.
+    var secondaryControlFill: Color {
+        wantsDarkInk ? .white.opacity(0.72) : .white.opacity(0.08)
     }
 
     /// A grouped panel sitting on this ground — an activity card, a row that
     /// answers to the pointer.
     ///
-    /// Not glass: the ground under it is already the lower surface, and §4's
-    /// answer when two glass surfaces would stack is to make one of them solid.
-    /// On a themed profile it takes a wash of the theme so the panel reads as
-    /// part of the person's surface rather than as a grey box dropped onto it.
+    /// Discord's `PROFILE_GRADIENT_SECTION_BOX`: black at 45 % on a dark card,
+    /// white at 45 % on a light one. Not glass — the ground under it is already
+    /// the lower surface, and §4's answer when two glass surfaces would stack is
+    /// to make one of them solid.
     var panelFill: AnyShapeStyle {
-        guard let pair else { return AnyShapeStyle(Palette.surfaceRaised) }
-        return AnyShapeStyle(pair.primary.opacity(0.16).blendMode(.plusLighter))
+        guard pair != nil else { return AnyShapeStyle(Palette.surfaceRaised) }
+        return AnyShapeStyle(wantsDarkInk
+            ? Color.white.opacity(0.45)
+            : Color.black.opacity(0.45))
+    }
+
+    /// The custom status bubble's plate.
+    ///
+    /// **Themed, and OPAQUE, and only one of those is measured.** The polarity
+    /// and the strength are Discord's `PROFILE_GRADIENT_SECTION_BOX` — black at
+    /// 45 % on a dark card, white at 45 % on a light one — which is the same
+    /// token every other panel on a profile takes and which `panelFill` already
+    /// carries. What is *not* from a capture is compositing it down to an opaque
+    /// colour instead of leaving it translucent: no capture in hand shows this
+    /// bubble on a themed profile, and the bubble is the one panel that sits
+    /// over the BANNER, which is arbitrary artwork. Forty-five per cent of
+    /// somebody's photograph coming through a speech bubble reads as a bug
+    /// rather than as material, and it reads worst while the bubble expands
+    /// under the pointer and the picture moves inside it.
+    ///
+    /// So the fill is that token resolved against the body it sits on, which
+    /// keeps the hue relationship Discord has and takes the picture out of it.
+    /// An unthemed card keeps the app's own surface.
+    var statusBubbleFill: Color {
+        guard let pair else { return Palette.surface }
+        let body = ProfileThemeColors.veiled(pair.primary, dark: isDark)
+        return Color(hex: ProfileThemeColors.veiled(body, dark: isDark, alpha: 0.45))
     }
 
     /// What stands behind a banner while the artwork loads, and instead of it
     /// when there is none.
     ///
-    /// **This is where `accent_color` belongs, and the only place it does.**
-    /// Discord derives it from the banner, so it is exactly right as a stand-in
-    /// for one — a person with no banner image gets their accent as a solid
-    /// strip, which is what Discord draws too — and exactly wrong as a tint for
-    /// the body underneath.
-    /// What stands behind a banner while the artwork loads, and instead of one
-    /// when there is none.
+    /// **Flat, and the primary UNVEILED.** Discord paints the raw primary
+    /// across the banner's whole slot — measured at `139,137,129` on an account
+    /// with no banner, edge to edge, identical in light and dark mode. Fading
+    /// it throws that agreement away: sampled anywhere but the first corner a
+    /// gradient read `120,119,113` against Discord's `139,137,129`.
     ///
-    /// **Flat for a derived ground, a gradient for everything else**, and that
-    /// is not a stylistic split. A derived colour IS what Discord paints in the
-    /// banner's slot — measured at 139,137,129 on an account with no banner,
-    /// flat across its whole width and identical in light and dark mode, and
-    /// this client quantises the same avatar to within three units of it. Fading
-    /// it across the strip throws that agreement away: sampled anywhere but the
-    /// first corner it read 120,119,113 against Discord's 139,137,129.
-    ///
-    /// The gradient stays where it earns its place — over `accent_color`, which
-    /// is a stand-in for artwork rather than a measured answer.
+    /// **`accent_color` is where the gradient belongs, and the only place it
+    /// does.** Discord derives it from the banner, so it is exactly right as a
+    /// stand-in for one — and exactly wrong as a tint for the body underneath.
     ///
     /// One function rather than a seed each surface builds a gradient from,
     /// because both surfaces drew that gradient and only one of them would have
     /// been fixed.
     func plateStyle(accentColorValue: UInt32?) -> AnyShapeStyle {
-        if case .derived(let primary, _) = self { return AnyShapeStyle(primary) }
-        let seed = pair?.primary
-            ?? accentColorValue.map { Color(hex: $0) }
-            ?? Palette.surfaceRaised
+        if let pair { return AnyShapeStyle(Color(hex: pair.primary)) }
+        let seed = accentColorValue.map { Color(hex: $0) } ?? Palette.surfaceRaised
         return AnyShapeStyle(LinearGradient(
             colors: [seed, seed.opacity(0.6)],
             startPoint: .topLeading,
@@ -296,6 +316,23 @@ enum ProfileGround: Equatable {
 /// that fills these colours in lands while the popover is already on screen, so
 /// that is the common case, not the edge one.
 struct ProfileGroundFill: ViewModifier {
+    /// Which of Discord's two treatments this surface takes.
+    ///
+    /// **Two surfaces, not two preferences.** Every card — the popout, the DM
+    /// sidebar, the full profile's identity column — is the pair under one
+    /// overlay. The full profile's *page* is the clamped midpoint with a ramp
+    /// of its own. This client had a single treatment and used it for both,
+    /// which is why a light profile came out a brown slab and a blue one came
+    /// out royal blue.
+    enum Form: Equatable {
+        /// A card. `topHold` is its banner's height: Discord holds the head
+        /// colour down to the foot of the banner and only ramps below it, which
+        /// is `linear-gradient(start, start var(--banner-height), end)`.
+        case card(topHold: CGFloat)
+        /// The full profile's page.
+        case page
+    }
+
     var ground: ProfileGround
     var corner: CGFloat
     /// Whether this surface paints a ground at all.
@@ -310,134 +347,49 @@ struct ProfileGroundFill: ViewModifier {
     /// Constant for the life of a surface, so the branch below never changes a
     /// view's identity.
     var paints: Bool = true
+    var form: Form = .card(topHold: 0)
 
-    /// How much of the theme the surface actually becomes.
-    ///
-    /// **Discord's own two answers, and they are two surfaces rather than two
-    /// preferences.** Its profile *popout* and its DM sidebar tint a dark card;
-    /// its full-profile *modal* adopts the colours outright — for an account
-    /// whose derived pair is `#89867d` / `#d5d4d3` the modal is a light card
-    /// with dark text, and the popout beside it stays dark. Same palette, same
-    /// person, two treatments.
-    enum Strength {
-        /// A wash over the app's near-black. The card has a colour.
-        case wash
-        /// The colours as the surface. The card IS the colour.
-        case full
+    func body(content: Content) -> some View {
+        content
+            .background { fill }
+            .environment(\.colorScheme, ground.wantsDarkInk ? .light : .dark)
     }
 
-    var strength: Strength = .wash
-
     @ViewBuilder
-    func body(content: Content) -> some View {
+    private var fill: some View {
         if !paints {
-            content
-        } else if strength == .full, ground.accentPair != nil {
-            // **The colour scheme goes with the ground.** Every `Ink` in this
-            // app is a hierarchical style, so flipping the scheme is what makes
-            // a whole subtree legible on a light card — one environment value
-            // rather than a light variant of every label, divider and control
-            // in the profile. It is also what the system's own controls read.
-            // **The body is the SECONDARY, and the primary is only the banner
-            // plate.** Ramping primary to secondary across the whole card was
-            // the first attempt and it comes out muddy: the two colours meet in
-            // the middle, so most of the surface is a blend of neither and the
-            // light colour never actually appears. Discord's card starts at the
-            // secondary immediately below the banner and only lightens from
-            // there — the primary has a home already, and using it twice is
-            // what turned a near-white body into a brown-grey one.
-            //
-            // The foot moves away from the ink rather than toward a fixed
-            // white: a light body lightens, a dark one darkens, so one rule
-            // covers both and neither loses contrast with the text on it.
-            content
-                .background {
+            EmptyView()
+        } else if ground == .neutral {
+            // **One opaque fill.** `surface` rather than `canvas` so the card is
+            // one step off the transcript it floats over; the rest of the
+            // separation is the rim above and the shadow the surface casts.
+            Palette.surface.clipShape(.rect(cornerRadius: corner, style: .continuous))
+        } else {
+            switch form {
+            case .card(let topHold):
+                VStack(spacing: 0) {
+                    ground.bodyHead.frame(height: topHold)
                     LinearGradient(
                         colors: [ground.bodyHead, ground.bodyFoot],
                         startPoint: .top,
                         endPoint: .bottom
                     )
                 }
-                .environment(\.colorScheme, ground.wantsDarkInk ? .light : .dark)
-        } else {
-            fill(content)
-        }
-    }
-
-    @ViewBuilder
-    private func fill(_ content: Content) -> some View {
-        switch ground {
-        case .themed(let primary, let secondary):
-            // Solid, not glass, and deliberately: a theme is a GRADIENT and
-            // `.glassEffect`'s tint takes one colour, so a themed surface
-            // rendered as glass loses half the person's palette. It is also the
-            // lower surface here — the chips on it are the glass — and §4's
-            // answer when two glass surfaces would stack is to make the lower
-            // one solid.
-            //
-            // **A theme colour is a WASH over the reading surface, not the
-            // surface itself.** Drawn at full strength the card came out a flat
-            // bright magenta while Discord's own stayed almost black with the
-            // colour only readable in it — the difference between a card that
-            // has a colour and a card that IS one. The base stays `canvas`, the
-            // app's near-black, and the theme is laid over it thinly.
-            //
-            // The ramp runs dark-to-coloured downward, matching Discord: the
-            // region just under the banner is the quietest part of the surface
-            // because the banner above it is already carrying the artwork, and
-            // the colour gathers toward the foot where nothing competes.
-            //
-            // The two opacities are fitted, not picked. Against a bright violet
-            // theme they resolve to #2B1032 at the top and #511648 at the foot
-            // — relative luminance 24 and 35 — where Discord's own card for the
-            // same member samples at 26 and 34. The values they replaced
-            // resolved to 77 and 98, which is the whole of "washed out".
-            content.background {
-                LinearGradient(
-                    colors: [primary.opacity(0.18), secondary.opacity(0.32)],
-                    startPoint: .top,
-                    endPoint: .bottom
-                )
-                .background(Palette.canvas)
+            case .page:
+                // The ramp is 300 points from the top and the rest is flat, so
+                // the base is the ramp's FOOT and the gradient is an overlay on
+                // it. Stating it the other way round leaves a seam wherever the
+                // page is taller than the ramp, which is every window.
+                ground.modalBase
+                    .overlay(alignment: .top) {
+                        LinearGradient(
+                            colors: [ground.modalHead, ground.modalBase],
+                            startPoint: .top,
+                            endPoint: .bottom
+                        )
+                        .frame(height: ProfileGround.modalRampHeight)
+                    }
             }
-        case .derived(let primary, let secondary):
-            // **Fitted against Discord's own DARK mode, which is the only fair
-            // reference for a dark app.** Measured on an account whose derived
-            // colour is 139,137,129: Discord runs its card body from 56,56,52
-            // at the head to 86,86,85 at the foot. Over this app's canvas at
-            // 10,10,12 those are that colour at 0.357 and 0.589 — so these two
-            // numbers are a solved equation rather than a preference, and the
-            // result lands within two units of Discord on every channel.
-            //
-            // **The foot is the SECOND swatch now, at the same strength.** That
-            // measurement was taken with one colour used twice, because the
-            // second colour this client computed was the near-black behind the
-            // subject — a wrong-rung artefact rather than a fact about derived
-            // palettes. With the right rung the pair is what Discord paints
-            // with, and the ramp that needed one colour twice is the ordinary
-            // themed one: colour still gathers downward, and it gathers toward
-            // the colour the body is meant to be.
-            content.background {
-                LinearGradient(
-                    colors: [primary.opacity(0.36), secondary.opacity(0.59)],
-                    startPoint: .top,
-                    endPoint: .bottom
-                )
-                .background(Palette.canvas)
-            }
-        case .neutral:
-            // **One opaque fill, and the same base the themed case sits on.**
-            // A themed card is `canvas` with a thin wash over it; an unthemed
-            // one is that base with no wash, which is what keeps the two reading
-            // as the same object with and without somebody's colours in it.
-            //
-            // `surface` rather than `canvas` so the card is one step off the
-            // transcript it floats over; the rest of the separation is the rim
-            // above and the shadow the surface already casts.
-            content.background(
-                Palette.surface,
-                in: .rect(cornerRadius: corner, style: .continuous)
-            )
         }
     }
 }

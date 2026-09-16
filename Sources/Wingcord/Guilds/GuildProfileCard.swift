@@ -220,7 +220,14 @@ struct GuildProfileCard: View {
     }
 
     private var notInThisServer: some View {
-        Text("You are not in this server.")
+        // **Two different facts, and they used to be one sentence.** A server
+        // the reader is simply not in still has a name, an icon and a date; a
+        // server that has *limited who can see its profile* has none of those,
+        // and telling that reader they are "not in this server" answers a
+        // question they did not ask while leaving the empty card unexplained.
+        Text(profile.isUnnamed
+            ? "The server has limited who can see this profile."
+            : "You are not in this server.")
             .font(Typeface.rowSubtitle)
             .foregroundStyle(InkColor.tertiary)
             .padding(.horizontal, Spacing.margin)

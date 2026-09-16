@@ -68,9 +68,11 @@ struct DirectMessageProfilePane: View {
     private static let width: CGFloat = Proportions.profileColumnIdeal
 
     private var ground: ProfileGround {
+        // The pane paints the ground its card sits on, so it has to reach the
+        // same answer — and this one is the sidebar. See `ProfileGround.isDark`.
         ProfileGround(
             themeColorValues: profile?.themeColorValues ?? [],
-            isDerived: profile?.isThemeDerived ?? false
+            followsAppTheme: true
         )
     }
 
@@ -108,7 +110,11 @@ struct DirectMessageProfilePane: View {
         // Filling comes from the frame, the corners from the clip, and the inset
         // is what gives the corners somewhere to be.
         .frame(maxHeight: .infinity, alignment: .top)
-        .modifier(ProfileGroundFill(ground: ground, corner: Radius.card))
+        .modifier(ProfileGroundFill(
+            ground: ground,
+            corner: Radius.card,
+            form: .card(topHold: MiniProfileCard.bannerHeight)
+        ))
         .clipShape(.rect(cornerRadius: Radius.card, style: .continuous))
         .overlay {
             RoundedRectangle(cornerRadius: Radius.card, style: .continuous)

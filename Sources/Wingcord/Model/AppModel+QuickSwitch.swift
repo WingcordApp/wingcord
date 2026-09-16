@@ -79,6 +79,7 @@ extension AppModel {
         closeQuickSwitch()
         profileRequest = nil
         gameProfileRequest = nil
+        tenureBadgeRequest = nil
         expressionInfoRequest = nil
         dismissMessageSurfaces()
         switch row.target {

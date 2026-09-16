@@ -134,6 +134,92 @@ struct ProfileThemePaletteTests {
     }
 }
 
+/// What Discord turns a profile's pair into — `ProfileThemeColors`.
+///
+/// **Every number below was measured off Discord's own rendering**, not fitted.
+/// Two accounts, one grey and one saturated, chosen because their primaries sit
+/// four hundredths either side of the light/dark threshold: `robinresting`
+/// has no `theme_colors` and takes the pair quantised out of his avatar, and
+/// `spiwal` chose `[#07ADEA, #4F003B]`. Both render as LIGHT cards, which is
+/// the fact this client was getting wrong.
+@MainActor
+@Suite("Profile theme colours")
+struct ProfileThemeColorsTests {
+    // The two captured pairs, and what Discord's own picker shows for the
+    // derived one.
+    static let greyPrimary: UInt32 = 0x8C_89_81
+    static let greySecondary: UInt32 = 0xD8_D7_D6
+    static let cyanPrimary: UInt32 = 0x07_AD_EA
+    static let plumSecondary: UInt32 = 0x4F_00_3B
+
+    @Test("The theme is the PRIMARY's YIQ darkness, and both samples are light")
+    func themeFollowsThePrimary() {
+        #expect(!ProfileThemeColors.isDark(Self.greyPrimary))
+        #expect(!ProfileThemeColors.isDark(Self.cyanPrimary))
+        // A navy somebody chose, which is the other side of the threshold.
+        #expect(ProfileThemeColors.isDark(0x46_1F_63))
+        // And the trap the threshold sets: green carries most of the weight, so
+        // a mid-green is light where a mid-blue of the same channel value is
+        // not. An average would call both the same.
+        #expect(!ProfileThemeColors.isDark(0x00_FF_00))
+        #expect(ProfileThemeColors.isDark(0x00_00_FF))
+    }
+
+    @Test("A card is the pair at 40 % over white or black")
+    func cardIsTheVeiledPair() {
+        // Discord's identity column for the grey account samples #d2d1ce just
+        // under the banner and #efefee at its foot.
+        #expect(ProfileThemeColors.veiled(Self.greyPrimary, dark: false) == 0xD1_D0_CD)
+        #expect(ProfileThemeColors.veiled(Self.greySecondary, dark: false) == 0xEF_EF_EF)
+        // The dark branch is the same arithmetic toward black.
+        #expect(ProfileThemeColors.veiled(0x46_1F_63, dark: true) == 0x1C_0C_28)
+    }
+
+    @Test("The full profile's base is the clamped Lab midpoint, and it was measured")
+    func modalBaseMatchesDiscord() {
+        let grey = ProfileThemeColors.modalBackground(
+            primary: Self.greyPrimary,
+            secondary: Self.greySecondary
+        )
+        // The ramp Discord draws over it: #e5e5e3 at the top of the modal and
+        // #d4d3d0 from 300 points down — both sampled off its own window, both
+        // exact.
+        #expect(ProfileThemeColors.modalRamp(over: grey, dark: false, fraction: 0.8) == 0xE5_E5_E3)
+        #expect(ProfileThemeColors.modalRamp(over: grey, dark: false, fraction: 0.2) == 0xD4_D3_D0)
+
+        let cyan = ProfileThemeColors.modalBackground(
+            primary: Self.cyanPrimary,
+            secondary: Self.plumSecondary
+        )
+        #expect(ProfileThemeColors.modalRamp(over: cyan, dark: false, fraction: 0.2) == 0xC8_C9_DC)
+    }
+
+    @Test("A dark pair clamps the other way, and stays dark")
+    func modalBaseClampsDownForADarkProfile() {
+        let base = ProfileThemeColors.modalBackground(primary: 0x46_1F_63, secondary: 0x2B_35_39)
+        // Lightness forced into 0...0.1, so every channel is near-black however
+        // bright the midpoint started.
+        #expect((base >> 16) & 0xFF <= 0x33)
+        #expect((base >> 8) & 0xFF <= 0x33)
+        #expect(base & 0xFF <= 0x33)
+    }
+
+    @Test("The button is the primary darkened until white reads on it")
+    func buttonMatchesDiscord() {
+        // Measured: #35332d on the grey profile, #005187 on the cyan one.
+        #expect(ProfileThemeColors.buttonFill(Self.greyPrimary) == 0x35_33_2C)
+        #expect(ProfileThemeColors.buttonFill(Self.cyanPrimary) == 0x00_52_87)
+    }
+
+    @Test("And it is a floor, so an already-dark colour is not darkened further")
+    func buttonLeavesADarkPrimaryAlone() {
+        // #4F003B contrasts 15.6:1 against white — above the tolerance ceiling
+        // — so the loop brightens it back into 7...10 rather than leaving it.
+        let fill = ProfileThemeColors.buttonFill(Self.plumSecondary)
+        #expect(fill != Self.plumSecondary)
+    }
+}
+
 /// Which way the ink goes on a themed surface.
 ///
 /// **A derived theme is the case that forces this and a chosen one rarely
@@ -145,16 +231,25 @@ struct ProfileThemePaletteTests {
 @Suite("Profile ground ink")
 struct ProfileGroundInkTests {
 
-    @Test("A light body asks for dark ink; a dark one does not")
+    @Test("A light primary asks for dark ink; a dark one does not")
     func inkFollowsTheBody() {
-        // The captured pair for the test avatar: a warm grey banner over a
-        // near-white body.
-        let light = ProfileGround(themeColorValues: [0x89_86_7D, 0xD5_D4_D3], isDerived: true)
+        // The pair quantised for the test avatar: a warm grey over a near-white.
+        let light = ProfileGround(themeColorValues: [0x89_86_7D, 0xD5_D4_D3])
         #expect(light.wantsDarkInk)
 
-        // The same shape with the body dark — which is what most avatars give.
-        let dark = ProfileGround(themeColorValues: [0x46_1F_63, 0x2B_35_39], isDerived: true)
+        // The same shape with the primary dark — which is what most people who
+        // choose their own colours pick.
+        let dark = ProfileGround(themeColorValues: [0x46_1F_63, 0x2B_35_39])
         #expect(!dark.wantsDarkInk)
+    }
+
+    @Test("The SECONDARY does not get a vote, however light it is")
+    func inkIgnoresTheSecondary() {
+        // The trap this replaced: reading the body's foot instead of the
+        // primary called a navy card light because its second colour was pale,
+        // and the whole card inverted.
+        let navy = ProfileGround(themeColorValues: [0x1F_2A_55, 0xEE_EE_F2])
+        #expect(!navy.wantsDarkInk)
     }
 
     @Test("An unthemed ground never asks, because it is the app's own near-black")
@@ -162,11 +257,39 @@ struct ProfileGroundInkTests {
         #expect(!ProfileGround(themeColorValues: []).wantsDarkInk)
     }
 
-    @Test("Luma is Rec. 709, not an average")
-    func lumaIsWeighted() {
-        // Green carries most of the perceived brightness, which is why a
-        // mid-green body needs dark ink and a mid-blue one does not.
-        #expect(ProfileGround.luma(of: Color(hex: 0x00_FF_00)) > 0.5)
-        #expect(ProfileGround.luma(of: Color(hex: 0x00_00_FF)) < 0.5)
+    @Test("A chosen pair and a derived one are ONE case")
+    func oneTreatmentForBothKinds() {
+        // Discord resolves `theme_colors ?? quantised` before anything draws,
+        // so nothing downstream can tell them apart — and this client used to
+        // draw them differently on a measurement that was a coincidence.
+        let ground = ProfileGround(themeColorValues: [0x8C_89_81, 0xD8_D7_D6])
+        #expect(ground == .themed(
+            primary: 0x8C_89_81, secondary: 0xD8_D7_D6, followsAppTheme: false
+        ))
+        // A single colour is still a theme, just a flat one.
+        #expect(ProfileGround(themeColorValues: [0x8C_89_81])
+            == .themed(primary: 0x8C_89_81, secondary: 0x8C_89_81, followsAppTheme: false))
+    }
+
+    @Test("A sidebar keeps the app's dark ink for a palette the modal draws light")
+    func sidebarFollowsTheApp() {
+        // Discord decides this per SURFACE: the same pair is a near-white modal
+        // and a dark sidebar, measured on two accounts. See `ProfileGround`.
+        let pair = [UInt32(0x8C_89_81), UInt32(0xD8_D7_D6)]
+        let modal = ProfileGround(themeColorValues: pair)
+        let sidebar = ProfileGround(themeColorValues: pair, followsAppTheme: true)
+
+        #expect(modal.wantsDarkInk)
+        #expect(!sidebar.wantsDarkInk)
+        #expect(sidebar.isDark)
+
+        // And the overlay is still the 0.6 one — the sidebar overrides the
+        // THEME, not the strength, which is what its measured body proves.
+        #expect(sidebar.bodyHead == Color(hex: ProfileThemeColors.veiled(0x8C_89_81, dark: true)))
+        #expect(sidebar.bodyFoot == Color(hex: ProfileThemeColors.veiled(0xD8_D7_D6, dark: true)))
+        // Discord's own sidebar for that account samples 57,56,54 at the head
+        // and 85,85,84 at the foot.
+        #expect(ProfileThemeColors.veiled(0x8C_89_81, dark: true) == 0x38_37_34)
+        #expect(ProfileThemeColors.veiled(0xD8_D7_D6, dark: true) == 0x56_56_56)
     }
 }

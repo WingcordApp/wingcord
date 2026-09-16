@@ -118,7 +118,12 @@ nonisolated enum Palette {
     /// Themed, because it is a *surface* rather than a relative fill — it is
     /// `surface` with a hole punched in it, and a grey bubble on a green card
     /// would read as a piece of another app.
-    static var statusBubble: Color { surface.opacity(0.92) }
+    /// **Opaque, and it used to be 0.92.** Discord's bubble is a solid plate —
+    /// it sits over a banner, which is arbitrary artwork, and eight per cent of
+    /// somebody's photograph coming through a speech bubble is the one place
+    /// this app's translucency had nothing to gain. It also reads as a bug when
+    /// the bubble expands under the pointer and the picture moves inside it.
+    static var statusBubble: Color { surface }
 
     /// Muted conversations render badges in this instead of `unreadBadge`, so a
     /// muted unread never competes with a live one.

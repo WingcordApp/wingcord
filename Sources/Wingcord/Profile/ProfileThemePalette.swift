@@ -22,27 +22,43 @@ import WingcordCore
 /// established by measuring what Discord renders rather than assumed:
 ///
 ///  - **WebP, not PNG.** Lossy, so the pixels genuinely differ.
-///  - **80 pixels**, and this is a correction. It was 128, on a measurement
-///    taken against a single dark avatar where only the *first* swatch was
-///    checkable. Driven against a capture of Discord's own `S4` output —
-///    `[137,134,125]` then `[213,212,211]` for a known avatar — the rungs
-///    disagree about the **second** box, which is the one the card body is
-///    painted with:
+///  - **80 pixels.** `useProfileThemeColors` asks for
+///    `user.getAvatarURL(guildId, 80)`, and that 80 is device-independent: the
+///    CDN builder multiplies it by `devicePixelRatio` and snaps to the rung
+///    ladder, so Discord on a Retina Mac actually quantises `?size=160` — read
+///    out of its URL builder and confirmed in a capture, where the only avatar
+///    request the profile makes is at 160.
+///
+///    **This client quantises 80 anyway, and that is a deliberate choice rather
+///    than an oversight.** At 160 the second and third boxes for the one avatar
+///    whose answer Discord will show you land within **3 %** of each other on
+///    `count * volume` — `#2e2f30` at 1,643,310 against `#d8d7d6` at
+///    1,595,748 — so which one becomes the person's *secondary* is decided by
+///    the WebP decoder rather than by the algorithm. Chrome on the machine that
+///    took the capture gets the light one, and Chromium under Playwright and
+///    Core Graphics both get the near-black. That is not a difference of a few
+///    units: the secondary is what the card body is painted with, so it is a
+///    near-white card against a near-black one. At 80 the same two boxes are
+///    9 % apart, every decoder agrees, and the answer is the pair Discord's own
+///    editor shows for that account — within three units.
+///
+///    The rungs, from a sweep driven through Discord's own `quantize` module in
+///    a browser:
 ///
 ///    ```
-///    src=64   #8c8982  #2e2f2d  #d8d8d4
-///    src=80   #87847c  #d5d4d3  #2b2c2b   <- Discord's pair, in Discord's order
-///    src=128  #8d8b84  #2f3130  #d8d8d5
-///    src=256  #8d8b84  #2f3232  #d9d8d6
+///    Discord shows          #8c8981  #d8d7d6
+///    webp src=64   #8c8983  #2e2f2d  #d8d8d4
+///    webp src=80   #89867d  #d5d4d3  #2a2b2a   <- the light swatch second
+///    webp src=96   #8c8a83  #303131  #d7d7d5
+///    webp src=128  #8c8a82  #2f3030  #d7d6d5
+///    webp src=160  #8c8982  #2e2f30  #d8d7d6   <- the rung Discord requests
+///    webp src=256  #8c8a82  #2f3232  #d7d7d5
 ///    ```
 ///
 ///    At every rung but 80 the near-black behind the subject wins second place
-///    and the light colour falls to third. `HANDOFF.md` recorded that as a
+///    and the light colour falls to third. `HANDOFF.md` once recorded that as a
 ///    property of derived palettes — "the second of those is very often the
-///    near-black *behind* the subject" — and it was a property of asking for
-///    the wrong picture. 80 is the rung the profile surfaces themselves
-///    request, and the palette store is keyed by the URL, so it is the rung
-///    Discord quantises.
+///    near-black *behind* the subject" — and it is a property of the *rung*.
 ///  - **Every tenth pixel.** Discord's `quality` argument, and it changes which
 ///    box the median cut lands in.
 ///  - **No resample.** The image is quantised at the size it arrives.
@@ -71,9 +87,11 @@ import WingcordCore
 ///    face get two palettes, because they are two cache entries built from two
 ///    pictures. There is no single palette for a person.
 ///
-/// Verified against the captured pair above: the secondary is **exact**, and
-/// the primary is within **2 units** on every channel. The remainder is this
-/// client's WebP decode against Chrome's, not the algorithm.
+/// Verified against the pair Discord's own profile editor pre-fills for that
+/// account — `#8c8981` and `#d8d7d6` — which this client answers within **four
+/// units** on every channel. The residue is the rung above, and it is invisible
+/// once drawn: see `ProfileThemeColors` for the surfaces those two colours then
+/// become, every one of which was checked against Discord's own window.
 nonisolated enum ProfileThemePalette {
     /// The rendition a **profile** is quantised from, in pixels. Also the CDN
     /// rung it is fetched at, so one number rather than two that can drift

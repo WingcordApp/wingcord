@@ -113,6 +113,28 @@ public struct RoleColors: Hashable, Sendable, Codable {
 
     /// Whether the role uses more than one stop.
     public var isGradient: Bool { secondary != nil || tertiary != nil }
+
+    /// The stops as Discord writes them, **wrapped back to the first colour**,
+    /// or nil for a flat role.
+    ///
+    /// `linear-gradient(to right, c1, c2, c1)` for two and `(c1, c2, c3, c1)`
+    /// for three. The wrap is not decoration: Discord's gradient is a repeating
+    /// 100-point tile that scrolls, and a list that did not return to where it
+    /// started would show a seam on every cycle. Kept here even though this
+    /// client draws the tile once, because it is also what makes the two ends
+    /// of a short name agree.
+    ///
+    /// One definition, because the chip on a profile and the painted member row
+    /// draw the same rule from two different layers — and two copies is how
+    /// they come to disagree about a colour somebody chose.
+    public static func wrappedStops(_ colors: RoleColors) -> [UInt32]? {
+        guard colors.isGradient else { return nil }
+        var stops = [colors.primary]
+        if let secondary = colors.secondary { stops.append(secondary) }
+        if let tertiary = colors.tertiary { stops.append(tertiary) }
+        guard stops.count >= 2 else { return nil }
+        return stops + [colors.primary]
+    }
 }
 
 /// A member of a guild: the account, plus everything true only inside that
@@ -196,8 +218,21 @@ public enum RoleResolver {
         of memberRoleIDs: [RoleID],
         in roles: [RoleID: Role]
     ) -> UInt32? {
-        topRole(of: memberRoleIDs, in: roles) { $0.displayColorValue != nil }?
-            .displayColorValue
+        nameColorRole(of: memberRoleIDs, in: roles)?.displayColorValue
+    }
+
+    /// The role the name's colour comes from, rather than the colour alone.
+    ///
+    /// **An enhanced role carries a gradient as well as a flat colour**, and the
+    /// two have to come from the SAME role or a member whose top coloured role
+    /// is gradient and whose second is not draws one role's stops over
+    /// another's colour. Asking for the role once and reading both off it is
+    /// the whole of that guarantee.
+    public static func nameColorRole(
+        of memberRoleIDs: [RoleID],
+        in roles: [RoleID: Role]
+    ) -> Role? {
+        topRole(of: memberRoleIDs, in: roles) { $0.displayColorValue != nil }
     }
 
     /// The role a member is grouped under in the member list, or nil for the

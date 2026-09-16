@@ -614,6 +614,20 @@ nonisolated enum TimelineRowPainter {
         maxWidth: CGFloat,
         alignment: NSTextAlignment = .left,
         tracking: CGFloat = 0,
+        /// **The enhanced role style.** Two or more stops painted *through* the
+        /// glyphs rather than behind them — which is what `background-clip:
+        /// text` does in Discord's stylesheet, and which a fill colour cannot
+        /// express at all. Nil for every ordinary name, which is nearly all of
+        /// them, and the branch then costs one comparison.
+        gradient: [NSColor]? = nil,
+        /// Where the ramp has travelled to, `0..<1`, or nil for a name that is
+        /// standing still.
+        ///
+        /// **Nil is also what turns the glow off**, because Discord lights and
+        /// moves an enhanced role's name together — both are its hover state,
+        /// and a glowing name that did not travel would read as a rendering
+        /// artefact rather than as an answer to the pointer.
+        gradientPhase: CGFloat? = nil,
         context: CGContext
     ) -> CGFloat {
         guard !string.isEmpty else { return 0 }
@@ -641,9 +655,79 @@ nonisolated enum TimelineRowPainter {
         context.textMatrix = .identity
         context.translateBy(x: x, y: point.y + ascent)
         context.scaleBy(x: 1, y: -1)
-        CTLineDraw(drawn, context)
+        if let ramp = Self.ramp(gradient, repeating: gradientPhase != nil) {
+            let phase = gradientPhase ?? 0
+            // **The glow is a shadow, not a second blurred copy of the text.**
+            // Discord draws the name again at `blur(4px)` and 70 % behind
+            // itself; a zero-offset shadow in the ramp's own accent is the same
+            // halo for one draw instead of two, which matters on a canvas that
+            // repaints a row per frame. Set before the layer, so it applies to
+            // the layer's whole composite rather than to the glyphs inside it.
+            if gradientPhase != nil, let accent = gradient?.dropFirst().first {
+                context.setShadow(
+                    offset: .zero,
+                    blur: 4,
+                    color: accent.usingColorSpace(.sRGB)?.withAlphaComponent(0.7).cgColor
+                )
+            }
+            // **A transparency layer and `.sourceIn`, NOT `setTextDrawingMode(.clip)`.**
+            // The clip recipe is the one everybody reaches for and it drew
+            // nothing here: Core Text sets the fill colour from each run's own
+            // attributes as it draws, which puts the text drawing mode back,
+            // so the glyphs never reached the clipping path and the ramp
+            // painted into an empty region — a name that simply vanished.
+            //
+            // Drawing the glyphs into a layer and compositing the ramp *into*
+            // their coverage asks nothing of Core Text at all, which is why it
+            // cannot be undone by an attribute.
+            context.beginTransparencyLayer(auxiliaryInfo: nil)
+            CTLineDraw(drawn, context)
+            context.setBlendMode(.sourceIn)
+            context.drawLinearGradient(
+                ramp,
+                // **The stop list is laid down TWICE across twice the width and
+                // the window slides over it.** The list already wraps back to
+                // its first colour, so two copies laid end to end are periodic
+                // with the name's own width — which means any phase shows a
+                // seamless cycle and phase 1 is indistinguishable from phase 0.
+                // Sliding a single copy instead would clamp at both ends and
+                // leave the first and last letters flat.
+                start: CGPoint(x: -phase * width, y: 0),
+                end: CGPoint(x: (gradientPhase == nil ? 1 : 2) * width - phase * width, y: 0),
+                // The glyphs run the full width, so both ends have to keep
+                // painting past the last stop or the first and last letters
+                // come out unfilled.
+                options: [.drawsBeforeStartLocation, .drawsAfterEndLocation]
+            )
+            context.endTransparencyLayer()
+        } else {
+            CTLineDraw(drawn, context)
+        }
         context.restoreGState()
         return width
+    }
+
+    /// The ramp a gradient name is filled through, or nil for an ordinary one.
+    ///
+    /// **Converted to sRGB first.** A catalog colour has no components until it
+    /// is resolved against a colour space, and `CGGradient` answers nil for a
+    /// list it cannot read — which would silently draw nothing at all where the
+    /// name used to be.
+    /// - Parameter repeating: lay the stops down twice, for a ramp that has to
+    ///   slide without showing where it started.
+    private static func ramp(_ colors: [NSColor]?, repeating: Bool = false) -> CGGradient? {
+        guard let colors, colors.count >= 2 else { return nil }
+        // The list ends on the colour it began with, so a second copy joins the
+        // first without a seam — and the duplicate join is dropped rather than
+        // drawn twice, which would put a flat spot in the middle.
+        let laid = repeating ? colors + colors.dropFirst() : colors
+        let resolved = laid.compactMap { $0.usingColorSpace(.sRGB)?.cgColor }
+        guard resolved.count == laid.count else { return nil }
+        return CGGradient(
+            colorsSpace: CGColorSpace(name: CGColorSpace.sRGB),
+            colors: resolved as CFArray,
+            locations: nil
+        )
     }
 
     /// Where a single line's `y` has to be so its capitals sit centred in

@@ -79,11 +79,20 @@ struct MiniProfileCard: View {
     /// card read as two mismatched pieces. Every profile now reserves the same
     /// block, and what fills it (artwork, or the accent) is a paint-time
     /// difference rather than a layout one.
-    private var bannerHeight: CGFloat { 108 }
+    static let bannerHeight: CGFloat = 108
     /// How far the avatar hangs below the banner.
     private var avatarDrop: CGFloat { Metrics.avatarProfile / 2 - 6 }
 
-    private var ground: ProfileGround { ProfileGround(themeColorValues: profile.themeColorValues, isDerived: profile.isThemeDerived) }
+    private var ground: ProfileGround {
+        // **The column follows the APP's theme and the popout does not**, and
+        // they are the same view — Discord's DM sidebar hands its own
+        // `themeOverride` down while the popout beside it takes the person's.
+        // See `ProfileGround.isDark`.
+        ProfileGround(
+            themeColorValues: profile.themeColorValues,
+            followsAppTheme: form == .column
+        )
+    }
 
     /// What a section has to lay out inside. One definition, because the badge
     /// flyout has to know it in order not to reach past the card's edge.
@@ -92,6 +101,9 @@ struct MiniProfileCard: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
+            // Above the banner, which is where Discord puts it — the first
+            // thing on the card rather than a mark inside it.
+            if profile.isProfilePrivate { PrivateProfileBanner() }
             banner
             identity
             if !profile.isLoading { detail }
@@ -161,7 +173,12 @@ struct MiniProfileCard: View {
         // that stops where the content stops leaves the lower half of the
         // sidebar showing the transcript's black through it, which is what a
         // rounded card floating at the top of an empty column actually was.
-        .modifier(ProfileGroundFill(ground: ground, corner: corner, paints: form == .card))
+        .modifier(ProfileGroundFill(
+            ground: ground,
+            corner: corner,
+            paints: form == .card,
+            form: .card(topHold: Self.bannerHeight)
+        ))
         .clipShape(.rect(cornerRadius: corner, style: .continuous))
         .overlay {
             if form == .card {
@@ -271,7 +288,7 @@ struct MiniProfileCard: View {
                         }
                     }
                 }
-                .frame(height: bannerHeight)
+                .frame(height: Self.bannerHeight)
                 .clipped()
             // The avatar's cut-out. See `ProfileAvatar`: the gap around the
             // avatar is a hole in this artwork, so it shows the card's own
@@ -296,7 +313,8 @@ struct MiniProfileCard: View {
                     text: profile.customStatus,
                     emoji: profile.customStatusEmoji,
                     avatarDrop: avatarDrop,
-                    cardWidth: width
+                    cardWidth: width,
+                    fill: ground.statusBubbleFill
                 )
             }
         }
@@ -363,13 +381,6 @@ struct MiniProfileCard: View {
                 // reader can see for themselves; hiding them here would be
                 // inventing a restriction the server did not make, and dropping
                 // the flag would be losing something this person chose to say.
-                if profile.isProfilePrivate {
-                    Image(systemName: "lock.fill")
-                        .font(.system(size: 9))
-                        .foregroundStyle(InkColor.tertiary)
-                        .help("This profile is private")
-                        .accessibilityLabel(Text("Private profile"))
-                }
                 Spacer(minLength: 0)
             }
             .font(.system(.caption))
@@ -384,7 +395,7 @@ struct MiniProfileCard: View {
             }
 
             if !profile.badges.isEmpty {
-                BadgeRow(badges: profile.badges)
+                BadgeRow(badges: profile.badges, premiumSince: profile.premiumSince)
                     .padding(.top, 2)
             }
 

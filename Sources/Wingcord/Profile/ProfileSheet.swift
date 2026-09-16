@@ -59,7 +59,7 @@ struct ProfileSheet: View {
     }
 
     private var ground: ProfileGround {
-        ProfileGround(themeColorValues: shown.themeColorValues, isDerived: shown.isThemeDerived)
+        ProfileGround(themeColorValues: shown.themeColorValues)
     }
 
     var body: some View {
@@ -218,7 +218,7 @@ struct ProfileSheet: View {
         // `ProfileGround.derived`, fitted against Discord's own card. Anything
         // that reaches past it for the picture again is answering a question
         // that has already been answered.
-        .modifier(ProfileGroundFill(ground: ground, corner: 0, strength: .full))
+        .modifier(ProfileGroundFill(ground: ground, corner: 0, form: .page))
     }
 
     private var topBar: some View {
@@ -309,8 +309,9 @@ struct ProfileSheet: View {
         .buttonStyle(.plain)
         .interactiveChromeOverMedia(in: .circle)
         // See `View.cancelAction(unless:)`: a game profile opened from this
-        // sheet's own board sits on top of it and owns Escape while it is there.
-        .cancelAction(unless: model.gameProfileRequest != nil || model.isQuickSwitchShown)
+        // sheet's own board, or a tenure badge's page opened from its badge
+        // row, sits on top of it and owns Escape while it is there.
+        .cancelAction(unless: model.isCovered(.profile))
         .accessibilityLabel(Text("Close"))
     }
 
@@ -367,7 +368,9 @@ struct ProfileSheet: View {
                         openGame: gameOpener(for: current),
                         applicationIconURL: model.applicationIconURL(
                             current.applicationID, side: Metrics.avatarProfile
-                        )
+                        ),
+                        // The slab around it is already the plate.
+                        platesItself: false
                     )
                 }
             }

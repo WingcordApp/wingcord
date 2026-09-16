@@ -54,6 +54,20 @@ struct CurrentActivityCard: View {
             buttons
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+        // **A plate of its own, which this card has never had.** Discord draws
+        // the whole block — verb, art, lines, clock and buttons — on a
+        // translucent panel, so on a themed profile it reads as an object lying
+        // on the person's colour rather than as text typed onto it. It is the
+        // ground's own `panelFill`, which is Discord's `PROFILE_GRADIENT_SECTION_BOX`
+        // — black at 45 % on a dark card and white at 45 % on a light one — so
+        // it inverts with the card instead of needing a second rule.
+        .padding(platesItself ? Spacing.snug : 0)
+        .background {
+            if platesItself {
+                RoundedRectangle(cornerRadius: Radius.card, style: .continuous)
+                    .fill(ground.panelFill)
+            }
+        }
     }
 
     /// "Playing", "Listening to Spotify" — the verb, with a live dot in front.
@@ -92,6 +106,14 @@ struct CurrentActivityCard: View {
     /// Passed in rather than read from the store here: this view holds no
     /// model reference, which is what lets the pane above it be compared.
     var applicationIconURL: URL?
+    /// Whether this card draws its own plate.
+    ///
+    /// **False where a surface already puts it in one.** The full profile wraps
+    /// this in a `ProfileSlab`, and adding a second plate inside the first is a
+    /// card drawn inside a card — which is what happened the moment the mini
+    /// profile got the plate it was missing. The mini card has no slab, so it
+    /// carries the plate itself.
+    var platesItself: Bool = true
 
     private var artwork: some View {
         ZStack(alignment: .bottomTrailing) {

@@ -245,7 +245,12 @@ extension AppModel {
     func guildProfilePresentation(of guildID: GuildID, tag: String?) -> GuildProfilePresentation {
         let profile = guildProfiles[guildID]
         let resident = guilds[guildID]
-        let name = profile?.name ?? resident?.name ?? "Server"
+        // **"Private Server", not "Server".** A server whose tag somebody wears
+        // but whose profile the reader may not fetch has no name here, and
+        // "Server" reads as a placeholder that failed to load rather than as
+        // the answer — which it is: the card below it already says "You are not
+        // in this server", and this is the same fact said in the title.
+        let name = profile?.name ?? resident?.name ?? "Private Server"
 
         return GuildProfilePresentation(
             guildID: guildID,
@@ -254,7 +259,14 @@ extension AppModel {
             iconURL: (profile?.iconHash ?? resident?.iconHash).flatMap {
                 CDN.guildIcon(guildID: guildID, hash: $0, side: Metrics.avatarProfile)
             },
-            monogram: resident?.monogram ?? AppModel.monogram(of: name),
+            // **"?" rather than a letter of the placeholder.** A monogram is
+            // an abbreviation of a real name; taking one off "Private Server"
+            // draws a confident "P" for a server nobody can name.
+            monogram: {
+                if let known = resident?.monogram { return known }
+                if let named = profile?.name { return AppModel.monogram(of: named) }
+                return "?"
+            }(),
             // **Both hashes, because they are two different CDN families** —
             // see `CDN.guildProfileBanner`. The resident guild's own banner
             // stands in for a server the reader is already a member of, which

@@ -556,6 +556,15 @@ final class AppModel {
     /// Whether a join raised from the preview banner is in flight.
     var isJoiningPreviewedGuild = false
 
+    // MARK: A tenure badge's own page
+
+    /// The Nitro tenure badge whose page is open, if any.
+    ///
+    /// A request on the store rather than a `@State` beside the badge row,
+    /// because the row that raises it lives inside a popover on the mini card
+    /// and inside a column on the full profile — see `TenureBadgePresenter`.
+    var tenureBadgeRequest: TenureBadgeRequest?
+
     // MARK: A game's own profile
 
     /// The game whose profile is open, if any.

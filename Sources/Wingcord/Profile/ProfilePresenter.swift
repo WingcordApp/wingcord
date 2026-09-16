@@ -121,7 +121,7 @@ struct ProfilePresenter: ViewModifier {
                 .contentShape(.rect)
         }
         .buttonStyle(.plain)
-        .cancelAction(unless: model.gameProfileRequest != nil || model.isQuickSwitchShown)
+        .cancelAction(unless: model.isCovered(.profile))
         .accessibilityLabel(Text("Close profile"))
         // **Past the titlebar, or the scrim stops at the toolbar's foot.** The
         // window is `fullSizeContentView` and this overlay is laid out inside
@@ -339,19 +339,25 @@ extension View {
 extension View {
     /// Escape, but only while this really is the topmost layer.
     ///
-    /// **Three controls in this app claimed `.cancelAction` at once**, and one
-    /// key cannot mean three things: the profile's scrim, the profile sheet's
-    /// own close button, and the game profile's scrim above both of them.
-    /// SwiftUI settles a contested shortcut by hierarchy rather than by what is
-    /// drawn on top, so Escape over an open game profile closed the profile
-    /// *underneath* it and left the page floating over nothing.
+    /// **Several controls in this app claim `.cancelAction` at once**, and one
+    /// key cannot mean several things: the profile's scrim, the profile sheet's
+    /// own close button, the game profile's scrim above both, and the tenure
+    /// badge's page above that. SwiftUI settles a contested shortcut by
+    /// hierarchy rather than by what is drawn on top, so Escape over an open
+    /// game profile closed the profile *underneath* it and left the page
+    /// floating over nothing.
     ///
-    /// The quick switcher is the fourth, and it covers all three — it is opened
-    /// by a key rather than by a click, so it is the one layer that can appear
-    /// over any of them without anybody having dismissed anything. Its own field
-    /// handles Escape while it has focus, but a key *equivalent* is matched
-    /// before a key press reaches the responder chain, so the layers underneath
-    /// have to give the shortcut up rather than rely on that.
+    /// The quick switcher covers all of them — it is opened by a key rather
+    /// than by a click, so it is the one layer that can appear over any of the
+    /// others without anybody having dismissed anything. Its own field handles
+    /// Escape while it has focus, but a key *equivalent* is matched before a key
+    /// press reaches the responder chain, so the layers underneath have to give
+    /// the shortcut up rather than rely on that.
+    ///
+    /// **Ask `AppModel.escapeLayer` rather than listing what might be on top.**
+    /// Every caller spelling out its own exclusions is how a layer added later
+    /// gets left out of four predicates at once — which is exactly what happened
+    /// to the tenure page, whose Escape closed the profile behind it.
     ///
     /// A conditional `KeyboardShortcut?` rather than `.disabled`: a disabled
     /// control gives up its shortcut but also stops answering the pointer and
@@ -359,5 +365,39 @@ extension View {
     /// merely covered rather than unavailable.
     func cancelAction(unless isCovered: Bool) -> some View {
         keyboardShortcut(isCovered ? nil : .cancelAction)
+    }
+}
+
+extension AppModel {
+    /// The floating layers that answer Escape, **in the order they stack**.
+    ///
+    /// One list rather than a predicate at each call site: the order is a fact
+    /// about the app and belongs somewhere a new layer has to be inserted into,
+    /// not repeated in every control that might be under it.
+    enum EscapeLayer: Equatable {
+        case profile
+        case gameProfile
+        case tenureBadge
+        case quickSwitcher
+    }
+
+    /// Which of them is on top right now, or nil when none is open.
+    var escapeLayer: EscapeLayer? {
+        if isQuickSwitchShown { return .quickSwitcher }
+        if tenureBadgeRequest != nil { return .tenureBadge }
+        if gameProfileRequest != nil { return .gameProfile }
+        if profileRequest != nil { return .profile }
+        return nil
+    }
+
+    /// Whether `layer` is covered by something above it.
+    ///
+    /// **Not `escapeLayer != layer`**: a layer that is not open at all is also
+    /// not the top one, and answering "covered" for it would take the shortcut
+    /// away from a control that is about to want it — the profile sheet's close
+    /// button asks this while the sheet is being presented.
+    func isCovered(_ layer: EscapeLayer) -> Bool {
+        guard let escapeLayer else { return false }
+        return escapeLayer != layer
     }
 }

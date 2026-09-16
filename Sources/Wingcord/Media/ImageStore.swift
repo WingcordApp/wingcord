@@ -310,7 +310,7 @@ nonisolated final class ImageStore: @unchecked Sendable {
             kCGImageSourceShouldCache: false,
         ]
         guard let source = CGImageSourceCreateWithData(data as CFData, sourceOptions as CFDictionary)
-        else { return nil }
+        else { return vector(data, maximumPixelSize: maximumPixelSize) }
 
         let thumbnailOptions: [CFString: Any] = [
             kCGImageSourceCreateThumbnailFromImageAlways: true,
@@ -323,6 +323,58 @@ nonisolated final class ImageStore: @unchecked Sendable {
             kCGImageSourceCreateThumbnailWithTransform: true,
         ]
         return CGImageSourceCreateThumbnailAtIndex(source, 0, thumbnailOptions as CFDictionary)
+            ?? vector(data, maximumPixelSize: maximumPixelSize)
+    }
+
+    /// The same thing for an **SVG**, which `CGImageSource` cannot open at all.
+    ///
+    /// Discord ships the tenure badge artwork — and a good deal of its
+    /// illustration — as SVG under `/assets/`, and a client that only knows
+    /// `CGImageSource` draws nothing for any of it. AppKit does know the format:
+    /// `NSImage(data:)` answers with an `_NSSVGImageRep`, which rasterises
+    /// cleanly at whatever size it is drawn into.
+    ///
+    /// **Rasterised HERE at the drawn size**, for the reason the caller above
+    /// gives: a vector rep re-evaluates its paths on every draw, so leaving it
+    /// as an `NSImage` moves the cost into the display pass and repeats it every
+    /// frame. One bitmap, decoded off the main thread, on the same terms as
+    /// every other picture in the app.
+    ///
+    /// **Off the main actor, unlike `LottieFilmstrip`**, and the difference is
+    /// real rather than a bet: that rasteriser drives a `CALayer` tree, which
+    /// races Core Animation's own transactions and killed the app for it. This
+    /// draws an image rep into a private bitmap context through a per-thread
+    /// `NSGraphicsContext` — no layer tree, nothing shared with the render
+    /// server, and the pattern Apple documents for exactly this.
+    ///
+    /// Tried only when `CGImageSource` has already refused, so it costs nothing
+    /// on the common path.
+    private static func vector(_ data: Data, maximumPixelSize: Int) -> CGImage? {
+        guard let image = NSImage(data: data), image.size.width > 0, image.size.height > 0
+        else { return nil }
+        // Fitted, so a non-square drawing keeps its aspect — the same contract
+        // `kCGImageSourceThumbnailMaxPixelSize` has.
+        let scale = Double(maximumPixelSize) / max(image.size.width, image.size.height)
+        let width = Int((image.size.width * scale).rounded())
+        let height = Int((image.size.height * scale).rounded())
+        guard width > 0, height > 0,
+              let space = CGColorSpace(name: CGColorSpace.sRGB),
+              let context = CGContext(
+                  data: nil,
+                  width: width,
+                  height: height,
+                  bitsPerComponent: 8,
+                  bytesPerRow: 0,
+                  space: space,
+                  bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+              )
+        else { return nil }
+        let rect = CGRect(x: 0, y: 0, width: width, height: height)
+        let previous = NSGraphicsContext.current
+        NSGraphicsContext.current = NSGraphicsContext(cgContext: context, flipped: false)
+        image.draw(in: rect, from: .zero, operation: .sourceOver, fraction: 1)
+        NSGraphicsContext.current = previous
+        return context.makeImage()
     }
 
     // MARK: Storage

@@ -48,4 +48,12 @@ struct GuildProfilePresentation: Equatable, Sendable {
         /// Applied, and waiting on a moderator.
         case pending
     }
+
+    /// Whether this card is standing in for a server it could not name.
+    ///
+    /// **The placeholder is the answer, not a failure.** A tag can be worn from
+    /// a server the reader is not in and whose profile the route will not hand
+    /// over — the card then has no name, no icon and no date, and saying "You
+    /// are not in this server" there answers a question nobody asked.
+    var isUnnamed: Bool { name == "Private Server" }
 }

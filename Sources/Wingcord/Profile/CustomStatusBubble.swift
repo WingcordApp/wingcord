@@ -71,6 +71,12 @@ struct CustomStatusBubble: View {
         )
     }
 
+    /// The plate, which follows the card it sits on — see
+    /// `ProfileGround.statusBubbleFill`. Defaulted so a surface that draws a
+    /// bubble with no ground behind it does not have to say so, and declared
+    /// last because a memberwise initialiser takes its arguments in order.
+    var fill: Color = Palette.statusBubble
+
     var body: some View {
         bubble
             // **Behind the bubble, not beside it.** The large disc straddles its
@@ -120,9 +126,12 @@ struct CustomStatusBubble: View {
         }
     }
 
+    /// **The same fill as the bubble, or the tail stops belonging to it.** The
+    /// two discs are the speech tail; drawn in a different colour they read as
+    /// two dots that happen to be nearby.
     private func disc(_ side: CGFloat) -> some View {
         Circle()
-            .fill(Palette.statusBubble)
+            .fill(fill)
             .frame(width: side, height: side)
     }
 
@@ -155,7 +164,7 @@ struct CustomStatusBubble: View {
         // bubble holding one emoji into a lozenge the width of the card.
         .frame(width: layout.bubbleWidth(contentWidth: contentWidth), alignment: .leading)
         .background(
-            Palette.statusBubble,
+            fill,
             in: .rect(cornerRadius: layout.bubbleCorner, style: .continuous)
         )
     }

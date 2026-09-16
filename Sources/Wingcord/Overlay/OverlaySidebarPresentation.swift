@@ -83,7 +83,6 @@ struct OverlayIdentity: Hashable, Sendable {
     var bannerURL: URL?
     /// `theme_colors`, or the pair quantised out of their artwork.
     var themeColorValues: [UInt32]
-    var isThemeDerived: Bool
     /// The legacy single swatch, which is what stands in for a banner nobody
     /// uploaded — see `ProfileGround.plateStyle(accentColorValue:)`.
     var accentColorValue: UInt32?
@@ -94,8 +93,7 @@ struct OverlayIdentity: Hashable, Sendable {
         handle: "",
         monogram: "?",
         status: .offline,
-        themeColorValues: [],
-        isThemeDerived: true
+        themeColorValues: []
     )
 }
 

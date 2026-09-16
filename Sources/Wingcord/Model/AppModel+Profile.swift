@@ -37,7 +37,6 @@ extension AppModel {
             },
             accentColorValue: decoration?.accentColor,
             themeColorValues: themeColorValues(of: user, decoration),
-            isThemeDerived: decoration?.themeColorValues?.isEmpty ?? true,
             status: presence?.status ?? .offline,
             customStatus: presence?.customStatus?.state,
             customStatusEmoji: presence?.customStatus?.emoji,
@@ -69,10 +68,25 @@ extension AppModel {
                     return role.id.rawValue != guildID.rawValue
                 }
                 .sorted(by: Role.seniorityOrder)
-                .map {
+                .map { role in
                     ProfileRole(
-                        id: $0.id, name: $0.name,
-                        colorValue: userColor($0.displayColorValue) ?? 0
+                        id: role.id, name: role.name,
+                        colorValue: userColor(role.displayColorValue) ?? 0,
+                        // **Desaturated through the same projection as every
+                        // other user colour**, so the accessibility slider
+                        // reaches a gradient role as well as a flat one —
+                        // §"User colour is turned down at the PROJECTION".
+                        colors: role.colors.map { stops in
+                            RoleColors(
+                                primary: userColor(stops.primary) ?? stops.primary,
+                                secondary: stops.secondary.flatMap { userColor($0) },
+                                tertiary: stops.tertiary.flatMap { userColor($0) }
+                            )
+                        },
+                        iconURL: role.iconHash.flatMap { hash in
+                            CDN.roleIcon(roleID: role.id, hash: hash, side: 16)
+                        },
+                        unicodeEmoji: role.unicodeEmoji
                     )
                 },
             memberSince: member?.joinedAt,
@@ -299,7 +313,20 @@ extension AppModel {
             // artwork.** Rich presence art is optional — Roblox sends a name
             // and nothing else — and the card drew a grey plate with a
             // controller in it where Discord draws the application icon.
-            if activity.largeImageKey == nil, let id = activity.applicationID {
+            //
+            // **Gated on the artwork RESOLVING, not on a key being present**,
+            // and the difference is a whole class of game. An asset key is a
+            // tagged union written as a string and this client answers nil for
+            // a tag it does not know — so a presence carrying such a key had a
+            // `largeImageKey` (the old gate passed it over), no URL to draw,
+            // and no icon fetched to fall back to. The full profile hid it:
+            // its Activity tab loads the recent-activity inventory, which fills
+            // the same directory on its way past, so the same card drew the
+            // real icon one click deeper. Minecraft was the account that showed
+            // it.
+            if activity.largeArtworkURL(side: Metrics.avatarProfile) == nil,
+               let id = activity.applicationID
+            {
                 resolveApplications([id])
             }
         }

@@ -36,8 +36,22 @@ import WingcordCore
 /// single id — so the row costs one popover, not one each.
 struct BadgeRow: View {
     var badges: [ProfileBadge]
+    /// When this account's subscription started, for the one badge that says
+    /// so. Nil where the profile route has not answered, and on the two preview
+    /// surfaces that draw a badge row without a live account behind it.
+    var premiumSince: Date?
 
-    @State private var hovered: ProfileBadge.ID?
+    @Environment(AppModel.self) private var model
+    /// Whose flyout is up.
+    @State private var shown: ProfileBadge.ID?
+    /// Where the pointer actually is. **Two latches, because the card sits
+    /// directly above the badge** — a tenure badge's flyout is a 240-point
+    /// object a reader is meant to click, and reaching it means leaving the
+    /// mark that raised it. The plain one-line flyout never needed this because
+    /// nothing in it was worth reaching.
+    @State private var onBadge: ProfileBadge.ID?
+    @State private var onCard: ProfileBadge.ID?
+    @State private var dismissal: Task<Void, Never>?
 
     private static let side: CGFloat = 18
 
@@ -47,30 +61,112 @@ struct BadgeRow: View {
         // drops badges the reader has no way to know existed.
         FlowLayout(spacing: Spacing.tight) {
             ForEach(badges) { badge in
+                let tenure = PremiumTenure.named(badge.id)
                 mark(badge)
                     .frame(width: Self.side, height: Self.side)
+                    // **Discord's own `drop-shadow(0 0 5px …)` in the tier's
+                    // colour**, and only while the pointer is on it. A badge
+                    // that glows all the time is decoration; one that glows
+                    // under the pointer is telling the reader it answers.
+                    .shadow(
+                        color: tenure.map { Color(hex: $0.glow) } ?? .clear,
+                        radius: shown == badge.id ? 5 : 0
+                    )
                     .contentShape(.rect)
-                    .onHover { isInside in
-                        // A `@State` write of an equal value still invalidates.
-                        let next = isInside ? badge.id : (hovered == badge.id ? nil : hovered)
-                        guard hovered != next else { return }
-                        hovered = next
-                    }
+                    // Only a tenure badge opens anything. Everything else on
+                    // this row is a label, and a mark that looks pressable and
+                    // does nothing is the inert control `INVARIANTS.md` §5.5
+                    // forbids.
+                    .onTapGesture { open(tenure) }
+                    .onHover { pointer(badge.id, onCard: false, inside: $0) }
                     .popover(
                         isPresented: Binding(
-                            get: { hovered == badge.id },
+                            get: { shown == badge.id },
                             // Dismissal is owned by the pointer leaving, not by
                             // the popover: clearing here as well would fight
-                            // `onHover` and flicker.
-                            set: { if !$0, hovered == badge.id { hovered = nil } }
+                            // `onHover` and flicker. A real dismissal — Escape,
+                            // the window resigning — still lands here.
+                            set: { if !$0, shown == badge.id { dismiss() } }
                         ),
                         arrowEdge: .top
                     ) {
-                        BadgeFlyout(label: badge.label)
+                        // **A tenure badge gets a card, everything else a
+                        // line.** That is Discord's own split rather than a
+                        // preference: it is the only badge it says more than a
+                        // sentence about, and the only one that opens a page.
+                        if let tenure {
+                            TenureBadgeFlyout(
+                                tenure: tenure,
+                                premiumSince: premiumSince,
+                                open: { open(tenure) },
+                                hovering: { pointer(badge.id, onCard: true, inside: $0) }
+                            )
+                        } else {
+                            BadgeFlyout(label: badge.label)
+                        }
                     }
+                    // **A presentation paints the APP's material, not the
+                    // card's**, and it inherits the card's environment on the
+                    // way out — so a flyout raised from a light profile came up
+                    // on this app's near-black popover with the card's dark ink
+                    // on it, unreadable. Anything that escapes a themed surface
+                    // into a window of its own has to restate the scheme it is
+                    // actually drawn against.
+                    .environment(\.colorScheme, .dark)
                     .accessibilityLabel(Text(badge.label))
+                    .accessibilityAddTraits(tenure == nil ? [] : .isButton)
             }
         }
+    }
+
+    /// Where the pointer is, from either surface, and what that means for the
+    /// flyout.
+    ///
+    /// **The grace period is what makes the card reachable at all.** The card is
+    /// a separate window with an arrow between it and the badge, so for the
+    /// frames the pointer spends crossing it is over neither — and dismissing on
+    /// the first `false` takes the card away from under the hand reaching for
+    /// it. Cancelled the moment either surface reports the pointer back, so a
+    /// reader who keeps moving never sees the delay.
+    private func pointer(_ id: ProfileBadge.ID, onCard isCard: Bool, inside: Bool) {
+        if isCard {
+            onCard = inside ? id : (onCard == id ? nil : onCard)
+        } else {
+            onBadge = inside ? id : (onBadge == id ? nil : onBadge)
+        }
+        dismissal?.cancel()
+        dismissal = nil
+        if let next = onBadge ?? onCard {
+            // A `@State` write of an equal value still invalidates.
+            if shown != next { shown = next }
+            return
+        }
+        dismissal = Task {
+            try? await Task.sleep(for: .milliseconds(180))
+            guard !Task.isCancelled, onBadge == nil, onCard == nil else { return }
+            shown = nil
+        }
+    }
+
+    private func dismiss() {
+        dismissal?.cancel()
+        dismissal = nil
+        onBadge = nil
+        onCard = nil
+        shown = nil
+    }
+
+    /// Raises the tier's page, and takes the flyout down on the way.
+    ///
+    /// Leaving the card up over a full-window page would be a hover answer
+    /// floating above the page it just opened.
+    private func open(_ tenure: PremiumTenure?) {
+        guard let tenure else { return }
+        dismiss()
+        model.tenureBadgeRequest = TenureBadgeRequest(
+            tenure: tenure,
+            premiumSince: premiumSince
+        )
     }
 
     @ViewBuilder
@@ -179,6 +275,8 @@ struct MutualServersRow: View {
                 // The list carries the material; the popover must carry none,
                 // or two are stacked and the result reads as frost.
                 .presentationBackground(.clear)
+                // And the app's ink with it — see the badge flyout above.
+                .environment(\.colorScheme, .dark)
         }
     }
 }
@@ -433,6 +531,7 @@ struct MutualFriendsRow: View {
         .popover(isPresented: $isOpen, arrowEdge: .trailing) {
             MutualFriendsList(friends: friends)
                 .presentationBackground(.clear)
+                .environment(\.colorScheme, .dark)
         }
     }
 }
@@ -567,10 +666,27 @@ struct GuildTagChip: View {
 
     @Environment(AppModel.self) private var model
     @Environment(\.motion) private var motion
+    /// The card's, not the window's — a themed profile flips it.
+    @Environment(\.colorScheme) private var colorScheme
     @State private var isOpen = false
     @State private var isHovering = false
 
     private static let badgeSide: CGFloat = 12
+
+    /// What the tag rides on.
+    ///
+    /// **A neutral plate, not a wash of the card**, and that is measured rather
+    /// than reasoned: on a profile whose ground is `#e2ca9c` Discord draws the
+    /// chip at `#91919b` — a blue-grey with no trace of the gold under it, so it
+    /// is an opaque surface token rather than black at some opacity over the
+    /// person's colour, which would have kept the hue.
+    ///
+    /// On a dark card the app's own hover fill is already that plate, so only
+    /// the light side needs the constant. One sample, and it is labelled as one.
+    private var plate: Color {
+        let base = colorScheme == .light ? Color(hex: 0x91_91_9B) : Color.white.opacity(0.16)
+        return isHovering || isOpen ? base.opacity(colorScheme == .light ? 0.85 : 0.28) : base
+    }
 
     var body: some View {
         Group {
@@ -596,6 +712,9 @@ struct GuildTagChip: View {
                     // The card supplies its own ground, so the popover must
                     // supply none — two materials in series read as frost.
                     .presentationBackground(.clear)
+                    // A server's card is the app's own surface, not the
+                    // person's — see the badge flyout above.
+                    .environment(\.colorScheme, .dark)
                 }
             } else {
                 chip
@@ -611,19 +730,18 @@ struct GuildTagChip: View {
                     .frame(width: Self.badgeSide, height: Self.badgeSide)
             }
             Text(tag.text)
+                // **Always white, whatever the card under it is doing.** The
+                // tag is a server's mark rather than the person's ink, and it
+                // rides a plate chosen to carry white — so it does not follow
+                // `colorScheme` the way everything else on a themed card does.
                 .font(.system(size: 10, weight: .bold))
-                .foregroundStyle(InkColor.primary)
+                .foregroundStyle(.white)
                 .lineLimit(1)
         }
         .padding(.leading, tag.badgeURL == nil ? 6 : 4)
         .padding(.trailing, 6)
         .padding(.vertical, 2)
-        .glassEffect(
-            // Lit under the pointer rather than given a fill behind it: a fill
-            // under glass is what stops a surface lensing (§4 rule 3).
-            isHovering || isOpen ? .clear.tint(Palette.hoverFill) : .clear,
-            in: .capsule
-        )
+        .background(plate, in: .capsule)
         .contentShape(.capsule)
     }
 }
@@ -711,14 +829,44 @@ struct RoleChipFlow: View {
     }
 
     private func chip(_ role: ProfileRole) -> some View {
-        HStack(spacing: RoleChipFit.dotGap) {
-            Circle()
-                .fill(role.colorValue.map { Color(hex: $0) } ?? Palette.presenceOffline)
-                .frame(width: size.dotSide, height: size.dotSide)
+        // **The enhanced role style, which a boosted server buys.** Discord
+        // paints the name with `linear-gradient(to right, c1, c2, c1)` clipped
+        // to the glyphs, and gives the dot the same stops. Every field it needs
+        // has been on `Role` since the role editor was written and nothing has
+        // ever drawn it.
+        let stops = role.gradientStops
+        return HStack(spacing: RoleChipFit.dotGap) {
+            Group {
+                if let stops {
+                    Circle().fill(LinearGradient(
+                        colors: stops, startPoint: .leading, endPoint: .trailing
+                    ))
+                } else {
+                    Circle().fill(role.colorValue.map { Color(hex: $0) } ?? Palette.presenceOffline)
+                }
+            }
+            .frame(width: size.dotSide, height: size.dotSide)
+
             Text(role.name)
                 .font(size.font)
-                .foregroundStyle(InkColor.primary)
+                .foregroundStyle(stops.map {
+                    AnyShapeStyle(LinearGradient(
+                        colors: $0, startPoint: .leading, endPoint: .trailing
+                    ))
+                } ?? AnyShapeStyle(InkColor.primary))
                 .lineLimit(1)
+
+            // **A role's own mark, and it goes AFTER the name** — the dot says
+            // which colour the role is, the mark says which role it is, and
+            // Discord orders them that way. A server sets an uploaded icon or a
+            // unicode emoji, never both.
+            if let url = role.iconURL {
+                RemoteImage(url: url, side: size.dotSide + 4) { Color.clear }
+                    .aspectRatio(contentMode: .fit)
+                    .frame(width: size.dotSide + 4, height: size.dotSide + 4)
+            } else if let emoji = role.unicodeEmoji {
+                Text(emoji).font(size.font)
+            }
         }
         .padding(.horizontal, size.horizontalPadding)
         .padding(.vertical, size.verticalPadding)
@@ -728,6 +876,36 @@ struct RoleChipFlow: View {
             .clear.tint(Palette.flyoutTint),
             in: size == .compact ? AnyShape(.rect(cornerRadius: 7)) : AnyShape(.capsule)
         )
+    }
+}
+
+/// "Private Profile", across the head of the card.
+///
+/// **A nine-point lock beside the handle is not a label, it is a speck.** That
+/// is what this replaced, and a reader who has not been told what it means will
+/// never find out — the badge row beside it is full of small marks that all
+/// look like decoration. Discord gives the fact a strip of its own above the
+/// banner, glyph and words together, and it is the first thing on the card.
+///
+/// **A label, never a filter.** The route says `private: true` and still hands
+/// over the mutual servers the reader can see for themselves; hiding them would
+/// be inventing a restriction the server did not make.
+struct PrivateProfileBanner: View {
+    var body: some View {
+        HStack(spacing: Spacing.tight) {
+            Image(systemName: "lock.fill")
+                .font(.system(size: 11, weight: .semibold))
+            Text("Private Profile")
+                .font(.system(.subheadline, weight: .semibold))
+        }
+        .foregroundStyle(InkColor.primary)
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, Spacing.base)
+        // Over the person's own ground rather than a grey plate, so the strip
+        // belongs to the card instead of sitting on it.
+        .background(.white.opacity(0.10))
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(Text("This profile is private"))
     }
 }
 

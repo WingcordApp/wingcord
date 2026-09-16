@@ -11,6 +11,9 @@ struct MemberSection: Hashable, Sendable, Identifiable {
     var count: Int
     /// The hoisted role's colour, which the heading is drawn in.
     var colorValue: UInt32?
+    /// The hoisted role's own mark, drawn before its name. Nil for the two
+    /// synthetic groups and for every role that has not set one.
+    var iconURL: URL?
     var members: [MemberEntry]
 
     var id: UInt64 { roleID?.rawValue ?? (title == "Online" ? 1 : 2) }
@@ -30,6 +33,13 @@ struct MemberEntry: Hashable, Sendable, Identifiable {
     var name: String
     /// The highest coloured role's colour, or nil for the default.
     var colorValue: UInt32?
+    /// **The enhanced role style's stops**, from the same role `colorValue`
+    /// came from, already wrapped back to the first colour — nil for the
+    /// ordinary roles, which is nearly all of them.
+    ///
+    /// Packed values rather than `Color`, because this is read by a painter off
+    /// the main actor and a `Color` cannot be asked for its channels there.
+    var gradient: [UInt32]?
     var avatarURL: URL?
     var monogram: String
     var decorationURL: URL?
@@ -202,6 +212,11 @@ nonisolated enum MemberRowGeometry {
     /// the still was decoded at the source's full 672 pixels for a picture
     /// drawn at 470. It matters more now than it did, because the moving form
     /// is thirty-nine of those.
+    /// The hoisted role's mark in a section heading. Matched to the label's
+    /// cap height rather than to its line box, so a heading with a mark and one
+    /// without sit on the same baseline.
+    static let sectionIconSide: CGFloat = 14
+
     static let nameplateArtWidth: CGFloat = ((rowHeight - 2) * Nameplate.artworkAspect)
         .rounded()
 }
@@ -212,7 +227,7 @@ nonisolated enum MemberRowGeometry {
 /// is found by binary search over one array, and a nested sections-containing-
 /// members shape would need that search to descend.
 nonisolated enum MemberRow: Sendable {
-    case header(title: String, count: Int, colorValue: UInt32?)
+    case header(title: String, count: Int, colorValue: UInt32?, iconURL: URL?)
     case member(MemberEntry)
 
     var height: CGFloat {
@@ -238,7 +253,8 @@ nonisolated extension Array where Element == MemberSection {
             rows.append(.header(
                 title: section.title,
                 count: section.count,
-                colorValue: section.colorValue
+                colorValue: section.colorValue,
+                iconURL: section.iconURL
             ))
             for member in section.members { rows.append(.member(member)) }
         }

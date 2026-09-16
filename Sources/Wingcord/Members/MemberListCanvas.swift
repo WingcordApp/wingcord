@@ -181,19 +181,25 @@ final class MemberListCanvas: NSView {
         context.clear(dirtyRect)
         guard !rows.isEmpty, var index = rowIndex(at: max(0, dirtyRect.minY)) else { return }
         let scale = window?.backingScaleFactor ?? 2
+        // Read once per draw rather than per row: it is a clock read, and every
+        // row would otherwise ask the same question and get the same answer.
+        let phase = gradientPhase
 
         while index < rows.count, offsets[index] < dirtyRect.maxY {
             let frame = rowFrame(at: index)
             if frame.intersects(dirtyRect) {
                 switch rows[index] {
-                case .header(let title, let count, let colorValue):
+                case .header(let title, let count, let colorValue, let iconURL):
                     MemberRowPainter.drawHeader(
                         title: title,
                         count: count,
                         colorValue: colorValue,
+                        iconURL: iconURL,
                         in: frame,
                         context: context,
-                        style: style
+                        style: style,
+                        images: ImageStore.shared,
+                        scale: scale
                     )
                 case .member(let entry):
                     MemberRowPainter.drawMember(
@@ -210,7 +216,12 @@ final class MemberListCanvas: NSView {
                         nameFace: entry.displayNameFont.flatMap {
                             DisplayNameFontRegistry.font($0, size: style.bodyFont.pointSize)
                         },
-                        plateFrame: plateImage(forRow: index)
+                        plateFrame: plateImage(forRow: index),
+                        // **Nil unless this is the row under the pointer.**
+                        // Discord gates the same thing on hover, and it is what
+                        // keeps a roster of gradient roles from being forty
+                        // animations at once.
+                        gradientPhase: hoveredRow == index ? phase : nil
                     )
                 }
             }
@@ -363,15 +374,61 @@ final class MemberListCanvas: NSView {
         invalidateRow(platedRowCache)
     }
 
+    /// How long one cycle of an enhanced role's gradient takes.
+    ///
+    /// Discord's `gradientUsernameAnimation` is `1.5s linear infinite` and its
+    /// tile is 100 points wide, so the ramp travels one tile per cycle. The
+    /// tile here is the name's own width, which is what makes a short name and
+    /// a long one take the same time to come round rather than a short one
+    /// flickering.
+    private static let gradientCycle = 1.5
+
+    /// Where in that cycle the hovered name is, or nil when nothing is
+    /// animating.
+    ///
+    /// **Only the hovered row**, for the reason the plate film already gives:
+    /// forty names scrolling their own ramps is a column of moving text where a
+    /// list of people should be, and every one of them is a row-sized
+    /// invalidation per frame.
+    private var gradientPhase: CGFloat? {
+        guard !isScrolling, let hoveredRow, hoveredRow < rows.count,
+              case .member(let entry) = rows[hoveredRow], entry.gradient != nil
+        else { return nil }
+        let cycle = AnimationClock.shared.time / Self.gradientCycle
+        return CGFloat(cycle - cycle.rounded(.down))
+    }
+
     private func subscribeToClock() {
         guard !isPlateSubscribed else { return }
         isPlateSubscribed = true
         AnimationClock.shared.subscribe(playToken) { [weak self] in
-            guard let self, let plateFilm = self.plateFilm else { return }
-            let index = plateFilm.index(at: AnimationClock.shared.time)
-            guard index != self.plateFrame else { return }
-            self.plateFrame = index
-            self.invalidateRow(self.platedRowCache)
+            guard let self else { return }
+            // **Two things ride this subscription and either can be absent.**
+            // A hovered row can have a moving plate, a travelling gradient,
+            // both or neither — and an early return on the plate alone is what
+            // would leave a gradient name frozen behind a still nameplate.
+            if let plateFilm = self.plateFilm {
+                let index = plateFilm.index(at: AnimationClock.shared.time)
+                if index != self.plateFrame {
+                    self.plateFrame = index
+                    self.invalidateRow(self.platedRowCache)
+                }
+            }
+            if self.gradientPhase != nil, let hovered = self.hoveredRow {
+                self.invalidateRow(hovered)
+            }
+        }
+    }
+
+    /// Starts or stops the clock for whatever the pointer is now on.
+    ///
+    /// The plate's own path already calls `subscribeToClock`; this is the other
+    /// half, for a row whose name travels and whose plate does not move.
+    private func refreshGradientClock() {
+        if gradientPhase != nil {
+            subscribeToClock()
+        } else if plateFilm == nil {
+            unsubscribeFromClock()
         }
     }
 

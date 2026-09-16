@@ -122,9 +122,14 @@ struct RowPainterRenderTests {
                 title: "Main Dev",
                 count: 3,
                 colorValue: 0xE67E22,
+                // No mark on this role, which is the common case — a heading
+                // that has one shifts its label right rather than growing.
+                iconURL: nil,
                 in: frame,
                 context: context,
-                style: self.style
+                style: self.style,
+                images: ImageStore.shared,
+                scale: 2
             )
         }
         #expect(ink > 0.005)

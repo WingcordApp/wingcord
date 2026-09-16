@@ -1341,10 +1341,22 @@ struct UserProfileDTO: Decodable, Sendable {
         var type: String?
         var name: String?
         var verified: Bool?
-        /// **Every value is a string on the wire**, including the numbers —
-        /// Steam sends `"game_count": "16"` and Reddit `"total_karma":
-        /// "20223"`. Decoded as written; `ConnectionFact` is what reads them.
-        var metadata: [String: String]?
+        /// **Almost every value is a string on the wire, and "almost" cost a
+        /// whole profile.** Steam sends `"game_count": "16"`, Reddit
+        /// `"total_karma": "20223"` and PayPal `"verified": "0"` — and TikTok
+        /// sends `"verified": false`, a JSON boolean. Typed `[String: String]`
+        /// this bag threw, and because it is decoded as part of the profile
+        /// response the throw took **the entire profile** with it: the account's
+        /// badges, bio, pronouns, premium tier, connections and theme colours
+        /// all vanished, leaving a card drawn from the gateway's user object
+        /// alone. One bool in one service's metadata, and the symptom was "the
+        /// mini profile shows one badge".
+        ///
+        /// So it is decoded as *whatever scalar arrived*, rendered to the string
+        /// form the rest of the wire uses — a boolean as `"1"` or `"0"`, which
+        /// is exactly how PayPal and Twitter send the same field.
+        /// `ConnectionFact` is what reads them and needs no change.
+        var metadata: [String: MetadataValue]?
 
         var domain: ConnectedAccount? {
             guard let id, let type, let name else { return nil }
@@ -1353,8 +1365,55 @@ struct UserProfileDTO: Decodable, Sendable {
                 service: type,
                 name: name,
                 isVerified: verified ?? false,
-                metadata: metadata ?? [:]
+                metadata: metadata?.compactMapValues(\.rendered) ?? [:]
             )
+        }
+    }
+
+    /// One value out of a connection's metadata bag.
+    ///
+    /// **A tolerant scalar, and a decoder that cannot throw.** The bag is
+    /// free-form: Discord adds a key whenever a service starts reporting
+    /// something, and the type of a key it already sends can change under you —
+    /// which is what happened to `verified`. Anything unrecognised decodes to
+    /// nothing and is dropped from the dictionary rather than failing the
+    /// response it arrived in.
+    enum MetadataValue: Decodable, Sendable {
+        case text(String)
+        case number(Double)
+        case flag(Bool)
+        case null
+
+        init(from decoder: Decoder) throws {
+            let value = try decoder.singleValueContainer()
+            if value.decodeNil() {
+                self = .null
+            } else if let text = try? value.decode(String.self) {
+                self = .text(text)
+            } else if let flag = try? value.decode(Bool.self) {
+                self = .flag(flag)
+            } else if let number = try? value.decode(Double.self) {
+                self = .number(number)
+            } else {
+                self = .null
+            }
+        }
+
+        /// The string form the rest of this bag is written in, or nil for a
+        /// value there is nothing to render.
+        var rendered: String? {
+            switch self {
+            case .text(let text): text
+            // `"1"` and `"0"`, because that is how the services that send this
+            // field as a string send it — so a flag reads the same whichever
+            // type it arrived as.
+            case .flag(let flag): flag ? "1" : "0"
+            case .number(let number):
+                number == number.rounded() && abs(number) < 1e15
+                    ? String(Int64(number))
+                    : String(number)
+            case .null: nil
+            }
         }
     }
 

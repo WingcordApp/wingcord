@@ -96,7 +96,6 @@ extension AppModel {
                 CDN.userBanner(userID: currentUserID, hash: $0, width: 512)
             },
             themeColorValues: themeColorValues(of: user, decoration),
-            isThemeDerived: decoration?.themeColorValues?.isEmpty ?? true,
             accentColorValue: decoration?.accentColor
         )
     }

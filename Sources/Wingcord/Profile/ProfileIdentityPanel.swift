@@ -57,6 +57,8 @@ struct ProfileIdentityPanel: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 0) {
+                // Above the banner, which is where Discord puts it.
+                if profile.isProfilePrivate { PrivateProfileBanner() }
                 banner
                 identity
                 bioSection
@@ -90,7 +92,11 @@ struct ProfileIdentityPanel: View {
         // light catching the glass; this one is opaque paint already fitted
         // against Discord's own card, and the same wash there just makes a
         // themed profile paler than the colours it was given.
-        .modifier(ProfileGroundFill(ground: ground, corner: 0, strength: .full))
+        .modifier(ProfileGroundFill(
+            ground: ground,
+            corner: 0,
+            form: .card(topHold: Self.bannerHeight)
+        ))
         .overlay(alignment: .bottom) { footDock }
         .overlay(alignment: .trailing) {
             Rectangle().fill(.white.opacity(0.10)).frame(width: 1)
@@ -259,7 +265,8 @@ struct ProfileIdentityPanel: View {
                     avatarDrop: Self.avatarDrop,
                     cardWidth: Self.width,
                     avatarSide: Self.avatarSide,
-                    margin: Self.gutter
+                    margin: Self.gutter,
+                    fill: ground.statusBubbleFill
                 )
             }
         }
@@ -354,14 +361,7 @@ struct ProfileIdentityPanel: View {
                 }
                 // A label, never a filter — the route still hands over the
                 // mutual servers the reader can see for themselves.
-                if profile.isProfilePrivate {
-                    Image(systemName: "lock.fill")
-                        .font(.system(size: 9))
-                        .foregroundStyle(InkColor.tertiary)
-                        .help("This profile is private")
-                        .accessibilityLabel(Text("Private profile"))
-                }
-                if !profile.badges.isEmpty { BadgeRow(badges: profile.badges) }
+                if !profile.badges.isEmpty { BadgeRow(badges: profile.badges, premiumSince: profile.premiumSince) }
                 Spacer(minLength: 0)
             }
             // A row of eleven badges beside a guild tag and a handle is wider
@@ -626,39 +626,46 @@ struct ProfileIdentityPanel: View {
             .buttonStyle(.plain)
             .disabled(profile.isRelationshipBusy)
             .background(friendFill, in: .capsule)
-            .modifier(NeutralFriendGlass(isPlain: ground.accentPair == nil))
+            .modifier(NeutralFriendGlass(
+                isPlain: ground.accentPair == nil
+                    || profile.relationship.friendActionIsDestructive
+            ))
             .accessibilityLabel(Text(title))
         }
     }
 
-    /// **Always a LIGHT ramp of the person's hue, never the raw colour.** The
-    /// handoff's pill runs `oklch(0.9 …)` to `oklch(0.78 …)` — two tints of the
-    /// theme, both light — and sets the label in near-black. Dropping the raw
-    /// swatch in as the lower stop is what put dark text on a navy pill: half
-    /// the themes people choose are dark, and a fill whose contrast depends on
-    /// somebody else's taste is a label that is unreadable for some of them.
+    /// **Discord's own `--profile-gradient-button-color`**, which is the
+    /// person's primary darkened until its contrast against white lands in
+    /// `7...10` — see `ProfileThemeColors.buttonFill`. Measured off its window
+    /// at `#35332C` for a grey profile and `#005287` for a cyan one.
+    ///
+    /// It replaced a light ramp of the same hue, and the reason is that a card
+    /// can now be near-white: a pale tint of somebody's colour is a perfectly
+    /// good pill on a dark card and disappears completely on a light one, which
+    /// is half of all Nitro accounts with no theme of their own. A fill defined
+    /// by its contrast works on both, which is the whole point of defining it
+    /// that way.
+    ///
+    /// **A destructive action keeps the plain pill.** Remove Friend is the one
+    /// thing on this bar that cannot be taken back, so it says so in its own
+    /// colour rather than wearing the person's — and a red label on a solid
+    /// theme-coloured fill is exactly the unreadable pair this is avoiding.
     private var friendFill: AnyShapeStyle {
-        guard let pair = ground.accentPair else { return AnyShapeStyle(Color.clear) }
-        return AnyShapeStyle(LinearGradient(
-            colors: [
-                pair.primary.mix(with: .white, by: 0.72),
-                pair.primary.mix(with: .white, by: 0.42),
-            ],
-            startPoint: .top,
-            endPoint: .bottom
-        ))
+        guard !profile.relationship.friendActionIsDestructive, let fill = ground.buttonFill else {
+            return AnyShapeStyle(Color.clear)
+        }
+        return AnyShapeStyle(fill)
     }
 
-    /// Near-black on a lit pill, the hierarchy on a clear one. A destructive
-    /// action keeps its own colour either way — dropping a friend is the one
-    /// thing on this bar that cannot be taken back.
+    /// White on a lit pill, the hierarchy on a clear one — and the lit pill was
+    /// chosen for exactly that contrast.
     private var friendLabelStyle: AnyShapeStyle {
         if profile.relationship.friendActionIsDestructive {
             return AnyShapeStyle(Palette.destructive)
         }
-        return ground.accentPair == nil
+        return ground.buttonFill == nil
             ? AnyShapeStyle(InkColor.primary)
-            : AnyShapeStyle(Color.black.opacity(0.82))
+            : AnyShapeStyle(Color.white)
     }
 
     private func circle(

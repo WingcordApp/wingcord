@@ -124,11 +124,16 @@ extension AppModel {
 
             let presence = presenceTable[userID]
             let status = presence?.status ?? .offline
+            // One role answers for both, so a gradient can never be drawn over
+            // a different role's colour — see `RoleResolver.nameColorRole`.
+            let coloured = RoleResolver.nameColorRole(of: member.roleIDs, in: guildRoles)
             let entry = MemberEntry(
                 userID: userID,
                 name: member.resolvedName(user: user),
-                colorValue: RoleResolver
-                    .nameColorValue(of: member.roleIDs, in: guildRoles)
+                colorValue: coloured?.displayColorValue
+                    .map { UserColor.desaturated($0, by: saturation) },
+                gradient: coloured?.colors
+                    .flatMap { RoleColors.wrappedStops($0) }?
                     .map { UserColor.desaturated($0, by: saturation) },
                 avatarURL: avatarURL(forUserID: userID, inGuild: guildID, side: Metrics.avatarRow),
                 monogram: user.monogram,
@@ -174,6 +179,9 @@ extension AppModel {
                 count: entries.count,
                 colorValue: role.displayColorValue
                     .map { UserColor.desaturated($0, by: saturation) },
+                iconURL: role.iconHash.flatMap {
+                    CDN.roleIcon(roleID: role.id, hash: $0, side: MemberRowGeometry.sectionIconSide)
+                },
                 members: entries
             ))
         }

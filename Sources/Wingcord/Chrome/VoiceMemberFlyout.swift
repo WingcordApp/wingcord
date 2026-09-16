@@ -50,7 +50,10 @@ struct VoiceMemberFlyout: View {
                     openGame: nil,
                     applicationIconURL: model.applicationIconURL(
                         activity.applicationID, side: 68
-                    )
+                    ),
+                    // The flyout is already one glass plate; a second inside it
+                    // would be a card in a card.
+                    platesItself: false
                 )
             }
         }

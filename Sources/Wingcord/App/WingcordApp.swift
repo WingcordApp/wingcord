@@ -105,6 +105,10 @@ struct WingcordApp: App {
                 // is opened from a tile inside the full profile and has to sit
                 // on top of the surface that raised it.
                 .presentsGameProfile()
+                // **After the game profile**, for the same reason it comes
+                // after the profiles: a tenure badge is clicked on a badge row
+                // that can be inside either of them.
+                .presentsTenureBadge()
                 .presentsSpotifyPlayer()
                 .presentsUserMenu()
                 .presentsDirectMessageMenu()

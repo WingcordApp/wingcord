@@ -18,23 +18,54 @@ nonisolated enum MemberRowPainter {
         title: String,
         count: Int,
         colorValue: UInt32?,
+        iconURL: URL?,
         in rowFrame: CGRect,
         context: CGContext,
-        style: MessageTextStyle
+        style: MessageTextStyle,
+        images: ImageStore,
+        scale: CGFloat
     ) {
-        let label = "\(title.uppercased()) — \(count)"
+        // **The role's own capitalisation, not an upper-cased copy of it.** A
+        // server names a role "Admin" or "EU Champion" and shouting it back is
+        // this client deciding it knows better — and it loses information the
+        // moment a role is deliberately lower case. Discord draws the name it
+        // was given.
+        let label = "\(title) — \(count)"
+        var textX = rowFrame.minX + MemberRowGeometry.horizontalMargin
+            + MemberRowGeometry.contentInset
+        let side = MemberRowGeometry.sectionIconSide
+        let baseline = rowFrame.minY + MemberRowGeometry.sectionSpacing + 8
+        let font = NSFont.systemFont(ofSize: style.metadataFont.pointSize, weight: .semibold)
+
+        // **Only when it is already decoded.** A painter may not start a fetch —
+        // it runs inside a draw, and a heading is redrawn on every scroll — so
+        // an icon that has not arrived yet simply leaves the label where it
+        // would have been anyway. The row's own avatars warm the same store.
+        if let iconURL,
+           let icon = images.cached(
+               ImageStore.Key(url: iconURL, maximumPixelSize: Int((side * scale).rounded(.up))),
+               bucket: .thumbnail
+           )
+        {
+            // Centred on the label's capitals, for the reason `capCenteredY`
+            // gives: a line box is ascent plus descent, and an all-caps-ish
+            // heading has no descenders to fill the space under it.
+            let top = baseline + font.ascender - font.capHeight / 2 - side / 2
+            context.saveGState()
+            context.draw(icon, in: CGRect(x: textX, y: top, width: side, height: side))
+            context.restoreGState()
+            textX += side + 5
+        }
+
         TimelineRowPainter.drawText(
             label,
-            font: NSFont.systemFont(ofSize: style.metadataFont.pointSize, weight: .semibold),
+            font: font,
             // A hoisted role's heading takes the role's colour, which is how the
             // list says *why* these people are grouped. The synthetic Online and
             // Offline groups have no colour and take the quiet default.
             color: colorValue.map { NSColor(Color(hex: $0)) } ?? style.tertiaryColor,
-            at: CGPoint(
-                x: rowFrame.minX + MemberRowGeometry.horizontalMargin + MemberRowGeometry.contentInset,
-                y: rowFrame.minY + MemberRowGeometry.sectionSpacing + 8
-            ),
-            maxWidth: rowFrame.width - MemberRowGeometry.horizontalMargin * 2,
+            at: CGPoint(x: textX, y: baseline),
+            maxWidth: rowFrame.maxX - MemberRowGeometry.horizontalMargin - textX,
             context: context
         )
     }
@@ -59,7 +90,10 @@ nonisolated enum MemberRowPainter {
         images: ImageStore,
         scale: CGFloat,
         nameFace: NSFont? = nil,
-        plateFrame: CGImage? = nil
+        plateFrame: CGImage? = nil,
+        /// Where an enhanced role's ramp has travelled to, or nil for a name
+        /// that is not animating — which is every row but the hovered one.
+        gradientPhase: CGFloat? = nil
     ) {
         let plate = MemberRowGeometry.plateRect(in: rowFrame)
         let plateShape = CGPath(
@@ -141,6 +175,12 @@ nonisolated enum MemberRowPainter {
             at: CGPoint(x: textX, y: nameY),
             maxWidth: nameWidth,
             tracking: (entry.displayNameFont?.letterSpacing ?? 0) * style.bodyFont.pointSize,
+            // **A server's enhanced role beats the app's ink, and only here.**
+            // The note above is about a person's own display-name STYLE, which
+            // a server deliberately suppresses; this is the server's own choice
+            // about one of its roles, so it is drawn.
+            gradient: entry.gradient.map { $0.map { NSColor(Color(hex: $0)) } },
+            gradientPhase: gradientPhase,
             context: context
         )
 

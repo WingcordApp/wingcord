@@ -74,10 +74,9 @@ struct OverlaySidebarWidget: View {
     }
 
     private func ground(for identity: OverlayIdentity) -> ProfileGround {
-        ProfileGround(
-            themeColorValues: identity.themeColorValues,
-            isDerived: identity.isThemeDerived
-        )
+        // A widget over somebody's game is chrome, not a profile page: it
+        // keeps the app's dark ink whatever the reader's own colours are.
+        ProfileGround(themeColorValues: identity.themeColorValues, followsAppTheme: true)
     }
 
     // MARK: The strip under the card
@@ -229,7 +228,7 @@ private struct OverlaySidebarHeader: View {
             Rectangle().fill(
                 ProfileGround(
                     themeColorValues: identity.themeColorValues,
-                    isDerived: identity.isThemeDerived
+                    followsAppTheme: true
                 )
                 .plateStyle(accentColorValue: identity.accentColorValue)
             )

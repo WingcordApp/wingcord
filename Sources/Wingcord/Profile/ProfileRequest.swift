@@ -1,5 +1,6 @@
 import CoreGraphics
 import Foundation
+import SwiftUI
 import WingcordCore
 
 /// A request to show someone's profile.
@@ -65,10 +66,6 @@ struct ProfilePresentation: Equatable, Sendable {
     /// The profile's own two-colour theme, primary first. Empty when unthemed —
     /// which is most people, and the card must look deliberate for them too.
     var themeColorValues: [UInt32] = []
-    /// Whether those colours were quantised out of the person's artwork rather
-    /// than chosen by them. **Not derivable from the values**, and the two are
-    /// drawn differently — see `ProfileGround.derived`.
-    var isThemeDerived: Bool = false
     var status: PresenceStatus
     var customStatus: String?
     /// The glyph beside it. Kept apart from the text because the wire keeps them
@@ -180,6 +177,33 @@ struct ProfileRole: Hashable, Sendable, Identifiable {
     var id: RoleID
     var name: String
     var colorValue: UInt32?
+    /// The **enhanced role style** — a boosted server's gradient, two or three
+    /// stops. Nil on an ordinary role, which is nearly all of them.
+    ///
+    /// `Role.colors` has been decoded since the role editor was built and
+    /// nothing has ever drawn it: the editor exposes the identifiers a renderer
+    /// never needed. It reaches the chip through here.
+    var colors: RoleColors?
+    /// A role's own mark, which sits AFTER its name. Discord lets a server set
+    /// either an uploaded icon or a unicode emoji, never both.
+    var iconURL: URL?
+    var unicodeEmoji: String?
+
+    /// The stops an enhanced role's name and dot are painted with, or nil for
+    /// an ordinary one.
+    ///
+    /// **The list wraps back to the first colour**, which is Discord's own
+    /// rule and not decoration: `linear-gradient(to right, c1, c2, c1)` for two
+    /// stops and `(c1, c2, c3, c1)` for three. It is written that way because
+    /// the gradient is a *repeating* 100-point tile that scrolls — a list that
+    /// did not return to where it started would show a seam on every cycle.
+    ///
+    /// This client draws the tile once across the name rather than repeating
+    /// and animating it; the wrap is kept because it is what makes the two ends
+    /// of a short name agree, which is most of the look.
+    var gradientStops: [Color]? {
+        colors.flatMap { RoleColors.wrappedStops($0) }?.map { Color(hex: $0) }
+    }
 }
 
 struct ProfileBadge: Equatable, Sendable, Identifiable {
