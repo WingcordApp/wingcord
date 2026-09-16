@@ -19,6 +19,26 @@ extension SessionController {
         loadRecentActivity(of: userID)
         guard let activity = model.presences[userID]?.primaryActivity else { return }
         loadActivityButtons(of: userID, activity: activity)
+        loadActivityGame(activity)
+    }
+
+    /// The game record behind what somebody is playing right now.
+    ///
+    /// **Asked for explicitly, rather than left to the recent-activity list.**
+    /// The store button under the activity reads `Game.storeOffers`, and the
+    /// only other thing that fills `model.games` for a profile is the content
+    /// inventory — which answers **403** for anybody who has switched Recent
+    /// Activity off, and is filed as an empty list when it does. Leaning on it
+    /// would mean the button appearing for some people and not others for a
+    /// reason nothing on screen could explain.
+    ///
+    /// `/games` answers for titles Discord tracks as games and says nothing
+    /// about an editor, a bot or Spotify. `loadGames` remembers what it asked
+    /// for, so each of those costs one request for the life of the session
+    /// rather than one per profile opened.
+    private func loadActivityGame(_ activity: Activity) {
+        guard let applicationID = activity.applicationID else { return }
+        Task { [weak self] in await self?.loadGames(ids: [applicationID]) }
     }
 
     /// Resolves the marks for the games people in voice channels are playing.

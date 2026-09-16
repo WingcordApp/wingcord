@@ -210,4 +210,199 @@ struct GameTests {
     func unknownGenre() {
         #expect(GameGenre(rawValue: 999).title == "Genre 999")
     }
+
+    // MARK: Where the game is sold
+    //
+    // Every SKU list below is a real one, lifted whole out of a capture. The
+    // rule it exercises is Discord's `useSteamStoreURL`, which its own store
+    // button does not call — see `Game.storeOffers` for why this client sides
+    // with the hook rather than with the button.
+
+    private func sku(_ distributor: String, _ id: String) -> GameSKU {
+        GameSKU(distributor: distributor, id: id)
+    }
+
+    @Test("One Steam SKU is the address, slug and all ignored")
+    func singleSteamSKU() {
+        // The Sims 4. The website names the same app with a title slug on the
+        // end; the SKU is the shorter, equivalent address and it is what
+        // Discord builds.
+        let game = Game(
+            id: sims, name: "The Sims 4",
+            websites: [website("https://store.steampowered.com/app/1222670/The_Sims_4", .steam)],
+            thirdPartySkus: [
+                sku("igdb", "3212"), sku("opencritic", "572"),
+                sku("epic", "2A14CF8A83B149919A2399504E5686A6"),
+                sku("steam", "1222670"), sku("gop", "21009"),
+            ],
+            steamReleaseStatus: .postRelease
+        )
+        #expect(game.storeOffers.map(\.store) == [.steam])
+        #expect(
+            game.storeOffers.first?.url.absoluteString
+                == "https://store.steampowered.com/app/1222670"
+        )
+    }
+
+    @Test("Several Steam SKUs are ambiguous, so the website breaks the tie")
+    func severalSteamSKUs() {
+        // Beat Saber, verbatim. Its first Steam SKU is 38598 and the game is
+        // 620980 — taking the first, which is what Discord's own button does,
+        // opens something else entirely. Twenty games in the captures on disk
+        // carry more than one Steam SKU, all twenty carry the website that
+        // settles it, and nine of them need it.
+        let game = Game(
+            id: sims, name: "Beat Saber",
+            websites: [website("https://store.steampowered.com/app/620980", .steam)],
+            thirdPartySkus: [
+                sku("playstation", "PPSA15035_00"), sku("playstation", "CUSA14143_00"),
+                sku("steam", "38598"), sku("gop", "60240"), sku("opencritic", "6151"),
+                sku("igdb", "83731"), sku("steam", "37124"),
+                sku("gdco", "8380"), sku("steam", "620980"),
+            ],
+            steamReleaseStatus: .postRelease
+        )
+        #expect(
+            game.storeOffers.first?.url.absoluteString
+                == "https://store.steampowered.com/app/620980"
+        )
+    }
+
+    @Test("Several SKUs and no website leaves the first, which is all there is")
+    func severalSteamSKUsWithNoWebsite() {
+        let game = Game(
+            id: sims, name: "x",
+            thirdPartySkus: [sku("steam", "38598"), sku("steam", "620980")]
+        )
+        #expect(
+            game.storeOffers.first?.url.absoluteString
+                == "https://store.steampowered.com/app/38598"
+        )
+    }
+
+    @Test("A Steam SKU with no website is a button this page never used to draw")
+    func skuWithoutWebsite() {
+        // Battlefield 6 and Stardew Valley are both this shape: a Steam SKU and
+        // no STEAM website at all. Read from `websites` alone — which is what
+        // the game profile did — neither had a store button.
+        let game = Game(
+            id: sims, name: "Battlefield 6",
+            thirdPartySkus: [
+                sku("epic", "A14A02AA3C8143729605EAF7C93D7501"),
+                sku("xbox", "9P4BB02MWDZK"), sku("steam", "2807960"),
+                sku("playstation", "PPSA19534_00"), sku("igdb", "317407"),
+            ]
+        )
+        #expect(
+            game.storeOffers.map(\.url.absoluteString)
+                == ["https://store.steampowered.com/app/2807960"]
+        )
+    }
+
+    @Test("A website with no SKU is still an address")
+    func websiteWithoutSKU() {
+        let game = Game(
+            id: sims, name: "x",
+            websites: [website("https://store.steampowered.com/app/620980", .steam)]
+        )
+        #expect(
+            game.storeOffers.first?.url.absoluteString
+                == "https://store.steampowered.com/app/620980"
+        )
+    }
+
+    @Test("A retired game is offered no Steam page, whatever else it carries")
+    func retiredGame() {
+        let game = Game(
+            id: sims, name: "x",
+            websites: [website("https://store.steampowered.com/app/620980", .steam)],
+            thirdPartySkus: [sku("steam", "620980")],
+            steamReleaseStatus: .retiredAbandoned
+        )
+        #expect(game.storeOffers.isEmpty)
+    }
+
+    @Test("A status nobody has seen does not take the link away")
+    func unknownReleaseStatus() {
+        // Erring toward showing: only `retiredAbandoned` says a page has gone,
+        // and a number outside the enum says nothing at all.
+        #expect(SteamReleaseStatus(rawValue: 99) == nil)
+        let game = Game(
+            id: sims, name: "x",
+            thirdPartySkus: [sku("steam", "620980")],
+            steamReleaseStatus: nil
+        )
+        #expect(game.storeOffers.count == 1)
+    }
+
+    @Test("Game Pass comes first, and only these two are stores at all")
+    func storeOrderAndMembership() {
+        // Stardew Valley's own list: two Game Pass SKUs, one Steam, and six
+        // other distributors that are catalogues or storefronts Discord does
+        // not link. PlayStation is the commonest value in every capture and has
+        // no button anywhere.
+        let game = Game(
+            id: sims, name: "Stardew Valley",
+            thirdPartySkus: [
+                sku("playstation", "CUSA26625_00"), sku("xbox_title", "2080211397"),
+                sku("xbox_game_pass", "9MWR1NC6VQ6L"), sku("gop", "21095"),
+                sku("xbox_game_pass", "C3D891Z6TNQM"), sku("opencritic", "2242"),
+                sku("xbox", "9MWR1NC6VQ6L"), sku("igdb", "17000"),
+                sku("steam", "413150"), sku("gdco", "84015"),
+            ],
+            steamReleaseStatus: .postRelease
+        )
+        #expect(game.storeOffers.map(\.store) == [.xboxGamePass, .steam])
+        #expect(
+            game.storeOffers.map(\.url.absoluteString) == [
+                "https://www.xbox.com/games/store/title/9MWR1NC6VQ6L",
+                "https://store.steampowered.com/app/413150",
+            ]
+        )
+    }
+
+    @Test("An empty SKU id is never turned into an address")
+    func emptySKUID() {
+        // Minecraft ships `{"distributor": "microsoft", "id": ""}`, and origin
+        // and battlenet do the same elsewhere. An empty id pasted onto a store
+        // path is a 404 rather than a page.
+        let game = Game(
+            id: sims, name: "x",
+            thirdPartySkus: [sku("xbox_game_pass", ""), sku("steam", "")]
+        )
+        #expect(game.storeOffers.isEmpty)
+    }
+
+    @Test("A game with no store at all offers nothing")
+    func noStore() {
+        // Arknights: Endfield. Epic, Google Play and the App Store are real
+        // places to get it and none of them is a button in Discord either.
+        let game = Game(
+            id: sims, name: "ARKNIGHTS: ENDFIELD",
+            thirdPartySkus: [
+                sku("igdb", "194558"), sku("opencritic", "19963"),
+                sku("epic", "14D53B5D3FCB4526A69D59F35C9DD28F"),
+                sku("google_play", "com.gryphline.endfield.gp"),
+                sku("apple_app_store", "6752642477"),
+            ]
+        )
+        #expect(game.storeOffers.isEmpty)
+    }
+
+    @Test("A SKU with characters a path cannot hold is encoded")
+    func skuEncoding() {
+        #expect(
+            GameStore.xboxGamePass.url(sku: "a b").absoluteString
+                == "https://www.xbox.com/games/store/title/a%20b"
+        )
+    }
+
+    @Test("Both buttons say what they do, and neither promises to play anything")
+    func callsToAction() {
+        // Discord's Steam string, measured; its Game Pass string is "Play with
+        // Xbox Game Pass" and this client will not say it — nothing here plays
+        // a game, it opens a store page in a browser.
+        #expect(GameStore.steam.callToAction == "Get on Steam")
+        #expect(GameStore.xboxGamePass.callToAction == "Get on Xbox Game Pass")
+    }
 }

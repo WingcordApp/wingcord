@@ -126,6 +126,22 @@ final class SessionController {
     /// Game-profile fetches in flight. A game profile can be reached from four
     /// tiles on one board and every one of them must share a request.
     var gameProfileFetches: Set<ApplicationID> = []
+    /// Applications `/games` has already been asked about, answer or not.
+    ///
+    /// Not "in flight": the route says nothing about an application that is not
+    /// a tracked game, and that silence is an answer worth remembering for the
+    /// session. Read from `SessionController+Board`.
+    var gameFetches: Set<ApplicationID> = []
+    /// Which people this session has already asked the gateway about, so a
+    /// channel of two hundred messages from six people asks six times and not
+    /// six hundred. See `resolveMessageMembers`.
+    private var memberRequests: Set<MemberRequest> = []
+
+    struct MemberRequest: Hashable {
+        var guildID: GuildID
+        var userID: UserID
+    }
+
     /// Recent-activity fetches in flight, by person. Read from
     /// `SessionController+Presence`.
     var recentActivityFetches: Set<UserID> = []
@@ -811,6 +827,7 @@ final class SessionController {
             // minted. See `awaitActivityInstance`.
             resolveActivityLaunch(with: message)
             resolveSpotifyUnfurls(in: [message])
+            resolveMessageMembers(in: [message], channelID: message.channelID)
 
         case .messageUpdated(let message):
             // An edit arrives as a PARTIAL message: only the fields that changed
@@ -1256,6 +1273,7 @@ final class SessionController {
                 }
                 model.messageContentRevision &+= 1
                 resolveSpotifyUnfurls(in: page.messages)
+                resolveMessageMembers(in: page.messages, channelID: channelID)
             } catch {
                 Self.trace(
                     "history \(channelID) FAILED (attempt \(attempt)): \(Self.describe(error))"
@@ -1348,6 +1366,43 @@ final class SessionController {
     /// members **and their presences** — the documented member request answers
     /// with members and no presence for them, so a roster built on it shows
     /// everyone offline.
+    /// Asks the gateway about message authors this client holds no member
+    /// record for.
+    ///
+    /// **A user is not a member, and only a member has roles.** Somebody who
+    /// posted an hour ago is three hundred rows down the roster, or offline, or
+    /// hidden in a collapsed group — so the op-14 subscription that fills the
+    /// member list never names them, and they arrive at the transcript with a
+    /// user record and nothing else. No roles is no name colour, no role icon,
+    /// and an empty Roles section on their profile. Nothing fails; the member
+    /// simply is not there, for the rest of the session.
+    ///
+    /// **Asked once per person per session**, because the answer is a member
+    /// record that the gateway then keeps current with `GUILD_MEMBER_UPDATE`.
+    /// The set is what stops a channel of two hundred messages from the same
+    /// six people asking six times a page.
+    ///
+    /// Direct messages have no guild and no roles, so there is nothing to ask.
+    func resolveMessageMembers(in messages: [Message], channelID: ChannelID) {
+        guard let guildID = model.channelIndex.guildID(of: channelID), let socket else {
+            return
+        }
+        let known = model.members[guildID]
+        var wanted: [UserID] = []
+        for message in messages {
+            let userID = message.authorID
+            // Webhooks and apps have no member record to fetch and asking for
+            // one is a request Discord answers with an empty chunk.
+            guard !(model.users[userID]?.isBot ?? false), message.webhookID == nil,
+                  known?[userID] == nil,
+                  memberRequests.insert(MemberRequest(guildID: guildID, userID: userID)).inserted
+            else { continue }
+            wanted.append(userID)
+        }
+        guard !wanted.isEmpty else { return }
+        Task { await socket.requestGuildMembers(guildID: guildID, userIDs: wanted) }
+    }
+
     private func subscribeToMemberList(for channelID: ChannelID) {
         guard let guildID = model.channelIndex.guildID(of: channelID), let socket else {
             return
@@ -1539,6 +1594,7 @@ final class SessionController {
                 }
                 model.messageContentRevision &+= 1
                 resolveSpotifyUnfurls(in: page.messages)
+                resolveMessageMembers(in: page.messages, channelID: channelID)
                 model.requestJump(to: messageID, in: channelID)
             } catch {
                 Self.trace("jump \(messageID) failed: \(Self.describe(error))")

@@ -85,6 +85,14 @@ struct MemberEntry: Hashable, Sendable, Identifiable {
     /// already at the top of it, so a second mark there says nothing the reader
     /// did not already know.
     var isOwner: Bool = false
+    /// Whether they are typing in the channel on screen right now.
+    ///
+    /// **A fact about the CHANNEL, carried on the roster's row.** Typing is
+    /// scoped to a conversation — `box.typing` — and the member list is drawn
+    /// beside one, so the person who is typing in the channel the reader is
+    /// looking at is the person whose row says so. Somebody typing in a
+    /// different channel of the same server is not this.
+    var isTyping: Bool = false
 
     var id: UInt64 { userID.rawValue }
 }

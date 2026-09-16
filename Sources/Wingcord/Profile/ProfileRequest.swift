@@ -82,6 +82,14 @@ struct ProfilePresentation: Equatable, Sendable {
     /// matched against the labels at the draw, and a label with no address is
     /// not drawn.
     var activityButtonURLs: [URL] = []
+    /// Where the game they are playing is sold.
+    ///
+    /// **Empty until `/games` has answered for the activity's application**, and
+    /// empty forever for an activity that is not a tracked game — Spotify, a
+    /// bot's own presence, an editor. That is the same gate Discord's button
+    /// has: its store CTA reads the game record, so an application the games
+    /// route says nothing about gets no button rather than a guessed address.
+    var activityStoreOffers: [GameStoreOffer] = []
     var bio: String?
     var isBot: Bool
     var badges: [ProfileBadge]

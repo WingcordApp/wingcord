@@ -43,6 +43,21 @@ public struct Game: Hashable, Sendable, Identifiable {
     /// `"Science fiction"`. **Strings on the wire, not the documented integer
     /// enum**, in every captured response.
     public var themes: [String]
+    /// What this game is called in everybody else's catalogue.
+    ///
+    /// **Most of these are not storefronts.** `igdb`, `opencritic`, `gop`,
+    /// `gdco` and `sensortower` are reference databases; `xbox_title` is a
+    /// title id rather than a product. Only two of the twenty-four Discord
+    /// names have a page this client can send somebody to — see `GameStore` —
+    /// and the rest are kept because dropping them would make the list a lie
+    /// about what the route sent.
+    public var thirdPartySkus: [GameSKU]
+    /// Where the game is in its life on Steam, when Discord says.
+    ///
+    /// Only `/games` carries it — 511 entries across the captures on disk, and
+    /// not one on `/applications/public`. It is read for exactly one decision:
+    /// a retired game's store page is gone, so it is not offered.
+    public var steamReleaseStatus: SteamReleaseStatus?
 
     public init(
         id: ApplicationID,
@@ -60,7 +75,9 @@ public struct Game: Hashable, Sendable, Identifiable {
         screenshotURLs: [URL] = [],
         screenshotHashes: [String] = [],
         trailers: [GameTrailer] = [],
-        themes: [String] = []
+        themes: [String] = [],
+        thirdPartySkus: [GameSKU] = [],
+        steamReleaseStatus: SteamReleaseStatus? = nil
     ) {
         self.id = id
         self.name = name
@@ -78,6 +95,8 @@ public struct Game: Hashable, Sendable, Identifiable {
         self.screenshotHashes = screenshotHashes
         self.trailers = trailers
         self.themes = themes
+        self.thirdPartySkus = thirdPartySkus
+        self.steamReleaseStatus = steamReleaseStatus
     }
 
     /// The genres, printed the way the header prints them.
@@ -108,9 +127,76 @@ public struct Game: Hashable, Sendable, Identifiable {
         websites.first { $0.category == .discord }?.inviteCode
     }
 
-    /// Where the game is sold on Steam, when it is.
+    /// The Steam address the `websites` list itself names, when it names one.
+    ///
+    /// Not the answer on its own — see `storeOffers`, which prefers it only
+    /// where the SKUs are ambiguous.
     public var steamURL: URL? {
         websites.first { $0.category == .steam }?.url
+    }
+
+    /// Where somebody can go and get this game, in the order Discord offers
+    /// them.
+    ///
+    /// **Two stores out of twenty-four distributors, and that is Discord's own
+    /// list rather than a judgement.** Its `useStoreCTAs` holds exactly Xbox
+    /// Game Pass and Steam, in that order, and takes the **first** SKU it sees
+    /// for each. Everything else in `third_party_skus` is either a catalogue id
+    /// (`igdb`, `opencritic`, `gop`, `gdco`, `sensortower`) or a storefront
+    /// Discord declines to link — `playstation` is the commonest value in every
+    /// capture on disk and has no button anywhere in the app.
+    ///
+    /// **The Steam address does not come from that first SKU**, and this is the
+    /// one place this client knowingly does something better than the reference:
+    /// Discord ships a second derivation, `useSteamStoreURL`, which prefers the
+    /// `websites` link whenever a game has more than one Steam SKU — and then
+    /// its own CTA path calls the raw builder instead and never consults it.
+    /// The captures say the hook is right and the CTA is wrong. **Twenty games
+    /// on disk carry more than one Steam SKU, all twenty carry a STEAM website,
+    /// and in nine of them the first SKU names a different app than the website
+    /// does** — War Thunder's first is 2054413 and the game is 236390, Apex
+    /// Legends' is 1623570 and the game is 1172470, Rocket League's is 140146
+    /// and the game is 252950. Taking the first sends the reader to a DLC page
+    /// or a delisted listing about half the time. So: one SKU is authoritative,
+    /// several are ambiguous and the website breaks the tie, and a game with no
+    /// SKU at all still gets its website.
+    ///
+    /// A **retired** game keeps no Steam page, so it is offered none — also
+    /// `useSteamStoreURL`'s rule, and the same instinct as `INVARIANTS.md` §5.5:
+    /// a control that cannot work must not look like one that can.
+    public var storeOffers: [GameStoreOffer] {
+        GameStore.allCases.compactMap { store in
+            switch store {
+            case .steam:
+                steamStoreURL.map { GameStoreOffer(store: .steam, url: $0) }
+            case .xboxGamePass:
+                // No second address to fall back on: Discord publishes no
+                // `websites` category for Game Pass, so the SKU is all there is.
+                skuIDs(from: "xbox_game_pass").first
+                    .map { GameStoreOffer(store: .xboxGamePass, url: store.url(sku: $0)) }
+            }
+        }
+    }
+
+    /// Steam's address for this game, resolved the way Discord's own
+    /// `useSteamStoreURL` resolves it. See `storeOffers`.
+    public var steamStoreURL: URL? {
+        guard steamReleaseStatus != .retiredAbandoned else { return nil }
+        let skus = skuIDs(from: "steam")
+        if skus.count > 1, let website = steamURL { return website }
+        return skus.first.map { GameStore.steam.url(sku: $0) } ?? steamURL
+    }
+
+    /// The non-empty ids filed under one distributor, in the order they arrived.
+    ///
+    /// **Empty ids are real.** Minecraft ships `{"distributor": "microsoft",
+    /// "id": ""}` and two other games do the same for `origin` and `battlenet`;
+    /// none of them is a store this client links, but an empty id pasted onto a
+    /// store path is an address that opens a 404 rather than a page.
+    private func skuIDs(from distributor: String) -> [String] {
+        thirdPartySkus.compactMap { sku in
+            sku.distributor == distributor && !sku.id.isEmpty ? sku.id : nil
+        }
     }
 
     /// The links the profile prints as a row of marks.
@@ -184,6 +270,125 @@ public struct GameWebsite: Hashable, Sendable, Identifiable {
         guard category == .discord else { return nil }
         let code = url.lastPathComponent
         return code.isEmpty || code == "/" ? nil : code
+    }
+}
+
+/// What one game is called somewhere that is not Discord.
+///
+/// `{"distributor": "steam", "id": "730"}` on `/games`, and the same object with
+/// a third key on `/applications/public`: `sku`, which **equalled `id` in all
+/// 1,036 entries that carry it** across every capture on disk, and which
+/// `/games` omits from all 6,568 of its own. So there is one identifier here,
+/// not two, and the route that sends it twice is sending it twice.
+///
+/// The distributor is the wire's own string rather than an enum. Discord's list
+/// is twenty-four names long — `steam`, `battlenet`, `origin`, `eaplay`, `gog`,
+/// `glyph`, `uplay`, `twitch`, `epic`, `discord`, `google_play`,
+/// `apple_app_store`, `samsung_galaxy`, `microsoft`, `playstation`, `igdb`,
+/// `roblox`, `xbox`, `xbox_title`, `xbox_game_pass`, `gop`, `gdco`,
+/// `opencritic`, `sensortower` — and eighteen of them appear in the captures.
+/// Typing all twenty-four would invite a store page per case, which is the
+/// mistake `Game.storeOffers` exists to avoid: only two of them are places to
+/// send somebody.
+public struct GameSKU: Hashable, Sendable {
+    public var distributor: String
+    public var id: String
+
+    public init(distributor: String, id: String) {
+        self.distributor = distributor
+        self.id = id
+    }
+}
+
+/// Where the game is in its life on Steam.
+///
+/// Discord's own enum, numbers included. **An unrecognised value decodes to
+/// nil**, which leaves the store link standing: only `retiredAbandoned`
+/// suppresses it, and a number nobody has seen is not evidence that a page has
+/// gone — §5.5's "where being wrong costs different amounts in each direction".
+public enum SteamReleaseStatus: Int, Hashable, Sendable {
+    case preRelease = 1
+    case dayOfRelease = 2
+    case postRelease = 3
+    case retiredAbandoned = 4
+    case childApp = 6
+}
+
+/// A storefront this client can send somebody to.
+///
+/// **Two, and they are Discord's two.** Read out of its `useStoreCTAs`, in its
+/// order — Game Pass first, because a game somebody already subscribes to is a
+/// better offer than one they have to buy.
+public enum GameStore: String, Hashable, Sendable, CaseIterable {
+    case xboxGamePass = "xbox_game_pass"
+    case steam = "steam"
+
+    /// What the store is called, which is what a menu row says when there are
+    /// two of them.
+    public var title: String {
+        switch self {
+        case .steam: "Steam"
+        case .xboxGamePass: "Xbox Game Pass"
+        }
+    }
+
+    /// What the button says.
+    ///
+    /// Steam's is Discord's own string, and it is worth knowing that the string
+    /// does not follow from anything else on the object: the analytics event
+    /// beside it is `PRESS_PLAY_ON_STEAM_BUTTON` and the label is *Get on
+    /// Steam*, so a label guessed from the event name would have been wrong.
+    ///
+    /// **Game Pass is deliberately not Discord's string**, which is *Play with
+    /// Xbox Game Pass*. Discord can say that because its own client offers cloud
+    /// play; this button opens a store page in a browser and nothing here plays
+    /// anything, and a control that promises more than it does is the same fault
+    /// `INVARIANTS.md` §5.5 is about. So both stores take the same construction
+    /// and it is the one that is true of both.
+    public var callToAction: String {
+        switch self {
+        case .steam: "Get on Steam"
+        case .xboxGamePass: "Get on Xbox Game Pass"
+        }
+    }
+
+    /// The connection `type` whose brand mark names it — the same table the
+    /// profile's connections and the game profile's links already draw from.
+    /// Game Pass has no mark of its own and wears Xbox's, as it does in
+    /// Discord.
+    public var brandService: String {
+        switch self {
+        case .steam: "steam"
+        case .xboxGamePass: "xbox"
+        }
+    }
+
+    /// The store page for one SKU.
+    ///
+    /// **Discord's builders with its referral tags taken off.** It appends
+    /// `?ocid=discord7937464` to the Xbox address and sets `utm_source=discord`
+    /// on whatever it opens; both are Discord's own attribution, and sending
+    /// them from here would credit this client's traffic to somebody else.
+    /// Measured: both addresses answer 200 without them.
+    public func url(sku: String) -> URL {
+        let encoded = sku.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? sku
+        return switch self {
+        case .steam: URL(string: "https://store.steampowered.com/app/\(encoded)")!
+        case .xboxGamePass: URL(string: "https://www.xbox.com/games/store/title/\(encoded)")!
+        }
+    }
+}
+
+/// One store, and the address it is at for this game.
+public struct GameStoreOffer: Hashable, Sendable, Identifiable {
+    public var store: GameStore
+    public var url: URL
+
+    public var id: GameStore { store }
+
+    public init(store: GameStore, url: URL) {
+        self.store = store
+        self.url = url
     }
 }
 

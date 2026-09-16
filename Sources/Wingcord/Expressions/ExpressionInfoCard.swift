@@ -19,6 +19,9 @@ struct ExpressionInfoCard: View {
     private static let width: CGFloat = 300
     private static let artSide: CGFloat = 48
 
+    /// Whether the still under the moving emoji has been taken away. See `art`.
+    @State private var isPlaying = false
+
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(alignment: .top, spacing: Spacing.snug) {
@@ -80,6 +83,31 @@ struct ExpressionInfoCard: View {
             }
             .aspectRatio(contentMode: .fit)
             .frame(width: Self.artSide, height: Self.artSide)
+            .opacity(isPlaying ? 0 : 1)
+            // **The still is only half of an animated emoji**, and this card is
+            // the one place somebody asked to look at one closely — which is
+            // exactly where a frozen first frame is most obviously wrong. The
+            // same two-layer arrangement `AvatarView` and the rail tile use: the
+            // moving form over the still, and `onPlayback` takes the still away
+            // so an asset with a soft rim is not two offset copies.
+            //
+            // Gated on the address, not attempted for everything: Discord serves
+            // an animated emoji as `.gif` and a still one as `.png`, so there is
+            // nothing to discover — `CDN.canAnimate` is that fact everywhere.
+            .overlay {
+                if let url = info.artURL, CDN.canAnimate(url), AnimationClock.playsAnimatedEmoji {
+                    AnimatedDecoration(
+                        url: url,
+                        side: Self.artSide,
+                        onPlayback: { playing in
+                            guard isPlaying != playing else { return }
+                            isPlaying = playing
+                        }
+                    )
+                    .frame(width: Self.artSide, height: Self.artSide)
+                    .allowsHitTesting(false)
+                }
+            }
         }
     }
 }

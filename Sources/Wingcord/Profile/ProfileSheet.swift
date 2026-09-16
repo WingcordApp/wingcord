@@ -260,24 +260,52 @@ struct ProfileSheet: View {
         .padding(.bottom, 16)
     }
 
+    /// The mutual-servers pill.
+    ///
+    /// **Three spellings, and the row picks one — it never truncates.** The
+    /// comment on `topBar` has the arithmetic: the column is 476 points and the
+    /// picker takes what its longest labels need, so a *third* tab pushes the
+    /// spelled-out count past the edge and SwiftUI answered by clipping it to
+    /// "1 mutual ser…". A truncated count is worse than a short one: the number
+    /// is the whole content and the words are only there to say what it counts.
+    ///
+    /// `ViewThatFits` rather than a measured threshold, because the picker's
+    /// width is its own labels' — a constant here would be right for three
+    /// English tabs and wrong the moment one of them is a different length.
     private var mutualCount: some View {
+        ViewThatFits(in: .horizontal) {
+            mutualPill(spelledOut)
+            mutualPill("\(profile.mutualServers.count) mutual")
+            mutualPill("\(profile.mutualServers.count)")
+        }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(Text(spelledOut))
+    }
+
+    private var spelledOut: String {
+        profile.mutualServers.count == 1
+            ? "1 mutual server"
+            : "\(profile.mutualServers.count) mutual servers"
+    }
+
+    private func mutualPill(_ label: String) -> some View {
         HStack(spacing: 5) {
             Circle()
                 .fill(ground.accent ?? Palette.presenceOnline)
                 .frame(width: 6, height: 6)
-            Text(
-                profile.mutualServers.count == 1
-                    ? "1 mutual server"
-                    : "\(profile.mutualServers.count) mutual servers"
-            )
-            .font(.system(.caption, weight: .medium))
-            .foregroundStyle(InkColor.secondary)
-            .lineLimit(1)
+            Text(label)
+                .font(.system(.caption, weight: .medium))
+                .foregroundStyle(InkColor.secondary)
+                .lineLimit(1)
+                // **Fixed, or `ViewThatFits` has nothing to choose between.**
+                // A `Text` that will happily truncate reports that it fits at
+                // any width, so the first variant always "fits" and the shorter
+                // ones are never reached.
+                .fixedSize()
         }
         .padding(.horizontal, 11)
         .frame(height: 27)
         .chromeOverMedia(tinted: Palette.flyoutTint)
-        .accessibilityElement(children: .combine)
     }
 
     /// **A pencil, not a labelled button**, for the width above. It sits beside
@@ -364,6 +392,7 @@ struct ProfileSheet: View {
                     CurrentActivityCard(
                         activity: current,
                         buttonURLs: profile.activityButtonURLs,
+                        storeOffers: profile.activityStoreOffers,
                         ground: ground,
                         openGame: gameOpener(for: current),
                         applicationIconURL: model.applicationIconURL(

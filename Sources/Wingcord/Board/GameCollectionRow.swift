@@ -15,6 +15,18 @@ import WingcordCore
 /// two places for the chevron to drift.
 struct GameCollectionRow: View {
     var collection: GameCollection
+    /// The card's own surface, so this panel is the same one every other panel
+    /// on the profile is.
+    ///
+    /// **It used to be a hard-coded `white 0.04`**, which is why it and the
+    /// activity card under it drew as two different panels on the same themed
+    /// card — one a wash of white, the other Discord's own
+    /// `--profile-gradient-section-box`. That token is measured (black at 45 %
+    /// under every dark theme, white at 45 % under the light one) and
+    /// `ProfileGround.panelFill` already carries it; the comment on
+    /// `CurrentActivityCard` has said all along that the Game Collection and
+    /// In-voice cards take the same fill, and this was the one that did not.
+    var ground: ProfileGround
     /// What pressing it does. The card already owns the one route to the full
     /// profile — the avatar uses it too — so this takes that closure rather than
     /// reaching for the store and re-deriving an anchor the card already has.
@@ -48,7 +60,7 @@ struct GameCollectionRow: View {
             .padding(.vertical, Spacing.base)
             .background {
                 RoundedRectangle(cornerRadius: Radius.chip, style: .continuous)
-                    .fill(isHovered ? Palette.hoverFill : Color.white.opacity(0.04))
+                    .fill(isHovered ? AnyShapeStyle(Palette.hoverFill) : ground.panelFill)
             }
             .contentShape(.rect(cornerRadius: Radius.chip, style: .continuous))
         }

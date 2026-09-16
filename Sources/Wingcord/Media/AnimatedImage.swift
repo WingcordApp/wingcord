@@ -77,6 +77,24 @@ nonisolated struct AnimatedImage: Sendable {
     /// than one that evicts every avatar on screen to play smoothly.
     static let byteBudget = 6 * 1024 * 1024
 
+    /// What a full loop costs at a given drawn size, so a caller can ask for
+    /// one instead of guessing at megabytes.
+    ///
+    /// **The budget is a FRAME COUNT wearing a memory unit** — §"A per-asset
+    /// byte budget is a FRAME COUNT, and the caller owns it" — and a number
+    /// picked by hand is right for one asset at one size. A profile banner
+    /// drawn 360 points wide decodes around 576 KB a frame, so the 12 MB it
+    /// used to ask for bought twenty of a sixty-frame loop: every third frame,
+    /// which is what "the banner renders at very low fps" is. This is the
+    /// arithmetic that was being done in a comment.
+    ///
+    /// Never below the default, so a small asset does not end up with a
+    /// *smaller* allowance than it has always had.
+    static func budget(forDrawn size: CGSize, scale: CGFloat = 2) -> Int {
+        let pixels = max(1, size.width * scale) * max(1, size.height * scale)
+        return max(byteBudget, Int(pixels * 4) * frameBudget)
+    }
+
     /// A delay below this is what an authoring tool writes when it means "as
     /// fast as possible", and every renderer substitutes a real interval rather
     /// than spinning. This is the same substitution browsers make.

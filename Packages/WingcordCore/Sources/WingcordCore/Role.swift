@@ -235,6 +235,21 @@ public enum RoleResolver {
         topRole(of: memberRoleIDs, in: roles) { $0.displayColorValue != nil }
     }
 
+    /// The role whose icon is drawn beside a member's name, or nil.
+    ///
+    /// **The highest role that HAS one**, by the same rule the colour follows:
+    /// a senior role with no icon does not blank out a junior role's. A role
+    /// icon is either an uploaded image or a unicode emoji — never both, and
+    /// Discord accepts either — so the predicate asks for whichever arrived.
+    public static func iconRole(
+        of memberRoleIDs: [RoleID],
+        in roles: [RoleID: Role]
+    ) -> Role? {
+        topRole(of: memberRoleIDs, in: roles) {
+            $0.iconHash != nil || $0.unicodeEmoji != nil
+        }
+    }
+
     /// The role a member is grouped under in the member list, or nil for the
     /// ungrouped section. The highest role *with hoist set*, by the same rule.
     public static func hoistRole(

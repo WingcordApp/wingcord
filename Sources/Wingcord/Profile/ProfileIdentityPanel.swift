@@ -34,6 +34,9 @@ struct ProfileIdentityPanel: View {
     @Environment(AppModel.self) private var model
     @Environment(\.motion) private var motion
     @State private var isMenuOpen = false
+    /// Whether the still under the moving banner has been taken away. See
+    /// `bannerArtwork`.
+    @State private var bannerIsPlaying = false
 
     /// The card a frame and an effect are authored for. 452 ÷ 1,280 of the
     /// design's sheet, which is the same third of ours.
@@ -282,16 +285,32 @@ struct ProfileIdentityPanel: View {
             ZStack {
                 RemoteImage(url: url, side: Self.width, bucket: .artwork) { Color.clear }
                     .aspectRatio(contentMode: .fill)
+                    // Taken away once the film is up: two copies of the same
+                    // picture composited every frame buys nothing, and the
+                    // still is only here to fill the box while the strip
+                    // decodes.
+                    .opacity(bannerIsPlaying ? 0 : 1)
                 // Only where the hash says it can move, so a still banner never
-                // pays for a second fetch and a multi-frame decode. The budget
-                // is a banner's — around half a megabyte a frame — not a
-                // decoration's, whose default would buy nine of them.
+                // pays for a second fetch and a multi-frame decode.
+                //
+                // **The budget is the whole loop at the size it is drawn**, not
+                // a number chosen by hand: a banner is around half a megabyte a
+                // frame here, so the 12 MB this used to ask for bought twenty
+                // frames of a sixty-frame asset — every third one, which is
+                // what made it stutter. `AnimatedImage.budget(forDrawn:)` is
+                // that arithmetic in one place.
                 if CDN.canAnimate(url) {
                     AnimatedDecoration(
                         url: url,
                         side: Self.width,
                         gravity: .resizeAspectFill,
-                        byteBudget: 12 * 1024 * 1024
+                        byteBudget: AnimatedImage.budget(
+                            forDrawn: CGSize(width: Self.width, height: Self.bannerHeight)
+                        ),
+                        onPlayback: { playing in
+                            guard bannerIsPlaying != playing else { return }
+                            bannerIsPlaying = playing
+                        }
                     )
                 }
             }

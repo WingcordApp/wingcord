@@ -46,6 +46,12 @@ struct VoiceMemberFlyout: View {
                     // a button drawn before its URL lands opens nothing — see
                     // `CurrentActivityCard.buttons`. The card is the way in.
                     buttonURLs: [],
+                    // **And no store button, for a second reason.** This whole
+                    // flyout is `allowsHitTesting(false)` — it follows the
+                    // pointer off a roster row — so a button drawn here could
+                    // not be pressed. `INVARIANTS.md` §5.5: a control that
+                    // cannot work must not look like one that can.
+                    storeOffers: [],
                     ground: .neutral,
                     openGame: nil,
                     applicationIconURL: model.applicationIconURL(

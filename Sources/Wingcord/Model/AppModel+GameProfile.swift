@@ -28,7 +28,7 @@ extension AppModel {
             themes: game.themes,
             details: detailRows(of: game),
             links: game.socialLinks,
-            storeLink: game.websites.first { $0.category == .steam },
+            storeOffers: game.storeOffers,
             accountLink: accountLink(for: gameID),
             community: communityCard(for: gameID, game: game),
             reviews: game.reviews,

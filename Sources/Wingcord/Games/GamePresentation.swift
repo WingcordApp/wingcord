@@ -33,7 +33,9 @@ struct GamePresentation: Equatable, Sendable {
     var themes: [String]
     var details: [GameDetailRow]
     var links: [GameWebsite]
-    var storeLink: GameWebsite?
+    /// Where the game is sold, in Discord's own order. Usually one entry and
+    /// often none — see `Game.storeOffers`.
+    var storeOffers: [GameStoreOffer]
     /// The card offering to link an in-game account, when the game's widget
     /// application publishes an address for it.
     var accountLink: GameAccountLink?
@@ -60,7 +62,7 @@ struct GamePresentation: Equatable, Sendable {
             && lhs.themes == rhs.themes
             && lhs.details == rhs.details
             && lhs.links == rhs.links
-            && lhs.storeLink == rhs.storeLink
+            && lhs.storeOffers == rhs.storeOffers
             && lhs.accountLink == rhs.accountLink
             && lhs.community == rhs.community
             && lhs.reviews == rhs.reviews

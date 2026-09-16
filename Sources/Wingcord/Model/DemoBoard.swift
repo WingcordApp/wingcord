@@ -236,6 +236,10 @@ extension DemoFixtures {
         GameWebsite(url: URL(string: url)!, category: category)
     }
 
+    private static func sku(_ distributor: String, _ id: String) -> GameSKU {
+        GameSKU(distributor: distributor, id: id)
+    }
+
     private static func date(_ iso: String) -> Date? {
         ISO8601DateFormatter().date(from: iso)
     }
@@ -295,7 +299,13 @@ extension DemoFixtures {
                 globalRank: 43,
                 screenshotURLs: [
                     "scbtf2", "sctf9p", "sctf9q", "scbtf3", "scbtbp", "scbtf1",
-                ].compactMap { URL(string: "https://images.igdb.com/igdb/image/upload/t_1080p/\($0).jpg") }
+                ].compactMap { URL(string: "https://images.igdb.com/igdb/image/upload/t_1080p/\($0).jpg") },
+                thirdPartySkus: [
+                    sku("igdb", "3212"), sku("opencritic", "572"),
+                    sku("epic", "2A14CF8A83B149919A2399504E5686A6"),
+                    sku("steam", "1222670"), sku("gop", "21009"),
+                ],
+                steamReleaseStatus: .postRelease
             ),
             Game(
                 id: beatSaber,
@@ -330,7 +340,21 @@ extension DemoFixtures {
                         topCriticRating: 85.926, topCriticRatingCount: 27, tier: .mighty
                     )
                 ),
-                openCriticURL: URL(string: "https://opencritic.com/game/6151/beat-saber")
+                openCriticURL: URL(string: "https://opencritic.com/game/6151/beat-saber"),
+                // **The multi-SKU case, and its numbers are the real ones.**
+                // `/games` sends three Steam SKUs for Beat Saber and only the
+                // last is the game — 38598 and 37124 are a demo and a delisted
+                // listing. Taking the first, which is what Discord's own store
+                // button does, opens neither. The tie is broken by the STEAM
+                // website above, which names 620980. See `Game.storeOffers`.
+                thirdPartySkus: [
+                    sku("playstation", "PPSA15035_00"), sku("playstation", "CUSA14143_00"),
+                    sku("steam", "38598"), sku("gop", "60240"), sku("opencritic", "6151"),
+                    sku("igdb", "83731"), sku("steam", "37124"),
+                    sku("playstation", "CUSA12878_00"), sku("playstation", "PPSA14734_00"),
+                    sku("gdco", "8380"), sku("steam", "620980"),
+                ],
+                steamReleaseStatus: .postRelease
             ),
             Game(
                 id: endfield,
@@ -365,7 +389,16 @@ extension DemoFixtures {
                         topCriticRating: 79.286, topCriticRatingCount: 15, tier: .strong
                     )
                 ),
-                globalRank: 79
+                globalRank: 79,
+                // **No Steam and no Game Pass**, which is why it is worth
+                // having in the demo: the aside has to look deliberate for a
+                // game nobody can be sent to buy, and Endfield is that game.
+                thirdPartySkus: [
+                    sku("igdb", "194558"), sku("opencritic", "19963"),
+                    sku("epic", "14D53B5D3FCB4526A69D59F35C9DD28F"),
+                    sku("google_play", "com.gryphline.endfield.gp"),
+                    sku("apple_app_store", "6752642477"),
+                ]
             ),
             Game(
                 id: zenless,
@@ -373,7 +406,9 @@ extension DemoFixtures {
                 media: GameMedia(icon: .hash("fb528a20677f93d8f365fac88e3f0713")),
                 genres: [8, 4, 20].map(GameGenre.init(rawValue:)),
                 platforms: [.desktop, .xbox, .playStation, .iOS, .android],
-                globalRank: 32
+                globalRank: 32,
+                thirdPartySkus: [sku("steam", "4162040"), sku("igdb", "200551")],
+                steamReleaseStatus: .postRelease
             ),
             Game(
                 id: wuthering,
@@ -381,7 +416,8 @@ extension DemoFixtures {
                 media: GameMedia(icon: .hash("1e7d7e9ca69ea0951467994c581f70f5")),
                 genres: [8, 20, 4].map(GameGenre.init(rawValue:)),
                 platforms: [.desktop, .xbox, .playStation, .iOS, .android, .macOS],
-                globalRank: 51
+                globalRank: 51,
+                thirdPartySkus: [sku("steam", "3513350"), sku("igdb", "202956")]
             ),
             Game(
                 id: battlefield,
@@ -389,7 +425,16 @@ extension DemoFixtures {
                 media: GameMedia(icon: .hash("385864ebfdda22c76c0bd944c8722efd")),
                 genres: [GameGenre(rawValue: 23)],
                 platforms: [.desktop, .xbox, .playStation],
-                globalRank: 23
+                globalRank: 23,
+                // **A Steam SKU and no STEAM website**, which is the shape that
+                // used to draw no store button anywhere — and this is the game
+                // the demo presence is playing, so it is the one the card's new
+                // button is seen on.
+                thirdPartySkus: [
+                    sku("steam", "2807960"), sku("xbox", "9P4BB02MWDZK"),
+                    sku("epic", "A14A02AA3C8143729605EAF7C93D7501"),
+                    sku("igdb", "317407"), sku("opencritic", "19051"),
+                ]
             ),
         ]
     }

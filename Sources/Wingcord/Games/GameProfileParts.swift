@@ -379,20 +379,27 @@ private struct AsideSection<Content: View>: View {
 /// the one thing on this page a reader is most likely to have come for, and a
 /// cart icon in the header's corner says "some kind of shop" where a labelled
 /// button says "Steam".
+///
+/// **The same `Game.storeOffers` the profile card's activity reads**, which is
+/// what stops one surface knowing about a store the other does not. It used to
+/// be the `websites` list's STEAM entry alone, and that is a narrower answer
+/// than the route sends: Stardew Valley and Cry of Fear carry a Steam SKU and
+/// **no** STEAM website, so this page drew no store button for either of them.
 struct GameStoreButton: View {
-    var store: GameWebsite
+    var offer: GameStoreOffer
 
     @Environment(\.openURL) private var openURL
 
     var body: some View {
-        Button { openURL(store.url) } label: {
+        Button { openURL(offer.url) } label: {
             HStack(spacing: Spacing.base) {
-                ConnectionMark(service: store.category.brandService ?? "link", side: 18)
-                // **"View on Steam", not "Launch on Steam".** The handoff says
-                // Launch and this client cannot launch anything — the button
-                // opens the store page in a browser, and it has to say the thing
-                // it actually does.
-                Text("View on \(store.category.title)")
+                ConnectionMark(service: offer.store.brandService, side: 18)
+                // **"Get on Steam", not "Launch on Steam".** The design handoff
+                // says Launch and this client cannot launch anything — the
+                // button opens the store page in a browser, and it has to say
+                // the thing it actually does. The wording is one rule shared
+                // with the profile card's button, on `GameStore`.
+                Text(offer.store.callToAction)
                     .font(.system(.subheadline, weight: .semibold))
                 Image(systemName: "arrow.up.forward")
                     .font(.system(size: 9, weight: .bold))
@@ -405,7 +412,7 @@ struct GameStoreButton: View {
         .buttonStyle(.plain)
         .foregroundStyle(InkColor.primary)
         .interactiveChrome(in: .rect(cornerRadius: Radius.chip, style: .continuous))
-        .help("Open the \(store.category.title) page in your browser")
+        .help("Open the \(offer.store.title) page in your browser")
     }
 }
 

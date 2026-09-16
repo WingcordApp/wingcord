@@ -110,6 +110,14 @@ nonisolated struct ThemeInk: @unchecked Sendable {
     /// and here only so a painter does not have to bridge a `Color` to get them.
     let hoverFill: CGColor
     let selectionFill: CGColor
+    /// The pill behind a member row's typing dots.
+    ///
+    /// **The accent, not a status colour.** Typing is not a presence state —
+    /// somebody idle or on Do Not Disturb can be typing — so borrowing a
+    /// presence tint would say something the pill does not mean. It takes the
+    /// theme's accent, which is what the app already uses for "this is
+    /// happening now".
+    let typingPill: CGColor
 
     private static let box = Mutex(ThemeInk(.trueBlack, systemAccent: Self.fallbackAccent))
 
@@ -137,6 +145,7 @@ nonisolated struct ThemeInk: @unchecked Sendable {
         accent = colors.accent.map(Self.color) ?? systemAccent
         hoverFill = CGColor(srgbRed: 1, green: 1, blue: 1, alpha: 0.07)
         selectionFill = CGColor(srgbRed: 1, green: 1, blue: 1, alpha: 0.15)
+        typingPill = accent
     }
 
     private static func color(_ packed: UInt32) -> CGColor {

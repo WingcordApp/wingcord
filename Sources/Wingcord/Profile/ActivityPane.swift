@@ -18,6 +18,9 @@ struct CurrentActivityCard: View {
     /// until the metadata route answers, and empty forever for the vast
     /// majority of activities — see `ProfilePresentation.activityButtonURLs`.
     var buttonURLs: [URL]
+    /// Where the game is sold, when it is sold anywhere this client can address.
+    /// See `Game.storeOffers`.
+    var storeOffers: [GameStoreOffer] = []
     var ground: ProfileGround
     /// Opens the game this activity is about. Nil where there is nothing to
     /// open, which is every activity that is not a game.
@@ -52,6 +55,7 @@ struct CurrentActivityCard: View {
                 Spacer(minLength: 0)
             }
             buttons
+            store
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         // **A plate of its own, which this card has never had.** Discord draws
@@ -261,6 +265,69 @@ struct CurrentActivityCard: View {
                 }
             }
         }
+    }
+
+    /// Where to get the game.
+    ///
+    /// **Under the app's own buttons, never instead of them.** Discord composes
+    /// it the same way — its activity section puts the store call to action
+    /// after whatever primary control the activity already has, in the same
+    /// column — because the app's Join or Listen is what somebody came to the
+    /// card for and the store is what they do if they cannot.
+    ///
+    /// **One store is a button; two are a menu.** That is Discord's own shape
+    /// and it is the right one: two full-width buttons stacked under a 68-point
+    /// card make the card mostly chrome, and the second store is a choice
+    /// rather than a second action. The menu's word is *Play*, which is what
+    /// Discord puts on it, and each row then names the store it opens.
+    @ViewBuilder
+    private var store: some View {
+        if storeOffers.count == 1, let offer = storeOffers.first {
+            Button { openURL(offer.url) } label: {
+                storeLabel(offer.store, text: offer.store.callToAction)
+            }
+            .buttonStyle(.plain)
+            .interactiveChromeOverMedia()
+            .help("Open \(offer.store.title) in your browser")
+            .accessibilityHint(Text("Opens \(offer.store.title) in your browser"))
+        } else if storeOffers.count > 1 {
+            // The frame, the hit region and the material go on the MENU, after
+            // the style — a borderless menu lays its own label out and anything
+            // put on the label sizes a control of the menu's choosing instead.
+            // `INVARIANTS.md` §1, "A borderless menu ignores a frame set on its
+            // label".
+            Menu {
+                ForEach(storeOffers) { offer in
+                    Button(offer.store.title) { openURL(offer.url) }
+                }
+            } label: {
+                storeLabel(nil, text: "Play")
+            }
+            .menuStyle(.borderlessButton)
+            .menuIndicator(.hidden)
+            .frame(maxWidth: .infinity)
+            .contentShape(.capsule)
+            .interactiveChromeOverMedia()
+            .accessibilityLabel(Text("Play"))
+            .accessibilityHint(Text("Choose a store to open in your browser"))
+        }
+    }
+
+    /// The full-width row both shapes wear. Its own `maxWidth` is what sizes the
+    /// button; inside the menu it is inert and the menu carries the frame.
+    private func storeLabel(_ store: GameStore?, text: String) -> some View {
+        HStack(spacing: 6) {
+            if let store {
+                ConnectionMark(service: store.brandService, side: 16)
+            }
+            Text(text)
+                .font(.system(.subheadline, weight: .medium))
+                .foregroundStyle(InkColor.primary)
+                .lineLimit(1)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 7)
+        .contentShape(.capsule)
     }
 }
 

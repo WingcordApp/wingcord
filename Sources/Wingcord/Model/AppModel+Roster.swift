@@ -102,6 +102,13 @@ extension AppModel {
 
         let guildRoles = roles[guildID] ?? [:]
         let channel = selectedChannelID.flatMap { channelIndex[$0] }
+        // **Read once, for the channel on screen.** Typing is per-conversation,
+        // and the roster is drawn beside one — so a lookup per member would be
+        // a dictionary hit per row for a table that cannot move while the list
+        // is being built. Expired entries are left to the composer's own
+        // indicator to sweep; the comparison here is against `now` either way.
+        let typing = selectedChannelID.flatMap { messages(in: $0)?.typing } ?? [:]
+        let now = Date.now
 
         // Grouped by hoist role, plus the two synthetic groups. A dictionary of
         // arrays rather than repeated filtering: filtering per section is a full
@@ -154,7 +161,8 @@ extension AppModel {
                 },
                 nameplateURL: user.decoration?.nameplate?.artworkURL,
                 nameplateAnimatedURL: user.decoration?.nameplate?.animatedArtworkURL,
-                nameplatePalette: user.decoration?.nameplate?.palette ?? .none
+                nameplatePalette: user.decoration?.nameplate?.palette ?? .none,
+                isTyping: typing[userID].map { $0 > now } ?? false
             )
 
             if status == .offline {

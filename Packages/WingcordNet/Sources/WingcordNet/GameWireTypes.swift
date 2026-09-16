@@ -26,6 +26,24 @@ struct GameDTO: Decodable, Sendable {
     var reviews: ReviewsDTO?
     var opencritic_url: String?
     var l30_rank: Int?
+    var third_party_skus: [SKUDTO]?
+    /// Discord's `SteamReleaseStatus`. Only this route sends it — the same
+    /// field is absent from every `/applications/public` body on disk, which is
+    /// why the store offer is resolved from the game record and not from the
+    /// application.
+    var steam_release_status: Int?
+
+    /// `{"distributor": "steam", "id": "730"}`, plus a `sku` that repeats the
+    /// id on the routes that send one. See `GameSKU`.
+    struct SKUDTO: Decodable, Sendable {
+        var distributor: String?
+        var id: String?
+
+        var domain: GameSKU? {
+            guard let distributor, !distributor.isEmpty, let id else { return nil }
+            return GameSKU(distributor: distributor, id: id)
+        }
+    }
 
     struct MediaDTO: Decodable, Sendable {
         var icon: RefDTO?
@@ -170,7 +188,13 @@ struct GameDTO: Decodable, Sendable {
             screenshotURLs: (screenshot_urls ?? []).compactMap(URL.init(string:)),
             screenshotHashes: screenshot_hashes ?? [],
             trailers: (trailers ?? []).compactMap { $0.domain(fallbackApplicationID: id) },
-            themes: themes ?? []
+            themes: themes ?? [],
+            // An entry with an empty id is kept here and dropped where a store
+            // address is built: the list stays a faithful record of what the
+            // route sent, and `Game.storeOffers` is the one place that decides
+            // what can be turned into a link.
+            thirdPartySkus: (third_party_skus ?? []).compactMap(\.domain),
+            steamReleaseStatus: steam_release_status.flatMap(SteamReleaseStatus.init(rawValue:))
         )
     }
 

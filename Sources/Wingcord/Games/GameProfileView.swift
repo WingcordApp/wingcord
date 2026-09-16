@@ -230,8 +230,8 @@ struct GameProfileView: View {
     @ViewBuilder
     private var asideContent: some View {
         VStack(alignment: .leading, spacing: Spacing.group) {
-            if let store = game.storeLink {
-                GameStoreButton(store: store)
+            ForEach(game.storeOffers) { offer in
+                GameStoreButton(offer: offer)
             }
             if let link = game.accountLink {
                 GameAccountLinkCard(link: link)

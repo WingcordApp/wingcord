@@ -84,6 +84,16 @@ nonisolated enum TimelineRowPainter {
         /// last switched channels.
         var activityInviteStatus: String?
         var activityInviteIsJoined = false
+        /// One frame of this author's moving avatar, or nil for the still —
+        /// which is every row but the one under the pointer.
+        ///
+        /// **Resolved by the canvas, not peeked here.** A painter that reached
+        /// the film cache itself would animate every run head in the channel
+        /// whose avatar happens to be a GIF, which is the column of moving
+        /// faces `HoverAvatarFilm` exists to prevent.
+        var avatarFrame: CGImage?
+        /// One frame of their moving decoration, same rule.
+        var decorationFrame: CGImage?
     }
 
     static func draw(
@@ -194,7 +204,10 @@ nonisolated enum TimelineRowPainter {
                 context: context,
                 style: style,
                 images: images,
-                scale: scale
+                scale: scale,
+                decorationURL: row.decorationURL,
+                avatarFrame: state.avatarFrame,
+                decorationFrame: state.decorationFrame
             )
         } else if let symbol = row.systemSymbol {
             // A system event's mark, where a face would be. Tinted rather than
@@ -278,6 +291,36 @@ nonisolated enum TimelineRowPainter {
                     scale: scale,
                     context: context
                 )
+            }
+
+            // The role icon, after the tag chip. **An image or an emoji, never
+            // both** — Discord's role editor offers one or the other, and the
+            // layout reserved the same square for either.
+            if row.roleIconRect.width > 0 {
+                let box = row.roleIconRect.offsetBy(dx: rowFrame.minX, dy: rowFrame.minY)
+                if let url = row.roleIconURL {
+                    if let icon = images.cached(
+                        ImageStore.Key(
+                            url: url,
+                            maximumPixelSize: Int((box.width * scale).rounded(.up))
+                        ),
+                        bucket: .thumbnail
+                    ) {
+                        drawFlipped(icon, in: box, context: context)
+                    }
+                } else if let emoji = row.roleEmoji {
+                    // One copy of the measurement, for the reason §5.55 gives:
+                    // a colour emoji is wider than its point size and answering
+                    // an overflow by truncating draws it as "…".
+                    drawEmojiInBox(
+                        EmojiRef(name: emoji),
+                        in: box,
+                        context: context,
+                        color: style.secondaryColor,
+                        images: images,
+                        scale: scale
+                    )
+                }
             }
 
             drawText(
@@ -927,19 +970,29 @@ nonisolated enum TimelineRowPainter {
         style: MessageTextStyle,
         images: ImageStore,
         scale: CGFloat,
-        peekSide: CGFloat? = nil
+        peekSide: CGFloat? = nil,
+        /// The artwork worn around the face. **Nil on a reply header's
+        /// sixteen-point avatar**, where Discord draws none either: a
+        /// decoration scaled to that is a smear, and the quoted line is a
+        /// pointer at a message rather than a portrait.
+        decorationURL: URL? = nil,
+        avatarFrame: CGImage? = nil,
+        decorationFrame: CGImage? = nil
     ) {
         context.saveGState()
         context.addEllipse(in: frame)
         context.clip()
 
-        if let url,
-           let image = images.cached(ImageStore.Key(
-               url: url,
-               maximumPixelSize: Int(((peekSide ?? frame.width) * scale).rounded(.up))
-           ))
-        {
+        // The moving face where this is the row playing one, the decoded still
+        // everywhere else.
+        if let image = avatarFrame ?? url.flatMap({ url in
+            images.cached(ImageStore.Key(
+                url: url,
+                maximumPixelSize: Int(((peekSide ?? frame.width) * scale).rounded(.up))
+            ))
+        }) {
             drawFlipped(image, in: frame, context: context)
+            context.restoreGState()
         } else {
             context.setFillColor(ThemeInk.current.surfaceRaised)
             context.fill(frame)
@@ -954,9 +1007,28 @@ nonisolated enum TimelineRowPainter {
                 alignment: .center,
                 context: context
             )
-            return
         }
-        context.restoreGState()
+
+        // **After the clip is gone, and for a monogram too.** A decoration is
+        // worn at 1.2x around the circle, so it is the one thing here that must
+        // be outside the ellipse — and somebody with no avatar still wears
+        // theirs, which an early return for the monogram branch would drop.
+        guard decorationURL != nil || decorationFrame != nil else { return }
+        drawDecoration(
+            decorationFrame ?? decorationURL.flatMap { url in
+                images.cached(
+                    ImageStore.Key(
+                        url: url,
+                        maximumPixelSize: Int(
+                            (decorationRect(around: frame).width * scale).rounded(.up)
+                        )
+                    ),
+                    bucket: .thumbnail
+                )
+            },
+            around: frame,
+            context: context
+        )
     }
 
     private static func drawAttachment(
@@ -1085,12 +1157,17 @@ nonisolated enum TimelineRowPainter {
                 // The SAME clock every other moving thing reads, so a channel of
                 // GIFs stays in step instead of each drifting on its own
                 // accumulated error. See `AnimationClock`.
-                drawFlipped(film.frames[film.index(at: clock)], in: frame, context: context)
+                drawFlipped(
+                    film.frames[film.index(at: clock)],
+                    in: frame,
+                    context: context,
+                    fills: slot.cropsToFill
+                )
                 drewArtwork = true
             } else if let image = images.cached(
                 ImageStore.Key(url: url, maximumPixelSize: pixels), bucket: .attachment
             ) {
-                drawFlipped(image, in: frame, context: context)
+                drawFlipped(image, in: frame, context: context, fills: slot.cropsToFill)
                 drewArtwork = true
             }
         }
@@ -1456,13 +1533,78 @@ nonisolated enum TimelineRowPainter {
     /// flipped, so every `draw(_:in:)` in this file goes through here. It used
     /// to be four lines copied at each call site, and the one copy that was
     /// missing is what drew every inline custom emoji upside down.
-    static func drawFlipped(_ image: CGImage, in frame: CGRect, context: CGContext) {
+    /// - Parameter fills: whether the picture covers the box and is cropped,
+    ///   rather than being drawn to the box's own edges.
+    ///
+    ///   **`CGContext.draw(_:in:)` stretches**, which is invisible for as long
+    ///   as every box is derived from its own picture's shape — which it was,
+    ///   until several pictures started sharing a grid of fixed cells. In a
+    ///   cell the picture is scaled until the *smaller* overflow is gone and
+    ///   the rest hangs outside; the caller's clip is what removes it, so this
+    ///   must never be used to fill a box nothing has clipped.
+    static func drawFlipped(
+        _ image: CGImage,
+        in frame: CGRect,
+        context: CGContext,
+        fills: Bool = false
+    ) {
+        let box = fills ? coverRect(image, in: frame) : frame
         context.saveGState()
         context.translateBy(x: 0, y: frame.midY)
         context.scaleBy(x: 1, y: -1)
         context.translateBy(x: 0, y: -frame.midY)
-        context.draw(image, in: frame)
+        context.draw(image, in: box)
         context.restoreGState()
+    }
+
+    // MARK: Avatar decorations
+
+    /// The box a decoration occupies around an avatar drawn in `avatar`.
+    ///
+    /// **1.2x and concentric, which means it draws OUTSIDE the avatar's own
+    /// circle.** A decoration is authored with the face's circle in the middle
+    /// of a larger square — ears, a halo, a hat brim all live in the margin —
+    /// so a decoration sized to the avatar loses exactly the part that
+    /// identifies it. `AvatarView` has always drawn it this way in SwiftUI and
+    /// this is the same number, shared so the two surfaces cannot drift.
+    ///
+    /// It contributes no layout: both canvases place the avatar and then draw
+    /// this over whatever is beside it, which is what Discord does too.
+    static func decorationRect(around avatar: CGRect) -> CGRect {
+        let side = avatar.width * Metrics.decorationScale
+        return CGRect(
+            x: avatar.midX - side / 2,
+            y: avatar.midY - side / 2,
+            width: side,
+            height: side
+        )
+    }
+
+    /// One avatar decoration, still or moving.
+    ///
+    /// **Never clipped to the avatar's circle**, which is the mistake this
+    /// function exists to make impossible: the caller draws the face inside a
+    /// `clip()` and this must be called after the matching `restoreGState`.
+    /// And flipped, like every other bitmap these canvases draw — §4.5's one
+    /// rule, and the one whose absence drew every custom emoji upside down.
+    static func drawDecoration(_ image: CGImage?, around avatar: CGRect, context: CGContext) {
+        guard let image else { return }
+        drawFlipped(image, in: decorationRect(around: avatar), context: context)
+    }
+
+    /// The rect a picture occupies when it covers `frame` and stays centred.
+    private static func coverRect(_ image: CGImage, in frame: CGRect) -> CGRect {
+        let width = CGFloat(image.width)
+        let height = CGFloat(image.height)
+        guard width > 0, height > 0, frame.width > 0, frame.height > 0 else { return frame }
+        let scale = max(frame.width / width, frame.height / height)
+        let drawn = CGSize(width: width * scale, height: height * scale)
+        return CGRect(
+            x: frame.midX - drawn.width / 2,
+            y: frame.midY - drawn.height / 2,
+            width: drawn.width,
+            height: drawn.height
+        )
     }
 
     /// One sticker.

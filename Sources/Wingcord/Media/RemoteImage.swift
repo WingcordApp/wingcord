@@ -109,6 +109,13 @@ struct AvatarView: View {
     /// contributes no layout size — an overlay is sized to what it decorates.
     var decorationURL: URL?
 
+    /// Whether the still under the moving decoration has been taken away.
+    ///
+    /// See the comment on the overlay: this is the whole of the doubled-rim
+    /// defect, and it is state rather than a derived value because only
+    /// `AnimatedDecoration` knows whether there are frames on screen.
+    @State private var decorationIsPlaying = false
+
     var body: some View {
         RemoteImage(url: url, side: side) {
             Text(monogram)
@@ -123,7 +130,8 @@ struct AvatarView: View {
         .clipShape(.circle)
         .overlay {
             if let decorationURL {
-                // **Two layers, and the still one is not wasted.**
+                // **Two layers, and the still one is taken away once the film
+                // is up.**
                 //
                 // Discord serves decorations as APNG, and most of them animate —
                 // but not all, and the filmstrip takes a fetch and a multi-frame
@@ -133,15 +141,47 @@ struct AvatarView: View {
                 // stays empty forever for an asset that turns out to be a single
                 // frame. So a decoration is never missing while it resolves, and
                 // a still one costs no clock subscription at all.
+                //
+                // **`onPlayback` is what stops it being two copies.** The two
+                // layers are decoded by different paths at different sizes, so
+                // an asset with a soft or transparent rim — a cat's ear, a
+                // feathered halo — shows the still as a second, offset outline
+                // behind the moving one. It is unmistakable once seen and easy
+                // to read as a rendering fault in the artwork. `GuildRailTile`
+                // and `NameplateArtwork` have always done this; this call site
+                // never did, which is why it was the one place the doubling was
+                // visible. The report is deferred and generation-guarded inside
+                // `AnimatedDecoration` — `INVARIANTS.md` §1, "A representable
+                // NEVER reports state from `updateNSView`".
                 ZStack {
                     RemoteImage(url: decorationURL, side: side * Metrics.decorationScale) {
                         Color.clear
                     }
+                    .opacity(decorationIsPlaying ? 0 : 1)
                     AnimatedDecoration(
                         url: decorationURL,
-                        side: side * Metrics.decorationScale
+                        side: side * Metrics.decorationScale,
+                        // **The whole loop at the size it is drawn.** The
+                        // default is sized for a 92-point decoration; a profile
+                        // card draws one at nearly twice that, where the same
+                        // allowance buys two thirds of the frames and the ears
+                        // visibly step. Never below the default, so a row
+                        // avatar is unaffected.
+                        byteBudget: AnimatedImage.budget(
+                            forDrawn: CGSize(
+                                width: side * Metrics.decorationScale,
+                                height: side * Metrics.decorationScale
+                            )
+                        ),
+                        onPlayback: { playing in
+                            guard decorationIsPlaying != playing else { return }
+                            decorationIsPlaying = playing
+                        }
                     )
                 }
+                // A decoration that changes has to put its still back while the
+                // new one resolves, or the avatar wears nothing in between.
+                .onChange(of: decorationURL) { decorationIsPlaying = false }
                 .frame(
                     width: side * Metrics.decorationScale,
                     height: side * Metrics.decorationScale

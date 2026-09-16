@@ -49,6 +49,8 @@ struct MiniProfileCard: View {
     @State private var inspectedEmoji: EmojiRef?
     /// Whether the person menu is open.
     @State private var isMenuOpen = false
+    /// Whether the still under the moving banner has been taken away.
+    @State private var bannerIsPlaying = false
     /// How wide the card is laid out.
     ///
     /// A parameter rather than a constant because the same card is the popover
@@ -130,7 +132,11 @@ struct MiniProfileCard: View {
             // about themselves and the roles are what a server says about them,
             // so the games — which they also chose — sit with the first group.
             if !profile.isLoading, let gameCollection {
-                GameCollectionRow(collection: gameCollection, openBoard: openFullProfile)
+                GameCollectionRow(
+                    collection: gameCollection,
+                    ground: ground,
+                    openBoard: openFullProfile
+                )
                     .padding(.horizontal, Spacing.margin)
                     .padding(.bottom, Spacing.snug)
             }
@@ -270,19 +276,35 @@ struct MiniProfileCard: View {
                                 Color.clear
                             }
                             .aspectRatio(contentMode: .fill)
+                            // Gone once the film is up: two copies of one
+                            // picture composited every frame buys nothing.
+                            .opacity(bannerIsPlaying ? 0 : 1)
 
                             // Only when it can animate — the extension says so,
                             // so a still banner never pays for a second fetch, a
                             // multi-frame decode and a coordinator to learn it
-                            // has one frame. The budget is the banner's, not a
-                            // decoration's: a frame here is around half a
-                            // megabyte, and the 6 MB default would buy nine.
+                            // has one frame.
+                            //
+                            // **The budget is the whole loop at the drawn
+                            // size.** A hand-picked 12 MB bought twenty frames
+                            // of a sixty-frame banner here, which is every third
+                            // one — see `AnimatedImage.budget(forDrawn:)`, which
+                            // is the arithmetic this comment used to describe.
                             if CDN.canAnimate(bannerURL) {
                                 AnimatedDecoration(
                                     url: bannerURL,
                                     side: width,
                                     gravity: .resizeAspectFill,
-                                    byteBudget: 12 * 1024 * 1024
+                                    byteBudget: AnimatedImage.budget(
+                                        forDrawn: CGSize(
+                                            width: width,
+                                            height: Self.bannerHeight
+                                        )
+                                    ),
+                                    onPlayback: { playing in
+                                        guard bannerIsPlaying != playing else { return }
+                                        bannerIsPlaying = playing
+                                    }
                                 )
                             }
                         }
@@ -453,6 +475,7 @@ struct MiniProfileCard: View {
             CurrentActivityCard(
                 activity: activity,
                 buttonURLs: profile.activityButtonURLs,
+                storeOffers: profile.activityStoreOffers,
                 ground: ground,
                 openGame: openGame(for: activity),
                 applicationIconURL: model.applicationIconURL(

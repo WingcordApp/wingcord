@@ -337,6 +337,22 @@ final class MemberListCoordinator: NSObject {
                     requests.append((key, .thumbnail))
                 }
             }
+            // **The avatar decoration, which was decoded and never asked
+            // for.** `MemberEntry.decorationURL` has been on the wire and in
+            // the presentation since the roster was written, and no surface
+            // ever requested the bytes — so every decoration in this list drew
+            // as nothing at all. Same rule as the badge below: the painter only
+            // peeks, and the key has to match the one it peeks with.
+            if let url = entry.decorationURL {
+                let side = Metrics.avatarRow * Metrics.decorationScale
+                let key = ImageStore.Key(
+                    url: url,
+                    maximumPixelSize: Int((side * scale).rounded(.up))
+                )
+                if seen.insert(key).inserted, ImageStore.shared.cached(key) == nil {
+                    requests.append((key, .thumbnail))
+                }
+            }
             // The guild badge inside a clan tag. Missing from this loop is how
             // every tag in the list drew as bare letters: the painter only ever
             // *peeks* at the cache — it cannot start a fetch from inside a draw

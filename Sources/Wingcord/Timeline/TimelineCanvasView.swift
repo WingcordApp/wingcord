@@ -42,6 +42,28 @@ final class TimelineCanvasView: NSView {
     // MARK: Interaction state
 
     private var hoveredRow: Int?
+
+    /// The moving face and decoration on the row under the pointer.
+    ///
+    /// **One row at a time**, shared with the member list which has the
+    /// identical problem — see `HoverAvatarFilm`. A channel of four hundred
+    /// messages from a decorated server is otherwise dozens of filmstrips
+    /// resident and dozens of layers rewritten every tick, for faces nobody is
+    /// looking at.
+    private let avatarFilm = HoverAvatarFilm()
+
+    /// Wires that film to this view. Called once, from `init`.
+    ///
+    /// A strip that lands after a hop has to repaint the row *and* re-ask for
+    /// the clock: `hasVisibleFilm` was false when the pointer arrived, so
+    /// nothing is subscribed yet and the first frame would be the only one.
+    private func adoptAvatarFilm() {
+        avatarFilm.onFrameChange = { [weak self] in
+            guard let self else { return }
+            self.invalidateRow(self.hoveredRow)
+            self.refreshStickerAnimation()
+        }
+    }
     /// The origin, in row space, of the button under the pointer.
     ///
     /// Identified by its origin rather than by an index: the index of a button
@@ -87,6 +109,7 @@ final class TimelineCanvasView: NSView {
                 hoveredComponent = nil
                 invalidateRow(previous)
                 publishHover()
+                updateAvatarPlayback()
             } else if !isScrolling {
                 updateHover(at: currentPointerLocation())
             }
@@ -212,6 +235,7 @@ final class TimelineCanvasView: NSView {
         setAccessibilityElement(true)
         setAccessibilityRole(.list)
         setAccessibilityLabel("Message transcript")
+        adoptAvatarFilm()
     }
 
     @available(*, unavailable)
@@ -281,6 +305,10 @@ final class TimelineCanvasView: NSView {
         // An index survives a rows change; the message at it may not. Republish
         // so the pill cannot end up offering another message's actions.
         if hoveredRow != nil { publishHover() }
+        // The row under the pointer may now be a different message — an edit,
+        // a new message arriving, a channel switch — so the face playing on it
+        // has to be re-asked rather than left on the person who was there.
+        updateAvatarPlayback()
         needsDisplay = true
         refreshStickerAnimation()
         return running
@@ -289,10 +317,11 @@ final class TimelineCanvasView: NSView {
     /// Subscribes to the clock while something on screen is moving, and stops
     /// the moment nothing is.
     ///
-    /// **Three kinds of moving picture, one subscription.** A sticker, a GIF
-    /// attachment and a GIF a link unfurled into are all filmstrips drawn by the
-    /// same painter on the same clock, and giving each its own subscription
-    /// would be three display-link callbacks for one repaint.
+    /// **Four kinds of moving picture, one subscription.** A sticker, a GIF
+    /// attachment, a GIF a link unfurled into and the hovered row's own face
+    /// are all filmstrips drawn by the same painter on the same clock, and
+    /// giving each its own subscription would be four display-link callbacks
+    /// for one repaint.
     ///
     /// Called from every place the answer can change: a rows change, a viewport
     /// move, and the pass that installs newly-decoded film. Idempotent, so those
@@ -313,6 +342,7 @@ final class TimelineCanvasView: NSView {
 
     /// Releases the clock subscription. Idempotent.
     func stopStickerAnimation() {
+        avatarFilm.cancel()
         guard isAnimatingStickers else { return }
         isAnimatingStickers = false
         AnimationClock.shared.unsubscribe(animationToken)
@@ -320,6 +350,11 @@ final class TimelineCanvasView: NSView {
     }
 
     private var hasVisibleFilm: Bool {
+        // The hovered row's face and decoration ride this same subscription —
+        // "three kinds of moving picture, one subscription" is four now, and
+        // giving the fourth its own display-link callback for one repaint is
+        // exactly what that sentence is about.
+        if avatarFilm.isPlaying { return true }
         for index in visibleRowRange() {
             guard case .message(let row) = rows[index].kind else { continue }
             if row.stickers.contains(where: \.isAnimated) { return true }
@@ -350,6 +385,10 @@ final class TimelineCanvasView: NSView {
     private func advanceFilm() {
         let time = AnimationClock.shared.time
         let scale = window?.backingScaleFactor ?? 2
+
+        // Nothing happens on the ticks that resolve to the frame already on
+        // screen, which at 24 ticks over a 12-frame-a-second asset is half.
+        if avatarFilm.advance(to: time) { invalidateRow(hoveredRow) }
 
         // Local, so the three loops below share one lookup and one comparison
         // rather than three copies of them.
@@ -553,6 +592,12 @@ final class TimelineCanvasView: NSView {
                     state.showsGutterTimestamp = true
                 }
                 state.animationTime = AnimationClock.shared.time
+                if case .message(let message) = row.kind {
+                    state.avatarFrame = avatarFilm.avatarFrame(forRow: message.id.rawValue)
+                    state.decorationFrame = avatarFilm.decorationFrame(
+                        forRow: message.id.rawValue
+                    )
+                }
                 state.playingPreviewURL = playingPreview
                 if let messageID = row.messageID {
                     state.isHighlighted = messageID == highlightedMessageID
@@ -1074,7 +1119,40 @@ final class TimelineCanvasView: NSView {
         hoveredEmbed = embed
         if rowChanged { invalidateRow(previous) }
         invalidateRow(index)
-        if rowChanged { publishHover() }
+        if rowChanged {
+            publishHover()
+            updateAvatarPlayback()
+        }
+    }
+
+    /// Points the hover film at whatever the pointer is on.
+    ///
+    /// **Reconciles a subject rather than reacting to an event**, so the four
+    /// things that change what should be playing — the pointer moving, a scroll
+    /// starting, the rows being rebuilt under the pointer, and the reader's
+    /// animation preference — all funnel through one decision.
+    ///
+    /// Only a **run head** has a face: everything else in a run leaves the
+    /// gutter empty, so there is nothing to animate and `avatarRect` is the
+    /// same test the painter uses.
+    func updateAvatarPlayback() {
+        let wanted: HoverAvatarFilm.Subject? = {
+            guard AnimationClock.playsAnimatedEmoji, !isScrolling,
+                  let index = hoveredRow, rows.indices.contains(index),
+                  case .message(let row) = rows[index].kind,
+                  row.avatarRect != nil
+            else { return nil }
+            return HoverAvatarFilm.Subject(
+                rowID: row.id.rawValue,
+                avatarURL: row.avatarURL,
+                decorationURL: row.decorationURL,
+                avatarSide: Metrics.avatarMessage,
+                scale: window?.backingScaleFactor ?? 2
+            )
+        }()
+        guard avatarFilm.reconcile(to: wanted) else { return }
+        invalidateRow(hoveredRow)
+        refreshStickerAnimation()
     }
 
     /// Tells the window which row the pointer is on, and where that row is.

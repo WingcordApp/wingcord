@@ -84,6 +84,15 @@ nonisolated struct MessageRow: @unchecked Sendable {
     var tagBadgeURL: URL?
     var tagRect: CGRect = .zero
 
+    /// The role icon worn after the name, and its box.
+    ///
+    /// **Reserved at layout time like the tag chip**, because the timestamp is
+    /// placed after it — an icon measured inside the painter would draw over
+    /// the time or leave a hole where it should be.
+    var roleIconURL: URL?
+    var roleEmoji: String?
+    var roleIconRect: CGRect = .zero
+
     /// The message this one forwards, quoted. Nil for everything else, which is
     /// nearly every message.
     var forwarded: ForwardedSlot?
@@ -213,6 +222,17 @@ nonisolated struct AttachmentSlot: Sendable {
     /// contents, and resolving that inside `draw` puts the decision in every
     /// repaint of every row — the same rule `EmbedLayoutEngine` follows.
     var kind: Kind = .image
+    /// Whether the picture fills its box and is cropped, or keeps its own
+    /// shape.
+    ///
+    /// **True for every cell of a mosaic and false for a lone picture.** A grid
+    /// row is only flush if its cells are a fixed size, and a fixed cell can
+    /// only hold a picture of another shape by cropping it. Decided here rather
+    /// than inferred in `draw` from whether the rect's ratio happens to match
+    /// the image's — that comparison is a floating-point coincidence, and it
+    /// would be wrong for the one case where the picture's dimensions never
+    /// arrived at all.
+    var cropsToFill: Bool = false
     /// The file's own name and size, for the kinds that show them.
     var filename: String = ""
     var sizeLabel: String = ""
@@ -474,6 +494,15 @@ nonisolated struct TimelineLayoutEngine: Sendable {
         var tag: String?
         /// The little badge inside the chip, ahead of the letters.
         var tagBadgeURL: URL?
+        /// The icon of their highest role that has one, and where it comes
+        /// from — an uploaded image, or a unicode emoji.
+        ///
+        /// **Discord draws this beside the name and this client drew it
+        /// nowhere.** `Role.iconHash` and `Role.unicodeEmoji` have both been
+        /// decoded since roles were, and only the profile's role chips ever
+        /// read them.
+        var roleIconURL: URL?
+        var roleEmoji: String?
         /// The styled face, already resolved. Nil is the ordinary case.
         var nameFace: NSFont?
         /// Discord's per-family tracking, in points.
@@ -741,6 +770,7 @@ nonisolated struct TimelineLayoutEngine: Sendable {
         }
 
         var tagRect = CGRect.zero
+        var roleIconRect = CGRect.zero
         if item.isRunHead {
             avatarRect = CGRect(
                 x: TimelineMetrics.horizontalMargin,
@@ -785,6 +815,20 @@ nonisolated struct TimelineLayoutEngine: Sendable {
                     height: MemberRowGeometry.tagChipHeight
                 )
                 afterName = tagRect.maxX
+            }
+            // The role icon, after the tag. Discord's order on a run head is
+            // name, server tag, role icon, time — and the icon is a square on
+            // the name's own line box rather than a chip, because it carries no
+            // text of its own.
+            if item.isRunHead, author?.roleIconURL != nil || author?.roleEmoji != nil {
+                let side = TimelineMetrics.roleIconSide
+                roleIconRect = CGRect(
+                    x: afterName + TimelineMetrics.roleIconGap,
+                    y: y + (TimelineMetrics.headerHeight - side) / 2,
+                    width: side,
+                    height: side
+                )
+                afterName = roleIconRect.maxX
             }
             timestampRect = CGRect(
                 x: afterName + 8,
@@ -856,18 +900,13 @@ nonisolated struct TimelineLayoutEngine: Sendable {
         }
 
         // Attachments.
-        var attachments: [AttachmentSlot] = []
-        for attachment in message.attachments {
-            y += TimelineMetrics.attachmentGap
-            let slot = Self.attachmentSlot(
-                attachment,
-                origin: CGPoint(x: contentX, y: y),
-                availableWidth: contentWidth,
-                style: input.style
-            )
-            attachments.append(slot)
-            y = slot.rect.maxY
-        }
+        let attachments = Self.attachmentSlots(
+            message.attachments,
+            origin: CGPoint(x: contentX, y: y),
+            availableWidth: contentWidth,
+            style: input.style
+        )
+        for slot in attachments { y = max(y, slot.rect.maxY) }
 
         // A poll IS the message: it arrives beside an empty body, so a renderer
         // that does not know about one draws an author line over a blank row.
@@ -1041,6 +1080,9 @@ nonisolated struct TimelineLayoutEngine: Sendable {
             tag: item.isRunHead ? author?.tag : nil,
             tagBadgeURL: item.isRunHead ? author?.tagBadgeURL : nil,
             tagRect: tagRect,
+            roleIconURL: item.isRunHead ? author?.roleIconURL : nil,
+            roleEmoji: item.isRunHead ? author?.roleEmoji : nil,
+            roleIconRect: roleIconRect,
             forwarded: forwarded,
             textBlock: textBlock,
             textOrigin: textOrigin,
@@ -1560,18 +1602,13 @@ nonisolated struct TimelineLayoutEngine: Sendable {
             y += block.size.height
         }
 
-        var attachments: [AttachmentSlot] = []
-        for attachment in snapshot.attachments {
-            y += TimelineMetrics.attachmentGap
-            let slot = attachmentSlot(
-                attachment,
-                origin: CGPoint(x: contentX, y: y),
-                availableWidth: contentWidth,
-                style: style
-            )
-            attachments.append(slot)
-            y = slot.rect.maxY
-        }
+        let attachments = attachmentSlots(
+            snapshot.attachments,
+            origin: CGPoint(x: contentX, y: y),
+            availableWidth: contentWidth,
+            style: style
+        )
+        for slot in attachments { y = max(y, slot.rect.maxY) }
 
         var embeds: [EmbedSlot] = []
         if input.settings.showsEmbeds {
@@ -1738,43 +1775,144 @@ nonisolated struct TimelineLayoutEngine: Sendable {
 
     // MARK: Helpers
 
-    private static func attachmentSlot(
+    /// Every attachment on one message, placed.
+    ///
+    /// **The pictures are one arrangement and everything else is a stack.**
+    /// Discord partitions a message's attachments into visual media and the
+    /// rest, lays the first out as a mosaic and puts the second underneath one
+    /// per row — so four screenshots are a grid and a zip beside them is still
+    /// a card. This client used to stack all of them, each at the column's full
+    /// width, which is the whole of "the images are way too big and they are
+    /// not grouped".
+    ///
+    /// **The returned array is in the MESSAGE's order, not the mosaic's.** The
+    /// lightbox indexes `posterWidths` against `message.attachments` — see
+    /// `AppModel.openMedia` — and the click that opens it carries a position in
+    /// this array. Sorting the pictures to the front here would open the wrong
+    /// one on every message that mixes a picture with a file.
+    static func attachmentSlots(
+        _ attachments: [Attachment],
+        origin: CGPoint,
+        availableWidth: CGFloat,
+        style: MessageTextStyle
+    ) -> [AttachmentSlot] {
+        guard !attachments.isEmpty else { return [] }
+
+        var pictures: [Int] = []
+        var rest: [Int] = []
+        for (index, attachment) in attachments.enumerated() {
+            if isVisualMedia(attachment) { pictures.append(index) } else { rest.append(index) }
+        }
+
+        var slots = [AttachmentSlot?](repeating: nil, count: attachments.count)
+        var y = origin.y
+
+        if !pictures.isEmpty {
+            y += TimelineMetrics.attachmentGap
+            let sizes = pictures.map { Self.pixelSize(of: attachments[$0]) }
+            let frames = AttachmentMosaic.frames(sizes: sizes, width: availableWidth)
+            // **Cropped only where there is more than one.** A lone picture
+            // keeps its own shape; a cell in a grid is a fixed box and the
+            // picture fills it, which is what makes the rows flush.
+            let cropped = pictures.count > 1
+            // **The offset is fixed for the whole mosaic.** The frames come
+            // back relative to its own origin, so moving the cursor inside this
+            // loop would shift every cell by the one before it — a grid that
+            // walks down and to the right a row at a time.
+            let top = y
+            for (position, index) in pictures.enumerated() {
+                let frame = frames[position].offsetBy(dx: origin.x, dy: top)
+                slots[index] = mediaSlot(
+                    attachments[index],
+                    in: frame,
+                    pixels: sizes[position],
+                    cropped: cropped
+                )
+                y = max(y, frame.maxY)
+            }
+        }
+
+        for index in rest {
+            // Eight, not the six a picture takes — `.nonVisualMediaItem`'s own
+            // `margin-top`, and twice the gap inside the grid, which is what
+            // keeps a file card from reading as one more cell.
+            y += pictures.isEmpty && index == rest.first
+                ? TimelineMetrics.attachmentGap
+                : AttachmentMosaic.stackGap
+            let slot = nonVisualSlot(
+                attachments[index],
+                origin: CGPoint(x: origin.x, y: y),
+                availableWidth: availableWidth,
+                style: style
+            )
+            slots[index] = slot
+            y = slot.rect.maxY
+        }
+
+        return slots.compactMap { $0 }
+    }
+
+    /// Whether an attachment belongs in the mosaic.
+    ///
+    /// **A voice note is audio and is not media here**, which is the same split
+    /// Discord makes: it has a waveform and a duration and it is one line tall,
+    /// and dropping it into a grid cell would crop a control.
+    static func isVisualMedia(_ attachment: Attachment) -> Bool {
+        if attachment.waveform != nil || attachment.durationSeconds != nil,
+           attachment.contentType?.hasPrefix("audio/") ?? false
+        {
+            return false
+        }
+        return attachment.isImage || attachment.isVideo
+    }
+
+    /// The picture's own pixel dimensions, or nil where the attachment carried
+    /// none.
+    private static func pixelSize(of attachment: Attachment) -> CGSize? {
+        guard let width = attachment.width, let height = attachment.height,
+              width > 0, height > 0
+        else { return nil }
+        return CGSize(width: width, height: height)
+    }
+
+    /// A voice note or a file — the two that are not pictures.
+    ///
+    /// **The kind is decided once, here.** A picture, a clip, a voice note
+    /// and a document are four rectangles, and a painter that worked it out
+    /// per frame would branch inside every repaint of every row carrying one.
+    private static func nonVisualSlot(
         _ attachment: Attachment,
         origin: CGPoint,
         availableWidth: CGFloat,
         style: MessageTextStyle
     ) -> AttachmentSlot {
-        // **The kind is decided once, here.** A picture, a clip, a voice note
-        // and a document are four rectangles, and a painter that worked it out
-        // per frame would branch inside every repaint of every row carrying one.
         if attachment.waveform != nil || attachment.durationSeconds != nil,
            attachment.contentType?.hasPrefix("audio/") ?? false
         {
             return voiceSlot(attachment, origin: origin, availableWidth: availableWidth)
         }
-        guard attachment.isImage || attachment.isVideo else {
-            return fileSlot(attachment, origin: origin, availableWidth: availableWidth, style: style)
-        }
-        return mediaSlot(attachment, origin: origin, availableWidth: availableWidth)
+        return fileSlot(attachment, origin: origin, availableWidth: availableWidth, style: style)
     }
 
-    /// A picture or a clip, drawn at its own scale.
+    /// A picture or a clip, in the box the mosaic gave it.
     ///
-    /// **Never wider than the source.** A 180x120 GIF blown up to the column's
-    /// full width is a soft rectangle of upscaled pixels, and the cap on height
-    /// has to bring the *width* down with it or the picture is stretched —
-    /// which is what "the renderer does not respect the scale of the gif" is.
-    /// Both dimensions move together or neither does.
+    /// **The box comes in; this decides what goes in it.** Where the message
+    /// carries one picture the box is its own shape and nothing is cropped;
+    /// where it carries several the box is a grid cell and the picture fills
+    /// it — which is why `decodeWidth` is the *cover* width rather than the
+    /// cell's. Asking for the cell's width would fetch a rendition that then
+    /// has to be upscaled to cover, and it would be softest in exactly the
+    /// cells that are cropped most.
     private static func mediaSlot(
         _ attachment: Attachment,
-        origin: CGPoint,
-        availableWidth: CGFloat
+        in rect: CGRect,
+        pixels: CGSize?,
+        cropped: Bool
     ) -> AttachmentSlot {
-        let box = mediaBox(
-            width: attachment.width,
-            height: attachment.height,
-            availableWidth: availableWidth
-        )
+        let box = rect.size
+        let decodeWidth = cropped
+            ? AttachmentMosaic.coverWidth(pixels, in: box)
+            : box.width
         let isVideo = attachment.isVideo
         // **A GIF moves in the transcript, exactly as a sticker does**, and it
         // is fetched WHOLE rather than through the resizing proxy: `width=` on a
@@ -1790,20 +1928,20 @@ nonisolated struct TimelineLayoutEngine: Sendable {
             && !attachment.isSpoiler
             && attachment.contentType == "image/gif"
         let url: URL? = if isVideo {
-            CDN.videoPoster(proxyURL: attachment.proxyURL, width: box.width)
+            CDN.videoPoster(proxyURL: attachment.proxyURL, width: decodeWidth)
         } else if isAnimated {
             URL(string: attachment.proxyURL)
         } else {
-            CDN.resizedAttachment(proxyURL: attachment.proxyURL, width: box.width)
+            CDN.resizedAttachment(proxyURL: attachment.proxyURL, width: decodeWidth)
         }
-        let rect = CGRect(x: origin.x, y: origin.y, width: box.width, height: box.height)
         return AttachmentSlot(
             rect: rect,
             url: url,
             isSpoiler: attachment.isSpoiler,
             altText: attachment.description,
-            decodeWidth: box.width,
+            decodeWidth: decodeWidth,
             kind: isVideo ? .video : .image,
+            cropsToFill: cropped,
             filename: attachment.filename,
             durationLabel: isVideo ? Self.durationLabel(attachment.durationSeconds) : "",
             isAnimated: isAnimated,
@@ -1829,9 +1967,30 @@ nonisolated struct TimelineLayoutEngine: Sendable {
         guard let width, let height, width > 0, height > 0 else {
             return CGSize(width: min(availableWidth, 320), height: 180)
         }
-        let ratio = CGFloat(width) / CGFloat(height)
-        // Never upscaled past its own pixels, and never wider than the column.
-        var boxWidth = min(availableWidth, CGFloat(width))
+        return mediaBox(
+            ratio: CGFloat(width) / CGFloat(height),
+            // Never upscaled past its own pixels.
+            availableWidth: min(availableWidth, CGFloat(width)),
+            maximumHeight: maximumHeight
+        )
+    }
+
+    /// The same rule, from a shape rather than from a pixel count.
+    ///
+    /// **One copy, two callers.** The mosaic's lone picture and an unfurled
+    /// bare image are the same question asked with different caps, and this
+    /// file's own comment on the embed side already says what a second copy
+    /// costs: the ratio drifts in one of them and the symptom is a picture of
+    /// the wrong shape in one surface only.
+    static func mediaBox(
+        ratio: CGFloat,
+        availableWidth: CGFloat,
+        maximumHeight: CGFloat
+    ) -> CGSize {
+        guard ratio > 0 else {
+            return CGSize(width: min(availableWidth, 320), height: 180)
+        }
+        var boxWidth = availableWidth
         var boxHeight = boxWidth / ratio
         if boxHeight > maximumHeight {
             boxHeight = maximumHeight

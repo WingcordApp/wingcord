@@ -107,6 +107,15 @@ nonisolated enum TimelineMetrics {
 
     /// Between the message text and an attachment under it.
     static let attachmentGap: CGFloat = 6
+    /// The role icon beside a name in a message header.
+    ///
+    /// Measured off Discord's own header at 2x: the icon reads about 36 device
+    /// pixels beside a 24-pixel cap height, so it is a little taller than the
+    /// letters rather than matching them — which is what makes a diamond or a
+    /// crown read as a mark rather than as punctuation.
+    static let roleIconSide: CGFloat = 18
+    /// Between the name (or the tag chip after it) and that icon.
+    static let roleIconGap: CGFloat = 6
     /// A forwarded message's quote block: the rule, and how far its contents
     /// are set in behind it.
     static let forwardRuleWidth: CGFloat = 3

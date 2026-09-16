@@ -91,6 +91,15 @@ nonisolated enum MemberRowPainter {
         scale: CGFloat,
         nameFace: NSFont? = nil,
         plateFrame: CGImage? = nil,
+        /// One frame of this person's moving avatar, or nil for the still —
+        /// which is every row but the one under the pointer. Resolved by the
+        /// caller for the same reason `plateFrame` is.
+        avatarFrame: CGImage? = nil,
+        /// One frame of their moving decoration, same rule.
+        decorationFrame: CGImage? = nil,
+        /// Where in the typing animation's cycle this row is, or nil when they
+        /// are not typing — which is every row, nearly always.
+        typingPhase: CGFloat? = nil,
         /// Where an enhanced role's ramp has travelled to, or nil for a name
         /// that is not animating — which is every row but the hovered one.
         gradientPhase: CGFloat? = nil
@@ -123,7 +132,10 @@ nonisolated enum MemberRowPainter {
             context: context,
             style: style,
             images: images,
-            scale: scale
+            scale: scale,
+            avatarFrame: avatarFrame,
+            decorationFrame: decorationFrame,
+            typingPhase: entry.isTyping ? typingPhase : nil
         )
 
         // 3. Name, tag chip, activity.
@@ -443,27 +455,36 @@ nonisolated enum MemberRowPainter {
 
     // MARK: Avatar
 
+    /// The face, its decoration and its presence dot.
+    ///
+    /// **Three layers in one order, and the order is the whole of it**: the
+    /// face is clipped to its circle, the decoration draws *outside* that clip
+    /// — see `TimelineRowPainter.decorationRect` — and the dot goes over both.
+    /// Drawing the decoration inside the clip loses the ears, the halo and the
+    /// hat brim, which is to say everything that makes one recognisable.
     private static func drawAvatar(
         _ entry: MemberEntry,
         in frame: CGRect,
         context: CGContext,
         style: MessageTextStyle,
         images: ImageStore,
-        scale: CGFloat
+        scale: CGFloat,
+        avatarFrame: CGImage? = nil,
+        decorationFrame: CGImage? = nil,
+        typingPhase: CGFloat? = nil
     ) {
         context.saveGState()
         context.addEllipse(in: frame)
         context.clip()
-        if let url = entry.avatarURL,
-           let image = images.cached(ImageStore.Key(
-               url: url,
-               maximumPixelSize: Int((frame.width * scale).rounded(.up))
-           ))
-        {
-            context.translateBy(x: 0, y: frame.midY)
-            context.scaleBy(x: 1, y: -1)
-            context.translateBy(x: 0, y: -frame.midY)
-            context.draw(image, in: frame)
+        // The moving face where this is the row playing one, the decoded still
+        // everywhere else. Both are drawn through the same flip.
+        if let image = avatarFrame ?? entry.avatarURL.flatMap({ url in
+            images.cached(ImageStore.Key(
+                url: url,
+                maximumPixelSize: Int((frame.width * scale).rounded(.up))
+            ))
+        }) {
+            TimelineRowPainter.drawFlipped(image, in: frame, context: context)
             context.restoreGState()
         } else {
             context.setFillColor(ThemeInk.current.surfaceRaised)
@@ -484,7 +505,110 @@ nonisolated enum MemberRowPainter {
             )
         }
 
-        drawPresenceDot(entry.status, on: frame, context: context)
+        // **After the clip is gone.** A decoration is drawn around the face at
+        // 1.2x, so it is the one thing on this row that must not be inside the
+        // ellipse above — and it is drawn before the dot, which Discord puts
+        // over everything.
+        TimelineRowPainter.drawDecoration(
+            decorationFrame ?? decorationStill(entry, around: frame, images: images, scale: scale),
+            around: frame,
+            context: context
+        )
+
+        // **The typing pill REPLACES the presence dot.** Discord swaps the two
+        // rather than stacking them, and it has to: they share the same corner,
+        // and a pill drawn over a dot is a dot poking out of its end.
+        if let typingPhase {
+            drawTypingPill(on: frame, phase: typingPhase, context: context)
+        } else {
+            drawPresenceDot(entry.status, on: frame, context: context)
+        }
+    }
+
+    /// Three dots in a pill, where the presence dot would be.
+    ///
+    /// **The dots rise and fall in sequence** — a third of a cycle apart, which
+    /// is the stagger every typing indicator uses and the one that reads as
+    /// "someone is mid-sentence" rather than as a loading spinner. The phase is
+    /// resolved by the caller from the shared clock, for the same reason
+    /// `plateFrame` and `gradientPhase` are: this painter is `nonisolated` and
+    /// may not reach a main-actor singleton from inside a draw.
+    private static func drawTypingPill(
+        on avatarFrame: CGRect,
+        phase: CGFloat,
+        context: CGContext
+    ) {
+        let height: CGFloat = 11
+        let width: CGFloat = 20
+        let pill = CGRect(
+            x: avatarFrame.maxX - width + 2,
+            y: avatarFrame.maxY - height + 2,
+            width: width,
+            height: height
+        )
+        // The same cut-out the presence dot takes, so the pill reads as a hole
+        // in the avatar rather than a badge sitting on it.
+        let ring = pill.insetBy(dx: -2, dy: -2)
+        context.setFillColor(NSColor.windowBackgroundColor.cgColor)
+        context.addPath(CGPath(
+            roundedRect: ring,
+            cornerWidth: ring.height / 2,
+            cornerHeight: ring.height / 2,
+            transform: nil
+        ))
+        context.fillPath()
+
+        context.setFillColor(ThemeInk.current.typingPill)
+        context.addPath(CGPath(
+            roundedRect: pill,
+            cornerWidth: pill.height / 2,
+            cornerHeight: pill.height / 2,
+            transform: nil
+        ))
+        context.fillPath()
+
+        let dotSide: CGFloat = 3
+        let gap: CGFloat = 1.5
+        let run = dotSide * 3 + gap * 2
+        var x = pill.midX - run / 2
+        for index in 0..<3 {
+            // A third of a cycle apart, and the rise is a raised cosine so the
+            // dot eases at both ends instead of ticking between two positions.
+            let local = (phase + CGFloat(index) / 3).truncatingRemainder(dividingBy: 1)
+            let lift = (1 - cos(local * 2 * .pi)) / 2
+            let box = CGRect(
+                x: x,
+                y: pill.midY - dotSide / 2 - lift * 1.5,
+                width: dotSide,
+                height: dotSide
+            )
+            context.setFillColor(NSColor.white.withAlphaComponent(0.55 + lift * 0.45).cgColor)
+            context.fillEllipse(in: box)
+            x += dotSide + gap
+        }
+    }
+
+    /// The decoration's first frame, once anything has decoded it.
+    ///
+    /// **Only a peek.** A painter may not start a fetch — it runs inside a draw
+    /// and a roster is repainted on every scroll tick — so an asset nobody
+    /// prefetches is an asset that never arrives, which is the trap
+    /// `INVARIANTS.md` §2 names and exactly what kept every decoration in this
+    /// list invisible: `MemberEntry.decorationURL` has been decoded all along
+    /// and no surface asked for the bytes. The key must equal the prefetcher's,
+    /// or the picture lands in a slot this never looks in.
+    private static func decorationStill(
+        _ entry: MemberEntry,
+        around frame: CGRect,
+        images: ImageStore,
+        scale: CGFloat
+    ) -> CGImage? {
+        guard let url = entry.decorationURL else { return nil }
+        let side = TimelineRowPainter.decorationRect(around: frame).width
+        return images.cached(
+            ImageStore.Key(url: url, maximumPixelSize: Int((side * scale).rounded(.up))),
+            bucket: .thumbnail
+        )
     }
 
     /// The presence dot.

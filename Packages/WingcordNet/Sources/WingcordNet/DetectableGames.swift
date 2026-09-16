@@ -82,9 +82,12 @@ public enum DetectableGames {
 
     /// The wire shape, and the only three keys that matter.
     ///
-    /// `third_party_skus` is on 19,524 entries and is not decoded: it maps a
-    /// game to its Steam/Xbox/Battle.net product, which identifies a *purchase*
-    /// rather than a running process. Nothing here resolves one.
+    /// `third_party_skus` is on 19,524 entries and is not decoded **here**: it
+    /// identifies a *purchase* rather than a running process, and detection is
+    /// the only thing this file answers. It is read where it has a reader —
+    /// `GameDTO` on `/games`, whose copy also carries the `websites` link and
+    /// the `steam_release_status` that `Game.storeOffers` needs and that this
+    /// file has neither of.
     private struct GameDTO: Decodable {
         var id: ApplicationID?
         var name: String?

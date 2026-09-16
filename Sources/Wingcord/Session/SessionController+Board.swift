@@ -42,11 +42,26 @@ extension SessionController {
     /// **Only the ones nothing has already answered for.** A server of people
     /// who all play the same five games resolves them once for the session, and
     /// the second board opened asks for nothing at all.
+    ///
+    /// **And only the ones nothing has already ASKED about.** `/games` answers
+    /// for titles Discord tracks as games and returns nothing at all for an
+    /// application that is not one — Wordle, a bot, an editor, Spotify. Keyed
+    /// on "is it in the table", every one of those is asked again every time
+    /// anything names it, which is once per profile opened on somebody who
+    /// spends their day in Visual Studio Code. The set is the answer's absence
+    /// made storable, which is `INVARIANTS.md` §5.5's rule about a 404 being
+    /// stored as an empty answer rather than left absent.
+    ///
+    /// Recorded on **success only**: a request that threw proves nothing about
+    /// the ids in it, and latching them would turn one dropped connection into
+    /// a session with no box art.
     func loadGames(ids: [ApplicationID]) async {
-        let wanted = ids.filter { model.games[$0] == nil }
+        let wanted = ids.filter { model.games[$0] == nil && !gameFetches.contains($0) }
         guard !wanted.isEmpty else { return }
         do {
-            for game in try await rest.games(ids: wanted) {
+            let games = try await rest.games(ids: wanted)
+            gameFetches.formUnion(wanted)
+            for game in games {
                 model.games[game.id] = game
             }
         } catch {

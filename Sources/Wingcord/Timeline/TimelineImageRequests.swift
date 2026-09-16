@@ -69,6 +69,34 @@ nonisolated enum TimelineImageRequests {
                 }
             }
 
+            // **The avatar decoration, which was decoded and never asked
+            // for.** `MessageRow.decorationURL` has been filled by the layout
+            // since the row was written and nothing requested the bytes, so
+            // every decoration in the transcript drew as nothing. The painter
+            // only peeks — §2 — and the key has to equal the one it peeks with.
+            if let url = row.decorationURL, row.avatarRect != nil {
+                let side = Metrics.avatarMessage * Metrics.decorationScale
+                let key = ImageStore.Key(
+                    url: url,
+                    maximumPixelSize: Int((side * scale).rounded(.up))
+                )
+                if seen.insert(key).inserted, ImageStore.shared.cached(key) == nil {
+                    requests.append(Request(key: key, source: .still(.thumbnail)))
+                }
+            }
+
+            // The role icon beside the name. Same peek-only rule as everything
+            // else here: it draws as a hole without this.
+            if let url = row.roleIconURL, row.roleIconRect.width > 0 {
+                let key = ImageStore.Key(
+                    url: url,
+                    maximumPixelSize: Int((row.roleIconRect.width * scale).rounded(.up))
+                )
+                if seen.insert(key).inserted, ImageStore.shared.cached(key) == nil {
+                    requests.append(Request(key: key, source: .still(.thumbnail)))
+                }
+            }
+
             // The badge inside a server tag. Small — eleven points — and the
             // painter only peeks, so without this every tag in the transcript
             // draws its letters and a hole where the badge goes.

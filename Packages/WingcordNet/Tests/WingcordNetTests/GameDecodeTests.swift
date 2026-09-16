@@ -145,6 +145,73 @@ struct GameDecodeTests {
         #expect(game.socialLinks.map(\.category) == [.official, .twitter])
     }
 
+    // MARK: Third-party SKUs
+
+    /// `GET /games?game_ids=1158877933042143272`, trimmed to the fields this
+    /// section is about and otherwise byte for byte.
+    ///
+    /// **Counter-Strike 2 is the useful one**: four SKUs of which exactly one
+    /// is a storefront this client addresses, plus the `steam_release_status`
+    /// that no other route sends.
+    private let counterStrike = """
+    [{
+      "id": "1158877933042143272",
+      "name": "Counter-Strike 2",
+      "third_party_skus": [
+        { "distributor": "igdb", "id": "242408" },
+        { "distributor": "opencritic", "id": "15609" },
+        { "distributor": "steam", "id": "730" },
+        { "distributor": "gop", "id": "110013" }
+      ],
+      "websites": [{ "url": "https://store.steampowered.com/app/730", "category": 13 }],
+      "steam_release_status": 3
+    }]
+    """
+
+    @Test("Every SKU survives the decode, catalogue ids included")
+    func skusDecode() throws {
+        let game = try decode(counterStrike)
+        #expect(
+            game.thirdPartySkus.map(\.distributor) == ["igdb", "opencritic", "steam", "gop"]
+        )
+        #expect(game.thirdPartySkus.map(\.id) == ["242408", "15609", "730", "110013"])
+        #expect(game.steamReleaseStatus == .postRelease)
+        #expect(
+            game.storeOffers.map(\.url.absoluteString)
+                == ["https://store.steampowered.com/app/730"]
+        )
+    }
+
+    @Test("A distributor nobody has named keeps its name rather than being dropped")
+    func unknownDistributor() throws {
+        // The list is a record of what the route sent. Deciding what is a store
+        // happens once, in `Game.storeOffers`, not at the decode.
+        let game = try decode("""
+        [{ "id": "1", "name": "x",
+           "third_party_skus": [{ "distributor": "newstore", "id": "7" }] }]
+        """)
+        #expect(game.thirdPartySkus == [GameSKU(distributor: "newstore", id: "7")])
+        #expect(game.storeOffers.isEmpty)
+    }
+
+    @Test("A release status outside the enum is nil rather than a default")
+    func unknownReleaseStatus() throws {
+        let game = try decode("""
+        [{ "id": "1", "name": "x", "steam_release_status": 99 }]
+        """)
+        #expect(game.steamReleaseStatus == nil)
+    }
+
+    @Test("A SKU with no distributor is not a SKU")
+    func malformedSKU() throws {
+        let game = try decode("""
+        [{ "id": "1", "name": "x",
+           "third_party_skus": [{ "id": "7" }, { "distributor": "steam" },
+                                { "distributor": "steam", "id": "620980" }] }]
+        """)
+        #expect(game.thirdPartySkus.map(\.id) == ["620980"])
+    }
+
     @Test("A game with neither a name nor an id is dropped rather than blank")
     func incompleteGameDropped() throws {
         let games = try JSONDecoder()

@@ -109,6 +109,11 @@ extension AppModel {
                 return
             }
             let member = guildID.flatMap { members[$0]?[userID] }
+            // Asked once. The icon and the emoji come off the SAME role — the
+            // rule `nameColorRole` already states — and two walks of the role
+            // list would be two walks per author per page for one answer.
+            let iconRole = member
+                .flatMap { RoleResolver.iconRole(of: $0.roleIDs, in: guildRoles) }
             let styleFont = user.decoration?.displayNameStyle?.font
             let face = styleFont.flatMap {
                 DisplayNameFontRegistry.font($0, size: authorPointSize)
@@ -140,6 +145,20 @@ extension AppModel {
                     else { return nil }
                     return CDN.guildTagBadge(guildID: guildID, hash: hash)
                 },
+                // **The highest role that HAS an icon**, which is not
+                // necessarily their highest role — the same rule the name
+                // colour already follows, so a senior plain role cannot blank
+                // out a junior decorated one.
+                roleIconURL: iconRole.flatMap { role in
+                    role.iconHash.flatMap {
+                        CDN.roleIcon(
+                            roleID: role.id,
+                            hash: $0,
+                            side: TimelineMetrics.roleIconSide
+                        )
+                    }
+                },
+                roleEmoji: iconRole?.unicodeEmoji,
                 // Resolved here, on the main actor, and only for authors
                 // actually on screen — which is what keeps a face off the
                 // registry until somebody who wears it is visible.

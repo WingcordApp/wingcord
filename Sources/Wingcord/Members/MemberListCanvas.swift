@@ -69,6 +69,7 @@ final class MemberListCanvas: NSView {
         setAccessibilityElement(true)
         setAccessibilityRole(.list)
         setAccessibilityLabel("Members")
+        adoptAvatarFilm()
     }
 
     @available(*, unavailable)
@@ -91,6 +92,8 @@ final class MemberListCanvas: NSView {
         plateTask = nil
         plateFilm = nil
         plateKey = nil
+        avatarFilm.onFrameChange = nil
+        avatarFilm.cancel()
         unsubscribeFromClock()
     }
 
@@ -109,6 +112,9 @@ final class MemberListCanvas: NSView {
             offsets.append(running)
         }
         if let hoveredRow, hoveredRow >= rows.count { self.hoveredRow = nil }
+        // Somebody may have started or stopped typing in this rebuild, which is
+        // the only thing here that moves without the pointer.
+        defer { refreshClock() }
         // The row under the pointer may now be a different person — a presence
         // flush re-runs this list — so the film has to be re-resolved rather
         // than left playing on whoever moved into that slot.
@@ -169,6 +175,15 @@ final class MemberListCanvas: NSView {
         if abs(previousWidth - newSize.width) >= 1 { onWidthChange?(newSize.width) }
     }
 
+    /// Wires the hover film to this view. Called once, from `init`.
+    private func adoptAvatarFilm() {
+        avatarFilm.onFrameChange = { [weak self] in
+            guard let self else { return }
+            self.invalidateRow(self.platedRowCache)
+            self.refreshClock()
+        }
+    }
+
     private func invalidateRow(_ index: Int?) {
         guard let index, rows.indices.contains(index) else { return }
         setNeedsDisplay(rowFrame(at: index))
@@ -217,10 +232,15 @@ final class MemberListCanvas: NSView {
                             DisplayNameFontRegistry.font($0, size: style.bodyFont.pointSize)
                         },
                         plateFrame: plateImage(forRow: index),
+                        avatarFrame: avatarFilm.avatarFrame(forRow: entry.userID.rawValue),
+                        decorationFrame: avatarFilm.decorationFrame(
+                            forRow: entry.userID.rawValue
+                        ),
                         // **Nil unless this is the row under the pointer.**
                         // Discord gates the same thing on hover, and it is what
                         // keeps a roster of gradient roles from being forty
                         // animations at once.
+                        typingPhase: typingPhase,
                         gradientPhase: hoveredRow == index ? phase : nil
                     )
                 }
@@ -254,6 +274,14 @@ final class MemberListCanvas: NSView {
     private var plateFrame = -1
     private var plateTask: Task<Void, Never>?
     private var isPlateSubscribed = false
+
+    /// The moving face and decoration on the row under the pointer.
+    ///
+    /// **The same one-row rule the plate follows, and for a stronger reason.**
+    /// A roster draws two hundred faces; a decorated account animates most of
+    /// them. `HoverAvatarFilm` holds the pair together and is shared with the
+    /// transcript, which has the identical problem one row at a time.
+    private let avatarFilm = HoverAvatarFilm()
 
     /// This view's identity in the shared clock.
     private var playToken: ObjectIdentifier { ObjectIdentifier(self) }
@@ -327,7 +355,11 @@ final class MemberListCanvas: NSView {
                 scale: window?.backingScaleFactor ?? 2
             )
         }()
-        guard wanted != plateKey else { return }
+        updateAvatarPlayback()
+        guard wanted != plateKey else {
+            refreshClock()
+            return
+        }
 
         plateTask?.cancel()
         plateTask = nil
@@ -343,7 +375,7 @@ final class MemberListCanvas: NSView {
         if hadFilm { invalidateRow(platedRowCache) }
 
         guard let wanted else {
-            unsubscribeFromClock()
+            refreshClock()
             return
         }
         // A cached filmstrip starts on this frame rather than after a hop, so a
@@ -353,7 +385,7 @@ final class MemberListCanvas: NSView {
             install(hit, for: wanted)
             return
         }
-        unsubscribeFromClock()
+        refreshClock()
         // A plate with no animated form is remembered as a still by the store,
         // so this asks once and never again.
         guard !AnimatedImageStore.shared.isKnownStill(wanted) else { return }
@@ -370,8 +402,64 @@ final class MemberListCanvas: NSView {
         // In step with every other animation on screen, because they all read
         // the same timestamp.
         plateFrame = film.index(at: AnimationClock.shared.time)
-        subscribeToClock()
+        refreshClock()
         invalidateRow(platedRowCache)
+    }
+
+    /// Points the hover film at whatever the pointer is on.
+    ///
+    /// Shares `platedRow`'s answer, so the face, the decoration and the plate
+    /// are always the same person's — and an open card outranks the pointer
+    /// here too, because the card is where the pointer actually is.
+    private func updateAvatarPlayback() {
+        let wanted: HoverAvatarFilm.Subject? = {
+            guard animatesPlate, !isScrolling, let index = platedRowCache,
+                  rows.indices.contains(index),
+                  case .member(let entry) = rows[index]
+            else { return nil }
+            return HoverAvatarFilm.Subject(
+                rowID: entry.userID.rawValue,
+                avatarURL: entry.avatarURL,
+                decorationURL: entry.decorationURL,
+                avatarSide: MemberRowGeometry.avatarSide,
+                scale: window?.backingScaleFactor ?? 2
+            )
+        }()
+        if avatarFilm.reconcile(to: wanted) { invalidateRow(platedRowCache) }
+    }
+
+    /// How long one cycle of the typing dots takes.
+    ///
+    /// Three dots a third of a cycle apart at this period is the cadence every
+    /// typing indicator uses; faster reads as a spinner and slower as a stall.
+    private static let typingCycle = 1.4
+
+    /// Whether anybody in the list is typing.
+    ///
+    /// **Not gated on hover, unlike everything else that moves here.** A typing
+    /// indicator is a notification — its whole job is to be noticed without
+    /// being pointed at — and it is bounded by its own nature: it expires after
+    /// ten seconds and a channel rarely has more than two people mid-sentence.
+    private var hasTypingRow: Bool {
+        rows.contains { row in
+            if case .member(let entry) = row { return entry.isTyping }
+            return false
+        }
+    }
+
+    /// Where in that cycle the dots are, shared by every typing row so they
+    /// pulse together rather than each on its own arrival time.
+    private var typingPhase: CGFloat {
+        let cycle = AnimationClock.shared.time / Self.typingCycle
+        return CGFloat(cycle - cycle.rounded(.down))
+    }
+
+    /// Repaints the rows whose dots moved. Only those rows, never the column.
+    private func invalidateTypingRows() {
+        for (index, row) in rows.enumerated() {
+            guard case .member(let entry) = row, entry.isTyping else { continue }
+            invalidateRow(index)
+        }
     }
 
     /// How long one cycle of an enhanced role's gradient takes.
@@ -398,37 +486,44 @@ final class MemberListCanvas: NSView {
         return CGFloat(cycle - cycle.rounded(.down))
     }
 
-    private func subscribeToClock() {
-        guard !isPlateSubscribed else { return }
-        isPlateSubscribed = true
+    /// Starts or stops the one subscription, from one question.
+    ///
+    /// **Four things ride this clock and any of them can be the only one.** A
+    /// hovered row can have a moving plate, a moving face, a moving decoration,
+    /// a travelling gradient, all of them or none — and the subscription used
+    /// to be started and stopped from four places, which is how a rider that
+    /// arrives on its own ends up frozen behind a still one. Asking "is
+    /// anything moving" in one place is the same reconcile the plate's own key
+    /// already uses, and it is idempotent, so every caller may call it freely.
+    private func refreshClock() {
+        let wanted = plateFilm != nil || gradientPhase != nil
+            || avatarFilm.isPlaying || hasTypingRow
+        guard wanted != isPlateSubscribed else { return }
+        isPlateSubscribed = wanted
+        guard wanted else {
+            AnimationClock.shared.unsubscribe(playToken)
+            return
+        }
         AnimationClock.shared.subscribe(playToken) { [weak self] in
             guard let self else { return }
-            // **Two things ride this subscription and either can be absent.**
-            // A hovered row can have a moving plate, a travelling gradient,
-            // both or neither — and an early return on the plate alone is what
-            // would leave a gradient name frozen behind a still nameplate.
+            let time = AnimationClock.shared.time
             if let plateFilm = self.plateFilm {
-                let index = plateFilm.index(at: AnimationClock.shared.time)
+                let index = plateFilm.index(at: time)
                 if index != self.plateFrame {
                     self.plateFrame = index
                     self.invalidateRow(self.platedRowCache)
                 }
             }
+            // Nothing happens on the ticks that resolve to the frame already on
+            // screen, which at 24 ticks over a 12-frame-a-second asset is half
+            // of them.
+            if self.avatarFilm.advance(to: time) {
+                self.invalidateRow(self.platedRowCache)
+            }
             if self.gradientPhase != nil, let hovered = self.hoveredRow {
                 self.invalidateRow(hovered)
             }
-        }
-    }
-
-    /// Starts or stops the clock for whatever the pointer is now on.
-    ///
-    /// The plate's own path already calls `subscribeToClock`; this is the other
-    /// half, for a row whose name travels and whose plate does not move.
-    private func refreshGradientClock() {
-        if gradientPhase != nil {
-            subscribeToClock()
-        } else if plateFilm == nil {
-            unsubscribeFromClock()
+            self.invalidateTypingRows()
         }
     }
 

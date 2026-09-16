@@ -515,6 +515,49 @@ public actor GatewaySocket {
 
     /// Subscribes to a guild's member list.
     ///
+    /// Asks for specific members by id — op 8, `REQUEST_GUILD_MEMBERS`.
+    ///
+    /// **The other half of op 14, not a replacement for it.** The subscription
+    /// below answers for a *range of the roster*, which is what a member list
+    /// needs; it says nothing about somebody who posted an hour ago and is
+    /// three hundred rows down, or offline, or not in the list at all. Those
+    /// people arrived at the transcript with a user record and no member
+    /// record — so no roles, which is no name colour, no role icon and an empty
+    /// Roles section on their profile, for the whole session. Every counter
+    /// read healthy; the member simply was not there.
+    ///
+    /// `user_ids` is the addressed form and answers in one `GUILD_MEMBERS_CHUNK`
+    /// per hundred ids. `presences: true` is what Discord's own client sends —
+    /// the note below about op 8 answering without presences is true of the
+    /// *query* form, and is why the roster is still built on op 14.
+    ///
+    /// The nonce comes back on the chunk. Nothing here reads it: the chunk
+    /// merges into the same tables every other member source does, so there is
+    /// no request to correlate it with.
+    public func requestGuildMembers(guildID: GuildID, userIDs: [UserID]) {
+        guard !userIDs.isEmpty else { return }
+        struct Request: Encodable {
+            var op = 8
+            var d: Data
+
+            struct Data: Encodable {
+                var guild_id: String
+                var user_ids: [String]
+                var presences = true
+                var limit = 0
+            }
+        }
+        // Discord caps one request at a hundred ids and answers a longer one
+        // with nothing at all.
+        for chunk in stride(from: 0, to: userIDs.count, by: 100) {
+            let slice = userIDs[chunk..<min(chunk + 100, userIDs.count)]
+            send(Request(d: .init(
+                guild_id: guildID.description,
+                user_ids: slice.map(\.description)
+            )))
+        }
+    }
+
     /// The op-14 lazy subscription, which is the only route that answers with
     /// members **and their presences**. The documented op-8 request answers with
     /// members and no presence for them, so a roster built on it shows everyone

@@ -43,6 +43,8 @@ extension AppModel {
             activity: presence?.primaryActivity,
             activityButtonURLs: presence?.primaryActivity?.sessionID
                 .flatMap { activityButtonURLs[$0] } ?? [],
+            activityStoreOffers: presence?.primaryActivity?.applicationID
+                .flatMap { games[$0]?.storeOffers } ?? [],
             bio: decoration?.bio,
             isBot: user.isBot,
             badges: AccountBadges.resolve(flags: user.flags, decoration: decoration),
