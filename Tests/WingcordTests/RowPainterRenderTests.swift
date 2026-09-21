@@ -207,7 +207,14 @@ struct RowPainterRenderTests {
     /// Builds one laid-out message row through the real engine, so the test
     /// exercises the same path the app does rather than a hand-made value that
     /// could be geometrically impossible.
-    static func messageRow(style: MessageTextStyle, width: CGFloat) -> TimelineRow {
+    /// - Parameter nameStyle: the effect and colours the author chose, for the
+    ///   suite that exercises the hover state. Nil is the ordinary account and
+    ///   every existing caller.
+    static func messageRow(
+        style: MessageTextStyle,
+        width: CGFloat,
+        nameStyle: DisplayNameStyle? = nil
+    ) -> TimelineRow {
         let message = Message(
             id: MessageID(rawValue: 1 << 22),
             channelID: ChannelID(rawValue: 1),
@@ -233,7 +240,8 @@ struct RowPainterRenderTests {
                         avatarURL: nil,
                         monogram: "B",
                         decorationURL: nil,
-                        isBot: false
+                        isBot: false,
+                        nameStyle: nameStyle
                     )
                 ],
                 calendar: .current,

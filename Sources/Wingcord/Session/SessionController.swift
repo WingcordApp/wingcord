@@ -30,6 +30,21 @@ final class SessionController {
         DiagnosticLog.trace("session", message())
     }
 
+    /// The four fields of a fetched profile that decide what a card draws.
+    ///
+    /// **By value, because the shape dump beside it is by key.**
+    /// `DiscordREST.traceProfileShape` lists what a response CONTAINS, which
+    /// cannot separate a field that is absent from one that arrived null — and
+    /// on screen those are the same blank banner and two different faults.
+    nonisolated static func describe(profile user: User, guildLayer: User?) -> String {
+        let decoration = user.decoration
+        let accent = decoration?.accentColor.map(String.init) ?? "-"
+        let banner = decoration?.bannerHash ?? "-"
+        let theme = decoration?.themeColorValues?.count ?? 0
+        return "profile \(user.id) banner=\(banner) accent=\(accent) "
+            + "theme=\(theme) guildLayer=\(guildLayer == nil ? "-" : "yes")"
+    }
+
     /// The store, and the connection.
     ///
     /// `internal` rather than `private` so a group of routes can live in an
@@ -1449,6 +1464,12 @@ final class SessionController {
             do {
                 let fetched = try await rest.profile(of: userID, inGuild: guildID)
                 let user = fetched.user
+                // **What the card will actually draw from, by value.** The
+                // shape dump beside this one names the response's KEYS, which
+                // cannot tell a field that is absent from one that arrived
+                // null — and those are the same picture on screen and two
+                // different faults. One line per fetch, gated on the sink.
+                Self.trace(Self.describe(profile: user, guildLayer: fetched.guildUser))
                 // **Assigned whole, not merged.** This route is the
                 // authoritative answer for every cosmetic field, so a bio
                 // somebody deleted has to be able to disappear — see
@@ -1459,6 +1480,17 @@ final class SessionController {
                 if model.users[userID] != user {
                     model.users[userID] = user
                     model.identityRevision &+= 1
+                }
+                // The per-server layer, kept beside the account's rather than
+                // folded into it — which is what lets the profile's own menu
+                // offer both. Assigned whole for the same reason the account is:
+                // a per-server bio somebody deleted has to be able to go.
+                if let guildID = fetched.guildID {
+                    let guildUser = fetched.guildUser
+                    if model.memberProfiles[guildID]?[userID] != guildUser {
+                        model.memberProfiles[guildID, default: [:]][userID] = guildUser
+                        model.identityRevision &+= 1
+                    }
                 }
                 // The board arrives on this route and nowhere else — assigned
                 // whole for the same reason, so a tile somebody deleted stops

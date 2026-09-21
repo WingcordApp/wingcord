@@ -42,6 +42,25 @@ public struct Snowflake<Tag>: Hashable, Sendable, Comparable, CustomStringConver
                 Double((rawValue >> 22) &+ Self.epochMilliseconds) / 1000
         )
     }
+
+    /// The smallest id that could have been minted at `date`.
+    ///
+    /// **A stand-in cursor, not a real id.** Discord's own inbox uses one for a
+    /// channel the reader has never acknowledged: the day they joined the
+    /// server becomes the cursor, so nothing posted before they arrived can
+    /// count as unread. Without it every message a channel has ever carried is
+    /// unread, and a summary opens on a conversation from years before the
+    /// reader was there.
+    ///
+    /// Clamped at the epoch: a date before 2015 has no snowflake, and wrapping
+    /// the subtraction would produce an id larger than every real one — a
+    /// cursor that swallows the whole channel instead of none of it.
+    public init(before date: Date) {
+        let milliseconds = UInt64(max(0, date.timeIntervalSince1970 * 1000))
+        rawValue = milliseconds > Self.epochMilliseconds
+            ? (milliseconds &- Self.epochMilliseconds) << 22
+            : 0
+    }
 }
 
 // A snowflake encodes back to Discord's string form, so the wire shape is

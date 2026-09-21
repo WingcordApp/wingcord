@@ -37,3 +37,72 @@ struct FilmstripBudgetTests {
         #expect(AnimatedImage.budget(forDrawn: .zero) == AnimatedImage.byteBudget)
     }
 }
+
+/// A one-shot asset inside a slot longer than itself.
+///
+/// **The profile-effect catalogue's `duration` is the SLOT; the APNG's own is
+/// the playback, and they are not the same number.** SpongeBob's entry gives him
+/// 6000 ms and the file is 4125 ms with `acTL num_plays: 1`. Fed through the
+/// looping lookup, the last 1875 ms of the slot replayed the opening 1875 ms of
+/// the animation — he walked on, flew away, and walked on again before being cut
+/// off mid-stride. Measured off the real asset, not guessed.
+@MainActor
+@Suite("One-shot playback")
+struct OneShotPlaybackTests {
+
+    /// Four frames, a quarter-second each: a one-second asset.
+    private func strip() -> AnimatedImage {
+        let frames = (0..<4).map { index -> CGImage in
+            let context = CGContext(
+                data: nil, width: 2, height: 2, bitsPerComponent: 8, bytesPerRow: 8,
+                space: CGColorSpaceCreateDeviceRGB(),
+                bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+            )!
+            context.setFillColor(gray: CGFloat(index) / 4, alpha: 1)
+            context.fill(CGRect(x: 0, y: 0, width: 2, height: 2))
+            return context.makeImage()!
+        }
+        return AnimatedImage(
+            frames: frames,
+            ends: [0.25, 0.5, 0.75, 1.0],
+            duration: 1.0,
+            cost: 0
+        )
+    }
+
+    @Test("A one-shot asset holds its last frame instead of starting over")
+    func holdsTheLastFrame() {
+        let film = strip()
+        let last = film.frames[3]
+        // Inside its own duration it plays normally.
+        #expect(film.frame(at: 0.1, looping: false) === film.frames[0])
+        #expect(film.frame(at: 0.6, looping: false) === film.frames[2])
+        // **Past the end it holds**, for as long as the slot runs on.
+        #expect(film.frame(at: 1.2, looping: false) === last)
+        #expect(film.frame(at: 5.9, looping: false) === last)
+    }
+
+    @Test("A looping asset still wraps")
+    func loopingStillWraps() {
+        let film = strip()
+        // The other half of the same rule: a layer Discord marks `loop: true`
+        // carries `num_plays: 0` and must keep going.
+        #expect(film.frame(at: 1.1, looping: true) === film.frames[0])
+        #expect(film.frame(at: 2.6, looping: true) === film.frames[2])
+    }
+
+    @Test("SpongeBob's own numbers, as captured")
+    func spongebobSlot() {
+        // The catalogue: 6000 ms, loop false. The APNG: 4125 ms, 99 frames.
+        let film = AnimatedImage(
+            frames: strip().frames, ends: [1.03, 2.06, 3.09, 4.125],
+            duration: 4.125, cost: 0
+        )
+        // At 5.0 s the slot is still running and the looping lookup would be
+        // 0.875 s into a *second* performance — frame 0.
+        #expect(film.frame(at: 5.0, looping: true) === film.frames[0])
+        // One-shot holds the final frame instead, which is what the reader sees
+        // on Discord: he is gone, and stays gone.
+        #expect(film.frame(at: 5.0, looping: false) === film.frames[3])
+    }
+}

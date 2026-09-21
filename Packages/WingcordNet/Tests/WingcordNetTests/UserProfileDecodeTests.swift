@@ -34,7 +34,7 @@ struct UserProfileDecodeTests {
         "discriminator": "0",
         "display_name_styles": {
           "font_id": 12,
-          "effect_id": 6,
+          "effect_id": 8,
           "colors": [15378901, 11132400, 12167150, 12184267]
         },
         "collectibles": {
@@ -46,6 +46,12 @@ struct UserProfileDecodeTests {
     }
     """
 
+    /// **The id is 8, and this fixture used to say 6.** It was written from
+    /// the enum rather than from a capture, and the enum's ids were a guess —
+    /// so the test agreed with the bug and kept agreeing with it. The four
+    /// colours were always the tell: Gummy is the only effect that takes four,
+    /// and `corvin.har` carries exactly `{"font_id": 4, "effect_id": 8, "colors":
+    /// [4 values]}` for an account visibly wearing it.
     @Test("A styled display name survives the profile load")
     func displayNameStyleSurvives() throws {
         let user = try decode(styled)
@@ -53,6 +59,28 @@ struct UserProfileDecodeTests {
         #expect(style.font == .tempo)
         #expect(style.effect == .gummy)
         #expect(style.colors == [0xEA_A9_D5, 0xA9_DD_F0, 0xB9_A7_EE, 0xB9_EA_CB])
+    }
+
+    @Test("Effect 6 is Glow, which the picker never offers and accounts still wear")
+    func glowDecodes() throws {
+        let user = try decode(
+            styled.replacingOccurrences(of: "\"effect_id\": 8", with: "\"effect_id\": 6")
+        )
+        let style = try #require(user.decoration?.displayNameStyle)
+        #expect(style.effect == .glow)
+    }
+
+    /// `1001…1004` are Discord's `TEST_1…TEST_4` and every one of them falls
+    /// back to Solid — which is what the decoder already does with any id it
+    /// does not know, and what Gummy was wrongly getting.
+    @Test("An unknown effect keeps the colours and drops the effect")
+    func unknownEffectFallsBack() throws {
+        let user = try decode(
+            styled.replacingOccurrences(of: "\"effect_id\": 8", with: "\"effect_id\": 1002")
+        )
+        let style = try #require(user.decoration?.displayNameStyle)
+        #expect(style.effect == .solid)
+        #expect(style.colors.count == 4)
     }
 
     /// The other cosmetics on the same list, so a future edit that rebuilds this

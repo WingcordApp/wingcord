@@ -89,10 +89,7 @@ struct FlyoutLabel: View {
             .frame(maxWidth: wrapsAt, alignment: .leading)
             .padding(.horizontal, Spacing.snug)
             .padding(.vertical, Spacing.base)
-            // Its own clear glass rather than the popover's frosted default:
-            // a label floating over a transcript should let what is under it
-            // lens through, not blur it into grey.
-            .glassEffect(.clear.tint(Palette.flyoutTint), in: .capsule)
+            // No material of its own: the popover's glass is the body — §4.9.
             // It is an answer about the thing under the pointer, so it must
             // never become the thing under the pointer.
             .allowsHitTesting(false)

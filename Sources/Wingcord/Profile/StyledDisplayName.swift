@@ -13,6 +13,19 @@ struct StyledDisplayName: View {
     var style: DisplayNameStyle?
     var textStyle: Font.TextStyle
     var weight: Font.Weight
+    /// An exact size, in points, overriding `textStyle`'s.
+    ///
+    /// **Because Discord's sizes are not the system's.** Its profile name is
+    /// `heading-lg/bold` — 20px — in the popout and `heading-xl/semibold` — 24px
+    /// — in the full card, and macOS's nearest text styles are `.title2` at 17
+    /// and `.largeTitle` at 26. Those were what both surfaces used, so the mini
+    /// profile's name came out three points small and the full profile's two
+    /// points large.
+    ///
+    /// Nil everywhere the system's scale is the right answer, which is every
+    /// other call site. **Both branches read it**, or turning an effect on would
+    /// resize the name.
+    var pointSize: CGFloat?
     /// Whether the effect runs, when the reader has not asked for less motion.
     ///
     /// **A parameter, because not every surface wants it always on.** A profile
@@ -37,7 +50,8 @@ struct StyledDisplayName: View {
             StyledDisplayNameSurface(
                 text: text,
                 style: style,
-                pointSize: NSFont.preferredFont(forTextStyle: textStyle.nsTextStyle).pointSize,
+                pointSize: pointSize
+                    ?? NSFont.preferredFont(forTextStyle: textStyle.nsTextStyle).pointSize,
                 maximumWidth: maximumWidth,
                 // Reduce Motion parks each effect on its own first keyframe
                 // rather than hiding it: the style is part of how someone
@@ -48,7 +62,10 @@ struct StyledDisplayName: View {
             .accessibilityLabel(Text(text))
         } else {
             Text(text)
-                .font(.system(textStyle, weight: weight))
+                .font(
+                    pointSize.map { .system(size: $0, weight: weight) }
+                        ?? .system(textStyle, weight: weight)
+                )
                 .foregroundStyle(InkColor.primary)
                 .lineLimit(1)
         }

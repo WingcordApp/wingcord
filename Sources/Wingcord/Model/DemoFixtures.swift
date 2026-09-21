@@ -184,7 +184,7 @@ enum DemoFixtures {
             .gummy: [0xEA_A9_D5, 0xA9_DD_F0, 0xB9_A7_EE, 0xB9_EA_CB],
             .prism: [0xFE_92_42, 0x35_ED_7E, 0xFF_E0_47, 0xFF_4C_D2, 0x58_65_F2],
         ]
-        let effects = DisplayNameEffect.allCases
+        let effects = DisplayNameEffect.offered
         let faces = DisplayNameFont.allCases
         for (offset, id) in userIDs.enumerated() where offset % 3 == 1 {
             guard let user = users[id] else { continue }

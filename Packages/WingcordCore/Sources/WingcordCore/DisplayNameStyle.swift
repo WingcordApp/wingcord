@@ -115,16 +115,37 @@ public enum DisplayNameFont: Int, Hashable, Sendable, Codable, CaseIterable {
 
 /// The effect a styled display name is painted with.
 ///
-/// Raw values are Discord's effect ids, **1-indexed in the order the picker
-/// shows them** — which for effects is also the id order, unlike the fonts.
+/// **Raw values are Discord's own ids, and they are NOT the picker's order.**
+/// This enum used to say they were — "1-indexed in the order the picker shows
+/// them, which for effects is also the id order" — and that sentence was a
+/// guess written as a fact. `id 6` is `GLOW`, which the picker does not offer;
+/// Gummy is **8**. So every account whose Gummy arrived from Discord decoded as
+/// id 6, missed the enum entirely and fell back to Solid: one flat colour, no
+/// animation, for as long as this type has existed.
+///
+/// It was invisible from inside the app because the *editor* builds a style
+/// locally and never round-trips the wire, so the picker's own preview animated
+/// correctly while no real account ever did. Worse, saving Gummy wrote id 6 and
+/// set the account's effect to Glow.
+///
+/// Read off Discord's own bundle — `[SOLID, GRADIENT, NEON, TOON, POP]` and
+/// `[GUMMY, PRISM]` are the two groups the picker concatenates — and confirmed
+/// against `docs.discord.food`'s table, which additionally documents
+/// `1001…1004` as `TEST_1…TEST_4`, all of which fall back to Solid.
 public enum DisplayNameEffect: Int, Hashable, Sendable, Codable, CaseIterable {
     case solid = 1
     case gradient = 2
     case neon = 3
     case toon = 4
     case pop = 5
-    case gummy = 6
+    /// **Not offered by the picker, and it has to exist anyway.** Discord's
+    /// documentation says it "falls back to gradient", and its own bundle
+    /// groups it with Gradient when handing out preset palettes. An account
+    /// wearing it is a real account; leaving the case out would flatten them to
+    /// Solid the way Gummy was flattened.
+    case glow = 6
     case prism = 7
+    case gummy = 8
 
     /// What the picker calls it. Discord's own names.
     public var title: String {
@@ -134,9 +155,29 @@ public enum DisplayNameEffect: Int, Hashable, Sendable, Codable, CaseIterable {
         case .neon: "Neon"
         case .toon: "Toon"
         case .pop: "Pop"
-        case .gummy: "Gummy"
+        case .glow: "Glow"
         case .prism: "Prism"
+        case .gummy: "Gummy"
         }
+    }
+
+    /// The effects a reader may choose, in Discord's own order.
+    ///
+    /// **Not `allCases`, and the difference is Glow.** Discord's picker
+    /// concatenates two groups and Glow is in neither — it is a legacy id that
+    /// still arrives on the wire. Offering it would let somebody select an
+    /// effect Discord's own client cannot; leaving it out of the enum would
+    /// flatten everyone already wearing it.
+    public static let offered: [DisplayNameEffect] = [
+        .solid, .gradient, .neon, .toon, .pop, .gummy, .prism,
+    ]
+
+    /// Whether this is painted as something else.
+    ///
+    /// Glow is the only one, and Discord's own renderer does the same: its
+    /// preset-palette table groups `GRADIENT` and `GLOW` under one case.
+    public var painted: DisplayNameEffect {
+        self == .glow ? .gradient : self
     }
 
     /// How many colours this effect is chosen with, confirmed against the wells
@@ -148,7 +189,7 @@ public enum DisplayNameEffect: Int, Hashable, Sendable, Codable, CaseIterable {
     public var colorCount: Int {
         switch self {
         case .solid, .neon, .toon, .pop: 1
-        case .gradient: 2
+        case .gradient, .glow: 2
         case .gummy: 4
         case .prism: 5
         }
@@ -159,7 +200,8 @@ public enum DisplayNameEffect: Int, Hashable, Sendable, Codable, CaseIterable {
     /// animation it would only add and never run.
     public var isAnimated: Bool {
         switch self {
-        case .solid, .gradient: false
+        // Glow is drawn as a gradient, so it stands as still as one.
+        case .solid, .gradient, .glow: false
         case .neon, .toon, .pop, .gummy, .prism: true
         }
     }

@@ -32,11 +32,22 @@ struct ProfileIdentityPanel: View {
     var present: ((ProfileEditPicker) -> Void)?
 
     @Environment(AppModel.self) private var model
+
+    /// What this account and this server permit — see `ProfileEditCapability`.
+    /// `.account` outside an edit, where nothing is being gated anyway.
+    private var capability: ProfileEditCapability {
+        model.profileEditCapability(for: editor?.scope ?? .account)
+    }
     @Environment(\.motion) private var motion
     @State private var isMenuOpen = false
     /// Whether the still under the moving banner has been taken away. See
     /// `bannerArtwork`.
     @State private var bannerIsPlaying = false
+    /// Whether the pointer is over the card. Two things read it: the profile
+    /// effect fades back so the name and banner under it can be read, and the
+    /// edit pencils appear — both of which are "get out of the way of the thing
+    /// being looked at" answered on the same signal.
+    @State private var isHovered = false
 
     /// The card a frame and an effect are authored for. 452 ÷ 1,280 of the
     /// design's sheet, which is the same third of ours.
@@ -112,8 +123,11 @@ struct ProfileIdentityPanel: View {
                 ProfileEffectView(effect: effect, width: Self.width)
                     .allowsHitTesting(false)
                     .accessibilityLabel(Text(effect.accessibilityLabel ?? effect.title))
+                    .opacity(isHovered ? ProfileEffectFade.hovered : 1)
+                    .animation(ProfileEffectFade.animation, value: isHovered)
             }
         }
+        .onHover { isHovered = $0 }
         .clipped()
     }
 
@@ -127,7 +141,7 @@ struct ProfileIdentityPanel: View {
     @ViewBuilder
     private var avatarEditMenu: some View {
         if let editor {
-            EditOverlayButton(isVisible: true) {
+            EditOverlayButton(isVisible: isHovered) {
                 Button("Change Avatar") { present?(.avatar) }
                 Button("Change Avatar Decoration") { present?(.decoration) }
                 Divider()
@@ -153,7 +167,7 @@ struct ProfileIdentityPanel: View {
     @ViewBuilder
     private var bannerEditMenu: some View {
         if editor != nil {
-            EditOverlayButton(isVisible: true) {
+            EditOverlayButton(isVisible: isHovered) {
                 Button("Change Profile Effect") { present?(.effect) }
             }
             .padding(Spacing.snug)
@@ -175,9 +189,23 @@ struct ProfileIdentityPanel: View {
                     .foregroundStyle(InkColor.tertiary)
                     .textCase(.uppercase)
                     .tracking(0.9)
+                // **A per-server bio is a Nitro field; an account's is not.**
+                // `PATCH /guilds/{id}/members/@me` marks `bio` premium and
+                // `PATCH /users/@me/profile` does not — so the same control is
+                // gated in one scope and free in the other.
+                let allowed = editor.scope.guildID == nil
+                    ? capability.canEditBio
+                    : capability.canEditGuildBio
                 EditableBioField(
                     text: Binding(get: { editor.bio }, set: { editor.bio = $0 })
                 )
+                .disabled(!allowed)
+                .opacity(allowed ? 1 : 0.45)
+                if !allowed {
+                    Text(ProfileEditCapability.nitroNote)
+                        .font(.system(.caption))
+                        .foregroundStyle(InkColor.tertiary)
+                }
             }
             .padding(.horizontal, Self.gutter)
             .padding(.top, Spacing.margin)
@@ -279,6 +307,22 @@ struct ProfileIdentityPanel: View {
         .padding(.bottom, Self.avatarDrop + ProfileAvatar.decorationOverhang(side: Self.avatarSide))
     }
 
+    /// Whether there is a moving form to put up at all — the extension says
+    /// so, and nothing else here can.
+    ///
+    /// **Read beside the latch below, and the second half is not redundant.**
+    /// `bannerIsPlaying` is `@State` and only the film can clear it: a
+    /// filmstrip that is dismantled reports nothing on the way out
+    /// (`AnimatedDecoration.tearDown` bumps its generation precisely so a
+    /// report in flight is dropped), so the latch stays true, the still stays
+    /// at zero, and the strip draws its plate and the body's fade over
+    /// nothing — **a banner that is simply gone.** Asking whether there is a
+    /// film at all cannot get stuck. `AvatarView` keeps the same pair of
+    /// guards, for the same defect.
+    private var bannerPlays: Bool {
+        profile.bannerURL.map(CDN.canAnimate) ?? false
+    }
+
     @ViewBuilder
     private var bannerArtwork: some View {
         if let url = profile.bannerURL {
@@ -288,8 +332,8 @@ struct ProfileIdentityPanel: View {
                     // Taken away once the film is up: two copies of the same
                     // picture composited every frame buys nothing, and the
                     // still is only here to fill the box while the strip
-                    // decodes.
-                    .opacity(bannerIsPlaying ? 0 : 1)
+                    // decodes. See `bannerPlays` for the second half.
+                    .opacity(bannerIsPlaying && bannerPlays ? 0 : 1)
                 // Only where the hash says it can move, so a still banner never
                 // pays for a second fetch and a multi-frame decode.
                 //
@@ -314,6 +358,19 @@ struct ProfileIdentityPanel: View {
                     )
                 }
             }
+            // A banner that changes has to put its still back while the new one
+            // resolves, or the strip is empty in between.
+            .onChange(of: url) { bannerIsPlaying = false }
+            // The latch is the one thing on this card that can hide artwork
+            // that is present, and it does it silently — so its transitions are
+            // on the record. Gated on the trace sink and cold: a banner reports
+            // twice in its life.
+            .onChange(of: bannerIsPlaying) { _, playing in
+                DiagnosticLog.trace(
+                    "profile",
+                    "banner latch \(playing) plays=\(bannerPlays) \(url.lastPathComponent)"
+                )
+            }
         }
     }
 
@@ -327,21 +384,56 @@ struct ProfileIdentityPanel: View {
         VStack(alignment: .leading, spacing: 7) {
             HStack(alignment: .firstTextBaseline, spacing: Spacing.base) {
                 if let editor {
-                    EditableDisplayName(
-                        text: Binding(
-                            get: { editor.displayName },
-                            set: { editor.displayName = $0 }
-                        ),
-                        placeholder: profile.handle,
-                        style: profile.displayNameStyle,
-                        editStyle: { present?(.displayNameStyle) }
-                    )
+                    // **In a server this field is the NICKNAME**, and the server
+                    // decides whether it may be typed at all: `nick` is the one
+                    // profile field gated by a permission rather than by a
+                    // subscription — `CHANGE_NICKNAME` on
+                    // `PATCH /guilds/{id}/members/@me`. A server that withholds
+                    // it refuses the write, and the refusal arrives after every
+                    // other edit in the sheet has already been saved.
+                    let nameAllowed = editor.scope.guildID == nil
+                        || capability.canEditNickname
+                    VStack(alignment: .leading, spacing: 2) {
+                        // **The field the scope saves**: the account's display
+                        // name, or this server's nickname. Binding the display
+                        // name here in a server wrote nothing — `saveGuild`
+                        // sends `nick` — so a typed nickname was silently lost.
+                        EditableDisplayName(
+                            text: editor.scope.guildID == nil
+                                ? Binding(
+                                    get: { editor.displayName },
+                                    set: { editor.displayName = $0 }
+                                )
+                                : Binding(
+                                    get: { editor.nickname },
+                                    set: { editor.nickname = $0 }
+                                ),
+                            // Discord's own placeholder for a nickname is the
+                            // name it would fall back to.
+                            placeholder: editor.scope.guildID == nil
+                                ? profile.handle
+                                : editor.accountName,
+                            style: profile.displayNameStyle,
+                            editStyle: { present?(.displayNameStyle) }
+                        )
+                        .disabled(!nameAllowed)
+                        .opacity(nameAllowed ? 1 : 0.45)
+                        if !nameAllowed {
+                            Text(ProfileEditCapability.nicknameNote)
+                                .font(.system(.caption))
+                                .foregroundStyle(InkColor.tertiary)
+                        }
+                    }
                 } else {
                     StyledDisplayName(
                         text: profile.displayName,
                         style: profile.displayNameStyle,
                         textStyle: .largeTitle,
-                        weight: .bold,
+                        weight: .semibold,
+                        // `heading-xl/semibold`, read out of Discord's own
+                        // stylesheet. `.largeTitle` is 26 on macOS, two points
+                        // over — and the weight was bold where Discord sets 600.
+                        pointSize: 24,
                         // **The panel's own width, stated.** A styled name is
                         // a drawn view and `.lineLimit(1)` below reaches only
                         // the plain branch — so without a ceiling a long name
@@ -603,6 +695,17 @@ struct ProfileIdentityPanel: View {
                         .presentsUserMenu(
                             for: profile.userID,
                             inGuild: profile.guild?.id,
+                            profileOptions: .init(
+                                alternateName: profile.alternateName,
+                                showsMainProfile: profile.showsMainProfile
+                            ),
+                            onProfileOption: { option in
+                                switch option {
+                                case .fullProfile: break
+                                case .mainProfile: model.showMainProfile(true)
+                                case .perServerProfile: model.showMainProfile(false)
+                                }
+                            },
                             isPresented: $isMenuOpen
                         )
                 }

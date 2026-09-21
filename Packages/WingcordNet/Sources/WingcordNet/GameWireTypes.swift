@@ -262,11 +262,29 @@ struct SimilarGamesDTO: Decodable, Sendable {
 /// board out of that box and keeps the one call that fetches both from becoming
 /// two.
 public struct ProfileFetch: Sendable {
+    /// The account's own profile. Never the per-server one — see `guildUser`.
     public var user: User
+    /// The same account **as it presents itself in the guild that was asked
+    /// about**, or nil when the response carried no guild layer.
+    ///
+    /// **A second value rather than a merge**, because both are real and the
+    /// reader can ask for either: Discord's profile menu offers "View Main
+    /// Profile" and "View Per-server Profile", and a client that folded them
+    /// together could only ever draw one of the two.
+    public var guildUser: User?
+    /// Which guild `guildUser` belongs to.
+    public var guildID: GuildID?
     public var widgets: [ProfileWidget]
 
-    public init(user: User, widgets: [ProfileWidget] = []) {
+    public init(
+        user: User,
+        guildUser: User? = nil,
+        guildID: GuildID? = nil,
+        widgets: [ProfileWidget] = []
+    ) {
         self.user = user
+        self.guildUser = guildUser
+        self.guildID = guildID
         self.widgets = widgets
     }
 }

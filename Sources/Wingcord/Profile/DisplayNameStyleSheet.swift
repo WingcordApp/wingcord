@@ -177,7 +177,7 @@ struct DisplayNameStyleSheet: View {
                 columns: Array(repeating: GridItem(.flexible(), spacing: Spacing.snug), count: 4),
                 spacing: Spacing.snug
             ) {
-                ForEach(DisplayNameEffect.allCases, id: \.self) { option in
+                ForEach(DisplayNameEffect.offered, id: \.self) { option in
                     ChoiceTile(isSelected: effect == option) {
                         effect = option
                         fitColors()
@@ -497,7 +497,7 @@ extension DisplayNameEffect {
     var sampleColors: [UInt32] {
         switch self {
         case .solid: [0xFF_FF_FF]
-        case .gradient: [0x2A_AE_A6, 0xFF_C4_90]
+        case .gradient, .glow: [0x2A_AE_A6, 0xFF_C4_90]
         case .neon: [0x6A_1D_ED]
         case .toon: [0xF4_20_99]
         case .pop: [0x0E_CF_86]

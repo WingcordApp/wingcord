@@ -84,36 +84,85 @@ struct SaveDataDTO: Decodable, Sendable {
 
 // MARK: - Scheduled messages
 
-/// `GET /users/@me/scheduled-messages`.
+/// `GET` and `POST /users/@me/scheduled-messages`.
 ///
-/// **Every field is optional because the shape is inferred, not captured.** See
-/// `ScheduledMessage` for what is known: the route exists, it is user-scoped,
-/// and the one time it was recorded it answered `[]`. The names below follow
-/// the conventions every neighbouring route uses, and `domain()` returns nil
-/// rather than guessing when the three fields the row cannot be drawn without
-/// are missing.
+/// **Captured, request and reply both** — `inbox,fixed23.har`, one message
+/// queued from the composer and the list read back three times. Every field
+/// this decoder had before was wrong, and the whole row was being dropped:
+/// there is no `content`, no `channel_id` and no `scheduled_at` at the top
+/// level of an element, so `domain()` answered nil for every entry Discord
+/// sent and the Scheduled tab was empty on a response that decodes perfectly.
+///
+/// The shape, whole:
+///
+/// ```json
+/// { "id": "1551628835722625195",
+///   "scheduled_message_id": "1551628835722625195",
+///   "user_id": "987654321987654321",
+///   "send_at_timestamp": "2026-09-21T17:45:00+00:00",
+///   "state": 0,
+///   "attachment_uploads": [],
+///   "create_args":       { "content": "hey", "channel_id": "…", "type": 0, … },
+///   "scheduled_message": { "content": "hey", "channel_id": "…", "type": 0, … },
+///   "message_preview":   { …a whole message object… } }
+/// ```
+///
+/// **Three things about it that a reader would otherwise get wrong.**
+///
+///  - **The draft is nested, and it is nested TWICE.** `create_args` and
+///    `scheduled_message` were byte-identical in every captured element.
+///    `scheduled_message` is read first because it is named for what the row
+///    *is* rather than for how it was made; `create_args` is the fallback, so
+///    an edit route that revises one and not the other cannot blank the row.
+///  - **The timestamp is `send_at_timestamp` on the way OUT and
+///    `scheduled_timestamp` on the way IN.** Two names for one instant across
+///    one round trip — see `scheduleMessage`. Neither is `scheduled_at`.
+///  - **The id is spelled twice and both agreed.** `id` is read first.
+///
+/// **`state` is decoded and not interpreted.** Every captured row carried `0`,
+/// and no capture shows a send that failed — so a client that mapped a
+/// non-zero value onto a failure string would be inventing the one sentence
+/// that tells somebody their message never went out. It is kept so a future
+/// capture has somewhere to land, and `failureReason` stays nil until one
+/// arrives.
+///
+/// **`message_preview` is deliberately not decoded.** The row draws the
+/// reader's own draft text — there is no sent message to lay out — and a
+/// nested `MessageDTO` that failed to decode would throw the whole array away
+/// rather than one row. It is named here so the next reader knows it is there.
 struct ScheduledMessageDTO: Decodable, Sendable {
     var id: MessageID?
-    var channel_id: ChannelID?
-    var guild_id: GuildID?
-    var content: String?
-    /// The two spellings a Discord route uses for "when this happens". Both are
-    /// read; whichever arrives wins.
-    var scheduled_at: Date?
-    var send_at: Date?
-    var failure_reason: String?
+    var scheduled_message_id: MessageID?
+    var send_at_timestamp: Date?
+    var state: Int?
+    var scheduled_message: Draft?
+    var create_args: Draft?
+
+    /// What will be sent. Discord's own message-create body, stored.
+    struct Draft: Decodable, Sendable {
+        var content: String?
+        var channel_id: ChannelID?
+        var type: Int?
+        var flags: Int?
+        var sticker_ids: [String]?
+        var forward_only: Bool?
+    }
 
     func domain() -> ScheduledMessage? {
-        guard let id, let channelID = channel_id, let at = scheduled_at ?? send_at else {
-            return nil
-        }
+        let draft = scheduled_message ?? create_args
+        guard let id = id ?? scheduled_message_id,
+              let channelID = draft?.channel_id,
+              let at = send_at_timestamp
+        else { return nil }
         return ScheduledMessage(
             id: id,
             channelID: channelID,
-            guildID: guild_id,
-            content: content ?? "",
+            // Not on the payload at all, exactly as a mention is not — the
+            // caller resolves channel to guild through `ChannelIndex`.
+            guildID: nil,
+            content: draft?.content ?? "",
             scheduledAt: at,
-            failureReason: failure_reason
+            failureReason: nil
         )
     }
 }

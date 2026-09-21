@@ -1,4 +1,5 @@
 import SwiftUI
+import WingcordCore
 
 /// A remote image sized at both ends: the CDN rung asked for, and the pixel size
 /// decoded to.
@@ -108,6 +109,42 @@ struct AvatarView: View {
     /// Drawn *around* the avatar at 1.2x and outside its circular mask, so it
     /// contributes no layout size — an overlay is sized to what it decorates.
     var decorationURL: URL?
+    /// Whether an animated avatar plays here.
+    ///
+    /// **Off by default, and the default is not laziness.** A roster of two
+    /// hundred people or a channel of four hundred messages carries dozens of
+    /// GIF faces, and playing them all is dozens of filmstrips resident and
+    /// dozens of layers rewritten every tick for pictures nobody is looking at —
+    /// which is why those surfaces play only the row under the pointer, through
+    /// `HoverAvatarFilm`.
+    ///
+    /// A profile card is the opposite case: **one** face, opened deliberately,
+    /// and the thing the reader came to look at. It plays whenever it can.
+    var animates = false
+
+    @Environment(\.motion) private var motion
+    /// The reader's own animation preference. Its label names avatars, so it
+    /// governs this directly.
+    @State private var settings = AppSettings.shared
+
+    /// Whether the still under the moving face has been taken away.
+    ///
+    /// The same latch the decoration below keeps, and for the same reason: two
+    /// copies of one picture, decoded by different paths at different sizes,
+    /// read as a rendering fault rather than as a face.
+    @State private var faceIsPlaying = false
+
+    /// **Both answers, resolved together** — `INVARIANTS.md`'s rule: the
+    /// reader's battery switch and the system's Reduce Motion. Honouring one and
+    /// not the other is how somebody who turned animation off gets it anyway.
+    ///
+    /// `CDN.canAnimate` is the third: an avatar hash without `a_` is served as
+    /// PNG, and asking for a filmstrip there costs a multi-frame decode to
+    /// discover there is one frame.
+    private var playsFace: Bool {
+        guard animates, let url, CDN.canAnimate(url) else { return false }
+        return settings.playsAnimatedContent && !motion.reduceMotion
+    }
 
     /// Whether the still under the moving decoration has been taken away.
     ///
@@ -117,15 +154,55 @@ struct AvatarView: View {
     @State private var decorationIsPlaying = false
 
     var body: some View {
-        RemoteImage(url: url, side: side) {
-            Text(monogram)
-                .font(.system(size: side * 0.42, weight: .semibold))
-                .foregroundStyle(Ink.secondary)
+        ZStack {
+            RemoteImage(url: url, side: side) {
+                Text(monogram)
+                    .font(.system(size: side * 0.42, weight: .semibold))
+                    .foregroundStyle(Ink.secondary)
+                    .frame(width: side, height: side)
+                    // Neutral. A person's colour is their avatar, never a tint
+                    // derived from their name.
+                    .background(Palette.surfaceRaised)
+            }
+            // The still goes when the film is up — see `faceIsPlaying`.
+            //
+            // **`&& playsFace`, and the second half is not redundant.** The
+            // latch is `@State` and only the film can clear it; if the film
+            // stops being built for any reason the report never comes, the
+            // latch stays true and the still stays hidden — an avatar that is
+            // simply *gone*. `onChange(of: url)` covers a changed face, but not
+            // the reader turning animation off, Reduce Motion arriving, or the
+            // view being rebuilt around a resize. Asking whether there is a film
+            // at all cannot get stuck.
+            .opacity(faceIsPlaying && playsFace ? 0 : 1)
+
+            if playsFace, let url {
+                // **`.resizeAspectFill`, unlike a decoration's.** An avatar is
+                // cropped to its circle and must cover it; a decoration is
+                // drawn around one and must not be cropped at all.
+                AnimatedDecoration(
+                    url: url,
+                    side: side,
+                    gravity: .resizeAspectFill,
+                    // The whole loop at the size it is drawn — a profile draws a
+                    // face at nearly twice a row's, where the default allowance
+                    // buys a fraction of the frames and the motion visibly
+                    // steps.
+                    byteBudget: AnimatedImage.budget(
+                        forDrawn: CGSize(width: side, height: side)
+                    ),
+                    onPlayback: { playing in
+                        guard faceIsPlaying != playing else { return }
+                        faceIsPlaying = playing
+                    }
+                )
                 .frame(width: side, height: side)
-                // Neutral. A person's colour is their avatar, never a tint
-                // derived from their name.
-                .background(Palette.surfaceRaised)
+                .allowsHitTesting(false)
+            }
         }
+        // A face that changes has to put its still back while the new one
+        // resolves, or the avatar is empty in between.
+        .onChange(of: url) { faceIsPlaying = false }
         .frame(width: side, height: side)
         .clipShape(.circle)
         .overlay {

@@ -22,6 +22,21 @@ struct ExpressionInfoCard: View {
     /// Whether the still under the moving emoji has been taken away. See `art`.
     @State private var isPlaying = false
 
+    /// Whether there is a moving form to put up at all.
+    ///
+    /// **Read beside the latch, and that is what stops it sticking.** Only the
+    /// film can clear `isPlaying`, and a filmstrip that is dismantled reports
+    /// nothing on the way out — `AnimatedDecoration.tearDown` bumps its
+    /// generation precisely so a report in flight is dropped. So any of the
+    /// three conditions below going false while the card is open leaves the
+    /// still hidden over a film that is no longer there: an emoji card that is
+    /// blank, on the one surface somebody opened in order to look at the emoji.
+    /// `AvatarView` keeps the same pair of guards, for the same defect.
+    private var artPlays: Bool {
+        guard let url = info.artURL, CDN.canAnimate(url) else { return false }
+        return AnimationClock.playsAnimatedEmoji
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(alignment: .top, spacing: Spacing.snug) {
@@ -47,22 +62,8 @@ struct ExpressionInfoCard: View {
             }
         }
         .frame(width: Self.width)
-        // **`.clear`, not `.regular`.** The rule is `.clear` over media and
-        // `.regular` over the reading surface — and what actually passes under a
-        // card floating on the transcript is *content*: avatars, emoji,
-        // somebody's message. `.regular` frosts all of it into a grey slab; a
-        // clear body lets it lens through, which is the whole reason this app
-        // uses glass at all.
-        //
-        // The tint is what keeps it visible where the transcript happens to be
-        // empty near-black, and it is IN the material rather than a fill behind
-        // it — a fill under glass is what §4 rule 3 forbids and is exactly what
-        // stops a surface refracting.
-        .glassEffect(
-            .clear.tint(Palette.flyoutTint),
-            in: .rect(cornerRadius: Radius.glass, style: .continuous)
-        )
-        .shadow(color: .black.opacity(0.35), radius: 24, y: 8)
+        // No material or shadow of its own: the popover's glass is the body
+        // and it casts its own shadow — §4.9.
     }
 
     /// The picture, at four times the size it was drawn in the message.
@@ -83,7 +84,7 @@ struct ExpressionInfoCard: View {
             }
             .aspectRatio(contentMode: .fit)
             .frame(width: Self.artSide, height: Self.artSide)
-            .opacity(isPlaying ? 0 : 1)
+            .opacity(isPlaying && artPlays ? 0 : 1)
             // **The still is only half of an animated emoji**, and this card is
             // the one place somebody asked to look at one closely — which is
             // exactly where a frozen first frame is most obviously wrong. The
@@ -95,7 +96,7 @@ struct ExpressionInfoCard: View {
             // an animated emoji as `.gif` and a still one as `.png`, so there is
             // nothing to discover — `CDN.canAnimate` is that fact everywhere.
             .overlay {
-                if let url = info.artURL, CDN.canAnimate(url), AnimationClock.playsAnimatedEmoji {
+                if artPlays, let url = info.artURL {
                     AnimatedDecoration(
                         url: url,
                         side: Self.artSide,
@@ -108,6 +109,9 @@ struct ExpressionInfoCard: View {
                     .allowsHitTesting(false)
                 }
             }
+            // An emoji that changes has to put its still back while the new one
+            // resolves, or the card is empty in between.
+            .onChange(of: info.artURL) { isPlaying = false }
         }
     }
 }

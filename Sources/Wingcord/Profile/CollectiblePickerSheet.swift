@@ -41,6 +41,27 @@ struct CollectiblePickerSheet: View {
     /// across.
     private var columns: Int { kind == .nameplate ? 1 : 3 }
 
+    /// Whether the reader's account may wear a Nitro-exclusive collectible.
+    ///
+    /// **`premium_type == 2` exactly.** Nitro Basic is a paid tier and does not
+    /// carry these — the same distinction `PremiumTier.themesProfile` is written
+    /// about — so a test for "has paid for something" would offer Basic accounts
+    /// items the server refuses.
+    private var wearsNitro: Bool { profile.premiumTier == .nitro }
+
+    /// Whether this item can be worn at all.
+    ///
+    /// **The grid has to answer this, because the server answers it far too
+    /// late.** Discord returns these in `collectibles-purchases` whether or not
+    /// the subscription is live — they were granted, and the reader keeps them
+    /// listed — so the picker used to let one be chosen and applied, and the
+    /// refusal only arrived on Save as
+    /// `400 50035 · avatar_decoration_sku_id: Collectible is only available to
+    /// Nitro subscribers`, after every other edit in the sheet had been written.
+    private func isWearable(_ item: OwnedCollectible) -> Bool {
+        !item.isNitroExclusive || wearsNitro
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             header
@@ -250,7 +271,9 @@ struct CollectiblePickerSheet: View {
     }
 
     private func tile(for item: OwnedCollectible) -> some View {
-        PickerTile(isSelected: draft == item.skuID, isWide: kind == .nameplate) {
+        let wearable = isWearable(item)
+        return PickerTile(isSelected: draft == item.skuID, isWide: kind == .nameplate) {
+            guard wearable else { return }
             draft = item.skuID
         } content: {
             // A strip carries its name beside the artwork; a square carries it
@@ -267,9 +290,29 @@ struct CollectiblePickerSheet: View {
                 }
             }
         }
+        // **Dimmed and marked rather than hidden.** The reader owns it and it
+        // is listed by the account's own purchases; removing it would read as
+        // the item being gone. Discord locks it in place instead.
+        .opacity(wearable ? 1 : 0.4)
+        .overlay(alignment: .topTrailing) {
+            if !wearable {
+                Image(systemName: "lock.fill")
+                    .font(.system(size: 9, weight: .bold))
+                    .foregroundStyle(.white)
+                    .padding(4)
+                    .background(Circle().fill(.black.opacity(0.55)))
+                    .padding(4)
+            }
+        }
+        .allowsHitTesting(wearable)
+        .help(wearable ? "" : "Only Nitro subscribers can wear this.")
         // The label the artwork was authored with, which is the only description
         // a reader who cannot see it will get.
-        .accessibilityLabel(Text(item.label ?? item.name))
+        .accessibilityLabel(
+            Text(wearable
+                ? (item.label ?? item.name)
+                : "\(item.label ?? item.name), Nitro only")
+        )
     }
 
     /// **Two kinds have an addressable picture and two do not.** A nameplate is

@@ -26,12 +26,20 @@ struct AuthorScopeTests {
 
     /// One server where the friend wears a red role and a nickname, and one
     /// conversation with the same person where they wear neither.
-    private func model() -> AppModel {
+    ///
+    /// - Parameter nameStyle: the effect and colours the friend chose, for the
+    ///   two tests about what survives the trip from the user record.
+    private func model(nameStyle: DisplayNameStyle? = nil) -> AppModel {
         let model = AppModel()
         model.currentUserID = readerID
         model.users = [
             readerID: User(id: readerID, username: "reader"),
-            friendID: User(id: friendID, username: "friend", displayName: "Friend"),
+            friendID: User(
+                id: friendID,
+                username: "friend",
+                displayName: "Friend",
+                decoration: nameStyle.map { UserDecoration(displayNameStyle: $0) }
+            ),
         ]
         model.guilds = [guildID: Guild(id: guildID, name: "server", ownerID: readerID)]
         model.roles = [guildID: [
@@ -83,5 +91,34 @@ struct AuthorScopeTests {
         let friend = try #require(authors[friendID])
         #expect(friend.colorValue != nil)
         #expect(friend.name == "Nickname")
+    }
+
+    @Test("A conversation carries the name style its owner chose")
+    func directMessagesCarryTheNameStyle() throws {
+        // **`display_name_styles` rides the ordinary user object**, not the
+        // guild member — so it is present for somebody you have never shared a
+        // server with, which is exactly the case this feature is for. It had
+        // been decoded and then dropped here for every session before this one:
+        // only `.font` was read, and the effect and colours went nowhere.
+        let prism = DisplayNameStyle(
+            font: .default, effect: .prism, colors: [0xE9_1E_63, 0x21_96_F3]
+        )
+        let authors = model(nameStyle: prism)
+            .authorInfo(for: items, inGuild: nil, authorFont: font)
+        let friend = try #require(authors[friendID])
+        #expect(friend.nameStyle == prism)
+    }
+
+    @Test("A styled face with no colours is not carried as an effect")
+    func faceWithoutColoursIsNotAnEffect() throws {
+        // Nearly every styled account is this one. The face already reaches the
+        // transcript through `nameFace`; carrying the rest would put a glyph run
+        // and a clip behind a name that is a flat label either way.
+        let faceOnly = DisplayNameStyle(font: .sakura, effect: .solid, colors: [])
+        let authors = model(nameStyle: faceOnly)
+            .authorInfo(for: items, inGuild: nil, authorFont: font)
+        let friend = try #require(authors[friendID])
+        #expect(friend.nameStyle == nil)
+        #expect(friend.nameFace != nil)
     }
 }

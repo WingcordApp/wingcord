@@ -21,6 +21,16 @@ public struct Guild: Hashable, Sendable, Identifiable, Codable {
     /// Feature flags, as Discord's uppercase strings. A `Set` because every read
     /// is a membership test.
     public var features: Set<String>
+    /// The four letters this server lends its members, and the badge beside
+    /// them — `guild.profile.tag` and `guild.profile.badge` on the wire.
+    ///
+    /// **It arrives in READY and was being dropped.** Discord's own client
+    /// builds the "choose a server tag" list from exactly this and asks no
+    /// route for it: `guild?.profile?.tag != null` is the whole eligibility
+    /// test in its bundle. A client that did not decode it could only discover
+    /// a tag by fetching `/guilds/{id}/profile` once per server.
+    public var tag: String?
+    public var tagBadgeHash: String?
     /// Members Discord reports, when it reports any.
     public var memberCount: Int?
     /// The rules channel, for a community guild.
@@ -35,6 +45,12 @@ public struct Guild: Hashable, Sendable, Identifiable, Codable {
     /// @mentions, and a client that assumed All Messages would notify on every
     /// line of a channel with four hundred thousand people in it.
     public var defaultMessageNotifications: NotificationLevel = .allMessages
+    /// When the reader joined, off READY's own guild object.
+    ///
+    /// **The fallback read cursor for a channel that has none**, which is the
+    /// one thing that stops the inbox showing a server's history from before
+    /// the reader was in it. See `AppModel.unreadInboxChannels`.
+    public var joinedAt: Date?
 
     public init(
         id: GuildID,
@@ -46,10 +62,13 @@ public struct Guild: Hashable, Sendable, Identifiable, Codable {
         premiumTier: Int = 0,
         premiumSubscriptionCount: Int = 0,
         features: Set<String> = [],
+        tag: String? = nil,
+        tagBadgeHash: String? = nil,
         memberCount: Int? = nil,
         rulesChannelID: ChannelID? = nil,
         isLarge: Bool = false,
-        defaultMessageNotifications: NotificationLevel = .allMessages
+        defaultMessageNotifications: NotificationLevel = .allMessages,
+        joinedAt: Date? = nil
     ) {
         self.id = id
         self.name = name
@@ -60,13 +79,25 @@ public struct Guild: Hashable, Sendable, Identifiable, Codable {
         self.premiumTier = premiumTier
         self.premiumSubscriptionCount = premiumSubscriptionCount
         self.features = features
+        self.tag = tag
+        self.tagBadgeHash = tagBadgeHash
         self.memberCount = memberCount
         self.rulesChannelID = rulesChannelID
         self.isLarge = isLarge
         self.defaultMessageNotifications = defaultMessageNotifications
+        self.joinedAt = joinedAt
     }
 
     public var hasAnimatedIcon: Bool { iconHash?.hasPrefix("a_") ?? false }
+
+    /// Whether this server lends its members a tag they can wear.
+    ///
+    /// **The tag being present is the test, not the feature flag.** Discord's
+    /// own client asks `guild?.profile?.tag != null` — `GUILD_TAGS` says the
+    /// server is *allowed* one, which is not the same as having set one, and
+    /// gating on the flag would offer empty rows for servers with nothing to
+    /// wear.
+    public var offersTag: Bool { tag?.isEmpty == false }
 
     /// The initials drawn on a tile when a guild has no icon.
     ///

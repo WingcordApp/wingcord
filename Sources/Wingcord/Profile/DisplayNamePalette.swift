@@ -61,7 +61,7 @@ struct PaletteWell: View {
                     Rectangle().fill(colors[index])
                 }
             }
-        case .gradient, .prism:
+        case .gradient, .glow, .prism:
             LinearGradient(colors: colors, startPoint: .leading, endPoint: .trailing)
         case .solid, .neon, .toon, .pop:
             Rectangle().fill(colors.first ?? .clear)
@@ -167,7 +167,7 @@ extension DisplayNameEffect {
         switch self {
         case .solid, .neon, .toon, .pop:
             Self.solidPresets.map { [$0] }
-        case .gradient:
+        case .gradient, .glow:
             [
                 [0x2A_AE_A6, 0xFF_C4_90], [0x2D_B4_6D, 0x8A_E6_F6],
                 [0xD9_60_FD, 0x30_7C_E2], [0x8A_44_D5, 0x31_D1_92],

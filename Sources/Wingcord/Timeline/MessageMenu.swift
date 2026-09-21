@@ -9,10 +9,10 @@ import WingcordCore
 /// app has instead is one surface built from the same tokens every other flyout
 /// uses.
 ///
-/// It is `.clear` glass with the flyout tint, because what passes under it is
-/// the transcript and `INVARIANTS.md` §4 counts that as media. The popover
-/// hosting it carries `.presentationBackground(.clear)`, so there is exactly one
-/// material rather than two in series.
+/// **The popover's own glass is its body**, and nothing is painted on it —
+/// `INVARIANTS.md` §4.9. A SwiftUI glass drawn on popover content samples
+/// the popover's own window, where nothing sits behind it, and comes out as
+/// a flat slab; the system's glass samples the app behind the window.
 struct MessageMenu: View {
     var groups: [[MessageActionKind]]
     /// What the Apps list would run against. Nil on a surface with no apps
@@ -62,7 +62,7 @@ struct MessageMenu: View {
         }
         .padding(.vertical, Spacing.tight)
         .frame(width: Self.width)
-        .glassEffect(.clear.tint(Palette.flyoutTint), in: .rect(cornerRadius: Radius.glass))
+        // No material of its own: the popover's glass is the body — §4.9.
         .animation(motion.fadeQuick, value: hovered)
         .animation(motion.standard, value: isShowingApps)
         .animation(motion.standard, value: isShowingReminders)

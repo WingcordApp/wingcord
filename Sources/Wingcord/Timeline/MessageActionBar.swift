@@ -77,7 +77,12 @@ struct MessageActionBar: View {
         // pointer is on, and the pointer is by definition resting on it. Without
         // it the material has no specular response at all and reads as a flat
         // tinted capsule rather than as glass.
-        .glassEffect(.clear.tint(Palette.flyoutTint).interactive(), in: .capsule)
+        //
+        // **Untinted.** The flyout tint is a white wash *in* the material, and
+        // over the transcript's near-black it is the grey — the thing that made
+        // this read as an opaque slab rather than as glass the row shows
+        // through. The rim below keeps it findable on an empty stretch.
+        .glassEffect(.clear.interactive(), in: .capsule)
         // A fixed sheen along the upper edge. Moving glass picks the system's
         // own specular up as it travels; this pill is placed rather than
         // dragged, so it has none of its own.

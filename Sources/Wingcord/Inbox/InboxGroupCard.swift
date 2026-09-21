@@ -174,13 +174,25 @@ struct InboxMessageRow: View {
     @Environment(\.motion) private var motion
     @State private var isHovering = false
 
+    /// The draft being rewritten, or nil when the row is at rest.
+    ///
+    /// **Edited in place rather than in a presentation.** This row lives
+    /// inside a popover, and a sheet raised from one is a window over a window
+    /// — `INVARIANTS.md` §1 — while the thing being edited is one line of text
+    /// that is already on screen. The field replaces the line it changes,
+    /// which is `ProfileInlineEdits`' arrangement one surface over.
+    @State private var draftEdit: String?
+    /// The send time being moved, on the same argument.
+    @State private var timeEdit: Date?
+    @FocusState private var isEditingDraft: Bool
+
     var body: some View {
         HStack(alignment: .top, spacing: Spacing.base) {
             Button {
                 open()
             } label: {
                 body(of: row)
-                    .frame(width: InboxFlyout.cardWidth, alignment: .leading)
+                    .frame(width: InboxFlyout.cardWidth(for: tab), alignment: .leading)
                     .contentShape(.rect)
             }
             .buttonStyle(.plain)
@@ -226,7 +238,9 @@ struct InboxMessageRow: View {
                 // The height is the layout's. A measured height here would cost
                 // a second layout pass per row and settle visibly on the first
                 // frame.
-                .frame(width: InboxFlyout.cardWidth, height: card.height)
+                .frame(width: InboxFlyout.cardWidth(for: tab), height: card.height)
+            } else if let editing = draftEdit {
+                draftField(editing)
             } else if let draft = row.draft {
                 Text(draft)
                     .font(.system(.body))
@@ -250,7 +264,12 @@ struct InboxMessageRow: View {
     @ViewBuilder
     private var stamp: some View {
         let settings = PresentationRevision.shared.timeline
-        if let dueAt = row.dueAt {
+        if let editing = timeEdit {
+            // One field for both tabs: a reminder's `due_at` and a scheduled
+            // message's `send_at_timestamp` are the same question asked of two
+            // rows, and the commit is what differs.
+            timeField(editing)
+        } else if let dueAt = row.dueAt {
             Label(
                 "Due \(settings.timestampLabel(dueAt, calendar: .current))",
                 systemImage: "bell"
@@ -289,16 +308,40 @@ struct InboxMessageRow: View {
         Group {
             switch tab {
             case .mentions:
+                // **One act, so a button and not a menu.** A disclosure onto a
+                // single row is a click spent on nothing — the same rule the
+                // Apps submenu follows.
                 action("Dismiss", systemImage: "checkmark") {
                     model.dismissMention(row.id)
                 }
-            case .bookmarks, .reminders:
-                action("Remove", systemImage: "xmark") {
-                    model.removeSavedMessage(row.id, in: row.channelID)
+            case .bookmarks:
+                rowMenu {
+                    Button("Jump to Message") { open() }
+                        .disabled(row.card == nil)
+                    Divider()
+                    Button("Delete Bookmark", role: .destructive) {
+                        model.removeSavedMessage(row.id, in: row.channelID)
+                    }
+                }
+            case .reminders:
+                rowMenu {
+                    Button("Edit Reminder") { timeEdit = row.dueAt ?? .now }
+                    Button("Jump to Message") { open() }
+                        .disabled(row.card == nil)
+                    Divider()
+                    Button("Remove Reminder", role: .destructive) {
+                        model.removeSavedMessage(row.id, in: row.channelID)
+                    }
                 }
             case .scheduled:
-                action("Cancel", systemImage: "xmark") {
-                    model.cancelScheduledMessage(row.id)
+                rowMenu {
+                    Button("Send Now") { model.sendScheduledMessageNow(row.id) }
+                    Button("Edit Message") { draftEdit = row.draft ?? "" }
+                    Button("Edit Schedule Time") { timeEdit = row.scheduledAt ?? .now }
+                    Divider()
+                    Button("Cancel Scheduled Message", role: .destructive) {
+                        model.cancelScheduledMessage(row.id)
+                    }
                 }
             case .unreads:
                 // Marking read is the group's act, not the message's — Discord
@@ -309,12 +352,134 @@ struct InboxMessageRow: View {
                 EmptyView()
             }
         }
-        .frame(width: tab == .unreads ? 0 : 24, height: 24)
+        .frame(width: tab == .unreads ? 0 : InboxFlyout.accessoryGutter, height: 24)
         .opacity(isHovering ? 1 : 0)
         .animation(motion.fadeQuick, value: isHovering)
         // Hidden from the pointer as well as from the eye, so an invisible
         // button cannot be clicked by somebody who guessed where it was.
         .allowsHitTesting(isHovering)
+    }
+
+    /// The draft, being rewritten in place.
+    ///
+    /// **Return commits and Escape abandons**, which is the composer's own
+    /// contract and the one this app states once: a list means Return picks,
+    /// no list means Return commits. There is no list here.
+    ///
+    /// A commit that changes nothing sends no request — `editScheduledMessage`
+    /// compares against the row it already holds — so opening the field and
+    /// pressing Return costs nothing.
+    @ViewBuilder
+    private func draftField(_ text: String) -> some View {
+        // **`EditableInlineField`'s own clothes, not a new field idiom.** The
+        // profile edits a line where it is read with exactly this: a plain
+        // field, the hover fill behind it, and the accent as a border only
+        // while it has focus. A third spelling of "a short line being typed"
+        // is a third thing to keep in step.
+        TextField(
+            "Message",
+            text: Binding(get: { draftEdit ?? text }, set: { draftEdit = $0 }),
+            axis: .vertical
+        )
+        .textFieldStyle(.plain)
+        .font(.system(.body))
+        .foregroundStyle(Ink.primary)
+        .lineLimit(1...6)
+        .focused($isEditingDraft)
+        .padding(.horizontal, Spacing.base)
+        .padding(.vertical, Spacing.tight + 1)
+        .background {
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .fill(Palette.hoverFill)
+        }
+        .overlay {
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .strokeBorder(
+                    isEditingDraft ? Color.accentColor : .clear,
+                    lineWidth: 1.5
+                )
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        // Scoped to the border, which is the only thing that reads focus — a
+        // `.animation` on the row would rasterise the group underneath it, and
+        // §1.5 is explicit about what that does to a material.
+        .animation(motion.hover, value: isEditingDraft)
+        .onSubmit(commitDraft)
+        .onExitCommand { draftEdit = nil }
+        .onAppear { isEditingDraft = true }
+    }
+
+    private func commitDraft() {
+        if let edited = draftEdit { model.editScheduledMessage(row.id, content: edited) }
+        draftEdit = nil
+    }
+
+    /// The send time, being moved in place.
+    ///
+    /// **A graphical picker is the wrong control in a 500-point row** and a
+    /// field with a stepper is what macOS offers for a moment in time. Commit
+    /// is the tick beside it rather than Return, because a `DatePicker` eats
+    /// the key.
+    @ViewBuilder
+    private func timeField(_ date: Date) -> some View {
+        HStack(spacing: Spacing.base) {
+            DatePicker(
+                "Sends",
+                selection: Binding(get: { timeEdit ?? date }, set: { timeEdit = $0 }),
+                in: Date.now...,
+                displayedComponents: [.date, .hourAndMinute]
+            )
+            .labelsHidden()
+            .datePickerStyle(.field)
+            .font(.system(.caption))
+
+            Button("Save") {
+                if let moved = timeEdit {
+                    if tab == .reminders {
+                        model.rescheduleReminder(row.id, in: row.channelID, to: moved)
+                    } else {
+                        model.rescheduleScheduledMessage(row.id, to: moved)
+                    }
+                }
+                timeEdit = nil
+            }
+            .font(.system(.caption, weight: .semibold))
+            .foregroundStyle(Color.accentColor)
+            Button("Cancel") { timeEdit = nil }
+                .font(.system(.caption))
+                .foregroundStyle(Ink.secondary)
+        }
+        .buttonStyle(.plain)
+        .onExitCommand { timeEdit = nil }
+    }
+
+    /// The overflow beside a row.
+    ///
+    /// **A `Menu`, not a `.contextMenu`.** §2 forbids a context menu written
+    /// inline on a list row because it is evaluated as part of every row's
+    /// body — titles included — on every pass. A `Menu`'s items are built by
+    /// the closure only when it is opened, so what a row costs at rest is its
+    /// label: one glyph.
+    private func rowMenu(@ViewBuilder _ items: () -> some View) -> some View {
+        Menu {
+            items()
+        } label: {
+            Image(systemName: "ellipsis")
+                .font(.system(size: 11, weight: .semibold))
+                .frame(width: 24, height: 24)
+                .contentShape(.rect)
+        }
+        // **The frame, the shape and the style go on the MENU, after the
+        // style** — a borderless menu lays its own label out inside a control
+        // of its own choosing, so a frame set on the label does not size it.
+        // §1's rule, and the symptom is one control in a row wearing a
+        // different size from its neighbours.
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+        .frame(width: 24, height: 24)
+        .foregroundStyle(Ink.secondary)
+        .help("More")
+        .accessibilityLabel("More actions")
     }
 
     private func action(

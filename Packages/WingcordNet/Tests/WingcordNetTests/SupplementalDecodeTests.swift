@@ -432,4 +432,91 @@ struct VoiceChannelInfoDecodeTests {
         #expect(snapshot.voiceChannelInfo.count == 1)
         #expect(snapshot.voiceChannelInfo[ChannelID(rawValue: 100)]?.status == "NA COMP 6+")
     }
+
+    /// **A guild's notification floor arrives nested, and was read flat.**
+    ///
+    /// This client asks for `PRIORITIZED_READY_PAYLOAD`, so READY sends a
+    /// guild's own fields under `properties`. `default_message_notifications`
+    /// was declared only at the top level, so it was absent on every guild in
+    /// every READY and fell back to `allMessages` — which is the *loudest*
+    /// answer, and the opposite of what most large servers are set to.
+    ///
+    /// Nothing failed: the inbox simply listed every channel with anything
+    /// unread rather than the handful that would have told the reader
+    /// anything, and the notification policy read the same wrong floor.
+    @Test("A guild's notification default is read from its nested properties")
+    func guildDefaultNotificationsComeFromProperties() throws {
+        let ready = try Self.decode(ReadyPayload.self, """
+        {
+          "user": { "id": "1", "username": "me", "discriminator": "0" },
+          "session_id": "s",
+          "guilds": [
+            {
+              "id": "1",
+              "properties": {
+                "id": "1", "name": "Quiet",
+                "default_message_notifications": 1
+              }
+            },
+            {
+              "id": "2",
+              "properties": { "id": "2", "name": "Loud" },
+              "default_message_notifications": 0
+            },
+            { "id": "3", "properties": { "id": "3", "name": "Unstated" } }
+          ]
+        }
+        """)
+        let snapshot = ReadySnapshot(payload: ready)
+        let levels = Dictionary(
+            uniqueKeysWithValues: snapshot.guilds.map {
+                ($0.id, $0.defaultMessageNotifications)
+            }
+        )
+        // Nested — the case that was silently wrong.
+        #expect(levels[GuildID(rawValue: 1)] == .onlyMentions)
+        // Top level still wins where Discord sends it there.
+        #expect(levels[GuildID(rawValue: 2)] == .allMessages)
+        // Absent from both is the documented default, and is the one answer
+        // that must stay loud: a server nobody has configured must not be the
+        // reason somebody stops being told.
+        #expect(levels[GuildID(rawValue: 3)] == .allMessages)
+    }
+
+    /// **A read cursor of `"0"` is "never read", not a message id.**
+    ///
+    /// Discord sends it for every channel the reader has no position in, and
+    /// carried through as a real cursor it is the most dangerous value on this
+    /// payload: every snowflake compares greater than zero, so "everything
+    /// after the cursor" silently becomes the channel's entire history. The
+    /// inbox's Unreads tab drew a server's founding conversation from 2025 for
+    /// channels that had been busy all week, because the first message after
+    /// zero is the first message ever posted.
+    ///
+    /// It is nil at the wire boundary so no reader downstream has to know.
+    @Test("A read cursor of zero is no cursor at all")
+    func zeroReadCursorIsAbsent() throws {
+        let ready = try Self.decode(ReadyPayload.self, """
+        {
+          "user": { "id": "1", "username": "me", "discriminator": "0" },
+          "session_id": "s",
+          "read_state": { "entries": [
+            { "id": "100", "last_message_id": "0", "mention_count": 0 },
+            { "id": "101", "last_message_id": "1530121851874556743", "mention_count": 2 }
+          ]}
+        }
+        """)
+        let snapshot = ReadySnapshot(payload: ready)
+        #expect(snapshot.readStates[ChannelID(rawValue: 100)]?.lastAcknowledgedID == nil)
+        #expect(
+            snapshot.readStates[ChannelID(rawValue: 101)]?.lastAcknowledgedID
+                == MessageID(rawValue: 1_530_121_851_874_556_743)
+        )
+        // Both are still unread — an absent cursor means nothing has been read,
+        // never that there is nothing to read.
+        #expect(
+            snapshot.readStates[ChannelID(rawValue: 100)]?
+                .isUnread(newest: MessageID(rawValue: 5)) == true
+        )
+    }
 }

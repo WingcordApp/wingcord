@@ -66,6 +66,15 @@ nonisolated struct MessageRow: @unchecked Sendable {
     /// painter draws in the same one.
     var authorFace: NSFont?
     var authorTracking: CGFloat = 0
+    /// The author's role gradient, painted through the name under the
+    /// pointer — the member list's own behaviour, in the transcript.
+    var authorGradient: [NSColor]?
+    /// The effect and colours this name is lit with under the pointer.
+    ///
+    /// **Carried even though only the hovered row ever paints it**, because the
+    /// layout is cached and the pointer is not: resolving it at hover time
+    /// would mean re-laying out a row to answer a mouse move.
+    var authorStyle: DisplayNameStyle?
     var authorColor: NSColor?
     var authorRect: CGRect
     var timestampText: String
@@ -507,6 +516,17 @@ nonisolated struct TimelineLayoutEngine: Sendable {
         var nameFace: NSFont?
         /// Discord's per-family tracking, in points.
         var nameTracking: CGFloat = 0
+        /// The stops of the author's colour role, when that role carries a
+        /// gradient. The transcript draws it exactly as the roster does.
+        var gradient: [UInt32]?
+        /// The effect and colours the account chose, for the hover state.
+        ///
+        /// **The face has been read here since the transcript first drew a
+        /// styled name; the rest of the style was decoded and dropped.** A
+        /// person with Prism looked exactly like a person with the same font
+        /// and no effect, in every channel, forever — which is the shape of
+        /// `INVARIANTS.md`'s "on the wire and read by nothing".
+        var nameStyle: DisplayNameStyle?
     }
 
     /// One message's laid-out form, and everything it was laid out against.
@@ -1071,6 +1091,10 @@ nonisolated struct TimelineLayoutEngine: Sendable {
             authorName: author?.name ?? "Unknown",
             authorFace: author?.nameFace,
             authorTracking: author?.nameTracking ?? 0,
+            authorGradient: item.isRunHead
+                ? author?.gradient.map { $0.map { NSColor(Color(hex: $0)) } }
+                : nil,
+            authorStyle: item.isRunHead ? author?.nameStyle : nil,
             authorColor: author?.colorValue.map { NSColor(Color(hex: $0)) },
             authorRect: authorRect,
             timestampText: input.settings.timestampLabel(message.sentAt, calendar: input.calendar),

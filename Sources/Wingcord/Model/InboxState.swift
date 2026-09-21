@@ -38,6 +38,25 @@ struct InboxState {
     var saved: [SavedMessage]?
     var scheduled: [ScheduledMessage]?
 
+    /// The messages behind each unread group, **kept out of `messageBoxes` on
+    /// purpose.**
+    ///
+    /// This used to be written into the transcript's own boxes, and that is a
+    /// three-slot LRU (`AppModel.residentChannelLimit`). So the fourth unread
+    /// group to load evicted the first, the fifth evicted the second, and a
+    /// list of ten unread channels could never show more than three populated
+    /// at once — scrolling back up found the earlier ones empty, asked for them
+    /// again, and evicted the ones below. A refetch storm through one
+    /// rate-limit bucket, and a tab that reads as though it cannot fetch
+    /// anything.
+    ///
+    /// The transcript's cap exists because a transcript is hundreds of messages
+    /// and three of them is a real ceiling. This is twelve messages a channel
+    /// for the groups the reader actually scrolled to, it is dropped whole when
+    /// the flyout closes, and it belongs to the inbox the same way `mentions`
+    /// and `saved` do.
+    var unreadBodies: [ChannelID: [Message]] = [:]
+
     /// Which lists are in flight, so a second open does not ask again.
     var loading: Set<InboxTab> = []
     /// The last refusal per list, in the reader's words.
@@ -83,6 +102,7 @@ struct InboxState {
         mentions = nil
         saved = nil
         scheduled = nil
+        unreadBodies = [:]
         loading = []
         failures = [:]
         dismissedMentionIDs = []

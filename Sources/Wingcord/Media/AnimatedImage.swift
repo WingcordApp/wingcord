@@ -32,6 +32,24 @@ nonisolated struct AnimatedImage: Sendable {
     /// The frame showing at `time` seconds into an endlessly looping playback.
     func frame(at time: Double) -> CGImage { frames[index(at: time)] }
 
+    /// The frame showing at `time`, for an asset that plays **once**.
+    ///
+    /// **Past the end it holds the last frame rather than wrapping**, which is
+    /// what APNG's `acTL num_plays: 1` means and what an `<img>` does with one.
+    ///
+    /// The distinction exists because a caller's idea of how long a thing lasts
+    /// and the asset's own are not the same number. A profile effect's
+    /// catalogue entry gives SpongeBob a 6000 ms slot; the APNG is 4125 ms. Fed
+    /// through the looping lookup, the last 1875 ms of that slot replayed the
+    /// first 1875 ms of the animation — he walked on, flew away, and walked on
+    /// again before being cut off mid-stride.
+    func frame(at time: Double, looping: Bool) -> CGImage {
+        guard !looping else { return frame(at: time) }
+        guard frames.count > 1 else { return frames[0] }
+        guard time < duration else { return frames[frames.count - 1] }
+        return frames[index(at: max(0, time))]
+    }
+
     /// Which frame `time` lands on.
     ///
     /// Separate from `frame(at:)` because the draw path compares indices to

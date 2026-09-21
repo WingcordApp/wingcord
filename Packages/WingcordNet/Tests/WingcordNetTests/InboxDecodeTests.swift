@@ -306,35 +306,98 @@ struct InboxDecodeTests {
         #expect(response.results?.first?.domain() == nil)
     }
 
-    // MARK: Scheduled messages — inferred, and tolerant by design
+    // MARK: Scheduled messages — captured, request and reply both
 
-    @Test func scheduledMessagesAcceptEitherTimestampSpelling() throws {
+    /// The element shape, lifted out of `inbox,fixed23.har` with its framing
+    /// intact — one message queued from the composer, read back by the list
+    /// route three times. Trimmed only inside `message_preview`, which this
+    /// decoder deliberately does not read.
+    private static let scheduledListJSON = #"""
+    [
+      {
+        "id": "1551628835722625195",
+        "create_args": {
+          "content": "hey", "type": 0, "message_reference": null,
+          "channel_id": "1424759145021837325", "flags": 0,
+          "allowed_mentions": null, "poll": null,
+          "sticker_ids": [], "forward_only": null
+        },
+        "scheduled_message": {
+          "content": "hey", "type": 0, "message_reference": null,
+          "channel_id": "1424759145021837325", "flags": 0,
+          "allowed_mentions": null, "poll": null,
+          "sticker_ids": [], "forward_only": null
+        },
+        "user_id": "987654321987654321",
+        "scheduled_message_id": "1551628835722625195",
+        "send_at_timestamp": "2026-09-21T17:45:00+00:00",
+        "state": 0,
+        "attachment_uploads": [],
+        "message_preview": {
+          "id": "1551628835722625195", "type": 0, "content": "hey",
+          "channel_id": "1424759145021837325", "attachments": [],
+          "embeds": [], "mentions": [], "mention_roles": [],
+          "mention_everyone": false, "pinned": false, "tts": false,
+          "timestamp": "2026-09-21T16:19:02.306000+00:00",
+          "edited_timestamp": null, "flags": 0, "components": []
+        }
+      }
+    ]
+    """#
+
+    @Test func aScheduledMessageDecodesTheCapturedShape() throws {
+        let dtos = try DiscordREST.decoder.decode(
+            [ScheduledMessageDTO].self,
+            from: Data(Self.scheduledListJSON.utf8)
+        )
+        let messages = dtos.compactMap { $0.domain() }
+        #expect(messages.count == 1)
+        let message = try #require(messages.first)
+        #expect(message.id.rawValue == 1_551_628_835_722_625_195)
+        // **Nested, not top level.** The draft lives under `scheduled_message`.
+        #expect(message.channelID.rawValue == 1_424_759_145_021_837_325)
+        #expect(message.content == "hey")
+        // `send_at_timestamp`, and it carries no fractional seconds where every
+        // neighbouring date on this API does.
+        let expected = try #require(
+            ISO8601DateFormatter.plain.date(from: "2026-09-21T17:45:00+00:00")
+        )
+        #expect(message.scheduledAt == expected)
+        // Decoded and deliberately not interpreted — see `ScheduledMessageDTO`.
+        #expect(message.failureReason == nil)
+    }
+
+    /// **The shape this decoder used to expect, asserted to decode to nothing.**
+    ///
+    /// Every field the previous version looked for — `channel_id`, `content`
+    /// and `scheduled_at`/`send_at` at the top level — is absent from what
+    /// Discord actually sends, so `domain()` answered nil for every row and the
+    /// Scheduled tab was empty on a response that decodes perfectly. The two
+    /// tests that guarded it were written from the same guess as the decoder
+    /// and passed throughout, which is `INVARIANTS.md` §2.6 exactly: a fixture
+    /// that does not look like the caller's input guards the bug.
+    ///
+    /// Kept as a negative so the inferred shape cannot come back.
+    @Test func theInferredScheduledShapeIsNotWhatDiscordSends() throws {
         let json = #"""
-        [
-          {"id": "1", "channel_id": "9", "content": "later",
-           "scheduled_at": "2026-09-20T09:00:00.000000+00:00"},
-          {"id": "2", "channel_id": "9", "content": "also later",
-           "send_at": "2026-09-21T09:00:00.000000+00:00"}
-        ]
+        [{"id": "1", "channel_id": "9", "content": "later",
+          "scheduled_at": "2026-09-20T09:00:00.000000+00:00"}]
         """#
         let dtos = try DiscordREST.decoder.decode(
             [ScheduledMessageDTO].self,
             from: Data(json.utf8)
         )
-        let messages = dtos.compactMap { $0.domain() }
-        #expect(messages.count == 2)
-        #expect(messages.upcoming.map(\.id.rawValue) == [1, 2])
+        #expect(dtos.compactMap { $0.domain() }.isEmpty)
     }
 
     @Test func anUnreadableScheduledRowIsDroppedAndTheRestSurvive() throws {
-        // The shape is inferred. A row that does not match must cost one row,
-        // never the page — an empty tab on a wrong guess is recoverable; a
-        // thrown decode looks like the feature is broken.
+        // A row that cannot be understood costs one row, never the page.
         let json = #"""
         [
-          {"id": "1", "content": "no channel and no date"},
-          {"id": "2", "channel_id": "9", "content": "fine",
-           "scheduled_at": "2026-09-20T09:00:00.000000+00:00"}
+          {"id": "1", "state": 0},
+          {"id": "2",
+           "scheduled_message": {"content": "fine", "channel_id": "9"},
+           "send_at_timestamp": "2026-09-20T09:00:00+00:00"}
         ]
         """#
         let dtos = try DiscordREST.decoder.decode(
@@ -342,6 +405,21 @@ struct InboxDecodeTests {
             from: Data(json.utf8)
         )
         #expect(dtos.compactMap { $0.domain() }.map(\.id.rawValue) == [2])
+    }
+
+    /// `create_args` is the fallback when `scheduled_message` is absent, so an
+    /// edit route that revises one and not the other cannot blank the row.
+    @Test func aScheduledRowFallsBackToCreateArgs() throws {
+        let json = #"""
+        [{"id": "3",
+          "create_args": {"content": "from args", "channel_id": "9"},
+          "send_at_timestamp": "2026-09-20T09:00:00+00:00"}]
+        """#
+        let dtos = try DiscordREST.decoder.decode(
+            [ScheduledMessageDTO].self,
+            from: Data(json.utf8)
+        )
+        #expect(dtos.compactMap { $0.domain() }.map(\.content) == ["from args"])
     }
 
     // MARK: Relationships — three fields that were on the wire and read by nothing

@@ -65,10 +65,7 @@ struct VoiceMemberFlyout: View {
         }
         .padding(Spacing.snug)
         .frame(width: Self.width, alignment: .leading)
-        .glassEffect(
-            .clear.tint(Palette.flyoutTint),
-            in: .rect(cornerRadius: Radius.glass)
-        )
+        // No material of its own: the popover's glass is the body — §4.9.
         .allowsHitTesting(false)
         // The row it hangs off already carries the whole of this for VoiceOver.
         .accessibilityHidden(true)

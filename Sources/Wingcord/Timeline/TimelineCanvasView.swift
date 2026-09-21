@@ -42,6 +42,9 @@ final class TimelineCanvasView: NSView {
     // MARK: Interaction state
 
     private var hoveredRow: Int?
+    /// The hovered run head's prepared name, and the key it was built under.
+    /// Held rather than rebuilt per frame — see `styledAuthorName(for:)`.
+    private var styledName: (key: StyledNameKey, prepared: DisplayNameEffectPainter.Prepared)?
 
     /// The moving face and decoration on the row under the pointer.
     ///
@@ -107,6 +110,7 @@ final class TimelineCanvasView: NSView {
                 let previous = hoveredRow
                 hoveredRow = nil
                 hoveredComponent = nil
+                styledName = nil
                 invalidateRow(previous)
                 publishHover()
                 updateAvatarPlayback()
@@ -355,6 +359,13 @@ final class TimelineCanvasView: NSView {
         // giving the fourth its own display-link callback for one repaint is
         // exactly what that sentence is about.
         if avatarFilm.isPlaying { return true }
+        // Five and six. Neither is a filmstrip — nothing swaps a bitmap for
+        // them — but both are the same question: something on screen is moving,
+        // so this view needs a tick. A run head shows one or the other and
+        // never both: a server suppresses the account's own name colours and
+        // lends its role's instead.
+        if hoveredNameEffectAnimates { return true }
+        if nameGradientPhase != nil { return true }
         for index in visibleRowRange() {
             guard case .message(let row) = rows[index].kind else { continue }
             if row.stickers.contains(where: \.isAnimated) { return true }
@@ -376,6 +387,96 @@ final class TimelineCanvasView: NSView {
         return false
     }
 
+    /// Repaints just the hovered name, effect bleed included.
+    ///
+    /// Nothing at all when the name is not moving, which is the common case —
+    /// an unstyled row under the pointer must not cost a rect per tick.
+    private func invalidateHoveredName(force: Bool = false) {
+        guard force || hoveredNameEffectAnimates,
+              let index = hoveredRow, rows.indices.contains(index),
+              case .message(let row) = rows[index].kind
+        else { return }
+        let frame = rowFrame(at: index)
+        // A travelling role gradient paints strictly inside the glyphs and has
+        // no prepared run behind it — only a name effect does.
+        guard let prepared = styledName?.prepared else {
+            setNeedsDisplay(
+                CGRect(
+                    x: frame.minX + row.authorRect.minX,
+                    y: frame.minY + row.authorRect.minY,
+                    width: row.authorRect.width + 8,
+                    height: row.authorRect.height
+                )
+                // The glow `drawText` casts for a travelling ramp is a 4-point
+                // blur, so the box it is repainted in has to hold it.
+                .insetBy(dx: -6, dy: -6)
+            )
+            return
+        }
+        // The width is the prepared run's rather than the layout's: a truncated
+        // name is narrower than the box reserved for it, and a lit name that
+        // is wider than its box cannot exist — `maximumWidth` saw to that.
+        let box = CGRect(
+            x: frame.minX + row.authorRect.minX,
+            y: frame.minY + row.authorRect.minY,
+            width: min(row.authorRect.width + 8, prepared.run.size.width),
+            height: prepared.run.size.height
+        )
+        setNeedsDisplay(box.insetBy(dx: -prepared.bleed - 1, dy: -prepared.bleed - 1))
+    }
+
+    /// Whether a styled name may move at all.
+    ///
+    /// **Reduce Motion only, not `playsAnimatedContent`.** That setting's own
+    /// label names emoji and avatars, and a name effect is neither — it is how
+    /// somebody chose to be written. `StyledDisplayName` draws the profile's
+    /// copy on the same rule, and two surfaces disagreeing about one person's
+    /// name in one window is the thing to avoid.
+    private var playsNameEffects: Bool {
+        !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+    }
+
+    /// Where the hovered author's role gradient has travelled to, `0..<1`, or
+    /// nil when nothing is travelling.
+    ///
+    /// **The member list's own arithmetic, to the constant.** `MemberListCanvas`
+    /// runs the same ramp on a 1.5-second cycle so a short name and a long one
+    /// come round together, and the two surfaces drawing one person's name at
+    /// different speeds is exactly what this feature exists to avoid.
+    private var nameGradientPhase: CGFloat? {
+        guard !isScrolling, let hoveredRow, rows.indices.contains(hoveredRow),
+              case .message(let row) = rows[hoveredRow].kind,
+              row.isRunHead, (row.authorGradient?.count ?? 0) >= 2
+        else { return nil }
+        let cycle = AnimationClock.shared.time / Self.nameGradientCycle
+        return CGFloat(cycle - cycle.rounded(.down))
+    }
+
+    /// Matches `MemberListCanvas.gradientCycle`.
+    private static let nameGradientCycle = 1.5
+
+    /// Whether the hovered row is a run head whose owner chose a moving name
+    /// effect.
+    ///
+    /// **Only the hovered row**, which is the rule the member list's
+    /// `gradientPhase` already states and for the same reason: four hundred
+    /// messages in a channel carry dozens of styled names, and running all of
+    /// them is a page of moving text where a conversation should be — every one
+    /// of them a row-sized invalidation per frame.
+    ///
+    /// Reduce Motion stops the movement and **not the effect**: the still
+    /// picture is each effect's own first keyframe, which is the design rather
+    /// than a frozen frame of it. That is `StyledDisplayName`'s rule, restated
+    /// here because a canvas has no SwiftUI environment to read `\.motion` from.
+    private var hoveredNameEffectAnimates: Bool {
+        guard !isScrolling, playsNameEffects,
+              let hoveredRow, rows.indices.contains(hoveredRow),
+              case .message(let row) = rows[hoveredRow].kind,
+              row.isRunHead, let style = row.authorStyle
+        else { return false }
+        return DisplayNameEffectPainter.animates(style)
+    }
+
     /// One clock tick: repaint only the boxes whose frame actually moved.
     ///
     /// **Per box, not per row and never the whole canvas.** A ten-frame GIF
@@ -389,6 +490,18 @@ final class TimelineCanvasView: NSView {
         // Nothing happens on the ticks that resolve to the frame already on
         // screen, which at 24 ticks over a 12-frame-a-second asset is half.
         if avatarFilm.advance(to: time) { invalidateRow(hoveredRow) }
+
+        // The hovered author's travelling role gradient, which the member
+        // list runs on the same clock and the same cycle.
+        if nameGradientPhase != nil { invalidateHoveredName(force: true) }
+
+        // A name effect has no frames to skip — it is continuous, so every tick
+        // is a new picture. **Its own box, not the row**: a message carrying a
+        // photograph is four hundred points tall and the name is twenty, and
+        // repainting the picture sixty times a second to move a rainbow across
+        // fourteen letters is the cost this whole per-box arrangement exists to
+        // avoid.
+        invalidateHoveredName()
 
         // Local, so the three loops below share one lookup and one comparison
         // rather than three copies of them.
@@ -631,6 +744,16 @@ final class TimelineCanvasView: NSView {
                     state.activityInviteIsJoined =
                         activityInviteStatuses[application]?.isJoined ?? false
                 }
+                var preparedName: DisplayNameEffectPainter.Prepared?
+                if state.isHovered, case .message(let message) = row.kind,
+                   message.isRunHead, message.authorStyle != nil
+                {
+                    preparedName = styledAuthorName(for: message)
+                    state.playsNameEffect = playsNameEffects
+                }
+                if state.isHovered, playsNameEffects {
+                    state.nameGradientPhase = nameGradientPhase
+                }
                 TimelineRowPainter.draw(
                     row: row,
                     in: frame,
@@ -638,11 +761,68 @@ final class TimelineCanvasView: NSView {
                     style: style,
                     state: state,
                     images: images,
-                    scale: scale
+                    scale: scale,
+                    styledAuthorName: preparedName
                 )
             }
             index += 1
         }
+    }
+
+    /// What a prepared name was built from. A miss on any of it rebuilds.
+    ///
+    /// **The style is part of the key, not just the font.** Its colours decide
+    /// every ramp held in the prepared value, so an account that changes one
+    /// while the pointer sits on their message would otherwise keep painting
+    /// the old rainbow until the pointer moved.
+    private struct StyledNameKey: Hashable {
+        var text: String
+        var font: NSFont
+        var tracking: CGFloat
+        var style: DisplayNameStyle
+        var maximumWidth: CGFloat
+    }
+
+    /// The hovered run head's name as outlines and ramps, and what produced it.
+    ///
+    /// **One entry, because one row is hovered.** Core Text runs when the
+    /// pointer arrives on a name and not again until it leaves — where preparing
+    /// inside the draw would be a framesetting pass, an outline per letter and
+    /// a gradient, sixty times a second, for a name that cannot change while
+    /// somebody is pointing at it.
+    private func styledAuthorName(for row: MessageRow) -> DisplayNameEffectPainter.Prepared? {
+        guard let nameStyle = row.authorStyle else { return nil }
+        let font = row.authorFace ?? style.authorFont
+        let key = StyledNameKey(
+            text: row.authorName,
+            font: font,
+            tracking: row.authorTracking,
+            style: nameStyle,
+            // The same bound `drawText` truncates against, so the lit name
+            // cannot run wider than the plain one it replaces.
+            maximumWidth: row.authorRect.width + 8
+        )
+        if let styledName, styledName.key == key { return styledName.prepared }
+        guard let run = DisplayNameGlyphRun(
+            text: key.text,
+            font: font,
+            tracking: key.tracking,
+            // Gummy is the one effect that transforms letters independently,
+            // and splitting a run nothing splits is wasted work.
+            perGlyph: nameStyle.effect == .gummy,
+            maximumWidth: key.maximumWidth
+        ) else { return nil }
+        let prepared = DisplayNameEffectPainter.prepare(
+            run: run,
+            style: nameStyle,
+            pointSize: font.pointSize,
+            // **UTF-16, not grapheme clusters.** Prism's tile is a count of
+            // character slots and Discord counts them the way JavaScript does,
+            // so an emoji in a name is worth two.
+            characterCount: key.text.utf16.count
+        )
+        styledName = (key, prepared)
+        return prepared
     }
 
     /// The rows currently inside the canvas's window, as an index range.
@@ -682,8 +862,18 @@ final class TimelineCanvasView: NSView {
         guard hoveredRow != nil else { return }
         let previous = hoveredRow
         hoveredRow = nil
+        styledName = nil
         invalidateRow(previous)
         publishHover()
+        // **The same two reconciles the hover-change path runs, and they were
+        // missing here.** Everything that moves for the pointer is gated on
+        // `hoveredRow`, and leaving the transcript nils it — but nothing asked
+        // the clock about it again, so the display link kept firing for a face
+        // and a name nobody was pointing at until the next scroll or rows
+        // change happened to ask. `updateAvatarPlayback` returns early unless
+        // its own film reconciled, so the second call is not redundant.
+        updateAvatarPlayback()
+        refreshStickerAnimation()
     }
 
     override func mouseDown(with event: NSEvent) {
@@ -1122,6 +1312,11 @@ final class TimelineCanvasView: NSView {
         if rowChanged {
             publishHover()
             updateAvatarPlayback()
+            // **Not left to `updateAvatarPlayback`.** That one returns early
+            // unless its own film changed, so a row whose face is a still JPEG
+            // and whose name is Prism would never reach the reconcile — the
+            // name would light and then stand there.
+            refreshStickerAnimation()
         }
     }
 

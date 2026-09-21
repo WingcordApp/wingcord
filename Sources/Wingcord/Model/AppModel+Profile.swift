@@ -10,18 +10,59 @@ extension AppModel {
     /// ends up sorted differently in each.
     func profilePresentation(for request: ProfileRequest) -> ProfilePresentation? {
         guard let user = users[request.userID] else { return nil }
-        let guildID = request.guildID ?? selectedGuildID
+        // **"View Main Profile" drops the server entirely**, rather than only
+        // the nickname: the roles, the per-server avatar and the join date all
+        // belong to the membership, and a main profile showing a server's roles
+        // is the hybrid this used to draw.
+        let guildID = request.showsMainProfile ? nil : (request.guildID ?? selectedGuildID)
         let member = guildID.flatMap { members[$0]?[request.userID] }
+        // Whether there is a per-server profile to switch *to*, which the menu
+        // needs even while the main one is showing.
+        let homeGuildID = request.guildID ?? selectedGuildID
+        let homeMember = homeGuildID.flatMap { members[$0]?[request.userID] }
         let guildRoles = guildID.flatMap { roles[$0] } ?? [:]
         let presence = presences[request.userID]
-        let decoration = user.decoration
+        // **Which of the two profiles this card is.** A per-server one wears
+        // that server's banner, bio, colours, pronouns and effect; the account's
+        // own wears none of them. They are two records and the reader chooses
+        // between them from the menu — see `ProfileRequest.showsMainProfile`.
+        let guildUser = guildID.flatMap { memberProfiles[$0]?[request.userID] }
+        let profileUser = guildUser ?? user
+        let decoration = profileUser.decoration
 
         return ProfilePresentation(
             userID: user.id,
-            displayName: user.preferredName,
+            // **A per-server profile is named by the nickname.** Discord's
+            // own: open somebody from a server and the card says what they are
+            // called there, with "View Main Profile" in the menu to see the
+            // other one. This drew `global_name` under a list of that server's
+            // roles — a card that was neither profile.
+            //
+            // `resolvedName` is the member's own rule, shared with the
+            // transcript and the roster, so one person cannot be two people in
+            // one window.
+            displayName: member?.resolvedName(user: user) ?? user.preferredName,
             displayNameStyle: decoration?.displayNameStyle,
             handle: user.handle,
             nickname: member?.nickname,
+            showsMainProfile: request.showsMainProfile,
+            // What the profile the reader is NOT looking at is called, or nil
+            // when there is no other one to look at.
+            //
+            // **A per-server profile is more than a nickname**, so the offer
+            // stands whenever the server carries its own layer — a different
+            // banner, bio, colours or effect — even for somebody using their
+            // account name there. Nil only when the server adds nothing at all,
+            // where an item offering to show the same profile again is worse
+            // than no item.
+            alternateName: {
+                guard let homeGuildID else { return nil }
+                let hasOwnLayer = memberProfiles[homeGuildID]?[request.userID] != nil
+                let here = homeMember?.resolvedName(user: user) ?? user.preferredName
+                let account = user.preferredName
+                guard hasOwnLayer || here != account else { return nil }
+                return request.showsMainProfile ? here : account
+            }(),
             avatarURL: avatarURL(
                 forUserID: user.id,
                 inGuild: guildID,
@@ -291,6 +332,96 @@ extension AppModel {
         profileRequest = nil
         selectGuild(nil)
         selectChannel(channelID)
+    }
+
+    /// The profiles the reader can edit: their own, then every server they are
+    /// in, **in the rail's order** — which is the order Discord's own switcher
+    /// lists them in, and the order the reader already knows them by.
+    ///
+    /// Every server rather than only those with a per-server layer already set:
+    /// the switcher is how somebody *creates* one, so listing only existing
+    /// layers would make the first one impossible to make.
+    func profileEditScopes(for userID: UserID) -> [ProfileEditScope] {
+        var ordered: [GuildID] = []
+        var seen: Set<GuildID> = []
+        for guildID in folders.flatMap(\.guildIDs) where guilds[guildID] != nil {
+            if seen.insert(guildID).inserted { ordered.append(guildID) }
+        }
+        // A guild joined since the settings last arrived sits in no folder yet;
+        // it still belongs in the list, after the ones the reader arranged.
+        ordered += guilds.values
+            .filter { !seen.contains($0.id) }
+            .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+            .map(\.id)
+
+        return [.main] + ordered.compactMap { guildID in
+            guard let guild = guilds[guildID] else { return nil }
+            return ProfileEditScope(
+                scope: .guild(guildID),
+                title: guild.name,
+                iconURL: guild.iconHash.flatMap {
+                    CDN.guildIcon(guildID: guildID, hash: $0, side: 24)
+                },
+                monogram: guild.monogram,
+                subtitle: members[guildID]?[userID]?.nickname
+            )
+        }
+    }
+
+    /// The profile an editor at `scope` starts from.
+    ///
+    /// **Not the profile the sheet happens to be showing**, and the difference
+    /// was a real defect: opened from a server, the sheet shows the per-server
+    /// profile, and seeding "Main Profile" from it put the reader's nickname
+    /// and server bio into the fields that write their *account* — one Save
+    /// from overwriting their global name with a server nickname.
+    func profileEditBase(for scope: ProfileEditor.Scope, userID: UserID) -> ProfilePresentation? {
+        switch scope {
+        case .account:
+            profilePresentation(
+                for: ProfileRequest(userID: userID, showsMainProfile: true, anchor: .zero)
+            )
+        case .guild(let guildID):
+            profilePresentation(
+                for: ProfileRequest(userID: userID, guildID: guildID, anchor: .zero)
+            )
+        }
+    }
+
+    /// What the reader may change in a profile editor opened at this scope.
+    ///
+    /// **Resolved here because the two answers live here** — the account's
+    /// premium tier and the guild's permission bits — and because a control
+    /// that asked for them itself would ask once per body evaluation.
+    func profileEditCapability(for scope: ProfileEditor.Scope) -> ProfileEditCapability {
+        let tier = currentUserID.flatMap { users[$0] }?.decoration?.premiumTier ?? .none
+        return ProfileEditCapability(
+            wearsNitro: tier == .nitro,
+            // **Only meaningful in a server, and false outside one.** There is
+            // no nickname on an account profile to permit.
+            canChangeNickname: scope.guildID.map {
+                permissionGate.permissions(inGuild: $0).contains(.changeNickname)
+            } ?? false
+        )
+    }
+
+    /// Switches the open profile between the account's own and the one it
+    /// wears in this server.
+    ///
+    /// **The request is edited rather than rebuilt**, so the anchor, the depth
+    /// and the guild all survive — a rebuilt one would reopen the card at the
+    /// wrong place and at the wrong depth.
+    func showMainProfile(_ showsMain: Bool) {
+        guard var request = profileRequest, request.showsMainProfile != showsMain else { return }
+        request.showsMainProfile = showsMain
+        profileRequest = request
+    }
+
+    /// Raises the open card to the full profile, keeping its subject.
+    func openFullProfile() {
+        guard var request = profileRequest, request.depth != .full else { return }
+        request.depth = .full
+        profileRequest = request
     }
 
     /// Opens someone's profile from any surface.

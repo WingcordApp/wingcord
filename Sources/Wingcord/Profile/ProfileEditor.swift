@@ -64,6 +64,13 @@ final class ProfileEditor {
     /// `ProfilePresentation.isSelf` — but the id is needed to address the CDN
     /// for a recent avatar.
     let userID: UserID
+    /// The profile this draft was started from — the account's own for
+    /// `.account`, that server's for `.guild`. The sheet previews the draft over
+    /// **this**, not over whichever profile it was opened on, or a server draft
+    /// would be drawn onto the main profile.
+    let base: ProfilePresentation
+    /// The account's own name, which a cleared nickname falls back to.
+    let accountName: String
 
     // MARK: The draft
 
@@ -77,6 +84,15 @@ final class ProfileEditor {
     /// dirt compares two recipes rather than two colours — and a `nil` against a
     /// resolved black would read as a change on every open.
     var accentColor: UInt32?
+    /// The two colours a Nitro profile is themed with — `theme_colors` on the
+    /// wire, and **exactly two**, which the documentation states and the capture
+    /// confirms (`{"theme_colors":[14853140,3026736]}`).
+    ///
+    /// **Separate from `accentColor`, not a richer version of it.** The single
+    /// banner colour is free and the pair is not, so an account that loses Nitro
+    /// keeps the one and not the other; folding them together would make the
+    /// free field unreachable for anybody who had ever set a theme.
+    var themeColors: [UInt32]?
     var avatar: AvatarEdit = .unchanged
     /// Nil is "no tag". Distinct from `unchanged`, which is the original's value
     /// still being in place.
@@ -127,6 +143,7 @@ final class ProfileEditor {
         var bio: String
         var nickname: String
         var accentColor: UInt32?
+        var themeColors: [UInt32]?
         var primaryGuildID: GuildID?
         var nameplate: Nameplate?
         var profileEffectSKU: String?
@@ -142,15 +159,31 @@ final class ProfileEditor {
     /// next edit, so a stale failure never sits over a draft that has moved on.
     private(set) var failure: String?
 
-    init(profile: ProfilePresentation, widgets: [ProfileWidget], scope: Scope) {
+    /// - Parameter accountName: what a cleared nickname falls back to. Only a
+    ///   server scope needs it; the account scope's name *is* this.
+    init(
+        profile: ProfilePresentation,
+        widgets: [ProfileWidget],
+        scope: Scope,
+        accountName: String? = nil
+    ) {
         self.scope = scope
         userID = profile.userID
+        base = profile
+        self.accountName = accountName ?? profile.displayName
         let snapshot = Snapshot(
             displayName: profile.displayName,
             pronouns: profile.pronouns ?? "",
             bio: profile.bio ?? "",
             nickname: profile.nickname ?? "",
             accentColor: profile.accentColorValue,
+            // **Empty is nil here.** The presentation carries `[]` for "no
+            // theme" and the wire wants `null` to clear one; keeping the empty
+            // array would make every free account look like it had a theme of
+            // no colours and send one on the first save.
+            themeColors: profile.themeColorValues.isEmpty
+                ? nil
+                : profile.themeColorValues,
             primaryGuildID: profile.guildTag?.guildID,
             nameplate: profile.nameplate,
             profileEffectSKU: profile.effect?.skuID,
@@ -168,6 +201,7 @@ final class ProfileEditor {
         bio = snapshot.bio
         nickname = snapshot.nickname
         accentColor = snapshot.accentColor
+        themeColors = snapshot.themeColors
         primaryGuildID = snapshot.primaryGuildID
         nameplate = snapshot.nameplate
         profileEffectSKU = snapshot.profileEffectSKU
@@ -189,11 +223,20 @@ final class ProfileEditor {
         // A name is never empty on screen: cleared, it falls back to the
         // account's own, which is what Discord will do when the field is sent as
         // null anyway.
-        preview.displayName = displayName.isEmpty ? profile.displayName : displayName
+        // **In a server the name on the card is the nickname**, so that is the
+        // field the preview follows there; cleared, Discord shows the account's
+        // own name, and so does the preview.
+        switch scope {
+        case .account:
+            preview.displayName = displayName.isEmpty ? profile.displayName : displayName
+        case .guild:
+            preview.displayName = nickname.isEmpty ? accountName : nickname
+        }
         preview.pronouns = pronouns.isEmpty ? nil : pronouns
         preview.bio = bio.isEmpty ? nil : bio
         preview.nickname = nickname.isEmpty ? nil : nickname
         preview.accentColorValue = accentColor
+        preview.themeColorValues = themeColors ?? []
         preview.nameplate = nameplate
         preview.avatarDecorationSKU = avatarDecorationSKU
         // The picture follows the choice: cleared, the ring comes off the
@@ -268,6 +311,7 @@ final class ProfileEditor {
             bio: bio,
             nickname: nickname,
             accentColor: accentColor,
+            themeColors: themeColors,
             primaryGuildID: primaryGuildID,
             nameplate: nameplate,
             profileEffectSKU: profileEffectSKU,
@@ -284,6 +328,7 @@ final class ProfileEditor {
         bio = original.bio
         nickname = original.nickname
         accentColor = original.accentColor
+        themeColors = original.themeColors
         primaryGuildID = original.primaryGuildID
         nameplate = original.nameplate
         profileEffectSKU = original.profileEffectSKU
@@ -451,12 +496,16 @@ final class ProfileEditor {
         let bioEdit = edit(bio, original.bio)
         let pronounEdit = edit(pronouns, original.pronouns)
         let accent = edit(accentColor, original.accentColor)
+        let theme = edit(themeColors, original.themeColors)
         let effect = edit(profileEffectSKU, original.profileEffectSKU)
-        if bioEdit.isDirty || pronounEdit.isDirty || accent.isDirty || effect.isDirty {
+        if bioEdit.isDirty || pronounEdit.isDirty || accent.isDirty
+            || theme.isDirty || effect.isDirty
+        {
             try await rest.modifyProfile(
                 bio: bioEdit,
                 pronouns: pronounEdit,
                 accentColor: accent.map(Int.init),
+                themeColors: theme.map { $0.map(Int.init) },
                 profileEffectSKU: effect
             )
         }

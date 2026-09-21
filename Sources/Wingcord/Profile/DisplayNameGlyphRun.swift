@@ -16,7 +16,7 @@ import CoreText
 /// The coordinate space is **y-up with the origin at the box's bottom-left**,
 /// which is Core Graphics' and Core Animation's own. The view is deliberately
 /// not flipped so no path has to be mirrored on the way out.
-struct DisplayNameGlyphRun {
+nonisolated struct DisplayNameGlyphRun {
 
     /// One letter, as `display: inline-block` sees it.
     struct Glyph {
@@ -33,6 +33,15 @@ struct DisplayNameGlyphRun {
     /// outside it — Neon's glow, Toon's and Pop's strokes — the same way
     /// Discord's negative margins let them.
     let size: CGSize
+    /// The line's own ascent and descent, unrounded.
+    ///
+    /// **`size.height` is these two rounded UP together, and that is why they
+    /// are kept.** A layer host positions the whole box and never needs them; a
+    /// painter placing this run against text drawn by `CTLineDraw` elsewhere has
+    /// to land on the same baseline, and deriving it from the rounded height
+    /// leaves the effect up to a point above the name it is meant to be.
+    let ascent: CGFloat
+    let descent: CGFloat
     /// The whole run as one outline.
     let path: CGPath
     /// The same outlines split per letter. Built only when the effect needs
@@ -98,6 +107,8 @@ struct DisplayNameGlyphRun {
         let height = ascent + descent
         guard width > 0, height > 0 else { return nil }
         size = CGSize(width: width.rounded(.up), height: height.rounded(.up))
+        self.ascent = ascent
+        self.descent = descent
 
         let whole = CGMutablePath()
         var letters: [Glyph] = []

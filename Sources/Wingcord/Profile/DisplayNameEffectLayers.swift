@@ -28,12 +28,12 @@ enum DisplayNameEffectLayers {
     /// Exposed so a surface that plays an effect *once* — the DM list's rows do,
     /// on a click — knows how long once is. A duration invented at the call site
     /// would cut an effect off mid-movement.
-    static let cycle: CFTimeInterval = 4
+    static let cycle: CFTimeInterval = DisplayNameEffectSpec.cycle
     /// Prism scrolls one tile per two seconds, linearly.
-    private static let prismCycle: CFTimeInterval = 2
+    private static let prismCycle: CFTimeInterval = DisplayNameEffectSpec.prismCycle
 
-    private static let ease = CAMediaTimingFunction(controlPoints: 0.44, 0.29, 0.48, 1)
-    private static let neonEase = CAMediaTimingFunction(controlPoints: 0.24, 0.31, 0.36, 0.93)
+    private static let ease = DisplayNameEffectSpec.ease.timingFunction
+    private static let neonEase = DisplayNameEffectSpec.neonEase.timingFunction
 
     /// - Parameters:
     ///   - animates: false under Reduce Motion. **No animation is added at
@@ -62,7 +62,10 @@ enum DisplayNameEffectLayers {
             return root
         }
 
-        switch style.effect {
+        // `painted` is what collapses Glow onto Gradient — Discord's own
+        // renderer groups the two, and doing it here means neither this
+        // switch nor the painter's needs a case that draws nothing.
+        switch style.effect.painted {
         case .solid:
             root.addSublayer(fill(run.path, color: color(palette.main)))
         case .gradient:
@@ -75,6 +78,10 @@ enum DisplayNameEffectLayers {
             pop(into: root, run: run, palette: palette, em: pointSize, animates: animates)
         case .gummy:
             gummy(into: root, run: run, colors: style.colors, fallback: palette, animates: animates)
+        case .glow:
+            // Unreachable: `painted` maps it to `.gradient` above. Stated
+            // rather than defaulted so a new effect cannot land here silently.
+            root.addSublayer(gradient(run: run, colors: style.colors, fallback: palette))
         case .prism:
             prism(
                 into: root, run: run, colors: style.colors, fallback: palette,
@@ -100,7 +107,7 @@ enum DisplayNameEffectLayers {
         let layer = CAGradientLayer()
         layer.frame = CGRect(origin: .zero, size: run.size)
         layer.colors = [color(colors[0]), color(colors[1])]
-        layer.locations = [0.1, 0.9]
+        layer.locations = DisplayNameEffectSpec.Gradient.stops.map { NSNumber(value: $0) }
         // y-up: top-left to bottom-right.
         layer.startPoint = CGPoint(x: 0, y: 1)
         layer.endPoint = CGPoint(x: 1, y: 0)
@@ -123,7 +130,7 @@ enum DisplayNameEffectLayers {
         let glow = fill(run.path, color: color(palette.main))
         glow.shadowColor = color(palette.main)
         glow.shadowOffset = .zero
-        glow.shadowRadius = 4 + 0.12 * em
+        glow.shadowRadius = DisplayNameEffectSpec.Neon.glowRadius(em: em)
         glow.shadowOpacity = 1
         glow.shadowPath = run.path
         root.addSublayer(glow)
@@ -135,7 +142,7 @@ enum DisplayNameEffectLayers {
         stroke.path = run.path
         stroke.fillColor = nil
         stroke.strokeColor = color(palette.neonStroke)
-        stroke.lineWidth = 1 + 0.04 * em
+        stroke.lineWidth = DisplayNameEffectSpec.Neon.strokeWidth(em: em)
         stroke.lineJoin = .round
         root.addSublayer(stroke)
 
@@ -147,8 +154,8 @@ enum DisplayNameEffectLayers {
         let white = CGColor.white
         let flicker = keyframes(
             "fillColor",
-            values: [white, white, off, white, white, off, white, white, off, white, white],
-            keyTimes: [0, 0.15, 0.16, 0.18, 0.20, 0.22, 0.23, 0.25, 0.28, 0.50, 1],
+            values: DisplayNameEffectSpec.Neon.isOff.map { $0 ? off : white },
+            keyTimes: DisplayNameEffectSpec.Neon.keyTimes.map { NSNumber(value: $0) },
             duration: Self.cycle,
             timing: neonEase
         )
@@ -170,7 +177,7 @@ enum DisplayNameEffectLayers {
         base.path = run.path
         base.fillColor = color(palette.toonStroke)
         base.strokeColor = color(palette.toonStroke)
-        base.lineWidth = 1.6 + 0.04 * em
+        base.lineWidth = DisplayNameEffectSpec.Toon.strokeWidth(em: em)
         base.lineJoin = .round
         root.addSublayer(base)
 
@@ -183,7 +190,10 @@ enum DisplayNameEffectLayers {
         // `background-size: 100% 400%` — the gradient is four times the line box
         // and slides three of them.
         let sheen = CAGradientLayer()
-        sheen.bounds = CGRect(x: 0, y: 0, width: run.size.width, height: height * 4)
+        sheen.bounds = CGRect(
+            x: 0, y: 0,
+            width: run.size.width, height: height * DisplayNameEffectSpec.Toon.scale
+        )
         sheen.startPoint = CGPoint(x: 0.5, y: 1)
         sheen.endPoint = CGPoint(x: 0.5, y: 0)
         sheen.colors = [
@@ -191,14 +201,15 @@ enum DisplayNameEffectLayers {
             color(palette.light2), color(palette.main), CGColor.white, color(palette.light2),
             color(palette.light1), color(palette.main),
         ]
-        sheen.locations = [0, 0.08, 0.15, 0.25, 0.45, 0.55, 0.75, 0.83, 0.90, 1]
+        sheen.locations = DisplayNameEffectSpec.Toon.stops.map { NSNumber(value: $0) }
 
         // Rest is the gradient's top quarter aligned with the box. **The loop is
         // seamless by construction**: the last quarter of that stop list mirrors
         // the first, so the wrap from 100% back to 0% shows the same colours.
-        let top = -height
-        let bottom = height * 2
-        sheen.position = CGPoint(x: run.size.width / 2, y: top)
+        // The keyframe table is the whole travel, so the rest position is its
+        // own first entry rather than a second copy of the same number.
+        let travel = DisplayNameEffectSpec.Toon.travel.map { $0 * height }
+        sheen.position = CGPoint(x: run.size.width / 2, y: travel[0])
         window.addSublayer(sheen)
         root.addSublayer(window)
         guard animates else { return }
@@ -206,8 +217,8 @@ enum DisplayNameEffectLayers {
         sheen.add(
             keyframes(
                 "position.y",
-                values: [top, top, bottom, bottom],
-                keyTimes: [0, 0.05, 0.55, 1],
+                values: travel,
+                keyTimes: DisplayNameEffectSpec.Toon.keyTimes.map { NSNumber(value: $0) },
                 duration: Self.cycle,
                 timing: ease
             ),
@@ -224,7 +235,7 @@ enum DisplayNameEffectLayers {
         em: CGFloat,
         animates: Bool
     ) {
-        let lift = 0.08 * em
+        let lift = DisplayNameEffectSpec.Pop.lift * em
         let width = run.size.width
         let height = run.size.height
 
@@ -244,7 +255,7 @@ enum DisplayNameEffectLayers {
             color(palette.main), color(palette.light1), color(palette.main),
             color(palette.main),
         ]
-        sweep.locations = [0, 0.06, 0.20, 0.50, 0.56, 0.70, 1]
+        sweep.locations = DisplayNameEffectSpec.Pop.sweepStops.map { NSNumber(value: $0) }
         sweep.position = .zero
         shadow.addSublayer(sweep)
         shadow.transform = CATransform3DMakeTranslation(0, -lift, 0)
@@ -262,7 +273,7 @@ enum DisplayNameEffectLayers {
         outline.path = run.path
         outline.fillColor = nil
         outline.strokeColor = color(palette.dark2)
-        outline.lineWidth = 1.2 + 0.04 * em
+        outline.lineWidth = DisplayNameEffectSpec.Pop.outlineWidth(em: em)
         outline.lineJoin = .round
         letters.addSublayer(outline)
         letters.addSublayer(fill(run.path, color: .white))
@@ -278,8 +289,8 @@ enum DisplayNameEffectLayers {
                 // Typed, not inferred: a bare `0` in an `[Any]` literal is an
                 // `Int`, and a keyframe list that mixes Int with Double hands
                 // Core Animation a value it has to coerce per frame.
-                values: [0, 0.05 * em, -0.08 * em, 0, 0] as [CGFloat],
-                keyTimes: [0, 0.18, 0.35, 0.50, 1],
+                values: DisplayNameEffectSpec.Pop.letters.map { $0 * em } as [CGFloat],
+                keyTimes: DisplayNameEffectSpec.Pop.keyTimes.map { NSNumber(value: $0) },
                 duration: Self.cycle,
                 timing: ease
             ),
@@ -288,8 +299,8 @@ enum DisplayNameEffectLayers {
         shadow.add(
             keyframes(
                 "transform.translation.y",
-                values: [-lift, -0.13 * em, 0, -lift, -lift] as [CGFloat],
-                keyTimes: [0, 0.18, 0.35, 0.50, 1],
+                values: DisplayNameEffectSpec.Pop.shadow.map { $0 * em } as [CGFloat],
+                keyTimes: DisplayNameEffectSpec.Pop.keyTimes.map { NSNumber(value: $0) },
                 duration: Self.cycle,
                 timing: ease
             ),
@@ -301,7 +312,7 @@ enum DisplayNameEffectLayers {
                 values: [
                     CGPoint.zero, CGPoint(x: width, y: height), CGPoint(x: width, y: height),
                 ],
-                keyTimes: [0, 0.5, 1],
+                keyTimes: DisplayNameEffectSpec.Pop.sweepKeyTimes.map { NSNumber(value: $0) },
                 duration: Self.cycle,
                 timing: ease
             ),
@@ -336,18 +347,24 @@ enum DisplayNameEffectLayers {
             // Scaled about the centre of the *layout* box, which is what CSS
             // pivots an inline-block about — the ink box would swing a
             // descender around the wrong point.
+            // **`Double`, not the spec's `CGFloat`.** The two are the same
+            // bits on every platform this ships to, and `[Any]` does not care —
+            // but a keyframe list is read back by the tests that keep these
+            // numbers from drifting, and an array cast is type-exact. Handing
+            // Core Animation the type it has always been handed keeps that gate
+            // pointed at the values rather than at the refactor.
             for (keyPath, values) in [
-                ("transform.scale.x", [1.0, 1.28, 0.82, 1.1, 0.96, 1.0, 1.0]),
-                ("transform.scale.y", [1.0, 0.72, 1.18, 0.9, 1.04, 1.0, 1.0]),
+                ("transform.scale.x", DisplayNameEffectSpec.Gummy.scaleX.map(Double.init)),
+                ("transform.scale.y", DisplayNameEffectSpec.Gummy.scaleY.map(Double.init)),
             ] {
                 let squish = keyframes(
                     keyPath,
                     values: values,
-                    keyTimes: [0, 0.07, 0.14, 0.21, 0.28, 0.35, 1],
+                    keyTimes: DisplayNameEffectSpec.Gummy.keyTimes.map { NSNumber(value: $0) },
                     duration: Self.cycle,
                     timing: ease
                 )
-                squish.beginTime = start + Double(index) * 0.05
+                squish.beginTime = start + Double(index) * DisplayNameEffectSpec.Gummy.stagger
                 squish.fillMode = .backwards
                 letter.add(squish, forKey: keyPath)
             }

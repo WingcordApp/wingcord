@@ -101,8 +101,7 @@ private struct VoiceMemberRow: View {
             arrowEdge: .trailing
         ) {
             VoiceMemberFlyout(member: member, channelID: channelID, guildID: guildID)
-                // The card carries its own material; the popover must carry
-                // none, or two are stacked and the result reads as frost.
+                // The popover's glass is the card's body — §4.9.
                 .presentationBackground(.clear)
         }
         // One node for the row. Deriving a label from five views is the

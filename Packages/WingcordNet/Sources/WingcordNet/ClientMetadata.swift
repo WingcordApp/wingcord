@@ -22,9 +22,23 @@ public struct ClientMetadata: Sendable {
         /// continuously and a build number far behind the current one is a
         /// signal. Re-read them from a running client rather than guessing, and
         /// change them here — one place, both transports.
+        ///
+        /// **And staleness is not only a fingerprint risk; it refuses routes.**
+        /// `client_build_number` was 587,597 here against the 617,136 a live
+        /// session sent in `scheduled.har` — about thirty thousand builds
+        /// behind — and `users/@me/scheduled-messages` answered **401** for
+        /// this client while every older route on the same token kept working.
+        /// Discord gates newly-shipped endpoints on the build number, so a
+        /// stale one fails on exactly the newest feature and nowhere else,
+        /// which reads as one broken route rather than as a stale client.
+        ///
+        /// Read off the capture, not bumped speculatively. The tell that this
+        /// was the cause is the Scheduled tab answering at all; the tell that
+        /// it was not is a `HTTP 401 users/@me/scheduled-messages` line still
+        /// in the trace, which now carries Discord's own words for it.
         public static let current = Baseline(
             apiVersion: 9,
-            webBuildNumber: 587_597,
+            webBuildNumber: 617_136,
             nativeBuildNumber: 87_263,
             desktopVersion: "0.0.403",
             electronVersion: "42.7.1",

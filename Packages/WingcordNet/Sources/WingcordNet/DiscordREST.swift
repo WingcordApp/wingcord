@@ -157,6 +157,8 @@ public actor DiscordREST {
         )
         return ProfileFetch(
             user: payload.domain,
+            guildUser: guildID == nil ? nil : payload.guildDomain,
+            guildID: guildID,
             widgets: (payload.widgets ?? []).compactMap(\.domain)
         )
     }
@@ -578,10 +580,13 @@ public actor DiscordREST {
         case 200..<300:
             return data
         case 401:
+            Self.traceRefusal(status: 401, route: route, data: data)
             throw Failure.unauthorized
         case 403:
+            Self.traceRefusal(status: 403, route: route, data: data)
             throw Failure.forbidden
         case 404:
+            Self.traceRefusal(status: 404, route: route, data: data)
             throw Failure.notFound
         case 429:
             // The limiter has recorded the reset; retry once. A second 429 after
@@ -702,6 +707,28 @@ public actor DiscordREST {
         }
         await limiter.update(route: route, headers: http.allHeaderFields, statusCode: http.statusCode)
         return (data, http.statusCode)
+    }
+
+    /// Writes a refusal's own words into the trace before it is thrown away.
+    ///
+    /// **401, 403 and 404 are the three statuses whose body this client
+    /// discards**, because each maps to a case with no associated value — so
+    /// "Not authorised." reaches the reader with no way to tell a signed-out
+    /// session from a route that wants MFA from a path that does not exist.
+    /// Discord says which in the body every time: `{"message": "401:
+    /// Unauthorized", "code": 0}` and `{"code": 60003, "message": "Two factor
+    /// is required for this operation"}` are the same status and two different
+    /// things to do about it.
+    ///
+    /// This is `INVARIANTS.md`'s "never log a close code without its reason",
+    /// one layer over — it cost three rounds of guessing on the voice gateway
+    /// and it is costing them again on `users/@me/scheduled-messages`. Gated on
+    /// the sink, so it is free in a build nobody is tracing, and capped so a
+    /// large error page cannot flood the log.
+    static func traceRefusal(status: Int, route: String, data: Data) {
+        guard let sink = traceSink else { return }
+        let body = String(data: data.prefix(400), encoding: .utf8) ?? "<\(data.count) bytes>"
+        sink("HTTP \(status) \(route): \(body)")
     }
 
     static func apiFailure(status: Int, data: Data) -> Failure {
@@ -841,9 +868,13 @@ public actor DiscordREST {
 
         guard (200..<300).contains(http.statusCode) else {
             switch http.statusCode {
-            case 401: throw Failure.unauthorized
-            case 403: throw Failure.forbidden
-            case 404: throw Failure.notFound
+            case 401, 403, 404:
+                Self.traceRefusal(status: http.statusCode, route: route, data: data)
+                switch http.statusCode {
+                case 401: throw Failure.unauthorized
+                case 403: throw Failure.forbidden
+                default: throw Failure.notFound
+                }
             default: throw Self.apiFailure(status: http.statusCode, data: data)
             }
         }

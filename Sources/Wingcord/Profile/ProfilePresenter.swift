@@ -163,21 +163,18 @@ struct ProfilePresenter: ViewModifier {
                     height: min(container.height - Self.inset * 2, Self.maximumHeight)
                 ),
                 editor: editor,
-                beginEditing: {
-                    editor = ProfileEditor(
-                        profile: profile,
-                        // The raw board, which is what the write route takes —
-                        // `boardPresentation` has already resolved it into tiles
-                        // and dropped the ids.
-                        widgets: model.profileWidgets[profile.userID] ?? [],
-                        scope: .account
-                    )
-                },
+                beginEditing: { editor = makeEditor(.account, for: profile.userID) },
                 endEditing: { editor = nil },
+                scopes: editor == nil ? [] : model.profileEditScopes(for: profile.userID),
+                selectScope: { switchScope(to: $0.scope, for: profile.userID) },
                 saveEdits: { commit(profile) },
                 presentPicker: { picker = $0 },
                 dismiss: { model.profileRequest = nil }
             )
+            // **Keyed on the one value that can change under the draft**, not on
+            // the whole presentation: resolving a profile per body evaluation to
+            // compare it would be a presentation build on every hover.
+            .onChange(of: editorLayer) { refreshEditorIfUntouched() }
             .sheet(item: $picker) { picker in
                 if let kind = picker.collectible {
                     CollectiblePickerSheet(
@@ -272,12 +269,71 @@ struct ProfilePresenter: ViewModifier {
         Task {
             if await editor.save(using: model.sessionController.rest) {
                 self.editor = nil
+                // **The scope that was written**, not the one the rail happens
+                // to be pointing at: a server edit saved from a DM has to
+                // refetch that server's layer or the card shows the old one.
                 model.sessionController.loadProfile(
                     of: profile.userID,
-                    inGuild: model.selectedGuildID
+                    inGuild: editor.scope.guildID ?? model.selectedGuildID
                 )
             }
         }
+    }
+
+    /// The server layer the open draft was seeded from, or nil for the account
+    /// scope — the thing whose arrival should re-seed an untouched draft.
+    private var editorLayer: User? {
+        guard let editor, let guildID = editor.scope.guildID else { return nil }
+        return model.memberProfiles[guildID]?[editor.userID]
+    }
+
+    /// A draft at `scope`, seeded from that scope's own profile.
+    ///
+    /// **A server scope asks for its layer as it opens.** Only
+    /// `GET /users/{id}/profile?guild_id=…` answers with a per-server bio,
+    /// banner or pronouns, and a server the reader has never opened a profile
+    /// in has never been asked — so without this the draft starts from the
+    /// account's values and a Save would copy them onto the server.
+    private func makeEditor(_ scope: ProfileEditor.Scope, for userID: UserID) -> ProfileEditor? {
+        guard let base = model.profileEditBase(for: scope, userID: userID) else { return nil }
+        if let guildID = scope.guildID {
+            model.sessionController.loadProfile(of: userID, inGuild: guildID)
+        }
+        return ProfileEditor(
+            profile: base,
+            // The raw board, which is what the write route takes —
+            // `boardPresentation` has already resolved it into tiles and
+            // dropped the ids.
+            widgets: model.profileWidgets[userID] ?? [],
+            scope: scope,
+            accountName: model.users[userID]?.preferredName
+        )
+    }
+
+    /// Moves the editor to another profile.
+    ///
+    /// **Refused while there are unsaved changes** — Discord's own rule, and
+    /// the only safe one: a draft belongs to one scope, and carrying it across
+    /// would write a server's nickname as an account name, or throw five edits
+    /// away on a mis-click. The switcher disables itself in the same state, so
+    /// this guard is the second line rather than the first.
+    private func switchScope(to scope: ProfileEditor.Scope, for userID: UserID) {
+        guard let editor, editor.scope != scope, !editor.isDirty else { return }
+        self.editor = makeEditor(scope, for: userID)
+    }
+
+    /// Re-seeds an untouched draft when its scope's profile changes under it —
+    /// which is what happens when the server layer `makeEditor` asked for
+    /// arrives a moment after the rail switched.
+    ///
+    /// **Never over an edit.** A dirty draft is the reader's, and a network
+    /// answer arriving is no reason to discard what they typed.
+    private func refreshEditorIfUntouched() {
+        guard let editor, !editor.isDirty,
+              let base = model.profileEditBase(for: editor.scope, userID: editor.userID),
+              base != editor.base
+        else { return }
+        self.editor = makeEditor(editor.scope, for: editor.userID)
     }
 
     private func miniCard(

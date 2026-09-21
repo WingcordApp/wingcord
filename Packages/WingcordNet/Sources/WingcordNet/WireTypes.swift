@@ -575,6 +575,14 @@ struct GuildDTO: Decodable, Sendable {
     var icon: String?
     var banner: String?
     var splash: String?
+    /// The tag this server lends, when it has one.
+    ///
+    /// **Nested under `profile`, and it rides READY.** Discord's tag picker
+    /// asks no route at all: it reads this off the guilds it already has. Only
+    /// the two fields a tag is worn as are taken — the same object carries a
+    /// description, traits and badge colours, and those belong to
+    /// `GuildProfileDTO`, which fetches them when a tag card is opened.
+    var profile: GuildIdentityDTO?
     var owner_id: UserID?
     var premium_tier: Int?
     var premium_subscription_count: Int?
@@ -622,6 +630,9 @@ struct GuildDTO: Decodable, Sendable {
     var stage_instances: [StageInstanceDTO]?
     /// Present on the READY payload's guild objects, absent on a plain fetch.
     var properties: GuildProperties?
+    /// When the reader joined, at the top level. Nested on READY — see
+    /// `GuildProperties.joined_at`.
+    var joined_at: Date?
 
     /// Discord moved a guild's own fields into a nested `properties` object on
     /// the READY payload while leaving them at the top level everywhere else.
@@ -636,6 +647,33 @@ struct GuildDTO: Decodable, Sendable {
         var premium_tier: Int?
         var features: [String]?
         var rules_channel_id: ChannelID?
+        /// **The server's own notification floor, and READY is the only place
+        /// it arrives.** It was declared at the top level and nowhere here, so
+        /// on a payload where Discord nests a guild's fields — which is every
+        /// READY this client asks for, since it sets
+        /// `PRIORITIZED_READY_PAYLOAD` — it was absent and fell back to
+        /// `allMessages` for **every server on the account**.
+        ///
+        /// Nothing failed. Most large servers set Only @mentions, so the
+        /// inbox's Unreads tab listed every channel with anything unread in it
+        /// rather than the handful that would have told the reader anything,
+        /// and the notification policy read the same wrong floor. See the
+        /// neighbours above: `features` and `rules_channel_id` already carry
+        /// the fallback this one was missing.
+        var default_message_notifications: Int?
+        /// When the reader joined. Nested here on READY like everything else.
+        var joined_at: Date?
+        /// **Read from here as well as from the top level.** READY sends most
+        /// guilds unavailable-then-filled and puts the same fields under
+        /// `properties`; a tag decoded from only one of the two shapes is a tag
+        /// that appears for some servers and not others.
+        var profile: GuildIdentityDTO?
+    }
+
+    /// `guild.profile`, reduced to the two fields a tag is *worn* as.
+    struct GuildIdentityDTO: Decodable, Sendable {
+        var tag: String?
+        var badge: String?
     }
 
     var domain: Guild {
@@ -649,12 +687,17 @@ struct GuildDTO: Decodable, Sendable {
             premiumTier: premium_tier ?? properties?.premium_tier ?? 0,
             premiumSubscriptionCount: premium_subscription_count ?? 0,
             features: Set(features ?? properties?.features ?? []),
+            tag: profile?.tag ?? properties?.profile?.tag,
+            tagBadgeHash: profile?.badge ?? properties?.profile?.badge,
             memberCount: member_count,
             rulesChannelID: rules_channel_id ?? properties?.rules_channel_id,
             isLarge: large ?? false,
             defaultMessageNotifications: NotificationLevel(
-                rawValue: default_message_notifications ?? 0
-            )
+                rawValue: default_message_notifications
+                    ?? properties?.default_message_notifications
+                    ?? 0
+            ),
+            joinedAt: joined_at ?? properties?.joined_at
         )
     }
 }
@@ -1490,15 +1533,31 @@ struct UserProfileDTO: Decodable, Sendable {
         return formatter.date(from: string) ?? ISO8601DateFormatter().date(from: string)
     }
 
-    /// The account, with every profile layer folded onto its decoration.
+    /// The account's own profile — `user` with `user_profile` folded on, and
+    /// **without** the per-guild layer.
     ///
-    /// Merged rather than replaced field by field: an empty guild layer must not
-    /// erase a global banner, so each field takes the first non-empty answer in
-    /// guild-then-global-then-account order.
-    var domain: User {
+    /// **The guild layer is kept apart rather than merged in, and that is the
+    /// whole of per-server profiles.** This used to fold both together and hand
+    /// back one `User`, which meant the account's own banner, bio, colours and
+    /// effect were destroyed the moment a guild override existed — so "View
+    /// Main Profile" had nothing left to show. Two layers arrive; two are kept.
+    var domain: User { decoration(withGuildLayer: false) }
+
+    /// The same account as it presents itself **in this server**, or nil when
+    /// the response carried no guild layer at all.
+    ///
+    /// Still merged field by field, because `guild_member_profile` is *often
+    /// present and empty* — which is not the same as absent and must not blank
+    /// a global banner.
+    var guildDomain: User? {
+        guard guild_member_profile != nil else { return nil }
+        return decoration(withGuildLayer: true)
+    }
+
+    private func decoration(withGuildLayer: Bool) -> User {
         let base = user.domain
         func pick<T>(_ path: (ProfileLayer) -> T?) -> T? {
-            if let value = guild_member_profile.flatMap(path) { return value }
+            if withGuildLayer, let value = guild_member_profile.flatMap(path) { return value }
             return user_profile.flatMap(path)
         }
         let bio = pick(\.bio).flatMap { $0.isEmpty ? nil : $0 }

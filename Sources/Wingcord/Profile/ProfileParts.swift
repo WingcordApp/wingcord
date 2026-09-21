@@ -571,7 +571,9 @@ struct MutualFriendsList: View {
         }
         .frame(width: Self.width, height: height + Spacing.tight * 2)
         .scrollBounceBehavior(.basedOnSize)
-        .glassEffect(.clear.tint(Palette.flyoutTint), in: .rect(cornerRadius: Radius.glass))
+        // No material of its own: in the popover the popover's glass is the
+        // body, and in the profile it sits inside a slab that already has a
+        // ground — glass on either would be a second surface. §4.9.
     }
 
     private func row(_ friend: MutualFriend) -> some View {
@@ -1237,7 +1239,11 @@ struct ProfileAvatar: View {
             url: profile.avatarURL,
             monogram: profile.monogram,
             side: side,
-            decorationURL: profile.decorationURL
+            decorationURL: profile.decorationURL,
+            // **Both profile surfaces, always.** This is the one face the reader
+            // opened a card to look at; the roster's hover gate is about a
+            // column of them, and there is no column here.
+            animates: true
         )
         if let openFullProfile {
             Button(action: openFullProfile) {

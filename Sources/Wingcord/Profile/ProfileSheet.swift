@@ -37,6 +37,10 @@ struct ProfileSheet: View {
     var editor: ProfileEditor?
     var beginEditing: () -> Void
     var endEditing: () -> Void
+    /// Every profile the reader can edit — their own, then each server. Empty
+    /// outside an edit, where there is nothing to switch.
+    var scopes: [ProfileEditScope] = []
+    var selectScope: (ProfileEditScope) -> Void = { _ in }
     var saveEdits: () -> Void
     var presentPicker: (ProfileEditPicker) -> Void
     var dismiss: () -> Void
@@ -55,7 +59,8 @@ struct ProfileSheet: View {
     /// pronoun or a chosen nameplate is on screen before anything is saved —
     /// see `ProfileEditor.applied(to:)`.
     private var shown: ProfilePresentation {
-        editor?.applied(to: profile) ?? profile
+        guard let editor else { return profile }
+        return editor.applied(to: editor.base)
     }
 
     private var ground: ProfileGround {
@@ -68,8 +73,8 @@ struct ProfileSheet: View {
                 ProfileEditRail(
                     editor: editor,
                     profile: shown,
-                    scopes: [.main],
-                    selectScope: { _ in },
+                    scopes: scopes,
+                    selectScope: selectScope,
                     collapse: endEditing,
                     present: presentPicker
                 )
@@ -163,16 +168,32 @@ struct ProfileSheet: View {
     /// of them, which is `INVARIANTS.md` §5.5 — and inventing the list from
     /// mutual servers would be the same guess with extra steps. Decoding the
     /// gateway field is the fix, and it needs a capture.
+    /// **Every server that lends a tag, which this could not answer until the
+    /// gateway field was decoded.** The note above described the workaround it
+    /// replaces: with no list, the chooser could only offer "take the tag off or
+    /// leave it on", because inventing candidates from mutual servers would
+    /// offer switches that answer 403.
+    ///
+    /// `guild.profile.tag` rides READY and is what Discord's own client asks —
+    /// `guild?.profile?.tag != null` — so the list is exact rather than guessed.
     private var tagOptions: [ServerTagOption] {
-        guard let tag = profile.guildTag, let guildID = tag.guildID else { return [] }
-        return [
-            ServerTagOption(
-                id: guildID,
-                name: model.guilds[guildID]?.name ?? "This server",
-                tag: tag.text,
-                badgeURL: tag.badgeURL
-            )
-        ]
+        model.guilds.values
+            .filter(\.offersTag)
+            .map { guild in
+                ServerTagOption(
+                    id: guild.id,
+                    name: guild.name,
+                    tag: guild.tag ?? "",
+                    badgeURL: guild.tagBadgeHash.flatMap {
+                        CDN.guildTagBadge(guildID: guild.id, hash: $0)
+                    },
+                    iconURL: guild.iconHash.flatMap {
+                        CDN.guildIcon(guildID: guild.id, hash: $0, side: 24)
+                    },
+                    monogram: guild.monogram
+                )
+            }
+            .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
     }
 
     /// The handoff's own gutter for this column: 28 at its 1,280-point sheet.

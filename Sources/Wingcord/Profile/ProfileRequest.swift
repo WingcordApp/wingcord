@@ -23,6 +23,14 @@ struct ProfileRequest: Equatable, Identifiable {
     var userID: UserID
     /// The guild whose nickname, roles and colour apply. Nil in a DM.
     var guildID: GuildID?
+    /// Show the account's own profile rather than the one it wears here.
+    ///
+    /// **Not the same as a nil `guildID`, which is why this is a flag and not
+    /// an absence.** Nil means "no server in play" and falls back to whichever
+    /// guild is selected — the behaviour every caller wants by default. This
+    /// means "a server IS in play and the reader asked to look past it", which
+    /// is Discord's own "View Main Profile".
+    var showsMainProfile = false
     /// The frame of the control that opened it, in **window** coordinates, so
     /// the card can appear beside its origin rather than at the pointer. A card
     /// that follows the click reads as a menu.
@@ -44,7 +52,18 @@ struct ProfilePresentation: Equatable, Sendable {
     /// The per-guild nickname, when it differs from the display name. Shown as a
     /// second line rather than replacing the first: a nickname that silently
     /// replaces someone's real name makes them unfindable.
+    ///
+    /// **On a per-server profile it IS the display name**, so the line that
+    /// draws it is already guarded on the two differing and disappears.
     var nickname: String?
+    /// Which of the two profiles is showing.
+    var showsMainProfile = false
+    /// What the *other* profile calls them, or nil when there is no other one.
+    ///
+    /// Discord subtitles its menu item with this — "View Per-server Profile /
+    /// AKA Corvin KQZRA-TMWB" — so the reader knows what they are switching to
+    /// before they switch.
+    var alternateName: String?
     var avatarURL: URL?
     var monogram: String
     var decorationURL: URL?

@@ -27,7 +27,28 @@ enum RenderProbe {
         height: Int = 48,
         _ draw: (CGContext, CGRect) -> Void
     ) -> Double {
+        let pixels = self.pixels(width: width, height: height, draw)
+        let grey = UInt8(ground * 255)
+        var differing = 0
+        for index in stride(from: 0, to: pixels.count, by: 4) where pixels[index] != grey {
+            differing += 1
+        }
         guard width > 0, height > 0 else { return 0 }
+        return Double(differing) / Double(width * height)
+    }
+
+    /// The raw RGBA bytes a painter produced, for a check that two draws differ.
+    ///
+    /// **`inkFraction` cannot answer "did this move".** It counts pixels that
+    /// are not the ground, so an animation that ignores its clock entirely
+    /// scores exactly the same at every moment — which is the one failure a
+    /// painter driven by a phase is most likely to have.
+    static func pixels(
+        width: Int = 240,
+        height: Int = 48,
+        _ draw: (CGContext, CGRect) -> Void
+    ) -> [UInt8] {
+        guard width > 0, height > 0 else { return [] }
         let bytesPerRow = width * 4
         var pixels = [UInt8](repeating: 0, count: bytesPerRow * height)
         let grey = UInt8(ground * 255)
@@ -66,11 +87,6 @@ enum RenderProbe {
             draw(context, frame)
             NSGraphicsContext.restoreGraphicsState()
         }
-
-        var differing = 0
-        for index in stride(from: 0, to: pixels.count, by: 4) where pixels[index] != grey {
-            differing += 1
-        }
-        return Double(differing) / Double(width * height)
+        return pixels
     }
 }

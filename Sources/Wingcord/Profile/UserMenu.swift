@@ -9,12 +9,42 @@ import WingcordCore
 /// arrangement the report flow uses, for the same reason — so there is exactly
 /// one glass body over the transcript at any moment.
 ///
-/// `.clear` glass with the flyout tint, because what passes under it is the
-/// transcript or a profile card: content, which `INVARIANTS.md` §4 says must
-/// lens rather than frost.
+/// **The popover's own glass is its body**, and nothing is painted on it —
+/// `INVARIANTS.md` §4.9. A SwiftUI glass drawn on popover content samples
+/// the popover's own window, where nothing sits behind it, and comes out as
+/// a flat slab; the system's glass samples the app behind the window.
 struct UserMenu: View {
+    /// What the menu can offer at the top, when it was opened from a profile.
+    ///
+    /// **Nil everywhere else**, which is the transcript, the roster and the
+    /// rail — those already open the profile by clicking the row, so an item
+    /// offering to do it again says nothing.
+    struct ProfileOptions: Equatable {
+        /// "View Full Profile", from the card. Nil on the full profile, which
+        /// is already it.
+        var opensFullProfile = false
+        /// Switching between the account's own profile and the one it wears in
+        /// this server, with what the other one is called.
+        ///
+        /// Nil when there is no other one to see — somebody without a nickname
+        /// in this server reads the same either way, and Discord omits the item
+        /// for them too.
+        var alternateName: String?
+        /// Which one is showing, so the item names the other.
+        var showsMainProfile = false
+    }
+
     var userID: UserID
     var guildID: GuildID?
+    var profileOptions: ProfileOptions?
+    /// Raised when the reader picks one of the two items above.
+    var onProfileOption: ((ProfileOption) -> Void)?
+
+    enum ProfileOption: Equatable {
+        case fullProfile
+        case mainProfile
+        case perServerProfile
+    }
 
     @Environment(AppModel.self) private var model
     @Environment(\.motion) private var motion
@@ -50,7 +80,7 @@ struct UserMenu: View {
         }
         .padding(.vertical, Spacing.tight)
         .frame(width: Self.width)
-        .glassEffect(.clear.tint(Palette.flyoutTint), in: .rect(cornerRadius: Radius.glass))
+        // No material of its own: the popover's glass is the body — §4.9.
         .animation(motion.fadeQuick, value: hovered)
         .animation(motion.standard, value: isPickingServer)
     }
@@ -59,6 +89,37 @@ struct UserMenu: View {
 
     @ViewBuilder
     private func rootMenu(_ actions: UserActions) -> some View {
+        if let options = profileOptions, options.opensFullProfile || options.alternateName != nil {
+            // Discord's own order: the profile items sit above everything, and
+            // they are the only items here that change what you are looking at
+            // rather than acting on the person.
+            if options.opensFullProfile {
+                row(
+                    id: "full-profile",
+                    title: "View Full Profile",
+                    symbolName: "person.crop.square",
+                    opensSurface: true
+                ) { onProfileOption?(.fullProfile) }
+            }
+            if let alternate = options.alternateName {
+                row(
+                    id: "switch-profile",
+                    title: options.showsMainProfile
+                        ? "View Per-server Profile"
+                        : "View Main Profile",
+                    subtitle: "AKA \(alternate)",
+                    symbolName: options.showsMainProfile
+                        ? "person.2"
+                        : "person",
+                    opensSurface: true
+                ) {
+                    onProfileOption?(
+                        options.showsMainProfile ? .perServerProfile : .mainProfile
+                    )
+                }
+            }
+            divider
+        }
         if actions.canInvite {
             row(
                 id: "invite",
@@ -176,6 +237,10 @@ struct UserMenu: View {
     private func row(
         id: String,
         title: String,
+        /// The quiet second line Discord puts under a profile-switch item —
+        /// "AKA Corvin KQZRA-TMWB". Nil for every ordinary row, which is all but
+        /// one of them, and the row then keeps its single-line height.
+        subtitle: String? = nil,
         symbolName: String,
         isDestructive: Bool = false,
         isBusy: Bool = false,
@@ -187,9 +252,17 @@ struct UserMenu: View {
                 Image(systemName: symbolName)
                     .font(.system(size: 12, weight: .medium))
                     .frame(width: 16)
-                Text(title)
-                    .font(.system(.subheadline))
-                    .lineLimit(1)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(title)
+                        .font(.system(.subheadline))
+                        .lineLimit(1)
+                    if let subtitle {
+                        Text(subtitle)
+                            .font(.system(.caption))
+                            .foregroundStyle(Ink.tertiary)
+                            .lineLimit(1)
+                    }
+                }
                 Spacer(minLength: Spacing.base)
                 if isBusy {
                     ProgressView().controlSize(.small)
@@ -205,7 +278,12 @@ struct UserMenu: View {
                     : AnyShapeStyle(hovered == id ? Ink.primary : Ink.secondary)
             )
             .padding(.horizontal, Spacing.snug)
-            .frame(height: Self.rowHeight)
+            // **A minimum rather than a fixed height**, because one row carries
+            // two lines. A fixed 30 clips the subtitle to a sliver, which reads
+            // as a rendering fault; every single-line row is shorter than the
+            // minimum anyway, so none of them moves.
+            .padding(.vertical, subtitle == nil ? 0 : 4)
+            .frame(minHeight: Self.rowHeight)
             .frame(maxWidth: .infinity, alignment: .leading)
             .background { highlight(id, isDestructive: isDestructive) }
             .contentShape(.rect)
@@ -272,6 +350,8 @@ extension View {
 struct UserMenuPopover: ViewModifier {
     var userID: UserID
     var guildID: GuildID?
+    var profileOptions: UserMenu.ProfileOptions?
+    var onProfileOption: ((UserMenu.ProfileOption) -> Void)?
     @Binding var isPresented: Bool
 
     @Environment(AppModel.self) private var model
@@ -284,8 +364,16 @@ struct UserMenuPopover: ViewModifier {
             ),
             arrowEdge: .bottom
         ) {
-            UserMenu(userID: userID, guildID: guildID)
-                .environment(model)
+            UserMenu(
+                userID: userID,
+                guildID: guildID,
+                profileOptions: profileOptions,
+                onProfileOption: {
+                    isPresented = false
+                    onProfileOption?($0)
+                }
+            )
+            .environment(model)
                 .presentationBackground(.clear)
         }
     }
@@ -295,9 +383,19 @@ extension View {
     func presentsUserMenu(
         for userID: UserID,
         inGuild guildID: GuildID?,
+        profileOptions: UserMenu.ProfileOptions? = nil,
+        onProfileOption: ((UserMenu.ProfileOption) -> Void)? = nil,
         isPresented: Binding<Bool>
     ) -> some View {
-        modifier(UserMenuPopover(userID: userID, guildID: guildID, isPresented: isPresented))
+        modifier(
+            UserMenuPopover(
+                userID: userID,
+                guildID: guildID,
+                profileOptions: profileOptions,
+                onProfileOption: onProfileOption,
+                isPresented: isPresented
+            )
+        )
     }
 }
 

@@ -436,7 +436,7 @@ private struct VoiceDeviceList: View {
         }
         .padding(.bottom, Spacing.base)
         .frame(width: 240, alignment: .leading)
-        .background(Palette.surface)
+        // No material of its own: the popover's glass is the body — §4.9.
     }
 
     /// One device. Resolved to `(id, name)` here so the three kinds share one

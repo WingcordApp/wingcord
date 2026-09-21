@@ -114,7 +114,14 @@ extension AppModel {
             // list would be two walks per author per page for one answer.
             let iconRole = member
                 .flatMap { RoleResolver.iconRole(of: $0.roleIDs, in: guildRoles) }
-            let styleFont = user.decoration?.displayNameStyle?.font
+            // One role answers for the colour AND the gradient, so a gradient
+            // can never be drawn over a different role's colour — the rule
+            // `RoleResolver.nameColorRole` states and the roster already
+            // follows.
+            let coloured = member
+                .flatMap { RoleResolver.nameColorRole(of: $0.roleIDs, in: guildRoles) }
+            let style = user.decoration?.displayNameStyle
+            let styleFont = style?.font
             let face = styleFont.flatMap {
                 DisplayNameFontRegistry.font($0, size: authorPointSize)
             }
@@ -163,7 +170,28 @@ extension AppModel {
                 // actually on screen — which is what keeps a face off the
                 // registry until somebody who wears it is visible.
                 nameFace: face,
-                nameTracking: face == nil ? 0 : (styleFont?.letterSpacing ?? 0) * authorPointSize
+                nameTracking: face == nil ? 0 : (styleFont?.letterSpacing ?? 0) * authorPointSize,
+                // **A server suppresses the account's own name colours, and
+                // lends its role's instead.** That is the rule the member list
+                // already states — "a server's enhanced role beats the app's
+                // ink" — and the transcript has to match it, or one person
+                // reads two different ways in one window depending on which
+                // list you point at.
+                //
+                // So the effect is a **direct-message** thing: there is no role
+                // there to be beaten, which is exactly the case this was built
+                // for. The styled *face* still carries everywhere, as it does
+                // in the roster.
+                //
+                // Only a style with colours in it, too: nearly every styled
+                // account picked a face and left the colour alone, and those
+                // already draw correctly through `nameFace`.
+                gradient: coloured?.colors
+                    .flatMap { RoleColors.wrappedStops($0) }?
+                    .map { UserColor.desaturated($0, by: saturation) },
+                nameStyle: guildID != nil
+                    ? nil
+                    : style.flatMap { DisplayNameEffectPainter.paints($0) ? $0 : nil }
             )
         }
     }

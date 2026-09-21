@@ -33,6 +33,15 @@ final class AppModel {
     var guilds: [GuildID: Guild] = [:]
     var channelIndex = ChannelIndex()
     var users: [UserID: User] = [:]
+    /// How somebody presents themselves **in one server**, where that differs
+    /// from their account's own profile.
+    ///
+    /// **Its own table rather than a field on `User`, because a person has one
+    /// account and as many server profiles as they have servers.** Only ever
+    /// filled by `GET /users/{id}/profile?guild_id=…`, which is the one route
+    /// that answers with a banner, a bio or a theme at all — so this is sparse
+    /// by construction: one entry per profile the reader has actually opened.
+    var memberProfiles: [GuildID: [UserID: User]] = [:]
     var members: [GuildID: [UserID: Member]] = [:]
     var roles: [GuildID: [RoleID: Role]] = [:]
     /// A server's own emoji and stickers, for the expression picker.

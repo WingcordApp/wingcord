@@ -119,10 +119,7 @@ private struct BoardTileMenu: View {
         }
         .padding(.vertical, Spacing.tight)
         .frame(width: Self.width)
-        // Clear and tinted, the app's one flyout material. `.regular` here
-        // would frost the transcript behind it into grey and stop it reading as
-        // a floating sheet — `INVARIANTS.md` §4.
-        .glassEffect(.clear.tint(Palette.flyoutTint), in: .rect(cornerRadius: Radius.glass))
+        // No material of its own: the popover's glass is the body — §4.9.
         .animation(motion.fadeQuick, value: hovered)
     }
 

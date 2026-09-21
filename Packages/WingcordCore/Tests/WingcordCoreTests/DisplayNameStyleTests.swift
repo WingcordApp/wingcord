@@ -152,13 +152,66 @@ struct DisplayNameStyleTests {
         #expect(DisplayNameEffect.prism.colorCount == 5)
     }
 
-    @Test("Solid and Gradient are the two that never move")
+    /// **The ids are Discord's, and they are not the picker's order.**
+    ///
+    /// This is the fact the type used to state as a guess — "1-indexed in the
+    /// order the picker shows them, which for effects is also the id order" —
+    /// and the guess cost every account wearing Gummy: id 8 missed the enum,
+    /// fell back to Solid and drew one flat colour with no animation, for as
+    /// long as the type existed. Nothing inside the app could see it, because
+    /// the editor builds a style locally and never round-trips the wire.
+    ///
+    /// Read out of Discord's own bundle and confirmed against
+    /// `docs.discord.food`'s table. **Any change here wants the same two
+    /// sources**, not a renumbering that makes the list look tidy.
+    @Test("Effect ids are Discord's own, and 6 is Glow rather than Gummy")
+    func effectIdentifiers() {
+        #expect(DisplayNameEffect.solid.rawValue == 1)
+        #expect(DisplayNameEffect.gradient.rawValue == 2)
+        #expect(DisplayNameEffect.neon.rawValue == 3)
+        #expect(DisplayNameEffect.toon.rawValue == 4)
+        #expect(DisplayNameEffect.pop.rawValue == 5)
+        #expect(DisplayNameEffect.glow.rawValue == 6)
+        #expect(DisplayNameEffect.prism.rawValue == 7)
+        #expect(DisplayNameEffect.gummy.rawValue == 8)
+        // Corvin's, off `corvin.har`: four colours and effect 8. The arity is the
+        // corroboration — Gummy is the only effect that takes four.
+        let corvin = DisplayNameEffect(rawValue: 8)
+        #expect(corvin == .gummy)
+        #expect(corvin?.colorCount == 4)
+    }
+
+    @Test("The picker offers Discord's seven, and Glow is not one of them")
+    func pickerOmitsGlow() {
+        #expect(DisplayNameEffect.offered == [
+            .solid, .gradient, .neon, .toon, .pop, .gummy, .prism,
+        ])
+        #expect(!DisplayNameEffect.offered.contains(.glow))
+        // It still decodes, because accounts wear it — and it is drawn as the
+        // gradient Discord's own renderer draws it as.
+        #expect(DisplayNameEffect.glow.painted == .gradient)
+        // Everything else paints as itself.
+        for effect in DisplayNameEffect.offered {
+            #expect(effect.painted == effect, "\(effect) should paint as itself")
+        }
+    }
+
+    @Test("Solid, Gradient and Glow are the three that never move")
     func staticEffects() {
         #expect(!DisplayNameEffect.solid.isAnimated)
         #expect(!DisplayNameEffect.gradient.isAnimated)
+        #expect(!DisplayNameEffect.glow.isAnimated)
         for effect in [DisplayNameEffect.neon, .toon, .pop, .gummy, .prism] {
             #expect(effect.isAnimated, "\(effect) should animate")
         }
+    }
+
+    /// `1001…1004` are `TEST_1…TEST_4` and all fall back to Solid, which is
+    /// what the decoder already does with any id it does not know.
+    @Test("An unknown effect id keeps the colour and drops the effect")
+    func unknownEffectFallsBackToSolid() {
+        #expect(DisplayNameEffect(rawValue: 1001) == nil)
+        #expect(DisplayNameEffect(rawValue: 9) == nil)
     }
 
     // MARK: The empty-colours state

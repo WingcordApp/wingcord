@@ -46,11 +46,45 @@ struct InboxFlyout: View {
     /// which is most of what a bot posts and most of what an inbox holds.
     static let width: CGFloat = 580
     /// See the note on the frame below.
-    private static let minimumHeight: CGFloat = 360
-    private static let maximumHeight: CGFloat = 560
-    /// What a `MessageCard` is laid out against: the panel, less the list's own
-    /// margins and the group's.
-    static var cardWidth: CGFloat { width - Spacing.snug * 4 }
+    static let height: CGFloat = 560
+
+    /// The column a row's accessory takes — Dismiss, Remove, Cancel.
+    ///
+    /// **Zero on Unreads, where there is no per-message act**, because Discord
+    /// has no per-message read cursor. See `InboxGroupCard.accessory`.
+    static let accessoryGutter: CGFloat = 24
+
+    /// What a `MessageCard` is laid out against **on this tab**.
+    ///
+    /// **Four subtractions, and the last two were missing.** The panel's width,
+    /// less the list's own padding, less the row's, less the gap the row's
+    /// `HStack` puts before its accessory, less the accessory column itself:
+    ///
+    /// ```
+    ///  580  the panel
+    ///  -24  the LazyVStack's padding          (Spacing.snug each side)
+    ///  -24  the row's own padding             (Spacing.snug each side)
+    ///   -8  the HStack's spacing before the accessory
+    ///  -24  the accessory column, on the four tabs that have one
+    /// ```
+    ///
+    /// Without the last two the card was laid out at 532 in a row that had 532
+    /// to give — so every tab overflowed, Unreads by the 8-point gap and the
+    /// other four by 32. That is why a mention's card ran flush to both edges
+    /// of the panel with its trailing side clipped, and why Unreads looked
+    /// almost right: the gap is there even where the accessory is zero wide,
+    /// because an `HStack` spaces a zero-width child like any other.
+    ///
+    /// **One function, and both readers take the tab.** The layout is solved
+    /// here and the row is drawn in `InboxGroupCard` against the same number;
+    /// two copies of this arithmetic is how one of them stays individually
+    /// defensible while the result is wrong — `INVARIANTS.md` §2.
+    static func cardWidth(for tab: InboxTab) -> CGFloat {
+        width
+            - Spacing.snug * 4
+            - Spacing.base
+            - (tab == .unreads ? 0 : accessoryGutter)
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -73,18 +107,26 @@ struct InboxFlyout: View {
             content
         }
         .frame(width: Self.width)
-        // **A minimum, and it is what stops the popover opening as a sliver.**
+        // **A FIXED height, and a range is what was wrong with it.**
+        //
         // AppKit sizes a popover from its content's *first* layout, and on that
         // pass nothing has been fetched — the panel is a header over a spinner.
-        // The window is made that size and then grows as rows land, which reads
-        // as the flyout being broken for its first second. `alignment: .top`
-        // because a frame with a minimum taller than its content centres that
-        // content, which would float the header in the middle of the box.
-        .frame(
-            minHeight: Self.minimumHeight,
-            maxHeight: Self.maximumHeight,
-            alignment: .top
-        )
+        // A `minHeight`/`maxHeight` pair stops it opening as a sliver, which is
+        // what it was added for, and then leaves the window at the **minimum**
+        // for the life of the popover: the rows land afterwards, the content
+        // grows, and the window does not. So the flyout opened at 360 points
+        // every time and clipped whatever arrived, which reads as a panel that
+        // is simply too small — measured at 356 on screen against a 560 ceiling
+        // nothing could ever reach.
+        //
+        // A single height is the only shape that survives content arriving
+        // late, because the first layout and every later one agree. The cost is
+        // a tab with one row carrying air underneath it; the alternative is
+        // every tab losing its last rows, which is the worse half by a long way
+        // and is what shipped. `alignment: .top` because a frame taller than its
+        // content centres that content, which would float the header in the
+        // middle of the box.
+        .frame(height: Self.height, alignment: .top)
         // The popover supplies the material; a second one here would be glass
         // on glass — §4 rule 2.
         .presentationBackground(.clear)
@@ -200,7 +242,7 @@ struct InboxFlyout: View {
     @ViewBuilder
     private var list: some View {
         let tab = model.inbox.tab
-        let groups = model.inboxGroups(width: Self.cardWidth)
+        let groups = model.inboxGroups(width: Self.cardWidth(for: tab))
 
         if let failure = model.inboxFailure(tab) {
             InboxNotice(

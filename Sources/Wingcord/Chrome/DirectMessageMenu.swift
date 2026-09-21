@@ -10,9 +10,10 @@ import WingcordCore
 /// instead, which is the arrangement `UserMenu` and the report flow already
 /// use, so there is exactly one glass body over the sidebar at any moment.
 ///
-/// `.clear` glass with the flyout tint: what passes under it is the channel
-/// list and a transcript — content, which `INVARIANTS.md` §4 says must lens
-/// rather than frost.
+/// **The popover's own glass is its body**, and nothing is painted on it —
+/// `INVARIANTS.md` §4.9. A SwiftUI glass drawn on popover content samples
+/// the popover's own window, where nothing sits behind it, and comes out as
+/// a flat slab; the system's glass samples the app behind the window.
 ///
 /// **Half of it is about the conversation and half about the person.** A group
 /// direct message has the first half and none of the second, which is why
@@ -70,7 +71,7 @@ struct DirectMessageMenu: View {
         }
         .padding(.vertical, Spacing.tight)
         .frame(width: Self.width)
-        .glassEffect(.clear.tint(Palette.flyoutTint), in: .rect(cornerRadius: Radius.glass))
+        // No material of its own: the popover's glass is the body — §4.9.
         .animation(motion.fadeQuick, value: hovered)
         .animation(motion.standard, value: surface)
     }

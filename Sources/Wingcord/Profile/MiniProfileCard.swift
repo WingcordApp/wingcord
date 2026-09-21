@@ -51,6 +51,9 @@ struct MiniProfileCard: View {
     @State private var isMenuOpen = false
     /// Whether the still under the moving banner has been taken away.
     @State private var bannerIsPlaying = false
+    /// Whether the pointer is over the card, which fades the profile effect
+    /// back so the name and banner under it can be read.
+    @State private var isEffectFaded = false
     /// How wide the card is laid out.
     ///
     /// A parameter rather than a constant because the same card is the popover
@@ -201,8 +204,13 @@ struct MiniProfileCard: View {
                 ProfileEffectView(effect: effect, width: width)
                     .allowsHitTesting(false)
                     .accessibilityLabel(Text(effect.accessibilityLabel ?? effect.title))
+                    // Steps back under the pointer so the name and banner it is
+                    // drawn over can be read — Discord's own `.hovered` rule.
+                    .opacity(isEffectFaded ? ProfileEffectFade.hovered : 1)
+                    .animation(ProfileEffectFade.animation, value: isEffectFaded)
             }
         }
+        .onHover { isEffectFaded = $0 }
         // **The one control on the card, and it is a glyph rather than a
         // slab.** What this surface used to have was a filled accent button and
         // a bordered one sitting on somebody's own palette — two more colours
@@ -216,6 +224,20 @@ struct MiniProfileCard: View {
                     .presentsUserMenu(
                         for: profile.userID,
                         inGuild: profile.guild?.id,
+                        profileOptions: .init(
+                            // The card's own item. The full profile omits it,
+                            // being already there.
+                            opensFullProfile: true,
+                            alternateName: profile.alternateName,
+                            showsMainProfile: profile.showsMainProfile
+                        ),
+                        onProfileOption: { option in
+                            switch option {
+                            case .fullProfile: model.openFullProfile()
+                            case .mainProfile: model.showMainProfile(true)
+                            case .perServerProfile: model.showMainProfile(false)
+                            }
+                        },
                         isPresented: $isMenuOpen
                     )
             }
@@ -278,7 +300,9 @@ struct MiniProfileCard: View {
                             .aspectRatio(contentMode: .fill)
                             // Gone once the film is up: two copies of one
                             // picture composited every frame buys nothing.
-                            .opacity(bannerIsPlaying ? 0 : 1)
+                            // See `bannerPlays` for why the latch is read
+                            // beside a question the state cannot answer.
+                            .opacity(bannerIsPlaying && bannerPlays ? 0 : 1)
 
                             // Only when it can animate — the extension says so,
                             // so a still banner never pays for a second fetch, a
@@ -308,6 +332,9 @@ struct MiniProfileCard: View {
                                 )
                             }
                         }
+                        // A banner that changes has to put its still back while
+                        // the new one resolves, or the strip is empty between.
+                        .onChange(of: bannerURL) { bannerIsPlaying = false }
                     }
                 }
                 .frame(height: Self.bannerHeight)
@@ -362,6 +389,38 @@ struct MiniProfileCard: View {
         Rectangle().fill(ground.plateStyle(accentColorValue: profile.accentColorValue))
     }
 
+    /// Whether there is a moving form to put up at all.
+    ///
+    /// **Read beside `bannerIsPlaying`, and it is what stops that latch
+    /// sticking.** Only the film clears the latch, and a filmstrip that is
+    /// dismantled reports nothing on its way out — so without this the still
+    /// stays at zero over a film that is no longer there and the card draws a
+    /// bare plate where somebody's banner was. `AvatarView` carries the same
+    /// pair, for the same defect.
+    private var bannerPlays: Bool {
+        profile.bannerURL.map(CDN.canAnimate) ?? false
+    }
+
+    /// The widest the display name may come out, after the marks worn beside
+    /// it have taken theirs.
+    ///
+    /// Measured rather than guessed: the chip's width is `MemberRowGeometry`'s
+    /// own arithmetic, so the reservation here and the chip drawn there cannot
+    /// disagree.
+    private var nameWidth: CGFloat {
+        var available = contentWidth
+        if let tag = profile.guildTag {
+            available -= MemberRowGeometry.tagChipWidth(
+                textWidth: TimelineLayoutEngine.measure(tag.text, font: MemberRowGeometry.tagChipFont),
+                hasBadge: tag.badgeURL != nil
+            ) + Spacing.tight
+        }
+        if profile.isBot { available -= 34 + Spacing.tight }
+        // A floor, so a card whose marks are wider than its content still gives
+        // the name something to truncate into rather than a negative width.
+        return max(80, available)
+    }
+
     private var identity: some View {
         VStack(alignment: .leading, spacing: Spacing.tight) {
             // **The marks sit beside the NAME.** A clan tag and the APP mark are
@@ -374,7 +433,19 @@ struct MiniProfileCard: View {
                     text: profile.displayName,
                     style: profile.displayNameStyle,
                     textStyle: .title2,
-                    weight: .bold
+                    weight: .bold,
+                    // `heading-lg/bold`, read out of Discord's own stylesheet.
+                    // `.title2` is 17 on macOS, which is what this was and which
+                    // is visibly small beside the real thing.
+                    pointSize: 20,
+                    // **The card's own width, stated — the same fix the full
+                    // profile already carries.** A styled name is a drawn view,
+                    // so the `.lineLimit(1)` a `Text` would honour reaches
+                    // nothing: it reported its whole measured width, the row
+                    // grew to hold it, and the tag chip was laid down on top of
+                    // the letters. Visible only on a long name, which is why it
+                    // survived every short one.
+                    maximumWidth: nameWidth
                 )
                 if let tag = profile.guildTag {
                     GuildTagChip(tag: tag)

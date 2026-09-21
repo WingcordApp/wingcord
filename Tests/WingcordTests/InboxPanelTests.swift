@@ -76,48 +76,132 @@ struct InboxPanelTests {
     }
 
     // MARK: What the Unreads tab lists
+    //
+    // Every rule below is a line of Discord's own unread builder, read out of
+    // its bundle rather than inferred — see `AppModel.consider`. Four of them
+    // this client previously had backwards, and each is marked where it bites.
 
-    @Test("A muted channel never reaches the inbox")
-    func mutedChannelsAreExcluded() {
+    @Test("Only what named the reader is listed")
+    func quietChannelsAreExcluded() {
         let model = model()
-        let listed = Set(model.unreadInboxChannels().map(\.id))
-        // Muting is the reader saying they do not want to be told. An inbox
-        // that listed them anyway is the one place the mute does not hold.
-        #expect(!listed.contains(quiet))
-        #expect(listed.contains(general))
+        let listed = model.unreadInboxChannels().map(\.id)
+        // `general` carries 28 mentions; `secret` and `older` are merely
+        // unread. Listing the quiet ones is what made this tab a wall — a bot
+        // filling a feed channel sat above a person asking a question.
+        #expect(listed == [general])
     }
 
-    @Test("A muted server takes its channels with it")
+    @Test("A conversation needs a mention too")
+    func conversationsNeedAMention() {
+        let model = model()
+        #expect(!model.unreadInboxChannels().map(\.id).contains(dm))
+        // **And it leads once it has one.** A conversation ranks above every
+        // server channel, so the walk's order is overridden by the rank — which
+        // is the whole reason the two are separate steps.
+        model.readStates[dm]?.mentionCount = 1
+        #expect(model.unreadInboxChannels().map(\.id) == [dm, general])
+    }
+
+    @Test("A muted channel is dropped even when it named the reader")
+    func mutedChannelsAreExcluded() {
+        let model = model()
+        model.notificationPreferences.mutedChannelIDs.insert(general)
+        // **The mute is checked before the mention gate.** This client had the
+        // opposite rule on a guess — that a mention survives a mute — and it is
+        // not what Discord does.
+        #expect(model.unreadInboxChannels().isEmpty)
+    }
+
+    @Test("A muted server takes its channels with it, mentions or not")
     func mutedGuildsAreExcluded() {
         let model = model()
         model.mutedGuildIDs = [guildID]
-        let listed = Set(model.unreadInboxChannels().map(\.id))
-        #expect(listed.isDisjoint(with: [general, secret, older]))
-        // The conversation is not in that server and must survive.
-        #expect(listed.contains(dm))
+        #expect(model.unreadInboxChannels().isEmpty)
+    }
+
+    @Test("A muted category takes its channels with it")
+    func mutedCategoriesAreExcluded() {
+        let model = model()
+        model.notificationPreferences.mutedChannelIDs.insert(category)
+        // `general` is `MAIN`'s only child.
+        #expect(model.unreadInboxChannels().isEmpty)
+    }
+
+    @Test("A channel the reader cannot read is not listed")
+    func unreadableChannelsAreExcluded() {
+        let model = model()
+        model.readStates[secret]?.mentionCount = 4
+        #expect(model.unreadInboxChannels().map(\.id).contains(secret))
+    }
+
+    @Test("Nothing from before the reader joined counts as unread")
+    func noCursorFallsBackToTheJoinDate() {
+        let model = model()
+        // No cursor at all, and a server joined long after every message in it.
+        model.readStates[general] = ReadState(mentionCount: 28)
+        model.guilds[guildID]?.joinedAt = Date(timeIntervalSince1970: 4_000_000_000)
+        // **This is the whole of "unread messages from 2021".** With no cursor
+        // every message a channel ever carried is newer than nothing, so the
+        // summary opened on a conversation from before the reader arrived.
+        #expect(model.unreadInboxChannels().isEmpty)
+
+        // Joined before the messages were written, and it is unread again.
+        // **Before Discord's own epoch**, which also exercises the clamp: a
+        // date with no snowflake must floor at zero rather than wrap, because a
+        // wrapped cursor is larger than every real id and would swallow the
+        // whole channel instead of none of it.
+        model.guilds[guildID]?.joinedAt = Date(timeIntervalSince1970: 1_000_000_000)
+        #expect(model.unreadInboxChannels().map(\.id) == [general])
+    }
+
+    @Test("A server with no join date is skipped rather than guessed at")
+    func noJoinDateMeansNoFallback() {
+        let model = model()
+        model.readStates[general] = ReadState(mentionCount: 28)
+        model.guilds[guildID]?.joinedAt = nil
+        #expect(model.unreadInboxChannels().isEmpty)
+    }
+
+    @Test("A favourited channel leads")
+    func favouritesComeFirst() {
+        let model = model()
+        model.readStates[secret]?.mentionCount = 1
+        model.pinnedChannelIDs = [secret]
+        // `secret` is later in the sidebar and still leads — rank beats the
+        // walk, and a favourite is rank 0.
+        #expect(model.unreadInboxChannels().map(\.id) == [secret, general])
+    }
+
+    @Test("Within one rank it is the rail's order, then each server's own")
+    func orderedLikeTheSidebarWithinARank() {
+        let model = model()
+        model.readStates[secret]?.mentionCount = 1
+        model.readStates[older]?.mentionCount = 1
+        // The sidebar walk: the uncategorised channels in position order, then
+        // `MAIN`'s one child. `general` is position 1 and comes **last**, which
+        // a flat position sort would get backwards.
+        //
+        // Measured off Discord's own tab with the groups collapsed: seventeen
+        // rows across five servers came out grouped by server, each server's
+        // rows in its channel list's order. Under any recency ordering they
+        // would interleave, because servers do not take turns.
+        #expect(model.unreadInboxChannels().map(\.id) == [secret, older, general])
+    }
+
+    @Test("A busier channel does not jump the queue")
+    func recencyDoesNotReorderWithinARank() {
+        let model = model()
+        model.readStates[secret]?.mentionCount = 1
+        model.readStates[older]?.mentionCount = 1
+        model.channelIndex.patchLastMessage(MessageID(rawValue: 9_999), in: older)
+        #expect(model.unreadInboxChannels().map(\.id) == [secret, older, general])
     }
 
     @Test("A fully read channel is not listed")
     func readChannelsAreExcluded() {
         let model = model()
-        model.readStates[older]?.lastAcknowledgedID = MessageID(rawValue: 500)
-        #expect(!model.unreadInboxChannels().map(\.id).contains(older))
-    }
-
-    @Test("A channel with no read state at all counts as unread")
-    func unknownChannelsCountAsUnread() {
-        let model = model()
-        model.readStates[general] = nil
-        #expect(model.unreadInboxChannels().map(\.id).contains(general))
-    }
-
-    @Test("Newest activity comes first, not the sidebar's order")
-    func orderedByNewestMessage() {
-        let model = model()
-        // `secret` (902) then `general` (900) then `dm` (800) then `older`
-        // (500) — which is not the channel list's order, and is the answer to
-        // the question the reader is actually asking.
-        #expect(model.unreadInboxChannels().map(\.id) == [secret, general, dm, older])
+        model.readStates[general]?.lastAcknowledgedID = MessageID(rawValue: 5_000)
+        #expect(model.unreadInboxChannels().isEmpty)
     }
 
     @Test("Marking a group read takes it off at once")
@@ -155,7 +239,18 @@ struct InboxPanelTests {
     @Test("A conversation has no breadcrumb and no glyph")
     func conversationHeaderIsBare() {
         let model = model()
-        model.inbox.tab = .unreads
+        // **Mentions, not Unreads.** A conversation is not listed in Unreads at
+        // all — see `unreadInboxChannels` — so the tab that can still draw one
+        // is the one that groups by wherever the message was.
+        model.inbox.tab = .mentions
+        model.inbox.mentions = [
+            Message(
+                id: MessageID(rawValue: 900),
+                channelID: dm,
+                authorID: UserID(rawValue: 2),
+                content: "hello"
+            ),
+        ]
         let groups = model.inboxGroups(width: 400)
         let group = try? #require(groups.first { $0.channelID == dm })
         #expect(group?.breadcrumb == nil)

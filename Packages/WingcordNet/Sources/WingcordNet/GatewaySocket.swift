@@ -1362,7 +1362,17 @@ public struct ReadySnapshot: Sendable {
         var readStates: [ChannelID: ReadState] = [:]
         for entry in payload.read_state?.entries ?? [] {
             readStates[entry.id] = ReadState(
-                lastAcknowledgedID: entry.last_message_id,
+                // **A zero snowflake is not a message id; it is "never read".**
+                // Discord sends `"last_message_id": "0"` for a channel the
+                // reader has no position in, and carried through as a real
+                // cursor it is the most dangerous value there is: every
+                // comparison against it passes, so "everything after the
+                // cursor" becomes the channel's entire history and the first
+                // unread message is the first message ever posted there. The
+                // inbox drew 2025 for channels that had been busy all week.
+                lastAcknowledgedID: entry.last_message_id.flatMap {
+                    $0.rawValue == 0 ? nil : $0
+                },
                 mentionCount: entry.mention_count ?? 0,
                 isMuted: false
             )

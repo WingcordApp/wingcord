@@ -147,6 +147,11 @@ extension DiscordREST {
     }
 
     /// Takes a bookmark or a reminder off.
+    ///
+    /// **Captured** — `bookmarks, reminders,scheduled.har`, three bookmarks
+    /// removed in a row. Same path as the `PUT`, `DELETE`, answers **204** with
+    /// no body. The inference this client shipped on was right; it is a
+    /// measurement now.
     public func unsaveMessage(_ messageID: MessageID, in channelID: ChannelID) async throws {
         _ = try await requestData(
             method: "DELETE",
@@ -160,13 +165,15 @@ extension DiscordREST {
 
     /// Messages the reader queued to send later.
     ///
-    /// **User-scoped, not channel-scoped** — that much the capture settles, and
-    /// it is the one thing about this route that would have been guessed wrong:
-    /// every neighbouring "later" route in Discord's API hangs off a channel.
-    /// The element shape is inferred; see `ScheduledMessageDTO`.
+    /// **User-scoped, not channel-scoped**, which is the one thing about this
+    /// route that would have been guessed wrong: every neighbouring "later"
+    /// route in Discord's API hangs off a channel. The element shape is now
+    /// captured rather than inferred — see `ScheduledMessageDTO`, and note
+    /// that every field the old decoder looked for was absent, so this tab was
+    /// empty on a response that decodes perfectly.
     ///
     /// Rows that cannot be understood are dropped rather than thrown, so a
-    /// shape that turns out to be wrong costs an empty tab and not a failure.
+    /// shape that turns out to be wrong costs one row and not the page.
     public func scheduledMessages() async throws -> [ScheduledMessage] {
         let page = try await get(
             "/users/@me/scheduled-messages",
@@ -176,12 +183,142 @@ extension DiscordREST {
         return page.compactMap { $0.domain() }
     }
 
+    /// Queues a message to be sent later.
+    ///
+    /// **Captured** — `inbox,fixed23.har`, one message scheduled from the
+    /// composer's own control:
+    ///
+    /// ```json
+    /// POST /users/@me/scheduled-messages
+    /// { "channel_id": "1424759145021837325", "content": "hey",
+    ///   "scheduled_timestamp": "2026-09-21T17:45:00.000Z",
+    ///   "flags": 0, "attachments": [] }
+    /// ```
+    ///
+    /// **The field is `scheduled_timestamp` here and `send_at_timestamp` in
+    /// the answer.** One instant, two names, inside a single round trip — so a
+    /// client that reused the reply's spelling on the request is sending a key
+    /// Discord does not read, and a scheduled message that silently never gets
+    /// a time is one that silently never sends.
+    ///
+    /// `flags` and `attachments` are sent even though both are empty: they are
+    /// in every captured body, and §SM.1's rule is that a page sends the fields
+    /// it owns whether or not they changed.
+    ///
+    /// The reply is one `ScheduledMessageDTO`, the same element the list
+    /// answers with, so the caller can insert the new row without refetching.
+    public func scheduleMessage(
+        in channelID: ChannelID,
+        content: String,
+        at date: Date
+    ) async throws -> ScheduledMessage? {
+        struct Body: Encodable {
+            var channel_id: String
+            var content: String
+            var scheduled_timestamp: String
+            var flags: Int
+            var attachments: [String]
+        }
+        let dto = try await post(
+            "/users/@me/scheduled-messages",
+            route: "users/@me/scheduled-messages",
+            body: Body(
+                channel_id: channelID.description,
+                content: content,
+                scheduled_timestamp: ISO8601DateFormatter.withFraction.string(from: date),
+                flags: 0,
+                attachments: []
+            ),
+            as: ScheduledMessageDTO.self
+        )
+        return dto.domain()
+    }
+
+    /// Edits what a scheduled message will say.
+    ///
+    /// **Captured** — `scheduled.har`, Edit Message:
+    /// `PATCH /users/@me/scheduled-messages/{id}` with `{"content":"hey1",
+    /// "flags":0}`. The reply is the whole element the list answers with.
+    ///
+    /// **Two edits, two bodies, one route — and neither carries the other's
+    /// field.** Editing the text sends `content` and `flags`; editing the time
+    /// sends `scheduled_timestamp` alone. That is §SM.1's rule again: a page
+    /// sends the fields it owns. A client that merged the two into one body
+    /// would rewrite a time nobody touched every time somebody fixed a typo.
+    public func editScheduledMessage(
+        _ id: MessageID,
+        content: String
+    ) async throws -> ScheduledMessage? {
+        struct Body: Encodable {
+            var content: String
+            var flags: Int
+        }
+        let dto = try await request(
+            method: "PATCH",
+            path: "/users/@me/scheduled-messages/\(id.rawValue)",
+            route: "users/@me/scheduled-messages/{message}",
+            body: Body(content: content, flags: 0),
+            as: ScheduledMessageDTO.self
+        )
+        return dto.domain()
+    }
+
+    /// Moves when a scheduled message will be sent.
+    ///
+    /// **Captured** — `scheduled.har`, Edit Schedule Time:
+    /// `{"scheduled_timestamp":"2026-09-22T05:15:00.000Z"}`, and nothing else.
+    ///
+    /// **`scheduled_timestamp` on the way in, `send_at_timestamp` on the way
+    /// out**, exactly as the create route does — see `scheduleMessage`.
+    public func rescheduleMessage(
+        _ id: MessageID,
+        to date: Date
+    ) async throws -> ScheduledMessage? {
+        struct Body: Encodable { var scheduled_timestamp: String }
+        let dto = try await request(
+            method: "PATCH",
+            path: "/users/@me/scheduled-messages/\(id.rawValue)",
+            route: "users/@me/scheduled-messages/{message}",
+            body: Body(
+                scheduled_timestamp: ISO8601DateFormatter.withFraction.string(from: date)
+            ),
+            as: ScheduledMessageDTO.self
+        )
+        return dto.domain()
+    }
+
+    /// Sends a scheduled message now rather than waiting for its time.
+    ///
+    /// **Captured** — `scheduled.har`, Send Now:
+    /// `POST /users/@me/scheduled-messages/{id}/send`, **no request body at
+    /// all**, and the reply is **the sent message**, not the scheduled record:
+    /// a whole `MessageDTO` with a new snowflake and a fresh timestamp.
+    ///
+    /// That asymmetry is the thing to know. Every other route on this
+    /// collection answers with a `ScheduledMessageDTO`; this one answers with
+    /// the thing the collection just stopped holding, because the row is gone
+    /// and the message exists. A caller that decoded the usual element here
+    /// would throw on a send that succeeded.
+    ///
+    /// The row is removed by the caller on a 200 — there is no scheduled
+    /// message left to refetch.
+    public func sendScheduledMessageNow(_ id: MessageID) async throws -> Message? {
+        let dto = try await request(
+            method: "POST",
+            path: "/users/@me/scheduled-messages/\(id.rawValue)/send",
+            route: "users/@me/scheduled-messages/{message}/send",
+            body: Optional<Never>.none,
+            as: MessageDTO.self
+        )
+        return dto.domain
+    }
+
     /// Cancels a scheduled message.
     ///
-    /// **The path is inferred along with the shape.** It mirrors the list route,
-    /// which is the convention every other user-scoped collection follows. A 404
-    /// here means the path is wrong rather than the message being gone, and the
-    /// caller says so rather than removing the row.
+    /// **Captured** — `scheduled.har`, Cancel Scheduled Message. `DELETE` on
+    /// the element's own path, answering **204** with no body. The path this
+    /// client inferred from the list route was right, and it is a measurement
+    /// now rather than a convention.
     public func deleteScheduledMessage(_ id: MessageID) async throws {
         _ = try await requestData(
             method: "DELETE",

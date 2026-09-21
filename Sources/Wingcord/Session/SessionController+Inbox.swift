@@ -176,6 +176,68 @@ extension SessionController {
         }
     }
 
+    /// Sends a queued message now.
+    ///
+    /// **The reply is the sent message, not the scheduled row** — see
+    /// `sendScheduledMessageNow`. There is nothing left to refetch on success,
+    /// so the row the store already removed stays removed and the message is
+    /// filed into its channel if that transcript is resident. If it is not,
+    /// the gateway's own `MESSAGE_CREATE` puts it there when the reader opens
+    /// the channel; a fetch here would be a page nobody is looking at.
+    func sendScheduledMessageNow(_ id: MessageID) {
+        Task { [weak self] in
+            guard let self else { return }
+            defer { model.inbox.savesInFlight.remove(id) }
+            do {
+                guard let sent = try await rest.sendScheduledMessageNow(id) else { return }
+                if model.messages(in: sent.channelID)?.messages.isEmpty == false {
+                    model.mutateBox(sent.channelID) { $0.upsert(sent) }
+                }
+                model.messageContentRevision &+= 1
+            } catch {
+                Self.trace("send scheduled \(id) now failed: \(Self.describe(error))")
+                model.inbox.scheduled = nil
+                model.loadInboxTab(.scheduled)
+                model.reportActionFailure(Self.describe(error))
+            }
+        }
+    }
+
+    /// Rewrites what a queued message will say.
+    func editScheduledMessage(_ id: MessageID, content: String) {
+        Task { [weak self] in
+            guard let self else { return }
+            defer { model.inbox.savesInFlight.remove(id) }
+            do {
+                guard let updated = try await rest.editScheduledMessage(id, content: content)
+                else { return }
+                model.applyScheduledMessage(updated)
+            } catch {
+                Self.trace("edit scheduled \(id) failed: \(Self.describe(error))")
+                model.inbox.scheduled = nil
+                model.loadInboxTab(.scheduled)
+                model.reportActionFailure(Self.describe(error))
+            }
+        }
+    }
+
+    /// Moves when a queued message will be sent.
+    func rescheduleMessage(_ id: MessageID, to date: Date) {
+        Task { [weak self] in
+            guard let self else { return }
+            defer { model.inbox.savesInFlight.remove(id) }
+            do {
+                guard let updated = try await rest.rescheduleMessage(id, to: date) else { return }
+                model.applyScheduledMessage(updated)
+            } catch {
+                Self.trace("reschedule \(id) failed: \(Self.describe(error))")
+                model.inbox.scheduled = nil
+                model.loadInboxTab(.scheduled)
+                model.reportActionFailure(Self.describe(error))
+            }
+        }
+    }
+
     func cancelScheduledMessage(_ id: MessageID) {
         Task { [weak self] in
             guard let self else { return }
@@ -220,9 +282,11 @@ extension SessionController {
     /// Silent on failure: the group keeps its header and shows nothing under
     /// it, which is what a channel the reader cannot fetch should look like.
     func loadUnreadGroup(_ channelID: ChannelID) {
-        // Already loaded, or being loaded by the transcript. `hasMoreHistory`
-        // is not consulted — any page at all is enough for a summary.
-        guard model.messages(in: channelID)?.messages.isEmpty != false else { return }
+        // Already loaded, either here or by the transcript. `hasMoreHistory` is
+        // not consulted — any page at all is enough for a summary.
+        guard model.inbox.unreadBodies[channelID] == nil,
+              model.messages(in: channelID)?.messages.isEmpty != false
+        else { return }
         // **A ceiling on how many run at once, and it is what stops the storm.**
         // `LazyVStack` materialises rows ahead of the viewport, so on an account
         // with sixty unread channels a dozen groups can appear in one pass and
@@ -241,6 +305,22 @@ extension SessionController {
                 // newest message spends half the page on messages the reader
                 // has already read. Anchored at the cursor, the unread half is
                 // what comes back.
+                // **With a cursor, the page is centred on it; without one,
+                // it is the newest page.**
+                //
+                // Discord sends `around=0` for a channel with no cursor and
+                // this client did too, which is right for the short channels
+                // the capture happens to contain — a five-message channel
+                // answers with all five either way. It is wrong for a channel
+                // with years in it: `around=0` is the channel's *beginning*,
+                // so an account that had never opened a busy server got its
+                // founding conversation instead of this week's.
+                //
+                // Omitting the parameter asks for the newest page, which is
+                // the only page worth summarising when the reader has no
+                // position at all. A deliberate deviation from the captured
+                // request, and the reason is that the capture cannot show what
+                // Discord *draws* from what it asked for.
                 let anchor = model.readStates[channelID]?.lastAcknowledgedID
                 let page = try await rest.messages(
                     in: channelID,
@@ -249,10 +329,11 @@ extension SessionController {
                 )
                 model.users.merge(page.authors) { existing, new in new.merged(over: existing) }
                 for thread in page.threads { model.channelIndex.upsert(thread) }
-                model.mutateBox(channelID) { box in
-                    guard box.messages.isEmpty else { return }
-                    box.messages = page.messages
-                }
+                // **The inbox's own table, never a message box.** A box is the
+                // transcript's and is capped at three resident channels, so
+                // writing here evicted the group loaded three rows ago — see
+                // `InboxState.unreadBodies`.
+                model.inbox.unreadBodies[channelID] = page.messages
                 model.inbox.revision &+= 1
             } catch {
                 Self.trace("inbox unread \(channelID) failed: \(Self.describe(error))")

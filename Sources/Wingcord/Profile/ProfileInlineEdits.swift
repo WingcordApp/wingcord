@@ -112,47 +112,179 @@ struct ServerTagChooser: View {
     var options: [ServerTagOption]
     @Binding var selection: GuildID?
 
+    @Environment(\.motion) private var motion
+    @State private var isOpen = false
+    @State private var hovered: GuildID?
+    @State private var isNoneHovered = false
+
+    private static let rowHeight: CGFloat = 34
+    private static let iconSide: CGFloat = 22
+    private static let width: CGFloat = 264
+
     var body: some View {
-        Menu {
-            Button {
-                selection = nil
-            } label: {
-                Label {
-                    Text("No Server Tag")
-                } icon: {
-                    if selection == nil { Image(systemName: "checkmark") }
-                }
+        Button { isOpen.toggle() } label: { chip }
+            .buttonStyle(.plain)
+            .fixedSize()
+            .accessibilityLabel(Text("Server tag"))
+            .accessibilityValue(Text(current?.name ?? "None"))
+            // **The system popover's own glass, untouched.** On macOS 26 an
+            // `NSPopover` draws Liquid Glass at the window level, sampling the
+            // app behind it — which is what makes it transparent. Clearing that
+            // (`.presentationBackground(.clear)`) and painting a SwiftUI glass
+            // on the content instead gives a glass with nothing behind it to
+            // lens: it lives inside the popover's own window, so it renders as
+            // a flat grey slab. The row highlights are the only paint here.
+            .popover(isPresented: $isOpen, arrowEdge: .bottom) { list }
+    }
+
+    // MARK: The chip
+
+    /// **The badge comes with the letters, because the letters alone are not the
+    /// tag.** Discord draws the little diamond, leaf or crest ahead of them and
+    /// two servers can easily share four characters.
+    private var chip: some View {
+        HStack(spacing: 4) {
+            if let badge = current?.badgeURL {
+                RemoteImage(url: badge, side: 14, bucket: .artwork) { Color.clear }
+                    .frame(width: 14, height: 14)
             }
-            if !options.isEmpty { Divider() }
-            ForEach(options) { option in
-                Button {
-                    selection = option.id
-                } label: {
-                    Label {
-                        Text("\(option.name)  \(option.tag)")
-                    } icon: {
-                        if selection == option.id { Image(systemName: "checkmark") }
-                    }
-                }
-            }
-        } label: {
-            HStack(spacing: Spacing.tight) {
-                Text(current?.tag ?? "Server Tag")
-                    .font(.system(size: 11, weight: .semibold))
-                    .foregroundStyle(current == nil ? InkColor.tertiary : InkColor.primary)
-                    .lineLimit(1)
-                Image(systemName: "chevron.down")
-                    .font(.system(size: 8, weight: .bold))
-                    .foregroundStyle(InkColor.tertiary)
-            }
-            .padding(.horizontal, 8)
-            .frame(height: 22)
+            Text(current?.tag.isEmpty == false ? current!.tag : "Server Tag")
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(current == nil ? InkColor.tertiary : InkColor.primary)
+                .lineLimit(1)
+            Image(systemName: "chevron.down")
+                .font(.system(size: 8, weight: .bold))
+                .foregroundStyle(InkColor.tertiary)
+                // Points at the list while it is open, which is the cheapest
+                // possible statement of where the thing went.
+                .rotationEffect(.degrees(isOpen ? 180 : 0))
         }
-        .menuStyle(.button)
+        .padding(.horizontal, 8)
+        .frame(height: 22)
+        // Layout first, glass last — and `.clear`, never `.regular`: what passes
+        // under this is somebody's own banner, which `INVARIANTS.md` §4 says
+        // must lens rather than frost.
+        .glassEffect(.clear.tint(Palette.flyoutTint).interactive(), in: .capsule)
+        .animation(motion.hover, value: isOpen)
+    }
+
+    // MARK: The list
+
+    private var list: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 0) {
+                noneRow
+                ForEach(options) { option in
+                    row(option)
+                }
+            }
+            .padding(.vertical, Spacing.tight)
+        }
+        .scrollIndicators(.automatic)
+        .scrollBounceBehavior(.basedOnSize)
+        .frame(width: Self.width)
+        .frame(maxHeight: 280)
+        .animation(motion.fadeQuick, value: hovered)
+    }
+
+    private var noneRow: some View {
+        Button {
+            selection = nil
+            isOpen = false
+        } label: {
+            HStack(spacing: Spacing.snug) {
+                Text("No Server Tag")
+                    .font(.system(.subheadline))
+                    .foregroundStyle(InkColor.secondary)
+                    .italic()
+                Spacer(minLength: Spacing.tight)
+                if selection == nil {
+                    Image(systemName: "checkmark")
+                        .font(.system(size: 11, weight: .bold))
+                        .foregroundStyle(InkColor.secondary)
+                }
+            }
+            .padding(.horizontal, Spacing.snug)
+            .frame(height: Self.rowHeight)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background { highlight(isNoneHovered || selection == nil) }
+            .contentShape(.rect)
+        }
         .buttonStyle(.plain)
-        .fixedSize()
-        .chromeOverMedia(tinted: Palette.flyoutTint)
-        .accessibilityLabel(Text("Server tag"))
+        .onHover { isNoneHovered = $0 }
+    }
+
+    private func row(_ option: ServerTagOption) -> some View {
+        Button {
+            selection = option.id
+            isOpen = false
+        } label: {
+            HStack(spacing: Spacing.snug) {
+                icon(option)
+                Text(option.name)
+                    .font(.system(.subheadline, weight: .medium))
+                    .foregroundStyle(InkColor.primary)
+                    .lineLimit(1)
+                Spacer(minLength: Spacing.tight)
+                GuildTagChip(
+                    tag: GuildTag(
+                        text: option.tag,
+                        badgeURL: option.badgeURL,
+                        guildID: option.id
+                    )
+                )
+                if selection == option.id {
+                    Image(systemName: "checkmark")
+                        .font(.system(size: 11, weight: .bold))
+                        .foregroundStyle(InkColor.secondary)
+                }
+            }
+            .padding(.horizontal, Spacing.snug)
+            .frame(height: Self.rowHeight)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background { highlight(hovered == option.id || selection == option.id) }
+            .contentShape(.rect)
+        }
+        .buttonStyle(.plain)
+        .onHover { inside in
+            // Written only on a change: the pointer generates these at event
+            // rate and an equal write still costs a body evaluation.
+            let next = inside ? option.id : (hovered == option.id ? nil : hovered)
+            guard next != hovered else { return }
+            hovered = next
+        }
+        .accessibilityLabel(Text("\(option.name), tag \(option.tag)"))
+    }
+
+    /// A server's icon, or its initials where it has none — the same fallback
+    /// the rail's tiles draw.
+    @ViewBuilder
+    private func icon(_ option: ServerTagOption) -> some View {
+        if let url = option.iconURL {
+            RemoteImage(url: url, side: Self.iconSide, bucket: .artwork) {
+                Color.clear
+            }
+            .frame(width: Self.iconSide, height: Self.iconSide)
+            .clipShape(.circle)
+        } else {
+            Text(option.monogram)
+                .font(.system(size: 9, weight: .semibold))
+                .foregroundStyle(InkColor.secondary)
+                .frame(width: Self.iconSide, height: Self.iconSide)
+                .background(Palette.surfaceRaised, in: .circle)
+        }
+    }
+
+    /// **Concentric with the popover**, so a highlighted row's corners follow
+    /// the glass around it instead of sitting as a smaller, differently-rounded
+    /// box inside a rounded one.
+    @ViewBuilder
+    private func highlight(_ isHovered: Bool) -> some View {
+        if isHovered {
+            ConcentricRectangle()
+                .fill(Palette.hoverFill)
+                .padding(.horizontal, Spacing.tight)
+        }
     }
 
     private var current: ServerTagOption? {
@@ -166,6 +298,13 @@ struct ServerTagOption: Hashable, Sendable, Identifiable {
     var name: String
     var tag: String
     var badgeURL: URL?
+    /// The server's own icon, drawn at the head of its row.
+    ///
+    /// **A tag is four letters and several servers pick the same four.** The
+    /// icon is what tells RENO from RENO, which is why Discord's own list leads
+    /// with it rather than with the name.
+    var iconURL: URL?
+    var monogram: String = "?"
 }
 
 /// The pencil that opens a menu over the avatar or the banner.
@@ -174,31 +313,59 @@ struct ServerTagOption: Hashable, Sendable, Identifiable {
 /// cosmetics apiece — the avatar has its decoration, the banner has the effect
 /// and the frame — so a click has to ask which, and Discord's own answer is a
 /// short menu anchored on the thing being changed.
+///
+/// **It appears on hover and is otherwise absent.** These sit on top of the
+/// artwork somebody is editing — a face, a banner — and two permanent slabs
+/// over that artwork are two things competing with the thing being judged. The
+/// editor's promise is that the card beside the controls shows what the change
+/// will look like, which a control parked on top of it undermines.
 struct EditOverlayButton<Menu: View>: View {
+    /// Whether the surface under this is being pointed at.
     var isVisible: Bool
     @ViewBuilder var menu: () -> Menu
 
+    @Environment(\.motion) private var motion
+    /// **Reveals for VoiceOver unconditionally.** A hover-only control is a
+    /// control a reader who never hovers cannot reach at all — opacity zero and
+    /// no hit testing removes it from the accessibility tree as surely as
+    /// deleting it. Pointer users get the clean artwork; everybody else gets
+    /// the button.
+    @Environment(\.accessibilityVoiceOverEnabled) private var isVoiceOverRunning
+    /// Hover on the control itself as well as on the surface under it, so the
+    /// pointer crossing onto the pencil — or AppKit holding it highlighted
+    /// while its own menu is up — cannot make it disappear from under the list
+    /// it just opened.
+    @State private var isSelfHovered = false
+
+    private var isShown: Bool { isVisible || isSelfHovered || isVoiceOverRunning }
+
     var body: some View {
-        if isVisible {
-            SwiftUI.Menu {
-                menu()
-            } label: {
-                Image(systemName: "pencil")
-                    .font(.system(size: 13, weight: .semibold))
-                    .foregroundStyle(.white)
-                    .frame(width: 32, height: 32)
-                    .background {
-                        RoundedRectangle(cornerRadius: 9, style: .continuous)
-                            .fill(.black.opacity(0.55))
-                    }
-            }
-            .menuStyle(.button)
-            .buttonStyle(.plain)
-            .menuIndicator(.hidden)
-            .fixedSize()
-            .transition(.opacity)
-            .accessibilityLabel(Text("Edit"))
+        SwiftUI.Menu {
+            menu()
+        } label: {
+            Image(systemName: "pencil")
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(.white)
+                .frame(width: 32, height: 32)
+                // Layout first, glass last. `.clear` because what passes under
+                // is the reader's own artwork — §4's rule: a sampled material
+                // over a picture must lens rather than frost.
+                .glassEffect(.clear.interactive(), in: .circle)
         }
+        .menuStyle(.button)
+        .buttonStyle(.plain)
+        .menuIndicator(.hidden)
+        .fixedSize()
+        // **Scale with the fade, not a bare opacity.** A glass surface arriving
+        // should read as a material condensing out of the background rather
+        // than a decal switching on — and the pair is what makes the appearance
+        // legible at the speed a pointer moves.
+        .scaleEffect(isShown ? 1 : 0.86)
+        .opacity(isShown ? 1 : 0)
+        .allowsHitTesting(isShown)
+        .onHover { isSelfHovered = $0 }
+        .animation(motion.hover, value: isShown)
+        .accessibilityLabel(Text("Edit"))
     }
 }
 

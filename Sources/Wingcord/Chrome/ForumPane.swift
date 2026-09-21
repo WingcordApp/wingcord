@@ -708,9 +708,7 @@ private struct ForumTagList: View {
         }
         .padding(Spacing.margin)
         .frame(width: 300)
-        // A flyout over the board counts as being over content — §4 — so it is
-        // clear glass with the shared tint, never `.regular`.
-        .chromeOverMedia(tinted: Palette.flyoutTint, in: .rect(cornerRadius: Radius.card))
+        // No material of its own: the popover's glass is the body — §4.9.
     }
 }
 
@@ -803,9 +801,7 @@ private struct ForumSortMenu: View {
         }
         .padding(Spacing.margin)
         .frame(width: 220)
-        // A flyout over the board counts as being over content — §4 — so it is
-        // clear glass with the shared tint, never `.regular`.
-        .chromeOverMedia(tinted: Palette.flyoutTint, in: .rect(cornerRadius: Radius.card))
+        // No material of its own: the popover's glass is the body — §4.9.
     }
 
     private func section(

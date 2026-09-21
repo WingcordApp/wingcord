@@ -176,7 +176,15 @@ struct ProfileEffectView: NSViewRepresentable {
                     view.hide(index)
                     continue
                 }
-                view.show(strip.frame(at: phase), at: index)
+                // **The catalogue's duration is the SLOT; the asset's own is the
+                // playback.** They are not the same number and treating them as
+                // one is what made SpongeBob perform twice: his entry is a
+                // 6000 ms slot holding a 4125 ms APNG, so the looping lookup
+                // wrapped at 4.125 s and replayed the opening 1.875 s before the
+                // slot expired. A layer that does not loop holds its last frame
+                // for the rest of its slot instead, which is what `num_plays: 1`
+                // means and what a browser does with the same file.
+                view.show(strip.frame(at: phase, looping: layer.loops), at: index)
             }
 
             // Nothing left that can ever draw again: stop the clock work.
@@ -309,4 +317,23 @@ final class EffectHostView: NSView {
         }
         CATransaction.commit()
     }
+}
+
+/// What a profile effect does when the pointer is over the card.
+///
+/// **Discord's own numbers, off its stylesheet.** `.profileEffects` carries
+/// `transition: opacity .6s ease-in-out`, and the class it gains on hover —
+/// `.hovered` — is exactly `opacity: .35`.
+///
+/// The reason is legibility rather than decoration: these compositions are
+/// authored over the banner and the name, and at full strength a busy one sits
+/// on top of the text somebody opened the card to read. Stepping back under the
+/// pointer hands the content back without taking the effect away.
+///
+/// Stated once, because both profile surfaces do it and two copies of `0.35`
+/// are two places for it to drift.
+enum ProfileEffectFade {
+    static let hovered: Double = 0.35
+    static let duration: Double = 0.6
+    static var animation: Animation { .easeInOut(duration: duration) }
 }

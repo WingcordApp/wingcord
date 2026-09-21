@@ -53,15 +53,8 @@ struct GuildProfileCard: View {
             footer
         }
         .frame(width: Self.width)
-        // Clear glass, like every other flyout — see `ExpressionInfoCard`. What
-        // passes under a floating card here is content, and `.regular` frosts it
-        // into a grey slab instead of lensing it.
-        .clipShape(.rect(cornerRadius: Radius.card, style: .continuous))
-        .glassEffect(
-            .clear.tint(Palette.flyoutTint),
-            in: .rect(cornerRadius: Radius.card, style: .continuous)
-        )
-        .shadow(color: .black.opacity(0.4), radius: 28, y: 10)
+        // No material of its own: the popover's glass is the body — §4.9.
+        // The popover casts its own shadow; a second would double it.
     }
 
     // MARK: Header

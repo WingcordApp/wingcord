@@ -69,6 +69,20 @@ nonisolated enum TimelineRowPainter {
         /// render test can drive it, and reaching for a main-actor singleton
         /// from inside a draw loop is exactly what that buys.
         var animationTime: Double = 0
+        /// Whether a styled name's effect may move.
+        ///
+        /// **Its own flag rather than a nil `animationTime`**, because zero is a
+        /// real moment on that clock and every effect's first keyframe is its
+        /// resting picture — so "still" and "one frame in" have to be sayable
+        /// apart. False under Reduce Motion, where the design is still drawn and
+        /// only the movement stops.
+        var playsNameEffect = true
+        /// Where the hovered name's role gradient has travelled to, `0..<1`, or
+        /// nil for a name standing still.
+        ///
+        /// **Nil also turns the glow off**, because Discord lights and moves an
+        /// enhanced role's name together — see `drawText`'s own note.
+        var nameGradientPhase: CGFloat?
         /// An activity invitation's colour, quantised from the app's icon.
         ///
         /// **On the paint state rather than in the slot**, because it resolves
@@ -96,6 +110,15 @@ nonisolated enum TimelineRowPainter {
         var decorationFrame: CGImage?
     }
 
+    /// - Parameter styledAuthorName: the hovered run head's name, shaped and
+    ///   with its gradients built, or nil — which is every row but one.
+    ///
+    ///   **Passed in rather than put on `State`, and prepared by the canvas
+    ///   rather than here.** `State` is `Sendable` and a prepared name holds
+    ///   `CGPath`s and `CGGradient`s; and this painter never starts work, so
+    ///   shaping inside a draw would run a framesetting pass, fifteen outline
+    ///   builds and a ramp per frame for a name that cannot change while
+    ///   somebody is pointing at it.
     static func draw(
         row: TimelineRow,
         in rowFrame: CGRect,
@@ -103,7 +126,8 @@ nonisolated enum TimelineRowPainter {
         style: MessageTextStyle,
         state: State,
         images: ImageStore,
-        scale: CGFloat
+        scale: CGFloat,
+        styledAuthorName: DisplayNameEffectPainter.Prepared? = nil
     ) {
         switch row.kind {
         case .daySeparator(let label):
@@ -135,7 +159,8 @@ nonisolated enum TimelineRowPainter {
                 style: style,
                 state: state,
                 images: images,
-                scale: scale
+                scale: scale,
+                styledAuthorName: styledAuthorName
             )
         }
     }
@@ -149,7 +174,8 @@ nonisolated enum TimelineRowPainter {
         style: MessageTextStyle,
         state: State,
         images: ImageStore,
-        scale: CGFloat
+        scale: CGFloat,
+        styledAuthorName: DisplayNameEffectPainter.Prepared? = nil
     ) {
         // A mention of the reader tints the whole row and carries a leading
         // rule. Both, not one: the tint alone is easy to miss on a busy channel
@@ -244,22 +270,61 @@ nonisolated enum TimelineRowPainter {
         }
 
         if row.isRunHead {
-            // The face carries into the transcript; the colour does not — a
-            // role colour a server chose beats a colour its owner did. Drawn in
-            // the same face the layout measured, or the badge beside it lands
-            // in the wrong place.
-            drawText(
-                row.authorName,
-                font: row.authorFace ?? style.authorFont,
-                color: row.authorColor ?? style.primaryColor,
-                at: CGPoint(
-                    x: rowFrame.minX + row.authorRect.minX,
-                    y: rowFrame.minY + row.authorRect.minY
-                ),
-                maxWidth: row.authorRect.width + 8,
-                tracking: row.authorTracking,
-                context: context
+            let namePoint = CGPoint(
+                x: rowFrame.minX + row.authorRect.minX,
+                y: rowFrame.minY + row.authorRect.minY
             )
+            // **The face carries into the transcript always; the effect only
+            // under the pointer.** That is Discord's own arrangement and it is
+            // what the two captures show: the same pixel face in both, colour
+            // in the lit one only. A column of names all running their own
+            // effects is a page of moving text where a conversation should be.
+            //
+            // The role colour keeps the resting state — a colour a server chose
+            // beats a colour its owner did — and the effect takes the lit one,
+            // because an effect is a paint rather than a colour and there is
+            // nothing for the two to share.
+            // **A server's role beats the account's own paint, and the two
+            // are mutually exclusive.** The roster states the rule — "a
+            // server's enhanced role beats the app's ink" — and the transcript
+            // has to match it, or one person reads two ways in one window
+            // depending on which list you point at. `authorStyle` is already
+            // nil in a guild, so this branch is a DM's.
+            if let gradient = row.authorGradient, gradient.count >= 2 {
+                drawText(
+                    row.authorName,
+                    font: row.authorFace ?? style.authorFont,
+                    color: row.authorColor ?? style.primaryColor,
+                    at: namePoint,
+                    maxWidth: row.authorRect.width + 8,
+                    tracking: row.authorTracking,
+                    gradient: gradient,
+                    gradientPhase: state.isHovered ? state.nameGradientPhase : nil,
+                    context: context
+                )
+            } else if state.isHovered, let name = styledAuthorName {
+                DisplayNameEffectPainter.draw(
+                    name,
+                    fallback: (row.authorColor ?? style.primaryColor).cgColor,
+                    // Nil parks the effect on its own first keyframe, which is
+                    // what a still Reduce Motion picture is here.
+                    time: state.playsNameEffect ? state.animationTime : nil,
+                    at: namePoint,
+                    context: context
+                )
+            } else {
+                // Drawn in the same face the layout measured, or the badge
+                // beside it lands in the wrong place.
+                drawText(
+                    row.authorName,
+                    font: row.authorFace ?? style.authorFont,
+                    color: row.authorColor ?? style.primaryColor,
+                    at: namePoint,
+                    maxWidth: row.authorRect.width + 8,
+                    tracking: row.authorTracking,
+                    context: context
+                )
+            }
 
             if row.isBot {
                 let badgeRect = CGRect(

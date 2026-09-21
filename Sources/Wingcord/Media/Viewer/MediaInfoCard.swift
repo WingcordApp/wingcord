@@ -63,12 +63,7 @@ struct MediaInfoCard: View {
         }
         .padding(Spacing.margin)
         .frame(width: Self.width, alignment: .leading)
-        // The card carries its own material, so the popover must carry none —
-        // two in series read as frost rather than as glass.
-        .glassEffect(
-            .clear.tint(Palette.flyoutTint),
-            in: .rect(cornerRadius: Radius.glass, style: .continuous)
-        )
+        // No material of its own: the popover's glass is the body — §4.9.
     }
 
     /// The reader's words for the type, with the wire's own beside it when it

@@ -307,12 +307,7 @@ struct SoundboardPickerContainer: View {
                 .flatMap({ model.channelIndex[$0] })?.guildID else { return }
             model.loadSoundboard(inGuild: guildID)
         }
-        // Two materials are never stacked: the popover's own backdrop is
-        // suppressed and the picker carries the one glass body. §4.
+            // No material of its own: the popover's glass is the body — §4.9.
         .presentationBackground(.clear)
-        .glassEffect(
-            .clear.tint(Palette.flyoutTint),
-            in: .rect(cornerRadius: Radius.glass)
-        )
     }
 }
