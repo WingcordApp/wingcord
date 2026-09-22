@@ -43,6 +43,13 @@ struct UserDTO: Decodable, Sendable {
     /// whether the reader may use another server's emoji, and that is a question
     /// only ever asked about the reader.
     var premium_type: Int?
+    // **Only ever populated by `GET /users/@me`.** Every other route that
+    // carries a user carries a *public* one, so these are nil for everybody
+    // else and that is not a failure to decode — see `AccountDetails`.
+    var email: String?
+    var phone: String?
+    var verified: Bool?
+    var mfa_enabled: Bool?
 
     var domain: User {
         // The box is built only when there is something to put in it. One

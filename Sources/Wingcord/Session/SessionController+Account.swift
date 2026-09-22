@@ -23,4 +23,36 @@ extension SessionController {
             }
         }
     }
+
+    /// The account's own e-mail, phone and second-factor state.
+    ///
+    /// **Fetched when the pane opens rather than kept from launch.** The token
+    /// check at startup already calls this route, but it throws the extra fields
+    /// away deliberately: an e-mail address and a phone number held for a whole
+    /// session are two secrets in memory for a page most readers never open.
+    func loadAccountDetails() async {
+        guard model.accountDetails == nil else { return }
+        do {
+            let account = try await rest.currentAccount()
+            model.accountDetails = account.details
+        } catch {
+            Self.trace("account details failed: \(Self.describe(error))")
+        }
+    }
+
+    /// Everywhere the account is signed in.
+    ///
+    /// **Absent and empty are different states** and the pane draws them
+    /// differently: nil is "not asked yet or the route refused", `[]` is "one
+    /// session, this one". Collapsing them would have a failed request read as
+    /// "you are signed in nowhere", which on a security page is the wrong
+    /// direction to be wrong in.
+    func loadAuthSessions() async {
+        guard model.authSessions == nil else { return }
+        do {
+            model.authSessions = try await rest.authSessions()
+        } catch {
+            Self.trace("auth sessions failed: \(Self.describe(error))")
+        }
+    }
 }

@@ -620,6 +620,17 @@ private struct AccountPane: View {
     @State private var accounts: [StoredAccount] = []
 
     var body: some View {
+        content
+            // **Fetched when the pane opens, not held from launch.** The token
+            // check at startup calls the same route and throws these fields
+            // away deliberately: an e-mail address and a phone number kept for
+            // a whole session are two secrets in memory for a page most readers
+            // never open.
+            .task { await model.sessionController.loadAccountDetails() }
+    }
+
+    @ViewBuilder
+    private var content: some View {
         if let userID = model.currentUserID, let user = model.users[userID] {
             SettingsHero(title: user.preferredName, subtitle: user.handle) {
                 AvatarView(
@@ -628,11 +639,7 @@ private struct AccountPane: View {
                     side: 64
                 )
             }
-            SettingsCard {
-                SettingsValueRow(title: "Account", value: user.handle)
-                CardDivider()
-                SettingsValueRow(title: "Session", value: "Signed in on this Mac")
-            }
+            AccountInfoCard(handle: user.handle, details: model.accountDetails)
         } else {
             SettingsCard {
                 SettingsValueRow(
@@ -642,6 +649,15 @@ private struct AccountPane: View {
                 )
             }
         }
+
+        SettingsGroup("Security") {
+            AccountSecurityCard(details: model.accountDetails)
+        }
+
+        SettingsGroup("Signed in") {
+            AuthSessionsCard(sessions: model.authSessions)
+        }
+        .task { await model.sessionController.loadAuthSessions() }
 
         SettingsGroup("Standing") {
             AccountStandingCard(standing: model.accountStanding)

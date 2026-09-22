@@ -474,6 +474,14 @@ final class AppModel {
         UserID: (source: ObjectIdentifier, key: CosmeticSuppression, value: UserDecoration)
     ] = [:]
 
+    /// The signed-in account's own e-mail, phone and second-factor state.
+    /// Nil until the account pane has asked — see
+    /// `SessionController.loadAccountDetails`.
+    var accountDetails: AccountDetails?
+    /// Everywhere the account is signed in. Nil is "not asked or refused" and
+    /// `[]` is "nowhere else", and the pane draws them differently.
+    var authSessions: [AuthSession]?
+
     /// People the account has blocked, and people it has ignored.
     ///
     /// **Two sets, because they are two independent facts** — you can ignore a
