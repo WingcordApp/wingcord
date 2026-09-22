@@ -82,7 +82,8 @@ struct NowBarPlateTests {
         #expect(bar.nameplateURL == nil)
         // `.none` is what leaves the bar's ramp undrawn entirely. A fallback hue
         // here would paint a colour on somebody who owns none — and the bar's
-        // own `lift` is neutral, so there is nothing else to fall back to.
+        // material carries no tint at all now, so there is nothing else for a
+        // plateless reader's capsule to take a colour from.
         #expect(bar.nameplatePalette == .none)
         #expect(bar.nameplatePalette.colorValue == nil)
     }

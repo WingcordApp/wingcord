@@ -61,15 +61,23 @@ struct NowBar: View, Equatable {
     /// which is what it looked like.
     ///
     /// So the hue moved to where the reference keeps it — a ramp inside
-    /// `NowBarPlate`, weakest under the name and strongest under the artwork —
-    /// and what is left here is the lift that makes the bar an object at all.
-    /// White at 0.15 is the selected channel's own fill, three rows above it in
-    /// the same column, so the two agree by construction.
+    /// `NowBarPlate`, weakest under the name and strongest under the artwork.
     ///
-    /// **It goes IN the material.** §4: a wash laid over glass is paint on the
-    /// refraction and takes the lensing with it, exactly as a fill behind it
-    /// would.
-    private var lift: Color { Palette.selectionFill }
+    /// **And there is no neutral lift left either, which is the second half of
+    /// the same measurement.** White at 0.15 went in on the argument that the
+    /// selected channel's fill is the same value three rows up the same column.
+    /// It is, and it was still too much: measured on the running window, this
+    /// bar lifted a ground of `30,31,34` to `99,95,108` — plus 68 — against the
+    /// reference's plus 30 on a ground of its own. `.clear` on its own accounts
+    /// for about 34 of that, so the tint was the whole of the difference and
+    /// removing it lands within a few units of the client this was measured
+    /// against.
+    ///
+    /// The bar is still an object without it: the specular edge draws its
+    /// silhouette, the three controls carry their own fills, and a reader who
+    /// wears a plate has the ramp. What it no longer has is a flat veil
+    /// standing between the channel list and the material that is supposed to
+    /// be refracting it — which is what "it is not liquid glassing" meant.
 
     var body: some View {
         // **The call is not drawn here any more.** It used to be a line above
@@ -96,18 +104,13 @@ struct NowBar: View, Equatable {
         // material exists to avoid. `.regular` here is what made the bar read
         // as a plate rather than as glass.
         //
-        // **The tint is part of the material, not a fill behind it.** This was
-        // a `RoundedRectangle().fill(selectionFill).glassEffect(...)`, which is
-        // a fill *underneath* glass — the case `INVARIANTS.md` §4 rule 3
-        // forbids, and the reason a glass surface stops lensing and starts
-        // reading as a flat lighter panel. A tint lights the material itself
-        // and keeps what is behind the window refracting through it; clear
-        // glass over near-black has nothing to refract and disappears, which is
-        // what this one is for.
-        .glassEffect(
-            .clear.tint(lift),
-            in: .rect(cornerRadius: cornerRadius)
-        )
+        // **And untinted.** A tint lights the material rather than sitting
+        // behind it, so it is not §4 rule 3 — but it is still a flat value
+        // added to every pixel of the surface, and at 0.15 it was more than
+        // twice the veil the reference client carries. See the note on this
+        // type: the measurement is `30,31,34` to `99,95,108` with it, against
+        // plus 30 without.
+        .glassEffect(.clear, in: .rect(cornerRadius: cornerRadius))
         // **The plate goes OVER the material, never behind it.** A fill behind
         // glass is §4 rule 3 and is exactly what stops a surface lensing; the
         // artwork belongs on top, the way a nameplate sits over a roster row's
