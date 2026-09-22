@@ -961,6 +961,11 @@ final class AppModel {
     /// what stops a write going out against bytes nobody has.
     @ObservationIgnored var messagingPrivacyRaw: (text: Data, privacy: Data)?
 
+    /// Which kinds of notification the ACCOUNT wants, as opposed to what this
+    /// Mac does with one. See `NotificationSubscriptions`.
+    var notificationSubscriptions = NotificationSubscriptions()
+    @ObservationIgnored var notificationSubscriptionsRaw: Data?
+
     /// What this Mac is running, or nil.
     ///
     /// Written by `GameDetector` and read by `publishedActivities` below. Kept

@@ -153,9 +153,14 @@ public enum MessagingPrivacyProto {
         var reader = ProtobufReader(data)
         while let field = reader.next() {
             switch field.number {
+            // **The default belongs to an ABSENT field, never to a present
+            // one.** A wrapper carrying its type's default writes no payload, so
+            // `?? all` here would read "nobody may add me" — an empty
+            // `UInt32Value`, which is zero — as "everybody may". The absent case
+            // is already `.all`, from `MessagingPrivacy()`.
             case Privacy.friendSourceFlags:
                 value.friendSources = FriendSourceFlags(
-                    rawValue: reader.wrappedValue(for: field) ?? FriendSourceFlags.all.rawValue
+                    rawValue: reader.wrappedValue(for: field) ?? 0
                 )
             // **Every one of these is a RESTRICTION on the wire**, so the value
             // the page shows is its negation. A client that read them straight
@@ -169,7 +174,7 @@ public enum MessagingPrivacyProto {
                 value.showsFriendRequestNotes = (reader.wrappedValue(for: field) ?? 0) == 0
             case Privacy.gameFriendDirectMessages:
                 value.allowsGameFriendDirectMessages =
-                    (reader.wrappedValue(for: field) ?? 1) != 0
+                    (reader.wrappedValue(for: field) ?? 0) != 0
             default:
                 break
             }

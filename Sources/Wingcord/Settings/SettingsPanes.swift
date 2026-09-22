@@ -1,6 +1,7 @@
 import AppKit
 import SwiftUI
 import WingcordCore
+import WingcordNet
 
 // MARK: - The panes
 //
@@ -411,6 +412,7 @@ private struct MediaPane: View {
 
 private struct NotificationsPane: View {
     @State private var settings = AppSettings.shared
+    @Environment(AppModel.self) private var model
 
     var body: some View {
         SettingsCard {
@@ -458,6 +460,114 @@ private struct NotificationsPane: View {
                 symbolName: "gear"
             )
         }
+
+        // **Everything below follows the ACCOUNT, not this Mac.** The three
+        // cards above are what this client does with a notification; these are
+        // which kinds Discord sends at all, so turning one off here turns it off
+        // on a phone too. Two groups rather than one list, because the
+        // distinction is the only thing that makes the page comprehensible.
+        accountSubscriptions
+    }
+
+    @ViewBuilder
+    private var accountSubscriptions: some View {
+        SettingsGroup("Notify me when…") {
+            SettingsCard {
+                ForEach(Array(NotificationSwitch.incoming.enumerated()), id: \.element) { entry in
+                    if entry.offset > 0 { CardDivider() }
+                    SettingsToggle(title: entry.element.title, isOn: subscription(entry.element))
+                }
+                CardDivider()
+                SettingsFlyoutRow(
+                    "Someone reacts to my messages",
+                    selection: reactions,
+                    options: ReactionNotifications.allCases,
+                    title: \.title,
+                    symbol: \.symbolName
+                )
+            }
+            SettingsFootnote(
+                "These belong to your account, so they are the same on every device you sign in on.",
+                symbolName: "person.crop.circle.badge.checkmark"
+            )
+        }
+        .disabled(model.notificationSubscriptionsRaw == nil)
+
+        SettingsGroup("Let friends know when…") {
+            SettingsCard {
+                ForEach(Array(NotificationSwitch.outgoing.enumerated()), id: \.element) { entry in
+                    if entry.offset > 0 { CardDivider() }
+                    SettingsToggle(title: entry.element.title, isOn: subscription(entry.element))
+                }
+            }
+            SettingsFootnote(
+                "This is what Discord tells your friends about you, not what it tells you.",
+                symbolName: "arrow.up.forward"
+            )
+        }
+        .disabled(model.notificationSubscriptionsRaw == nil)
+
+        SettingsGroup("Quiet") {
+            SettingsCard {
+                SettingsToggle(
+                    title: "In-app notifications",
+                    help: "The banner Discord shows inside the app itself.",
+                    isOn: flag(\.showsInApp) { .showInApp($0) }
+                )
+                CardDivider()
+                SettingsToggle(
+                    title: "Quiet mode",
+                    help: "Holds every notification back until you turn it off. "
+                        + "The only one of these that is off to begin with.",
+                    isOn: flag(\.isQuiet) { .quietMode($0) }
+                )
+            }
+        }
+        .disabled(model.notificationSubscriptionsRaw == nil)
+        .task { await model.sessionController.loadNotificationSubscriptions() }
+    }
+
+    /// One switch, written through the store and put back on refusal.
+    private func subscription(_ item: NotificationSwitch) -> Binding<Bool> {
+        Binding(
+            get: { model.notificationSubscriptions[item] },
+            set: { isOn in
+                let previous = model.notificationSubscriptions
+                model.notificationSubscriptions[item] = isOn
+                model.sessionController.writeNotificationSubscription(
+                    .item(item, isOn), restoring: previous
+                )
+            }
+        )
+    }
+
+    private func flag(
+        _ path: WritableKeyPath<NotificationSubscriptions, Bool>,
+        _ change: @escaping (Bool) -> NotificationSettingsProto.Change
+    ) -> Binding<Bool> {
+        Binding(
+            get: { model.notificationSubscriptions[keyPath: path] },
+            set: { isOn in
+                let previous = model.notificationSubscriptions
+                model.notificationSubscriptions[keyPath: path] = isOn
+                model.sessionController.writeNotificationSubscription(
+                    change(isOn), restoring: previous
+                )
+            }
+        )
+    }
+
+    private var reactions: Binding<ReactionNotifications> {
+        Binding(
+            get: { model.notificationSubscriptions.reactions },
+            set: { scope in
+                let previous = model.notificationSubscriptions
+                model.notificationSubscriptions.reactions = scope
+                model.sessionController.writeNotificationSubscription(
+                    .reactions(scope), restoring: previous
+                )
+            }
+        )
     }
 }
 
