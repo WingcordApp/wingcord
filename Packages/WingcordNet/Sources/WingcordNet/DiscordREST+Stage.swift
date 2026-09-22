@@ -12,28 +12,34 @@ import WingcordCore
 // key and the instance's id is only ever an identity to compare.
 
 struct StageInstanceDTO: Decodable, Sendable {
-    var id: UInt64?
+    // **Snowflakes, not integers.** Discord sends every id as a decimal string
+    // and `Snowflake` accepts either; these two were typed `UInt64` and so
+    // accepted only the form Discord does not send. Neither value is read for
+    // anything — a stage is keyed on its channel — which is why it survived: the
+    // only thing they could do was throw, and on the first account with a live
+    // stage in one of its servers they did, taking the whole of READY with them.
+    var id: StageInstanceID?
     var guild_id: GuildID?
     var channel_id: ChannelID?
     var topic: String?
     var privacy_level: Int?
     var invite_code: String?
     var discoverable_disabled: Bool?
-    var guild_scheduled_event_id: UInt64?
+    var guild_scheduled_event_id: ScheduledEventID?
 
     var domain: StageInstance? {
         guard let guild_id, let channel_id else { return nil }
         return StageInstance(
             // The instance's own id is not load-bearing — everything keys on
             // the channel — so a payload without one is still a live stage.
-            id: id ?? channel_id.rawValue,
+            id: id?.rawValue ?? channel_id.rawValue,
             guildID: guild_id,
             channelID: channel_id,
             topic: topic ?? "",
             privacyLevel: StagePrivacyLevel(rawValue: privacy_level ?? 2),
             inviteCode: invite_code.flatMap { $0.isEmpty ? nil : $0 },
             isDiscoverableDisabled: discoverable_disabled ?? false,
-            scheduledEventID: guild_scheduled_event_id
+            scheduledEventID: guild_scheduled_event_id?.rawValue
         )
     }
 }

@@ -224,6 +224,15 @@ final class ScrollEdgeBlur: NSVisualEffectView {
         alphaValue = 0
         isHidden = true
 
+        // **The wash, not the picture.** The canvas already paints this ground
+        // below its clip view and the material above samples it, so painting
+        // the backdrop again here paints it twice — measured on a themed window
+        // with a picture, the strip came out 1.65x its own page against a
+        // reference sitting at 1.27x, and it varied horizontally as the picture
+        // did underneath it. The wash still goes, which is the whole reason for
+        // this second pass: it is what keeps the strip following a theme
+        // instead of resolving to the material's flat grey.
+        tint.drawsBackdropPicture = false
         tint.role = role
         // The column's own lift and nothing added. What separates this row from
         // the page is the material's veil; see the note on `tintOpacity`.

@@ -41,6 +41,25 @@ final class CanvasGroundView: NSView {
     /// Which of the two grounds this is. See `ThemeGroundRole`.
     var role: ThemeGroundRole = .reading
     /// How much of the window's chrome sits above the field. See above.
+    /// Whether the reader's backdrop picture is painted as well as the theme's
+    /// wash.
+    ///
+    /// **Off for a layer drawn OVER a material that is already sampling this
+    /// ground.** The scroll-edge strip is the case and it is the only one: the
+    /// canvas paints this ground below its clip view, the material samples it,
+    /// and the strip then draws the ground back over the material to give the
+    /// grey a hue. Painting the picture in that second pass paints it twice —
+    /// measured on a themed window with a backdrop, the strip came out 1.65x its
+    /// own page where the client this is measured against sits at 1.27x, and it
+    /// varied horizontally as the picture did underneath it.
+    ///
+    /// The wash still goes, which is the whole point of the second pass: it is
+    /// what makes the strip follow a theme change instead of resolving to the
+    /// material's flat grey.
+    var drawsBackdropPicture = true {
+        didSet { if drawsBackdropPicture != oldValue { needsDisplay = true } }
+    }
+
     var chromeInset: CGFloat = 0 {
         didSet { if chromeInset != oldValue { needsDisplay = true } }
     }
@@ -103,6 +122,7 @@ final class CanvasGroundView: NSView {
             field: field,
             role: role,
             lift: lift,
+            drawsBackdropPicture: drawsBackdropPicture,
             flipped: isFlipped
         )
     }
@@ -156,6 +176,7 @@ enum CanvasGround {
         field: Field,
         role: ThemeGroundRole,
         lift: Double,
+        drawsBackdropPicture: Bool = true,
         flipped: Bool
     ) {
         let colors = ThemeRuntime.colors
@@ -174,7 +195,7 @@ enum CanvasGround {
         let bottom = field.size.height - field.rect.minY
         drawWash(context, colors: colors, from: top, to: bottom, bounds: bounds, flipped: flipped)
 
-        if let backdrop, let picture {
+        if drawsBackdropPicture, let backdrop, let picture {
             drawPicture(context, picture, field: field, bounds: bounds, flipped: flipped)
             context.setAlpha(CGFloat(scrim(backdrop)))
             drawWash(context, colors: colors, from: top, to: bottom, bounds: bounds, flipped: flipped)

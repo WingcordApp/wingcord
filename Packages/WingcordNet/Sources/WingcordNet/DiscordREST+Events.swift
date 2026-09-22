@@ -33,7 +33,11 @@ extension DiscordREST {
     public func interestedEventIDs(in guildID: GuildID) async throws -> Set<UInt64> {
         struct Entry: Decodable, Sendable {
             var response: Int?
-            var guild_scheduled_event_id: UInt64?
+            // A snowflake, so a string on the wire. Typed `UInt64` it accepted
+            // only the form Discord does not send, and threw the whole list
+            // away — see `StageInstanceDTO`, where the same mistake took READY
+            // down.
+            var guild_scheduled_event_id: ScheduledEventID?
         }
         let entries = try await get(
             "/users/@me/scheduled-events",
@@ -41,7 +45,9 @@ extension DiscordREST {
             query: [URLQueryItem(name: "guild_ids", value: String(guildID.rawValue))],
             as: [Entry].self
         )
-        return Set(entries.compactMap { $0.response == 1 ? $0.guild_scheduled_event_id : nil })
+        return Set(
+            entries.compactMap { $0.response == 1 ? $0.guild_scheduled_event_id?.rawValue : nil }
+        )
     }
 
     /// How many people are interested, per event.

@@ -1299,7 +1299,9 @@ struct JoinRequestPageDTO: Decodable, Sendable {
     var guild_join_requests: [EntryDTO]?
 
     struct EntryDTO: Decodable, Sendable {
-        var id: UInt64?
+        /// A snowflake, so a string on the wire — the same mistake
+        /// `StageInstanceDTO` made, where it took the whole of READY down.
+        var id: JoinRequestID?
         var user_id: UserID?
         var user: UserDTO?
         var created_at: Date?
@@ -1347,7 +1349,7 @@ struct JoinRequestPageDTO: Decodable, Sendable {
                 return nil
             }
             return GuildJoinRequest(
-                id: id,
+                id: id.rawValue,
                 userID: userID,
                 username: entry.user?.username ?? "",
                 displayName: entry.user?.global_name.nonEmpty,

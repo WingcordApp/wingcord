@@ -147,6 +147,9 @@ public enum OAuthGrantTag: Sendable {}
 /// forum that defines it: the same integer names nothing in another channel, and
 /// resolving one is always a lookup into *that* forum's `availableTags`.
 public enum ForumTagTag: Sendable {}
+public enum StageInstanceTag: Sendable {}
+public enum ScheduledEventTag: Sendable {}
+public enum JoinRequestTag: Sendable {}
 
 public typealias GuildID = Snowflake<GuildTag>
 public typealias ChannelID = Snowflake<ChannelTag>
@@ -159,3 +162,13 @@ public typealias AttachmentID = Snowflake<AttachmentTag>
 public typealias RTCServerID = Snowflake<RTCServerTag>
 public typealias OAuthGrantID = Snowflake<OAuthGrantTag>
 public typealias ForumTagID = Snowflake<ForumTagTag>
+/// A live stage's own id, and the scheduled event a stage may belong to.
+///
+/// **They exist because two fields were typed `UInt64` and Discord sends every
+/// snowflake as a string.** Nothing reads either value — a stage is keyed on its
+/// channel — which is exactly why it went unnoticed: the fields were decoded and
+/// discarded, so the only thing they could ever do was throw, and they did. One
+/// server with a live stage took the whole of READY down with it.
+public typealias StageInstanceID = Snowflake<StageInstanceTag>
+public typealias ScheduledEventID = Snowflake<ScheduledEventTag>
+public typealias JoinRequestID = Snowflake<JoinRequestTag>
