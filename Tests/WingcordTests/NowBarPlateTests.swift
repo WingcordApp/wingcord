@@ -6,10 +6,12 @@ import Testing
 
 /// The reader's own nameplate, on the one surface that is always on screen.
 ///
-/// **A plate colours the whole capsule, not its trailing third.** The bar's
-/// glass is tinted with the palette and the artwork sits over it, which is what
-/// Discord's own bar does and what this one did not — it drew the strip alone
-/// and stayed neutral everywhere the strip is transparent.
+/// **A plate colours the whole capsule, not its trailing third — as a ramp, not
+/// as a flat wash.** The bar drew the strip alone for a while and stayed neutral
+/// everywhere the strip is transparent; then it put the palette flat into the
+/// capsule's own material at 0.42 and became the one saturated object in the
+/// window. What is there now is a leading-to-trailing ramp over the material,
+/// backed out of a measurement of a client that gets it right.
 /// **Serialized**, because one of these flips a preference on the shared
 /// `AppSettings` and the rest read the projection that consults it. Run in
 /// parallel they race for it, and the failure would be intermittent.
@@ -56,9 +58,10 @@ struct NowBarPlateTests {
         // the strip and there is bare bar beside it.
         //
         // **Both cases have to look right, and that is the whole argument for
-        // putting the colour in the material.** A wash drawn under the artwork
-        // can only cover the second case by guessing how much bar there is; a
-        // tint covers the capsule whatever width the reader chose.
+        // the colour being a full-width layer rather than a patch.** A wash
+        // sized to the artwork can only cover the second case by guessing how
+        // much bar there is; the ramp spans the capsule whatever width the
+        // reader dragged it to.
         #expect(Self.artWidth > Self.barWidth(column: Proportions.channelColumnMin))
         #expect(Self.artWidth > Self.barWidth(column: Proportions.channelColumnIdeal))
         #expect(Self.artWidth < Self.barWidth(column: Proportions.channelColumnMax))
@@ -77,8 +80,9 @@ struct NowBarPlateTests {
     func noPlateNoColour() {
         let bar = model(nameplate: nil).nowBarPresentation
         #expect(bar.nameplateURL == nil)
-        // `.none` is what sends `NowBar.tint` back to `Palette.selectionFill`.
-        // A fallback hue here would paint a colour on somebody who owns none.
+        // `.none` is what leaves the bar's ramp undrawn entirely. A fallback hue
+        // here would paint a colour on somebody who owns none — and the bar's
+        // own `lift` is neutral, so there is nothing else to fall back to.
         #expect(bar.nameplatePalette == .none)
         #expect(bar.nameplatePalette.colorValue == nil)
     }
@@ -95,9 +99,9 @@ struct NowBarPlateTests {
     func thePreferenceDropsTheColourToo() {
         // The regression this exists for. The two URLs were gated on the
         // preference and the palette was read unconditionally, which was
-        // harmless only while nothing but the artwork drew it — the bar's
-        // material now takes the colour, so a reader who switched the plate off
-        // would have lost the picture and kept a violet capsule.
+        // harmless only while nothing but the artwork drew it — the ramp takes
+        // the colour too, so a reader who switched the plate off would have lost
+        // the picture and kept a violet capsule.
         AppSettings.shared.showsNameplateInNowBar = false
         defer { AppSettings.shared.showsNameplateInNowBar = true }
 

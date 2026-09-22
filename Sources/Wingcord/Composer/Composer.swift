@@ -11,10 +11,12 @@ import WingcordCore
 /// layering a gesture over the text field where it competes with caret placement
 /// and selection.
 ///
-/// **`+` sits outside the plate.** At the plate's corner radius an enclosed
-/// circle collides with the rounded end, which is the whole reason Discord's own
-/// composer is a rounded rect rather than a capsule. Keeping `+` beside the
-/// plate lets the plate keep its radius and lets `+` keep its circle.
+/// **Where `+` and the send arrow sit is decided by the silhouette**, not here.
+/// A capsule's ends *are* circles, so an enclosed circle collides with the
+/// rounded end and both controls stay outside as glass bodies of their own; a
+/// rounded rectangle has flat sides and spare corners, so both sit inside it as
+/// regions cut into its material. `ChromeShape.enclosesFlankingControls` states
+/// the rule and `ComposerChrome` is the one place that lays either out.
 ///
 /// Colour is reserved for meaning: the send control is the only tinted thing
 /// here, and only once there is something to send.
@@ -33,6 +35,19 @@ struct Composer: View {
     /// settings preview can show a shape the reader has not committed to yet —
     /// and so this view still reaches for nothing observable.
     var shape: ChromeShape = .boxy
+    /// The order of the four trailing controls. Passed in for the reason `shape`
+    /// is: this view reaches for nothing observable, and the settings editor
+    /// draws it from the order being edited rather than from the one in force.
+    var controls: ComposerControlOrder = .default
+    /// Whether the trailing controls may be dragged into a new order.
+    ///
+    /// **Off in the window, on only in the editor that has a container for it.**
+    /// `.reorderable()` marks a child draggable through its container; in the
+    /// real composer there is no container, and a control that begins a drag
+    /// session on press is a control whose click has to wait to find out whether
+    /// it was one. These four are pressed constantly, so the cost is paid where
+    /// the gesture is the point and nowhere else.
+    var isReorderable: Bool = false
     /// What identifies the conversation the bar is writing to.
     ///
     /// **The caret follows it.** Opening a channel or switching to another one
@@ -128,11 +143,15 @@ struct Composer: View {
 
     @Environment(\.motion) private var motion
     @FocusState private var isFocused: Bool
-    @State private var openTab: ExpressionMode?
-    /// The launcher's own presentation. **Not folded into `openTab`**: that
-    /// enum is the expression picker's three modes, and a fourth case would
-    /// make every `switch` over it carry a branch that cannot draw a grid.
-    @State private var isShowingApps = false
+    /// Which of the four trailing controls has its flyout open.
+    ///
+    /// **Keyed on the control, not on the picker's mode.** Three of the four
+    /// open an `ExpressionPicker` and the fourth opens the app grid; keying on
+    /// `ExpressionMode` meant the odd one out needed a second latch beside this
+    /// one, and two latches for one "what is open" question is how both end up
+    /// true. `ComposerControl` is already the identity the reader's own order is
+    /// written in terms of.
+    @State private var openControl: ComposerControl?
     @State private var completionSelection = 0
     @State private var mentionSelection = 0
     /// The mention query the reader dismissed with Escape. Held so the list
@@ -153,18 +172,6 @@ struct Composer: View {
     /// exists: the list is derived from the draft, so dismissing it means
     /// remembering what was refused rather than clearing anything.
     @State private var dismissedCommandQuery: String?
-
-    /// The plate's corner.
-    ///
-    /// **Derived from the field's own minimum, not measured.** The bar grows
-    /// with a wrapped message and a capsule's radius is half its height — but a
-    /// radius that tracked the *grown* height would round a three-line composer
-    /// into a lozenge. The resting height is the shape, and the plate keeps it
-    /// as it grows, which is what every capsule text field on this platform
-    /// does. §2: derive the geometry you already have the inputs for.
-    private var plateCorner: CGFloat {
-        shape.cornerRadius(forHeight: Metrics.composerControlHeight)
-    }
 
     private var hasText: Bool {
         !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
@@ -287,11 +294,15 @@ struct Composer: View {
     }
 
     private var composerRow: some View {
-        HStack(alignment: .bottom, spacing: Spacing.base) {
+        ComposerChrome(shape: shape) {
+            // A channel that refuses files gets no control at all rather than a
+            // dimmed one — `INVARIANTS.md` §5.5. In the enclosed arrangement
+            // that closes up against the field, which is right: there is
+            // nothing to attach.
             if canAttach {
-                CircleControl(systemImage: "plus", label: "Add attachment", action: attach)
+                ComposerAttachButton(shape: shape, action: attach)
             }
-
+        } input: {
             HStack(alignment: .bottom, spacing: Spacing.base) {
                 if let pendingCommand {
                     CommandComposerBar(pending: pendingCommand, onEdit: focusCommandOption)
@@ -318,21 +329,18 @@ struct Composer: View {
                     .onKeyPress(.delete) { pressedBackspace() }
                     .onKeyPress(.escape) { pressedEscape() }
                     .frame(minHeight: Metrics.composerFieldMinHeight)
-
-                expressionControls
-
-                if canCommit {
-                    SendControl(action: pressedReturn)
-                        .transition(.materialize(from: .trailing))
-                }
             }
-            .padding(.horizontal, Spacing.snug)
+            // The field's own air, so a bar grown to three lines keeps it. The
+            // row's height comes from this plus the field's minimum, which is
+            // what leaves a 32-point control centred inside a 38-point bar
+            // rather than setting the bar's height itself.
             .padding(.vertical, Spacing.tight)
-            .glassEffect(.regular, in: .rect(cornerRadius: plateCorner))
-            .specularEdge(in: .rect(cornerRadius: plateCorner))
-            .animation(motion.glassMorph, value: canCommit)
-            .animation(motion.glassMorph, value: shape)
+        } controls: {
+            expressionControls
+        } send: {
+            ComposerSendButton(shape: shape, isArmed: canCommit, action: pressedReturn)
         }
+        .animation(motion.glassMorph, value: shape)
         .contentShape(.rect)
         // Clicking anywhere on the bar puts the caret in the field, which is
         // what every composer on this platform does.
@@ -556,109 +564,85 @@ struct Composer: View {
         return .handled
     }
 
-    /// GIF, sticker and emoji — rightmost is the one reached for most.
+    /// The four controls at the bar's trailing end, in the reader's own order.
     ///
     /// **A popover per control, not one shared between them.** A popover points
-    /// at what opened it, and three controls sharing one leaves the arrow under
+    /// at what opened it, and controls sharing one leave the arrow under
     /// whichever the group happened to centre on. Only one is ever presented,
     /// and the catalog behind them is memoized on the store, so the second and
     /// third cost a view value each.
+    ///
+    /// Apps is hidden where there is nothing to launch into — nil hides rather
+    /// than disables, because a greyed-out button implies a permission that
+    /// could be gained (§5.5). It keeps its slot in the order either way, so a
+    /// reader who dragged it somewhere finds it there again in a channel that
+    /// has one.
+    @ViewBuilder
     private var expressionControls: some View {
         HStack(spacing: Spacing.hair) {
-            control(.gifs) {
-                // The word, not a glyph. Every icon for this is a rectangle with
-                // something in it, and at 26 points "GIF" is the only mark that
-                // says GIF.
-                Text("GIF")
-                    .font(.system(size: 10, weight: .heavy))
+            if isReorderable {
+                ForEach(controlOrder, content: expressionControl).reorderable()
+            } else {
+                ForEach(controlOrder, content: expressionControl)
             }
-            control(.stickers) {
-                // A sticker peeling off its sheet. Deliberately not a second
-                // face: the emoji control beside it is already the face, and two
-                // faces is two controls nobody can tell apart.
-                Image(systemName: "rectangle.on.rectangle.angled")
-                    .font(Typeface.controlGlyph)
-            }
-            control(.emoji) {
-                Image(systemName: "face.smiling")
-                    .font(Typeface.controlGlyph)
-            }
-            if activityChannelID != nil { appsControl }
         }
+        // The controls are 32 points inside a 38-point bar rather than setting
+        // its height, so the box they sit in is the bar's.
+        .frame(height: Metrics.composerControlHeight)
     }
 
-    /// Apps and activities.
-    ///
-    /// Its own control rather than a fourth `ExpressionMode`, and its own
-    /// popover for the reason the three beside it each have one: a popover
-    /// points at what opened it, and a shared presentation leaves the arrow
-    /// under whichever control the group happened to centre on.
-    @ViewBuilder
-    private var appsControl: some View {
-        if let channelID = activityChannelID {
-            Button {
-                isShowingApps.toggle()
-            } label: {
-                // Four rounded pips. The mark Discord uses for this is a
-                // four-dot cluster and it is the one thing about the surface
-                // worth keeping — an app grid is what the icon means anywhere
-                // it appears, and inventing a different glyph for a familiar
-                // idea is the "familiarity" principle spent for nothing.
-                Image(systemName: "circle.grid.2x2.fill")
-                    .font(.system(size: 12, weight: .semibold))
-                    .foregroundStyle(
-                        isShowingApps ? AnyShapeStyle(Palette.accent) : AnyShapeStyle(Ink.secondary)
-                    )
-                    .frame(width: Metrics.compactControl, height: Metrics.compactControl)
-                    .contentShape(.rect)
-            }
-            .buttonStyle(.plain)
-            .help("Apps")
-            .accessibilityLabel("Apps")
-            .popover(isPresented: $isShowingApps, arrowEdge: .top) {
-                ActivityLauncher(channelID: channelID)
-            }
-        }
-    }
-
-    private func control(
-        _ tab: ExpressionMode,
-        @ViewBuilder mark: () -> some View
-    ) -> some View {
-        Button {
-            openTab = openTab == tab ? nil : tab
-        } label: {
-            mark()
-                .foregroundStyle(
-                    openTab == tab ? AnyShapeStyle(Palette.accent) : AnyShapeStyle(Ink.secondary)
-                )
-                .frame(width: Metrics.compactControl, height: Metrics.compactControl)
-                .contentShape(.rect)
-        }
-        .buttonStyle(.plain)
-        .help(tab.rawValue)
-        .accessibilityLabel(tab.rawValue)
-        .popover(
-            isPresented: Binding(
-                get: { openTab == tab },
-                set: { if !$0, openTab == tab { openTab = nil } }
-            ),
-            arrowEdge: .top
+    private func expressionControl(_ control: ComposerControl) -> some View {
+        ComposerControlButton(
+            label: control.label,
+            isActive: openControl == control,
+            shape: shape,
+            // Inert in the editor: dragging a control there must not also open
+            // a picker, and a preview that opened one would be presenting a
+            // flyout over the settings window.
+            action: isReorderable ? nil : { openControl = openControl == control ? nil : control }
         ) {
+            ComposerControlMark(control: control)
+        }
+        .popover(isPresented: flyoutBinding(for: control), arrowEdge: .top) {
+            flyout(for: control)
+        }
+    }
+
+    /// The order, minus whatever this channel cannot offer.
+    private var controlOrder: [ComposerControl] {
+        guard activityChannelID == nil else { return controls.controls }
+        return controls.controls.filter { $0 != .apps }
+    }
+
+    /// **The setter may only clear when this control is the one showing.**
+    /// Clearing unconditionally lets a dismissal arriving while a second
+    /// control's popover is opening take the new one down with it.
+    private func flyoutBinding(for control: ComposerControl) -> Binding<Bool> {
+        Binding(
+            get: { openControl == control },
+            set: { if !$0, openControl == control { openControl = nil } }
+        )
+    }
+
+    @ViewBuilder
+    private func flyout(for control: ComposerControl) -> some View {
+        if let mode = control.expressionMode {
             ExpressionPicker(
-                mode: tab,
+                mode: mode,
                 onPick: { item in
                     onPick(item)
                     // A sticker sends and the picker's work is done; an emoji is
                     // typed, and a picker that closed after each one would make
                     // choosing three emoji three round trips.
-                    if case .sticker = item.pick { openTab = nil }
+                    if case .sticker = item.pick { openControl = nil }
                 },
                 onPickGIF: { gif in
                     onPickGIF(gif)
-                    openTab = nil
+                    openControl = nil
                 }
             )
+        } else if let channelID = activityChannelID {
+            ActivityLauncher(channelID: channelID)
         }
     }
 }
@@ -719,53 +703,6 @@ extension Collection {
     /// held arrow key. Crashing on that is not a defence against it.
     subscript(safe index: Index) -> Element? {
         indices.contains(index) ? self[index] : nil
-    }
-}
-
-/// A circular glass control beside the composer.
-private struct CircleControl: View {
-    var systemImage: String
-    var label: String
-    var action: () -> Void
-
-    var body: some View {
-        Button(action: action) {
-            Image(systemName: systemImage)
-                .font(Typeface.controlGlyph)
-                .foregroundStyle(.white)
-                .frame(
-                    width: Metrics.composerControlHeight,
-                    height: Metrics.composerControlHeight
-                )
-                .contentShape(.circle)
-        }
-        .buttonStyle(.plain)
-        // Small discrete targets keep `.interactive()` — the displacement scales
-        // with the surface, so on a 38pt circle it reads as the control
-        // responding rather than as the bar moving.
-        .interactiveChrome(in: .circle)
-        .help(label)
-        .accessibilityLabel(Text(label))
-    }
-}
-
-/// The send control. The one tinted thing in the composer, and only once there
-/// is something to send.
-private struct SendControl: View {
-    var action: () -> Void
-
-    var body: some View {
-        Button(action: action) {
-            Image(systemName: "arrow.up")
-                .font(.system(.body, weight: .bold))
-                .foregroundStyle(.white)
-                .frame(width: 26, height: 26)
-                .contentShape(.circle)
-        }
-        .buttonStyle(.plain)
-        .emphasisChrome(Palette.accent, in: .circle)
-        .keyboardShortcut(.return, modifiers: [])
-        .accessibilityLabel(Text("Send"))
     }
 }
 

@@ -29,7 +29,8 @@ struct ComposerContainer: View {
         Composer(
             channelName: model.channelIndex[channelID].map(model.displayName(of:)) ?? "",
             channelSigil: model.channelIndex[channelID]?.kind.isPrivate == true ? "@" : "#",
-            shape: settings.composerShape,
+            shape: settings.chromeShape,
+            controls: settings.composerControls,
             focusKey: channelID,
             canSend: model.permissionGate.canSend(in: channelID),
             replyingToAuthor: replyingToAuthor,

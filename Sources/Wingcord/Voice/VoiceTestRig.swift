@@ -5,8 +5,18 @@ import WingcordVoice
 
 // MARK: - The settings pane's own microphone
 //
-// A second, short-lived engine, running only while the Voice & Video pane is
-// open and only while something in it is switched on.
+// A second, short-lived engine, running only while the reader has explicitly
+// switched the microphone test on.
+//
+// **Opening the pane must not open the microphone.** It did, from `.task`, and
+// it cost twice: macOS lit the orange recording indicator because somebody went
+// to look at their settings, and bringing up a voice-processing `AVAudioEngine`
+// is a synchronous main-actor call (§1.5 — it has to be), so the window sat
+// blank until CoreAudio came back. Measured beside it, the device enumeration
+// the same `.task` ran first was another 258 ms of main thread: 91 for the
+// CoreAudio device list and 167 for the first `AVCaptureDevice.DiscoverySession`
+// of the process, which loads the camera assistant. None of that may happen
+// before the pane paints, and none of it may happen at all unless asked for.
 //
 // **It is not the call's engine and must not be.** The call's engine is bound
 // to the devices the call is using, and a mic test that reconfigured it would
@@ -40,13 +50,17 @@ final class VoiceTestRig {
     }
 
     @ObservationIgnored private let engine = VoiceAudioEngine()
+    /// A player node into the chosen output and nothing else. It stops itself
+    /// once nothing has played for a few seconds, so a reader who presses Play
+    /// twice does not hold the device open for the pane's life.
+    @ObservationIgnored private let tones = NotificationAudioEngine()
     @ObservationIgnored private var meterTask: Task<Void, Never>?
 
     /// Brings the engine up on the devices the settings currently name.
     ///
-    /// Called on appear and again whenever a device changes, which is a full
-    /// restart: an IO unit is bound to its device and there is no supported way
-    /// to move one.
+    /// **Only ever called from the microphone test's own switch.** See the note
+    /// at the top of the file: this opens the input, and nothing but somebody
+    /// asking for it should.
     func start() async {
         let settings = AppSettings.shared
         engine.inputVolume = Float(settings.voiceInputVolume)
@@ -80,6 +94,21 @@ final class VoiceTestRig {
         startMeter()
     }
 
+    /// Follows a device change, and only where there is something to follow.
+    ///
+    /// A full restart, because an IO unit is bound to its device and there is no
+    /// supported way to move one. With the test off this does nothing at all —
+    /// changing the input device in a pane you are only reading must not open
+    /// the microphone, which is what calling `start()` here used to do.
+    func reconfigure() {
+        guard isRunning else { return }
+        let settings = AppSettings.shared
+        engine.reconfigure(
+            inputUniqueID: settings.voiceInputDeviceID,
+            outputUniqueID: settings.voiceOutputDeviceID
+        )
+    }
+
     func stop() {
         meterTask?.cancel()
         meterTask = nil
@@ -91,13 +120,24 @@ final class VoiceTestRig {
 
     /// Plays a short chime through the **chosen** output device.
     ///
-    /// Synthesised and pushed through this engine rather than handed to
-    /// `NSSound`: a speaker test that plays on the system's default output tests
-    /// the wrong device, which is exactly the case somebody opening this pane is
-    /// trying to diagnose.
+    /// Synthesised rather than handed to `NSSound`: a speaker test that plays on
+    /// the system's default output tests the wrong device, which is exactly the
+    /// case somebody opening this pane is trying to diagnose.
+    ///
+    /// **Through the notification engine, never through the voice engine.**
+    /// §1.5: a sound that is not part of a call must not open the microphone,
+    /// and `VoiceAudioEngine` turns on the voice processing unit, which does.
+    /// Routed through this one, the speaker test also works without the
+    /// microphone test being on — it used to `guard isRunning`, so testing the
+    /// speakers silently required opening the microphone first.
     func playTestTone() {
-        guard isRunning else { return }
-        engine.enqueue(Self.chime, frames: Self.chime.count / Int(OpusFormat.channels))
+        guard let buffer = Self.chimeBuffer else { return }
+        tones.play(
+            buffer,
+            volume: 1,
+            loops: false,
+            outputUniqueID: AppSettings.shared.voiceOutputDeviceID
+        )
     }
 
     /// Two short notes a fifth apart, with a raised-cosine envelope on each.
@@ -121,6 +161,33 @@ final class VoiceTestRig {
             }
         }
         return samples
+    }()
+
+    /// The same chime, in the notification engine's own format.
+    ///
+    /// Built once. That format is `standardFormatWithSampleRate`, which is
+    /// **non-interleaved**, so the stereo pairs above have to be split into the
+    /// per-channel planes rather than copied straight in — a memcpy here plays
+    /// the left channel at double speed and drops the right.
+    private static let chimeBuffer: AVAudioPCMBuffer? = {
+        let format = NotificationAudioEngine.format
+        let sourceChannels = Int(OpusFormat.channels)
+        let frames = chime.count / sourceChannels
+        guard frames > 0,
+              let buffer = AVAudioPCMBuffer(
+                  pcmFormat: format,
+                  frameCapacity: AVAudioFrameCount(frames)
+              ),
+              let planes = buffer.floatChannelData
+        else { return nil }
+        buffer.frameLength = AVAudioFrameCount(frames)
+        for channel in 0..<Int(format.channelCount) {
+            let source = min(channel, sourceChannels - 1)
+            for frame in 0..<frames {
+                planes[channel][frame] = chime[frame * sourceChannels + source]
+            }
+        }
+        return buffer
     }()
 
     private func startMeter() {

@@ -452,20 +452,30 @@ final class AppSettings {
         didSet { defaults.set(loadsImagesAutomatically, forKey: Key.loadsImages) }
     }
 
-    /// The identity bar's silhouette. See `ChromeShape`.
+    /// The silhouette of the app's two floating bars. See `ChromeShape`.
     ///
-    /// **Its own preference, separate from the composer's.** The two bars are
-    /// the same kind of object but they are not the same object: one is a fixed
-    /// 46-point capsule at the foot of a column, the other grows with what is
-    /// typed into it, and a pill reads differently on each. One setting for both
-    /// forced a choice nobody made.
-    var nowBarShape: ChromeShape = .boxy {
-        didSet { defaults.set(nowBarShape.rawValue, forKey: Key.nowBarShape) }
+    /// **One preference for both, restored.** It was split in two for a while on
+    /// the argument that a fixed 46-point capsule and a bar that grows with what
+    /// is typed into it are different objects. They are not, to look at: they
+    /// are the two floating plates at the foot of the window's two columns, they
+    /// are seen together, and a window with two opinions about its own shape is
+    /// what the split produced. A reader who genuinely wants them different is
+    /// asking for something no client offers.
+    var chromeShape: ChromeShape = .boxy {
+        didSet { defaults.set(chromeShape.rawValue, forKey: Key.chromeShape) }
     }
 
-    /// The composer's silhouette.
-    var composerShape: ChromeShape = .boxy {
-        didSet { defaults.set(composerShape.rawValue, forKey: Key.composerShape) }
+    /// The order of the four controls at the composer's trailing end.
+    ///
+    /// A preference because the reader reaches for one of them far more than the
+    /// other three and which one that is is theirs to say — Apple's
+    /// *flexibility* principle, and the cheapest possible form of it: the row is
+    /// four controls wide, so letting somebody drag their own to the end costs a
+    /// stored permutation and nothing else. `ComposerControlOrder` normalises
+    /// whatever comes back out of the defaults, so a build that adds or removes
+    /// a control needs no migration here.
+    var composerControls: ComposerControlOrder = .default {
+        didSet { defaults.set(composerControls.storage, forKey: Key.composerControls) }
     }
 
     /// Whether the now bar wears the reader's own nameplate.
@@ -737,10 +747,16 @@ final class AppSettings {
         showsEmbeds = defaults.object(forKey: Key.showsEmbeds) as? Bool ?? true
         playsAnimatedContent = defaults.object(forKey: Key.playsAnimated) as? Bool ?? true
         loadsImagesAutomatically = defaults.object(forKey: Key.loadsImages) as? Bool ?? true
-        nowBarShape = (defaults.object(forKey: Key.nowBarShape) as? String)
-            .flatMap(ChromeShape.init(rawValue:)) ?? .boxy
-        composerShape = (defaults.object(forKey: Key.composerShape) as? String)
-            .flatMap(ChromeShape.init(rawValue:)) ?? .boxy
+        // The composer's old key is the migration: it is the bar the reader
+        // looked at while choosing, so where the two disagreed it is the answer
+        // they meant. Read once, never written again.
+        chromeShape = (defaults.object(forKey: Key.chromeShape) as? String)
+            .flatMap(ChromeShape.init(rawValue:))
+            ?? (defaults.object(forKey: Key.legacyComposerShape) as? String)
+            .flatMap(ChromeShape.init(rawValue:))
+            ?? .boxy
+        composerControls = defaults.stringArray(forKey: Key.composerControls)
+            .map(ComposerControlOrder.init(storage:)) ?? .default
         showsNameplateInNowBar = defaults.object(forKey: Key.nowBarNameplate) as? Bool ?? true
         showsPerformanceInspector = defaults.object(forKey: Key.showsInspector) as? Bool ?? false
         developerMode = defaults.object(forKey: Key.developerMode) as? Bool ?? false
@@ -884,8 +900,11 @@ final class AppSettings {
         static let showsEmbeds = "chat.showsEmbeds"
         static let playsAnimated = "chat.playsAnimatedContent"
         static let loadsImages = "chat.loadsImagesAutomatically"
-        static let nowBarShape = "appearance.nowBarShape"
-        static let composerShape = "appearance.composerShape"
+        static let chromeShape = "appearance.chromeShape"
+        /// Where the composer's own shape lived before the two bars shared one.
+        /// Read once, for migration, and never written again.
+        static let legacyComposerShape = "appearance.composerShape"
+        static let composerControls = "appearance.composerControls"
         static let nowBarNameplate = "appearance.nowBarNameplate"
         static let showsInspector = "diagnostics.showsPerformanceInspector"
         static let developerMode = "advanced.developerMode"

@@ -225,19 +225,19 @@ struct InboxPanelTests {
     // MARK: Headers
 
     @Test("A channel's header names its server and its category")
-    func headerCarriesTheBreadcrumb() {
+    func headerCarriesTheBreadcrumb() throws {
         let model = model()
         model.inbox.tab = .unreads
         let groups = model.inboxGroups(width: 400)
-        let group = try? #require(groups.first { $0.channelID == general })
-        #expect(group?.name == "refill")
-        #expect(group?.breadcrumb == "nice server › MAIN")
+        let group = try #require(groups.first { $0.channelID == general })
+        #expect(group.name == "refill")
+        #expect(group.breadcrumb == "nice server › MAIN")
         // A server channel shows its kind's glyph; a conversation shows a face.
-        #expect(group?.symbolName != nil)
+        #expect(group.symbolName != nil)
     }
 
     @Test("A conversation has no breadcrumb and no glyph")
-    func conversationHeaderIsBare() {
+    func conversationHeaderIsBare() throws {
         let model = model()
         // **Mentions, not Unreads.** A conversation is not listed in Unreads at
         // all — see `unreadInboxChannels` — so the tab that can still draw one
@@ -252,10 +252,10 @@ struct InboxPanelTests {
             ),
         ]
         let groups = model.inboxGroups(width: 400)
-        let group = try? #require(groups.first { $0.channelID == dm })
-        #expect(group?.breadcrumb == nil)
+        let group = try #require(groups.first { $0.channelID == dm })
+        #expect(group.breadcrumb == nil)
         // A `#` in front of somebody's name reads as a channel.
-        #expect(group?.symbolName == nil)
+        #expect(group.symbolName == nil)
     }
 
     @Test("A muted channel's mention count is not badged")
@@ -362,7 +362,7 @@ struct InboxPanelTests {
     // MARK: Reminder presets
 
     @Test("Tomorrow goes through the calendar, not through arithmetic")
-    func tomorrowKeepsItsWallClockTime() {
+    func tomorrowKeepsItsWallClockTime() throws {
         // Adding 86,400 seconds is wrong by an hour across a daylight-saving
         // boundary; `Calendar.date(byAdding:)` keeps the time of day.
         var calendar = Calendar(identifier: .gregorian)
@@ -372,8 +372,8 @@ struct InboxPanelTests {
         components.month = 3
         components.day = 28
         components.hour = 14
-        let start = try? #require(calendar.date(from: components))
-        let due = ReminderPreset.tomorrow.dueDate(from: start ?? .now, calendar: calendar)
+        let start = try #require(calendar.date(from: components))
+        let due = ReminderPreset.tomorrow.dueDate(from: start, calendar: calendar)
         #expect(calendar.component(.hour, from: due) == 14)
         #expect(calendar.component(.day, from: due) == 29)
     }

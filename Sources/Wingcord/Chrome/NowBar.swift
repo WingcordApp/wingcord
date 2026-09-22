@@ -47,45 +47,29 @@ struct NowBar: View, Equatable {
         shape.cornerRadius(forHeight: Metrics.nowBarHeight)
     }
 
-    /// How strongly a plate's palette lights the bar's material.
-    ///
-    /// **Placed between the app's two existing tints rather than picked.** The
-    /// selection pill is white at 0.15, and white at low alpha over near-black
-    /// reads as *light* where a hue at the same alpha reads as almost nothing;
-    /// `emphasisChrome` is 0.7, which its own note calls the point at which a
-    /// tint stops reading as tinted glass and starts reading as a painted
-    /// button. A plate belongs below that line: the channel list has to keep
-    /// passing under the capsule and refracting through it, which is the whole
-    /// reason the bar is glass and the thing Discord's own opaque bar does not
-    /// do.
-    private static let plateTintStrength: Double = 0.42
-
     /// What lights the bar's material.
     ///
-    /// **A plate colours the whole capsule, not a patch of it.** A nameplate is
-    /// a strip whose leading two thirds are transparent *plus* a palette that
-    /// names it, and the palette is the object — the artwork is the trailing
-    /// end of a coloured plate, not a picture stuck on a grey one. Drawing the
-    /// strip alone is what left this bar neutral with a nebula on one end while
-    /// Discord's wears the colour edge to edge.
+    /// **Neutral, and the same whoever the reader is.** This carried the
+    /// nameplate's own hue at 0.42 for a while, on the argument that a plate
+    /// colours the whole capsule rather than a patch of it. Measured against a
+    /// client that gets this right, that argument is sound and the number was
+    /// not: over a themed sidebar of (66,38,32) the bar came out (117,74,130) —
+    /// the blue channel four times its ground — where the reference lifts
+    /// (35,34,34) to (67,61,71), a veil that is very nearly neutral with about
+    /// six units of hue in it. A capsule that is the one saturated object in the
+    /// window stops reading as glass and starts reading as a painted plate,
+    /// which is what it looked like.
+    ///
+    /// So the hue moved to where the reference keeps it — a ramp inside
+    /// `NowBarPlate`, weakest under the name and strongest under the artwork —
+    /// and what is left here is the lift that makes the bar an object at all.
+    /// White at 0.15 is the selected channel's own fill, three rows above it in
+    /// the same column, so the two agree by construction.
     ///
     /// **It goes IN the material.** §4: a wash laid over glass is paint on the
     /// refraction and takes the lensing with it, exactly as a fill behind it
-    /// would. `.tint` lights the material itself, so the capsule reads violet
-    /// and the wallpaper still comes through it — and the specular edge and the
-    /// controls cut into it inherit the hue instead of staying grey against it.
-    ///
-    /// **One flat colour rather than a gradient**, because the strip's own
-    /// alpha ramp already is the gradient. The wash this replaces ran the wrong
-    /// way — clear at the leading edge and strongest under the artwork, so it
-    /// was heaviest exactly where the picture already covered and absent where
-    /// nothing did.
-    private var tint: Color {
-        guard let value = presentation.nameplatePalette.colorValue else {
-            return Palette.selectionFill
-        }
-        return Color(hex: value).opacity(Self.plateTintStrength)
-    }
+    /// would.
+    private var lift: Color { Palette.selectionFill }
 
     var body: some View {
         // **The call is not drawn here any more.** It used to be a line above
@@ -103,19 +87,25 @@ struct NowBar: View, Equatable {
         // One capsule for the whole bar. The controls above are regions inside
         // it, never bodies on top of it.
         //
+        // **`.clear`, not `.regular`.** This bar floats over the sidebar
+        // column, and that column is the one surface in the window that is
+        // *nothing* — behind-window vibrancy, so what passes under the capsule
+        // is the reader's own desktop plus the channel list. §4's split sends
+        // clear glass wherever there is media or a lit ground behind the
+        // surface, and frosting a wallpaper into grey is exactly the loss the
+        // material exists to avoid. `.regular` here is what made the bar read
+        // as a plate rather than as glass.
+        //
         // **The tint is part of the material, not a fill behind it.** This was
         // a `RoundedRectangle().fill(selectionFill).glassEffect(...)`, which is
         // a fill *underneath* glass — the case `INVARIANTS.md` §4 rule 3
         // forbids, and the reason a glass surface stops lensing and starts
-        // reading as a flat lighter panel. `.regular.tint(...)` lights the
-        // material itself and keeps what is behind the window refracting
-        // through it.
-        //
-        // The colour is the reader's own plate where they wear one — see
-        // `tint`, which is what makes the whole capsule take the nameplate
-        // rather than only its trailing third.
+        // reading as a flat lighter panel. A tint lights the material itself
+        // and keeps what is behind the window refracting through it; clear
+        // glass over near-black has nothing to refract and disappears, which is
+        // what this one is for.
         .glassEffect(
-            .regular.tint(tint),
+            .clear.tint(lift),
             in: .rect(cornerRadius: cornerRadius)
         )
         // **The plate goes OVER the material, never behind it.** A fill behind
@@ -128,6 +118,7 @@ struct NowBar: View, Equatable {
                 NowBarPlate(
                     still: url,
                     animated: presentation.nameplateAnimatedURL,
+                    palette: presentation.nameplatePalette,
                     // **Under the pointer, like every other plate in the app.**
                     // This one is on screen for the whole session, so a loop
                     // that always ran would be a display-link subscriber and
@@ -146,9 +137,9 @@ struct NowBar: View, Equatable {
         }
         .specularEdge(in: .rect(cornerRadius: cornerRadius))
         .animation(motion.glassMorph, value: shape)
-        // A plate arriving, changing or being switched off in Settings relights
-        // the material; a cut between two saturated hues on the one surface
-        // that is always on screen reads as a glitch.
+        // A plate arriving, changing or being switched off in Settings changes
+        // the ramp over the material; a cut between two saturated hues on the
+        // one surface that is always on screen reads as a glitch.
         .animation(motion.standard, value: presentation.nameplatePalette)
         .padding(.horizontal, Spacing.base)
         .padding(.bottom, Spacing.base)
@@ -330,26 +321,38 @@ struct PresenceDot: View {
 }
 
 
-/// The reader's own nameplate artwork, over their name in the now bar.
+/// The reader's own nameplate, over their name in the now bar: a ramp of its
+/// palette with the artwork hung off the trailing end.
 ///
-/// **The artwork only, because the colour is the material.** The roster and the
-/// DM list draw a wash under the strip to close the gap its transparent leading
-/// two thirds leave — they have to, because a row's ground is a surface they
-/// may not recolour. This bar can: `NowBar.tint` lights the capsule's own glass
-/// with the palette, so the strip lands on a plate that is already the right
-/// colour and a second wash here would only be paint on the refraction.
+/// **The ramp is where the colour lives now.** It used to be a flat tint in the
+/// capsule's own material, on the argument that a plate colours the whole
+/// surface rather than a patch of it — see `NowBar.lift` for the measurement
+/// that overturned the strength, not the argument. A ramp keeps both halves: it
+/// closes the gap the strip's transparent leading two thirds leave, and it is
+/// almost nothing under the name, which is where a flat tint did its damage.
 ///
-/// It sits *over* the material at low strength rather than behind it: a fill
-/// behind glass is §4 rule 3, and it is what would take the lensing away.
+/// **It sits over the material rather than behind it**: a fill behind glass is
+/// §4 rule 3, and it is what would take the lensing away.
 private struct NowBarPlate: View {
     var still: URL
     var animated: URL?
+    var palette: NameplatePalette
     var isAnimating: Bool
 
     /// How strongly the plate reads. High enough to be the reader's own
     /// artwork, low enough that the glass underneath still shows what is behind
     /// the window — which is the whole reason the bar is glass.
     private static let strength: Double = 0.55
+
+    /// The ramp's two ends, before `strength` is applied.
+    ///
+    /// **Measured off a client that gets this right**, not picked: over a ground
+    /// of (35,34,34) its bar reads (67,61,71) at the leading edge and (85,68,101)
+    /// at the trailing, which backs out to roughly a tenth of the palette under
+    /// the name and four tenths under the artwork. At `strength` that is 5.5%
+    /// and 22% — against the 42% flat wash this replaces.
+    private static let rampLeading: Double = 0.1
+    private static let rampTrailing: Double = 0.4
 
     /// How wide the strip comes out once it is fitted to the bar's height. See
     /// `SidebarNameplate.artWidth` for why the box is reserved rather than
@@ -376,6 +379,11 @@ private struct NowBarPlate: View {
         // bar's own shape. The wash that used to hold this box open did the job
         // by accident.
         Color.clear
+            // Under the artwork, so a strip whose own alpha ramps in over its
+            // trailing third lands on a plate that is already going the same
+            // way. Nothing at all for a palette of `.none`: a nameplate that
+            // asked for no colour must not be given one.
+            .overlay { ramp }
             .overlay(alignment: .trailing) {
                 // Fitted to the bar's HEIGHT and hung off its trailing edge,
                 // which is the measured rule — see
@@ -391,5 +399,20 @@ private struct NowBarPlate: View {
             }
             .opacity(Self.strength)
             .accessibilityHidden(true)
+    }
+
+    @ViewBuilder
+    private var ramp: some View {
+        if let value = palette.colorValue {
+            let colour = Color(hex: value)
+            LinearGradient(
+                stops: [
+                    .init(color: colour.opacity(Self.rampLeading), location: 0),
+                    .init(color: colour.opacity(Self.rampTrailing), location: 1),
+                ],
+                startPoint: .leading,
+                endPoint: .trailing
+            )
+        }
     }
 }

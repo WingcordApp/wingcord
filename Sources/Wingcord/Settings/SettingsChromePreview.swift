@@ -1,7 +1,8 @@
 import SwiftUI
 import WingcordCore
 
-/// The now bar and the composer, live, at the shape the reader is choosing.
+/// The now bar and the composer, live, at the shape the reader is choosing —
+/// and the composer's controls, live, in the order they are dragging them into.
 ///
 /// **The real views, not a drawing of them.** `SettingsMessagePreview` makes the
 /// same argument for the transcript and makes it for the same reason: a preview
@@ -12,16 +13,20 @@ import WingcordCore
 /// closures, and hold no store reference — so they can be instantiated here
 /// with the reader's own identity and a set of closures that do nothing.
 ///
-/// The shape comes from the *preference being edited* rather than from
-/// `AppSettings`, which is what makes the picker change the picture rather than
-/// the app.
+/// The shape and the order both come from the *preference being edited* rather
+/// than from `AppSettings`, which is what makes the controls change the picture
+/// rather than the app.
 ///
-/// It is inert: `allowsHitTesting(false)` rather than `.disabled(true)`, because
-/// disabling dims a control and a dimmed preview is a preview of the wrong
-/// thing.
+/// **The composer half takes the mouse and the now bar half does not.** Dragging
+/// an icon is the whole point of the composer here, so it cannot be inert; every
+/// other control in it is, because a preview that sends a message is not a
+/// preview. `Composer` is handed closures that do nothing and no channel, so
+/// there is nothing behind any of them to reach — which is a stronger guarantee
+/// than `.disabled`, and unlike `.disabled` it does not dim the thing being
+/// shown.
 struct SettingsChromePreview: View {
-    var nowBarShape: ChromeShape
-    var composerShape: ChromeShape
+    var shape: ChromeShape
+    @Binding var controls: ComposerControlOrder
 
     @Environment(AppModel.self) private var model
 
@@ -45,28 +50,36 @@ struct SettingsChromePreview: View {
             Color.clear.readingSurface()
 
             VStack(spacing: Spacing.snug) {
-                NowBar(presentation: model.nowBarPresentation, shape: nowBarShape)
+                NowBar(presentation: model.nowBarPresentation, shape: shape)
                     .frame(width: Proportions.sidebarIdeal - Proportions.railWidth)
+                    .allowsHitTesting(false)
 
                 Composer(
                     channelName: channelName,
-                    shape: composerShape,
+                    shape: shape,
+                    controls: controls,
+                    isReorderable: true,
                     canSend: true,
                     replyingToAuthor: nil,
-                    text: .constant(""),
-                    // **The real channel, so the real controls.** The apps
-                    // launcher is hidden where there is nothing to launch into,
-                    // so a preview built with no channel is a composer missing a
-                    // control the reader can see two inches away.
-                    activityChannelID: model.selectedChannelID
+                    text: .constant("")
                 )
+                // **The reorder container goes on the whole bar, not on the
+                // control row.** The row is inside `Composer`, which is the
+                // view whose fidelity is the point; a container attached here
+                // finds the `.reorderable()` items wherever they end up, and
+                // the bar is also the region a drag may travel over.
+                .reorderContainer(for: ComposerControl.self) { difference in
+                    switch difference.destination.position {
+                    case .before(let control): controls.move(difference.sources, before: control)
+                    case .end: controls.move(difference.sources, before: nil)
+                    }
+                }
             }
             .padding(.vertical, Spacing.snug)
         }
         .frame(height: Self.height)
         .frame(maxWidth: .infinity)
         .clipShape(.settingsRect(SettingsMetrics.cardRadius))
-        .allowsHitTesting(false)
         .accessibilityHidden(true)
     }
 }

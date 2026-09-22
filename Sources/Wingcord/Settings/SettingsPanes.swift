@@ -193,21 +193,22 @@ private struct AppearancePane: View {
         }
 
         SettingsGroup("Bars") {
-            SettingsChromePreview(
-                nowBarShape: settings.nowBarShape,
-                composerShape: settings.composerShape
-            )
-            .padding(.bottom, SettingsMetrics.cardToHeader)
             SettingsCard {
                 CardHeaderRow(
-                    title: "Identity bar",
-                    help: "The silhouette of the bar with your name in it."
+                    title: "Appearance",
+                    help: "The silhouette both floating bars take. A pill keeps "
+                        + "its round controls beside it; a boxy bar encloses them."
                 )
                 SettingsSegmentedControl(
-                    selection: $settings.nowBarShape,
+                    selection: $settings.chromeShape,
                     options: ChromeShape.allCases.map {
                         .init($0, $0.label, symbolName: $0.symbolName)
                     }
+                )
+                CardDivider()
+                SettingsChromePreview(
+                    shape: settings.chromeShape,
+                    controls: $settings.composerControls
                 )
                 CardDivider()
                 SettingsToggle(
@@ -216,22 +217,10 @@ private struct AppearancePane: View {
                     isOn: $settings.showsNameplateInNowBar
                 )
             }
-            SettingsCard {
-                CardHeaderRow(
-                    title: "Composer",
-                    help: "The silhouette of the bar you write in."
-                )
-                SettingsSegmentedControl(
-                    selection: $settings.composerShape,
-                    options: ChromeShape.allCases.map {
-                        .init($0, $0.label, symbolName: $0.symbolName)
-                    }
-                )
-            }
-            .padding(.top, SettingsMetrics.cardToHeader)
             SettingsFootnote(
-                "The real bars, at the shapes above — not a picture of them.",
-                symbolName: "eye"
+                "The real bars, at the shape above — not a picture of them. "
+                    + "Drag the icons to rearrange them.",
+                symbolName: "hand.draw"
             )
         }
 

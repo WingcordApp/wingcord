@@ -69,6 +69,21 @@ struct ChannelPill: View {
         }
     }
 
+    /// The pill's contents.
+    ///
+    /// **The horizontal inset is the app's, because the toolbar supplies none.**
+    /// A `ToolbarItem` sizes its glass to the label's own bounds, and a label
+    /// that is a bare `HStack` has no bounds beyond its ink — so the item gave
+    /// this one the vertical padding that comes with its minimum height and
+    /// nothing at all sideways. Measured on the running window: 1.5 points from
+    /// the capsule's leading edge to the sigil and 1 point from the name to its
+    /// trailing edge, against 9 points above and below. That is what reads as
+    /// the glyph being crushed against the end of the pill.
+    ///
+    /// `Spacing.snug` at the ends and `Spacing.tight` between the sigil and the
+    /// name, deliberately in that order: the sigil belongs to the name, so the
+    /// pair has to read as one object inside the pill rather than as two things
+    /// spaced like the pill's own edges.
     private var label: some View {
         HStack(spacing: Spacing.tight) {
             Image(systemName: symbolName)
@@ -78,6 +93,7 @@ struct ChannelPill: View {
                 .lineLimit(1)
                 .contentTransition(.interpolate)
         }
+        .padding(.horizontal, Spacing.snug)
     }
 
     /// **The setter may only clear when the store is still showing this one.**

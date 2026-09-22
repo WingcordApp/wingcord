@@ -421,7 +421,7 @@ private struct NowBarContainer: View {
     var body: some View {
         NowBar(
             presentation: model.nowBarPresentation,
-            shape: settings.nowBarShape,
+            shape: settings.chromeShape,
             // Through the controller, so the switch reaches the media engine
             // AND is republished over the socket — a mute that only moves a
             // local flag is a mute nobody else can see.

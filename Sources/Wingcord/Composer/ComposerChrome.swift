@@ -1,0 +1,87 @@
+import SwiftUI
+
+/// The composer's two arrangements, and the only place that knows there are two.
+///
+/// **A silhouette is an arrangement.** `ChromeShape.enclosesFlankingControls`
+/// states the rule; this view is where it lands. A boxy bar is one panel holding
+/// everything — `+`, the field, the controls, a hairline and the send arrow —
+/// because a rounded rectangle has flat sides and corners to spare. A pill is
+/// three objects, because a circle enclosed in a capsule's rounded end collides
+/// with it.
+///
+/// **It takes finished views, not descriptions of them.** Each control decides
+/// its own material from the same shape — a glass body beside the plate, or a
+/// region cut into it — so the rule lives once on `ChromeShape` and the chrome
+/// here does nothing but place things. The alternative, a container that applies
+/// glass to whatever it is handed, cannot let the send control carry an accent
+/// tint without also inventing a vocabulary for saying so.
+///
+/// Both arrangements are `alignment: .bottom`, so a composer grown to three
+/// lines keeps its controls on the last one rather than centring them against a
+/// paragraph.
+struct ComposerChrome<Leading: View, Input: View, Controls: View, Send: View>: View {
+    var shape: ChromeShape
+    @ViewBuilder var leading: Leading
+    @ViewBuilder var input: Input
+    @ViewBuilder var controls: Controls
+    @ViewBuilder var send: Send
+
+    /// The plate's corner.
+    ///
+    /// **Derived from the bar's resting height, not measured.** The bar grows
+    /// with a wrapped message and a capsule's radius is half its height — but a
+    /// radius that tracked the *grown* height would round a three-line composer
+    /// into a lozenge. The resting height is the shape, and the plate keeps it
+    /// as it grows, which is what every capsule text field on this platform
+    /// does.
+    private var corner: CGFloat {
+        shape.cornerRadius(forHeight: Metrics.composerControlHeight)
+    }
+
+    var body: some View {
+        if shape.enclosesFlankingControls {
+            HStack(alignment: .bottom, spacing: Spacing.hair) {
+                leading
+                input
+                controls
+                ComposerSendDivider()
+                send
+            }
+            .padding(.horizontal, Metrics.composerControlInset)
+            .glassEffect(.regular, in: .rect(cornerRadius: corner))
+            .specularEdge(in: .rect(cornerRadius: corner))
+        } else {
+            HStack(alignment: .bottom, spacing: Spacing.base) {
+                leading
+                HStack(alignment: .bottom, spacing: Spacing.hair) {
+                    input
+                    controls
+                }
+                // The field's own inset. The trailing side is the last control's
+                // air, so both of its sides match.
+                .padding(.leading, Spacing.snug)
+                .padding(.trailing, Metrics.composerControlInset)
+                .glassEffect(.regular, in: .rect(cornerRadius: corner))
+                .specularEdge(in: .rect(cornerRadius: corner))
+                send
+            }
+        }
+    }
+}
+
+/// The hairline between the controls and the send arrow, inside a boxy bar.
+///
+/// **Only the enclosed arrangement has one**, and that is the whole reason it
+/// exists: in a pill the send control is a separate body with real space around
+/// it, so it is already separated. Enclosed, the arrow would otherwise be a
+/// fifth control in a row of four, and the one that *commits* has to read apart
+/// from the four that merely open a picker.
+private struct ComposerSendDivider: View {
+    var body: some View {
+        Capsule()
+            .fill(Ink.quaternary)
+            .frame(width: 1, height: 16)
+            .frame(width: Spacing.base, height: Metrics.composerControlHeight)
+            .accessibilityHidden(true)
+    }
+}

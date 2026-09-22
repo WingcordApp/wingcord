@@ -211,7 +211,7 @@ nonisolated enum Spacing {
 /// column — so a preference that changed one and not the other would be a window
 /// with two opinions about its own shape. Which one is right is genuinely taste,
 /// which is exactly what a setting is for.
-enum ChromeShape: String, CaseIterable, Sendable, Codable {
+nonisolated enum ChromeShape: String, CaseIterable, Sendable, Codable {
     /// Fully rounded ends. The shape a floating bar takes when it is read as an
     /// object rather than as a region.
     case pill
@@ -239,6 +239,22 @@ enum ChromeShape: String, CaseIterable, Sendable, Codable {
     /// cannot both be written down, and a hard-coded radius for the pill is
     /// wrong the moment the bar grows a line.
     ///
+    /// Whether a bar of this shape **encloses** the round controls that flank it.
+    ///
+    /// **A silhouette and an arrangement are one decision, not two.** A rounded
+    /// rectangle has flat sides and spare corners, so `+` and the send arrow sit
+    /// inside it as regions cut into its material, with a hairline separating
+    /// the send from the row — one panel holding everything. A capsule's ends
+    /// *are* circles, and a circle enclosed in one collides with the rounded
+    /// end; so the pill keeps its two circular controls as glass bodies of their
+    /// own, beside the plate. Discord's own composer is a rounded rect for
+    /// exactly this reason.
+    ///
+    /// One property rather than a flag beside the shape, because the two can
+    /// then never be chosen independently — a pill that swallowed its send
+    /// button is a drawing nobody asked for.
+    var enclosesFlankingControls: Bool { self == .boxy }
+
     /// **Boxy is `Radius.chip`, not `Radius.glass`, and that is the difference
     /// between a setting and a no-op.** The house glass radius is eighteen; a
     /// composer at rest is thirty-eight points tall, so its capsule radius is
@@ -349,6 +365,27 @@ nonisolated enum Metrics {
 
     /// The composer stops growing here and starts scrolling internally.
     static let composerMaxLines = 12
+
+    /// One control at the composer's trailing end — GIF, sticker, emoji, apps.
+    ///
+    /// **Bigger than `compactControl`, and that is the point.** These used to be
+    /// 26-point boxes carrying a 10-point word and a `.body` glyph in
+    /// `Ink.secondary`, which over the composer's glass read as four grey marks
+    /// somebody had left in the corner. A 32-point target with a 19-point glyph
+    /// in white is the size the rest of this platform gives a control that opens
+    /// a picker, and it is what makes the row read as four controls rather than
+    /// as decoration on the end of the field.
+    ///
+    /// It fits *inside* the bar rather than setting its height: 32 in 38 leaves
+    /// `composerControlInset` above and below.
+    static let composerControl: CGFloat = 32
+
+    /// What is left beside a trailing control once it is centred in the bar.
+    ///
+    /// The composer's trailing padding, so the last control's own air is the
+    /// same on both of its sides. Derived, because the two numbers it comes from
+    /// are the ones a reader would actually change.
+    static let composerControlInset: CGFloat = (composerControlHeight - composerControl) / 2
 
     // MARK: Avatars
 

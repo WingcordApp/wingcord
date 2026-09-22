@@ -25,6 +25,11 @@ struct VoiceVideoPane: View {
     @State private var outputs: [AudioDevice] = []
     @State private var cameras: [CameraDevice] = []
     @State private var isTestingCamera = false
+    /// Whether the reader has asked for the microphone.
+    ///
+    /// **Off until asked, exactly as the camera is.** See `VoiceTestRig` for
+    /// what opening the pane used to cost.
+    @State private var isTestingMic = false
 
     var body: some View {
         Group {
@@ -35,9 +40,20 @@ struct VoiceVideoPane: View {
             video
             callSounds
         }
-        .task {
-            refreshDevices()
-            await rig.start()
+        // **Off the main actor.** Both catalogs are synchronous system calls and
+        // together they are about a quarter of a second on the first visit of a
+        // process — the pane cannot paint until they return. `WingcordVoice` is
+        // not main-actor isolated and both device types are `Sendable`, so this
+        // is one hop and no copy.
+        .task { await loadDevices() }
+        // Start and stop follow the switch, so the engine's life is the test's.
+        // `.task(id:)` rather than `.onChange`, so a cancel tears it down too.
+        .task(id: isTestingMic) {
+            if isTestingMic {
+                await rig.start()
+            } else {
+                rig.stop()
+            }
         }
         .onDisappear {
             rig.stop()
@@ -58,7 +74,7 @@ struct VoiceVideoPane: View {
                         get: { settings.voiceInputDeviceID },
                         set: {
                             settings.voiceInputDeviceID = $0
-                            Task { await rig.start() }
+                            rig.reconfigure()
                             model.voicePreferencesChanged()
                         }
                     ),
@@ -73,7 +89,7 @@ struct VoiceVideoPane: View {
                         get: { settings.voiceOutputDeviceID },
                         set: {
                             settings.voiceOutputDeviceID = $0
-                            Task { await rig.start() }
+                            rig.reconfigure()
                             model.voicePreferencesChanged()
                         }
                     ),
@@ -165,6 +181,7 @@ struct VoiceVideoPane: View {
                 SettingsCard {
                     ThresholdRow(
                         level: rig.level,
+                        isLive: rig.isRunning,
                         threshold: Binding(
                             get: { settings.voiceActivityThreshold },
                             set: {
@@ -219,18 +236,31 @@ struct VoiceVideoPane: View {
                     )
                     CardDivider()
                 }
-                MeterRow(level: rig.level, threshold: nil)
-                CardDivider()
+                // **The switch, and it is the only thing that opens the input.**
+                // The camera beside it has always worked this way; the
+                // microphone did not, and simply looking at this pane lit the
+                // recording indicator.
                 SettingsToggle(
-                    title: "Hear yourself",
-                    help: rig.isVoiceProcessing
-                        ? "Plays your microphone back through the output above. Echo cancellation stays on, so it is safe on speakers."
-                        : "Plays your microphone back through the output above. There is no echo cancellation on this Mac — use headphones, or this will feed back.",
-                    isOn: Binding(
-                        get: { rig.isMonitoring },
-                        set: { rig.isMonitoring = $0 }
-                    )
+                    title: "Microphone test",
+                    help: "Opens your microphone so the level below moves. Wingcord "
+                        + "keeps it shut the rest of the time.",
+                    isOn: $isTestingMic
                 )
+                CardDivider()
+                MeterRow(level: rig.level, threshold: nil, isLive: rig.isRunning)
+                if rig.isRunning {
+                    CardDivider()
+                    SettingsToggle(
+                        title: "Hear yourself",
+                        help: rig.isVoiceProcessing
+                            ? "Plays your microphone back through the output above. Echo cancellation stays on, so it is safe on speakers."
+                            : "Plays your microphone back through the output above. There is no echo cancellation on this Mac — use headphones, or this will feed back.",
+                        isOn: Binding(
+                            get: { rig.isMonitoring },
+                            set: { rig.isMonitoring = $0 }
+                        )
+                    )
+                }
             }
             if rig.isRunning, !rig.isVoiceProcessing {
                 SettingsFootnote(
@@ -325,10 +355,21 @@ struct VoiceVideoPane: View {
         }
     }
 
-    private func refreshDevices() {
-        inputs = AudioDeviceCatalog.inputs()
-        outputs = AudioDeviceCatalog.outputs()
-        cameras = CameraCapture.devices()
+    private func loadDevices() async {
+        let catalog = await Self.catalog()
+        inputs = catalog.inputs
+        outputs = catalog.outputs
+        cameras = catalog.cameras
+    }
+
+    /// The three device lists, read off the main actor.
+    ///
+    /// `nonisolated` so the `await` above is a real hop rather than a
+    /// same-actor call that suspends and resumes on the same thread.
+    private nonisolated static func catalog() async -> (
+        inputs: [AudioDevice], outputs: [AudioDevice], cameras: [CameraDevice]
+    ) {
+        (AudioDeviceCatalog.inputs(), AudioDeviceCatalog.outputs(), CameraCapture.devices())
     }
 }
 
@@ -401,12 +442,27 @@ private struct DevicePickerRow: View {
 private struct MeterRow: View {
     var level: Float
     var threshold: Double?
+    /// Whether the microphone is actually open.
+    ///
+    /// **A still bar and a broken microphone look identical**, and this pane is
+    /// the one place somebody comes to tell those two apart — so a meter with no
+    /// input behind it says so rather than sitting at zero and letting the
+    /// reader draw the wrong conclusion.
+    var isLive: Bool = true
 
     var body: some View {
         VStack(alignment: .leading, spacing: Spacing.base) {
-            Text("Input level")
-                .font(SettingsType.rowLabel)
-                .foregroundStyle(Ink.primary)
+            HStack(spacing: Spacing.tight) {
+                Text("Input level")
+                    .font(SettingsType.rowLabel)
+                    .foregroundStyle(Ink.primary)
+                if !isLive {
+                    Text("microphone off")
+                        .font(SettingsType.rowSubtitle)
+                        .foregroundStyle(Ink.tertiary)
+                }
+                Spacer(minLength: 0)
+            }
             GeometryReader { proxy in
                 ZStack(alignment: .leading) {
                     Capsule().fill(SettingsSurface.controlTrough)
@@ -449,11 +505,12 @@ private struct MeterRow: View {
 /// The meter and the threshold slider, as one row.
 private struct ThresholdRow: View {
     var level: Float
+    var isLive: Bool
     @Binding var threshold: Double
 
     var body: some View {
         VStack(spacing: 0) {
-            MeterRow(level: level, threshold: threshold)
+            MeterRow(level: level, threshold: threshold, isLive: isLive)
             CardDivider()
             SettingsSliderRow(
                 title: "Open at",
