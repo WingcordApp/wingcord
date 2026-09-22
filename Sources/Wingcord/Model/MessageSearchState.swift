@@ -15,6 +15,16 @@ struct MessageSearchState: Hashable, Sendable {
     var submitted: MessageSearchQuery?
     var page: MessageSearchPage?
     var isLoading = false
+    /// Whether the results column is on screen.
+    ///
+    /// **Typing is not searching, and the column is not the draft.** The state
+    /// exists as soon as the field has anything in it, because that is where the
+    /// draft lives; the column appears only once Return has actually asked
+    /// something. It used to appear on the first keystroke, so typing `from:`
+    /// replaced the transcript with three hundred points of "type in the search
+    /// field above, then press Return" — a page whose entire content was an
+    /// instruction to do the thing that had opened it.
+    var isPresented = false
     /// Discord is still building this guild's index — a 202, not a failure. See
     /// `DiscordREST.SearchIndexing`.
     var isIndexing = false

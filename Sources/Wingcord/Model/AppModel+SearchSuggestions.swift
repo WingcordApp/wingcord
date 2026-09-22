@@ -42,7 +42,7 @@ extension AppModel {
         // Nothing being typed as a filter: offer the grammar itself, which is
         // what Discord's own field does on an empty box.
         guard let editing = parsed.editing else {
-            return MessageSearchToken.Kind.allCases.compactMap { kind in
+            return findInRow(scope, text: text) + MessageSearchToken.Kind.allCases.compactMap { kind in
                 guard kind.isOffered(in: scope) else { return nil }
                 return SearchSuggestion(
                     id: "key.\(kind.rawValue)",
@@ -102,6 +102,40 @@ extension AppModel {
                 )
             ]
         }
+    }
+
+    /// The row above the grammar that names **where** this search will run.
+    ///
+    /// **Only in a conversation, because only there is it news.** A server
+    /// search is scoped to the server whose channel list is on screen and whose
+    /// name is in the field's own prompt; a conversation is reached from a list
+    /// of conversations, so which one the field is pointed at is the question a
+    /// reader actually has — and the answer is a face, which is how they
+    /// recognise it.
+    ///
+    /// Its completion is the text unchanged: picking it commits what is already
+    /// typed, which is what the row offers. An empty field completes to nothing
+    /// and runs nothing, exactly as Return would.
+    private func findInRow(_ scope: MessageSearchScope, text: String) -> [SearchSuggestion] {
+        guard case .channel(let channelID) = scope,
+              let channel = channelIndex[channelID], channel.kind.isPrivate
+        else { return [] }
+        let name = displayName(of: channel)
+        let partner = channel.kind == .directMessage
+            ? channel.recipientIDs.first { $0 != currentUserID }.flatMap { users[$0] }
+            : nil
+        return [
+            SearchSuggestion(
+                id: "scope.\(channelID.rawValue)",
+                completion: text,
+                title: "Find in \(name)",
+                avatarURL: partner.flatMap { avatarURL(for: $0, side: Metrics.avatarRow) },
+                // A group has several faces and therefore none; its own glyph
+                // stands in, which is what the conversation list draws too.
+                monogram: partner == nil ? nil : Self.monogram(of: name),
+                symbolName: partner == nil ? "person.2.fill" : nil
+            )
+        ]
     }
 
     /// The people worth offering, in the order somebody expects to find them.

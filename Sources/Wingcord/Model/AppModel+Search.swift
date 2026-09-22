@@ -6,7 +6,15 @@ import WingcordCore
 extension AppModel {
 
     /// Whether the search panel is the supplementary column right now.
-    var isSearchShown: Bool { messageSearch != nil }
+    ///
+    /// **Not "is there a draft".** See `MessageSearchState.isPresented`: the
+    /// state exists as soon as the field has text in it, and the column appears
+    /// only when Return has asked something.
+    var isSearchShown: Bool { messageSearch?.isPresented ?? false }
+
+    /// Whether the field is holding a query, shown or not. What the toolbar's
+    /// own control toggles.
+    var isSearchDrafting: Bool { messageSearch != nil }
 
     /// What the panel would search if it were opened here.
     ///
@@ -77,13 +85,41 @@ extension AppModel {
     /// results 826–850 of a search that may have twelve, which the route answers
     /// with an empty page — and an empty page reads as "nothing found" rather
     /// than "you are past the end".
+    /// What Return in the field means.
+    ///
+    /// **A filter left without an argument takes the first thing offered for
+    /// it.** `from:` with nothing after it is a question the reader has half
+    /// asked: the list under the field is already showing who they meant, and
+    /// making them arrow down to it before Return does anything is a step that
+    /// exists only because the grammar has a colon in it. The same for every
+    /// other token — `in:`, `has:`, `mentions:` — which is why this asks the
+    /// tokenizer rather than special-casing one keyword.
+    ///
+    /// Nothing is completed when no filter is being edited: `searchSuggestions`
+    /// then offers the *grammar*, and adopting its first row would turn a plain
+    /// search for "hello" into `hello from:`.
+    func submitSearch() {
+        if let state = messageSearch,
+           MessageSearchTokenizer.parse(state.draft.content).editing != nil,
+           let first = searchSuggestions(for: state.draft.content).first,
+           first.completion != state.draft.content
+        {
+            messageSearch?.draft.content = first.completion
+        }
+        runSearch()
+    }
+
     func runSearch() {
         guard let state = messageSearch else { return }
         var query = resolvedQuery(from: state.draft.content)
         query.sort = state.draft.sort
         query.order = state.draft.order
         query.page = 1
+        // **The column opens here and nowhere earlier**, and only for a question
+        // that will actually be asked: Return on an empty field must not replace
+        // the transcript with an empty results page.
         guard !query.isEmpty else { return }
+        messageSearch?.isPresented = true
         // The draft keeps the raw text — it is what the field shows — while the
         // resolved query is what goes out and what the answer is checked against.
         messageSearch?.draft = query.keepingText(state.draft.content)

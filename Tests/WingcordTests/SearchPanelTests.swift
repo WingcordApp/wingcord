@@ -47,14 +47,38 @@ struct SearchPanelTests {
         #expect(model.searchScope == .channel(channelID))
     }
 
-    @Test("Toggling opens the panel, and toggling again closes it")
-    func togglingOpensAndCloses() {
+    /// **Typing is not searching.** The state exists as soon as the field holds
+    /// anything, because that is where the draft lives; the results column
+    /// appears only once Return has asked something. It used to appear on the
+    /// first keystroke, so typing `from:` replaced the transcript with three
+    /// hundred points of "type in the search field above, then press Return".
+    @Test("A draft is not a column, and Return is what opens one")
+    func draftingDoesNotOpenTheColumn() {
         let model = model()
         model.toggleSearch()
+        #expect(model.isSearchDrafting)
+        #expect(!model.isSearchShown)
+        #expect(model.workspacePresentation.supplementary != .search)
+
+        model.searchText = "hey"
+        #expect(!model.isSearchShown)
+
+        model.submitSearch()
         #expect(model.isSearchShown)
         #expect(model.workspacePresentation.supplementary == .search)
 
+        model.closeSearch()
+        #expect(!model.isSearchShown)
+        #expect(!model.isSearchDrafting)
+    }
+
+    @Test("Return on an empty field opens nothing")
+    func anEmptyQuestionOpensNothing() {
+        // A column whose entire content is an apology for being empty is worse
+        // than no column.
+        let model = model()
         model.toggleSearch()
+        model.submitSearch()
         #expect(!model.isSearchShown)
     }
 
@@ -68,6 +92,8 @@ struct SearchPanelTests {
         #expect(model.workspacePresentation.supplementary == .members)
 
         model.toggleSearch()
+        model.searchText = "hey"
+        model.submitSearch()
         #expect(model.workspacePresentation.supplementary == .search)
     }
 
@@ -79,6 +105,7 @@ struct SearchPanelTests {
         let model = model()
         model.toggleSearch()
         model.searchText = "hey"
+        model.submitSearch()
         #expect(model.searchScope == .guild(guildID))
 
         // A channel inside the same server: the results are still about here,
@@ -118,6 +145,7 @@ struct SearchPanelTests {
 
         model.toggleSearch()
         model.searchText = "hey"
+        model.submitSearch()
         #expect(model.searchScope == .channel(first))
         #expect(model.isSearchShown)
 
@@ -142,6 +170,7 @@ struct SearchPanelTests {
         let model = model()
         model.toggleSearch()
         model.searchText = "hey"
+        model.submitSearch()
         #expect(model.isSearchShown)
 
         model.closeSearch()
@@ -329,6 +358,81 @@ struct SearchPanelTests {
 
     // MARK: Clicking a result
 
+    // MARK: A filter with nothing after it
+
+    @Test("Return on a bare filter takes the first thing offered for it")
+    func returnCompletesABareFilter() throws {
+        // `from:` is a question half asked: the list under the field is already
+        // showing who was meant, and arrowing down to it before Return does
+        // anything is a step that exists only because the grammar has a colon
+        // in it.
+        let model = model()
+        let member = UserID(rawValue: 4_242)
+        model.users[member] = User(id: member, username: "robinresting")
+        model.members[guildID] = [member: Member(userID: member, roleIDs: [])]
+
+        model.toggleSearch()
+        model.searchText = "from:"
+        let offered = try #require(model.searchSuggestions(for: "from:").first)
+
+        model.submitSearch()
+        #expect(model.searchText == offered.completion)
+        #expect(model.searchText != "from:")
+    }
+
+    @Test("Plain words are left exactly as typed")
+    func plainWordsAreNotCompleted() {
+        // With no filter being edited the suggestion list offers the GRAMMAR,
+        // and adopting its first row would turn a search for "hello" into
+        // `hello from:`.
+        let model = model()
+        model.toggleSearch()
+        model.searchText = "hello"
+        model.submitSearch()
+        #expect(model.searchText == "hello")
+    }
+
+    // MARK: Where the search will run
+
+    @Test("A conversation's suggestions name the conversation, with its face")
+    func conversationsOfferFindIn() throws {
+        let partner = UserID(rawValue: 77)
+        let dm = ChannelID(rawValue: 900)
+        let model = model()
+        model.users[partner] = User(id: partner, username: "robin_harper1")
+        var index = model.channelIndex
+        index.replacePrivateChannels([
+            Channel(
+                id: dm,
+                kind: .directMessage,
+                guildID: nil,
+                name: "",
+                position: 0,
+                recipientIDs: [partner]
+            )
+        ])
+        model.channelIndex = index
+        model.selectGuild(nil)
+        model.selectChannel(dm)
+
+        let first = try #require(model.searchSuggestions(for: "").first)
+        #expect(first.title == "Find in robin_harper1")
+        // Picking it commits what is already typed rather than changing it: the
+        // row says where, not what.
+        #expect(first.completion.isEmpty)
+        #expect(first.avatarURL != nil)
+    }
+
+    @Test("A server's suggestions do not, because the prompt already says so")
+    func serversDoNot() throws {
+        // A server search is scoped to the server whose channel list is on
+        // screen and whose name is in the field's own prompt. The row would be
+        // a line repeating the window.
+        let model = model()
+        let first = try #require(model.searchSuggestions(for: "").first)
+        #expect(!first.title.hasPrefix("Find in"))
+    }
+
     /// **The one thing the panel exists not to do is close itself.** A search is
     /// a list somebody works through.
     @Test("Opening a result jumps and leaves the panel up")
@@ -336,6 +440,7 @@ struct SearchPanelTests {
         let model = model()
         model.toggleSearch()
         model.searchText = "hey"
+        model.submitSearch()
         // Read into a local first: reading and writing `messageSearch` in one
         // statement is overlapping access to the same stored property.
         let draft = model.messageSearch?.draft

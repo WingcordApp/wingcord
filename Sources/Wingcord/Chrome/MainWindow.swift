@@ -41,11 +41,16 @@ struct MainWindow: View {
         Binding(
             get: { model.searchText },
             set: { text in
+                // Emptying the field puts the transcript back, results and all:
+                // there is nothing left to have asked.
                 guard !text.isEmpty else {
-                    if model.isSearchShown { model.closeSearch() }
+                    if model.isSearchDrafting { model.closeSearch() }
                     return
                 }
-                if !model.isSearchShown { model.toggleSearch() }
+                // The first keystroke starts a DRAFT, not a search — the state
+                // is where the text lives. The results column waits for Return;
+                // see `MessageSearchState.isPresented`.
+                if !model.isSearchDrafting { model.toggleSearch() }
                 model.searchText = text
             }
         )
@@ -96,7 +101,11 @@ struct MainWindow: View {
                 // Return runs it; typing alone does not. A request per keystroke
                 // against a route that indexes whole servers is a request per
                 // keystroke, and the field is where a filter grammar is typed.
-                .onSubmit(of: .search) { model.runSearch() }
+                //
+                // **And Return is also where the column appears.** It used to
+                // appear on the first keystroke — see
+                // `MessageSearchState.isPresented`.
+                .onSubmit(of: .search) { model.submitSearch() }
                 .toolbar {
                     // **The closures have to be passed.** They default to `{}`,
                     // so a toolbar built without them compiles, renders, and
