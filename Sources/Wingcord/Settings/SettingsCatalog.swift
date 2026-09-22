@@ -27,6 +27,7 @@ enum SettingsSection: String, CaseIterable, Identifiable, Hashable, Sendable {
     case account
     case connectedApps
     case privacy
+    case messagingPermissions
     // What it costs.
     case performance
     case storage
@@ -52,6 +53,7 @@ enum SettingsSection: String, CaseIterable, Identifiable, Hashable, Sendable {
         case .account: "Account"
         case .connectedApps: "Connected Apps"
         case .privacy: "Privacy"
+        case .messagingPermissions: "Messaging Permissions"
         case .performance: "Performance"
         case .storage: "Storage"
         case .diagnostics: "Diagnostics"
@@ -76,6 +78,7 @@ enum SettingsSection: String, CaseIterable, Identifiable, Hashable, Sendable {
         case .account: "person.crop.circle.fill"
         case .connectedApps: "link"
         case .privacy: "hand.raised.fill"
+        case .messagingPermissions: "bubble.left.and.exclamationmark.bubble.right.fill"
         case .performance: "speedometer"
         case .storage: "internaldrive.fill"
         case .diagnostics: "waveform.path.ecg"
@@ -104,6 +107,7 @@ enum SettingsSection: String, CaseIterable, Identifiable, Hashable, Sendable {
         case .account: Color(hex: 0x5E5CE6)
         case .connectedApps: Color(hex: 0x1D_B9_54)
         case .privacy: Color(hex: 0x30D158)
+        case .messagingPermissions: Color(hex: 0xD4A017)
         case .performance: Color(hex: 0xFF9F0A)
         case .storage: Color(hex: 0x00C7BE)
         case .diagnostics: Color(hex: 0xBF5AF2)
@@ -131,6 +135,7 @@ enum SettingsSection: String, CaseIterable, Identifiable, Hashable, Sendable {
         case .account: "Who you are signed in as, on this Mac"
         case .connectedApps: "Linked accounts, and what you've authorized"
         case .privacy: "What leaves this machine, which is nothing"
+        case .messagingPermissions: "Who may write to you, and what they may send"
         case .performance: "What the app is costing you right now"
         case .storage: "What Wingcord keeps on this Mac, and how to reclaim it"
         case .diagnostics: "The state of the connection, and where the logs are"
@@ -157,6 +162,7 @@ enum SettingsSection: String, CaseIterable, Identifiable, Hashable, Sendable {
         case .account: "sign in out switch token keychain"
         case .connectedApps: "connections spotify steam xbox playstation github twitch authorized apps oauth deauthorize unlink"
         case .privacy: "data telemetry crash reports"
+        case .messagingPermissions: "messaging permissions dm direct messages spam filter friend requests blocked block ignore sensitive explicit nsfw age restricted content filter blur gore"
         case .performance: "memory cache inspector frames"
         case .storage: "disk space cache clear reclaim downloads images"
         case .diagnostics: "logs trace crash report"
@@ -171,7 +177,7 @@ enum SettingsSection: String, CaseIterable, Identifiable, Hashable, Sendable {
         [.general, .appearance, .accessibility],
         [.messages, .expressions, .media, .voiceVideo, .notifications, .shortcuts],
         [.activity, .overlay, .clips],
-        [.account, .connectedApps, .privacy],
+        [.account, .connectedApps, .privacy, .messagingPermissions],
         [.performance, .storage, .diagnostics, .about],
     ]
 }

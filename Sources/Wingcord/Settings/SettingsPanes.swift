@@ -41,6 +41,7 @@ struct SettingsPaneContent: View {
             case .account: AccountPane()
             case .connectedApps: ConnectedAppsPane()
             case .privacy: PrivacyPane()
+            case .messagingPermissions: MessagingPermissionsPane()
             case .performance: PerformancePane()
             case .accessibility: AccessibilityPane()
             case .shortcuts: ShortcutsPane()

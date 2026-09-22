@@ -947,6 +947,20 @@ final class AppModel {
     @ObservationIgnored var activityPrivacyRaw: Data?
     @ObservationIgnored var activityStatusRaw: Data?
 
+    /// What the Messaging Permissions page shows.
+    ///
+    /// **Its own value beside `activityPrivacy` rather than folded into it**,
+    /// even though four of its fields live in the same `privacy` message. The
+    /// two are fetched at different moments — activity privacy arrives with
+    /// READY, this arrives when somebody opens the pane — and one value filled
+    /// in halves would be a page showing defaults for the half that had not
+    /// landed yet, which on a privacy surface reads as a setting having been
+    /// changed.
+    var messagingPrivacy = MessagingPrivacy()
+    /// Nil until the pane has fetched. What draws the pane's loading state, and
+    /// what stops a write going out against bytes nobody has.
+    @ObservationIgnored var messagingPrivacyRaw: (text: Data, privacy: Data)?
+
     /// What this Mac is running, or nil.
     ///
     /// Written by `GameDetector` and read by `publishedActivities` below. Kept
