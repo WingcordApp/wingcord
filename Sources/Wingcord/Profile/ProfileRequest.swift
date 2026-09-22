@@ -36,6 +36,20 @@ struct ProfileRequest: Equatable, Identifiable {
     /// that follows the click reads as a menu.
     var anchor: CGRect
     var depth: Depth = .mini
+    /// Open with the editor already showing, on this page.
+    ///
+    /// **A scope rather than a flag**, because the one caller that wants this —
+    /// the server menu's Edit Per-server Profile — wants a *specific* page, and
+    /// a bool would land on the account's. Nil is every other caller, which
+    /// opens the profile to read.
+    var editsScope: ProfileEditor.Scope?
+    /// Whether the card carries the reader's own controls — Edit Profile, the
+    /// status picker and the account rows.
+    ///
+    /// **A flag rather than `profile.isSelf`**, because the reader's own card is
+    /// opened from four places and only one of them is asking for the controls:
+    /// clicking your own name in a transcript opens the card to *read*.
+    var showsOwnActions = false
 
     var id: UInt64 { userID.rawValue }
 }

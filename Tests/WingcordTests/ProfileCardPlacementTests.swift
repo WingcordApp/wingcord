@@ -126,3 +126,71 @@ struct ProfileCardPlacementTests {
         #expect(place(anchor: low).growthAnchor.y == 1)
     }
 }
+
+/// The now bar's own card, which stands on its trigger rather than flanking it.
+///
+/// **The bar is pinned to the window's foot.** Placed `.beside`, the card was
+/// centred on the bar and then clamped to the window — which put its bottom edge
+/// level with the bar's and laid the card straight over the control that opened
+/// it. There is no "beside" for a bar at the foot of a window; there is only
+/// above.
+@Suite("Profile card above its trigger")
+@MainActor
+struct ProfileCardAbovePlacementTests {
+
+    private static let cardWidth: CGFloat = 320
+    private static let container = CGSize(width: 1512, height: 900)
+    /// The identity capsule, at the foot of the sidebar column.
+    private static let bar = CGRect(x: 76, y: 838, width: 190, height: 46)
+
+    private func place(
+        _ anchor: CGRect = ProfileCardAbovePlacementTests.bar,
+        overhang: EdgeInsets = EdgeInsets(),
+        container: CGSize = ProfileCardAbovePlacementTests.container
+    ) -> ProfileCardPlacement {
+        ProfileCardPlacement(
+            anchor: anchor, cardWidth: Self.cardWidth,
+            overhang: overhang, container: container, side: .above
+        )
+    }
+
+    @Test("Its leading edge is the trigger's, not a gap away from it")
+    func alignsToTheTriggerLeadingEdge() {
+        #expect(place().cardX == Self.bar.minX)
+    }
+
+    /// The whole defect, as arithmetic: the card's foot must clear the bar's
+    /// head whatever the card's height turns out to be.
+    @Test("Its foot clears the trigger's head at every height")
+    func neverOverlapsTheTrigger() {
+        for height in [200.0, 480.0, 720.0] as [CGFloat] {
+            let y = place().cardY(forHeight: height)
+            #expect(y + height <= Self.bar.minY)
+        }
+    }
+
+    @Test("A card taller than the room above it is clamped, not pushed off")
+    func tallCardStaysInTheWindow() {
+        let y = place().cardY(forHeight: 2000)
+        #expect(y >= ProfileCardPlacement.margin)
+    }
+
+    @Test("It grows out of the trigger's own corner")
+    func growsFromTheCorner() {
+        #expect(place().growthAnchor.x == 0)
+        #expect(place().growthAnchor.y == 1)
+    }
+
+    /// A row keeps flanking. This is the case that happens constantly and the
+    /// one the new mode must not have touched.
+    @Test("Beside is unchanged")
+    func besideIsUnchanged() {
+        let row = CGRect(x: 1000, y: 400, width: 180, height: 44)
+        let beside = ProfileCardPlacement(
+            anchor: row, cardWidth: Self.cardWidth,
+            overhang: EdgeInsets(), container: Self.container
+        )
+        #expect(beside.cardX == 1000 - ProfileCardPlacement.gap - Self.cardWidth)
+        #expect(beside.cardY(forHeight: 400) == row.midY - 200)
+    }
+}

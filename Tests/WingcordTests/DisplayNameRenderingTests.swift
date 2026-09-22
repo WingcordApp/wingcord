@@ -362,3 +362,110 @@ struct DisplayNameRenderingTests {
         #expect(shape.path != nil)
     }
 }
+
+/// A display name that does not fit on one line.
+///
+/// **A styled name is a drawn view**, so `.lineLimit` at the call site reaches
+/// nothing — wrapping is this type's job or it does not happen. Discord wraps a
+/// profile name to two lines and truncates past that; the mini profile used to
+/// truncate at one and lay the server tag down on top of the letters.
+@Suite("Display name wrapping")
+@MainActor
+struct DisplayNameWrappingTests {
+
+    private let font = NSFont.systemFont(ofSize: 24, weight: .bold)
+    private let long = "ThereWasntA12 (You may Ping Me)"
+
+    private func run(
+        _ text: String,
+        width: CGFloat?,
+        lines: Int = 1,
+        perGlyph: Bool = false
+    ) throws -> DisplayNameGlyphRun {
+        try #require(
+            DisplayNameGlyphRun(
+                text: text,
+                font: font,
+                tracking: 0,
+                perGlyph: perGlyph,
+                maximumWidth: width,
+                maximumLines: lines
+            )
+        )
+    }
+
+    @Test("One line is still one line, and still truncates")
+    func singleLineIsUnchanged() throws {
+        let capped = try run(long, width: 160)
+        #expect(capped.lineCount == 1)
+        #expect(capped.size.width <= 161)
+
+        // A name that fits is not touched at all.
+        let short = try run("alex", width: 400)
+        #expect(short.lineCount == 1)
+        #expect(short.size.width < 400)
+    }
+
+    @Test("A name too long for the width takes a second line")
+    func longNameWraps() throws {
+        let one = try run(long, width: 200)
+        let two = try run(long, width: 200, lines: 2)
+        #expect(two.lineCount == 2)
+        #expect(two.size.width <= 200)
+        // Two lines of the same face are exactly twice as tall as one, which is
+        // what makes the leading even. A rounding difference of a point is the
+        // box being rounded up once rather than twice.
+        #expect(abs(two.size.height - one.size.height * 2) <= 2)
+    }
+
+    @Test("The room it is given is what decides whether it wraps")
+    func widthDecidesWrapping() throws {
+        #expect(try run(long, width: 1000, lines: 2).lineCount == 1)
+        #expect(try run(long, width: 200, lines: 2).lineCount == 2)
+    }
+
+    /// The last line it is allowed still ends in an ellipsis rather than simply
+    /// stopping — otherwise a very long name reads as a name that was cut.
+    @Test("A name too long even for two lines is truncated on the second")
+    func overlongNameTruncatesOnTheLastLine() throws {
+        let sentence = String(repeating: "Wingcord ", count: 20)
+        let wrapped = try run(sentence, width: 200, lines: 2)
+        #expect(wrapped.lineCount == 2)
+        #expect(wrapped.size.width <= 201)
+    }
+
+    /// A width narrower than a single character must not spin looking for a
+    /// break that does not exist.
+    @Test("An impossible width terminates")
+    func impossibleWidthTerminates() throws {
+        let wrapped = try run(long, width: 1, lines: 2)
+        #expect(wrapped.lineCount <= 2)
+    }
+
+    /// Gummy is the one effect that transforms letters independently, and it
+    /// pivots each one about its **line** box. A second line's letters must sit
+    /// in their own, not in the first line's.
+    @Test("Per-letter boxes follow the line their letter is on")
+    func perGlyphBoxesFollowTheirLine() throws {
+        let wrapped = try run(long, width: 200, lines: 2, perGlyph: true)
+        #expect(wrapped.lineCount == 2)
+        let feet = Set(wrapped.glyphs.map { $0.box.minY.rounded() })
+        #expect(feet.count == 2)
+        // Both boxes are a whole line tall, and together they fill the run.
+        let heights = Set(wrapped.glyphs.map { $0.box.height.rounded() })
+        #expect(heights.count == 1)
+        let tallest = try #require(heights.first)
+        #expect(abs(tallest * 2 - wrapped.size.height) <= 2)
+    }
+
+    /// The first line's baseline is what `DisplayNameEffectPainter` lands on,
+    /// and the transcript is single-line — so a wrapped run must not change what
+    /// `ascent` means.
+    @Test("Ascent and descent describe the first line")
+    func metricsDescribeTheFirstLine() throws {
+        let one = try run(long, width: 200)
+        let two = try run(long, width: 200, lines: 2)
+        #expect(abs(one.ascent - two.ascent) < 0.01)
+        #expect(abs(one.descent - two.descent) < 0.01)
+    }
+}

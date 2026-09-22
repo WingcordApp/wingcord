@@ -30,12 +30,15 @@ struct NowBar: View, Equatable {
     var toggleMute: () -> Void = {}
     var toggleDeafen: () -> Void = {}
     var openSettings: () -> Void = {}
-    var openSelfProfile: () -> Void = {}
-    var setStatus: (PresenceStatus) -> Void = { _ in }
-    var setCustomStatus: (String?) -> Void = { _ in }
+    /// Opens the reader's own profile card, beside the capsule that asked for
+    /// it. See `ProfilePresenter` — the card is a window-root layer, not a
+    /// presentation, because a profile frame draws outside it.
+    var openProfile: (CGRect) -> Void = { _ in }
 
     @Environment(\.motion) private var motion
-    @State private var isMenuOpen = false
+    /// The identity capsule's own frame, in the window root's space, so the
+    /// card opens beside it rather than at the window's corner.
+    @State private var anchor: CGRect = .zero
     /// Whether the pointer is on the bar, which is when the reader's own plate
     /// plays.
     @State private var isHoveringPlate = false
@@ -158,7 +161,7 @@ struct NowBar: View, Equatable {
     /// on a row — exists because a popover written into a list row is evaluated
     /// by every row on every pass. There is exactly one now bar.
     private var identity: some View {
-        Button { isMenuOpen = true } label: {
+        Button { openProfile(anchor) } label: {
             HStack(spacing: Spacing.base) {
                 AvatarView(
                     url: presentation.avatarURL,
@@ -190,16 +193,14 @@ struct NowBar: View, Equatable {
         .buttonStyle(.plain)
         .accessibilityLabel(Text(presentation.displayName))
         .accessibilityValue(Text(presentation.status.label))
-        .accessibilityHint("Change your status")
-        .popover(isPresented: $isMenuOpen, arrowEdge: .top) {
-            NowBarMenu(
-                presentation: presentation,
-                setStatus: setStatus,
-                setCustomStatus: setCustomStatus,
-                openSelfProfile: openSelfProfile,
-                dismiss: { isMenuOpen = false }
-            )
-        }
+        .accessibilityHint("Open your profile")
+        // **The card is raised through the store, not presented here.** It was a
+        // `.popover` for one build and that was the bug: a popover is an
+        // `NSWindow` and cannot draw past its own frame, so a profile FRAME —
+        // the decoration that hangs over the top of a card — was clipped to
+        // nothing. `INVARIANTS.md` §2. `ProfilePresenter` draws it at the window
+        // root, where every other profile card in the app already is.
+        .reportsPresentationAnchor { anchor = $0 }
     }
 
     private var controls: some View {

@@ -69,6 +69,25 @@ public struct Permissions: OptionSet, Hashable, Sendable, Codable {
     public static let viewCreatorMonetizationAnalytics = Permissions(rawValue: 1 << 41)
     public static let useSoundboard = Permissions(rawValue: 1 << 42)
     public static let createExpressions = Permissions(rawValue: 1 << 43)
+
+    /// Who may open a server's settings window at all.
+    ///
+    /// **Ten permissions, read out of Discord's own bundle**, where the mask is
+    /// declared in one line and `canAccessGuildSettings` is a single test
+    /// against it. Two things it deliberately does NOT contain:
+    ///
+    ///  - `createInvite`, which `@everyone` holds on almost every server. A gate
+    ///    that included it opened the window for every member of every server —
+    ///    which is exactly what happened when this client derived the gate from
+    ///    its own per-page requirements instead, because the Invites page asks
+    ///    for `createInvite` and nothing else.
+    ///  - `kickMembers`. Discord's Members page is gated by its own separate
+    ///    check, not by this mask.
+    public static let guildSettingsAccess: Permissions = [
+        .manageGuild, .manageRoles, .administrator, .banMembers, .manageNicknames,
+        .createExpressions, .manageExpressions, .manageWebhooks, .viewAuditLog,
+        .viewGuildInsights,
+    ]
     public static let createEvents = Permissions(rawValue: 1 << 44)
     public static let useExternalSounds = Permissions(rawValue: 1 << 45)
     public static let sendVoiceMessages = Permissions(rawValue: 1 << 46)

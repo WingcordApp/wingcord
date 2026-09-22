@@ -98,8 +98,17 @@ struct ProfilePresenter: ViewModifier {
                 // opened next — and the id changes for a new subject as well as
                 // for none at all, so both cases land here.
                 .onChange(of: model.profileRequest?.id) {
-                    editor = nil
                     picker = nil
+                    // **Seeded rather than merely cleared**, for the one caller
+                    // that asks to arrive editing — the server menu's Edit
+                    // Per-server Profile, which has a server in hand and a page
+                    // to land on. Every other request clears it.
+                    editor = editorForRequest()
+                }
+                .task(id: model.profileRequest?.id) {
+                    // The first request of a session arrives before that
+                    // `onChange` has anything to compare against.
+                    if editor == nil { editor = editorForRequest() }
                 }
             }
         }
@@ -287,6 +296,14 @@ struct ProfilePresenter: ViewModifier {
         return model.memberProfiles[guildID]?[editor.userID]
     }
 
+    /// The draft an incoming request asks for, or nil for one that does not.
+    private func editorForRequest() -> ProfileEditor? {
+        guard let request = model.profileRequest, let scope = request.editsScope else {
+            return nil
+        }
+        return makeEditor(scope, for: request.userID)
+    }
+
     /// A draft at `scope`, seeded from that scope's own profile.
     ///
     /// **A server scope asks for its layer as it opens.** Only
@@ -346,7 +363,11 @@ struct ProfilePresenter: ViewModifier {
             anchor: request.anchor,
             cardWidth: Self.cardWidth,
             overhang: overhang,
-            container: container
+            container: container,
+            // The now bar is pinned to the window's foot and its card has to
+            // rise out of it — see `ProfileCardPlacement.Side`. Every other
+            // caller is a row in a column.
+            side: request.showsOwnActions ? .above : .beside
         )
         return MiniProfileCard(
             profile: profile,
@@ -360,7 +381,13 @@ struct ProfilePresenter: ViewModifier {
             },
             openLink: { model.openLink($0) },
             gameCollection: model.gameCollection(for: request.userID),
-            width: Self.cardWidth
+            width: Self.cardWidth,
+            // Only where the caller asked for them — see
+            // `ProfileRequest.showsOwnActions`. Opening your own card from a
+            // transcript is opening it to read.
+            ownActions: request.showsOwnActions
+                ? model.ownProfileActions(dismiss: { model.profileRequest = nil })
+                : nil
         )
         // **Placed by alignment guides, not by `.position` or by a measured
         // `@State`.** The card's height is its content's — a bio and a role flow

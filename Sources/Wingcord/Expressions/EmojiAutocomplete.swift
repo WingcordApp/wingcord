@@ -45,6 +45,43 @@ nonisolated enum EmojiAutocomplete {
         return String(token).lowercased()
     }
 
+    /// A shortcode the reader has **finished** typing at the end of `text`.
+    ///
+    /// **`:sob:`, not `:sob`.** The open form is what the completion list
+    /// offers; this is the one somebody typed all the way through and expects to
+    /// have become an emoji — which is what Discord does, and what pressing Tab
+    /// was the only way to get here.
+    ///
+    /// The same boundary rules as `query`, plus the closing colon: a run with no
+    /// whitespace in it, opened by a colon that starts the text or follows
+    /// whitespace. `12:30:` is not a shortcode, and neither is `https://a:b:`.
+    static func closedShortcode(in text: String) -> String? {
+        guard text.hasSuffix(":") else { return nil }
+        let body = text.dropLast()
+        guard let colon = body.lastIndex(of: ":") else { return nil }
+        if colon > body.startIndex {
+            let before = body[body.index(before: colon)]
+            guard before.isWhitespace || before.isNewline else { return nil }
+        }
+        let token = body[body.index(after: colon)...]
+        guard token.count >= minimumQueryLength,
+              !token.contains(where: { $0.isWhitespace || $0 == ":" })
+        else { return nil }
+        return String(token).lowercased()
+    }
+
+    /// The text with a finished `:name:` replaced by what it names.
+    ///
+    /// **No trailing space.** `applying` adds one because a completion ends a
+    /// word the reader was still typing; this one is typed *past* — they have
+    /// already said where it ends — and adding a space would put one where they
+    /// did not.
+    static func applyingClosed(_ replacement: String, to text: String) -> String {
+        let body = text.dropLast()
+        guard let colon = body.lastIndex(of: ":") else { return text }
+        return body[..<colon] + replacement
+    }
+
     /// The text with the trailing `:query` replaced by what was chosen.
     ///
     /// A trailing space follows, because a completion is the end of a word and

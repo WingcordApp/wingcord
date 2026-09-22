@@ -226,11 +226,18 @@ extension DiscordREST {
     /// person hands to a person, and the pair a client should not invent
     /// alternatives to.
     public func createInvite(in channelID: ChannelID) async throws -> String {
+        // **Discord's own invite modal, field for field.** Captured in
+        // `serveroptions + privacy.har`: thirty days rather than seven, and
+        // `flags`/`target_type`/`validate` sent explicitly. The lifetime is what
+        // the modal's own "expires in 30 days" refers to, so a client that
+        // minted a seven-day code and said thirty would be lying about it.
         struct Body: Encodable {
-            var max_age = 604_800
+            var max_age = 2_592_000
             var max_uses = 0
             var temporary = false
-            var unique = false
+            var flags = 0
+            var target_type: Int?
+            var validate: String?
         }
         struct Reply: Decodable { var code: String }
         let reply = try await post(

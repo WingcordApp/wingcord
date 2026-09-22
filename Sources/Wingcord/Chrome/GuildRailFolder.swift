@@ -12,6 +12,7 @@ struct GuildRailFolder: View {
     var selectedGuildID: GuildID?
     var toggle: () -> Void
     var selectGuild: (GuildID) -> Void
+    var openGuildMenu: (GuildID, CGRect) -> Void = { _, _ in }
 
     @Environment(\.motion) private var motion
     @State private var isHovering = false
@@ -60,7 +61,8 @@ struct GuildRailFolder: View {
                         GuildRailTile(
                             guild: guild,
                             isSelected: guild.id == selectedGuildID,
-                            action: { selectGuild(guild.id) }
+                            action: { selectGuild(guild.id) },
+                            openMenu: { openGuildMenu(guild.id, $0) }
                         )
                     }
                 }

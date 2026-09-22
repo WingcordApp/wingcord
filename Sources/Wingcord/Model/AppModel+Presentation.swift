@@ -186,7 +186,7 @@ extension AppModel {
             avatarURL: user.flatMap { avatarURL(for: $0, side: Metrics.avatarRow) },
             monogram: user?.monogram ?? "?",
             status: selfStatus,
-            customStatus: selfCustomStatus,
+            customStatus: selfCustomStatus?.current()?.text,
             isMuted: isSelfMuted,
             isDeafened: isSelfDeafened,
             // Offered only when the reader asked for it. The strip is fetched at
@@ -737,7 +737,7 @@ extension AppModel {
         }
     }
 
-    private func guildBadge(for guildID: GuildID) -> (mentions: Int, unread: Bool, muted: Bool) {
+    func guildBadge(for guildID: GuildID) -> (mentions: Int, unread: Bool, muted: Bool) {
         // The dot survives; only the COUNT is suppressed. A reader who turned
         // counts off still wants to know a server has something new — what they
         // turned off is the number, which on a busy account is a wall of digits.

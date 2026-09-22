@@ -173,6 +173,40 @@ enum ServerSettingsSection: String, CaseIterable, Identifiable, Hashable, Codabl
         }
     }
 
+    /// Whether this reader may open this page at all.
+    ///
+    /// **`requiredPermission` is a permission needed *beyond* `MANAGE_GUILD`,
+    /// and nothing used to supply the `MANAGE_GUILD`.** A page with no extra
+    /// requirement therefore passed for everybody — so a reader who is just a
+    /// member of somebody else's server could open the window and find Server
+    /// Profile, Engagement, Onboarding and Server Template waiting for them,
+    /// with Invites answering "You do not have permission to do that here".
+    /// Every one of those is a page whose every write is a 403, which is exactly
+    /// what `INVARIANTS.md` §5.5 forbids.
+    ///
+    /// A moderator holding only `MANAGE_ROLES` still gets a window — with Roles
+    /// in it and nothing else — which is what Discord does and the reason this
+    /// is per page rather than one gate on the window.
+    func isReachable(with permissions: Permissions) -> Bool {
+        if permissions.contains(.administrator) { return true }
+        guard let required = requiredPermission else { return permissions.contains(.manageGuild) }
+        return permissions.contains(required)
+    }
+
+    /// Every page this reader could open, ungrouped.
+    ///
+    /// **Empty is not the gate.** Deriving "may this window open at all" from
+    /// the pages was wrong twice over: the Invites page asks for `createInvite`,
+    /// which `@everyone` holds, so every member of every server passed. The gate
+    /// is `Permissions.guildSettingsAccess` — Discord's own ten-permission mask
+    /// — and this list is what the sidebar draws once that gate is passed.
+    static func reachable(with permissions: Permissions) -> [ServerSettingsSection] {
+        guard permissions.contains(.administrator)
+            || !permissions.intersection(.guildSettingsAccess).isEmpty
+        else { return [] }
+        return groups.flatMap(\.self).filter { $0.isReachable(with: permissions) }
+    }
+
     /// The permission the page needs beyond the `MANAGE_GUILD` that opened the
     /// window.
     var requiredPermission: Permissions? {
@@ -215,9 +249,7 @@ enum ServerSettingsSection: String, CaseIterable, Identifiable, Hashable, Codabl
     ) -> [[ServerSettingsSection]] {
         groups.compactMap { group in
             let kept = group.filter { section in
-                guard section.isAvailable(in: settings) else { return false }
-                guard let required = section.requiredPermission else { return true }
-                return permissions.contains(required) || permissions.contains(.administrator)
+                section.isAvailable(in: settings) && section.isReachable(with: permissions)
             }
             return kept.isEmpty ? nil : kept
         }

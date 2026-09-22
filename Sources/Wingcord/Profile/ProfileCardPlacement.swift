@@ -49,6 +49,7 @@ nonisolated struct ProfileCardPlacement: Equatable, Sendable {
     let growthAnchor: UnitPoint
 
     private let anchor: CGRect
+    private let side: Side
     private let overhang: EdgeInsets
     private let container: CGSize
 
@@ -64,8 +65,28 @@ nonisolated struct ProfileCardPlacement: Equatable, Sendable {
     ///     overwhelming majority of profiles, which is what keeps a frame from
     ///     being a cost everybody pays.
     ///   - container: the root's size.
-    init(anchor: CGRect, cardWidth: CGFloat, overhang: EdgeInsets, container: CGSize) {
+    /// Which way the card leaves its trigger.
+    ///
+    /// **A row is flanked; a bar is stood on.** A member row sits in the middle
+    /// of a tall column, so its card belongs beside it, centred on it. The now
+    /// bar is pinned to the window's foot: there is no "beside" — the card has
+    /// to rise out of it, left edges aligned, the way the bar's own menu did.
+    /// Centring on it and clamping to the window is what laid the card *over*
+    /// the bar that opened it.
+    enum Side {
+        case beside
+        case above
+    }
+
+    init(
+        anchor: CGRect,
+        cardWidth: CGFloat,
+        overhang: EdgeInsets,
+        container: CGSize,
+        side: Side = .beside
+    ) {
         self.anchor = anchor
+        self.side = side
         self.overhang = overhang
         self.container = container
 
@@ -74,10 +95,17 @@ nonisolated struct ProfileCardPlacement: Equatable, Sendable {
         // only when there is genuinely no room, which means a narrow window
         // rather than a preference.
         let artworkWidth = cardWidth + overhang.leading + overhang.trailing
-        let leading = anchor.minX - Self.gap - cardWidth
+        // Standing on the trigger, the card's leading edge is the trigger's —
+        // which is what makes it read as growing out of the bar rather than as
+        // appearing next to it.
+        let leading = side == .above
+            ? anchor.minX
+            : anchor.minX - Self.gap - cardWidth
         let trailing = anchor.maxX + Self.gap
         let fitsLeading = leading - overhang.leading >= Self.margin
-        let placedLeading = fitsLeading || trailing + artworkWidth > container.width
+        let placedLeading = side == .above
+            || fitsLeading
+            || trailing + artworkWidth > container.width
 
         // Clamped on the ARTWORK, not on the card. A frame is what reaches the
         // window's edge first, and clamping the card alone puts the roses half
@@ -88,7 +116,8 @@ nonisolated struct ProfileCardPlacement: Equatable, Sendable {
         cardX = highest >= lowest ? min(max(wanted, lowest), highest) : lowest
 
         growthAnchor = UnitPoint(
-            x: placedLeading ? 1 : 0,
+            // Out of the bar's own corner when it stands on one.
+            x: side == .above ? 0 : (placedLeading ? 1 : 0),
             // The half of the window the row is in, rather than the half of the
             // card — the card's height is not known here, and the window's
             // halves are the stable answer a transition wants.
@@ -102,7 +131,11 @@ nonisolated struct ProfileCardPlacement: Equatable, Sendable {
     /// rather than dropping from it, then clamped so the artwork stays inside
     /// the window.
     func cardY(forHeight cardHeight: CGFloat) -> CGFloat {
-        let wanted = anchor.midY - cardHeight / 2
+        let wanted = side == .above
+            // Its foot a gap above the trigger's head, so the two never overlap
+            // however tall the card turns out to be.
+            ? anchor.minY - Self.gap - cardHeight
+            : anchor.midY - cardHeight / 2
         let lowest = Self.margin + overhang.top
         let highest = container.height - Self.margin - overhang.bottom - cardHeight
         return highest >= lowest ? min(max(wanted, lowest), highest) : lowest

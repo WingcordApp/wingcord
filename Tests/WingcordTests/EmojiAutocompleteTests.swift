@@ -134,3 +134,58 @@ struct EmojiAutocompleteTests {
         #expect(matches.count <= 5)
     }
 }
+
+/// A shortcode the reader typed all the way through.
+///
+/// **`:sob:` becomes the emoji without Tab** — the closing colon is somebody
+/// saying they are finished, and the completion list could only act on a
+/// keypress. The boundary rules are the open scanner's plus that colon, which
+/// is what keeps `12:30:` and `https://a:b:` out of it.
+@Suite("Finished shortcodes")
+struct ClosedShortcodeTests {
+
+    @Test("A finished shortcode is recognised")
+    func recognisesAFinishedOne() {
+        #expect(EmojiAutocomplete.closedShortcode(in: ":sob:") == "sob")
+        #expect(EmojiAutocomplete.closedShortcode(in: "well :sob:") == "sob")
+        #expect(EmojiAutocomplete.closedShortcode(in: "a\n:sob:") == "sob")
+    }
+
+    @Test("An unfinished one is not")
+    func ignoresAnUnfinishedOne() {
+        #expect(EmojiAutocomplete.closedShortcode(in: ":sob") == nil)
+        #expect(EmojiAutocomplete.closedShortcode(in: "well :so") == nil)
+    }
+
+    /// The whole reason the opening colon needs a boundary: a time, a ratio and
+    /// a URL scheme all end in the same shape.
+    @Test("A colon that follows a word does not open one")
+    func wordBoundaryHolds() {
+        #expect(EmojiAutocomplete.closedShortcode(in: "12:30:") == nil)
+        #expect(EmojiAutocomplete.closedShortcode(in: "https://a:b:") == nil)
+    }
+
+    @Test("A run with whitespace in it is not a shortcode")
+    func whitespaceBreaksIt() {
+        #expect(EmojiAutocomplete.closedShortcode(in: ": sob:") == nil)
+        #expect(EmojiAutocomplete.closedShortcode(in: ":so b:") == nil)
+    }
+
+    @Test("Only the trailing one counts")
+    func onlyTheTrailingOne() {
+        #expect(EmojiAutocomplete.closedShortcode(in: ":tada: and :sob:") == "sob")
+        #expect(EmojiAutocomplete.closedShortcode(in: ":tada: and more") == nil)
+    }
+
+    /// **No trailing space**, unlike the list's completion. The reader has
+    /// already said where the word ends; adding a space would put one where
+    /// they did not.
+    @Test("Applying it leaves the caret where the reader left it")
+    func appliesWithoutASpace() {
+        #expect(EmojiAutocomplete.applyingClosed("😭", to: ":sob:") == "😭")
+        #expect(EmojiAutocomplete.applyingClosed("😭", to: "well :sob:") == "well 😭")
+        #expect(
+            EmojiAutocomplete.applyingClosed("<:a:1>", to: "hi :a:") == "hi <:a:1>"
+        )
+    }
+}

@@ -102,6 +102,28 @@ extension SessionController {
         }
     }
 
+    /// Saves the reader's custom status into the settings blob.
+    ///
+    /// **Optimistic, and put back on a refusal** — the model has already moved
+    /// and published it, which is what makes the bubble change under the
+    /// pointer. A write that fails silently would leave a status everybody else
+    /// can see and this client would forget on its next launch.
+    func writeCustomStatus(_ status: CustomStatus?, restoring previous: CustomStatus?) {
+        Task { [weak self] in
+            guard let self else { return }
+            do {
+                let raw = try await activityPrivacyBytes()
+                try await rest.setCustomStatus(status, preserving: raw.status)
+                model.activityPrivacyRaw = raw.privacy
+                model.activityStatusRaw = raw.status
+            } catch {
+                Self.trace("custom status write failed: \(Self.describe(error))")
+                model.selfCustomStatus = previous
+                publishPresence()
+            }
+        }
+    }
+
     /// The raw sub-messages, from READY if they are there and from the route if
     /// they are not.
     private func activityPrivacyBytes() async throws -> (privacy: Data, status: Data?) {

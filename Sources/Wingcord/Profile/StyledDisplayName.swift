@@ -42,6 +42,14 @@ struct StyledDisplayName: View {
     /// measured, and a surface that cannot afford that has to say so. Nil
     /// where the name has a line to itself.
     var maximumWidth: CGFloat?
+    /// How many lines the name may take before it is truncated.
+    ///
+    /// **One everywhere but a profile.** A list row is one line by definition
+    /// and a name that wrapped in it would push every row below it down; a
+    /// profile is a card *about* one person, where the honest thing to do with
+    /// a long name is to show it. Discord wraps to two in both of its profiles
+    /// and truncates past that, which is what this reproduces.
+    var maximumLines: Int = 1
 
     @Environment(\.motion) private var motion
 
@@ -53,6 +61,7 @@ struct StyledDisplayName: View {
                 pointSize: pointSize
                     ?? NSFont.preferredFont(forTextStyle: textStyle.nsTextStyle).pointSize,
                 maximumWidth: maximumWidth,
+                maximumLines: maximumLines,
                 // Reduce Motion parks each effect on its own first keyframe
                 // rather than hiding it: the style is part of how someone
                 // chose to be named, and the preference is about movement.
@@ -67,7 +76,10 @@ struct StyledDisplayName: View {
                         ?? .system(textStyle, weight: weight)
                 )
                 .foregroundStyle(InkColor.primary)
-                .lineLimit(1)
+                // **The two branches must agree**, or turning an effect on
+                // would change how many lines somebody's name takes.
+                .lineLimit(maximumLines)
+                .fixedSize(horizontal: false, vertical: true)
         }
     }
 }
@@ -99,6 +111,7 @@ private struct StyledDisplayNameSurface: NSViewRepresentable {
     var style: DisplayNameStyle
     var pointSize: CGFloat
     var maximumWidth: CGFloat?
+    var maximumLines: Int
     var animates: Bool
 
     func makeNSView(context: Context) -> StyledDisplayNameView {
@@ -112,7 +125,8 @@ private struct StyledDisplayNameSurface: NSViewRepresentable {
                 style: style,
                 pointSize: pointSize,
                 animates: animates,
-                maximumWidth: maximumWidth
+                maximumWidth: maximumWidth,
+                maximumLines: maximumLines
             )
         )
     }
@@ -127,6 +141,11 @@ private struct StyledDisplayNameSurface: NSViewRepresentable {
     /// A proposal is honoured only when it is *narrower*, so a surface with
     /// room to spare still gets the name at its natural size rather than
     /// stretched across the column.
+    ///
+    /// **The height is always the content's**, never the proposal's: a wrapped
+    /// name is two lines tall and the parent has no way to know that until this
+    /// says so. Clamping it would draw the second line outside the frame, over
+    /// whatever the card puts under the name.
     func sizeThatFits(
         _ proposal: ProposedViewSize,
         nsView: StyledDisplayNameView,
@@ -151,10 +170,11 @@ final class StyledDisplayNameView: NSView {
         var style: DisplayNameStyle
         var pointSize: CGFloat
         var animates: Bool
-        /// The widest the name may come out, past which it is truncated.
-        /// Nil is "as wide as it likes", which is right for a surface that
-        /// gives it a line of its own.
+        /// The widest the name may come out, past which it wraps or is
+        /// truncated. Nil is "as wide as it likes", which is right for a
+        /// surface that gives it a line of its own.
         var maximumWidth: CGFloat?
+        var maximumLines: Int
     }
 
     private var configuration: Configuration?
@@ -231,7 +251,8 @@ final class StyledDisplayNameView: NSView {
             font: face,
             tracking: configuration.style.font.letterSpacing * configuration.pointSize,
             perGlyph: configuration.style.effect == .gummy,
-            maximumWidth: configuration.maximumWidth
+            maximumWidth: configuration.maximumWidth,
+            maximumLines: configuration.maximumLines
         ) else { return invalidateIntrinsicContentSize() }
 
         let built = DisplayNameEffectLayers.build(

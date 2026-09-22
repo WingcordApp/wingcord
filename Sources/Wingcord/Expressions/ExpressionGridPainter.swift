@@ -46,17 +46,22 @@ nonisolated enum ExpressionGridPainter {
     ) {
         let font = NSFont.systemFont(ofSize: 11, weight: .bold)
         let title = section.title.uppercased()
-        let line = CTLineCreateWithAttributedString(NSAttributedString(
-            string: title,
-            attributes: [.font: font]
-        ))
-        let textWidth = ceil(CGFloat(CTLineGetTypographicBounds(line, nil, nil, nil)))
+        let textWidth = measure(title, font: font)
+        // **Reserved, not appended.** The lock used to be glued onto the title
+        // and drawn as one string — while the pill was measured from the title
+        // ALONE. So the pill hugged the name, the draw was handed a longer
+        // string, and the first thing truncated away was the padlock itself:
+        // every locked server read as a name that stopped mid-word for no
+        // reason, with nothing to say why. Measured here, and drawn separately
+        // below at the pill's trailing edge, so the NAME is what gives when the
+        // panel is narrow and the lock survives at every width.
+        let lockWidth = section.isLocked ? measure(Self.lockMark, font: font) + badgeGap : 0
 
         let pill = CGRect(
             x: rowFrame.minX + ExpressionGridMetrics.horizontalInset,
             y: rowFrame.midY - headerPillHeight / 2,
             width: min(
-                leadingPad + badgeSide + badgeGap + textWidth + trailingPad,
+                leadingPad + badgeSide + badgeGap + textWidth + lockWidth + trailingPad,
                 rowFrame.width - ExpressionGridMetrics.horizontalInset * 2
             ),
             height: headerPillHeight
@@ -80,15 +85,45 @@ nonisolated enum ExpressionGridPainter {
         drawBadge(section.badge, in: badge, images: images, scale: scale, context: context)
 
         let textX = badge.maxX + badgeGap
-        _ = TimelineRowPainter.drawText(
-            section.isLocked ? "\(title)  🔒" : title,
+        let baseline = TimelineRowPainter.capCenteredY(of: font, in: pill)
+        let drawnWidth = TimelineRowPainter.drawText(
+            title,
             font: font,
             color: NSColor.labelColor,
-            at: CGPoint(x: textX, y: TimelineRowPainter.capCenteredY(of: font, in: pill)),
-            maxWidth: max(pill.maxX - trailingPad - textX, 1),
+            at: CGPoint(x: textX, y: baseline),
+            maxWidth: max(pill.maxX - trailingPad - lockWidth - textX, 1),
             context: context
         )
+        if section.isLocked {
+            // Against the name rather than against the pill's far edge: a name
+            // that fits leaves the lock beside it, which is what reads as "this
+            // one is locked" rather than as two unrelated marks.
+            _ = TimelineRowPainter.drawText(
+                Self.lockMark,
+                font: font,
+                color: NSColor.labelColor,
+                at: CGPoint(x: textX + drawnWidth + badgeGap, y: baseline),
+                maxWidth: lockWidth,
+                context: context
+            )
+        }
     }
+
+    /// Measures a string in the header's own face.
+    ///
+    /// **One place, because the pill's width and the text's ceiling are the same
+    /// number twice** — and the bug this replaces was exactly those two numbers
+    /// being computed from two different strings.
+    private static func measure(_ string: String, font: NSFont) -> CGFloat {
+        let line = CTLineCreateWithAttributedString(
+            NSAttributedString(string: string, attributes: [.font: font])
+        )
+        return ceil(CGFloat(CTLineGetTypographicBounds(line, nil, nil, nil)))
+    }
+
+    /// The mark on a section whose expressions this account cannot use.
+    static let lockMark = "🔒"
+
 
     /// The pill's own height, inside the taller row that gives it breathing
     /// space above and below.

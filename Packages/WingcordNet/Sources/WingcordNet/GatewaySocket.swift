@@ -824,7 +824,7 @@ public actor GatewaySocket {
     public func updatePresence(
         status: String,
         customStatus: String?,
-        customEmoji: String?,
+        customEmoji: EmojiRef?,
         activities richPresences: [RichPresenceActivity] = []
     ) {
         struct Update: Encodable {
@@ -855,7 +855,16 @@ public actor GatewaySocket {
                 var application_id: String?
             }
 
-            struct Emoji: Encodable { var name: String }
+            /// **`id` and `animated` as well as the name.** A custom emoji in a
+            /// status is `{name, id, animated}`; this carried the name alone, so
+            /// every custom one was broadcast as a literal shortcode and drew as
+            /// text on everybody else's roster. Both extra keys are omitted for a
+            /// Unicode emoji, which is what the encoder does with a nil.
+            struct Emoji: Encodable {
+                var name: String
+                var id: String?
+                var animated: Bool?
+            }
 
             struct Assets: Encodable {
                 var large_image: String?
@@ -880,12 +889,21 @@ public actor GatewaySocket {
         }
 
         var activities: [Update.Activity] = []
-        if customStatus?.isEmpty == false || customEmoji?.isEmpty == false {
+        if customStatus?.isEmpty == false || customEmoji != nil {
             activities.append(Update.Activity(
                 name: "Custom Status",
                 type: 4,
                 state: customStatus.flatMap { $0.isEmpty ? nil : $0 },
-                emoji: customEmoji.flatMap { $0.isEmpty ? nil : Update.Emoji(name: $0) }
+                emoji: customEmoji.map {
+                    Update.Emoji(
+                        name: $0.name,
+                        id: $0.id.map { String($0.rawValue) },
+                        // Sent only when it is true: an explicit `false` on a
+                        // still emoji is a key Discord's own client does not
+                        // send.
+                        animated: $0.isAnimated ? true : nil
+                    )
+                }
             ))
         }
         for activity in richPresences {
@@ -1164,6 +1182,14 @@ public struct ReadySnapshot: Sendable {
     /// see `NotificationPreferences`. It carries the two mute sets above as
     /// well, because the policy takes all of it or none.
     public var notificationPreferences: NotificationPreferences
+    /// The reader's whole settings record for each server they are in.
+    ///
+    /// **Not a duplicate of `notificationPreferences`.** That one is the
+    /// *decision's* input — read on every arriving message, off a hot path, in
+    /// a shape built for membership tests. This is the *editor's*: the server
+    /// menu opens on one of these and shows nine fields at once, four of which
+    /// the policy has no use for and therefore never carried.
+    public var guildUserSettings: [GuildID: GuildUserSettings]
     /// Channels and categories the reader has opted into — the checkboxes and
     /// the Follow switches in Browse Channels. See `ChannelSettingsFlags`.
     public var followedChannelIDs: Set<ChannelID>
@@ -1386,8 +1412,10 @@ public struct ReadySnapshot: Sendable {
         var channelLevels: [ChannelID: MessageNotificationLevel] = [:]
         var suppressEveryone: Set<GuildID> = []
         var suppressRoles: Set<GuildID> = []
+        var guildUserSettings: [GuildID: GuildUserSettings] = [:]
         for entry in payload.user_guild_settings?.entries ?? [] {
             if let guildID = entry.guild_id {
+                guildUserSettings[guildID] = entry.domain(guildID: guildID)
                 if entry.muted == true { mutedGuildIDs.insert(guildID) }
                 // **Stored even when it is `inherit`.** The policy distinguishes
                 // "the reader chose the server's default" from "the reader chose
@@ -1435,6 +1463,7 @@ public struct ReadySnapshot: Sendable {
             suppressEveryoneGuildIDs: suppressEveryone,
             suppressRoleMentionGuildIDs: suppressRoles
         )
+        self.guildUserSettings = guildUserSettings
         self.followedChannelIDs = followedChannelIDs
         self.pinnedChannelIDs = pinnedChannelIDs
         // The protobuf first, the JSON second, empty last.
@@ -1564,8 +1593,15 @@ public enum GatewayUpdate: Sendable {
     /// **The sets are complete for that guild, not deltas.** An override with
     /// nothing left on it is dropped by the server, so what is absent from
     /// these is off rather than unmentioned.
+    /// - Parameter settings: the reader's whole record for that server, when
+    ///   the event was about one. **Nil for the private-channel entry**, whose
+    ///   `guild_id` is null — that one carries the DM pins and mutes above and
+    ///   is not a server's settings at all.
     case guildSettingsChanged(
-        guildID: GuildID?, pinned: Set<ChannelID>, muted: Set<ChannelID>
+        guildID: GuildID?,
+        pinned: Set<ChannelID>,
+        muted: Set<ChannelID>,
+        settings: GuildUserSettings?
     )
     /// Somebody moved in, out of, or between voice channels. A state whose
     /// `channelID` is nil **is** the departure.
@@ -1957,7 +1993,8 @@ public enum GatewayUpdate: Sendable {
             self = .guildSettingsChanged(
                 guildID: dto.guild_id,
                 pinned: DiscordREST.pinned(in: dto),
-                muted: DiscordREST.muted(in: dto)
+                muted: DiscordREST.muted(in: dto),
+                settings: dto.guild_id.map(dto.domain(guildID:))
             )
         default:
             return nil

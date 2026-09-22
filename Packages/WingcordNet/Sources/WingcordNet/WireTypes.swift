@@ -1276,7 +1276,9 @@ struct ClientSettingsDTO: Decodable, Sendable {
                 )
             } ?? [],
             status: PresenceStatus(rawValue: status ?? "online") ?? .online,
-            customStatus: custom_status?.text
+            // The JSON branch, which Discord has stopped sending — it carries
+            // the text and nothing else, where the proto carries all three.
+            customStatus: custom_status?.text.map { WingcordCore.CustomStatus(text: $0) }
         )
     }
 }
@@ -1294,7 +1296,8 @@ public struct ClientSettings: Sendable {
     /// account is most of it. Empty when the account has never rearranged.
     public var guildPositions: [GuildID] = []
     public var status: PresenceStatus
-    public var customStatus: String?
+    /// What the reader wrote about themselves, with its emoji and its expiry.
+    public var customStatus: CustomStatus?
     /// Which inbox tab the account had open last, across every client.
     ///
     /// Defaults to `.fallback` rather than being optional: an account that has
@@ -1319,7 +1322,7 @@ public struct ClientSettings: Sendable {
         folders: [GuildFolder],
         guildPositions: [GuildID] = [],
         status: PresenceStatus,
-        customStatus: String?,
+        customStatus: CustomStatus?,
         inboxTab: InboxTab = .fallback,
         activityPrivacy: ActivityPrivacy = ActivityPrivacy(),
         privacyRaw: Data? = nil,
@@ -1791,6 +1794,14 @@ struct GuildProfileDTO: Decodable, Sendable {
     var visibility: Int?
     var badge: Int?
     var game_application_ids: [ApplicationID]?
+    /// Keyed by the application's id **as a string**, which is how every map on
+    /// this wire is keyed — a snowflake does not survive a JSON number.
+    var game_activity: [String: GameActivityDTO]?
+
+    struct GameActivityDTO: Decodable, Sendable {
+        var activity_level: Int?
+        var activity_score: Int?
+    }
 
     struct TraitDTO: Decodable, Sendable {
         var emoji_id: EmojiID?
@@ -1848,7 +1859,14 @@ struct GuildProfileDTO: Decodable, Sendable {
             visibility: visibility ?? 1,
             badge: badge ?? 0,
             customBannerHash: custom_banner_hash,
-            gameApplicationIDs: game_application_ids ?? []
+            gameApplicationIDs: game_application_ids ?? [],
+            gameActivity: (game_activity ?? [:]).reduce(into: [:]) { table, entry in
+                guard let id = UInt64(entry.key) else { return }
+                table[ApplicationID(rawValue: id)] = GuildGameActivity(
+                    level: entry.value.activity_level ?? 0,
+                    score: entry.value.activity_score ?? 0
+                )
+            }
         )
     }
 

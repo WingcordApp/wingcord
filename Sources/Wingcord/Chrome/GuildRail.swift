@@ -46,6 +46,8 @@ struct GuildRail: View, Equatable {
 
     var selectHome: () -> Void = {}
     var selectGuild: (GuildID) -> Void = { _ in }
+    /// A right-click on a tile, with its frame. See `GuildRailTile.openMenu`.
+    var openGuildMenu: (GuildID, CGRect) -> Void = { _, _ in }
     var toggleFolder: (UInt64) -> Void = { _ in }
     var addServer: () -> Void = {}
     var openDiscovery: () -> Void = {}
@@ -71,7 +73,8 @@ struct GuildRail: View, Equatable {
                     GuildRailTile(
                         guild: previewedGuild,
                         isSelected: previewedGuild.id == selectedGuildID,
-                        action: { selectGuild(previewedGuild.id) }
+                        action: { selectGuild(previewedGuild.id) },
+                        openMenu: { openGuildMenu(previewedGuild.id, $0) }
                     )
                 }
 
@@ -83,14 +86,16 @@ struct GuildRail: View, Equatable {
                         GuildRailTile(
                             guild: guild,
                             isSelected: guild.id == selectedGuildID,
-                            action: { selectGuild(guild.id) }
+                            action: { selectGuild(guild.id) },
+                            openMenu: { openGuildMenu(guild.id, $0) }
                         )
                     case .folder(let folder):
                         GuildRailFolder(
                             folder: folder,
                             selectedGuildID: selectedGuildID,
                             toggle: { toggleFolder(folder.id) },
-                            selectGuild: selectGuild
+                            selectGuild: selectGuild,
+                            openGuildMenu: openGuildMenu
                         )
                     }
                 }

@@ -242,7 +242,37 @@ extension AppModel {
     /// request at all, which is why the card is never empty: the fetch adds the
     /// description, the counts, the badge and the traits to a card that already
     /// says which server it is.
-    func guildProfilePresentation(of guildID: GuildID, tag: String?) -> GuildProfilePresentation {
+    /// The games a server names, as far as this client has resolved them.
+    ///
+    /// **Only the ones it has.** A game whose store entry has not arrived yet is
+    /// dropped rather than drawn as a grey square with no name — the card asks
+    /// for them as it opens and the row fills in, which is the same trade the
+    /// profile board makes for its covers.
+    private func guildProfileGames(_ profile: GuildProfile?) -> [GuildProfileGame] {
+        guard let profile else { return [] }
+        return profile.gameApplicationIDs.compactMap { id in
+            guard let game = games[id] else { return nil }
+            return GuildProfileGame(
+                id: id,
+                name: game.name,
+                iconURL: gameArtURL(game, kind: .mark, side: 40),
+                isHot: profile.gameActivity[id]?.isHot ?? false
+            )
+        }
+    }
+
+    /// - Parameter badgeURL: the tag's own emblem, as the *person wearing it*
+    ///   published it. **Handed in rather than looked up**, and that is the whole
+    ///   point: a server that has limited who can see its profile answers the
+    ///   profile route with nothing, so the card had no icon and drew a `?` — for
+    ///   a server whose mark was on screen an inch above it, in the chip that
+    ///   opened the card. The badge rides `primary_guild` on the user, which is
+    ///   readable by anybody who can see them.
+    func guildProfilePresentation(
+        of guildID: GuildID,
+        tag: String?,
+        badgeURL: URL? = nil
+    ) -> GuildProfilePresentation {
         let profile = guildProfiles[guildID]
         let resident = guilds[guildID]
         // **"Private Server", not "Server".** A server whose tag somebody wears
@@ -279,7 +309,7 @@ extension AppModel {
             ),
             badgeURL: profile?.badgeHash.flatMap {
                 CDN.guildTagBadge(guildID: guildID, hash: $0)
-            },
+            } ?? badgeURL,
             badgeColorPrimary: profile?.badgeColorPrimary,
             badgeColorSecondary: profile?.badgeColorSecondary,
             standing: profile?.standing
@@ -288,6 +318,7 @@ extension AppModel {
             memberCount: profile?.memberCount ?? resident?.memberCount,
             onlineCount: profile?.onlineCount,
             traits: profile?.traits ?? [],
+            games: guildProfileGames(profile),
             createdAt: guildID.timestamp,
             isJoined: resident != nil,
             isLoading: guildProfilesLoading.contains(guildID),

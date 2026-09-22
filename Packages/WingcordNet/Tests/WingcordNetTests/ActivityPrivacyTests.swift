@@ -91,7 +91,7 @@ struct ActivityPrivacyTests {
     func perServerWins() {
         let blocked = GuildID(rawValue: 99)
         let privacy = ActivityPrivacy(
-            sharingScope: .everywhere, restrictedGuildIDs: [blocked]
+            sharingScope: .everywhere, activityRestrictedGuildIDs: [blocked]
         )
         #expect(!privacy.shares(in: blocked, memberCount: 5))
         #expect(privacy.shares(in: GuildID(rawValue: 100), memberCount: 5))
@@ -233,16 +233,16 @@ struct ActivityPrivacyTests {
         var raw = ProtobufWriter()
         raw.varint(field: 29, 1)
         let body = ActivityPrivacyProto.privacyPatch(
-            applying: .restrictedGuildIDs(ids), to: raw.data
+            applying: .activityRestrictedGuildIDs(ids), to: raw.data
         )
         let data = Data(base64Encoded: body) ?? Data()
-        #expect(ActivityPrivacyProto.decode(data).privacy.restrictedGuildIDs == ids)
+        #expect(ActivityPrivacyProto.decode(data).privacy.activityRestrictedGuildIDs == ids)
 
         // Sorted, so writing the same set twice produces the same bytes — a
         // client whose PATCH body changed on every save would look like a
         // client with a bug.
         let again = ActivityPrivacyProto.privacyPatch(
-            applying: .restrictedGuildIDs(ids), to: raw.data
+            applying: .activityRestrictedGuildIDs(ids), to: raw.data
         )
         #expect(again == body)
     }

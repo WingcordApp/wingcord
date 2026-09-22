@@ -48,6 +48,27 @@ extension DiscordREST {
         )
     }
 
+    /// Saves the reader's custom status.
+    ///
+    /// **The socket broadcasts it; this is what makes it survive a launch.**
+    /// `publishPresence` is how everybody else sees a status, and it stores
+    /// nothing — so a client that only published one had a status that
+    /// disappeared the next time it started.
+    public func setCustomStatus(
+        _ status: CustomStatus?,
+        preserving statusRaw: Data?
+    ) async throws {
+        struct Body: Encodable { var settings: String }
+        _ = try await requestData(
+            method: "PATCH",
+            path: "/users/@me/settings-proto/1",
+            route: "users/@me/settings-proto/:type",
+            body: Body(
+                settings: ActivityPrivacyProto.customStatusPatch(status, statusRaw: statusRaw)
+            )
+        )
+    }
+
     /// Writes "Share my activity", which lives on `status` rather than
     /// `privacy`.
     public func setSharesCurrentGame(_ shares: Bool, preserving statusRaw: Data?) async throws {

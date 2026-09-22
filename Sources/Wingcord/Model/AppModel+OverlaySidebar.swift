@@ -89,8 +89,8 @@ extension AppModel {
             // trip, and a dot that takes a second to follow a menu reads as the
             // menu having missed.
             status: selfStatus,
-            customStatus: selfCustomStatus ?? presence?.customStatus?.state,
-            customStatusEmoji: selfCustomStatusEmoji.map { EmojiRef(name: $0) }
+            customStatus: selfCustomStatus?.current()?.text ?? presence?.customStatus?.state,
+            customStatusEmoji: selfCustomStatus?.current()?.emoji
                 ?? presence?.customStatus?.emoji,
             bannerURL: decoration?.bannerHash.flatMap {
                 CDN.userBanner(userID: currentUserID, hash: $0, width: 512)

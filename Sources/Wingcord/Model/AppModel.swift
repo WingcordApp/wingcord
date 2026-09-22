@@ -195,11 +195,14 @@ final class AppModel {
     // MARK: Self state
 
     var selfStatus: PresenceStatus = .online
-    var selfCustomStatus: String?
-    /// The glyph beside the reader's own custom status. Kept beside the text
-    /// rather than inside it: the wire carries them as two fields, and a status
-    /// with an emoji and no words is a real state.
-    var selfCustomStatusEmoji: String?
+    /// What the reader wrote about themselves: the words, the emoji beside them
+    /// and the moment it clears.
+    ///
+    /// **One value, where this used to be two loose fields.** The wire carries
+    /// all three in one `CustomStatus` message and the write replaces the whole
+    /// of it — and the expiry, which had nowhere to live before, is the reason
+    /// the clear-after menu can exist at all. See `CustomStatus`.
+    var selfCustomStatus: CustomStatus?
     var isSelfMuted = false
     var isSelfDeafened = false
     var connectedVoiceChannelID: ChannelID?
@@ -382,6 +385,31 @@ final class AppModel {
     var userMenu: UserMenuRequest?
     /// The conversation whose own menu is open, and where to hang it.
     var directMessageMenu: DirectMessageMenuRequest?
+    /// The server whose own menu is open — from the name pill, the toolbar
+    /// title or a right-click in the rail. One property for all three: they are
+    /// one menu, and two of them open at once is a state with no meaning.
+    var serverOptionsMenu: ServerOptionsRequest?
+    /// Every linked role in a server, once its configuration has been fetched.
+    ///
+    /// **An absent entry is "not asked"; an empty array is "asked, none".** The
+    /// menu's Linked Roles row is drawn from the second being non-empty, so
+    /// collapsing the two would make the row appear on every server until the
+    /// answer landed and then vanish again.
+    var linkedRoles: [GuildID: [LinkedRole]] = [:]
+
+    /// The shareable link for each server, once one has been made.
+    ///
+    /// **Cached for the session, because every mint is a real invite.** The
+    /// menu's invite surface would otherwise `POST` a new code every time it
+    /// was opened, and a server's invite list would fill with codes nobody
+    /// ever used.
+    var serverInviteLinks: [GuildID: String] = [:]
+    /// The server the reader has asked to leave, pending their confirmation.
+    ///
+    /// **The one irreversible act in the menu**, so it takes the platform's own
+    /// alert rather than a glass panel — the same trade message deletion makes,
+    /// and for the same three reasons: Escape, Return and VoiceOver.
+    var leaveGuildRequest: LeaveGuildRequest?
     /// The channel whose pinned messages are on screen.
     var openPinsChannelID: ChannelID?
 
@@ -1112,6 +1140,15 @@ final class AppModel {
         player.onChange = { [weak self] url in self?.spotifyPreviewURL = url }
         return player
     }()
+
+    /// The reader's own settings for each server: mutes, levels, the two
+    /// suppressions, the mobile push switch and the channel overrides.
+    ///
+    /// **The editor's input, where `notificationPreferences` is the decision's.**
+    /// Seeded from READY's `user_guild_settings` and kept current by
+    /// `USER_GUILD_SETTINGS_UPDATE`, which fires for this client's own writes
+    /// and for one made on a phone.
+    var guildUserSettings: [GuildID: GuildUserSettings] = [:]
 
     /// Guilds the account has muted. Their unread never reaches the rail.
     var mutedGuildIDs: Set<GuildID> = []

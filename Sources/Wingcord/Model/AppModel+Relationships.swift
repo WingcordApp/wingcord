@@ -171,7 +171,7 @@ extension AppModel {
     ///
     /// The first text channel in the sidebar's own order that the reader can
     /// both see and invite to, which is what Discord's own picker lands on.
-    private func inviteChannel(inGuild guildID: GuildID) -> ChannelID? {
+    func inviteChannel(inGuild guildID: GuildID) -> ChannelID? {
         for channelID in channelIndex.channelIDs(inGuild: guildID) {
             guard let channel = channelIndex[channelID],
                   channel.kind == .text || channel.kind == .announcement

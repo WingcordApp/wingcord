@@ -169,9 +169,21 @@ extension AppModel {
         case .friendsJoin(let allowed): activityPrivacy.allowsFriendsToJoin = allowed
         case .voiceJoin(let allowed): activityPrivacy.allowsVoiceParticipantsToJoin = allowed
         case .sharingScope(let scope): activityPrivacy.sharingScope = scope
-        case .restrictedGuildIDs(let ids): activityPrivacy.restrictedGuildIDs = ids
+        case .activityRestrictedGuildIDs(let ids): activityPrivacy.activityRestrictedGuildIDs = ids
+        case .guildList(let toggle, let ids): activityPrivacy.setGuildIDs(ids, for: toggle)
         }
         sessionController.writeActivityPrivacy(change, restoring: previous)
+    }
+
+    /// One switch on a server's own Privacy Settings sheet.
+    ///
+    /// **The switch's polarity is the inverse of the list's.** Every one of
+    /// these fields is a *restriction* list, so turning a switch ON removes the
+    /// server and turning it OFF adds it — see `GuildPrivacy`.
+    func setGuildPrivacy(_ toggle: GuildPrivacyToggle, on: Bool, in guildID: GuildID) {
+        var ids = activityPrivacy.guildIDs(for: toggle)
+        if on { ids.remove(guildID) } else { ids.insert(guildID) }
+        applyActivityPrivacy(.guildList(toggle, ids))
     }
 
     /// "Share my activity", which lives on `status` rather than `privacy`.

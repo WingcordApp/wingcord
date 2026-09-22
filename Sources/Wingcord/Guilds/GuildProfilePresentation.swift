@@ -22,6 +22,13 @@ struct GuildProfilePresentation: Equatable, Sendable {
     var memberCount: Int?
     var onlineCount: Int?
     var traits: [GuildTrait]
+    /// The games this server says it plays, resolved to names and icons.
+    ///
+    /// **Resolved here rather than in the card**, for the reason the profile
+    /// board's covers are: joining twelve ids to twelve games is a table lookup
+    /// each, and doing it in a body would redo it on every hover anywhere on the
+    /// card.
+    var games: [GuildProfileGame]
     var createdAt: Date
     /// Whether the reader is in this server, which is what turns the footer from
     /// a promise this client cannot keep into a real destination.
@@ -56,4 +63,14 @@ struct GuildProfilePresentation: Equatable, Sendable {
     /// over — the card then has no name, no icon and no date, and saying "You
     /// are not in this server" there answers a question nobody asked.
     var isUnnamed: Bool { name == "Private Server" }
+}
+
+
+/// One game on a server's tag card.
+struct GuildProfileGame: Equatable, Sendable, Identifiable {
+    var id: ApplicationID
+    var name: String
+    var iconURL: URL?
+    /// Whether it wears the little flame — see `GuildGameActivity.isHot`.
+    var isHot: Bool
 }

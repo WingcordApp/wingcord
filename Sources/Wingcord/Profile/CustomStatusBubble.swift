@@ -34,6 +34,13 @@ import WingcordCore
 struct CustomStatusBubble: View {
     var text: String?
     var emoji: EmojiRef?
+    /// The greyed prompt an **empty** bubble carries, on the reader's own card.
+    ///
+    /// **Nil everywhere else, and that is the whole difference between the two
+    /// cases.** Somebody else's empty status is not drawn at all — there is
+    /// nothing to say and nothing to press. The reader's own is a control, so it
+    /// is always there and says what it is for.
+    var placeholder: String?
     /// How far the avatar beside this hangs below the artwork.
     ///
     /// **The bubble places itself from it.** The banner's height, the avatar's
@@ -76,9 +83,50 @@ struct CustomStatusBubble: View {
     /// bubble with no ground behind it does not have to say so, and declared
     /// last because a memberwise initialiser takes its arguments in order.
     var fill: Color = Palette.statusBubble
+    /// The ink on that plate — see `ProfileGround.statusBubbleInk`. Defaulted
+    /// for the surfaces that draw a bubble with no themed ground behind it.
+    var ink: Color = InkColor.primary
+    /// Answering it. **Nil on the reader's own bubble and on a surface with no
+    /// route** — you do not react to yourself, and a control that cannot send
+    /// is the inert one §5.5 forbids.
+    var answer: CustomStatusAnswering?
 
     var body: some View {
         bubble
+            // **Above the bubble's own trailing corner, on hover.** Discord
+            // floats a small pill there rather than putting the controls inside
+            // the bubble: what is inside is what somebody said, and a button in
+            // it would read as part of the sentence.
+            //
+            // **Attached to the bubble, not to the cluster.** It was on the
+            // outer view — which carries the tail's overhang at its top and the
+            // avatar's whole width as leading padding — so "top-trailing" was a
+            // corner thirty points above the bubble and to the right of it, and
+            // the pill floated off on its own. The only frame this can be placed
+            // from is the one it is about.
+            .overlay(alignment: .topTrailing) {
+                if let answer, isExpanded {
+                    StatusAnswerControls(
+                        answer: answer,
+                        // **Never wider than the bubble it belongs to.** A
+                        // status of one emoji draws a 42-point bubble, and a
+                        // fixed 64-point pill on it hung off both ends and
+                        // covered the thing it was about. The controls shrink
+                        // to fit instead — down to a floor, because a button
+                        // smaller than a fingertip is a button nobody can hit.
+                        side: Self.controlSide(
+                            forBubbleWidth: layout.bubbleWidth(contentWidth: contentWidth)
+                        )
+                    )
+                        // Sat on the bubble's top edge, tucked in from its right
+                        // end — the pill's foot overlaps the bubble so the two
+                        // read as one object rather than as a toolbar hovering
+                        // nearby.
+                        .alignmentGuide(.top) { $0[.bottom] - Self.controlsOverlap }
+                        .alignmentGuide(.trailing) { $0[.trailing] + Spacing.base }
+                        .transition(.opacity)
+                }
+            }
             // **Behind the bubble, not beside it.** The large disc straddles its
             // top edge, and a disc drawn *over* it would show its own rim
             // crossing the bubble's face; underneath, only the part that
@@ -89,6 +137,21 @@ struct CustomStatusBubble: View {
             // ancestor that clips would take them.
             .padding(.top, layout.topOverhang)
             .padding(.leading, layout.leadingInset + layout.leadingOverhang)
+        // **One height for every status, and the content aligned to its top.**
+        //
+        // Two bugs, one cause. The cluster is placed bottom-leading against the
+        // banner, so its *layout* height decides where the bubble rests — and
+        // that height was the content's. A one-line status, a two-line one, an
+        // emoji on its own and the empty prompt are four different heights, so
+        // the bubble sat in four different places; and hovering, which lifts the
+        // two-line clamp, moved it again — upward, off the artwork and away from
+        // the face it comes out of, where Discord's grows down over the name.
+        //
+        // Fixing it is one frame. The box is always as tall as two clamped lines
+        // need, so its bottom never moves and the resting position is the same
+        // whatever the status says; the content sits at its top, so anything
+        // taller spills below rather than shoving the whole cluster up.
+        .frame(height: layout.topOverhang + collapsedHeight, alignment: .top)
         // Placed from the avatar's own drop, so the cluster leaves the face at
         // the same angle on both surfaces.
         .offset(y: layout.verticalOffset)
@@ -140,13 +203,28 @@ struct CustomStatusBubble: View {
             if let emoji {
                 ExpressionGlyph(emoji: emoji, side: layout.emojiSide)
             }
-            if let text, !text.isEmpty {
+            if let placeholder, text?.isEmpty != false, emoji == nil {
+                // The plus is the affordance: an empty bubble with grey words in
+                // it reads as a status somebody wrote, where a plus reads as a
+                // place to put one.
+                Image(systemName: "plus.circle.fill")
+                    .font(.system(size: layout.emojiSide * 0.9))
+                    .foregroundStyle(ink.opacity(0.55))
+                Text(placeholder)
+                    .font(.system(.subheadline))
+                    .italic()
+                    .foregroundStyle(ink.opacity(0.55))
+                    .lineLimit(2)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .multilineTextAlignment(.leading)
+            } else if let text, !text.isEmpty {
                 Text(text)
                     .font(.system(.subheadline))
-                    // Fixed white rather than the hierarchy: this composites
-                    // against a scrim over artwork nobody chose, and vibrancy
-                    // there resolves against the picture instead of the panel.
-                    .foregroundStyle(.white)
+                    // The plate's own ink. **Not the hierarchy**, which would
+                    // resolve against the card rather than against this panel,
+                    // and not a fixed white, which was legible on half the
+                    // themes — see `ProfileGround.statusBubbleInk`.
+                    .foregroundStyle(ink)
                     // **Two lines, then it clamps** — Discord's own
                     // `-webkit-line-clamp: 2` — and hovering lifts the clamp
                     // rather than opening a second surface to read it in. The
@@ -175,6 +253,14 @@ struct CustomStatusBubble: View {
     /// every name and timestamp with — `NSAttributedString.size()` builds a text
     /// container and a layout manager to answer the same question.
     private var contentWidth: CGFloat {
+        // The empty state is the plus and the prompt, and it has to be measured
+        // the same way — a bubble sized for a status it does not have would sit
+        // at zero width with its own prompt spilling out of it.
+        if let placeholder, text?.isEmpty != false, emoji == nil {
+            return layout.emojiSide
+                + layout.contentGap
+                + TimelineLayoutEngine.measure(placeholder, font: Self.textFont)
+        }
         var width: CGFloat = 0
         if emoji != nil { width += layout.emojiSide }
         if let text, !text.isEmpty {
@@ -182,6 +268,43 @@ struct CustomStatusBubble: View {
             width += TimelineLayoutEngine.measure(text, font: Self.textFont)
         }
         return width
+    }
+
+    /// The height the cluster reserves, whatever it is holding.
+    ///
+    /// **Two clamped lines, always** — not the height of *this* status. That is
+    /// the whole point: a box sized to its content is a bubble that moves every
+    /// time the content changes, which is what put an emoji-only status and a
+    /// two-line one in two different places on the same card.
+    private var collapsedHeight: CGFloat {
+        layout.collapsedHeight(lineHeight: Self.lineHeight, hasEmoji: true, hasText: true)
+    }
+
+    /// One line of the bubble's face, drawn.
+    ///
+    /// **Ascent plus descent plus leading**, which is what a text stack advances
+    /// a baseline by — a height taken from the point size alone is short by the
+    /// descender on every face.
+    private static var lineHeight: CGFloat {
+        let font = textFont
+        return (font.ascender - font.descender + font.leading).rounded(.up)
+    }
+
+    /// How far the hover pill's foot sits inside the bubble's top edge.
+    ///
+    /// `nonisolated` because an alignment guide's closure is `Sendable` — a
+    /// main-actor constant cannot be read from one.
+    nonisolated static let controlsOverlap: CGFloat = 6
+
+    /// How big each control may be, given the bubble it sits on.
+    ///
+    /// Two buttons and three points of padding have to fit inside the bubble's
+    /// own width with a little to spare, and no smaller than 18 points — below
+    /// that a target stops being reliably hittable and the glyph inside it stops
+    /// being legible, which is worse than a pill that slightly overhangs.
+    nonisolated static func controlSide(forBubbleWidth width: CGFloat) -> CGFloat {
+        let available = width - Spacing.base * 2 - 6
+        return min(26, max(18, (available / 2).rounded(.down)))
     }
 
     /// The face the status is drawn in, resolved once for measurement.
@@ -220,5 +343,119 @@ struct ExpressionGlyph: View {
                 .font(.system(size: side * 0.86))
                 .frame(width: side, height: side)
         }
+    }
+}
+
+
+// MARK: - Answering somebody's status
+
+/// What the bubble's hover controls do.
+///
+/// **Both halves are one act with two spellings.** Reacting and replying are
+/// the same `POST` to the same conversation — see
+/// `SessionController.answerStatus`, where the only difference is the word in
+/// the header, chosen from whether the reader sent an emoji or a sentence. So
+/// this is one closure, not two.
+struct CustomStatusAnswering {
+    /// The person whose status it is, for the sheet's own copy.
+    var name: String
+    /// Sends it. An emoji on its own reads as a reaction; anything else as a
+    /// reply.
+    var send: (String) -> Void
+}
+
+/// The smiley and the arrow above a status bubble.
+private struct StatusAnswerControls: View {
+    var answer: CustomStatusAnswering
+    /// How big each button draws — see `CustomStatusBubble.controlSide`.
+    var side: CGFloat
+
+    @Environment(\.motion) private var motion
+    @State private var isPickingEmoji = false
+    @State private var isReplying = false
+
+    var body: some View {
+        HStack(spacing: 2) {
+            control("face.smiling", label: "React to this status") {
+                isPickingEmoji = true
+            }
+            .popover(isPresented: $isPickingEmoji, arrowEdge: .bottom) {
+                ExpressionPicker(
+                    mode: .emoji,
+                    onPick: { item in
+                        isPickingEmoji = false
+                        guard case .insert(let text) = item.pick else { return }
+                        answer.send(text)
+                    },
+                    onPickGIF: { _ in }
+                )
+                .presentationBackground(.clear)
+            }
+
+            control("arrowshape.turn.up.left", label: "Reply to this status") {
+                isReplying = true
+            }
+            .popover(isPresented: $isReplying, arrowEdge: .bottom) {
+                StatusReplyField(name: answer.name) { text in
+                    isReplying = false
+                    answer.send(text)
+                }
+                .presentationBackground(.clear)
+            }
+        }
+        .padding(3)
+        // In-window glass, not a popover's: this sits inside the card and
+        // samples what is under it — §4.9's other half.
+        .glassEffect(.clear.tint(Palette.flyoutTint), in: .capsule)
+    }
+
+    private func control(
+        _ symbol: String,
+        label: String,
+        act: @escaping () -> Void
+    ) -> some View {
+        Button(action: act) {
+            Image(systemName: symbol)
+                // Scaled with the button, so a shrunken control holds a
+                // proportionate glyph rather than the same one in a smaller box.
+                .font(.system(size: side * 0.42, weight: .medium))
+                .foregroundStyle(InkColor.primary)
+                .frame(width: side, height: side)
+                .contentShape(.circle)
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(Text(label))
+    }
+}
+
+/// The field a reply is typed into.
+///
+/// Discord's own copy — "Reply to {name}'s status" — because the field is the
+/// only thing that says what it will do.
+private struct StatusReplyField: View {
+    var name: String
+    var send: (String) -> Void
+
+    @State private var draft = ""
+    @FocusState private var isFocused: Bool
+
+    var body: some View {
+        TextField("Reply to \(name)'s status", text: $draft, axis: .vertical)
+            .textFieldStyle(.plain)
+            .font(.system(.subheadline))
+            .foregroundStyle(InkColor.primary)
+            .lineLimit(1...4)
+            .focused($isFocused)
+            .onSubmit(commit)
+            .padding(.horizontal, Spacing.snug)
+            .padding(.vertical, Spacing.base)
+            .frame(width: 260, alignment: .leading)
+            .task { isFocused = true }
+    }
+
+    private func commit() {
+        let trimmed = draft.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        send(trimmed)
     }
 }

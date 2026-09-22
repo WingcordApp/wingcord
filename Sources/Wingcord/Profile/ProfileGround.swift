@@ -259,25 +259,73 @@ enum ProfileGround: Equatable {
 
     /// The custom status bubble's plate.
     ///
-    /// **Themed, and OPAQUE, and only one of those is measured.** The polarity
-    /// and the strength are Discord's `PROFILE_GRADIENT_SECTION_BOX` — black at
-    /// 45 % on a dark card, white at 45 % on a light one — which is the same
-    /// token every other panel on a profile takes and which `panelFill` already
-    /// carries. What is *not* from a capture is compositing it down to an opaque
-    /// colour instead of leaving it translucent: no capture in hand shows this
-    /// bubble on a themed profile, and the bubble is the one panel that sits
-    /// over the BANNER, which is arbitrary artwork. Forty-five per cent of
-    /// somebody's photograph coming through a speech bubble reads as a bug
-    /// rather than as material, and it reads worst while the bubble expands
-    /// under the pointer and the picture moves inside it.
+    /// **Translucent, over whatever is actually behind it.** This is
+    /// `PROFILE_GRADIENT_SECTION_BOX` as Discord's own token table declares it —
+    /// `BLACK` at 45 % on its dark themes, `WHITE` at 45 % on its light one —
+    /// and the client resolves it to an eight-digit hex and lets the profile
+    /// show through. Nothing is composited down.
     ///
-    /// So the fill is that token resolved against the body it sits on, which
-    /// keeps the hue relationship Discord has and takes the picture out of it.
-    /// An unthemed card keeps the app's own surface.
+    /// **This used to be flattened against the body colour, and that is what
+    /// made it wrong.** The reasoning was that 45 % of somebody's banner coming
+    /// through a speech bubble reads as a bug — but Discord accepts exactly
+    /// that, and flattening produced a bubble derived from the *primary* theme
+    /// colour, which is not what is behind the bubble at all. On a profile whose
+    /// primary is bright pink the bubble came out bright pink; Discord's, over
+    /// the same profile's pale banner, measured `#EFFEFF`.
+    ///
+    /// Both of Alex's measurements are consistent with this and with nothing
+    /// derivable from the theme colours alone: `#EFFEFF` is 45 % white over a
+    /// near-white banner region, and `#262421` is 45 % black over a dark warm
+    /// grey one. That the backdrop is the *artwork* rather than a theme colour
+    /// is the whole finding — a derivation from `theme_colors` cannot produce
+    /// either number, which is why every attempt to fit one has missed.
+    ///
+    /// **Near-white on a light profile, near-black on a dark one, and opaque.**
+    ///
+    /// Three things had to be true at once and each was wrong on its own:
+    ///
+    ///  - **The colour is the theme's, not the person's.** Deriving it from the
+    ///    `primary` gave a bright-pink bubble on a bright-pink profile, where
+    ///    Discord's over the same account measured `#EFFEFF` — near-white with a
+    ///    trace of cyan. `PROFILE_GRADIENT_SECTION_BOX` is `WHITE` on a light
+    ///    theme and `BLACK` on a dark one, and neither is a hue.
+    ///  - **It is opaque.** The token carries an opacity, but the client
+    ///    resolves it with `.resolve(theme).hex()` and a six-digit hex has no
+    ///    alpha — the 45 % is applied against the theme's own background and the
+    ///    *result* is painted. Left translucent, a bubble on a pale banner had
+    ///    the artwork legible straight through the words.
+    ///  - **It still carries a trace of the person.** `modalBackground` is
+    ///    exactly that value — Discord's own `v2` base, a near-white or
+    ///    near-black card holding the pair's hue — so the plate is the token
+    ///    laid over it rather than over the saturated body.
+    ///
+    /// **The 0.9 is fitted to one measurement**, and that is stated rather than
+    /// hidden: it lands on `#F2F0FE` against Discord's `#EFFEFF` for the one
+    /// profile whose theme colours and rendered bubble are both in hand. A
+    /// second pair — any account's `theme_colors` beside a sampled bubble —
+    /// would settle whether the constant is right or whether the relationship
+    /// is something else that happens to pass through this point.
     var statusBubbleFill: Color {
         guard let pair else { return Palette.surface }
-        let body = ProfileThemeColors.veiled(pair.primary, dark: isDark)
-        return Color(hex: ProfileThemeColors.veiled(body, dark: isDark, alpha: 0.45))
+        let base = ProfileThemeColors.modalBackground(
+            primary: pair.primary,
+            secondary: pair.secondary,
+            forcedDark: followsAppTheme ? true : nil
+        )
+        return Color(hex: ProfileThemeColors.veiled(base, dark: isDark, alpha: 0.9))
+    }
+
+    /// The ink on the custom-status bubble.
+    ///
+    /// **It follows the bubble's own plate, not the card's body.** The plate is
+    /// near-white on a light profile and near-black on a dark one — see
+    /// `statusBubbleFill` — so a fixed white was legible on exactly half of
+    /// them. It was fixed for a reason that has since stopped being true: the
+    /// bubble used to be translucent over arbitrary banner artwork, where
+    /// vibrancy resolves against a picture nobody chose. It is an opaque themed
+    /// plate now, and an opaque plate has a knowable contrast.
+    var statusBubbleInk: Color {
+        pair == nil ? InkColor.primary : (isDark ? .white : .black)
     }
 
     /// What stands behind a banner while the artwork loads, and instead of it

@@ -418,17 +418,15 @@ private struct ServerNamePill: View {
 
     @Environment(\.motion) private var motion
 
+    @State private var isMenuOpen = false
+
     var body: some View {
         HStack(spacing: Spacing.base) {
-            Menu {
-                ServerMenuContent(guildID: guildID)
-            } label: {
+            Button { isMenuOpen = true } label: {
                 label
             }
-            // `.button` + `.plain` + a content shape, THEN the glass. The
-            // borderless style with `.fixedSize` collapses the label frame on
-            // this platform.
-            .menuStyle(.button)
+            // `.plain` + a content shape, THEN the glass. The borderless style
+            // with `.fixedSize` collapses the label frame on this platform.
             .buttonStyle(.plain)
             // Hugs the label. Everything above this in the chain must leave the
             // width alone.
@@ -437,6 +435,17 @@ private struct ServerNamePill: View {
             .animation(motion.glassMorph, value: name)
             .accessibilityLabel(Text(name))
             .accessibilityHint("Server options")
+            // **Inline, because this is one view rather than a list row.** §2
+            // forbids a presentation on a *row*, where the modifier is paid for
+            // by every one of a hundred; the name pill is drawn once per
+            // sidebar and this is the only place that can point a popover at
+            // the control that opened it.
+            .popover(isPresented: $isMenuOpen, arrowEdge: .bottom) {
+                if let guildID {
+                    ServerOptionsMenu(guildID: guildID, close: { isMenuOpen = false })
+                        .presentationBackground(.clear)
+                }
+            }
 
             // The spacer keeps the pill leading-aligned instead of centring
             // itself across the column, and it is also what stops the overlay
@@ -502,15 +511,21 @@ private struct ServerTitleItem: View, Equatable {
             && lhs.guildID == rhs.guildID
     }
 
+    @State private var isMenuOpen = false
+
     var body: some View {
         Group {
-            if guildID != nil {
-                Menu {
-                    ServerMenuContent(guildID: guildID)
-                } label: {
-                    title
-                }
-                .accessibilityHint("Server options")
+            if let guildID {
+                Button { isMenuOpen = true } label: { title }
+                    .accessibilityHint("Server options")
+                    // **A real toolbar item is the one place a presentation may
+                    // be inline** — `INVARIANTS.md` §1. It is one item evaluated
+                    // once, and the alternative is a window-root presenter
+                    // anchored to a rect the toolbar cannot report.
+                    .popover(isPresented: $isMenuOpen, arrowEdge: .bottom) {
+                        ServerOptionsMenu(guildID: guildID, close: { isMenuOpen = false })
+                            .presentationBackground(.clear)
+                    }
             } else {
                 title.accessibilityAddTraits(.isHeader)
             }
@@ -607,48 +622,3 @@ private struct ServerTitleItem: View, Equatable {
 
 /// The server's own menu, under the name.
 ///
-/// **Every item here does something.** It used to carry five, all of them wired
-/// to one no-op closure — Invite People, Server Settings, Mark as Read, Leave
-/// Server — and now that two of them are real the other three cannot stay:
-/// `INVARIANTS.md` §5.5, "an inert control teaches people to distrust the live
-/// ones beside it". Mark as Read and Leave Server come back when there is a
-/// route behind them.
-private struct ServerMenuContent: View {
-    /// Nil for the direct-message home, which is a destination rather than a
-    /// server. The caller already refuses to draw the pill there; this is the
-    /// second guard, because the menu is also reachable from the toolbar title.
-    var guildID: GuildID?
-
-    @Environment(AppModel.self) private var model
-
-    var body: some View {
-        if let guildID {
-            // **A previewed server has two items and neither is a setting.**
-            // Server Settings and Invite People both need permissions a lurker
-            // does not hold, and a menu that offers them offers two round trips
-            // to a 403 — §5.5. Discord's own preview menu is exactly these two,
-            // and its "Leave Server" is the same verb this app's Back is: it
-            // ends the lurk.
-            if model.isPreviewing(guildID) {
-                Button("Leave Server", systemImage: "rectangle.portrait.and.arrow.right") {
-                    model.leavePreview()
-                }
-            } else {
-                Button("Server Settings", systemImage: "gearshape") {
-                    ServerSettingsWindow.open(guildID)
-                }
-                Button("Invite People", systemImage: "person.badge.plus") {
-                    // The same window, on the page that makes the link. A second
-                    // sheet that made one invite would be a second implementation
-                    // of a form the settings window already has.
-                    ServerSettingsWindow.open(guildID, section: .invites)
-                }
-            }
-            Divider()
-            Button("Copy Server ID", systemImage: "number") {
-                NSPasteboard.general.clearContents()
-                NSPasteboard.general.setString(String(guildID.rawValue), forType: .string)
-            }
-        }
-    }
-}

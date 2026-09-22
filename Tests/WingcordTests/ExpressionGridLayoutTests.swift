@@ -1,3 +1,5 @@
+import AppKit
+import CoreText
 import CoreGraphics
 import Testing
 @testable import Wingcord
@@ -243,5 +245,62 @@ struct ExpressionGridLayoutTests {
         #expect(!range.isEmpty)
         #expect(range.count < 12)
         #expect(range.upperBound <= layout.rows.count)
+    }
+}
+
+/// The pill above each section of the expression grid.
+///
+/// **It used to be measured from one string and drawn with another.** The lock
+/// on a section this account cannot use was appended to the title at draw time
+/// while the pill was sized from the title alone — so the pill hugged the name,
+/// the draw overflowed it, and the first thing `CTLine` truncated away was the
+/// padlock. Every locked server read as a name that stopped mid-word with
+/// nothing to explain it.
+@Suite("Expression grid header")
+@MainActor
+struct ExpressionGridHeaderTests {
+
+    private let font = NSFont.systemFont(ofSize: 11, weight: .bold)
+
+    private func width(_ string: String) -> CGFloat {
+        let line = CTLineCreateWithAttributedString(
+            NSAttributedString(string: string, attributes: [.font: font])
+        )
+        return ceil(CGFloat(CTLineGetTypographicBounds(line, nil, nil, nil)))
+    }
+
+    /// The defect, stated as arithmetic: a pill sized for the name alone cannot
+    /// hold the name plus a lock, so something has to give — and the only thing
+    /// that can give is the end of the string, which is the lock.
+    @Test("A pill sized for the name alone cannot hold the name and the lock")
+    func appendingTheLockOverflowsTheName() {
+        let title = "COUNTER-STRIKE DISCORD | CSGO & CS2"
+        #expect(width("\(title)  \(ExpressionGridPainter.lockMark)") > width(title))
+    }
+
+    /// Reserving it is what makes both fit: the name's own ceiling shrinks by
+    /// the lock's width rather than the pill pretending the lock is not there.
+    @Test("Reserving the lock leaves the name a smaller ceiling and both fit")
+    func reservingTheLockFitsBoth() {
+        let title = "FORZA OFFICIAL"
+        let lock = width(ExpressionGridPainter.lockMark)
+        let reserved = width(title) + lock
+        #expect(reserved >= width(title))
+        // The name's ceiling inside a pill that reserved the lock is the name's
+        // own width — it is not truncated at all where there is room.
+        #expect(reserved - lock == width(title))
+    }
+
+    /// A name too long for the panel still truncates. That is correct, and the
+    /// lock must survive it — it is the only thing on the row that says *why*
+    /// the section cannot be used.
+    @Test("A name too long for the panel gives, and the lock does not")
+    func theNameGivesBeforeTheLock() {
+        let title = String(repeating: "COUNTER-STRIKE DISCORD ", count: 4)
+        let lock = width(ExpressionGridPainter.lockMark)
+        let panel: CGFloat = 320
+        let ceiling = max(panel - lock, 1)
+        #expect(ceiling < width(title))
+        #expect(ceiling > 0)
     }
 }

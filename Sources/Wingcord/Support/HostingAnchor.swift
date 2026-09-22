@@ -122,3 +122,31 @@ extension NSView {
         return found
     }
 }
+
+
+// MARK: - The same conversion, for a SwiftUI view
+
+import SwiftUI
+
+extension View {
+    /// Reports this view's frame in the SwiftUI root's own space — the space
+    /// `ProfileRequest.anchor` and every other window-root presenter is
+    /// interpreted in.
+    ///
+    /// **`.global` minus the root's own origin.** A SwiftUI view has no AppKit
+    /// view to convert through, so `anchorInHostingRoot` does not apply; what
+    /// does apply is the same correction it ends with, because `.global` is the
+    /// window's space and the root is laid out below the titlebar strip.
+    ///
+    /// `onGeometryChange` rather than a `GeometryReader`: it reads the value the
+    /// layout already computed and fires only when it changes, where a reader is
+    /// an extra container and an extra pass.
+    func reportsPresentationAnchor(_ action: @escaping (CGRect) -> Void) -> some View {
+        onGeometryChange(for: CGRect.self) { proxy in
+            proxy.frame(in: .global)
+        } action: { frame in
+            let origin = PresentationOrigin.value
+            action(frame.offsetBy(dx: -origin.x, dy: -origin.y))
+        }
+    }
+}

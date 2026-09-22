@@ -16,6 +16,9 @@ import WingcordCore
 struct GuildProfileCard: View {
     var profile: GuildProfilePresentation
     var openGuild: (GuildID) -> Void
+    /// Opens a game's own page. Nil on a surface with nowhere to send anybody,
+    /// which draws the icons as pictures rather than as controls — §5.5.
+    var openGame: ((ApplicationID) -> Void)?
     /// Joins, or opens the server's application form. Nil on a surface with
     /// nothing to join with, which draws the plain sentence instead — §5.5.
     var enterGuild: ((GuildID) -> Void)?
@@ -42,6 +45,14 @@ struct GuildProfileCard: View {
                     .foregroundStyle(InkColor.secondary)
                     .lineLimit(6)
                     .fixedSize(horizontal: false, vertical: true)
+                    .padding(.horizontal, Spacing.margin)
+                    .padding(.top, Spacing.snug)
+            }
+            // **Above the traits, which is where Discord puts it.** A trait is
+            // a word somebody typed about the server; a game is a thing you can
+            // go and look at, so it sits with the description it follows from.
+            if !profile.games.isEmpty {
+                GuildProfileGameRow(games: profile.games, open: openGame)
                     .padding(.horizontal, Spacing.margin)
                     .padding(.top, Spacing.snug)
             }
@@ -118,6 +129,15 @@ struct GuildProfileCard: View {
             .compositingGroup()
     }
 
+    /// The server's own picture, or a monogram where there is none.
+    ///
+    /// **Not the tag's badge.** That was tried and reverted: a private server
+    /// answers the profile route with nothing, so the plate fell back to `?` —
+    /// and the badge *is* available, off the person wearing the tag. But the
+    /// badge is a mark that belongs beside the letters, and blown up onto the
+    /// server's avatar plate it reads as the server's icon, which it is not.
+    /// The chip above the card already wears it; the plate says, honestly, that
+    /// there is no picture to show.
     private var icon: some View {
         RemoteImage(url: profile.iconURL, side: Self.iconSide) {
             Text(profile.monogram)
@@ -346,5 +366,185 @@ private struct TraitFlow: View {
                     .padding(.vertical, 3)
             }
         }
+    }
+}
+
+
+// MARK: - The games a server plays
+
+/// The row of game icons under a server's description.
+///
+/// **One game is named; several are a row of marks and a count.** Discord draws
+/// exactly that split — a server with a single game shows its icon and its title
+/// side by side, where five show five icons and a `+7` that opens the rest.
+/// The reason is the row's job: with one game the name is the information, and
+/// with twelve the icons are.
+struct GuildProfileGameRow: View {
+    var games: [GuildProfileGame]
+    var open: ((ApplicationID) -> Void)?
+
+    @State private var isShowingRest = false
+
+    /// How many marks the row draws before the rest become a count. Five, which
+    /// is what fits a 320-point card beside a `+N`.
+    private static let inlineLimit = 5
+    private static let side: CGFloat = 32
+
+    var body: some View {
+        if games.count == 1, let game = games.first {
+            Button { open?(game.id) } label: {
+                HStack(spacing: Spacing.snug) {
+                    GuildProfileGameMark(game: game, side: Self.side)
+                    Text(game.name)
+                        .font(.system(.subheadline, weight: .medium))
+                        .foregroundStyle(InkColor.primary)
+                        .lineLimit(1)
+                    Spacer(minLength: 0)
+                }
+                .contentShape(.rect)
+            }
+            .buttonStyle(.plain)
+            .disabled(open == nil)
+        } else {
+            HStack(spacing: Spacing.base) {
+                ForEach(games.prefix(Self.inlineLimit)) { game in
+                    Button { open?(game.id) } label: {
+                        GuildProfileGameMark(game: game, side: Self.side)
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(open == nil)
+                    .help(game.name)
+                    .accessibilityLabel(Text(game.name))
+                }
+                if games.count > Self.inlineLimit {
+                    Button { isShowingRest = true } label: {
+                        Text("+\(games.count - Self.inlineLimit)")
+                            .font(.system(.caption, weight: .semibold))
+                            .foregroundStyle(InkColor.secondary)
+                            .monospacedDigit()
+                            .frame(width: Self.side, height: Self.side)
+                            .background(
+                                Palette.surfaceRaised,
+                                in: .rect(cornerRadius: 9, style: .continuous)
+                            )
+                            .contentShape(.rect)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel(
+                        Text("Show \(games.count - Self.inlineLimit) more games")
+                    )
+                    .popover(isPresented: $isShowingRest, arrowEdge: .top) {
+                        GuildProfileGameList(
+                            games: Array(games.dropFirst(Self.inlineLimit)),
+                            open: {
+                                isShowingRest = false
+                                open?($0)
+                            }
+                        )
+                        // The list carries no material: the popover's glass is
+                        // the body — §4.9.
+                        .presentationBackground(.clear)
+                    }
+                }
+                Spacer(minLength: 0)
+            }
+        }
+    }
+}
+
+/// One game's icon, with the flame a busy one wears.
+///
+/// **The flame is cut OUT of the icon, not laid on it.** Discord notches the
+/// icon's corner and sits the mark in the hole, so the two read as one object —
+/// a flame painted on top would be a sticker on a picture. The notch is the same
+/// even-odd mask the rail's live-voice tile uses and the mutual-avatar cluster
+/// does: a circle subtracted from the icon's own shape.
+private struct GuildProfileGameMark: View {
+    var game: GuildProfileGame
+    var side: CGFloat
+
+    /// The flame's own size, and how far its centre sits outside the icon's
+    /// top-trailing corner.
+    private var flameSide: CGFloat { side * 0.5 }
+    /// The clearance bitten out around it, so the icon does not touch the mark.
+    private var clearance: CGFloat { 1.5 }
+
+    var body: some View {
+        RemoteImage(url: game.iconURL, side: side) {
+            Palette.surfaceRaised
+        }
+        .frame(width: side, height: side)
+        .clipShape(.rect(cornerRadius: side * 0.28, style: .continuous))
+        .mask {
+            if game.isHot {
+                GameMarkNotch(flameSide: flameSide, clearance: clearance, corner: side * 0.28)
+                    .fill(style: FillStyle(eoFill: true))
+            } else {
+                Rectangle()
+            }
+        }
+        .overlay(alignment: .topTrailing) {
+            if game.isHot {
+                Text("🔥")
+                    .font(.system(size: flameSide * 0.82))
+                    .frame(width: flameSide, height: flameSide)
+                    .offset(x: flameSide * 0.32, y: -flameSide * 0.32)
+            }
+        }
+        .accessibilityHidden(true)
+    }
+}
+
+/// The icon's shape with a disc taken out of its top-trailing corner.
+nonisolated private struct GameMarkNotch: Shape {
+    var flameSide: CGFloat
+    var clearance: CGFloat
+    var corner: CGFloat
+
+    func path(in rect: CGRect) -> Path {
+        var path = Path(roundedRect: rect, cornerRadius: corner, style: .continuous)
+        let centre = CGPoint(
+            x: rect.maxX + flameSide * 0.32,
+            y: rect.minY - flameSide * 0.32 + flameSide / 2
+        )
+        let radius = flameSide / 2 + clearance
+        path.addEllipse(
+            in: CGRect(
+                x: centre.x - radius,
+                y: centre.y - radius,
+                width: radius * 2,
+                height: radius * 2
+            )
+        )
+        return path
+    }
+}
+
+/// The games the row had no room for.
+private struct GuildProfileGameList: View {
+    var games: [GuildProfileGame]
+    var open: (ApplicationID) -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            ForEach(games) { game in
+                Button { open(game.id) } label: {
+                    HStack(spacing: Spacing.snug) {
+                        GuildProfileGameMark(game: game, side: 26)
+                        Text(game.name)
+                            .font(.system(.subheadline, weight: .medium))
+                            .foregroundStyle(InkColor.primary)
+                            .lineLimit(1)
+                        Spacer(minLength: 0)
+                    }
+                    .padding(.horizontal, Spacing.snug)
+                    .frame(minHeight: 36)
+                    .contentShape(.rect)
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .padding(.vertical, Spacing.base)
+        .frame(width: 230)
     }
 }

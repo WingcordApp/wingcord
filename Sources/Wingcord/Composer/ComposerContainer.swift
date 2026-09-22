@@ -30,6 +30,7 @@ struct ComposerContainer: View {
             channelName: model.channelIndex[channelID].map(model.displayName(of:)) ?? "",
             channelSigil: model.channelIndex[channelID]?.kind.isPrivate == true ? "@" : "#",
             shape: settings.composerShape,
+            focusKey: channelID,
             canSend: model.permissionGate.canSend(in: channelID),
             replyingToAuthor: replyingToAuthor,
             isEditing: box?.editing != nil,
@@ -102,6 +103,10 @@ struct ComposerContainer: View {
             submitCommand: submitCommand,
             pendingInteractions: pendingInteractions
         )
+        // A shortcode the reader finished typing becomes its emoji — see
+        // `applyClosedShortcode`. Keyed on the text so it runs once per change
+        // rather than on every evaluation of this body.
+        .onChange(of: activeText) { applyClosedShortcode() }
         // **One importer on one view.** The rule §2 states is about a
         // presentation modifier on a list ROW — evaluated by every row on every
         // pass. There is exactly one composer, and the panel has to be anchored
@@ -334,6 +339,34 @@ struct ComposerContainer: View {
             for: completionQuery,
             custom: model.emojiCatalog.sections
         )
+    }
+
+    /// Turns a shortcode the reader typed all the way through into its emoji.
+    ///
+    /// **`:sob:` becomes the emoji without Tab**, which is what Discord does and
+    /// what the completion list could only do on a keypress. The closing colon
+    /// is the reader saying they are finished; taking them at their word is the
+    /// whole feature.
+    ///
+    /// **Only on an exact name, and only when one thing owns it.** A prefix
+    /// match would turn `:so:` into whatever happened to sort first, and two
+    /// servers with an emoji of the same name is a coin toss this has no
+    /// business making — it leaves those alone and the list still offers them.
+    private func applyClosedShortcode() {
+        let text = activeText
+        guard let name = EmojiAutocomplete.closedShortcode(in: text) else { return }
+        let exact = EmojiAutocomplete.matches(
+            for: name,
+            custom: model.emojiCatalog.sections
+        ).filter { $0.name.lowercased() == name }
+        guard exact.count == 1, case .insert(let replacement) = exact[0].pick else { return }
+        model.mutateBox(channelID) { box in
+            if let existing = box.editing?.text, existing == text {
+                box.editing?.text = EmojiAutocomplete.applyingClosed(replacement, to: existing)
+            } else if box.draft == text {
+                box.draft = EmojiAutocomplete.applyingClosed(replacement, to: box.draft)
+            }
+        }
     }
 
     private func commit(_ item: ExpressionItem) {

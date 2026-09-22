@@ -19,12 +19,23 @@ import WingcordCore
 //       3  restricted_guild_ids                        packed fixed64
 //      13  activity_restricted_guild_ids               packed fixed64
 //      15  activity_joining_restricted_guild_ids       packed fixed64
+//      16  message_request_restricted_guild_ids        packed fixed64
 //      29  default_guilds_activity_restricted_v2       varint enum
+//
+// **3, 15 and 16 are the per-server Privacy Settings sheet**, and 3 and 15 were
+// pinned a second time by `serveroptions + privacy.har` (2026-09-22): the three
+// switches were turned off top to bottom and back on bottom to top, and the six
+// PATCHes differ in exactly those three fields and nothing else. 16 is the one
+// switch that capture does NOT contain, and it is not a guess either — it is
+// read out of Discord's own compiled descriptor in the app bundle, where
+// `PrivacySettings` is declared field by field with its numbers.
 //
 // **The published docs are wrong about these.** `docs.discord.food` lists the
 // same fields in the same order numbered −5 at the top level and −2 inside
-// `PrivacySettings`. This client's own `UserSettingsProto` — walked off a live
-// READY in August — agrees with the capture. Use that page for names only.
+// `PrivacySettings`, and the offset is not even constant — it is −2 from field 9
+// to 16 and 0 again by 22. This client's own `UserSettingsProto` — walked off a
+// live READY in August — agrees with the capture and with the bundle. Use that
+// page for names only.
 
 /// Where the account shares what it is playing.
 ///
@@ -66,22 +77,69 @@ public struct ActivityPrivacy: Hashable, Sendable {
     public var sharesCurrentGame: Bool
     public var sharingScope: ActivitySharingScope
     /// Servers the reader has switched off by hand.
-    public var restrictedGuildIDs: Set<GuildID>
+    public var activityRestrictedGuildIDs: Set<GuildID>
     public var allowsFriendsToJoin: Bool
     public var allowsVoiceParticipantsToJoin: Bool
+    /// Servers the reader has switched direct messages off in — field 3, which
+    /// is a **different list** from the one above however similar the wire's
+    /// two names look.
+    public var dmRestrictedGuildIDs: Set<GuildID>
+    /// Servers nobody may join the reader's game from — field 15.
+    public var activityJoiningRestrictedGuildIDs: Set<GuildID>
+    /// Servers whose DMs bypass the message-request filter — field 16.
+    public var messageRequestRestrictedGuildIDs: Set<GuildID>
 
     public init(
         sharesCurrentGame: Bool = true,
         sharingScope: ActivitySharingScope = .unset,
-        restrictedGuildIDs: Set<GuildID> = [],
+        activityRestrictedGuildIDs: Set<GuildID> = [],
         allowsFriendsToJoin: Bool = true,
-        allowsVoiceParticipantsToJoin: Bool = true
+        allowsVoiceParticipantsToJoin: Bool = true,
+        dmRestrictedGuildIDs: Set<GuildID> = [],
+        activityJoiningRestrictedGuildIDs: Set<GuildID> = [],
+        messageRequestRestrictedGuildIDs: Set<GuildID> = []
     ) {
         self.sharesCurrentGame = sharesCurrentGame
         self.sharingScope = sharingScope
-        self.restrictedGuildIDs = restrictedGuildIDs
+        self.activityRestrictedGuildIDs = activityRestrictedGuildIDs
         self.allowsFriendsToJoin = allowsFriendsToJoin
         self.allowsVoiceParticipantsToJoin = allowsVoiceParticipantsToJoin
+        self.dmRestrictedGuildIDs = dmRestrictedGuildIDs
+        self.activityJoiningRestrictedGuildIDs = activityJoiningRestrictedGuildIDs
+        self.messageRequestRestrictedGuildIDs = messageRequestRestrictedGuildIDs
+    }
+
+    /// The per-server Privacy sheet, for one server.
+    ///
+    /// **Every switch is the ABSENCE of the id.** Each of these is a restriction
+    /// list, so a server nobody has touched is in none of them and every switch
+    /// reads on — which is what the sheet shows for a fresh account.
+    public func privacy(in guildID: GuildID) -> GuildPrivacy {
+        GuildPrivacy(
+            allowsDirectMessages: !dmRestrictedGuildIDs.contains(guildID),
+            filtersMessageRequests: !messageRequestRestrictedGuildIDs.contains(guildID),
+            sharesActivity: !activityRestrictedGuildIDs.contains(guildID),
+            allowsActivityJoining: !activityJoiningRestrictedGuildIDs.contains(guildID)
+        )
+    }
+
+    /// The list behind one switch, and the change that flips it.
+    public func guildIDs(for toggle: GuildPrivacyToggle) -> Set<GuildID> {
+        switch toggle {
+        case .directMessages: dmRestrictedGuildIDs
+        case .messageRequests: messageRequestRestrictedGuildIDs
+        case .activitySharing: activityRestrictedGuildIDs
+        case .activityJoining: activityJoiningRestrictedGuildIDs
+        }
+    }
+
+    public mutating func setGuildIDs(_ ids: Set<GuildID>, for toggle: GuildPrivacyToggle) {
+        switch toggle {
+        case .directMessages: dmRestrictedGuildIDs = ids
+        case .messageRequests: messageRequestRestrictedGuildIDs = ids
+        case .activitySharing: activityRestrictedGuildIDs = ids
+        case .activityJoining: activityJoiningRestrictedGuildIDs = ids
+        }
     }
 
     /// Whether activity is shared into `guildID`, given its size.
@@ -90,7 +148,7 @@ public struct ActivityPrivacy: Hashable, Sendable {
     /// it cannot disagree.
     public func shares(in guildID: GuildID, memberCount: Int?) -> Bool {
         guard sharesCurrentGame else { return false }
-        if restrictedGuildIDs.contains(guildID) { return false }
+        if activityRestrictedGuildIDs.contains(guildID) { return false }
         switch sharingScope {
         case .unset, .everywhere: return true
         case .friendsOnly: return false
@@ -116,12 +174,49 @@ public enum ActivityPrivacyProto {
     enum Privacy {
         static let friendsJoin = 1
         static let voiceJoin = 2
+        /// Servers the reader will not accept direct messages from.
+        static let dmRestrictedGuildIDs = 3
         static let activityRestrictedGuildIDs = 13
+        static let activityJoiningRestrictedGuildIDs = 15
+        /// Servers whose DMs skip the message-request filter.
+        static let messageRequestRestrictedGuildIDs = 16
         static let sharingScope = 29
     }
 
+    /// The three lists the per-server Privacy sheet edits, by their field number.
+    ///
+    /// One table rather than a `switch` in four places: a decode, a write, a
+    /// membership test and an optimistic update all ask the same question, and
+    /// three of them getting it right is a privacy setting that silently
+    /// disagrees with itself.
+    static func field(for toggle: GuildPrivacyToggle) -> Int {
+        switch toggle {
+        case .directMessages: Privacy.dmRestrictedGuildIDs
+        case .messageRequests: Privacy.messageRequestRestrictedGuildIDs
+        case .activitySharing: Privacy.activityRestrictedGuildIDs
+        case .activityJoining: Privacy.activityJoiningRestrictedGuildIDs
+        }
+    }
+
     enum Status {
+        static let status = 1
+        static let customStatus = 2
         static let showCurrentGame = 3
+    }
+
+    /// `discord_protos.discord_users.v1.CustomStatus`, field for field.
+    ///
+    /// **Lifted from Discord's own compiled descriptor**, where the message is
+    /// declared beside `StatusSettings`: text, the emoji as an id *and* a name,
+    /// and two millisecond clocks. `emoji_id` and `expires_at_ms` are
+    /// **fixed64**, not varints — a writer that sent them as varints would be
+    /// writing a well-formed message Discord reads as something else.
+    enum CustomStatusField {
+        static let text = 1
+        static let emojiID = 2
+        static let emojiName = 3
+        static let expiresAtMS = 4
+        static let createdAtMS = 5
     }
 
     /// Everything this client understands, out of a whole settings blob.
@@ -170,7 +265,19 @@ public enum ActivityPrivacyProto {
             case Privacy.voiceJoin:
                 privacy.allowsVoiceParticipantsToJoin = (reader.wrappedValue(for: field) ?? 0) != 0
             case Privacy.activityRestrictedGuildIDs:
-                privacy.restrictedGuildIDs = Set(
+                privacy.activityRestrictedGuildIDs = Set(
+                    reader.packedFixed64(for: field).map { GuildID(rawValue: $0) }
+                )
+            case Privacy.dmRestrictedGuildIDs:
+                privacy.dmRestrictedGuildIDs = Set(
+                    reader.packedFixed64(for: field).map { GuildID(rawValue: $0) }
+                )
+            case Privacy.activityJoiningRestrictedGuildIDs:
+                privacy.activityJoiningRestrictedGuildIDs = Set(
+                    reader.packedFixed64(for: field).map { GuildID(rawValue: $0) }
+                )
+            case Privacy.messageRequestRestrictedGuildIDs:
+                privacy.messageRequestRestrictedGuildIDs = Set(
                     reader.packedFixed64(for: field).map { GuildID(rawValue: $0) }
                 )
             case Privacy.sharingScope:
@@ -229,20 +336,107 @@ public enum ActivityPrivacyProto {
         case .sharingScope(let scope):
             inner.tag(field: Privacy.sharingScope, wireType: 0)
             inner.varint(scope.rawValue)
-        case .restrictedGuildIDs(let ids):
-            // Packed fixed64, in a stable order. The order carries no meaning
-            // on the wire, and sorting is what makes two writes of the same set
-            // produce the same bytes.
-            var packed = Data()
-            for id in ids.map(\.rawValue).sorted() {
-                withUnsafeBytes(of: id.littleEndian) { packed.append(contentsOf: $0) }
-            }
-            inner.message(field: Privacy.activityRestrictedGuildIDs, packed)
+        case .activityRestrictedGuildIDs(let ids):
+            inner.message(field: Privacy.activityRestrictedGuildIDs, Self.packed(ids))
+        case .guildList(let toggle, let ids):
+            inner.message(field: Self.field(for: toggle), Self.packed(ids))
         }
         let field = number(of: change)
         let merged = replacing(field: field, with: inner.data, in: raw)
         var outer = ProtobufWriter()
         outer.message(field: Top.privacy, merged)
+        return outer.base64
+    }
+
+    /// Reads the custom status out of a whole settings blob.
+    ///
+    /// **Nothing read this before and the status was lost on every launch.**
+    /// `publishPresence` broadcasts one over the socket, which is how everybody
+    /// else sees it — but the value itself lives in the settings blob, and this
+    /// client decoded `status.1` and stopped. So a status survived until the app
+    /// was quit and then silently was not there.
+    public static func decodeCustomStatus(_ blob: Data) -> CustomStatus? {
+        var reader = ProtobufReader(blob)
+        while let field = reader.next() {
+            guard field.number == Top.status else { continue }
+            var inner = reader.reader(for: field)
+            while let entry = inner.next() {
+                guard entry.number == Status.customStatus else { continue }
+                return decodeCustomStatusMessage(inner.reader(for: entry))
+            }
+        }
+        return nil
+    }
+
+    private static func decodeCustomStatusMessage(_ reader: ProtobufReader) -> CustomStatus? {
+        var reader = reader
+        var text: String?
+        var emojiID: EmojiID?
+        var emojiName: String?
+        var expiry: Date?
+        while let field = reader.next() {
+            switch field.number {
+            case CustomStatusField.text:
+                text = reader.string(for: field)
+            case CustomStatusField.emojiID:
+                // Zero is the absence, not an id — §5.8, "a zero snowflake is
+                // not an id, and it is the most dangerous value there is".
+                if field.value != 0 { emojiID = EmojiID(rawValue: field.value) }
+            case CustomStatusField.emojiName:
+                emojiName = reader.string(for: field)
+            case CustomStatusField.expiresAtMS:
+                if field.value != 0 {
+                    expiry = Date(timeIntervalSince1970: Double(field.value) / 1000)
+                }
+            default:
+                break
+            }
+        }
+        let emoji = emojiName.flatMap { name -> EmojiRef? in
+            name.isEmpty ? nil : EmojiRef(id: emojiID, name: name)
+        }
+        let status = CustomStatus(text: text, emoji: emoji, expiresAt: expiry)
+        return status.isEmpty ? nil : status
+    }
+
+    /// The body of `PATCH /users/@me/settings-proto/1` for one custom status.
+    ///
+    /// **The whole `CustomStatus` message is rebuilt, and that is correct
+    /// here** where it would not be for `privacy`: it is five fields, this
+    /// client reads four of them, and the fifth — `created_at_ms` — is one
+    /// Discord recomputes. The `status` message *around* it is spliced as
+    /// always, so the presence and its expiry are carried across untouched.
+    ///
+    /// A nil status clears it: the field is removed rather than written empty,
+    /// which is what Discord's own Clear does.
+    public static func customStatusPatch(_ status: CustomStatus?, statusRaw: Data?) -> String {
+        var encoded: Data?
+        if let status, !status.isEmpty {
+            var inner = ProtobufWriter()
+            if let text = status.text { inner.string(field: CustomStatusField.text, text) }
+            if let emoji = status.emoji {
+                if let id = emoji.id {
+                    inner.fixed64(field: CustomStatusField.emojiID, id.rawValue)
+                }
+                inner.string(field: CustomStatusField.emojiName, emoji.name)
+            }
+            if let expiry = status.expiresAt {
+                inner.fixed64(
+                    field: CustomStatusField.expiresAtMS,
+                    UInt64(max(0, expiry.timeIntervalSince1970 * 1000))
+                )
+            }
+            var wrapper = ProtobufWriter()
+            wrapper.message(field: Status.customStatus, inner.data)
+            encoded = wrapper.data
+        }
+        let merged = replacing(
+            field: Status.customStatus,
+            with: encoded,
+            in: statusRaw ?? Data()
+        )
+        var outer = ProtobufWriter()
+        outer.message(field: Top.status, merged)
         return outer.base64
     }
 
@@ -265,11 +459,32 @@ public enum ActivityPrivacyProto {
         return outer.base64
     }
 
+    /// Packed fixed64, in a stable order.
+    ///
+    /// The order carries no meaning on the wire, and sorting is what makes two
+    /// writes of the same set produce the same bytes — which is what lets a
+    /// test assert a round trip rather than a set comparison.
+    static func packed(_ ids: Set<GuildID>) -> Data {
+        var packed = Data()
+        for id in ids.map(\.rawValue).sorted() {
+            withUnsafeBytes(of: id.littleEndian) { packed.append(contentsOf: $0) }
+        }
+        return packed
+    }
+
     public enum Change: Hashable, Sendable {
         case friendsJoin(Bool)
         case voiceJoin(Bool)
         case sharingScope(ActivitySharingScope)
-        case restrictedGuildIDs(Set<GuildID>)
+        case activityRestrictedGuildIDs(Set<GuildID>)
+        /// One of the per-server Privacy sheet's four lists, whole.
+        ///
+        /// **The whole list, never a delta**, because the field is replaced
+        /// rather than merged — `INVARIANTS.md` §5.6, "whether a settings field
+        /// merges or is replaced is a capture, not a guess". The capture proves
+        /// it here too: switching a server's DMs back on sent a list one id
+        /// SHORTER, which a merge cannot express.
+        case guildList(GuildPrivacyToggle, Set<GuildID>)
     }
 
     private static func number(of change: Change) -> Int {
@@ -277,7 +492,8 @@ public enum ActivityPrivacyProto {
         case .friendsJoin: Privacy.friendsJoin
         case .voiceJoin: Privacy.voiceJoin
         case .sharingScope: Privacy.sharingScope
-        case .restrictedGuildIDs: Privacy.activityRestrictedGuildIDs
+        case .activityRestrictedGuildIDs: Privacy.activityRestrictedGuildIDs
+        case .guildList(let toggle, _): field(for: toggle)
         }
     }
 

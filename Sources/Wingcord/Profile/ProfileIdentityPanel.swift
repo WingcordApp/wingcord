@@ -297,7 +297,9 @@ struct ProfileIdentityPanel: View {
                     cardWidth: Self.width,
                     avatarSide: Self.avatarSide,
                     margin: Self.gutter,
-                    fill: ground.statusBubbleFill
+                    fill: ground.statusBubbleFill,
+                    ink: ground.statusBubbleInk,
+                    answer: model.statusAnswering(for: profile)
                 )
             }
         }
@@ -435,13 +437,14 @@ struct ProfileIdentityPanel: View {
                         // over — and the weight was bold where Discord sets 600.
                         pointSize: 24,
                         // **The panel's own width, stated.** A styled name is
-                        // a drawn view and `.lineLimit(1)` below reaches only
-                        // the plain branch — so without a ceiling a long name
-                        // reported its whole measured width and took the card
-                        // out of the window with it.
-                        maximumWidth: contentWidth - (profile.isBot ? 44 : 0)
+                        // a drawn view and a `.lineLimit` at the call site
+                        // reaches only the plain branch — so without a ceiling a
+                        // long name reported its whole measured width and took
+                        // the card out of the window with it, and with one it
+                        // truncated where Discord wraps.
+                        maximumWidth: contentWidth - (profile.isBot ? 44 : 0),
+                        maximumLines: 2
                     )
-                    .lineLimit(1)
                 }
                 if profile.isBot { TagChip(text: "APP") }
                 Spacer(minLength: 0)
@@ -470,14 +473,21 @@ struct ProfileIdentityPanel: View {
                 } else if let tag = profile.guildTag {
                     GuildTagChip(tag: tag)
                 }
-                // A label, never a filter — the route still hands over the
-                // mutual servers the reader can see for themselves.
-                if !profile.badges.isEmpty { BadgeRow(badges: profile.badges, premiumSince: profile.premiumSince) }
                 Spacer(minLength: 0)
             }
-            // A row of eleven badges beside a guild tag and a handle is wider
-            // than the column, and the row is the part that gives.
             .fixedSize(horizontal: false, vertical: true)
+
+            // **The badges are their own row**, which is where Discord puts
+            // them. They used to share the handle's: eleven badges beside a
+            // tag chip and a handle is wider than the column, and the handle is
+            // what gave — it truncated to "someramdomguyykal…" on a name whose
+            // owner had six badges, while the badges themselves wrapped onto a
+            // second line anyway. Splitting them costs nothing and the handle
+            // fits.
+            if !profile.badges.isEmpty {
+                BadgeRow(badges: profile.badges, premiumSince: profile.premiumSince)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
 
             // A nickname is an extra line, never a replacement: one that
             // silently stands in for somebody's real name makes them

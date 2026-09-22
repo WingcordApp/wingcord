@@ -25,6 +25,13 @@ final class SessionController {
     /// back, so two overlapping toggles would both start from the state before
     /// either — and the later would undo the earlier. See `toggleFavorite`.
     var favoriteWritesInFlight: Set<URL> = []
+    /// Servers whose linked-role configuration is being fetched.
+    ///
+    /// **Beside the cache rather than folded into it**, because the answer can
+    /// be an empty array and "asked, nothing there" has to be distinguishable
+    /// from "asking". Without it, opening the menu twice in a second on a server
+    /// with no linked roles is two requests.
+    var linkedRolesInFlight: Set<GuildID> = []
 
     nonisolated static func trace(_ message: @autoclosure () -> String) {
         DiagnosticLog.trace("session", message())
@@ -604,6 +611,7 @@ final class SessionController {
         model.activityStatusRaw = snapshot.settings.statusRaw
         model.mutedGuildIDs = snapshot.mutedGuildIDs
         model.notificationPreferences = snapshot.notificationPreferences
+        model.guildUserSettings = snapshot.guildUserSettings
 
         // Every role the reader holds, plus their own id, as one flat set. A
         // mention test is then one lookup rather than a scan over roles per
@@ -1085,7 +1093,7 @@ final class SessionController {
             // phone reaches this window without a refetch.
             model.applyFriendNickname(nickname, for: userID)
 
-        case .guildSettingsChanged(let guildID, let pinned, let muted):
+        case .guildSettingsChanged(let guildID, let pinned, let muted, let settings):
             // **Only the private-channel entry carries pins**, and it is the
             // one whose `guild_id` is null. A server's entry arriving here
             // would otherwise clear every pin in the direct-message list,
@@ -1094,6 +1102,10 @@ final class SessionController {
             for channelID in model.channelIndex.privateChannelIDs() {
                 model.applyChannelMute(muted.contains(channelID), channelID: channelID)
             }
+            // A server's own record. Applied whatever set it: our own write
+            // settles on the answer its optimistic update already made, and one
+            // made on a phone reaches the open menu without a refetch.
+            if let settings { model.applyGuildUserSettings(settings) }
 
         case .recentMentionDeleted(let messageID):
             // Dismissed here, or on another client. Applied either way: the
@@ -1539,7 +1551,15 @@ final class SessionController {
                 model.guildProfilesLoading.remove(guildID)
             }
             do {
-                model.guildProfiles[guildID] = try await rest.guildProfile(of: guildID)
+                let profile = try await rest.guildProfile(of: guildID)
+                model.guildProfiles[guildID] = profile
+                // **The profile names games by id and nothing else**, so the
+                // card's row is blank until the store entries arrive — a name
+                // and an icon are a second request, which is exactly what
+                // Discord's own capture shows it making. Only the ones this
+                // client does not already hold are asked for.
+                let missing = profile.gameApplicationIDs.filter { model.games[$0] == nil }
+                if !missing.isEmpty { await loadGames(ids: missing) }
             } catch {
                 Self.trace("guild profile \(guildID) failed: \(Self.describe(error))")
             }
@@ -1694,8 +1714,12 @@ final class SessionController {
     func publishPresence() {
         guard let socket else { return }
         let status = model.selfStatus.rawValue
-        let text = model.selfCustomStatus
-        let emoji = model.selfCustomStatusEmoji
+        // **Read through `current()`, so a status whose moment has passed is
+        // not re-broadcast.** Discord leaves an expired status in the blob and
+        // lets the time pass, exactly as it does with a mute.
+        let custom = model.selfCustomStatus?.current()
+        let text = custom?.text
+        let emoji = custom?.emoji
         // **The activities ride along.** `activities` is one array and the
         // write replaces all of it, so publishing a status without the running
         // game and the running activity would erase both from everybody's

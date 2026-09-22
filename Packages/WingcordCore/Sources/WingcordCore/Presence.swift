@@ -25,6 +25,29 @@ public enum PresenceStatus: String, Hashable, Sendable, Codable, CaseIterable {
         case .offline: "Offline"
         }
     }
+
+    /// What picking this one actually does, where it is not obvious.
+    ///
+    /// Discord writes a line under two of the four and leaves the other two
+    /// bare, which is the right split: Online and Idle mean what they say, and
+    /// the two that change behaviour say how.
+    public var explanation: String? {
+        switch self {
+        case .doNotDisturb: "You will not receive desktop notifications"
+        case .invisible: "You will appear offline"
+        default: nil
+        }
+    }
+
+    /// The four a person can choose.
+    ///
+    /// **`.offline` is not one of them.** It is what *other* people are —
+    /// everyone else's invisible arrives as offline — and choosing it is what
+    /// `.invisible` means. A picker offering both would offer one state twice
+    /// and a state nobody can be in.
+    public static let choosable: [PresenceStatus] = [
+        .online, .idle, .doNotDisturb, .invisible,
+    ]
 }
 
 /// One person's presence, as the gateway last reported it.

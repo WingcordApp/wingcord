@@ -825,3 +825,64 @@ private extension SidebarRow {
         return channel.name
     }
 }
+
+/// Who may open a server's settings window.
+///
+/// **The gate was derived from the pages and that was wrong twice over.** The
+/// Invites page asks for `CREATE_INSTANT_INVITE`, which `@everyone` holds on
+/// almost every server — so "is any page reachable" was true for every member of
+/// every server, and Server Settings appeared in the menu of servers the reader
+/// had no business configuring. Discord's own gate is a ten-permission mask,
+/// lifted from its bundle; `createInvite` and `kickMembers` are not in it.
+@Suite("Server settings access")
+@MainActor
+struct ServerSettingsAccessTests {
+
+    @Test("A plain member cannot open it, however many invites they may create")
+    func plainMemberIsRefused() {
+        let member: Permissions = [
+            .createInvite, .viewChannel, .sendMessages, .readMessageHistory,
+            .addReactions, .attachFiles, .embedLinks, .useExternalEmojis,
+        ]
+        #expect(ServerSettingsSection.reachable(with: member).isEmpty)
+    }
+
+    @Test("Someone who manages the server gets the whole window")
+    func managerGetsEverything() {
+        let pages = ServerSettingsSection.reachable(with: .manageGuild)
+        #expect(!pages.isEmpty)
+        #expect(pages.contains(.profile))
+    }
+
+    @Test("An administrator gets every page, whatever else they hold")
+    func administratorGetsEverything() {
+        let pages = ServerSettingsSection.reachable(with: .administrator)
+        #expect(pages.count == ServerSettingsSection.groups.flatMap(\.self).count)
+    }
+
+    /// A moderator holding one of the ten gets a window — with the pages that
+    /// permission reaches and nothing else. That is Discord's behaviour and the
+    /// reason the gate is a mask rather than `MANAGE_GUILD` alone.
+    @Test("One moderation permission opens a window of just its own pages")
+    func moderatorGetsTheirOwnPages() {
+        let pages = ServerSettingsSection.reachable(with: .manageRoles)
+        #expect(pages == [.roles])
+
+        let auditor = ServerSettingsSection.reachable(with: .viewAuditLog)
+        #expect(auditor == [.auditLog])
+    }
+
+    /// Kicking is not on the mask: Discord gates its Members page separately.
+    @Test("Kicking alone does not open the window")
+    func kickAloneIsRefused() {
+        #expect(ServerSettingsSection.reachable(with: .kickMembers).isEmpty)
+    }
+
+    /// The pages with no requirement of their own are the ones that presume
+    /// `MANAGE_GUILD`, and they must not come along with a lesser permission.
+    @Test("A page with no requirement of its own still needs MANAGE_GUILD")
+    func unrequiredPagesStillNeedManageGuild() {
+        #expect(ServerSettingsSection.profile.isReachable(with: .manageRoles) == false)
+        #expect(ServerSettingsSection.profile.isReachable(with: .manageGuild))
+    }
+}

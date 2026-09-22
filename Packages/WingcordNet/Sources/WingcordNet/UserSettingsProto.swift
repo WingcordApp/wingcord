@@ -152,7 +152,11 @@ enum UserSettingsProto {
             folders: folders,
             guildPositions: guildPositions,
             status: status,
-            customStatus: nil,
+            // **Decoded at last.** This was `nil` and the reader's own status
+            // was therefore lost on every launch — see
+            // `ActivityPrivacyProto.decodeCustomStatus`, which walks the same
+            // `status` message this branch already opens for field 1.
+            customStatus: ActivityPrivacyProto.decodeCustomStatus(data),
             inboxTab: inboxTab,
             activityPrivacy: privacy.privacy,
             privacyRaw: privacy.raw,

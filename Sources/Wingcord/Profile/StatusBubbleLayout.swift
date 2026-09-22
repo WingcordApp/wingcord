@@ -61,7 +61,18 @@ nonisolated struct StatusBubbleLayout: Equatable, Sendable {
     /// Measured: the cluster leaves the face just under its middle and hangs off
     /// the artwork's lower edge, which is what makes it read as coming out of
     /// somebody rather than floating beside them.
-    var dropBelowCentre: CGFloat = 8
+    ///
+    /// **12.5 rather than 8, measured against Discord on one screen.** Two
+    /// full-screen captures of the same person's card, same display, same scale:
+    /// the bubble's top edge sits 36 image pixels above the banner's lower edge
+    /// here and 30 above it there, and both captures put the banner's own height
+    /// at 141 and 139 — which is what says the two measurements found the same
+    /// edge rather than two different ones. Six pixels at 1.3228 image pixels
+    /// per point is 4.5 points, and this is where they go.
+    ///
+    /// The error bar is about a point and a half; a number this close is worth
+    /// re-measuring rather than re-deriving if it ever looks wrong again.
+    var dropBelowCentre: CGFloat = 12.5
 
     // MARK: The bubble itself
 
@@ -130,6 +141,28 @@ nonisolated struct StatusBubbleLayout: Equatable, Sendable {
             max(minimumBubbleWidth, contentWidth + bubbleHorizontalPadding * 2),
             maximumBubbleWidth
         )
+    }
+
+    /// How tall the bubble is while its words are clamped.
+    ///
+    /// **The bubble's LAYOUT height, which is not its drawn height once it
+    /// expands.** Hovering lifts the two-line clamp, and the cluster is placed
+    /// bottom-leading against the banner — so growing it pushed the whole bubble
+    /// *upward*, off the artwork and away from the face it comes out of.
+    /// Discord's grows downward, over the name. Pinning the layout height to the
+    /// collapsed one and aligning the content to its top is what makes the extra
+    /// lines spill down instead of shoving everything up.
+    ///
+    /// - Parameter lineHeight: the drawn height of one line of the bubble's own
+    ///   face. Passed in because this type has no text stack — the view measures
+    ///   it with the same CoreText the transcript uses.
+    func collapsedHeight(lineHeight: CGFloat, hasEmoji: Bool, hasText: Bool) -> CGFloat {
+        var content: CGFloat = 0
+        if hasEmoji { content = emojiSide }
+        if hasText {
+            content = max(content, lineHeight * CGFloat(collapsedLineLimit))
+        }
+        return max(content, emojiSide) + bubbleVerticalPadding * 2
     }
 
     /// The widest the *content* may run before it wraps.

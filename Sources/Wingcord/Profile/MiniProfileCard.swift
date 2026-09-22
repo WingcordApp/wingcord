@@ -49,6 +49,20 @@ struct MiniProfileCard: View {
     @State private var inspectedEmoji: EmojiRef?
     /// Whether the person menu is open.
     @State private var isMenuOpen = false
+    /// Which list the reader's own action block is showing.
+    ///
+    /// **Held here rather than in the block**, because the status bubble at the
+    /// top of the card is the other thing that opens the editor: clicking what
+    /// you wrote is how you change it.
+    @State private var ownSurface: OwnProfileSurface = .root
+    /// The prompt an empty bubble carries, chosen once per card.
+    ///
+    /// **Not per body evaluation.** A body runs on every hover, and a prompt
+    /// that changed under the pointer would read as a card that cannot make up
+    /// its mind — see `CustomStatusPrompt`.
+    @State private var ownStatusPrompt = CustomStatusPrompt.prompt(
+        seed: Int.random(in: 0..<1000)
+    )
     /// Whether the still under the moving banner has been taken away.
     @State private var bannerIsPlaying = false
     /// Whether the pointer is over the card, which fades the profile effect
@@ -69,6 +83,12 @@ struct MiniProfileCard: View {
     /// rounded card floating at the top of an empty column with a shadow under
     /// it reads as something that failed to load the rest of itself.
     var form: Form = .card
+    /// The controls the reader's own card carries, from the now bar.
+    ///
+    /// **Nil on every other card in the app**, which is what keeps this out of
+    /// their bodies: a profile opened from a message is somebody else's, and
+    /// there is nothing on it to edit. See `OwnProfilePanel`.
+    var ownActions: OwnProfileActions?
 
     enum Form: Equatable {
         case card
@@ -143,6 +163,19 @@ struct MiniProfileCard: View {
                     .padding(.horizontal, Spacing.margin)
                     .padding(.bottom, Spacing.snug)
             }
+            // **Above the roles and below the mutuals**, which is where the
+            // reference puts it: being in a call is a thing happening now, and
+            // it belongs with what somebody is doing rather than with what a
+            // server says about them.
+            if let voice = model.profileVoice(for: profile.userID) {
+                ProfileVoiceCard(
+                    voice: voice,
+                    width: contentWidth,
+                    join: { model.joinVoice($0) }
+                )
+                .padding(.horizontal, Spacing.margin)
+                .padding(.bottom, Spacing.snug)
+            }
             currentActivity
             if !profile.isLoading, !profile.roles.isEmpty {
                 section("Roles") {
@@ -169,6 +202,12 @@ struct MiniProfileCard: View {
                     .padding(.horizontal, Spacing.margin)
                     .padding(.bottom, Spacing.snug)
                 }
+            }
+            // **Last, under everything the card says about the person.** These
+            // act on the profile above them, and a block of commands between the
+            // bio and the roles would read as part of what the profile says.
+            if let ownActions {
+                OwnProfileActionBlock(actions: ownActions, surface: $ownSurface)
             }
         }
         // **Pinned on the VStack itself, not only on whatever hosts the card.**
@@ -225,17 +264,23 @@ struct MiniProfileCard: View {
                         for: profile.userID,
                         inGuild: profile.guild?.id,
                         profileOptions: .init(
-                            // The card's own item. The full profile omits it,
-                            // being already there.
-                            opensFullProfile: true,
-                            alternateName: profile.alternateName,
-                            showsMainProfile: profile.showsMainProfile
+                            // **The card's own item, and its only one.** The
+                            // full profile omits it, being already there — and
+                            // this card omits *View Main Profile*, which Discord
+                            // offers only from the full one. A popout is a
+                            // glance; swapping which of two profiles it is
+                            // showing, in place, with no room to say which, is a
+                            // control that leaves the reader unsure what they
+                            // are looking at.
+                            opensFullProfile: true
                         ),
                         onProfileOption: { option in
                             switch option {
                             case .fullProfile: model.openFullProfile()
-                            case .mainProfile: model.showMainProfile(true)
-                            case .perServerProfile: model.showMainProfile(false)
+                            // Not offered here — see the options above. Written
+                            // out rather than defaulted, so a case added later
+                            // is a compile error rather than a silent no-op.
+                            case .mainProfile, .perServerProfile: break
                             }
                         },
                         isPresented: $isMenuOpen
@@ -353,17 +398,42 @@ struct MiniProfileCard: View {
                 openFullProfile: openFullProfile
             )
 
-            if hasCustomStatus {
-                // The cluster places itself from the avatar's drop — see
-                // `CustomStatusBubble`. The banner, the avatar and the bubble
-                // are one arrangement, and a hand-tuned offset here would be
-                // right on one of the two profile surfaces at most.
+            // **On the reader's own card the bubble is ALWAYS there, and it is
+            // a button.** Clicking what you wrote is how you change it — which
+            // is Discord's arrangement, and what a separate "Set a Custom
+            // Status" row in the menu below was standing in for. An empty one
+            // carries a prompt and a plus, so a card with no status still says
+            // where a status goes.
+            //
+            // The cluster places itself from the avatar's drop — see
+            // `CustomStatusBubble`. The banner, the avatar and the bubble are
+            // one arrangement, and a hand-tuned offset here would be right on
+            // one of the two profile surfaces at most.
+            if ownActions != nil {
+                Button { ownSurface = .customStatus } label: {
+                    CustomStatusBubble(
+                        text: profile.customStatus,
+                        emoji: profile.customStatusEmoji,
+                        placeholder: hasCustomStatus ? nil : ownStatusPrompt,
+                        avatarDrop: avatarDrop,
+                        cardWidth: width,
+                        fill: ground.statusBubbleFill,
+                        ink: ground.statusBubbleInk
+                    )
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(
+                    Text(hasCustomStatus ? "Edit your custom status" : "Set a custom status")
+                )
+            } else if hasCustomStatus {
                 CustomStatusBubble(
                     text: profile.customStatus,
                     emoji: profile.customStatusEmoji,
                     avatarDrop: avatarDrop,
                     cardWidth: width,
-                    fill: ground.statusBubbleFill
+                    fill: ground.statusBubbleFill,
+                    ink: ground.statusBubbleInk,
+                    answer: model.statusAnswering(for: profile)
                 )
             }
         }
@@ -404,21 +474,14 @@ struct MiniProfileCard: View {
     /// The widest the display name may come out, after the marks worn beside
     /// it have taken theirs.
     ///
-    /// Measured rather than guessed: the chip's width is `MemberRowGeometry`'s
-    /// own arithmetic, so the reservation here and the chip drawn there cannot
-    /// disagree.
+    /// **The tag chip no longer takes any**, because it is no longer beside the
+    /// name — see `identity`. Only the APP mark is, and only on a bot, whose
+    /// name is one that Discord chose rather than a person's.
+    ///
+    /// A floor, so a card whose marks are wider than its content still gives
+    /// the name something to wrap into rather than a negative width.
     private var nameWidth: CGFloat {
-        var available = contentWidth
-        if let tag = profile.guildTag {
-            available -= MemberRowGeometry.tagChipWidth(
-                textWidth: TimelineLayoutEngine.measure(tag.text, font: MemberRowGeometry.tagChipFont),
-                hasBadge: tag.badgeURL != nil
-            ) + Spacing.tight
-        }
-        if profile.isBot { available -= 34 + Spacing.tight }
-        // A floor, so a card whose marks are wider than its content still gives
-        // the name something to truncate into rather than a negative width.
-        return max(80, available)
+        max(80, contentWidth - (profile.isBot ? 34 + Spacing.tight : 0))
     }
 
     private var identity: some View {
@@ -428,6 +491,18 @@ struct MiniProfileCard: View {
             // draws them against the name for the same reason — and hanging
             // them off the handle underneath separates a person from the thing
             // they chose to be identified by.
+            // **The name has the row to itself, and it wraps.**
+            //
+            // The tag chip used to sit beside it, which is what the member list
+            // does — and on a long name the two could not both fit. The width
+            // reserved for the chip made the name truncate sooner, and the chip
+            // still landed on the letters, because a styled name is a drawn view
+            // that reported its whole measured width whatever it was told.
+            //
+            // Discord's own popout wraps the name to two lines and moves the tag
+            // down to the head of the badge row. That is the arrangement here:
+            // a tag is a thing somebody wears, and the badges are the row of
+            // things somebody wears.
             HStack(spacing: Spacing.tight) {
                 StyledDisplayName(
                     text: profile.displayName,
@@ -438,18 +513,12 @@ struct MiniProfileCard: View {
                     // `.title2` is 17 on macOS, which is what this was and which
                     // is visibly small beside the real thing.
                     pointSize: 20,
-                    // **The card's own width, stated — the same fix the full
-                    // profile already carries.** A styled name is a drawn view,
-                    // so the `.lineLimit(1)` a `Text` would honour reaches
-                    // nothing: it reported its whole measured width, the row
-                    // grew to hold it, and the tag chip was laid down on top of
-                    // the letters. Visible only on a long name, which is why it
-                    // survived every short one.
-                    maximumWidth: nameWidth
+                    // **The card's own width, stated.** A styled name is a drawn
+                    // view, so a `.lineLimit` at the call site reaches nothing —
+                    // the ceiling is what makes it wrap at all.
+                    maximumWidth: nameWidth,
+                    maximumLines: 2
                 )
-                if let tag = profile.guildTag {
-                    GuildTagChip(tag: tag)
-                }
                 if profile.isBot {
                     TagChip(text: "APP")
                 }
@@ -487,11 +556,22 @@ struct MiniProfileCard: View {
                     .foregroundStyle(InkColor.tertiary)
             }
 
-            if !profile.badges.isEmpty {
-                BadgeRow(badges: profile.badges, premiumSince: profile.premiumSince)
-                    .padding(.top, 2)
+            // The tag leads the row, then the badges — Discord's own order,
+            // and the reason this is one row rather than a tag row above a
+            // badge row: they are the same kind of thing and a divide between
+            // them would be a line the popout does not have.
+            if profile.guildTag != nil || !profile.badges.isEmpty {
+                HStack(spacing: Spacing.tight) {
+                    if let tag = profile.guildTag {
+                        GuildTagChip(tag: tag)
+                    }
+                    if !profile.badges.isEmpty {
+                        BadgeRow(badges: profile.badges, premiumSince: profile.premiumSince)
+                    }
+                    Spacer(minLength: 0)
+                }
+                .padding(.top, 2)
             }
-
         }
         .padding(.horizontal, Spacing.margin)
         // A deliberate gap under the avatar rather than the name starting where
@@ -514,14 +594,8 @@ struct MiniProfileCard: View {
     /// than a statement — which is why it is the only one that stays.
     @ViewBuilder
     private var detail: some View {
-        if !profile.mutualServers.isEmpty {
-            MutualServersRow(servers: profile.mutualServers)
-                .padding(.horizontal, Spacing.margin)
-                .padding(.bottom, Spacing.snug)
-        }
-
-        if !profile.mutualFriends.isEmpty {
-            MutualFriendsRow(friends: profile.mutualFriends)
+        if !profile.mutualServers.isEmpty || !profile.mutualFriends.isEmpty {
+            MutualsRow(servers: profile.mutualServers, friends: profile.mutualFriends)
                 .padding(.horizontal, Spacing.margin)
                 .padding(.bottom, Spacing.snug)
         }

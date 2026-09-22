@@ -33,7 +33,29 @@ enum SettingsWindow {
         opener = open
     }
 
-    static func open() {
+    /// The page an incoming `open(_:)` asked for, until the window takes it.
+    ///
+    /// **A pending value rather than a parameter on the scene**, because this is
+    /// a `Window` and not a `WindowGroup`: it has no value to be presented with,
+    /// and one already open cannot be re-opened at a different page. The window
+    /// reads this as it appears and again whenever it is raised, and clears it —
+    /// so a second caller asking for a second page moves the window rather than
+    /// being ignored.
+    ///
+    /// `ServerSettingsWindow` does not need this: its scene *is* value-driven,
+    /// and the page rides `ServerSettingsTarget`.
+    private(set) static var pendingSection: SettingsSection?
+
+    /// Takes the pending page, if there is one. Reading it consumes it.
+    static func takePendingSection() -> SettingsSection? {
+        defer { pendingSection = nil }
+        return pendingSection
+    }
+
+    /// - Parameter section: the page to open on, or nil to leave the window
+    ///   wherever it was — which is what every existing caller wants.
+    static func open(_ section: SettingsSection? = nil) {
+        if let section { pendingSection = section }
         // An already-open window is raised rather than reopened: `openWindow`
         // on a `Window` scene does raise it, but it does not make the app active
         // when the call came from a background context.

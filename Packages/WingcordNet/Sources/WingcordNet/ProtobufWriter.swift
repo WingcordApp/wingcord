@@ -44,6 +44,17 @@ struct ProtobufWriter {
         data.append(payload)
     }
 
+    /// A `fixed64` — wire type 1, eight little-endian bytes.
+    ///
+    /// **Not a varint, and the difference is silent.** A snowflake or a
+    /// millisecond clock written as a varint is a well-formed message that
+    /// decodes to something else entirely; Discord's own descriptor marks
+    /// `emoji_id` and `expires_at_ms` as `T:6`, which is `fixed64`.
+    mutating func fixed64(field: Int, _ value: UInt64) {
+        tag(field: field, wireType: 1)
+        withUnsafeBytes(of: value.littleEndian) { data.append(contentsOf: $0) }
+    }
+
     mutating func string(field: Int, _ value: String) {
         message(field: field, Data(value.utf8))
     }

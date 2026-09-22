@@ -56,6 +56,11 @@ public struct GuildProfile: Hashable, Sendable, Identifiable {
     public var customBannerHash: String?
     /// The games the server says it plays, in the order the page lists them.
     public var gameApplicationIDs: [ApplicationID]
+    /// How busy each of those games is in this server.
+    ///
+    /// **`game_activity` on the wire, and nothing read it.** It is what decides
+    /// the little flame on a game's icon — see `GuildGameActivity`.
+    public var gameActivity: [ApplicationID: GuildGameActivity]
 
     public init(
         id: GuildID,
@@ -77,13 +82,15 @@ public struct GuildProfile: Hashable, Sendable, Identifiable {
         visibility: Int = 1,
         badge: Int = 0,
         customBannerHash: String? = nil,
-        gameApplicationIDs: [ApplicationID] = []
+        gameApplicationIDs: [ApplicationID] = [],
+        gameActivity: [ApplicationID: GuildGameActivity] = [:]
     ) {
         self.brandColorPrimary = brandColorPrimary
         self.visibility = visibility
         self.badge = badge
         self.customBannerHash = customBannerHash
         self.gameApplicationIDs = gameApplicationIDs
+        self.gameActivity = gameActivity
         self.id = id
         self.name = name
         self.iconHash = iconHash
@@ -297,4 +304,31 @@ public struct GuildTrait: Hashable, Sendable, Identifiable {
         guard emojiID == nil, let emojiName else { return nil }
         return UnicodeEmoji.glyph(for: emojiName)
     }
+}
+
+
+/// How busy one game is inside one server.
+///
+/// `{"activity_level": 2, "activity_score": 29697}` — captured on every server
+/// profile that names a game, and read by nothing until now.
+public struct GuildGameActivity: Hashable, Sendable {
+    public var level: Int
+    public var score: Int
+
+    public init(level: Int, score: Int) {
+        self.level = level
+        self.score = score
+    }
+
+    /// Whether the icon wears a flame.
+    ///
+    /// **Two captures, both level 2, both with a flame** — the Wooting server's
+    /// twelve games and Counter-Strike's one. Level 0 and level 1 have never
+    /// been seen, so the threshold is the conservative one: a level this client
+    /// has no evidence for draws no flame, where the other direction would put a
+    /// "busy here" mark on a game nobody plays.
+    ///
+    /// If a server ever shows a game with no flame beside one that has it, that
+    /// is the capture that settles where the line actually is.
+    public var isHot: Bool { level >= 2 }
 }

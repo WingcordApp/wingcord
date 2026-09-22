@@ -170,10 +170,7 @@ struct ServerSettingsView: View {
         // fetched yet, so the first pass filters on permissions alone and the
         // sidebar re-filters when the fetch lands — it also fixes up a selection
         // that disappears underneath itself.
-        let reachable = ServerSettingsSection.groups.flatMap(\.self).filter { section in
-            guard let required = section.requiredPermission else { return true }
-            return permissions.contains(required) || permissions.contains(.administrator)
-        }
+        let reachable = ServerSettingsSection.reachable(with: permissions)
         if !reachable.contains(selection) { selection = reachable.first ?? .profile }
     }
 

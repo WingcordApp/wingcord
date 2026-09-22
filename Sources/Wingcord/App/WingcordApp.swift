@@ -112,6 +112,7 @@ struct WingcordApp: App {
                 .presentsSpotifyPlayer()
                 .presentsUserMenu()
                 .presentsDirectMessageMenu()
+                .presentsServerOptions()
                 .presentsActivityInfo()
                 .presentsExpressionInfo()
                 .presentsGuildSurfaces()

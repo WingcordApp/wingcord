@@ -28,7 +28,8 @@ struct UserMenu: View {
         ///
         /// Nil when there is no other one to see — somebody without a nickname
         /// in this server reads the same either way, and Discord omits the item
-        /// for them too.
+        /// for them too — **and nil from the mini card whatever the person
+        /// wears**, because Discord offers this only from the full profile.
         var alternateName: String?
         /// Which one is showing, so the item names the other.
         var showsMainProfile = false

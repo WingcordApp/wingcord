@@ -352,6 +352,35 @@ public enum ChannelSettingsFlags {
     /// "an override exists carrying this bit" and absence is the answer, not an
     /// unknown.
     public static let favorited = 2048
+
+    /// `1 << 14` / `1 << 13`. Whether a forum channel's new threads are
+    /// followed. Not offered by this client, and carried across every write —
+    /// see `clearingUnreadPreference`.
+    public static let newForumThreadsOn = 16384
+    public static let newForumThreadsOff = 8192
+
+    /// `1 << 10` / `1 << 9`. Which messages count as unread in this channel,
+    /// which is a separate question from which ones notify.
+    ///
+    /// **Read out of Discord's bundle**, where the guild's own flag table sits
+    /// beside this one at overlapping numbers — `16384` is opt-in on a guild and
+    /// "new forum threads on" here. Neither is offered by this client; they are
+    /// named so a write can leave the ones it does not draw alone, and cleared
+    /// only where Discord clears them.
+    public static let unreadsAllMessages = 1024
+    public static let unreadsOnlyMentions = 512
+
+    /// The flags a channel keeps when its override is reset to the server's
+    /// default.
+    ///
+    /// **Only the two unread bits go.** Discord's own "use server default"
+    /// writes `message_notifications: 3` alongside the flags with exactly these
+    /// two cleared — every other bit is somebody's opt-in, their pin or their
+    /// forum follow, and a reset that dropped those would be three settings
+    /// undone by one.
+    public static func clearingUnreadPreference(_ flags: Int) -> Int {
+        flags & ~(unreadsAllMessages | unreadsOnlyMentions)
+    }
 }
 
 /// What `PUT /guilds/{id}/requests/@me` answers with.

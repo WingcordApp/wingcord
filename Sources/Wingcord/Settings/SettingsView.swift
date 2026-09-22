@@ -54,6 +54,24 @@ struct SettingsView: View {
         )
         .settingsWindowChrome()
         .toolbar(removing: .title)
+        // A caller that asked for a page gets it — on the first appearance, and
+        // on every raise after, since a `Window` scene does not re-appear.
+        .onAppear { takePendingSection() }
+        .onReceive(
+            NotificationCenter.default.publisher(
+                for: NSApplication.didBecomeActiveNotification
+            )
+        ) { _ in takePendingSection() }
+    }
+
+    /// Moves to the page an outside caller asked for, if one did.
+    ///
+    /// Through the history, so the back arrow can undo it — the same rule the
+    /// source list follows.
+    private func takePendingSection() {
+        guard let section = SettingsWindow.takePendingSection() else { return }
+        guard history.current != section else { return }
+        history.go(to: section)
     }
 
     /// The source list writes through the history rather than to a stored

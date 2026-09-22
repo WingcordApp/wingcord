@@ -351,6 +351,17 @@ struct GuildSettingsDTO: Decodable, Sendable {
     var suppress_everyone: Bool?
     var suppress_roles: Bool?
     var channel_overrides: [ChannelOverride]?
+    /// `OPT_IN_CHANNELS_ON` and the unread bits — see `GuildUserSettingsFlags`.
+    /// **A different table from the override's `flags` below**, at overlapping
+    /// numbers: `16384` is opt-in here and "new forum threads on" there.
+    var flags: Int?
+    /// Present and non-null only while a mute is running.
+    var mute_config: MuteConfig?
+    var hide_muted_channels: Bool?
+    var mobile_push: Bool?
+    var mute_scheduled_events: Bool?
+    /// Discord's `Highlight Level`: 0 default, 1 suppressed, 2 on.
+    var notify_highlights: Int?
 
     struct ChannelOverride: Decodable, Sendable {
         var channel_id: ChannelID?
@@ -358,6 +369,19 @@ struct GuildSettingsDTO: Decodable, Sendable {
         var message_notifications: Int?
         /// The opt-in bit lives here — see `ChannelSettingsFlags`.
         var flags: Int?
+        var mute_config: MuteConfig?
+    }
+
+    /// A running mute, on a guild or on one of its channels.
+    ///
+    /// **`end_time` is an ISO-8601 string with fractional seconds**, which the
+    /// shared decoder does not parse — captured as
+    /// `"2026-09-22T04:22:36.924Z"`. It is read as a string and converted here
+    /// rather than typed as a `Date`, so one unexpected format costs the mute's
+    /// expiry and not the whole settings object.
+    struct MuteConfig: Decodable, Sendable {
+        var end_time: String?
+        var selected_time_window: Int?
     }
 }
 

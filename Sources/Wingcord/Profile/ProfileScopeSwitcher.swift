@@ -39,6 +39,15 @@ struct ProfileScopeSwitcher: View {
             .popover(isPresented: $isOpen, arrowEdge: .bottom) { list }
     }
 
+    /// The widest the name may draw inside the rail's own width.
+    ///
+    /// The rail, less the icon, the chevron, the gaps and the pill's own
+    /// padding — stated rather than measured, because every one of those is a
+    /// constant in this file or in `ProfileEditRail`.
+    private static var labelCap: CGFloat {
+        ProfileEditRail.width - (20 + Spacing.tight * 2 + 10 + 6 + 12 + Spacing.margin)
+    }
+
     // MARK: The trigger
 
     private var trigger: some View {
@@ -48,6 +57,14 @@ struct ProfileScopeSwitcher: View {
                 .font(.system(.body, weight: .semibold))
                 .foregroundStyle(InkColor.primary)
                 .lineLimit(1)
+                .truncationMode(.tail)
+                // **A cap, because `.lineLimit(1)` alone does not truncate —
+                // it stops a second line and lets the first one run.** The pill
+                // is inside a 210-point rail and reported whatever the name
+                // measured, so a server called "Counter-Strike Discord | CSGO &
+                // CS2" drew a capsule wider than the rail, clipped at both ends,
+                // with the name running off each side.
+                .frame(maxWidth: Self.labelCap, alignment: .leading)
             Image(systemName: "chevron.down")
                 .font(.system(size: 10, weight: .bold))
                 .foregroundStyle(InkColor.secondary)

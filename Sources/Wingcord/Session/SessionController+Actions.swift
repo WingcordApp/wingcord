@@ -336,6 +336,82 @@ extension SessionController {
         }
     }
 
+    /// Answers somebody's custom status — with an emoji, or with words.
+    ///
+    /// **There is no status route. It is a direct message.** Captured both ways
+    /// in `reply + react to status.har`: reacting and replying both `POST` to
+    /// the conversation with the person, and the only thing that makes them
+    /// *about* a status is the content the client composes —
+    ///
+    ///     > -# *Reacted to robinresting's status*
+    ///     > 🤷🏿 test
+    ///     😺
+    ///
+    /// A blockquote carrying a subtext-italic header and the status itself, then
+    /// the answer on its own line. No `message_reference`, no new field, no
+    /// second endpoint — which is why this reads as a quoted reply on every
+    /// client including the ones that have never heard of the feature.
+    ///
+    /// **The handle, not the display name.** The capture says
+    /// `robinresting's status` where that account's display name is something
+    /// else; a client that wrote the display name would compose a sentence
+    /// Discord's own never does.
+    func answerStatus(
+        of userID: UserID,
+        handle: String,
+        status: CustomStatus,
+        answer: String
+    ) {
+        let content = Self.statusAnswer(handle: handle, status: status, answer: answer)
+        guard !content.isEmpty else { return }
+        Task { [weak self] in
+            guard let self else { return }
+            do {
+                let conversation = try await resolveDirectMessage(with: userID)
+                _ = try await rest.sendMessage(
+                    in: conversation, content: content, nonce: Self.nonce()
+                )
+            } catch {
+                Self.trace("status answer \(userID) failed: \(Self.describe(error))")
+                model.reportActionFailure(Self.describe(error))
+            }
+        }
+    }
+
+    /// The message body, exactly as the capture composes it.
+    ///
+    /// **"Reacted" for a bare emoji and "Replied" for words**, which is the only
+    /// difference between the two in the capture — the header is the whole
+    /// distinction, and Discord picks it from what the reader sent.
+    static func statusAnswer(
+        handle: String,
+        status: CustomStatus,
+        answer: String
+    ) -> String {
+        let trimmed = answer.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return "" }
+        // A single emoji and nothing else is a reaction; anything with words in
+        // it is a reply.
+        let isReaction = trimmed.unicodeScalars.allSatisfy {
+            $0.properties.isEmoji || $0.properties.isEmojiModifier
+                || $0.properties.isVariationSelector || $0 == "\u{200D}"
+        }
+        let verb = isReaction ? "Reacted" : "Replied"
+        // The status as it reads: its emoji, a space, then its words. Either
+        // half may be missing and the quote still has to be one line.
+        let quoted = [status.emoji.map(Self.plainEmoji), status.text]
+            .compactMap { $0 }
+            .joined(separator: " ")
+        return "> -# *\(verb) to \(handle)'s status*\n> \(quoted)\n\(trimmed)"
+    }
+
+    /// An emoji as it goes into message text: the glyph for a Unicode one, and
+    /// `<:name:id>` for a custom one — the composer's own spelling.
+    private static func plainEmoji(_ emoji: EmojiRef) -> String {
+        guard let id = emoji.id else { return emoji.name }
+        return "<\(emoji.isAnimated ? "a" : ""):\(emoji.name):\(id.rawValue)>"
+    }
+
     private func resolveDirectMessage(with userID: UserID) async throws -> ChannelID {
         if let existing = model.directMessageChannel(with: userID) { return existing }
         let channel = try await rest.openDirectMessage(with: userID)

@@ -210,78 +210,7 @@ struct BadgeFlyout: View {
     }
 }
 
-/// The mutual-servers line, and the list it opens.
-///
-/// The count alone is a fact the reader then has to go and check somewhere else,
-/// and the profile route already sent the answer — so the line is the way into
-/// it rather than a statement beside it.
-///
-/// A `.popover` here rather than an in-card overlay, unlike the badge flyout:
-/// this one is opened by a click, holds a scrolling list of arbitrary length,
-/// and has to be dismissible. All four of those are things a popover already
-/// does — outside-click, Escape, screen-edge avoidance, first responder — and
-/// each is a thing a hand-placed overlay would have to grow by hand.
-struct MutualServersRow: View {
-    var servers: [MutualServer]
-
-    @Environment(\.motion) private var motion
-    @State private var isOpen = false
-    @State private var isHovering = false
-
-    private var label: String {
-        servers.count == 1 ? "1 Mutual Server" : "\(servers.count) Mutual Servers"
-    }
-
-    var body: some View {
-        Button { isOpen = true } label: {
-            HStack(spacing: Spacing.base) {
-                Image(systemName: "person.2.fill")
-                    .font(.system(.caption2))
-                    .foregroundStyle(InkColor.tertiary)
-                    .frame(width: 14)
-                Text(label)
-                    .font(.system(.caption))
-                    .foregroundStyle(InkColor.secondary)
-                    .lineLimit(1)
-                Image(systemName: "chevron.right")
-                    .font(.system(size: 8, weight: .bold))
-                    .foregroundStyle(InkColor.tertiary)
-                    .opacity(isHovering || isOpen ? 1 : 0.45)
-            }
-            // The ground grows OUTWARD from the row rather than the row being
-            // padded in and back out again: the symbol then still lines up with
-            // the fact rows under it, which is the alignment a reader actually
-            // sees. Inside the button's own label, so it is part of the control
-            // rather than a background behind it — §4 rule 4.
-            .background {
-                RoundedRectangle(cornerRadius: Radius.row, style: .continuous)
-                    .fill(Palette.hoverFill)
-                    .opacity(isHovering || isOpen ? 1 : 0)
-                    .padding(.horizontal, -5)
-                    .padding(.vertical, -3)
-            }
-            .contentShape(.rect)
-        }
-        .buttonStyle(.plain)
-        .onHover { hovering in
-            guard isHovering != hovering else { return }
-            isHovering = hovering
-        }
-        .animation(motion.hover, value: isHovering)
-        .accessibilityLabel(Text(label))
-        .accessibilityHint("Show the servers you share")
-        .popover(isPresented: $isOpen, arrowEdge: .trailing) {
-            MutualServersList(servers: servers)
-                // The list carries the material; the popover must carry none,
-                // or two are stacked and the result reads as frost.
-                .presentationBackground(.clear)
-                // And the app's ink with it — see the badge flyout above.
-                .environment(\.colorScheme, .dark)
-        }
-    }
-}
-
-/// The servers themselves.
+/// The servers two accounts share, opened from `MutualsRow`.
 ///
 /// Scrolls only once it has to: an account sharing three servers gets a panel
 /// three rows tall, not a fixed pane with an empty half. The cap is what stops
@@ -479,46 +408,168 @@ struct ConnectionChip: View {
     }
 }
 
-/// The people both accounts know.
+/// The two mutual counts, on one line, behind a cluster of the faces they name.
 ///
-/// The same control the mutual-servers row is, and deliberately: they answer
-/// the same shape of question one line apart, and two arrangements for one
-/// shape is two places for the chevron to drift.
-struct MutualFriendsRow: View {
+/// **Discord draws these as one row, not two.** The popout reads
+/// "1 Mutual Friend · 8 Mutual Servers" with a stack of small pictures in front
+/// of it; this app had them as two stacked rows with a symbol each, which is
+/// twice the height for the same two facts and reads as a list of settings.
+///
+/// **The pictures are the FRIENDS' when there are any, and the servers' when
+/// there are not.** That is Discord's rule and it is the right way round: a
+/// face somebody recognises is worth more than a server icon they may not, and
+/// the two counts are already written out beside it either way.
+///
+/// Each half keeps its own destination — the row is two buttons, not one — so a
+/// reader who wants the servers does not have to go through the friends.
+struct MutualsRow: View {
+    var servers: [MutualServer]
     var friends: [MutualFriend]
+
+    /// How many pictures the cluster shows before it stops.
+    ///
+    /// Three. The cluster is a hint at who, not a list of them; the list is one
+    /// click away and the count beside it is exact.
+    private static let clusterLimit = 3
+    private static let iconSide: CGFloat = 16
+    /// How far each picture sits from the one before it. Less than the side, so
+    /// they overlap the way a stack of cards does.
+    private static let step: CGFloat = 11
+    /// The clearance bitten out of a picture for the one in front of it, so the
+    /// two read as separate discs on any ground rather than merging.
+    private static let clearance: CGFloat = 1.5
+
+    var body: some View {
+        HStack(spacing: Spacing.base) {
+            cluster
+            if !friends.isEmpty {
+                MutualCountButton(
+                    label: friends.count == 1
+                        ? "1 Mutual Friend"
+                        : "\(friends.count) Mutual Friends",
+                    hint: "Show the people you both know"
+                ) { MutualFriendsList(friends: friends) }
+            }
+            if !friends.isEmpty && !servers.isEmpty {
+                Text("·").foregroundStyle(InkColor.tertiary).font(.system(.caption))
+            }
+            if !servers.isEmpty {
+                MutualCountButton(
+                    label: servers.count == 1
+                        ? "1 Mutual Server"
+                        : "\(servers.count) Mutual Servers",
+                    hint: "Show the servers you share"
+                ) { MutualServersList(servers: servers) }
+            }
+            Spacer(minLength: 0)
+        }
+    }
+
+    /// The overlapping pictures.
+    ///
+    /// **Laid out by hand rather than by a negative-spacing `HStack`**, because
+    /// each disc has to be notched for the one in FRONT of it — which means the
+    /// one drawn first is on top, and a stack's z-order is the other way round.
+    /// The width is stated so the row beside it lands where it should.
+    @ViewBuilder
+    private var cluster: some View {
+        let count = min(friends.isEmpty ? servers.count : friends.count, Self.clusterLimit)
+        if count > 0 {
+            ZStack(alignment: .leading) {
+                ForEach(0..<count, id: \.self) { index in
+                    icon(at: index)
+                        .frame(width: Self.iconSide, height: Self.iconSide)
+                        // Bitten out for the next one along, which is the only
+                        // way two discs read as two on a ground this view does
+                        // not know the colour of. A ring drawn in a guessed
+                        // colour is the alternative, and it is wrong on every
+                        // theme but the one it was picked against.
+                        .mask {
+                            NotchedDisc(
+                                notch: index + 1 < count ? Self.step : nil,
+                                clearance: Self.clearance
+                            )
+                            .fill(style: FillStyle(eoFill: true))
+                        }
+                        .offset(x: CGFloat(index) * Self.step)
+                        .zIndex(Double(-index))
+                }
+            }
+            .frame(
+                width: Self.iconSide + CGFloat(count - 1) * Self.step,
+                height: Self.iconSide,
+                alignment: .leading
+            )
+            .accessibilityHidden(true)
+        }
+    }
+
+    @ViewBuilder
+    private func icon(at index: Int) -> some View {
+        if friends.isEmpty {
+            let server = servers[index]
+            AvatarView(url: server.iconURL, monogram: server.monogram, side: Self.iconSide)
+        } else {
+            let friend = friends[index]
+            AvatarView(
+                url: friend.avatarHash.flatMap {
+                    CDN.avatar(userID: friend.id, hash: $0, side: Self.iconSide)
+                },
+                monogram: friend.monogram,
+                side: Self.iconSide
+            )
+        }
+    }
+}
+
+/// A disc with a bite taken out of its trailing side for the disc in front.
+///
+/// Filled even-odd: the second ellipse subtracts rather than adds. `nil` is the
+/// last picture in a cluster, which has nothing in front of it.
+nonisolated private struct NotchedDisc: Shape {
+    var notch: CGFloat?
+    var clearance: CGFloat
+
+    func path(in rect: CGRect) -> Path {
+        var path = Path(ellipseIn: rect)
+        guard let notch else { return path }
+        path.addEllipse(
+            in: rect
+                .offsetBy(dx: notch, dy: 0)
+                .insetBy(dx: -clearance, dy: -clearance)
+        )
+        return path
+    }
+}
+
+/// One half of the mutuals row: a count that opens its own list.
+private struct MutualCountButton<List: View>: View {
+    var label: String
+    var hint: String
+    @ViewBuilder var list: () -> List
 
     @Environment(\.motion) private var motion
     @State private var isOpen = false
     @State private var isHovering = false
 
-    private var label: String {
-        friends.count == 1 ? "1 Mutual Friend" : "\(friends.count) Mutual Friends"
-    }
-
     var body: some View {
         Button { isOpen = true } label: {
-            HStack(spacing: Spacing.base) {
-                Image(systemName: "person.crop.circle.badge.checkmark")
-                    .font(.system(.caption2))
-                    .foregroundStyle(InkColor.tertiary)
-                    .frame(width: 14)
-                Text(label)
-                    .font(.system(.caption))
-                    .foregroundStyle(InkColor.secondary)
-                    .lineLimit(1)
-                Image(systemName: "chevron.right")
-                    .font(.system(size: 8, weight: .bold))
-                    .foregroundStyle(InkColor.tertiary)
-                    .opacity(isHovering || isOpen ? 1 : 0.45)
-            }
-            .background {
-                RoundedRectangle(cornerRadius: Radius.row, style: .continuous)
-                    .fill(Palette.hoverFill)
-                    .opacity(isHovering || isOpen ? 1 : 0)
-                    .padding(.horizontal, -5)
-                    .padding(.vertical, -3)
-            }
-            .contentShape(.rect)
+            Text(label)
+                .font(.system(.caption))
+                .foregroundStyle(isHovering || isOpen ? InkColor.primary : InkColor.secondary)
+                .lineLimit(1)
+                // The ground grows OUTWARD from the text rather than the text
+                // being padded in and back out again, so the row's baseline is
+                // where it would be without it — §4 rule 4, and the same trade
+                // the rows this replaces already made.
+                .background {
+                    RoundedRectangle(cornerRadius: Radius.row, style: .continuous)
+                        .fill(Palette.hoverFill)
+                        .opacity(isHovering || isOpen ? 1 : 0)
+                        .padding(.horizontal, -5)
+                        .padding(.vertical, -3)
+                }
+                .contentShape(.rect)
         }
         .buttonStyle(.plain)
         .onHover { hovering in
@@ -527,16 +578,19 @@ struct MutualFriendsRow: View {
         }
         .animation(motion.hover, value: isHovering)
         .accessibilityLabel(Text(label))
-        .accessibilityHint("Show the people you both know")
+        .accessibilityHint(hint)
         .popover(isPresented: $isOpen, arrowEdge: .trailing) {
-            MutualFriendsList(friends: friends)
+            list()
+                // The list carries the material; the popover must carry none,
+                // or two are stacked and the result reads as frost.
                 .presentationBackground(.clear)
                 .environment(\.colorScheme, .dark)
         }
     }
 }
 
-/// The friends themselves, each with the server tag they wear.
+/// The people two accounts both know, opened from `MutualsRow`. Each carries
+/// the server tag they wear.
 struct MutualFriendsList: View {
     var friends: [MutualFriend]
 
@@ -583,7 +637,14 @@ struct MutualFriendsList: View {
                     CDN.avatar(userID: friend.id, hash: $0, side: Metrics.avatarRow)
                 },
                 monogram: friend.monogram,
-                side: Metrics.avatarRow
+                side: Metrics.avatarRow,
+                // **Played here, where a roster of two hundred does not.** The
+                // default is off because a long list of GIF faces is dozens of
+                // filmstrips resident and dozens of layers rewritten every tick
+                // for pictures nobody is looking at. This list is a handful of
+                // people, opened deliberately, and it is short enough to scroll
+                // in one glance — the same trade the profile card makes.
+                animates: true
             )
             Text(friend.name)
                 .font(Typeface.rowTitle)
@@ -707,8 +768,16 @@ struct GuildTagChip: View {
                 .accessibilityHint("Show this server")
                 .popover(isPresented: $isOpen, arrowEdge: .bottom) {
                     GuildProfileCard(
-                        profile: model.guildProfilePresentation(of: guildID, tag: tag.text),
+                        profile: model.guildProfilePresentation(
+                            of: guildID,
+                            tag: tag.text,
+                            badgeURL: tag.badgeURL
+                        ),
                         openGuild: { model.openGuild($0) },
+                        openGame: {
+                            isOpen = false
+                            model.openGameProfile($0)
+                        },
                         enterGuild: { model.enterGuild($0) }
                     )
                     // The card supplies its own ground, so the popover must
@@ -808,8 +877,16 @@ struct RoleChipFlow: View {
         }
     }
 
+    /// Whether the reader has opened the flow out.
+    ///
+    /// **State on the flow, not a parameter.** It is the flow's own control that
+    /// sets it, it means nothing to anybody else, and a card that carried it
+    /// would have to reset it when the profile changed.
+    @State private var isExpanded = false
+    @Environment(\.motion) private var motion
+
     private var visibleCount: Int {
-        guard let maximumRows, width > 0 else { return roles.count }
+        guard let maximumRows, width > 0, !isExpanded else { return roles.count }
         return RoleChipFit.visibleCount(
             names: roles.map(\.name),
             total: roles.count,
@@ -824,10 +901,23 @@ struct RoleChipFlow: View {
             ForEach(roles.prefix(shown)) { role in
                 chip(role)
             }
+            // **The count is a button, and so is the arrow that puts it back.**
+            // `+8` used to be a label: a card holding forty-six roles said so
+            // and offered no way to read them, which is a control that names a
+            // thing it will not show you. Discord opens the flow in place and
+            // collapses it with a `<` in the same slot.
             if shown < roles.count {
-                RoleOverflowChip(count: roles.count - shown)
+                RoleOverflowChip(count: roles.count - shown) {
+                    isExpanded = true
+                }
+            } else if isExpanded, maximumRows != nil {
+                RoleCollapseChip { isExpanded = false }
             }
         }
+        .animation(motion.standard, value: isExpanded)
+        // A new person is a new set of roles, and an expansion the reader made
+        // for somebody else is not a decision about them.
+        .onChange(of: roles) { isExpanded = false }
     }
 
     private func chip(_ role: ProfileRole) -> some View {
@@ -914,16 +1004,56 @@ struct PrivateProfileBanner: View {
 /// The chip that stands for the roles a capped flow could not show.
 struct RoleOverflowChip: View {
     var count: Int
+    /// What pressing it does. **Nil where there is nothing to open** — the
+    /// chip is also drawn on surfaces that have no room to expand into, and a
+    /// pressable one there would be the inert control §5.5 forbids.
+    var expand: (() -> Void)?
 
     var body: some View {
-        Text("+\(count)")
+        let label = Text("+\(count)")
             .font(.system(.caption2, weight: .medium))
             .foregroundStyle(InkColor.secondary)
             // A count that ticks must not change width as it does.
             .monospacedDigit()
-            .padding(.horizontal, RoleChipFit.horizontalPadding)
-            .padding(.vertical, 3)
-            .glassEffect(.clear, in: .rect(cornerRadius: 7))
+
+        Group {
+            if let expand {
+                Button(action: expand) { label.contentShape(.rect) }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel(Text("Show \(count) more roles"))
+            } else {
+                label
+            }
+        }
+        .padding(.horizontal, RoleChipFit.horizontalPadding)
+        .padding(.vertical, 3)
+        .glassEffect(.clear, in: .rect(cornerRadius: 7))
+    }
+}
+
+/// The chip that puts an opened role flow back.
+///
+/// **A `<` in the slot the `+N` came out of**, which is Discord's own
+/// arrangement and the reason it is a separate type rather than the overflow
+/// chip with a flag: the two say opposite things and share only a shape.
+struct RoleCollapseChip: View {
+    var collapse: () -> Void
+
+    var body: some View {
+        Button(action: collapse) {
+            Image(systemName: "chevron.left")
+                .font(.system(size: 9, weight: .bold))
+                .foregroundStyle(InkColor.secondary)
+                // The same box a `+N` occupies, so the row does not reflow as
+                // the last chip swaps for this one.
+                .frame(minWidth: 14)
+                .contentShape(.rect)
+        }
+        .buttonStyle(.plain)
+        .padding(.horizontal, RoleChipFit.horizontalPadding)
+        .padding(.vertical, 3)
+        .glassEffect(.clear, in: .rect(cornerRadius: 7))
+        .accessibilityLabel(Text("Show fewer roles"))
     }
 }
 

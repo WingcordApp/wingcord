@@ -98,12 +98,19 @@ extension AppModel {
         sessionController.publishPresence()
     }
 
-    func updateSelfCustomStatus(_ text: String?, emoji: String? = nil) {
-        let normalized = text.flatMap { $0.isEmpty ? nil : $0 }
-        guard selfCustomStatus != normalized || selfCustomStatusEmoji != emoji else { return }
-        selfCustomStatus = normalized
-        selfCustomStatusEmoji = emoji
+    /// Sets, changes or clears the reader's own custom status.
+    ///
+    /// **Published AND saved.** The socket is how everybody else sees it and
+    /// the settings blob is what makes it survive a launch — this client did
+    /// only the first for as long as it has had a status field, so a status set
+    /// on a Monday was gone on Tuesday with nothing to say why.
+    func updateSelfCustomStatus(_ status: CustomStatus?) {
+        let next = status.flatMap { $0.isEmpty ? nil : $0 }
+        guard selfCustomStatus != next else { return }
+        let previous = selfCustomStatus
+        selfCustomStatus = next
         sessionController.publishPresence()
+        sessionController.writeCustomStatus(next, restoring: previous)
     }
 
     /// Casts the reader's vote in a poll.

@@ -82,6 +82,21 @@ struct SidebarChannelRow: View {
                     }
                 }
 
+                // **The notice belongs to the name row, not to the block.**
+                //
+                // It used to be applied to the whole thing — the name, the
+                // status line and every face under it — so resting the pointer
+                // on somebody's stream registered a hover on the channel as
+                // well. Two hover surfaces then raced: the stream's preview
+                // came up, the notice's dwell fired 180ms later, and a popover
+                // took the screen from the preview. What a reader saw was a
+                // preview that appeared, vanished, and was replaced by a
+                // sentence about the room being full — which is not even an
+                // answer to what they were pointing at.
+                //
+                // Scoped here, pointing at a face says nothing about the room.
+                .modifier(FullChannelNotice(isFull: isFull))
+
                 // What somebody in the room called it. Under the name and
                 // above the faces, which is the order the two are read in:
                 // what this room is for, then who is in it.
@@ -159,11 +174,6 @@ struct SidebarChannelRow: View {
         }
         // Only where there is a menu to raise. See `openMenu`.
         .modifier(SecondaryClickModifier(openMenu: openMenu))
-        // And only where the room is actually full. **The modifier is guarded,
-        // not its label** — an unconditional `hoverFlyout` would put a second
-        // hover tracker and a popover behind every row in a hundred-channel
-        // list, for the one or two that have anything to say.
-        .modifier(FullChannelNotice(isFull: isFull))
         .animation(motion.fadeQuick, value: isHovering)
         .animation(motion.standard, value: isSelected)
         // **A press plays the effect once and then stops.** A style is something

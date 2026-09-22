@@ -15,6 +15,12 @@ struct GuildRailTile: View {
     var guild: RailGuild
     var isSelected: Bool
     var action: () -> Void
+    /// A right-click, with the tile's own frame in the window root's space.
+    ///
+    /// **The tile reports and stops.** §2 forbids a presentation modifier on a
+    /// row, and this column can hold ninety-seven of them; the menu is hung off
+    /// this rect at the window root — see `ServerOptionsPresenter`.
+    var openMenu: (CGRect) -> Void = { _ in }
 
     @Environment(\.motion) private var motion
     @State private var isHovering = false
@@ -147,6 +153,9 @@ struct GuildRailTile: View {
         // drawn for the whole rail and travels between tiles; see
         // `RailHoverLabel`.
         .railHoverLabel(guild.name, guildID: guild.id, isHovered: isHovering)
+        // One empty layer-less `NSView` per tile that reports a point — see
+        // `SecondaryClickCatcher` for why this is not a `.contextMenu`.
+        .onSecondaryClick { openMenu($0) }
         .accessibilityLabel(Text(guild.name))
         .accessibilityAddTraits(isSelected ? [.isButton, .isSelected] : .isButton)
     }

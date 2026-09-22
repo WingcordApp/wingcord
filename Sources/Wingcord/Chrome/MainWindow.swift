@@ -369,6 +369,7 @@ private struct GuildRailContainer: View {
             homeHasUnread: false,
             selectHome: { model.selectGuild(nil) },
             selectGuild: { model.selectGuild($0) },
+            openGuildMenu: { model.openServerOptions($0, anchor: $1) },
             toggleFolder: { model.toggleFolder($0) },
             addServer: { model.joinServerSheet = JoinServerSheetState() },
             openDiscovery: { model.toggleDiscovery() },
@@ -427,14 +428,21 @@ private struct NowBarContainer: View {
             toggleMute: { model.toggleVoiceMute() },
             toggleDeafen: { model.toggleVoiceDeafen() },
             openSettings: { SettingsWindow.open() },
-            openSelfProfile: {
+            openProfile: { anchor in
                 guard let userID = model.currentUserID else { return }
-                // The full profile is a sheet and anchors to nothing, so there
-                // is no rect to hand it.
-                model.openProfile(userID, anchor: .zero, depth: .full)
-            },
-            setStatus: { model.updateSelfStatus($0) },
-            setCustomStatus: { model.updateSelfCustomStatus($0) }
+                // **The MAIN profile, not the one worn in the open server.**
+                // Without this the card came up with the reader's server
+                // nickname, their roles there and their per-server avatar — the
+                // profile a *member list* shows, not the one the identity
+                // capsule is about.
+                model.profileRequest = ProfileRequest(
+                    userID: userID,
+                    showsMainProfile: true,
+                    anchor: anchor,
+                    showsOwnActions: true
+                )
+                model.sessionController.loadProfile(of: userID, inGuild: nil)
+            }
         )
         .equatable()
     }

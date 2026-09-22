@@ -33,6 +33,15 @@ struct Composer: View {
     /// settings preview can show a shape the reader has not committed to yet —
     /// and so this view still reaches for nothing observable.
     var shape: ChromeShape = .boxy
+    /// What identifies the conversation the bar is writing to.
+    ///
+    /// **The caret follows it.** Opening a channel or switching to another one
+    /// should leave the reader able to type, which is what every client on this
+    /// platform does and what this bar did not: it kept the focus wherever the
+    /// click had left it, so the first thing typed after changing channel went
+    /// nowhere. A value rather than a `channelID`, because this view reaches for
+    /// nothing observable and the settings preview has no channel at all.
+    var focusKey: AnyHashable = 0
     var canSend: Bool
     var replyingToAuthor: String?
     /// Whether the bar is holding an edit rather than a new message. It changes
@@ -328,6 +337,10 @@ struct Composer: View {
         // Clicking anywhere on the bar puts the caret in the field, which is
         // what every composer on this platform does.
         .onTapGesture { isFocused = true }
+        // And so does opening a conversation. `.task(id:)` rather than
+        // `.onChange`, so the first channel of a session is focused too — a
+        // change handler has nothing to compare against on the way in.
+        .task(id: focusKey) { isFocused = true }
     }
 
     /// **One field, three destinations.** A command borrows the bar exactly as
