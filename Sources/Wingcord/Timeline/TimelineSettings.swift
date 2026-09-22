@@ -1,5 +1,6 @@
 import AppKit
 import Foundation
+import WingcordCore
 
 /// What the reader's preferences contribute to a laid-out transcript.
 ///
@@ -48,6 +49,13 @@ nonisolated struct TimelineSettings: @unchecked Sendable {
     var alwaysShowsTimestamps: Bool
     /// Extra air between runs, on top of what `isCompact` sets.
     var groupSpacing: CGFloat
+    /// The parts of a message's spoken label the reader has muted.
+    ///
+    /// **Carried here because the layout engine is `nonisolated`** and may not
+    /// read `AppSettings` — §1 — and because the label is built at layout time,
+    /// so a change to it has to discard the row cache the same way a font change
+    /// does.
+    var mutedSpokenDetails: SpokenDetail.Set
     /// Part of the key because the formatters below are built against it, and a
     /// locale change has to rebuild them.
     var localeIdentifier: String
@@ -65,6 +73,7 @@ nonisolated struct TimelineSettings: @unchecked Sendable {
         showsSeconds: Bool = false,
         alwaysShowsTimestamps: Bool = false,
         groupSpacing: CGFloat = 0,
+        mutedSpokenDetails: SpokenDetail.Set = [],
         locale: Locale
     ) {
         self.isCompact = isCompact
@@ -73,6 +82,7 @@ nonisolated struct TimelineSettings: @unchecked Sendable {
         self.showsSeconds = showsSeconds
         self.alwaysShowsTimestamps = alwaysShowsTimestamps
         self.groupSpacing = groupSpacing
+        self.mutedSpokenDetails = mutedSpokenDetails
         self.localeIdentifier = locale.identifier
 
         // **One formatter each, built here and reused for the life of the
@@ -168,6 +178,7 @@ nonisolated struct TimelineSettings: @unchecked Sendable {
             showsSeconds: settings.showsSeconds,
             alwaysShowsTimestamps: settings.alwaysShowsTimestamps,
             groupSpacing: settings.messageGroupSpacing,
+            mutedSpokenDetails: settings.mutedSpokenDetails,
             locale: .current
         )
     }
@@ -188,6 +199,7 @@ extension TimelineSettings: Equatable {
             && lhs.showsSeconds == rhs.showsSeconds
             && lhs.alwaysShowsTimestamps == rhs.alwaysShowsTimestamps
             && lhs.groupSpacing == rhs.groupSpacing
+            && lhs.mutedSpokenDetails == rhs.mutedSpokenDetails
             && lhs.localeIdentifier == rhs.localeIdentifier
     }
 }

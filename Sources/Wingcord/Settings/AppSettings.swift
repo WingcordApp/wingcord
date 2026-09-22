@@ -562,6 +562,77 @@ final class AppSettings {
         }
     }
 
+    /// The cosmetics this reader has asked not to see.
+    ///
+    /// **One stored set rather than six booleans.** It is the memo key for the
+    /// filtered decorations — see `AppModel.cosmetics(of:)` — and a set compares
+    /// in one word where six properties are six reads on every row.
+    var suppressedCosmetics: CosmeticSuppression = [] {
+        didSet {
+            guard suppressedCosmetics != oldValue else { return }
+            defaults.set(Int(suppressedCosmetics.rawValue), forKey: Key.suppressedCosmetics)
+            notifyPresentation()
+        }
+    }
+
+    /// Whether the suppression above applies to the reader's OWN cosmetics too.
+    ///
+    /// **Off by default, and that asymmetry is the point.** Somebody who turns
+    /// nameplates off is usually saying "stop other people's decorations
+    /// shouting at me", not "take the thing I bought off my own name". Discord
+    /// draws the same distinction.
+    var suppressesOwnCosmetics = false {
+        didSet {
+            guard suppressesOwnCosmetics != oldValue else { return }
+            defaults.set(suppressesOwnCosmetics, forKey: Key.suppressesOwnCosmetics)
+            notifyPresentation()
+        }
+    }
+
+    /// Whether every link is underlined, or only the ones under the pointer.
+    var underlinesLinks = false {
+        didSet {
+            guard underlinesLinks != oldValue else { return }
+            defaults.set(underlinesLinks, forKey: Key.underlinesLinks)
+            notifyPresentation()
+        }
+    }
+
+    /// Where a role's colour is allowed to land.
+    var roleColorPlacement: RoleColorPlacement = .inNames {
+        didSet {
+            guard roleColorPlacement != oldValue else { return }
+            defaults.set(roleColorPlacement.rawValue, forKey: Key.roleColorPlacement)
+            notifyPresentation()
+        }
+    }
+
+    /// What VoiceOver is told about a message beyond its words.
+    ///
+    /// **A set, for the reason the cosmetics are one**, and an *opt-out* set:
+    /// everything is spoken unless it is in here, so a build that adds a detail
+    /// speaks it for everybody rather than silently leaving it out of a stored
+    /// list nobody will go back and tick.
+    var mutedSpokenDetails: SpokenDetail.Set = [] {
+        didSet {
+            guard mutedSpokenDetails != oldValue else { return }
+            defaults.set(Int(mutedSpokenDetails.rawValue), forKey: Key.mutedSpokenDetails)
+        }
+    }
+
+    /// Whether VoiceOver is interrupted when a message arrives in the channel
+    /// being read.
+    ///
+    /// **Off by default.** An announcement per message in a busy channel makes
+    /// the app unusable with a screen reader, which is the opposite of what the
+    /// pane is for.
+    var announcesNewMessages = false {
+        didSet {
+            guard announcesNewMessages != oldValue else { return }
+            defaults.set(announcesNewMessages, forKey: Key.announcesNewMessages)
+        }
+    }
+
     /// Whether the now bar wears the reader's own nameplate.
     ///
     /// A preference rather than always-on: a nameplate is artwork behind the
@@ -848,6 +919,21 @@ final class AppSettings {
         composerControls = defaults.stringArray(forKey: Key.composerControls)
             .map(ComposerControlOrder.init(storage:)) ?? .default
         showsNameplateInNowBar = defaults.object(forKey: Key.nowBarNameplate) as? Bool ?? true
+        suppressedCosmetics = CosmeticSuppression(
+            rawValue: UInt8(truncatingIfNeeded:
+                defaults.object(forKey: Key.suppressedCosmetics) as? Int ?? 0)
+        )
+        suppressesOwnCosmetics =
+            defaults.object(forKey: Key.suppressesOwnCosmetics) as? Bool ?? false
+        underlinesLinks = defaults.object(forKey: Key.underlinesLinks) as? Bool ?? false
+        roleColorPlacement = (defaults.object(forKey: Key.roleColorPlacement) as? String)
+            .flatMap(RoleColorPlacement.init(rawValue:)) ?? .inNames
+        mutedSpokenDetails = SpokenDetail.Set(
+            rawValue: UInt8(truncatingIfNeeded:
+                defaults.object(forKey: Key.mutedSpokenDetails) as? Int ?? 0)
+        )
+        announcesNewMessages =
+            defaults.object(forKey: Key.announcesNewMessages) as? Bool ?? false
         storedGroupSpacing = defaults.object(forKey: Key.groupSpacing) as? Double ?? 0
         showsSeconds = defaults.object(forKey: Key.showsSeconds) as? Bool ?? false
         alwaysShowsTimestamps = defaults.object(forKey: Key.alwaysShowsTimestamps) as? Bool
@@ -1003,6 +1089,12 @@ final class AppSettings {
         static let legacyComposerShape = "appearance.composerShape"
         static let composerControls = "appearance.composerControls"
         static let nowBarNameplate = "appearance.nowBarNameplate"
+        static let suppressedCosmetics = "accessibility.suppressedCosmetics"
+        static let suppressesOwnCosmetics = "accessibility.suppressesOwnCosmetics"
+        static let underlinesLinks = "accessibility.underlinesLinks"
+        static let roleColorPlacement = "accessibility.roleColorPlacement"
+        static let mutedSpokenDetails = "accessibility.mutedSpokenDetails"
+        static let announcesNewMessages = "accessibility.announcesNewMessages"
         static let groupSpacing = "appearance.messageGroupSpacing"
         static let showsSeconds = "chat.showsSeconds"
         static let alwaysShowsTimestamps = "chat.alwaysShowsTimestamps"

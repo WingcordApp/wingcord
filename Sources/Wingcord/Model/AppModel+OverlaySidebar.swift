@@ -128,7 +128,7 @@ extension AppModel {
                 displayName: friendNicknames[userID] ?? user.preferredName,
                 avatarURL: avatarURL(for: user, side: Metrics.avatarRow),
                 monogram: user.monogram,
-                decorationURL: user.decoration?.avatarDecorationHash
+                decorationURL: cosmetics(of: user)?.avatarDecorationHash
                     .flatMap { CDN.avatarDecoration(hash: $0) },
                 status: status,
                 isOnMobile: presence?.isOnMobile ?? false,

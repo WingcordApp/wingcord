@@ -28,7 +28,11 @@ extension AppModel {
         // between them from the menu — see `ProfileRequest.showsMainProfile`.
         let guildUser = guildID.flatMap { memberProfiles[$0]?[request.userID] }
         let profileUser = guildUser ?? user
-        let decoration = profileUser.decoration
+        // **Filtered here, once, and every field below reads the filtered
+        // copy.** The card is where a profile effect, a frame and a gradient are
+        // actually drawn, so this one binding is what those three switches turn
+        // off — see `AppModel.cosmetics(of:)`.
+        let decoration = cosmetics(of: profileUser)
 
         return ProfilePresentation(
             userID: user.id,
@@ -200,6 +204,20 @@ extension AppModel {
     func userColor(_ value: UInt32?) -> UInt32? {
         guard let value else { return nil }
         return UserColor.desaturated(value, by: userColorSaturation)
+    }
+
+    /// A ROLE's colour, resolved for a projection.
+    ///
+    /// **The same saturation, plus the one thing saturation cannot express.**
+    /// Turning the slider to zero leaves a grey that is still a colour and still
+    /// sets the type apart from the ink beside it; "don't show role colours" is
+    /// the different question of whether a name is drawn in somebody else's
+    /// colour at all. Both are answered here so the roster, its section headers
+    /// and the transcript's author names cannot disagree — a name grey in one
+    /// surface and coloured in another is worse than either.
+    func roleColor(_ value: UInt32?) -> UInt32? {
+        guard AppSettings.shared.roleColorPlacement.tintsNames else { return nil }
+        return userColor(value)
     }
 
     /// A profile's two colours, chosen or derived.

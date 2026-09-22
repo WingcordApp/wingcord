@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import OSLog
 import WingcordCore
@@ -845,6 +846,7 @@ final class SessionController {
             // posted only for one the reader is not *looking at*, which needs
             // the window's state as well — see `NotificationPolicy.Subject`.
             announce(message)
+            speakIfReading(message)
             // A launch this client is still waiting on: the invitation message
             // is the only thing that carries the instance Discord actually
             // minted. See `awaitActivityInstance`.
@@ -1173,6 +1175,40 @@ final class SessionController {
     /// something to tell somebody about, rather than at launch — a permission
     /// sheet in front of an app nobody has signed into yet is a question about
     /// something they have not seen.
+    /// Interrupts VoiceOver with a message that arrived in the channel being
+    /// read — and only that one.
+    ///
+    /// **A different question from the banner above it.** `announce` posts for a
+    /// channel the reader is *not* looking at; this one fires only for the
+    /// channel they are, because a screen-reader user reading a transcript has
+    /// no other way to learn that something appeared below them. The banner and
+    /// this are mutually exclusive by construction.
+    ///
+    /// **Off by default, and that is not timidity.** An interruption per message
+    /// on a busy channel makes the app unusable with a screen reader, which is
+    /// the opposite of what the setting is for; somebody who wants it is
+    /// choosing it for a quiet conversation.
+    ///
+    /// `.low` priority so it queues behind whatever the reader asked for rather
+    /// than cutting across it mid-word.
+    private func speakIfReading(_ message: Message) {
+        guard AppSettings.shared.announcesNewMessages,
+              message.channelID == model.selectedChannelID,
+              message.authorID != model.currentUserID,
+              let window = NSApp?.keyWindow
+        else { return }
+        let name = model.users[message.authorID]?.preferredName ?? "Someone"
+        let body = message.content.isEmpty ? "sent an attachment" : message.content
+        NSAccessibility.post(
+            element: window,
+            notification: .announcementRequested,
+            userInfo: [
+                .announcement: "\(name): \(body)",
+                .priority: NSAccessibilityPriorityLevel.low.rawValue,
+            ]
+        )
+    }
+
     private func announce(_ message: Message) {
         guard let notice = model.notice(for: message) else { return }
         // **The overlay first, and then nothing else.** A system banner behind

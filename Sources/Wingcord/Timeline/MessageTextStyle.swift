@@ -33,6 +33,8 @@ nonisolated struct MessageTextStyle: @unchecked Sendable {
     var secondaryColor: NSColor
     var tertiaryColor: NSColor
     var linkColor: NSColor
+    /// Whether every link carries a rule as well as its colour. See `link`.
+    var underlinesLinks: Bool = false
     var mentionColor: NSColor
     var mentionBackground: NSColor
     var selfMentionBackground: NSColor
@@ -93,6 +95,7 @@ nonisolated struct MessageTextStyle: @unchecked Sendable {
             secondaryColor: .secondaryLabelColor,
             tertiaryColor: .tertiaryLabelColor,
             linkColor: .linkColor,
+            underlinesLinks: AppSettings.shared.underlinesLinks,
             mentionColor: NSColor(Palette.accent),
             mentionBackground: NSColor(Palette.accent).withAlphaComponent(0.16),
             selfMentionBackground: NSColor(Palette.accent).withAlphaComponent(0.28),
@@ -183,6 +186,12 @@ nonisolated struct MessageTextStyle: @unchecked Sendable {
     func link(base: [NSAttributedString.Key: Any]) -> [NSAttributedString.Key: Any] {
         var attributes = base
         attributes[.foregroundColor] = linkColor
+        // **A rule, not a colour, for anyone who cannot rely on the colour.**
+        // A link is distinguished from body text by hue alone by default, which
+        // is the first distinction a colour-blind reader loses — so the
+        // accessibility pane offers the underline and this is the one place it
+        // lands. Off by default because Discord's is.
+        if underlinesLinks { attributes[.underlineStyle] = NSUnderlineStyle.single.rawValue }
         return attributes
     }
 

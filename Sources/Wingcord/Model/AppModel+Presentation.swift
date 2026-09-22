@@ -177,7 +177,7 @@ extension AppModel {
         // switched the plate off would have kept a violet capsule and lost the
         // picture.
         let plate = AppSettings.shared.showsNameplateInNowBar
-            ? user?.decoration?.nameplate
+            ? user.flatMap { cosmetics(of: $0)?.nameplate }
             : nil
         return NowBarPresentation(
             userID: currentUserID ?? UserID(rawValue: 0),

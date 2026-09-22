@@ -457,6 +457,23 @@ final class AppModel {
     /// How the last submission went, so the flow's last screen can say.
     var reportSubmission: ReportSubmissionState?
 
+    /// Filtered decorations, keyed by the person, the decoration object they
+    /// came from, and the set that produced them.
+    ///
+    /// **Self-invalidating on both inputs**, so there is nothing to clear: a
+    /// changed preference misses on the set and a changed decoration misses on
+    /// the object identity. It only ever holds an entry for somebody who has
+    /// been drawn *while* a suppression was on, which is a subset of `users`
+    /// and pruned with it.
+    ///
+    /// `@ObservationIgnored` because nothing observes it — it is a pure function
+    /// of its two keys, and a tracked read would register a dependency on a
+    /// cache rather than on either input.
+    @ObservationIgnored
+    var cosmeticMemo: [
+        UserID: (source: ObjectIdentifier, key: CosmeticSuppression, value: UserDecoration)
+    ] = [:]
+
     /// People the account has blocked, and people it has ignored.
     ///
     /// **Two sets, because they are two independent facts** — you can ignore a

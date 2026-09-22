@@ -120,23 +120,25 @@ extension AppModel {
             // follows.
             let coloured = member
                 .flatMap { RoleResolver.nameColorRole(of: $0.roleIDs, in: guildRoles) }
-            let style = user.decoration?.displayNameStyle
+            let style = cosmetics(of: user)?.displayNameStyle
             let styleFont = style?.font
             let face = styleFont.flatMap {
                 DisplayNameFontRegistry.font($0, size: authorPointSize)
             }
             result[userID] = TimelineLayoutEngine.AuthorInfo(
                 name: member?.resolvedName(user: user) ?? user.preferredName,
-                colorValue: member
-                    .flatMap { RoleResolver.nameColorValue(of: $0.roleIDs, in: guildRoles) }
-                    .map { UserColor.desaturated($0, by: saturation) },
+                colorValue: roleColor(
+                    member.flatMap {
+                        RoleResolver.nameColorValue(of: $0.roleIDs, in: guildRoles)
+                    }
+                ),
                 avatarURL: avatarURL(
                     forUserID: userID,
                     inGuild: guildID,
                     side: Metrics.avatarMessage
                 ),
                 monogram: user.monogram,
-                decorationURL: user.decoration?.avatarDecorationHash
+                decorationURL: cosmetics(of: user)?.avatarDecorationHash
                     .flatMap { CDN.avatarDecoration(hash: $0) },
                 isBot: user.isBot,
                 // **The tag the roster has always drawn, in the transcript at
@@ -145,8 +147,8 @@ extension AppModel {
                 // direct-message list drew the chip and the message header did
                 // not. Same fields, same resolution, so a person cannot look
                 // like two people in one window.
-                tag: user.decoration?.primaryGuildTag,
-                tagBadgeURL: user.decoration.flatMap { decoration in
+                tag: cosmetics(of: user)?.primaryGuildTag,
+                tagBadgeURL: cosmetics(of: user).flatMap { decoration in
                     guard let guildID = decoration.primaryGuildID,
                           let hash = decoration.primaryGuildBadgeHash
                     else { return nil }

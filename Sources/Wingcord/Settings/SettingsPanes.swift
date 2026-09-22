@@ -814,59 +814,170 @@ private struct AccessibilityPane: View {
     @Environment(\.accessibilityDifferentiateWithoutColor) private var differentiateWithoutColor
     @Environment(\.colorSchemeContrast) private var contrast
     @State private var settings = AppSettings.shared
+    @State private var isConfirmingReset = false
 
     var body: some View {
-        SettingsCard {
-            SettingsValueRow(
-                title: "Reduce Motion",
-                value: reduceMotion ? "On" : "Off",
-                help: reduceMotion
-                    ? "Travel is replaced by a short cross-fade. The materials stay."
-                    : "Animations run in full. Wingcord has no separate motion setting."
-            )
-            CardDivider()
-            SettingsValueRow(
-                title: "Reduce Transparency",
-                value: reduceTransparency ? "On" : "Off",
-                help: reduceTransparency
-                    ? "This window is drawn on opaque surfaces instead of glass."
-                    : "Chrome is glass, and the desktop shows through it."
-            )
-            CardDivider()
-            SettingsValueRow(
-                title: "Increase Contrast",
-                value: contrast == .increased ? "On" : "Off",
-                help: "Every label uses the system's hierarchy rather than a fixed grey, so contrast tracks this automatically."
-            )
-            CardDivider()
-            SettingsValueRow(
-                title: "Differentiate Without Color",
-                value: differentiateWithoutColor ? "On" : "Off",
-                help: "Presence is drawn as a shape — filled, crescent, dash, ring — and not by colour alone, whether or not this is set."
-            )
-        }
-        SettingsFootnote(
-            "Reported, not duplicated: there is no app-level copy of any of these, so there is never a question of which one is being honoured.",
-            symbolName: "checkmark.seal"
-        )
+        cosmetics
+        readability
+        voiceOver
+        systemSettings
+        reset
+    }
 
-        SettingsGroup("Text size") {
+    // MARK: Cosmetics
+
+    /// **The reason this is the first card and not a footnote.** Everything in
+    /// it is artwork somebody *else* bought, drawn on this reader's screen: a
+    /// name set in a low-contrast gradient face, an effect animating behind a
+    /// bio, a strip of colour across a whole row. None of it is this reader's
+    /// choice and all of it is in their way, which is what makes it an
+    /// accessibility control rather than a taste one.
+    private var cosmetics: some View {
+        SettingsGroup("Cosmetics") {
             SettingsCard {
-                SettingsValueRow(
-                    title: "System text size",
-                    value: "Followed",
-                    help: "Every size in the app is a relative style, so the accessibility text setting scales all of it."
+                CardHeaderRow(
+                    title: "Hide these",
+                    help: "Other people's decorations. Their words, badges and "
+                        + "names are untouched."
+                )
+                SettingsCheckboxGrid(
+                    options: CosmeticSuppression.all.map { .init($0.option, $0.title) },
+                    isOn: { settings.suppressedCosmetics.contains($0) },
+                    set: { option, isOn in
+                        if isOn {
+                            settings.suppressedCosmetics.insert(option)
+                        } else {
+                            settings.suppressedCosmetics.remove(option)
+                        }
+                    }
                 )
                 CardDivider()
-                SettingsValueRow(
-                    title: "Wingcord's own scale",
-                    value: settings.textScale.formatted(.percent.precision(.fractionLength(0))),
-                    help: "Applied on top of the system size, never instead of it."
+                SettingsToggle(
+                    title: "Hide my own too",
+                    help: "Off by default: most people who turn these off mean "
+                        + "other people's, not the one they bought.",
+                    isOn: $settings.suppressesOwnCosmetics
                 )
             }
         }
+    }
 
-        SettingsGroup("Change these") {
+    // MARK: Readability
+
+    private var readability: some View {
+        SettingsGroup("Readability") {
+            SettingsCard {
+                SettingsToggle(
+                    title: "Underline links",
+                    help: "A link is told apart from body text by colour alone "
+                        + "otherwise, which is the first distinction to go.",
+                    isOn: $settings.underlinesLinks
+                )
+                CardDivider()
+                SettingsFlyoutRow(
+                    "Role colours",
+                    help: "Whether a name is drawn in the colour of somebody's "
+                        + "highest coloured role.",
+                    selection: $settings.roleColorPlacement,
+                    options: RoleColorPlacement.allCases,
+                    title: \.title,
+                    symbol: \.symbolName
+                )
+                CardDivider()
+                SettingsSliderRow(
+                    title: "Colour strength",
+                    help: "Fades every colour that came from a person — role "
+                        + "colours, name gradients — without touching the app's own.",
+                    value: $settings.userColorSaturation,
+                    range: 0...1,
+                    step: 0.05,
+                    format: { "\(Int($0 * 100))%" }
+                )
+            }
+            SettingsFootnote(
+                "Text size and message density are in Appearance, where the rest of "
+                    + "what the transcript looks like lives.",
+                symbolName: "textformat.size"
+            )
+        }
+    }
+
+    // MARK: VoiceOver
+
+    private var voiceOver: some View {
+        SettingsGroup("VoiceOver") {
+            SettingsCard {
+                CardHeaderRow(
+                    title: "Say this about a message",
+                    help: "Each one is a phrase added to every message in the "
+                        + "channel. Useful once, noise a hundred times."
+                )
+                SettingsCheckboxGrid(
+                    options: SpokenDetail.allCases.map { .init($0, $0.title) },
+                    // Stored as the MUTED set, drawn as the spoken one — an
+                    // opt-out list, so a detail added later is spoken for
+                    // everybody rather than left out of a stored list of
+                    // opt-ins nobody goes back to tick.
+                    isOn: { !settings.mutedSpokenDetails.contains(.mask(for: $0)) },
+                    set: { detail, isOn in
+                        let mask = SpokenDetail.Set.mask(for: detail)
+                        if isOn {
+                            settings.mutedSpokenDetails.remove(mask)
+                        } else {
+                            settings.mutedSpokenDetails.insert(mask)
+                        }
+                    }
+                )
+                CardDivider()
+                SettingsToggle(
+                    title: "Announce new messages",
+                    help: "Interrupts whatever is being read when a message arrives "
+                        + "in the channel you are in. Off by default — on a busy "
+                        + "channel it makes the app unusable.",
+                    isOn: $settings.announcesNewMessages
+                )
+            }
+        }
+    }
+
+    // MARK: What macOS decides
+
+    private var systemSettings: some View {
+        SettingsGroup("From macOS") {
+            SettingsCard {
+                SettingsValueRow(
+                    title: "Reduce Motion",
+                    value: reduceMotion ? "On" : "Off",
+                    help: reduceMotion
+                        ? "Travel is replaced by a short cross-fade. The materials stay."
+                        : "Animations run in full. Wingcord has no separate motion setting."
+                )
+                CardDivider()
+                SettingsValueRow(
+                    title: "Reduce Transparency",
+                    value: reduceTransparency ? "On" : "Off",
+                    help: reduceTransparency
+                        ? "This window is drawn on opaque surfaces instead of glass."
+                        : "Chrome is glass, and the desktop shows through it."
+                )
+                CardDivider()
+                SettingsValueRow(
+                    title: "Increase Contrast",
+                    value: contrast == .increased ? "On" : "Off",
+                    help: "Every label uses the system's hierarchy rather than a fixed grey, so contrast tracks this automatically."
+                )
+                CardDivider()
+                SettingsValueRow(
+                    title: "Differentiate Without Color",
+                    value: differentiateWithoutColor ? "On" : "Off",
+                    help: "Presence is drawn as a shape — filled, crescent, dash, ring — and not by colour alone, whether or not this is set."
+                )
+            }
+            SettingsFootnote(
+                "Reported, not duplicated: there is no app-level copy of any of these, so there is never a question of which one is being honoured.",
+                symbolName: "checkmark.seal"
+            )
+
             SettingsCard {
                 SettingsNavigationRow(
                     title: "Display",
@@ -886,7 +997,47 @@ private struct AccessibilityPane: View {
                     open("x-apple.systempreferences:com.apple.preference.universalaccess?Seeing_VoiceOver")
                 }
             }
+            .padding(.top, SettingsMetrics.cardToHeader)
         }
+    }
+
+    // MARK: Reset
+
+    private var reset: some View {
+        SettingsGroup {
+            SettingsCard {
+                SettingsActionRow(
+                    "Reset this page",
+                    help: "Puts every switch above back where it started. Nothing "
+                        + "outside this page is touched.",
+                    actionTitle: "Reset"
+                ) { isConfirmingReset = true }
+            }
+            // **A confirmation, because there is no undo.** §5.5's rule about a
+            // destructive act: this throws away a set of choices somebody made
+            // deliberately, and a misclick has nothing to put them back.
+            .confirmationDialog(
+                "Reset accessibility settings?",
+                isPresented: $isConfirmingReset,
+                titleVisibility: .visible
+            ) {
+                Button("Reset", role: .destructive, action: resetAll)
+                Button("Cancel", role: .cancel) {}
+            } message: {
+                Text("Every switch on this page goes back to its default. "
+                    + "Nothing else in Settings changes.")
+            }
+        }
+    }
+
+    private func resetAll() {
+        settings.suppressedCosmetics = []
+        settings.suppressesOwnCosmetics = false
+        settings.underlinesLinks = false
+        settings.roleColorPlacement = .inNames
+        settings.userColorSaturation = 1
+        settings.mutedSpokenDetails = []
+        settings.announcesNewMessages = false
     }
 
     private func open(_ string: String) {

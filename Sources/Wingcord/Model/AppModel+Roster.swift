@@ -137,31 +137,32 @@ extension AppModel {
             let entry = MemberEntry(
                 userID: userID,
                 name: member.resolvedName(user: user),
-                colorValue: coloured?.displayColorValue
-                    .map { UserColor.desaturated($0, by: saturation) },
-                gradient: coloured?.colors
-                    .flatMap { RoleColors.wrappedStops($0) }?
-                    .map { UserColor.desaturated($0, by: saturation) },
+                colorValue: roleColor(coloured?.displayColorValue),
+                gradient: AppSettings.shared.roleColorPlacement.tintsNames
+                    ? coloured?.colors
+                        .flatMap { RoleColors.wrappedStops($0) }?
+                        .map { UserColor.desaturated($0, by: saturation) }
+                    : nil,
                 avatarURL: avatarURL(forUserID: userID, inGuild: guildID, side: Metrics.avatarRow),
                 monogram: user.monogram,
-                decorationURL: user.decoration?.avatarDecorationHash
+                decorationURL: cosmetics(of: user)?.avatarDecorationHash
                     .flatMap { CDN.avatarDecoration(hash: $0) },
-                displayNameFont: user.decoration?.displayNameStyle?.font,
+                displayNameFont: cosmetics(of: user)?.displayNameStyle?.font,
                 status: status,
                 isOnMobile: presence?.isOnMobile ?? false,
                 subtitle: presence?.primaryActivity?.rowSubtitle
                     ?? presence?.customStatus?.rowSubtitle,
                 isBot: user.isBot,
-                tag: user.decoration?.primaryGuildTag,
-                tagBadgeURL: user.decoration.flatMap { decoration in
+                tag: cosmetics(of: user)?.primaryGuildTag,
+                tagBadgeURL: cosmetics(of: user).flatMap { decoration in
                     guard let guildID = decoration.primaryGuildID,
                           let hash = decoration.primaryGuildBadgeHash
                     else { return nil }
                     return CDN.guildTagBadge(guildID: guildID, hash: hash)
                 },
-                nameplateURL: user.decoration?.nameplate?.artworkURL,
-                nameplateAnimatedURL: user.decoration?.nameplate?.animatedArtworkURL,
-                nameplatePalette: user.decoration?.nameplate?.palette ?? .none,
+                nameplateURL: cosmetics(of: user)?.nameplate?.artworkURL,
+                nameplateAnimatedURL: cosmetics(of: user)?.nameplate?.animatedArtworkURL,
+                nameplatePalette: cosmetics(of: user)?.nameplate?.palette ?? .none,
                 isTyping: typing[userID].map { $0 > now } ?? false
             )
 
@@ -185,8 +186,7 @@ extension AppModel {
                 roleID: role.id,
                 title: role.name,
                 count: entries.count,
-                colorValue: role.displayColorValue
-                    .map { UserColor.desaturated($0, by: saturation) },
+                colorValue: roleColor(role.displayColorValue),
                 iconURL: role.iconHash.flatMap {
                     CDN.roleIcon(roleID: role.id, hash: $0, side: MemberRowGeometry.sectionIconSide)
                 },
@@ -256,24 +256,24 @@ extension AppModel {
                 colorValue: nil,
                 avatarURL: avatarURL(for: user, side: Metrics.avatarRow),
                 monogram: user.monogram,
-                decorationURL: user.decoration?.avatarDecorationHash
+                decorationURL: cosmetics(of: user)?.avatarDecorationHash
                     .flatMap { CDN.avatarDecoration(hash: $0) },
-                displayNameFont: user.decoration?.displayNameStyle?.font,
+                displayNameFont: cosmetics(of: user)?.displayNameStyle?.font,
                 status: status,
                 isOnMobile: presence?.isOnMobile ?? false,
                 subtitle: presence?.primaryActivity?.rowSubtitle
                     ?? presence?.customStatus?.rowSubtitle,
                 isBot: user.isBot,
-                tag: user.decoration?.primaryGuildTag,
-                tagBadgeURL: user.decoration.flatMap { decoration in
+                tag: cosmetics(of: user)?.primaryGuildTag,
+                tagBadgeURL: cosmetics(of: user).flatMap { decoration in
                     guard let guildID = decoration.primaryGuildID,
                           let hash = decoration.primaryGuildBadgeHash
                     else { return nil }
                     return CDN.guildTagBadge(guildID: guildID, hash: hash)
                 },
-                nameplateURL: user.decoration?.nameplate?.artworkURL,
-                nameplateAnimatedURL: user.decoration?.nameplate?.animatedArtworkURL,
-                nameplatePalette: user.decoration?.nameplate?.palette ?? .none,
+                nameplateURL: cosmetics(of: user)?.nameplate?.artworkURL,
+                nameplateAnimatedURL: cosmetics(of: user)?.nameplate?.animatedArtworkURL,
+                nameplatePalette: cosmetics(of: user)?.nameplate?.palette ?? .none,
                 isOwner: userID == channel.ownerID
             )
             if status == .offline { offline.append(entry) } else { online.append(entry) }

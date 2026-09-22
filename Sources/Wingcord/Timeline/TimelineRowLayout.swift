@@ -1157,7 +1157,10 @@ nonisolated struct TimelineLayoutEngine: Sendable {
                 attachments: message.attachments.count,
                 stickers: stickers.map(\.sticker.name),
                 extra: Self.spokenBody(of: message),
-                isEphemeral: message.isEphemeral
+                isEphemeral: message.isEphemeral,
+                isEdited: message.editedAt != nil,
+                reactions: message.reactions,
+                muted: input.settings.mutedSpokenDetails
             )
         )
     }
@@ -2192,6 +2195,17 @@ nonisolated struct TimelineLayoutEngine: Sendable {
         return ceil(CTLineGetTypographicBounds(line, nil, nil, nil))
     }
 
+    /// One plain string for one accessibility node.
+    ///
+    /// **Four of these are muteable, and each one is a real string somebody has
+    /// to listen to on every message in the channel.** A timestamp per row, an
+    /// attachment count per row and a reaction tally per row are useful the
+    /// first time and noise the hundredth, which is why the accessibility pane
+    /// offers them individually rather than as one "verbose" switch.
+    ///
+    /// **Edited and reactions used not to be spoken at all**, which was a plain
+    /// gap: a sighted reader sees the pencil and the chips, and a VoiceOver
+    /// reader was told neither.
     private static func accessibilityLabel(
         author: String,
         time: String,
@@ -2199,10 +2213,14 @@ nonisolated struct TimelineLayoutEngine: Sendable {
         attachments: Int,
         stickers: [String],
         extra: String,
-        isEphemeral: Bool
+        isEphemeral: Bool,
+        isEdited: Bool,
+        reactions: [Reaction],
+        muted: SpokenDetail.Set
     ) -> String {
-        var label = "\(author), \(time)"
+        var label = muted.contains(.timestamps) ? author : "\(author), \(time)"
         if !body.isEmpty { label += ". \(body)" }
+        if isEdited, !muted.contains(.editedStatus) { label += ". Edited" }
         // **A components-only message and a poll have no `content` at all**, so
         // a label folded from the body alone leaves VoiceOver reading a name and
         // a timestamp over what is, to a sighted reader, a whole card.
@@ -2212,8 +2230,14 @@ nonisolated struct TimelineLayoutEngine: Sendable {
         for name in stickers where !name.isEmpty {
             label += ". Sticker, \(name)"
         }
-        if attachments > 0 {
+        if attachments > 0, !muted.contains(.attachmentTypes) {
             label += attachments == 1 ? ". 1 attachment" : ". \(attachments) attachments"
+        }
+        // The total rather than each emoji: "six reactions" is the fact, and
+        // naming all six is a sentence nobody listens to the end of.
+        if !reactions.isEmpty, !muted.contains(.reactionCounts) {
+            let total = reactions.reduce(0) { $0 + $1.count }
+            label += total == 1 ? ". 1 reaction" : ". \(total) reactions"
         }
         // Spoken, not only drawn. Whether a message is private to the reader is
         // exactly the kind of fact a note in the quietest ink on the row is the
