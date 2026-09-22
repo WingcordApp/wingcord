@@ -107,3 +107,113 @@ struct TimelineSettingsTests {
         #expect(TimelineSettings.comfortable.showsEmbeds)
     }
 }
+
+// MARK: - Every input reaches the transcript
+
+/// **A preference that persists and changes nothing is worse than no
+/// preference** — `INVARIANTS.md` §1 — and this is the shape it takes here.
+/// Three things have to be true for one of these to reach a drawn row, and each
+/// of them is a separate place somebody can forget:
+///
+/// 1. `TimelineSettings.current()` reads it off the store.
+/// 2. `==` compares it, or `PresentationRevision.invalidate()`'s guard swallows
+///    the change and no cached row is discarded.
+/// 3. the setter calls `notifyPresentation()`, or nothing asks until some
+///    unrelated signal happens along.
+///
+/// Two of the three were missing when the density slider and the timestamp
+/// switches were added, and neither failure says anything on screen: the
+/// setting sticks, the window keeps the old layout, and it comes right the next
+/// time the appearance changes.
+@MainActor
+@Suite("Timeline settings reach the transcript", .serialized)
+struct TimelineSettingsReachTests {
+
+    /// Drives one preference through the real store and reports whether the
+    /// resolved value moved.
+    private func resolves(
+        _ change: (AppSettings) -> Void,
+        restore: (AppSettings) -> Void
+    ) -> Bool {
+        let settings = AppSettings.shared
+        let before = TimelineSettings.current()
+        change(settings)
+        let after = TimelineSettings.current()
+        restore(settings)
+        return before != after
+    }
+
+    @Test("Density, seconds and always-on timestamps all move the resolved value")
+    func everyInputResolves() {
+        #expect(resolves({ $0.messageGroupSpacing = 12 }, restore: { $0.messageGroupSpacing = 0 }))
+        #expect(resolves({ $0.showsSeconds = true }, restore: { $0.showsSeconds = false }))
+        #expect(resolves(
+            { $0.alwaysShowsTimestamps = true },
+            restore: { $0.alwaysShowsTimestamps = false }
+        ))
+        #expect(resolves({ $0.isCompactMode = true }, restore: { $0.isCompactMode = false }))
+        #expect(resolves({ $0.uses24HourTime = true }, restore: { $0.uses24HourTime = false }))
+    }
+
+    @Test("And each one moves the revision the row cache keys on")
+    func everyInputBumpsTheRevision() {
+        func bumps(_ change: (AppSettings) -> Void, restore: (AppSettings) -> Void) -> Bool {
+            let before = PresentationRevision.shared.value
+            change(AppSettings.shared)
+            let moved = PresentationRevision.shared.value != before
+            restore(AppSettings.shared)
+            return moved
+        }
+        #expect(bumps({ $0.messageGroupSpacing = 8 }, restore: { $0.messageGroupSpacing = 0 }))
+        #expect(bumps({ $0.showsSeconds = true }, restore: { $0.showsSeconds = false }))
+        #expect(bumps(
+            { $0.alwaysShowsTimestamps = true },
+            restore: { $0.alwaysShowsTimestamps = false }
+        ))
+    }
+
+    @Test("The group spacing is clamped rather than trusted")
+    func spacingIsClamped() {
+        let settings = AppSettings.shared
+        settings.messageGroupSpacing = 500
+        #expect(settings.messageGroupSpacing == 24)
+        settings.messageGroupSpacing = -10
+        #expect(settings.messageGroupSpacing == 0)
+    }
+
+    @Test("Density and the slider compose rather than override each other")
+    func densityAndSpacingCompose() {
+        // Compact is a *shape* — it closes the run's bottom padding and shrinks
+        // the author gutter as well — and the slider is the air between one
+        // person's block and the next.
+        let comfortable = TimelineSettings(
+            isCompact: false, showsEmbeds: true, uses24HourTime: false,
+            groupSpacing: 6, locale: Locale(identifier: "en_US_POSIX")
+        )
+        let compact = TimelineSettings(
+            isCompact: true, showsEmbeds: true, uses24HourTime: false,
+            groupSpacing: 6, locale: Locale(identifier: "en_US_POSIX")
+        )
+        #expect(comfortable.runSpacing == TimelineMetrics.runSpacing + 6)
+        #expect(compact.runSpacing == TimelineMetrics.compactRunSpacing + 6)
+        #expect(compact.runSpacing < comfortable.runSpacing)
+    }
+
+    @Test("Seconds go through the locale's own template")
+    func secondsUseTheTemplate() {
+        // Not appended as ":ss" — the separator and the running order are the
+        // locale's, and a hard-coded colon is wrong wherever the minute
+        // separator is not one.
+        let plain = TimelineSettings(
+            isCompact: false, showsEmbeds: true, uses24HourTime: true,
+            showsSeconds: false, locale: Locale(identifier: "en_US_POSIX")
+        )
+        let withSeconds = TimelineSettings(
+            isCompact: false, showsEmbeds: true, uses24HourTime: true,
+            showsSeconds: true, locale: Locale(identifier: "en_US_POSIX")
+        )
+        let noon = Date(timeIntervalSince1970: 1_700_000_000)
+        #expect(plain.time(noon).count < withSeconds.time(noon).count)
+        #expect(plain != withSeconds)
+    }
+}

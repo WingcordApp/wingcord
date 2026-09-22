@@ -37,6 +37,9 @@ final class TimelineCanvasView: NSView {
     private(set) var offsets: [CGFloat] = [0]
 
     var style: MessageTextStyle
+    /// Whether a continuation row draws its gutter time without being pointed
+    /// at. Set beside `style` from the same revision, for the same reason.
+    var alwaysShowsTimestamps = false
     var contentHeight: CGFloat { offsets[offsets.count - 1] }
 
     // MARK: Interaction state
@@ -724,6 +727,12 @@ final class TimelineCanvasView: NSView {
             if frame.intersects(dirtyRect) {
                 let row = rows[index]
                 var state = TimelineRowPainter.State()
+                // **The preference, then the pointer.** Always-on timestamps are
+                // a `TimelineSettings` field and reach the canvas through the
+                // presentation revision, which is what invalidates every cached
+                // row when it changes — a read of `AppSettings` here would be the
+                // painter reading a value its cache cannot see (§1).
+                state.showsGutterTimestamp = alwaysShowsTimestamps
                 if hoveredRow == index, !isScrolling {
                     state.isHovered = true
                     state.showsGutterTimestamp = true

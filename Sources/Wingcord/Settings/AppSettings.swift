@@ -319,6 +319,45 @@ final class AppSettings {
         globalHotkeys[action] = .some(hotkey)
     }
 
+    /// The in-window shortcuts the reader has moved.
+    ///
+    /// **The same double-optional as the table above, for the same reason**: a
+    /// missing key is "never asked, take the default" and a present `nil` is
+    /// "deliberately cleared". A menu item whose binding was cleared keeps its
+    /// row and loses its equivalent, which is what makes clearing one a way of
+    /// freeing a combination rather than of hiding a command.
+    var appShortcuts: [AppShortcut: Hotkey?] = [:] {
+        didSet {
+            guard appShortcuts != oldValue else { return }
+            for action in AppShortcut.allCases {
+                let key = Key.appShortcut(action)
+                guard let binding = appShortcuts[action] else {
+                    defaults.removeObject(forKey: key)
+                    continue
+                }
+                defaults.set(binding?.storageValue ?? Self.noHotkey, forKey: key)
+            }
+        }
+    }
+
+    func shortcut(for action: AppShortcut) -> Hotkey? {
+        appShortcuts[action] ?? action.defaultBinding
+    }
+
+    func setShortcut(_ hotkey: Hotkey?, for action: AppShortcut) {
+        appShortcuts[action] = .some(hotkey)
+    }
+
+    /// Every action a binding would collide with, so a recorder can say so
+    /// before the reader has two menu items on one combination.
+    ///
+    /// **A collision is a real defect and a silent one.** AppKit gives the
+    /// combination to whichever item it finds first, so the other command simply
+    /// stops working and nothing says why.
+    func shortcutConflicts(_ hotkey: Hotkey, ignoring action: AppShortcut) -> [AppShortcut] {
+        AppShortcut.allCases.filter { $0 != action && shortcut(for: $0) == hotkey }
+    }
+
     /// What a *deliberately cleared* hotkey looks like in defaults.
     ///
     /// A sentinel rather than removing the key, because absence already means
@@ -476,6 +515,51 @@ final class AppSettings {
     /// a control needs no migration here.
     var composerControls: ComposerControlOrder = .default {
         didSet { defaults.set(composerControls.storage, forKey: Key.composerControls) }
+    }
+
+    /// Extra space between message runs, in points, on top of the density the
+    /// segmented control above it sets.
+    ///
+    /// **A slider AND a segmented control, because they answer different
+    /// questions.** Compact is a *shape* — it also closes the run's bottom
+    /// padding and shrinks the author gutter — and this is the air between one
+    /// person's block and the next. Discord ships both for the same reason.
+    var messageGroupSpacing: Double {
+        get { storedGroupSpacing }
+        set { storedGroupSpacing = min(24, max(0, newValue)) }
+    }
+
+    /// Clamped, so it is a computed facade over private storage — see the note
+    /// at the top of this type about why clamping in `didSet` is a crash.
+    private var storedGroupSpacing: Double = 0 {
+        didSet {
+            guard storedGroupSpacing != oldValue else { return }
+            defaults.set(storedGroupSpacing, forKey: Key.groupSpacing)
+            notifyPresentation()
+        }
+    }
+
+    /// Whether a timestamp carries seconds.
+    var showsSeconds = false {
+        didSet {
+            guard showsSeconds != oldValue else { return }
+            defaults.set(showsSeconds, forKey: Key.showsSeconds)
+            notifyPresentation()
+        }
+    }
+
+    /// Whether every message shows its time, or only the one under the pointer.
+    ///
+    /// **Off is not "no timestamps"** — the first message of a run always
+    /// carries one beside the author's name. This is the *gutter* time on a
+    /// continuation row, which appears on hover, and turning it on makes the
+    /// column of times permanent.
+    var alwaysShowsTimestamps = false {
+        didSet {
+            guard alwaysShowsTimestamps != oldValue else { return }
+            defaults.set(alwaysShowsTimestamps, forKey: Key.alwaysShowsTimestamps)
+            notifyPresentation()
+        }
     }
 
     /// Whether the now bar wears the reader's own nameplate.
@@ -731,17 +815,23 @@ final class AppSettings {
             .flatMap { try? JSONDecoder().decode([ManualGame].self, from: $0) } ?? []
         var table: [GlobalAction: Hotkey?] = [:]
         for action in GlobalAction.allCases {
-            // The window's binding moved key when the table arrived. Read the
-            // old one once so an existing install keeps the shortcut its reader
-            // chose; the new key is written the first time anything changes.
-            let stored = defaults.object(forKey: Key.hotkey(action)) as? Int
-                ?? (action == .toggleWindow
-                    ? defaults.object(forKey: Key.legacyGlobalHotkey) as? Int
-                    : nil)
-            guard let stored else { continue }
+            guard let stored = defaults.object(forKey: Key.hotkey(action)) as? Int else {
+                continue
+            }
             table[action] = stored == Self.noHotkey ? .some(nil) : .some(Hotkey(storageValue: stored))
         }
         globalHotkeys = table
+
+        var shortcuts: [AppShortcut: Hotkey?] = [:]
+        for action in AppShortcut.allCases {
+            guard let stored = defaults.object(forKey: Key.appShortcut(action)) as? Int else {
+                continue
+            }
+            shortcuts[action] = stored == Self.noHotkey
+                ? .some(nil)
+                : .some(Hotkey(storageValue: stored))
+        }
+        appShortcuts = shortcuts
         uses24HourTime = defaults.object(forKey: Key.use24Hour) as? Bool
             ?? Locale.current.usesTwentyFourHourClock
         showsEmbeds = defaults.object(forKey: Key.showsEmbeds) as? Bool ?? true
@@ -758,6 +848,10 @@ final class AppSettings {
         composerControls = defaults.stringArray(forKey: Key.composerControls)
             .map(ComposerControlOrder.init(storage:)) ?? .default
         showsNameplateInNowBar = defaults.object(forKey: Key.nowBarNameplate) as? Bool ?? true
+        storedGroupSpacing = defaults.object(forKey: Key.groupSpacing) as? Double ?? 0
+        showsSeconds = defaults.object(forKey: Key.showsSeconds) as? Bool ?? false
+        alwaysShowsTimestamps = defaults.object(forKey: Key.alwaysShowsTimestamps) as? Bool
+            ?? false
         showsPerformanceInspector = defaults.object(forKey: Key.showsInspector) as? Bool ?? false
         developerMode = defaults.object(forKey: Key.developerMode) as? Bool ?? false
         storedMediaVolume = defaults.object(forKey: Key.mediaVolume) as? Double ?? 1
@@ -896,6 +990,9 @@ final class AppSettings {
         static func hotkey(_ action: GlobalAction) -> String {
             "shortcuts.hotkey.\(action.rawValue)"
         }
+        static func appShortcut(_ action: AppShortcut) -> String {
+            "shortcuts.app.\(action.rawValue)"
+        }
         static let use24Hour = "chat.use24HourTime"
         static let showsEmbeds = "chat.showsEmbeds"
         static let playsAnimated = "chat.playsAnimatedContent"
@@ -906,6 +1003,9 @@ final class AppSettings {
         static let legacyComposerShape = "appearance.composerShape"
         static let composerControls = "appearance.composerControls"
         static let nowBarNameplate = "appearance.nowBarNameplate"
+        static let groupSpacing = "appearance.messageGroupSpacing"
+        static let showsSeconds = "chat.showsSeconds"
+        static let alwaysShowsTimestamps = "chat.alwaysShowsTimestamps"
         static let showsInspector = "diagnostics.showsPerformanceInspector"
         static let developerMode = "advanced.developerMode"
         static let launchDestination = "startup.launchDestination"

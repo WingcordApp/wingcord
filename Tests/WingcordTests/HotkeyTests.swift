@@ -126,3 +126,92 @@ struct HotkeyFlyoutPlacementTests {
         #expect(HotkeyMetrics.dividerY + HotkeyMetrics.footerHeight == HotkeyMetrics.bodyHeight)
     }
 }
+
+// MARK: - The shortcuts inside the window
+
+/// **What a test can hold here is that the list is self-consistent.** Whether a
+/// shortcut *works* is a menu the app installs at launch; what can go wrong
+/// silently is two rows sharing a combination — AppKit gives it to whichever
+/// item it finds first and the other command simply stops working, with nothing
+/// on screen to say why.
+@Suite("In-window shortcuts")
+struct AppShortcutTests {
+
+    @Test("No two default bindings collide")
+    func defaultsDoNotCollide() {
+        var seen: [Hotkey: AppShortcut] = [:]
+        for shortcut in AppShortcut.allCases {
+            let binding = shortcut.defaultBinding
+            #expect(
+                seen[binding] == nil,
+                "\(shortcut.title) and \(seen[binding]?.title ?? "") share \(binding.displayString)"
+            )
+            seen[binding] = shortcut
+        }
+    }
+
+    @Test("Every default binding is one macOS will accept")
+    func defaultsAreValid() {
+        // A bare letter would eat the key in every text field in the app.
+        for shortcut in AppShortcut.allCases {
+            #expect(shortcut.defaultBinding.isValid, "\(shortcut.title)")
+        }
+    }
+
+    @Test("Every default binding survives the trip to a menu equivalent")
+    func defaultsBridgeToMenuShortcuts() {
+        // A binding with no `KeyEquivalent` behind it leaves its menu item with
+        // no shortcut at all — which is a row in the pane printing a key the
+        // menu does not honour, the exact lie this page must not tell.
+        for shortcut in AppShortcut.allCases {
+            #expect(shortcut.defaultBinding.keyboardShortcut != nil, "\(shortcut.title)")
+        }
+    }
+
+    @Test("Named keys bridge to their own equivalents, not to characters")
+    func namedKeysBridge() {
+        // The arrows are the case that matters: four of the default bindings
+        // use them, and a layout lookup would answer nothing for a key that
+        // types nothing.
+        for code in [kVK_UpArrow, kVK_DownArrow, kVK_Return, kVK_Escape, kVK_Tab, kVK_Space] {
+            let hotkey = Hotkey(keyCode: UInt16(code), modifiers: [.command])
+            #expect(hotkey.keyboardShortcut != nil, "key code \(code)")
+        }
+    }
+
+    @Test("Every group is drawn, and every shortcut is in one")
+    func groupsCoverEverything() {
+        // A shortcut whose group is not shown is a binding the reader cannot
+        // reach — and the pane loops over the groups, so it would vanish
+        // silently.
+        let grouped = AppShortcut.Group.allCases.flatMap { group in
+            AppShortcut.allCases.filter { $0.group == group }
+        }
+        #expect(grouped.count == AppShortcut.allCases.count)
+    }
+
+    @Test("A conflict is reported, and a shortcut never conflicts with itself")
+    func conflictsAreFound() {
+        let settings = AppSettings(defaults: UserDefaults(suiteName: "wingcord.tests.\(UUID())")!)
+        let binding = AppShortcut.quickSwitcher.defaultBinding
+        #expect(settings.shortcutConflicts(binding, ignoring: .quickSwitcher).isEmpty)
+
+        settings.setShortcut(binding, for: .inbox)
+        #expect(settings.shortcutConflicts(binding, ignoring: .quickSwitcher) == [.inbox])
+        #expect(settings.shortcutConflicts(binding, ignoring: .inbox) == [.quickSwitcher])
+    }
+
+    @Test("A cleared binding stays cleared, and an untouched one takes its default")
+    func clearingIsRemembered() {
+        // The double optional: a missing key means "never asked, take the
+        // default" and a present nil means "deliberately cleared". Collapsing
+        // them is what makes a cleared binding come back on the next launch.
+        let suite = UserDefaults(suiteName: "wingcord.tests.\(UUID())")!
+        let settings = AppSettings(defaults: suite)
+        #expect(settings.shortcut(for: .inbox) == AppShortcut.inbox.defaultBinding)
+
+        settings.setShortcut(nil, for: .inbox)
+        #expect(settings.shortcut(for: .inbox) == nil)
+        #expect(AppSettings(defaults: suite).shortcut(for: .inbox) == nil)
+    }
+}

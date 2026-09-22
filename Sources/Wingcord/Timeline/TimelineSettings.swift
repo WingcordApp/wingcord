@@ -38,6 +38,16 @@ nonisolated struct TimelineSettings: @unchecked Sendable {
     /// costs its framesetting for nothing.
     var showsEmbeds: Bool
     var uses24HourTime: Bool
+    /// Whether a time carries seconds. Part of the key because the formatters
+    /// below are built from it.
+    var showsSeconds: Bool
+    /// Whether a continuation row's gutter time is always drawn, or only under
+    /// the pointer. **Layout, not paint**: the gutter is the same width either
+    /// way, but a row that always draws one is a row whose repaint no longer
+    /// depends on hover.
+    var alwaysShowsTimestamps: Bool
+    /// Extra air between runs, on top of what `isCompact` sets.
+    var groupSpacing: CGFloat
     /// Part of the key because the formatters below are built against it, and a
     /// locale change has to rebuild them.
     var localeIdentifier: String
@@ -48,10 +58,21 @@ nonisolated struct TimelineSettings: @unchecked Sendable {
     private let dayFormatter: DateFormatter
     private let dateAndTimeFormatter: DateFormatter
 
-    init(isCompact: Bool, showsEmbeds: Bool, uses24HourTime: Bool, locale: Locale) {
+    init(
+        isCompact: Bool,
+        showsEmbeds: Bool,
+        uses24HourTime: Bool,
+        showsSeconds: Bool = false,
+        alwaysShowsTimestamps: Bool = false,
+        groupSpacing: CGFloat = 0,
+        locale: Locale
+    ) {
         self.isCompact = isCompact
         self.showsEmbeds = showsEmbeds
         self.uses24HourTime = uses24HourTime
+        self.showsSeconds = showsSeconds
+        self.alwaysShowsTimestamps = alwaysShowsTimestamps
+        self.groupSpacing = groupSpacing
         self.localeIdentifier = locale.identifier
 
         // **One formatter each, built here and reused for the life of the
@@ -66,9 +87,14 @@ nonisolated struct TimelineSettings: @unchecked Sendable {
         // running order stay the locale's own — a hard-coded "HH:mm" is correct
         // in Britain and wrong in a dozen places.
         let hour = uses24HourTime ? "H" : "h"
-        timeFormatter = Self.formatter(template: hour + "mm", locale: locale)
+        // Seconds go in the template, not on the end of the string: the
+        // separator and the running order are the locale's own, and a
+        // hard-coded ":ss" is wrong wherever the minute separator is not a
+        // colon.
+        let clock = hour + "mm" + (showsSeconds ? "ss" : "")
+        timeFormatter = Self.formatter(template: clock, locale: locale)
         dayFormatter = Self.formatter(template: "EEEEdMMMMy", locale: locale)
-        dateAndTimeFormatter = Self.formatter(template: "dMy" + hour + "mm", locale: locale)
+        dateAndTimeFormatter = Self.formatter(template: "dMy" + clock, locale: locale)
     }
 
     private static func formatter(template: String, locale: Locale) -> DateFormatter {
@@ -81,8 +107,14 @@ nonisolated struct TimelineSettings: @unchecked Sendable {
     // MARK: Metrics
 
     /// The gap above a run's first message.
+    ///
+    /// The density's own value plus whatever the slider adds. Compact is a
+    /// *shape* — it closes the run's bottom padding and shrinks the author
+    /// gutter as well — and the slider is the air between one person's block and
+    /// the next, so the two compose rather than override each other.
     var runSpacing: CGFloat {
-        isCompact ? TimelineMetrics.compactRunSpacing : TimelineMetrics.runSpacing
+        (isCompact ? TimelineMetrics.compactRunSpacing : TimelineMetrics.runSpacing)
+            + groupSpacing
     }
 
     /// The gap under a run's last message.
@@ -133,6 +165,9 @@ nonisolated struct TimelineSettings: @unchecked Sendable {
             isCompact: settings.isCompactMode,
             showsEmbeds: settings.showsEmbeds,
             uses24HourTime: settings.uses24HourTime,
+            showsSeconds: settings.showsSeconds,
+            alwaysShowsTimestamps: settings.alwaysShowsTimestamps,
+            groupSpacing: settings.messageGroupSpacing,
             locale: .current
         )
     }
@@ -140,10 +175,19 @@ nonisolated struct TimelineSettings: @unchecked Sendable {
 
 extension TimelineSettings: Equatable {
     /// The inputs only — see the note on the stored properties.
+    /// **Every input, or the revision swallows the change.**
+    /// `PresentationRevision.invalidate` guards on this being different before
+    /// it bumps the counter — several system signals fire together and each bump
+    /// discards every laid-out row in the app — so a field left out here is a
+    /// preference that persists and changes nothing, which is §1's forbidden
+    /// shape.
     nonisolated static func == (lhs: TimelineSettings, rhs: TimelineSettings) -> Bool {
         lhs.isCompact == rhs.isCompact
             && lhs.showsEmbeds == rhs.showsEmbeds
             && lhs.uses24HourTime == rhs.uses24HourTime
+            && lhs.showsSeconds == rhs.showsSeconds
+            && lhs.alwaysShowsTimestamps == rhs.alwaysShowsTimestamps
+            && lhs.groupSpacing == rhs.groupSpacing
             && lhs.localeIdentifier == rhs.localeIdentifier
     }
 }

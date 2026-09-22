@@ -25,8 +25,6 @@ import SwiftUI
 /// The raw value is the defaults key suffix and must not change: it is what a
 /// reader's stored binding is filed under.
 enum GlobalAction: String, CaseIterable, Identifiable, Sendable {
-    /// Bring Wingcord forward, or send it away. The app's original binding.
-    case toggleWindow
     /// Open the in-game overlay, or send it back to sleep.
     case toggleOverlay
     /// Hand the overlay the mouse, or give it back to the game.
@@ -40,7 +38,6 @@ enum GlobalAction: String, CaseIterable, Identifiable, Sendable {
 
     var title: String {
         switch self {
-        case .toggleWindow: "Show Wingcord"
         case .toggleOverlay: "Toggle overlay"
         case .toggleOverlayLock: "Lock or unlock the overlay"
         case .saveClip: "Save a clip"
@@ -50,8 +47,6 @@ enum GlobalAction: String, CaseIterable, Identifiable, Sendable {
 
     var help: String {
         switch self {
-        case .toggleWindow:
-            "Brings the window forward from anywhere, and hides it if it is already in front."
         case .toggleOverlay:
             "Shows the overlay over whatever is running, and takes the mouse so you can use it."
         case .toggleOverlayLock:
@@ -75,8 +70,6 @@ enum GlobalAction: String, CaseIterable, Identifiable, Sendable {
     /// validity rule exists to prevent for letters — and ⌥C types `ç`.
     var defaultHotkey: Hotkey? {
         switch self {
-        case .toggleWindow:
-            Hotkey(keyCode: UInt16(kVK_ANSI_W), modifiers: [.control, .command])
         case .toggleOverlay:
             Hotkey(keyCode: UInt16(kVK_ANSI_Grave), modifiers: [.control, .command])
         case .toggleOverlayLock:
@@ -250,7 +243,6 @@ private struct GlobalHotkeyInstaller: ViewModifier {
         content
             .onChange(of: settings.globalHotkeys, initial: true) { _, table in
                 let overlay = model.overlay
-                GlobalHotkey.shared.setAction(GlobalHotkey.toggleFrontmost, for: .toggleWindow)
                 GlobalHotkey.shared.setAction({ overlay.toggle() }, for: .toggleOverlay)
                 GlobalHotkey.shared.setAction({ overlay.toggleInputLock() }, for: .toggleOverlayLock)
                 GlobalHotkey.shared.setAction({ model.saveClip() }, for: .saveClip)

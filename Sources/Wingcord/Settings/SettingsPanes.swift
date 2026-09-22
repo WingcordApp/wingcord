@@ -226,20 +226,62 @@ private struct AppearancePane: View {
             )
         }
 
-        SettingsCard {
-            CardHeaderRow(
-                title: "Message density",
-                help: "Compact removes the spacing between runs and shrinks the author gutter."
-            )
-            SettingsSegmentedControl(
-                selection: $settings.isCompactMode,
-                options: [
-                    .init(false, "Comfortable", symbolName: "rectangle.expand.vertical"),
-                    .init(true, "Compact", symbolName: "rectangle.compress.vertical"),
-                ]
+        SettingsGroup("Density") {
+            SettingsCard {
+                CardHeaderRow(
+                    title: "Message density",
+                    help: "Compact removes the spacing between runs and shrinks the author gutter."
+                )
+                SettingsSegmentedControl(
+                    selection: $settings.isCompactMode,
+                    options: [
+                        .init(false, "Comfortable", symbolName: "rectangle.expand.vertical"),
+                        .init(true, "Compact", symbolName: "rectangle.compress.vertical"),
+                    ]
+                )
+                CardDivider()
+                SettingsSliderRow(
+                    title: "Space between groups",
+                    help: "Extra air between one person's block of messages and the next. "
+                        + "It composes with the density above rather than replacing it.",
+                    value: $settings.messageGroupSpacing,
+                    range: 0...24,
+                    step: 1,
+                    format: { "\(Int($0)) pt" }
+                )
+            }
+            SettingsMessagePreview()
+                .padding(.top, SettingsMetrics.cardToHeader)
+            SettingsFootnote(
+                "Drawn by the transcript's own painter, so it cannot disagree with the real thing.",
+                symbolName: "eye"
             )
         }
-        .padding(.top, SettingsMetrics.cardToHeader)
+
+        SettingsGroup("Timestamps") {
+            SettingsCard {
+                SettingsSegmentedControl(
+                    selection: $settings.uses24HourTime,
+                    options: [
+                        .init(false, "12-hour", symbolName: "clock"),
+                        .init(true, "24-hour", symbolName: "clock.badge.checkmark"),
+                    ]
+                )
+                CardDivider()
+                SettingsToggle(
+                    title: "Show seconds",
+                    help: "Adds seconds to every time, in whatever order your region writes them.",
+                    isOn: $settings.showsSeconds
+                )
+                CardDivider()
+                SettingsToggle(
+                    title: "Always show timestamps",
+                    help: "The time beside every message rather than only the one under the "
+                        + "pointer. The first message of a run always shows one either way.",
+                    isOn: $settings.alwaysShowsTimestamps
+                )
+            }
+        }
 
         SettingsGroup("Text") {
             SettingsCard {
@@ -859,52 +901,99 @@ private struct ShortcutsPane: View {
     @State private var settings = AppSettings.shared
 
     var body: some View {
-        // The shortcuts on this page that are not menu items, and the only ones
-        // the reader can change: they are registered with the whole machine,
-        // not with this app's responder chain, so they are controls rather than
-        // lines in the table below.
-        SettingsCard {
-            ForEach(Array(GlobalAction.allCases.enumerated()), id: \.element.id) { index, action in
-                if index > 0 { CardDivider() }
-                HotkeyRecorderRow(
-                    title: action.title,
-                    help: action.help,
-                    hotkey: Binding(
-                        get: { settings.hotkey(for: action) },
-                        set: { settings.setHotkey($0, for: action) }
+        // The shortcuts registered with the whole machine. They are first
+        // because they are the ones that can take a combination away from
+        // another application, which is the only thing on this page with a cost
+        // outside Wingcord.
+        SettingsGroup("Anywhere on this Mac") {
+            SettingsCard {
+                ForEach(Array(GlobalAction.allCases.enumerated()), id: \.element.id) { entry in
+                    if entry.offset > 0 { CardDivider() }
+                    HotkeyRecorderRow(
+                        title: entry.element.title,
+                        help: entry.element.help,
+                        hotkey: Binding(
+                            get: { settings.hotkey(for: entry.element) },
+                            set: { settings.setHotkey($0, for: entry.element) }
+                        )
                     )
-                )
+                }
             }
+            SettingsFootnote(
+                "A global shortcut takes its combination away from every other application, "
+                    + "which is why there are only a few and why each can be cleared with ⌫ "
+                    + "while recording.",
+                symbolName: "globe"
+            )
         }
-        SettingsFootnote(
-            "A global shortcut takes its combination away from every other application, which is why there are only a few and why each can be cleared with ⌫ while recording.",
-            symbolName: "globe"
-        )
 
-        // No `ForEach` over the groups with an index: each carries its own
-        // heading, and a `SettingsGroup` per group is what gives the 20/16/10
-        // rhythm the rest of the window has.
-        ForEach(SettingsShortcut.groups, id: \.title) { group in
+        // **Every one of these is a real menu item**, and the binding here is
+        // the one the menu reads — see `AppShortcut`. A row that printed a key
+        // the menu did not honour would be a lie in a settings window.
+        ForEach(AppShortcut.Group.allCases) { group in
             SettingsGroup(group.title) {
                 SettingsCard {
-                    ForEach(group.shortcuts.indices, id: \.self) { index in
-                        let shortcut = group.shortcuts[index]
-                        if index > 0 { CardDivider() }
-                        SettingsControlRow(shortcut.action) {
-                            Text(shortcut.keys)
-                                .font(SettingsType.rowLabel.monospaced())
-                                .foregroundStyle(Ink.secondary)
-                        }
-                        .accessibilityElement(children: .combine)
+                    ForEach(
+                        Array(AppShortcut.allCases.filter { $0.group == group }.enumerated()),
+                        id: \.element.id
+                    ) { entry in
+                        if entry.offset > 0 { CardDivider() }
+                        HotkeyRecorderRow(
+                            title: entry.element.title,
+                            help: conflictNote(for: entry.element),
+                            hotkey: Binding(
+                                get: { settings.shortcut(for: entry.element) },
+                                set: { settings.setShortcut($0, for: entry.element) }
+                            )
+                        )
                     }
                 }
             }
         }
 
         SettingsFootnote(
-            "Every one of these is bound in the menu bar or on the view that handles it — nothing is listed here that the app does not actually do.",
+            "These work while Wingcord is in front. Clearing one with ⌫ frees its "
+                + "combination and leaves the command in the menu bar, where it is still "
+                + "one click away.",
             symbolName: "keyboard"
         )
+
+        // The keys the app answers on a view rather than in a menu. They are
+        // **not** rebindable and the page says so rather than leaving a reader
+        // hunting for the row: Return in a composer is the composer's grammar,
+        // and a client that let it be moved would have a text field whose
+        // meaning depends on a setting three panes away.
+        SettingsGroup("Fixed") {
+            SettingsCard {
+                ForEach(SettingsShortcut.fixed.indices, id: \.self) { index in
+                    let shortcut = SettingsShortcut.fixed[index]
+                    if index > 0 { CardDivider() }
+                    SettingsControlRow(shortcut.action) {
+                        Text(shortcut.keys)
+                            .font(SettingsType.rowLabel.monospaced())
+                            .foregroundStyle(Ink.secondary)
+                    }
+                    .accessibilityElement(children: .combine)
+                }
+            }
+            SettingsFootnote(
+                "These belong to whatever has the keyboard — the composer, a list, an open "
+                    + "card — so they mean what they mean wherever you are and cannot be moved.",
+                symbolName: "text.cursor"
+            )
+        }
+    }
+
+    /// Says so when two rows share a combination.
+    ///
+    /// **A collision is a real defect and a silent one**: AppKit gives the
+    /// combination to whichever menu item it finds first and the other command
+    /// simply stops working, with nothing on screen to say why.
+    private func conflictNote(for shortcut: AppShortcut) -> String? {
+        guard let binding = settings.shortcut(for: shortcut) else { return nil }
+        let clashes = settings.shortcutConflicts(binding, ignoring: shortcut)
+        guard !clashes.isEmpty else { return nil }
+        return "Also bound to \(clashes.map(\.title).joined(separator: ", "))."
     }
 }
 

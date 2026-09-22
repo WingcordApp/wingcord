@@ -16,30 +16,24 @@ nonisolated struct SettingsShortcut: Identifiable, Sendable {
     var keys: String
     var action: String
 
-    static let groups: [(title: String, shortcuts: [SettingsShortcut])] = [
-        ("Going somewhere", [
-            .init(keys: "⌘K", action: "Quick switcher"),
-            .init(keys: "⌥↑", action: "Previous channel"),
-            .init(keys: "⌥↓", action: "Next channel"),
-            .init(keys: "⌥⌘↑", action: "Previous server"),
-            .init(keys: "⌥⌘↓", action: "Next server"),
-            .init(keys: "⌘0", action: "Direct messages"),
-            .init(keys: "⌘1–9", action: "Nth server"),
-        ]),
-        ("Writing", [
-            .init(keys: "↑", action: "Reply to the newest message, in an empty composer"),
-            .init(keys: "⏎", action: "Send"),
-            .init(keys: "⇥", action: "Accept the highlighted emoji"),
-            .init(keys: "⎋", action: "Dismiss the emoji list, or the open card"),
-        ]),
-        ("Windows", [
-            .init(keys: "⌘,", action: "Settings"),
-            .init(keys: "⌘W", action: "Close the window"),
-            .init(keys: "⌘M", action: "Minimise"),
-        ]),
-        ("In this window", [
-            .init(keys: "↑ ↓", action: "Move through the sections"),
-            .init(keys: "⌘F", action: "Search the sections"),
-        ]),
+    /// The keys a view answers, which are not menu items and cannot be moved.
+    ///
+    /// **Everything that CAN be rebound left this table** — it is
+    /// `AppShortcut` now, which the menu reads, so a row and the key it names
+    /// cannot drift. What is left is the grammar of whatever has the keyboard:
+    /// Return in a composer means send, and a client that let that be moved
+    /// would have a text field whose meaning depends on a setting three panes
+    /// away.
+    static let fixed: [SettingsShortcut] = [
+        .init(keys: "↑", action: "Reply to the newest message, in an empty composer"),
+        .init(keys: "⏎", action: "Send"),
+        .init(keys: "⇧⏎", action: "A new line without sending"),
+        .init(keys: "⇥", action: "Accept the highlighted emoji, mention or command"),
+        .init(keys: "↑ ↓", action: "Move through an open list"),
+        .init(keys: "⎋", action: "Dismiss the open list, card or panel"),
+        .init(keys: "⌫", action: "Take back the last answered option of a command"),
+        .init(keys: "⌘F", action: "Search this server or conversation"),
+        .init(keys: "⌘,", action: "Settings"),
+        .init(keys: "⌘1–9", action: "Nth server"),
     ]
 }

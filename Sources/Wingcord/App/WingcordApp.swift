@@ -201,48 +201,70 @@ struct WingcordCommands: Commands {
         // A Go menu rather than items buried in View: these are destinations, and
         // a reader looking for "how do I get to the next channel" looks under a
         // heading that says going somewhere.
+        //
+        // **Every equivalent here is read from `AppSettings`, not written
+        // down.** That is what makes the shortcuts pane a set of bindings rather
+        // than a printed table beside them: one list — `AppShortcut` — carries
+        // the title, the default, the availability test and the verb, so a row
+        // in the pane and an item in this menu cannot come to mean different
+        // things.
         CommandMenu("Go") {
             Group {
-                // First in the menu because it is first in the hand: everything
-                // under it is a step, and this is the way to somewhere you
-                // cannot see. ⌘K is where every editor on this platform puts it,
-                // and it is free here — the toolbar's search field owns ⌘F.
-                Button("Quick Switcher…") { model.toggleQuickSwitch() }
-                    .keyboardShortcut("k", modifiers: .command)
+                shortcutItem(.quickSwitcher)
+                Divider()
+                shortcutItem(.nextChannel)
+                shortcutItem(.previousChannel)
+                Divider()
+                shortcutItem(.nextServer)
+                shortcutItem(.previousServer)
+                shortcutItem(.directMessages)
 
                 Divider()
 
-                Button("Next Channel") { model.stepChannel(by: 1) }
-                .keyboardShortcut(.downArrow, modifiers: .option)
-            Button("Previous Channel") { model.stepChannel(by: -1) }
-                .keyboardShortcut(.upArrow, modifiers: .option)
-
-            Divider()
-
-            Button("Next Server") { model.stepGuild(by: 1) }
-                .keyboardShortcut(.downArrow, modifiers: [.option, .command])
-            Button("Previous Server") { model.stepGuild(by: -1) }
-                .keyboardShortcut(.upArrow, modifiers: [.option, .command])
-            Button("Direct Messages") { model.selectGuild(nil) }
-                .keyboardShortcut("0", modifiers: .command)
-
-            Divider()
-
-            // Nine items rather than a loop over the servers the reader happens
-            // to have: ⌘4 must mean the fourth server whether or not there is
-            // one, or the shortcut changes meaning as you join and leave.
-            ForEach(1...9, id: \.self) { ordinal in
+                // Nine items rather than a loop over the servers the reader
+                // happens to have: ⌘4 must mean the fourth server whether or not
+                // there is one, or the shortcut changes meaning as you join and
+                // leave. **Deliberately not rebindable** — nine rows in a
+                // settings pane for one idea, and the idea is the digit.
+                ForEach(1...9, id: \.self) { ordinal in
                     Button("Server \(ordinal)") { model.selectGuild(atOrdinal: ordinal) }
-                    .keyboardShortcut(
-                        KeyEquivalent(Character("\(ordinal)")), modifiers: .command
-                    )
+                        .keyboardShortcut(
+                            KeyEquivalent(Character("\(ordinal)")), modifiers: .command
+                        )
                 }
+                .disabled(!model.canNavigate)
             }
-            // On the items rather than on the menu: a whole menu that greys out
-            // while the app is connecting reads as a feature that is missing,
-            // where greyed items read as a feature that is not ready yet.
-            .disabled(!model.canNavigate)
         }
+
+        CommandMenu("Channel") {
+            shortcutItem(.memberList)
+            shortcutItem(.inbox)
+            shortcutItem(.channelTopic)
+            Divider()
+            shortcutItem(.markChannelRead)
+            shortcutItem(.markServerRead)
+            Divider()
+            shortcutItem(.toggleMute)
+            shortcutItem(.toggleDeafen)
+        }
+    }
+
+    /// One menu item, bound to whatever the reader has moved it to.
+    ///
+    /// **A cleared binding keeps its item and loses its equivalent**, which is
+    /// what makes clearing one a way of freeing a combination rather than of
+    /// hiding a command — the item is still in the menu, still says what it
+    /// does, and is still clickable.
+    ///
+    /// On the item rather than on the menu: a whole menu that greys out while
+    /// the app is connecting reads as a feature that is missing, where greyed
+    /// items read as a feature that is not ready yet.
+    @ViewBuilder
+    private func shortcutItem(_ shortcut: AppShortcut) -> some View {
+        let binding = AppSettings.shared.shortcut(for: shortcut)?.keyboardShortcut
+        Button(shortcut.menuTitle) { shortcut.perform(in: model) }
+            .keyboardShortcut(binding)
+            .disabled(!shortcut.isAvailable(in: model))
     }
 }
 

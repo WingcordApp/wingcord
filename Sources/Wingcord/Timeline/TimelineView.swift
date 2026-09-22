@@ -554,6 +554,7 @@ final class TimelineCoordinator: NSObject {
             style = PresentationRevision.shared.style
             settings = PresentationRevision.shared.timeline
             canvas?.style = style
+            canvas?.alwaysShowsTimestamps = settings.alwaysShowsTimestamps
             rowCache.removeAll(keepingCapacity: true)
             if !items.isEmpty { runLayout(preservingPosition: true) }
         }
