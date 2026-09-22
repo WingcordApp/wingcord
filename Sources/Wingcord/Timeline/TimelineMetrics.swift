@@ -141,6 +141,26 @@ nonisolated enum TimelineMetrics {
     static let reactionGap: CGFloat = 6
     static let reactionChipHeight: CGFloat = 22
 
+    /// The chip's corner.
+    ///
+    /// **A rounded square, not a capsule, and the ratio is measured.** This was
+    /// `height / 2`, which on a 22-point chip is a lozenge — and neither Discord
+    /// nor the client Wingcord is measured against draws one. Traced off a
+    /// capture: the chip is 56 px tall and its leading edge moves 13 px inward
+    /// over the same 14 px of height, so the corner is 0.24 of the chip's own
+    /// height. Derived rather than written down, so a change to the chip's
+    /// height keeps its silhouette.
+    static let reactionChipRadius: CGFloat = (reactionChipHeight * 0.24).rounded()
+
+    /// The square controls at the end of the reaction row: add a reaction, and
+    /// bookmark the message.
+    ///
+    /// Square, and the chips' own height — they sit on that row and wrap with
+    /// it, so a control a point taller would break the line the row sits on.
+    static let reactionControlSide: CGFloat = reactionChipHeight
+    /// The glyph inside one of them.
+    static let reactionControlGlyphSide: CGFloat = 14
+
     // The reaction chip's parts. Layout and painter read the SAME constants,
     // because they are two halves of one geometry and drifting them is
     // invisible until it isn't.

@@ -79,6 +79,43 @@ struct EscapeLayerTests {
         #expect(model.isCovered(.tenureBadge))
     }
 
+    // MARK: What the drawn canvases read
+
+    @Test("An empty window is not covered")
+    func anEmptyWindowIsNotCovered() {
+        // The transcript hovers, plays avatars and raises its action bar
+        // whenever this is false, which is nearly always — so the cheap answer
+        // has to be the common one.
+        #expect(!AppModel().isWindowCovered)
+    }
+
+    @Test("Every floating layer covers the canvases underneath it")
+    func everyLayerCovers() throws {
+        // **The defect this pins was visible and looked like a rendering
+        // fault.** A tracking area is not occlusion-tested, so the transcript
+        // went on lighting rows under an open profile and its hover action bar
+        // stuck out from behind the card. One list of layers answers it for all
+        // of them — a second list is how the next one added gets left out.
+        let profile = AppModel()
+        profile.profileRequest = ProfileRequest(userID: UserID(rawValue: 7), anchor: .zero)
+        #expect(profile.isWindowCovered)
+
+        let game = AppModel()
+        game.gameProfileRequest = GameProfileRequest(gameID: ApplicationID(rawValue: 1))
+        #expect(game.isWindowCovered)
+
+        let tenure = AppModel()
+        tenure.tenureBadgeRequest = TenureBadgeRequest(
+            tenure: try #require(PremiumTenure.named("premium_tenure_3_month_v2")),
+            premiumSince: nil
+        )
+        #expect(tenure.isWindowCovered)
+
+        let switcher = AppModel()
+        switcher.toggleQuickSwitch()
+        #expect(switcher.isWindowCovered)
+    }
+
     @Test("A page opened from the DM column, with no profile behind it")
     func tenureWithoutAProfile() throws {
         let model = AppModel()

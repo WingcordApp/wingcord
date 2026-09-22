@@ -21,6 +21,8 @@ final class MemberListCanvas: NSView {
 
     private var hoveredRow: Int?
     private var trackingArea: NSTrackingArea?
+    /// See `apply(isCovered:)`.
+    private var isCovered = false
 
     var isScrolling = false {
         didSet {
@@ -548,8 +550,19 @@ final class MemberListCanvas: NSView {
         trackingArea = area
     }
 
+    /// Whether a floating layer is drawn over this canvas. See
+    /// `TimelineCanvasView.apply(isCovered:)` — a tracking area is not
+    /// occlusion-tested, so without this the roster lights rows and plays
+    /// nameplates underneath an open profile card.
+    func apply(isCovered: Bool) {
+        guard self.isCovered != isCovered else { return }
+        self.isCovered = isCovered
+        guard isCovered else { return }
+        clearHover()
+    }
+
     override func mouseMoved(with event: NSEvent) {
-        guard !isScrolling else { return }
+        guard !isScrolling, !isCovered else { return }
         let point = convert(event.locationInWindow, from: nil)
         let index = bounds.contains(point) ? rowIndex(at: point.y) : nil
         let hoverable = index.flatMap { rows.indices.contains($0) && rows[$0].userID != nil ? $0 : nil }
@@ -563,6 +576,12 @@ final class MemberListCanvas: NSView {
     }
 
     override func mouseExited(with event: NSEvent) {
+        clearHover()
+    }
+
+    /// Lets go of the pointer: the same work whether it left the column or a
+    /// card was drawn over it.
+    private func clearHover() {
         guard hoveredRow != nil else { return }
         let previous = hoveredRow
         hoveredRow = nil

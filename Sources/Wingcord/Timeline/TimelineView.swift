@@ -45,6 +45,19 @@ struct TimelineView: NSViewRepresentable {
     /// to stop it. Read by the container for the reason the accents are.
     var playingPreview: URL?
     var jump: MessageJump?
+    /// Whether a floating layer is drawn over the transcript.
+    ///
+    /// An INPUT for the reason every other one here is: the canvas is a drawn
+    /// `NSView` and only what SwiftUI re-evaluates ever reaches it. See
+    /// `TimelineCanvasView.apply(isCovered:)` for what it is for — a tracking
+    /// area is not occlusion-tested, so without this the transcript hovers
+    /// underneath an open profile.
+    var isCovered: Bool
+    /// The messages the reader has kept, so the bookmark control on each
+    /// reaction row says which way a click goes. Read by the container for the
+    /// reason the accents are — a drawn canvas is only told what SwiftUI
+    /// re-evaluates.
+    var bookmarks: Set<MessageID>
     var model: AppModel
 
     func makeCoordinator() -> TimelineCoordinator {
@@ -66,7 +79,9 @@ struct TimelineView: NSViewRepresentable {
             bottomInset: bottomInset,
             jump: jump,
             spotifyRevision: spotifyRevision,
-            playingPreview: playingPreview
+            playingPreview: playingPreview,
+            isCovered: isCovered,
+            bookmarks: bookmarks
         )
     }
 
@@ -240,6 +255,18 @@ final class TimelineCoordinator: NSObject {
         canvas.onToggleReaction = { [weak self] messageID, emoji in
             guard let self, let channelID = self.channelID else { return }
             self.model.toggleReaction(emoji, on: messageID, in: channelID)
+        }
+        // The same two acts the hover bar and the message menu already offer,
+        // reached from the reaction row itself. Routed through the store rather
+        // than re-implemented, so there is one place a reaction is added and one
+        // place a message is kept.
+        canvas.onAddReaction = { [weak self] messageID, anchor in
+            guard let self, let channelID = self.channelID else { return }
+            self.model.openReactionPicker(for: messageID, in: channelID, anchor: anchor)
+        }
+        canvas.onToggleBookmark = { [weak self] messageID in
+            guard let self, let channelID = self.channelID else { return }
+            self.model.toggleBookmark(of: messageID, in: channelID)
         }
         canvas.onOpenThread = { [weak self] threadID in
             // The store decides between the panel and the whole column, on the
@@ -474,8 +501,12 @@ final class TimelineCoordinator: NSObject {
         bottomInset: CGFloat,
         jump: MessageJump?,
         spotifyRevision: UInt64,
-        playingPreview: URL?
+        playingPreview: URL?,
+        isCovered: Bool,
+        bookmarks: Set<MessageID>
     ) {
+        canvas?.apply(isCovered: isCovered)
+        canvas?.apply(bookmarks: bookmarks)
         canvas?.apply(activityAccents: activityAccents)
         canvas?.apply(playingPreview: playingPreview)
         canvas?.apply(activityInviteStatuses: activityInviteStatuses)

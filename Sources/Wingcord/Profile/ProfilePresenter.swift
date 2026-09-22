@@ -458,6 +458,9 @@ extension AppModel {
     /// about the app and belongs somewhere a new layer has to be inserted into,
     /// not repeated in every control that might be under it.
     enum EscapeLayer: Equatable {
+        /// Bottom of the group: `.presentsMedia()` is applied first at the
+        /// window root, and an earlier `.overlay` draws under a later one.
+        case mediaViewer
         case profile
         case gameProfile
         case tenureBadge
@@ -470,8 +473,24 @@ extension AppModel {
         if tenureBadgeRequest != nil { return .tenureBadge }
         if gameProfileRequest != nil { return .gameProfile }
         if profileRequest != nil { return .profile }
+        if mediaViewer != nil { return .mediaViewer }
         return nil
     }
+
+    /// Whether a floating layer is drawn over the window's content.
+    ///
+    /// **The drawn canvases need this and cannot work it out.** An
+    /// `NSTrackingArea` reports the pointer from its own rect in window space;
+    /// AppKit does not occlusion-test it against whatever is drawn on top, so a
+    /// SwiftUI layer over the transcript takes every *click* — `hitTest:` does
+    /// respect view order — and none of the moves. The transcript therefore kept
+    /// lighting rows, playing avatars and raising its hover action bar
+    /// underneath an open profile, which is where the reader saw it: a pill
+    /// sticking out from behind the card.
+    ///
+    /// Derived from `escapeLayer` rather than kept as a second list. Two lists
+    /// of "what is on top" is how the next layer added gets into one of them.
+    var isWindowCovered: Bool { escapeLayer != nil }
 
     /// Whether `layer` is covered by something above it.
     ///

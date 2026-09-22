@@ -35,6 +35,11 @@ struct TimelineContainer: View {
             // transcript's business, and passing it would restart the
             // coordinator's update for nothing.
             jump: model.pendingJump.flatMap { $0.channelID == channelID ? $0 : nil },
+            // Read here for the reason the accents are, and it is the one input
+            // whose *absence* was a visible defect: see
+            // `AppModel.isWindowCovered`.
+            isCovered: model.isWindowCovered,
+            bookmarks: model.bookmarkedMessageIDs,
             model: model
         )
     }

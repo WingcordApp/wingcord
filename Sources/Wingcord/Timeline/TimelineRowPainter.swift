@@ -22,6 +22,14 @@ nonisolated enum TimelineRowPainter {
 
     struct State: Sendable {
         var isHovered = false
+        /// Whether this message is one the reader has kept.
+        ///
+        /// **On the paint state, not in the layout.** §4.5: a row's layout is
+        /// cached and only re-runs on a presentation or items change, so a flag
+        /// taken at measure time would freeze the moment the row was laid out
+        /// and a bookmark toggled afterwards would never reach the canvas. The
+        /// geometry does not depend on it.
+        var isBookmarked = false
         var showsGutterTimestamp = false
         var isHighlighted = false
         var revealedSpoilers: Set<Int> = []
@@ -523,6 +531,15 @@ nonisolated enum TimelineRowPainter {
             )
         }
 
+        for slot in row.reactionControls {
+            drawReactionControl(
+                slot,
+                in: slot.rect,
+                context: context,
+                isHovered: state.hoveredComponent == slot.rect.origin,
+                isBookmarked: state.isBookmarked
+            )
+        }
         for slot in row.reactions {
             let frame = slot.rect.offsetBy(dx: rowFrame.minX, dy: rowFrame.minY)
             drawReaction(
@@ -1501,6 +1518,53 @@ nonisolated enum TimelineRowPainter {
         )
     }
 
+    /// One of the two square controls at the end of the reaction row.
+    ///
+    /// The same fill and the same corner as a chip it sits beside, because it is
+    /// the same kind of object: a small control on the row, not a badge.
+    private static func drawReactionControl(
+        _ slot: ReactionControlSlot,
+        in frame: CGRect,
+        context: CGContext,
+        isHovered: Bool,
+        isBookmarked: Bool
+    ) {
+        let isOn = slot.kind == .bookmark && isBookmarked
+        context.addPath(CGPath(
+            roundedRect: frame,
+            cornerWidth: TimelineMetrics.reactionChipRadius,
+            cornerHeight: TimelineMetrics.reactionChipRadius,
+            transform: nil
+        ))
+        let base: CGFloat = isOn ? 0.22 : 0.07
+        context.setFillColor(
+            isOn
+                ? NSColor.controlAccentColor.withAlphaComponent(base + (isHovered ? 0.12 : 0)).cgColor
+                : NSColor.white.withAlphaComponent(base + (isHovered ? 0.06 : 0)).cgColor
+        )
+        context.fillPath()
+
+        let side = TimelineMetrics.reactionControlGlyphSide
+        let symbol: String = switch slot.kind {
+        case .addReaction: "face.smiling"
+        // Filled once it is on: a bookmark is a state, and a reader scanning a
+        // channel has to see which messages they kept without reading a tint
+        // difference of one step.
+        case .bookmark: isBookmarked ? "bookmark.fill" : "bookmark"
+        }
+        drawSymbol(
+            symbol,
+            tint: isOn ? .controlAccentColor : NSColor.white.withAlphaComponent(0.75),
+            in: CGRect(
+                x: (frame.midX - side / 2).rounded(),
+                y: (frame.midY - side / 2).rounded(),
+                width: side,
+                height: side
+            ),
+            context: context
+        )
+    }
+
     private static func drawReaction(
         _ slot: ReactionSlot,
         in frame: CGRect,
@@ -1510,10 +1574,13 @@ nonisolated enum TimelineRowPainter {
         images: ImageStore,
         scale: CGFloat
     ) {
+        // **A rounded square, not a capsule.** See
+        // `TimelineMetrics.reactionChipRadius` for the measurement; a lozenge is
+        // what this drew and it is what neither reference client draws.
         let path = CGPath(
             roundedRect: frame,
-            cornerWidth: frame.height / 2,
-            cornerHeight: frame.height / 2,
+            cornerWidth: TimelineMetrics.reactionChipRadius,
+            cornerHeight: TimelineMetrics.reactionChipRadius,
             transform: nil
         )
         context.addPath(path)

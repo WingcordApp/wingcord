@@ -18,6 +18,9 @@ struct MemberListView: NSViewRepresentable {
     /// Whose card is open over this roster. See
     /// `MemberListCanvas.profiledUserID`.
     var profiledUserID: UserID?
+    /// Whether a floating layer is drawn over the roster. See
+    /// `MemberListCanvas.apply(isCovered:)`.
+    var isCovered: Bool = false
 
     @Environment(\.motion) private var motion
 
@@ -36,6 +39,7 @@ struct MemberListView: NSViewRepresentable {
         // `MemberListCanvas.animatesPlate`.
         context.coordinator.setAnimatesPlate(!motion.reduceMotion)
         context.coordinator.setProfiledUser(profiledUserID)
+        context.coordinator.setCovered(isCovered)
         context.coordinator.update(
             sections: sections,
             presentationRevision: presentationRevision,
@@ -220,6 +224,10 @@ final class MemberListCoordinator: NSObject {
     }
 
     private var presentationRevision: UInt64 = 0
+
+    func setCovered(_ isCovered: Bool) {
+        canvas?.apply(isCovered: isCovered)
+    }
 
     func update(sections: [MemberSection], presentationRevision: UInt64, topInset: CGFloat) {
         guard !isTornDown else { return }

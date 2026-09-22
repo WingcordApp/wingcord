@@ -121,6 +121,12 @@ nonisolated struct MessageRow: @unchecked Sendable {
     /// the message — the launch carries no body at all.
     var activityInvite: ActivityInviteSlot?
     var reactions: [ReactionSlot]
+    /// Add-a-reaction and bookmark, at the end of the reaction row.
+    ///
+    /// Empty where the message carries no reaction: the row exists because
+    /// there is something on it, and two controls floating under a message
+    /// nobody has reacted to is chrome the hover bar already offers.
+    var reactionControls: [ReactionControlSlot] = []
     /// The thread this message started, when it did.
     var threadChip: ThreadChipSlot?
 
@@ -437,6 +443,28 @@ nonisolated struct ReactionSlot: Sendable {
     var imageURL: URL?
 }
 
+/// One of the two square controls at the end of a message's reaction row.
+///
+/// **Its own slot rather than a reaction-shaped one.** These carry no emoji, no
+/// count and no "mine": folding them into `ReactionSlot` would mean four fields
+/// that mean nothing for two of the three cases, which is the free-form bag
+/// `INVARIANTS.md` warns about — and the hit test would then have to ask which
+/// kind it had found before it could read any of them.
+///
+/// **The bookmark's *state* is deliberately not here.** A row's layout is cached
+/// and only re-runs on a presentation or items change, so a flag taken at
+/// measure time would freeze the moment it was laid out — §4.5's rule. The
+/// geometry does not depend on it; the painter reads it off its own `State`,
+/// where a change costs a redraw.
+nonisolated struct ReactionControlSlot: Sendable {
+    enum Kind: Sendable, Equatable {
+        case addReaction
+        case bookmark
+    }
+    var rect: CGRect
+    var kind: Kind
+}
+
 // MARK: - The layout engine
 
 /// Turns timeline items into laid-out rows.
@@ -737,6 +765,7 @@ nonisolated struct TimelineLayoutEngine: Sendable {
         if let poll = row.poll { bottom = max(bottom, poll.rect.maxY) }
         if let invite = row.activityInvite { bottom = max(bottom, invite.rect.maxY) }
         for slot in row.reactions { bottom = max(bottom, slot.rect.maxY) }
+        for slot in row.reactionControls { bottom = max(bottom, slot.rect.maxY) }
         if let chip = row.threadChip { bottom = max(bottom, chip.rect.maxY) }
         if let note = row.ephemeralNote { bottom = max(bottom, note.rect.maxY) }
         return ceil(bottom + TimelineMetrics.runBottomPadding)
@@ -1021,13 +1050,15 @@ nonisolated struct TimelineLayoutEngine: Sendable {
 
         // Reaction chips.
         var reactions: [ReactionSlot] = []
+        var reactionControls: [ReactionControlSlot] = []
         y = Self.layoutReactions(
             message.reactions,
             contentX: contentX,
             y: y,
             width: contentWidth,
             style: input.style,
-            into: &reactions
+            into: &reactions,
+            controls: &reactionControls
         )
 
         // The thread this message started, under its content and above the
@@ -1117,6 +1148,7 @@ nonisolated struct TimelineLayoutEngine: Sendable {
             poll: poll,
             activityInvite: activityInvite,
             reactions: reactions,
+            reactionControls: reactionControls,
             threadChip: chip.slot,
             accessibilityLabel: Self.accessibilityLabel(
                 author: author?.name ?? "Unknown",
@@ -1166,13 +1198,15 @@ nonisolated struct TimelineLayoutEngine: Sendable {
         // A join message can be reacted to like any other, and dropping them
         // would be dropping data the payload already carries.
         var reactions: [ReactionSlot] = []
+        var reactionControls: [ReactionControlSlot] = []
         let reactionsBottom = Self.layoutReactions(
             message.reactions,
             contentX: contentX,
             y: y + block.size.height,
             width: contentWidth,
             style: input.style,
-            into: &reactions
+            into: &reactions,
+            controls: &reactionControls
         )
 
         // **A THREAD_CREATED system message carries the thread it announces.**
@@ -1213,6 +1247,7 @@ nonisolated struct TimelineLayoutEngine: Sendable {
             poll: nil,
             activityInvite: nil,
             reactions: reactions,
+            reactionControls: reactionControls,
             threadChip: systemChip.slot,
             systemSymbol: sentence?.symbolName ?? "circle",
             systemTint: Self.tintColor(sentence?.tint),
@@ -1435,7 +1470,8 @@ nonisolated struct TimelineLayoutEngine: Sendable {
         y startY: CGFloat,
         width: CGFloat,
         style: MessageTextStyle,
-        into slots: inout [ReactionSlot]
+        into slots: inout [ReactionSlot],
+        controls: inout [ReactionControlSlot]
     ) -> CGFloat {
         guard !reactions.isEmpty else { return startY }
         var y = startY + TimelineMetrics.reactionGap
@@ -1464,6 +1500,23 @@ nonisolated struct TimelineLayoutEngine: Sendable {
                 }
             ))
             x += chipWidth + 4
+        }
+
+        // The two controls wrap with the chips rather than being pinned to the
+        // row's end: a message with eight reactions on a narrow column ends its
+        // last line wherever it ends, and a control pinned to the right of the
+        // measure would sit alone under a gap.
+        for kind in [ReactionControlSlot.Kind.addReaction, .bookmark] {
+            let side = TimelineMetrics.reactionControlSide
+            if x + side > contentX + width, x > contentX {
+                x = contentX
+                y += TimelineMetrics.reactionChipHeight + 4
+            }
+            controls.append(ReactionControlSlot(
+                rect: CGRect(x: x, y: y, width: side, height: side),
+                kind: kind
+            ))
+            x += side + 4
         }
         return y + TimelineMetrics.reactionChipHeight
     }

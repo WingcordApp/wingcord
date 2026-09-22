@@ -183,6 +183,13 @@ final class TimelineCanvasView: NSView {
     var onDismissEphemeral: ((MessageID) -> Void)?
     /// A reaction chip was clicked. The reader's own reaction is toggled.
     var onToggleReaction: ((MessageID, EmojiRef) -> Void)?
+    /// The add-a-reaction control at the end of the reaction row was clicked.
+    /// The rect is in the hosting root's space, so the picker opens beside the
+    /// control rather than at the window's corner.
+    var onAddReaction: ((MessageID, CGRect) -> Void)?
+    /// The bookmark control beside it was clicked: keep the message, or let it
+    /// go.
+    var onToggleBookmark: ((MessageID) -> Void)?
     /// A reply's quoted line was clicked: go to what it quotes.
     var onOpenReplyTarget: ((MessageID) -> Void)?
     /// The thread chip under a message was clicked: open that thread.
@@ -195,6 +202,10 @@ final class TimelineCanvasView: NSView {
     var onOpenMenu: ((MessageID, CGRect) -> Void)?
 
     private var trackingArea: NSTrackingArea?
+    /// See `apply(isCovered:)`.
+    private var isCovered = false
+    /// See `apply(bookmarks:)`.
+    private var bookmarkedMessageIDs: Set<MessageID> = []
 
     // MARK: Animated stickers
     //
@@ -266,6 +277,19 @@ final class TimelineCanvasView: NSView {
     /// so re-measuring the transcript for it would be the most expensive way to
     /// change two words. Without this the line was frozen until the reader
     /// switched channels, which is what made it look broken.
+    /// The messages the reader has kept.
+    ///
+    /// **An input, and a redraw rather than a relayout.** §4.5: the bookmark
+    /// changes a glyph and nothing about the row's geometry, so it belongs on
+    /// the paint path — a flag taken at layout time would freeze the moment the
+    /// row was measured. Only the visible rect is invalidated, which is where
+    /// the control that changed can be.
+    func apply(bookmarks: Set<MessageID>) {
+        guard bookmarks != bookmarkedMessageIDs else { return }
+        bookmarkedMessageIDs = bookmarks
+        setNeedsDisplay(visibleRect)
+    }
+
     func apply(activityInviteStatuses statuses: [ApplicationID: ActivityInviteStatus]) {
         guard statuses != activityInviteStatuses else { return }
         activityInviteStatuses = statuses
@@ -714,6 +738,9 @@ final class TimelineCanvasView: NSView {
                 state.playingPreviewURL = playingPreview
                 if let messageID = row.messageID {
                     state.isHighlighted = messageID == highlightedMessageID
+                    // A set lookup per visible row, and only for a row that
+                    // carries a message at all.
+                    state.isBookmarked = bookmarkedMessageIDs.contains(messageID)
                     state.revealedSpoilers = revealedSpoilers[messageID] ?? []
                     state.revealedAttachments = revealedAttachments[messageID] ?? []
                     if hoveredRow == index {
@@ -852,11 +879,35 @@ final class TimelineCanvasView: NSView {
     }
 
     override func mouseMoved(with event: NSEvent) {
-        guard !isScrolling else { return }
+        guard !isScrolling, !isCovered else { return }
         updateHover(at: convert(event.locationInWindow, from: nil))
     }
 
     override func mouseExited(with event: NSEvent) {
+        clearHover()
+    }
+
+    /// Whether a floating layer is drawn over this canvas.
+    ///
+    /// **A tracking area is not occlusion-tested.** AppKit dispatches
+    /// `mouseMoved:` from the area's own rect in window space, so a SwiftUI
+    /// layer over the transcript takes every click — `hitTest:` does respect
+    /// view order — and none of the moves. The transcript went on lighting rows
+    /// and raising its hover action bar underneath an open profile, and the
+    /// reader saw the bar sticking out from behind the card.
+    func apply(isCovered: Bool) {
+        guard self.isCovered != isCovered else { return }
+        self.isCovered = isCovered
+        // Only on the way in. Coming back out, the next move re-establishes the
+        // hover by itself — and doing it here would light whichever row the
+        // pointer happens to be over as the card closes.
+        guard isCovered else { return }
+        clearHover()
+    }
+
+    /// Lets go of the pointer: the same work whether it left the canvas or a
+    /// card was drawn over it.
+    private func clearHover() {
         applyCursor(nil)
         hoveredComponent = nil
         guard hoveredRow != nil else { return }
@@ -940,6 +991,16 @@ final class TimelineCanvasView: NSView {
             if origin != .zero { onPlayActivity?(row.id) }
         case .reaction(let emoji, _):
             onToggleReaction?(row.id, emoji)
+        case .addReaction(let rect):
+            // In the hosting root's space, not the window's — see
+            // `anchorInHostingRoot`, and `INVARIANTS.md` §1 for the three
+            // plausible answers that are wrong first.
+            onAddReaction?(
+                row.id,
+                anchorInHostingRoot(rect.offsetBy(dx: frame.minX, dy: frame.minY))
+            )
+        case .bookmark:
+            onToggleBookmark?(row.id)
         case .threadChip(let threadID, _):
             onOpenThread?(threadID)
         case .replyHeader(let target):
@@ -1018,6 +1079,14 @@ final class TimelineCanvasView: NSView {
         /// under the pointer — identified by origin, not index, for the reason
         /// `hoveredComponent` is.
         case reaction(EmojiRef, origin: CGPoint)
+        /// The square control that opens the emoji picker for this message, at
+        /// the end of its reaction row. Carries its rect in **row** space — the
+        /// origin for the painter to light, and the size for the click to
+        /// convert into an anchor. Converting here instead would do it on every
+        /// pointer move for the one press that needs it.
+        case addReaction(rect: CGRect)
+        /// The square control beside it, which keeps the message or lets it go.
+        case bookmark(origin: CGPoint)
         /// The chip under a message that started a thread. Carries the thread
         /// to open, and its origin in row space so the painter can light it.
         case threadChip(ChannelID, origin: CGPoint)
@@ -1176,6 +1245,15 @@ final class TimelineCanvasView: NSView {
             return .reaction(slot.emoji, origin: slot.rect.origin)
         }
 
+        for slot in row.reactionControls where slot.rect.contains(local) {
+            switch slot.kind {
+            case .addReaction:
+                return .addReaction(rect: slot.rect)
+            case .bookmark:
+                return .bookmark(origin: slot.rect.origin)
+            }
+        }
+
         // The face, then the name. Both open the same card, and both are things
         // a reader points at when they want to know who somebody is.
         if let avatarRect = row.avatarRect, avatarRect.contains(local) {
@@ -1272,6 +1350,12 @@ final class TimelineCanvasView: NSView {
                 component = origin
                 cursor = origin == .zero ? nil : .pointingHand
             case .reaction(_, let origin):
+                component = origin
+                cursor = .pointingHand
+            case .addReaction(let rect):
+                component = rect.origin
+                cursor = .pointingHand
+            case .bookmark(let origin):
                 component = origin
                 cursor = .pointingHand
             case .threadChip(_, let origin):

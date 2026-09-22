@@ -23,7 +23,12 @@ struct MemberListContainer: View {
             // A card open over the roster keeps its own subject's plate
             // moving, whether or not the pointer is still on the row — the
             // card is what the pointer is on.
-            profiledUserID: model.profileRequest?.userID
+            profiledUserID: model.profileRequest?.userID,
+            // A tracking area is not occlusion-tested, so without this the
+            // roster lights rows under an open card. The profiled row keeps its
+            // plate moving regardless — `platedRow` prefers the card's subject
+            // over the pointer's.
+            isCovered: model.isWindowCovered
         )
     }
 }
