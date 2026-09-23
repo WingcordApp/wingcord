@@ -70,6 +70,186 @@ final class TimelineCanvasView: NSView {
             self.refreshStickerAnimation()
         }
     }
+
+    /// Wires the effects to this view. Called once, from `init`.
+    ///
+    /// An effect appearing or ending changes what its chip draws — its emoji
+    /// goes to the effect, and the chip shakes — so the chip is repainted and
+    /// the clock re-asked: the shake is the one part of an effect this view
+    /// draws itself.
+    private func adoptBurstEffects() {
+        burstEffects.locate = { [weak self] key in
+            guard let self, let chip = self.burstChip(for: key) else { return nil }
+            let glyph = chip.slot.glyphRect.offsetBy(dx: chip.rowFrame.minX, dy: chip.rowFrame.minY)
+            return CGPoint(x: glyph.midX, y: glyph.midY)
+        }
+        burstEffects.onChange = { [weak self] key in
+            guard let self else { return }
+            self.invalidateBurstChip(key)
+            self.refreshStickerAnimation()
+        }
+    }
+
+    /// The channel these rows are in. A different one ends every effect and
+    /// forgets which chips have had their ambient play.
+    func apply(channelID: ChannelID) {
+        guard self.channelID != channelID else { return }
+        self.channelID = channelID
+        burstEffects.stopAll()
+        ambientPlayed.removeAll()
+        pendingArrivals.removeAll()
+        hoveredBurst = nil
+        publishReactionHover(nil)
+    }
+
+    /// Whether the reader may send super reactions. See `canSuperReact`.
+    func apply(canSuperReact: Bool) {
+        guard self.canSuperReact != canSuperReact else { return }
+        self.canSuperReact = canSuperReact
+        // The chip under the pointer may have just become a control, or
+        // stopped being one.
+        updateHover(at: currentPointerLocation())
+    }
+
+    /// A super reaction chip, by the reaction it shows: its slot and the frame
+    /// of the row it sits in.
+    private func burstChip(
+        for key: SuperReactionEffects.Key
+    ) -> (slot: ReactionSlot, rowFrame: CGRect)? {
+        guard let index = rows.firstIndex(where: { $0.messageID == key.messageID }),
+              case .message(let row) = rows[index].kind,
+              let slot = row.reactions.first(where: {
+                  $0.kind == .burst && $0.emoji.reactionKey == key.emoji
+              })
+        else { return nil }
+        return (slot, rowFrame(at: index))
+    }
+
+    /// Repaints one super reaction chip, glow and shake included.
+    private func invalidateBurstChip(_ key: SuperReactionEffects.Key) {
+        guard let chip = burstChip(for: key) else { return }
+        setNeedsDisplay(
+            chip.slot.rect
+                .offsetBy(dx: chip.rowFrame.minX, dy: chip.rowFrame.minY)
+                .insetBy(dx: -Self.burstBleed, dy: -Self.burstBleed)
+        )
+    }
+
+    /// How far a super reaction chip's drawing reaches past the chip: its glow,
+    /// plus the two points and one degree of its shake.
+    private static let burstBleed = (TimelineMetrics.superReactionGlowBlur * 1.5).rounded(.up) + 3
+
+    /// Starts `slot`'s effect, if it has one to play.
+    private func playEffect(
+        _ slot: ReactionSlot,
+        on row: MessageRow,
+        trigger: SuperReactionEffects.Trigger
+    ) {
+        guard AnimationClock.playsAnimatedEmoji, let channelID,
+              let palette = slot.palette
+        else { return }
+        burstEffects.play(
+            SuperReactionEffects.Request(
+                key: SuperReactionEffects.Key(messageID: row.id, emoji: slot.emoji.reactionKey),
+                emoji: slot.emoji,
+                channelID: channelID,
+                accent: palette.style(isLight: ThemeInk.current.isLight).accent
+            ),
+            trigger: trigger
+        )
+    }
+
+    /// A super reaction landed somewhere. Played when it landed on a chip the
+    /// reader can see — an effect nobody can see is a layer for nothing.
+    private func superReactionArrived(_ emoji: EmojiRef, on messageID: MessageID) {
+        guard let index = rows.firstIndex(where: { $0.messageID == messageID }),
+              case .message(let row) = rows[index].kind
+        else { return }
+        guard let slot = row.reactions.first(where: {
+            $0.kind == .burst && $0.emoji.isSameReaction(as: emoji)
+        }) else {
+            pendingArrivals.append((messageID, emoji, CACurrentMediaTime() + 1.5))
+            return
+        }
+        guard slot.rect.offsetBy(dx: 0, dy: offsets[index]).intersects(visibleRect) else { return }
+        playEffect(slot, on: row, trigger: .arrival)
+    }
+
+    /// Plays the arrivals whose chips have now been laid out, and forgets the
+    /// ones that waited too long to still be news.
+    private func playPendingArrivals() {
+        guard !pendingArrivals.isEmpty else { return }
+        let now = CACurrentMediaTime()
+        let waiting = pendingArrivals
+        pendingArrivals.removeAll()
+        for arrival in waiting where arrival.until > now {
+            guard let index = rows.firstIndex(where: { $0.messageID == arrival.messageID }),
+                  case .message(let row) = rows[index].kind
+            else { continue }
+            guard let slot = row.reactions.first(where: {
+                $0.kind == .burst && $0.emoji.isSameReaction(as: arrival.emoji)
+            }) else {
+                pendingArrivals.append(arrival)
+                continue
+            }
+            if slot.rect.offsetBy(dx: 0, dy: offsets[index]).intersects(visibleRect) {
+                playEffect(slot, on: row, trigger: .arrival)
+            }
+        }
+    }
+
+    /// Schedules the ambient roll while a super reaction chip is within the
+    /// canvas, and drops it the moment none is.
+    ///
+    /// **Five seconds, like Discord's**, and each tick costs a walk of the
+    /// visible rows' chips. A transcript with no super reaction on it holds no
+    /// timer at all.
+    private func refreshAmbient() {
+        let wanted = window != nil && visibleRowRange().contains { index in
+            guard case .message(let row) = rows[index].kind else { return false }
+            return row.reactions.contains { $0.kind == .burst && $0.palette != nil }
+        }
+        if wanted, ambientTimer == nil {
+            let timer = Timer(timeInterval: 5, repeats: true) { [weak self] _ in
+                MainActor.assumeIsolated { self?.rollAmbient() }
+            }
+            timer.tolerance = 1
+            RunLoop.main.add(timer, forMode: .default)
+            ambientTimer = timer
+        } else if !wanted, let timer = ambientTimer {
+            timer.invalidate()
+            ambientTimer = nil
+        }
+    }
+
+    /// Discord's ambient roll, per chip on screen: a digit, plus up to four
+    /// for a busier chip, and above seven plays — so a lone super reaction
+    /// plays by itself about one tick in five and a chip of five or more about
+    /// three in five. Each chip plays this way at most once per channel visit.
+    ///
+    /// **Gated harder than Discord's**, which checks only the animated-emoji
+    /// setting. An effect nobody asked for is exactly what Reduce Motion is
+    /// for, so it is honoured here too, and nothing rolls for a window that
+    /// is hidden or an app in the background.
+    private func rollAmbient() {
+        guard AnimationClock.playsAnimatedEmoji, !isScrolling, NSApp.isActive,
+              window?.occlusionState.contains(.visible) == true
+        else { return }
+        let visible = visibleRect
+        for index in visibleRowRange() {
+            guard case .message(let row) = rows[index].kind else { continue }
+            for slot in row.reactions where slot.kind == .burst && slot.palette != nil {
+                let key = SuperReactionEffects.Key(messageID: row.id, emoji: slot.emoji.reactionKey)
+                guard !ambientPlayed.contains(key), burstEffects.shownAt(key) == nil,
+                      slot.rect.offsetBy(dx: 0, dy: offsets[index]).intersects(visible)
+                else { continue }
+                let roll = Int.random(in: 0..<10) + min(slot.count - 1, 4)
+                guard roll > 7 else { continue }
+                ambientPlayed.insert(key)
+                playEffect(slot, on: row, trigger: .ambient)
+            }
+        }
+    }
     /// The origin, in row space, of the button under the pointer.
     ///
     /// Identified by its origin rather than by an index: the index of a button
@@ -109,6 +289,7 @@ final class TimelineCanvasView: NSView {
     var isScrolling = false {
         didSet {
             guard isScrolling != oldValue else { return }
+            if isScrolling { publishReactionHover(nil) }
             if isScrolling, hoveredRow != nil {
                 let previous = hoveredRow
                 hoveredRow = nil
@@ -184,8 +365,9 @@ final class TimelineCanvasView: NSView {
     /// only in this session, so taking it out of the store destroys the only
     /// copy the reader can reach.
     var onDismissEphemeral: ((MessageID) -> Void)?
-    /// A reaction chip was clicked. The reader's own reaction is toggled.
-    var onToggleReaction: ((MessageID, EmojiRef) -> Void)?
+    /// A reaction chip was clicked. The reader's own reaction of that chip's
+    /// kind is toggled.
+    var onToggleReaction: ((MessageID, EmojiRef, ReactionKind) -> Void)?
     /// The add-a-reaction control at the end of the reaction row was clicked.
     /// The rect is in the hosting root's space, so the picker opens beside the
     /// control rather than at the window's corner.
@@ -203,12 +385,55 @@ final class TimelineCanvasView: NSView {
     var onHoverMessage: ((MessageID?, CGRect) -> Void)?
     /// The full menu was asked for — a right-click, or the pill's own button.
     var onOpenMenu: ((MessageID, CGRect) -> Void)?
+    /// The pointer moved onto, or off, a reaction chip. The chip's frame is in
+    /// the CLIP VIEW's space, for the reason `onHoverMessage`'s is: what reads
+    /// it is the tooltip overlaid on the scroll view.
+    var onHoverReaction: ((ReactionHover?) -> Void)?
+    /// The chip last published through `onHoverReaction`.
+    private var hoveredReaction: ReactionHover?
 
     private var trackingArea: NSTrackingArea?
     /// See `apply(isCovered:)`.
     private var isCovered = false
     /// See `apply(bookmarks:)`.
     private var bookmarkedMessageIDs: Set<MessageID> = []
+
+    // MARK: Super reactions
+
+    /// The channel these rows belong to. An effect is chosen by hashing it with
+    /// the message and the emoji, so the canvas has to know it; see
+    /// `apply(channelID:)`.
+    private var channelID: ChannelID?
+    /// Whether the reader may add or take back a super reaction — Nitro.
+    ///
+    /// **A super reaction chip is still a hover target without it**: its effect
+    /// plays under the pointer for everybody, as it does in Discord. What goes
+    /// is the control — no hand, no lift, and a click that does nothing,
+    /// because a chip that looks pressable and cannot be pressed is the inert
+    /// control `INVARIANTS.md` §5.5 forbids.
+    private var canSuperReact = false
+    /// The effects playing over this transcript's super reactions.
+    private lazy var burstEffects = SuperReactionEffects(host: self)
+    /// The super reaction chip under the pointer, so entering one plays its
+    /// effect once rather than on every move across it.
+    private var hoveredBurst: SuperReactionEffects.Key?
+    /// Chips that have already played their ambient effect in this channel —
+    /// Discord's per-chip latch: each one plays at most once by itself.
+    private var ambientPlayed: Set<SuperReactionEffects.Key> = []
+    /// The chips that were shaking on the last tick, so the tick after a shake
+    /// ends repaints them at rest.
+    private var shakingChips: Set<SuperReactionEffects.Key> = []
+    /// The five-second ambient roll. Scheduled only while a super reaction
+    /// chip is within the canvas; see `refreshAmbient`.
+    private var ambientTimer: Timer?
+    /// Super reactions announced before their chip was laid out.
+    ///
+    /// **A first super reaction on an emoji is announced before the row that
+    /// shows it exists**: the store changes at once and the transcript lays
+    /// itself out a moment later, off the main actor. Discord's store keeps an
+    /// effect until the chip that plays it mounts; this keeps one for a
+    /// moment, and plays it when the rows land.
+    private var pendingArrivals: [(messageID: MessageID, emoji: EmojiRef, until: CFTimeInterval)] = []
 
     // MARK: Animated stickers
     //
@@ -231,7 +456,7 @@ final class TimelineCanvasView: NSView {
     /// first one's repaint mark the second as up to date — so the second would
     /// sit on whichever frame it happened to land on.
     struct FilmSlot: Hashable {
-        enum Kind: UInt8 { case sticker, attachment, embed, emoji }
+        enum Kind: UInt8 { case sticker, attachment, embed, emoji, reaction }
         var messageID: MessageID
         var kind: Kind
         var index: Int
@@ -254,6 +479,7 @@ final class TimelineCanvasView: NSView {
         setAccessibilityRole(.list)
         setAccessibilityLabel("Message transcript")
         adoptAvatarFilm()
+        adoptBurstEffects()
     }
 
     @available(*, unavailable)
@@ -340,6 +566,12 @@ final class TimelineCanvasView: NSView {
         // a new message arriving, a channel switch — so the face playing on it
         // has to be re-asked rather than left on the person who was there.
         updateAvatarPlayback()
+        // A playing effect follows its chip when the rows move under it, and
+        // ends when its chip is gone; one announced before its chip existed
+        // plays now that it does.
+        burstEffects.follow()
+        playPendingArrivals()
+        refreshAmbient()
         needsDisplay = true
         refreshStickerAnimation()
         return running
@@ -393,6 +625,12 @@ final class TimelineCanvasView: NSView {
         // lends its role's instead.
         if hoveredNameEffectAnimates { return true }
         if nameGradientPhase != nil { return true }
+        // A super reaction chip shaking. Not a filmstrip either, and for half
+        // a second at a time.
+        if burstEffects.isShaking(at: AnimationClock.shared.time) || !shakingChips.isEmpty {
+            return true
+        }
+        let playsEmoji = AnimationClock.playsAnimatedEmoji
         for index in visibleRowRange() {
             guard case .message(let row) = rows[index].kind else { continue }
             if row.stickers.contains(where: \.isAnimated) { return true }
@@ -405,8 +643,16 @@ final class TimelineCanvasView: NSView {
             // documented as out of scope at the time and asked for since. The
             // tag carries `isAnimated`, so a message of ordinary Unicode emoji
             // costs nothing here.
-            if AnimationClock.playsAnimatedEmoji,
+            if playsEmoji,
                row.textBlock?.emojiRects.contains(where: { $0.emoji.isAnimated }) == true
+            {
+                return true
+            }
+            // **And the emoji on reaction chips**, which drew as a plate — or,
+            // animated, as frame zero — because nothing had ever asked for
+            // their pictures.
+            if playsEmoji,
+               row.reactions.contains(where: { $0.emoji.isAnimated && $0.imageURL != nil })
             {
                 return true
             }
@@ -605,6 +851,26 @@ final class TimelineCanvasView: NSView {
                     )
                 }
             }
+            for (offset, slot) in row.reactions.enumerated() where slot.emoji.isAnimated {
+                advance(
+                    url: slot.imageURL,
+                    box: slot.glyphRect,
+                    decodeWidth: TimelineMetrics.reactionGlyphSide,
+                    key: FilmSlot(messageID: row.id, kind: .reaction, index: offset),
+                    rowOrigin: origin
+                )
+            }
+        }
+
+        // Shaking chips, and the ones that stopped shaking since the last
+        // tick — a shake that ends between ticks would otherwise leave its chip
+        // drawn a point off and a degree askew until something else repainted
+        // it.
+        let shaking = Set(burstEffects.shaking(at: time))
+        for key in shaking.union(shakingChips) { invalidateBurstChip(key) }
+        if shaking != shakingChips {
+            shakingChips = shaking
+            if shaking.isEmpty { refreshStickerAnimation() }
         }
     }
 
@@ -614,6 +880,18 @@ final class TimelineCanvasView: NSView {
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
         refreshStickerAnimation()
+        // A transcript hears about super reactions arriving while it is in a
+        // window, and plays nothing once it has left one.
+        let token = ObjectIdentifier(self)
+        if window != nil {
+            SuperReactionStage.shared.subscribe(token) { [weak self] messageID, emoji in
+                self?.superReactionArrived(emoji, on: messageID)
+            }
+        } else {
+            SuperReactionStage.shared.unsubscribe(token)
+            burstEffects.stopAll()
+        }
+        refreshAmbient()
     }
 
     /// The row containing a document-space y, by binary search.
@@ -691,8 +969,9 @@ final class TimelineCanvasView: NSView {
         if bounds.origin != newBounds.origin {
             setBoundsOrigin(newBounds.origin)
             // What is visible has changed, and with it whether anything on
-            // screen moves.
+            // screen moves — or might, on its own.
             refreshStickerAnimation()
+            refreshAmbient()
             // A fast gesture can replace the whole overscanned window in one
             // event. Ask for the new contents explicitly so Core Animation never
             // presents an empty slice while waiting for an unrelated
@@ -722,9 +1001,23 @@ final class TimelineCanvasView: NSView {
         let scale = window?.backingScaleFactor ?? 2
         let images = ImageStore.shared
 
+        // **A super reaction's glow reaches past the foot of its row**, so the
+        // row above this rectangle can own pixels inside it — and the clear
+        // above has just erased them. That one row is drawn as well, and only
+        // when it actually carries a glow: every other repaint costs what it
+        // always did.
+        var bleedingRow: Int?
+        if index > 0, dirtyRect.minY < offsets[index] + Self.burstBleed,
+           case .message(let above) = rows[index - 1].kind,
+           above.reactions.contains(where: { $0.kind == .burst && $0.palette != nil })
+        {
+            index -= 1
+            bleedingRow = index
+        }
+
         while index < rows.count, offsets[index] < dirtyRect.maxY {
             let frame = rowFrame(at: index)
-            if frame.intersects(dirtyRect) {
+            if frame.intersects(dirtyRect) || index == bleedingRow {
                 let row = rows[index]
                 var state = TimelineRowPainter.State()
                 // **The preference, then the pointer.** Always-on timestamps are
@@ -743,6 +1036,9 @@ final class TimelineCanvasView: NSView {
                     state.decorationFrame = avatarFilm.decorationFrame(
                         forRow: message.id.rawValue
                     )
+                    if !burstEffects.isEmpty {
+                        state.burstEffects = burstEffects.showing(on: message.id)
+                    }
                 }
                 state.playingPreviewURL = playingPreview
                 if let messageID = row.messageID {
@@ -919,6 +1215,8 @@ final class TimelineCanvasView: NSView {
     private func clearHover() {
         applyCursor(nil)
         hoveredComponent = nil
+        hoveredBurst = nil
+        publishReactionHover(nil)
         guard hoveredRow != nil else { return }
         let previous = hoveredRow
         hoveredRow = nil
@@ -998,8 +1296,11 @@ final class TimelineCanvasView: NSView {
         case .activityInvite(let origin):
             // `.zero` means the click landed on the card but not on the button.
             if origin != .zero { onPlayActivity?(row.id) }
-        case .reaction(let emoji, _):
-            onToggleReaction?(row.id, emoji)
+        case .reaction(let emoji, let kind, _):
+            // A super reaction chip without Nitro is not a control; the click
+            // lands on it and stops there. See `canSuperReact`.
+            guard kind == .normal || canSuperReact else { return }
+            onToggleReaction?(row.id, emoji, kind)
         case .addReaction(let rect):
             // In the hosting root's space, not the window's — see
             // `anchorInHostingRoot`, and `INVARIANTS.md` §1 for the three
@@ -1083,11 +1384,11 @@ final class TimelineCanvasView: NSView {
         /// space so the painter can light it, exactly as a component button
         /// does.
         case activityInvite(origin: CGPoint)
-        /// A reaction chip. Clicking it adds or removes the reader's own.
-        /// Carries its origin in row space so the painter can light the one
-        /// under the pointer — identified by origin, not index, for the reason
-        /// `hoveredComponent` is.
-        case reaction(EmojiRef, origin: CGPoint)
+        /// A reaction chip. Clicking it adds or removes the reader's own of the
+        /// chip's kind. Carries its origin in row space so the painter can
+        /// light the one under the pointer — identified by origin, not index,
+        /// for the reason `hoveredComponent` is.
+        case reaction(EmojiRef, kind: ReactionKind, origin: CGPoint)
         /// The square control that opens the emoji picker for this message, at
         /// the end of its reaction row. Carries its rect in **row** space — the
         /// origin for the painter to light, and the size for the click to
@@ -1251,7 +1552,7 @@ final class TimelineCanvasView: NSView {
         }
 
         for slot in row.reactions where slot.rect.contains(local) {
-            return .reaction(slot.emoji, origin: slot.rect.origin)
+            return .reaction(slot.emoji, kind: slot.kind, origin: slot.rect.origin)
         }
 
         for slot in row.reactionControls where slot.rect.contains(local) {
@@ -1328,6 +1629,8 @@ final class TimelineCanvasView: NSView {
         var component: CGPoint?
         var attachment: Int?
         var embed: Int?
+        var burst: (key: SuperReactionEffects.Key, slot: ReactionSlot, row: MessageRow)?
+        var reaction: ReactionHover?
         if let index, rows.indices.contains(index), case .message(let row) = rows[index].kind {
             // **Resolved from the geometry, not from the click target.** The
             // star is drawn on whichever picture the pointer is over, and the
@@ -1358,9 +1661,30 @@ final class TimelineCanvasView: NSView {
             case .activityInvite(let origin):
                 component = origin
                 cursor = origin == .zero ? nil : .pointingHand
-            case .reaction(_, let origin):
-                component = origin
-                cursor = .pointingHand
+            case .reaction(let emoji, let kind, let origin):
+                let clip = enclosingScrollView?.contentView.bounds.origin ?? .zero
+                if let slot = row.reactions.first(where: { $0.rect.origin == origin }) {
+                    reaction = ReactionHover(
+                        messageID: row.id,
+                        emoji: emoji,
+                        kind: kind,
+                        chipFrame: slot.rect.offsetBy(dx: -clip.x, dy: offsets[index] - clip.y)
+                    )
+                }
+                if kind == .burst,
+                   let slot = row.reactions.first(where: { $0.rect.origin == origin })
+                {
+                    burst = (
+                        SuperReactionEffects.Key(messageID: row.id, emoji: emoji.reactionKey),
+                        slot,
+                        row
+                    )
+                }
+                // Lit and offered a hand only when a click would do something.
+                if kind == .normal || canSuperReact {
+                    component = origin
+                    cursor = .pointingHand
+                }
             case .addReaction(let rect):
                 component = rect.origin
                 cursor = .pointingHand
@@ -1387,6 +1711,15 @@ final class TimelineCanvasView: NSView {
             }
         }
         applyCursor(cursor)
+
+        // Entering a super reaction chip plays its effect — for everybody,
+        // Nitro or not, exactly as Discord's hover does. Once per entry: a move
+        // across the chip is not a second entry.
+        if burst?.key != hoveredBurst {
+            hoveredBurst = burst?.key
+            if let burst { playEffect(burst.slot, on: burst.row, trigger: .hover) }
+        }
+        publishReactionHover(reaction)
 
         // A write of an equal value still costs a redraw request, and the
         // pointer generates these at event rate.
@@ -1460,6 +1793,15 @@ final class TimelineCanvasView: NSView {
         }
         let origin = enclosingScrollView?.contentView.bounds.origin ?? .zero
         onHoverMessage(row.id, rowFrame(at: index).offsetBy(dx: -origin.x, dy: -origin.y))
+    }
+
+    /// Tells the window which reaction chip the pointer rests on. Equal writes
+    /// are dropped here: the pointer moves at event rate and the answer
+    /// changes only at a chip's edge.
+    private func publishReactionHover(_ hover: ReactionHover?) {
+        guard hover != hoveredReaction else { return }
+        hoveredReaction = hover
+        onHoverReaction?(hover)
     }
 
     // MARK: Highlight

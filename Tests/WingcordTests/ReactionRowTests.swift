@@ -109,6 +109,98 @@ struct ReactionRowTests {
         #expect(narrow.reactionControls.last?.kind == .bookmark)
     }
 
+    // MARK: Super reactions
+
+    private let shaq = EmojiRef(id: EmojiID(rawValue: 1_122_960_370_512_957_560), name: "x_shaq")
+
+    @Test("An emoji with both kinds is two chips, the super one first")
+    func bothHalvesTwoChips() throws {
+        let row = try #require(laidOut(reactions: [
+            Reaction(
+                emoji: shaq, count: 3, isMine: true,
+                burstCount: 194, isMineBurst: false, burstColors: [0x40_1B_17]
+            ),
+        ])).row
+        // Discord's own order: module 279182 pushes an emoji's burst half
+        // before its plain half.
+        #expect(row.reactions.map(\.kind) == [.burst, .normal])
+        #expect(row.reactions.map(\.count) == [194, 3])
+        #expect(row.reactions.map(\.isMine) == [false, true])
+        // The super chip carries its colours; the plain one draws as it always
+        // did.
+        #expect(row.reactions[0].palette != nil)
+        #expect(row.reactions[1].palette == nil)
+    }
+
+    @Test("A reaction with only super reactions has no plain chip")
+    func onlyBurst() throws {
+        // The captured case: count 194, all of them super. Reading the wire's
+        // `count` as the plain tally drew a second, plain chip reading 194.
+        let row = try #require(laidOut(reactions: [
+            Reaction(emoji: shaq, count: 0, isMine: false, burstCount: 194, burstColors: [0x40_1B_17]),
+        ])).row
+        #expect(row.reactions.map(\.kind) == [.burst])
+    }
+
+    @Test("A custom emoji's picture is asked for at the size the chip draws it")
+    func emojiAtDrawnSize() throws {
+        let row = try #require(laidOut(reactions: [
+            Reaction(emoji: shaq, count: 1, isMine: false),
+        ])).row
+        let url = try #require(row.reactions.first?.imageURL)
+        let rung = CDN.rung(forSide: TimelineMetrics.reactionGlyphSide)
+        #expect(url.query?.contains("size=\(rung)") == true)
+    }
+
+    @Test("The prefetch asks for every chip's picture, and an animated one's strip")
+    func prefetchAsksForChips() throws {
+        let animated = EmojiRef(id: EmojiID(rawValue: 1_458_335_056_203_403_164), name: "AutoRolePetPet", isAnimated: true)
+        let row = try #require(laidOut(reactions: [
+            Reaction(emoji: shaq, count: 2, isMine: false, burstCount: 1, burstColors: [0x40_1B_17]),
+            Reaction(emoji: animated, count: 386, isMine: false),
+            Reaction(emoji: EmojiRef(name: "🔥"), count: 1, isMine: false),
+        ])).row
+        // **This is the whole of "custom emoji in reactions do not render":**
+        // the painter peeked for these and nothing ever asked for them.
+        let requests = TimelineImageRequests.requests(
+            for: [row], scale: 2, loadsArtwork: true, playsAnimatedEmoji: true
+        )
+        let still = requests.filter { $0.key.url == row.reactions[0].imageURL }
+        let film = requests.filter { $0.key.url == row.reactions[2].imageURL }
+        // One request for the emoji's two chips — the key is the same.
+        #expect(still.count == 1)
+        #expect(still.first?.source == .still(.thumbnail))
+        #expect(film.first?.source == .film)
+        // Keyed exactly as the painter peeks.
+        #expect(still.first?.key.maximumPixelSize == Int((TimelineMetrics.reactionGlyphSide * 2).rounded(.up)))
+        // A Unicode emoji is a glyph, and asks for nothing.
+        #expect(requests.count == 2)
+    }
+
+    @Test("The tooltip reads as Discord's does", arguments: [
+        (["PapaPysklo", "f2p", "🍃"], 191, ReactionKind.burst,
+         ":x_shaq: Super reacted by PapaPysklo, f2p, 🍃, and 191 others"),
+        (["Ana"], 0, .normal, ":x_shaq: reacted by Ana"),
+        (["Ana"], 1, .normal, ":x_shaq: reacted by Ana and 1 other"),
+        (["Ana", "Bo"], 0, .normal, ":x_shaq: reacted by Ana and Bo"),
+        (["Ana", "Bo"], 5, .burst, ":x_shaq: Super reacted by Ana, Bo, and 5 others"),
+        (["Ana", "Bo", "Cy"], 0, .normal, ":x_shaq: reacted by Ana, Bo, and Cy"),
+    ])
+    func tooltipSentence(_ names: [String], _ remaining: Int, _ kind: ReactionKind, _ expected: String) {
+        // The first row is the capture — the tooltip over the `x_shaq` chip,
+        // three names out of 194.
+        #expect(ReactionTooltipText.sentence(
+            emojiName: ":x_shaq:", names: names, remaining: remaining, kind: kind
+        ) == expected)
+    }
+
+    @Test("Nobody to name is no tooltip, and a Unicode emoji is named by its shortcode")
+    func tooltipEdges() {
+        #expect(ReactionTooltipText.sentence(emojiName: ":a:", names: [], remaining: 4, kind: .normal) == nil)
+        #expect(ReactionTooltipText.name(of: EmojiRef(name: "🔥")) == ":fire:")
+        #expect(ReactionTooltipText.name(of: shaq) == ":x_shaq:")
+    }
+
     @Test("A chip is a rounded square, not a capsule")
     func chipIsASquircle() {
         // The corner is derived from the chip's own height at a ratio traced off

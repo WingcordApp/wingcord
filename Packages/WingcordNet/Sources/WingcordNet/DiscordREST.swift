@@ -395,34 +395,89 @@ public actor DiscordREST {
         )
     }
 
+    // MARK: Reactions
+    //
+    // **The emoji goes into the path RAW.** `requestData` builds the URL with
+    // `appending(path:)`, which percent-encodes the segment itself — so a
+    // segment encoded beforehand is encoded twice, and 🔥 went out as
+    // `%25F0%259F%2594%25A5`, which Discord reads as an emoji literally named
+    // `%F0%9F%94%A5`. Every reaction this client wrote was an Unknown Emoji.
+    //
+    // All three shapes are Discord's own client's, read out of module `649963`
+    // and its route table. The listing route is captured
+    // (`lottiesuperreaction.har`); the two writes are not, and are worth
+    // confirming on an account that has Nitro — see `HANDOFF.md`.
+
+    /// Adds the reader's reaction of `kind`.
+    ///
+    /// `PUT …/reactions/{emoji}/@me?location=…&type=…` — the same route for both
+    /// kinds, told apart by `type` alone.
     public func addReaction(
         _ emoji: EmojiRef,
+        kind: ReactionKind,
+        location: ReactionLocation,
         to messageID: MessageID,
         in channelID: ChannelID
     ) async throws {
-        let encoded = emoji.apiIdentifier
-            .addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? emoji.apiIdentifier
         _ = try await requestData(
             method: "PUT",
-            path: "/channels/\(channelID.rawValue)/messages/\(messageID.rawValue)/reactions/\(encoded)/@me",
+            path: "/channels/\(channelID.rawValue)/messages/\(messageID.rawValue)/reactions/\(emoji.apiIdentifier)/@me",
             route: "channels/\(channelID.rawValue)/messages/:id/reactions",
+            query: [
+                URLQueryItem(name: "location", value: location.rawValue),
+                URLQueryItem(name: "type", value: String(kind.rawValue)),
+            ],
             body: Optional<Never>.none
         )
     }
 
+    /// Takes the reader's reaction of `kind` back.
+    ///
+    /// **The type is a path segment here, not a query** — `…/{emoji}/{type}/@me`
+    /// — which is the route Discord's client uses for every removal, plain ones
+    /// included. The bare `…/{emoji}/@me` removes only a plain reaction and has
+    /// no way to name a super one.
     public func removeReaction(
         _ emoji: EmojiRef,
+        kind: ReactionKind,
+        location: ReactionLocation,
         from messageID: MessageID,
         in channelID: ChannelID
     ) async throws {
-        let encoded = emoji.apiIdentifier
-            .addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? emoji.apiIdentifier
         _ = try await requestData(
             method: "DELETE",
-            path: "/channels/\(channelID.rawValue)/messages/\(messageID.rawValue)/reactions/\(encoded)/@me",
+            path: "/channels/\(channelID.rawValue)/messages/\(messageID.rawValue)/reactions/\(emoji.apiIdentifier)/\(kind.rawValue)/@me",
             route: "channels/\(channelID.rawValue)/messages/:id/reactions",
+            query: [
+                URLQueryItem(name: "location", value: location.rawValue),
+                URLQueryItem(name: "burst", value: kind == .burst ? "true" : "false"),
+            ],
             body: Optional<Never>.none
         )
+    }
+
+    /// The first people who reacted with `emoji` of `kind` — what a chip's
+    /// tooltip names.
+    ///
+    /// **Captured**: `GET …/reactions/x_shaq%3A…?limit=3&type=1` answers a bare
+    /// array of whole user objects, and Discord asks for exactly three, because
+    /// three names are all its sentence has room for.
+    public func reactors(
+        of emoji: EmojiRef,
+        kind: ReactionKind,
+        on messageID: MessageID,
+        in channelID: ChannelID,
+        limit: Int = 3
+    ) async throws -> [User] {
+        try await get(
+            "/channels/\(channelID.rawValue)/messages/\(messageID.rawValue)/reactions/\(emoji.apiIdentifier)",
+            route: "channels/\(channelID.rawValue)/messages/:id/reactions",
+            query: [
+                URLQueryItem(name: "limit", value: String(limit)),
+                URLQueryItem(name: "type", value: String(kind.rawValue)),
+            ],
+            as: [UserDTO].self
+        ).map(\.domain)
     }
 
     /// Marks a channel read.
@@ -1361,4 +1416,18 @@ extension DiscordREST {
             as: StorefrontProductDTO.self
         ).domain(skuID: skuID)
     }
+}
+
+/// Where a reaction was made, in the words Discord's own client puts in the
+/// reaction routes' `location` query — module `649963`'s table, verbatim.
+///
+/// Only the two surfaces this client reacts from. The value changes nothing
+/// about what the route does; it is sent because Discord's client always sends
+/// it, and a request that differs from the official one for no reason is a
+/// request that stands out.
+public enum ReactionLocation: String, Sendable {
+    /// A chip under a message.
+    case inlineButton = "Message Inline Button"
+    /// The emoji picker a message's Add Reaction opens.
+    case reactionPicker = "Message Reaction Picker"
 }

@@ -1880,21 +1880,38 @@ enum DemoFixtures {
 
     /// The chips under a message.
     ///
-    /// Three shapes, because they draw differently: one the reader has joined,
-    /// one they have not, and a row of several so the wrap is exercised.
+    /// The shapes that draw differently: one the reader has joined, one they
+    /// have not, a row of several so the wrap is exercised — and super
+    /// reactions, one of them the reader's own.
+    ///
+    /// **The `x_shaq` entry is the captured one**, verbatim from
+    /// `lottiesuperreaction.har`: 194 super reactions and no plain ones, with
+    /// the first three colours the server sent. Its picture is a real emoji on
+    /// the public CDN, so the chip and its effect draw what Discord draws.
     private static func reactions(at index: Int) -> [Reaction] {
         switch index % 17 {
         case 4:
             [Reaction(emoji: EmojiRef(name: "👍"), count: 3, isMine: true)]
         case 9:
             [
-                Reaction(emoji: EmojiRef(name: "🔥"), count: 12, isMine: false),
+                Reaction(
+                    emoji: EmojiRef(name: "🔥"), count: 12, isMine: false,
+                    burstCount: 3, burstColors: [0xF4_90_0C, 0xFF_CC_4D, 0xDD_2E_44]
+                ),
                 Reaction(emoji: EmojiRef(name: "😀"), count: 2, isMine: false),
             ]
         case 13:
             [
+                Reaction(
+                    emoji: EmojiRef(id: EmojiID(rawValue: 1_122_960_370_512_957_560), name: "x_shaq"),
+                    count: 0, isMine: false,
+                    burstCount: 194, burstColors: [0x00_00_00, 0x30_11_11, 0x40_1B_17]
+                ),
                 Reaction(emoji: EmojiRef(name: "✅"), count: 1, isMine: true),
-                Reaction(emoji: EmojiRef(name: "🎉"), count: 8, isMine: false),
+                Reaction(
+                    emoji: EmojiRef(name: "🎉"), count: 8, isMine: false,
+                    burstCount: 2, isMineBurst: true, burstColors: [0xEA_59_6E, 0xFF_CC_4D, 0x5C_91_3B]
+                ),
                 Reaction(emoji: EmojiRef(name: "😢"), count: 4, isMine: false),
                 Reaction(emoji: EmojiRef(name: "❤️"), count: 21, isMine: false),
             ]

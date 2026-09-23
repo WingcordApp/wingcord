@@ -141,6 +141,23 @@ struct MessageHover: Hashable, Sendable {
     var rowFrame: CGRect
 }
 
+/// A reaction chip under the pointer, and where it is in the transcript's clip
+/// view — the space its tooltip is laid out in, for the reason
+/// `MessageHover.rowFrame` is.
+struct ReactionHover: Hashable, Sendable {
+    var messageID: MessageID
+    var emoji: EmojiRef
+    var kind: ReactionKind
+    var chipFrame: CGRect
+}
+
+/// One chip's reactors, as the tooltip asks for them.
+struct ReactorKey: Hashable, Sendable {
+    var messageID: MessageID
+    var emoji: ReactionEmojiKey
+    var kind: ReactionKind
+}
+
 /// A message being edited, and the text so far.
 ///
 /// **Beside the draft rather than replacing it.** An edit borrows the composer;

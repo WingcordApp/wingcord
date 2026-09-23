@@ -569,19 +569,61 @@ public struct Attachment: Hashable, Sendable, Identifiable, Codable {
     }
 }
 
+/// One emoji's reactions on a message: the plain ones and the super ones.
+///
+/// **Two tallies in one value, because Discord keeps them in one.** A message
+/// carries one entry per emoji, and that entry holds a count of each kind — so
+/// an emoji somebody super reacted with and somebody else reacted to plainly is
+/// ONE entry drawn as TWO chips. `ReactionKind` names which half a chip is.
+///
+/// **`count` is the plain tally, not the wire's `count`.** The wire's is the
+/// total of both kinds — `194` for an emoji with 194 super reactions and no
+/// plain ones, captured — and Discord's client throws it away in favour of
+/// `count_details.normal` the moment a message is decoded. Drawing the wire's
+/// number is how a super reaction used to show up here as a second copy of
+/// itself inside the plain chip.
 public struct Reaction: Hashable, Sendable, Codable {
     public var emoji: EmojiRef
+    /// Plain reactions: `count_details.normal`.
     public var count: Int
+    /// The reader has reacted plainly: `me`.
     public var isMine: Bool
-    /// Burst (super) reaction count, kept separate because it renders
-    /// differently and Discord counts it separately.
+    /// Super reactions: `count_details.burst`.
     public var burstCount: Int
+    /// The reader has super reacted: `me_burst`.
+    public var isMineBurst: Bool
+    /// The colours a super reaction chip is derived from, packed `0xRRGGBB`.
+    ///
+    /// **The first three of `burst_colors` and no more**, because that is all
+    /// Discord ever reads: `SuperReactionPalette` picks the most vivid of the
+    /// first three and derives everything else from that one. The server sends
+    /// up to ten. Empty on an emoji nobody super reacted with.
+    public var burstColors: [UInt32]
 
-    public init(emoji: EmojiRef, count: Int, isMine: Bool, burstCount: Int = 0) {
+    public init(
+        emoji: EmojiRef,
+        count: Int,
+        isMine: Bool,
+        burstCount: Int = 0,
+        isMineBurst: Bool = false,
+        burstColors: [UInt32] = []
+    ) {
         self.emoji = emoji
         self.count = count
         self.isMine = isMine
         self.burstCount = burstCount
+        self.isMineBurst = isMineBurst
+        self.burstColors = burstColors
+    }
+
+    /// One half's tally.
+    public func count(of kind: ReactionKind) -> Int {
+        kind == .burst ? burstCount : count
+    }
+
+    /// Whether the reader is in one half.
+    public func isMine(_ kind: ReactionKind) -> Bool {
+        kind == .burst ? isMineBurst : isMine
     }
 }
 
@@ -628,6 +670,26 @@ public struct EmojiRef: Hashable, Sendable, Codable {
     }
 
     public var isCustom: Bool { id != nil }
+
+    /// Whether two refs name the same reaction — Discord's own test, `i6` in
+    /// module `815807`: by id for a custom emoji, by the sequence for a Unicode
+    /// one.
+    ///
+    /// **Not `==`**, which also compares `name` and `isAnimated`. A custom
+    /// emoji renamed since the page loaded, or an event that leaves `animated`
+    /// out, is still the same reaction — and `==` would put a second chip for
+    /// it beside the first.
+    public func isSameReaction(as other: EmojiRef) -> Bool {
+        if let id = other.id { return id == self.id }
+        return self.id == nil && name == other.name
+    }
+
+    /// The same identity as a hashable value, for keying anything per
+    /// reaction — a playing effect, a tooltip's answer.
+    public var reactionKey: ReactionEmojiKey {
+        if let id { return .custom(id) }
+        return .unicode(name)
+    }
 
     /// The form Discord's reaction routes want in a path segment: `name:id` for
     /// a custom emoji, the bare sequence for a Unicode one.

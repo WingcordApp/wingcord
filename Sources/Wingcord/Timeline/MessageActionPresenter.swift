@@ -79,21 +79,25 @@ struct MessageActionPresenter: ViewModifier {
                 attachmentAnchor: .rect(.rect(model.reactionPicker?.anchor ?? .zero)),
                 arrowEdge: .bottom
             ) { request in
+                let react = { (item: ExpressionItem, kind: ReactionKind) in
+                    guard case .insert(let token) = item.pick,
+                          let emoji = EmojiRef(messageToken: token)
+                    else { return }
+                    model.toggleReaction(
+                        emoji, kind: kind, location: .reactionPicker,
+                        on: request.messageID, in: request.channelID
+                    )
+                    model.reactionPicker = nil
+                }
                 ExpressionPicker(
                     mode: .emoji,
-                    onPick: { item in
-                        guard case .insert(let token) = item.pick,
-                              let emoji = EmojiRef(messageToken: token)
-                        else { return }
-                        model.toggleReaction(
-                            emoji, on: request.messageID, in: request.channelID
-                        )
-                        model.reactionPicker = nil
-                    },
+                    onPick: { react($0, .normal) },
                     // The GIF board is unreachable in emoji mode; the closure is
                     // required by the picker's signature and this is the honest
                     // answer for a reaction, which cannot be a GIF.
-                    onPickGIF: { _ in }
+                    onPickGIF: { _ in },
+                    // The switch exists only for an account that can send one.
+                    onPickSuperReaction: model.hasNitro ? { react($0, .burst) } : nil
                 )
                 .environment(model)
                 .presentationBackground(.clear)

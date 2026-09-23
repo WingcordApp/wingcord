@@ -40,6 +40,10 @@ struct TimelineContainer: View {
             // `AppModel.isWindowCovered`.
             isCovered: model.isWindowCovered,
             bookmarks: model.bookmarkedMessageIDs,
+            // Read here for the reason the accents are: whether a super
+            // reaction chip is a control is decided by the account, and a drawn
+            // canvas is only told what SwiftUI re-evaluates.
+            canSuperReact: model.hasNitro,
             model: model
         )
     }

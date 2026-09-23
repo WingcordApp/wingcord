@@ -94,6 +94,9 @@ struct ConversationPane: View {
             // a time — see `MessageActionBar`. Overlaid rather than inset, so it
             // floats over the rows the way a flyout does.
             .overlay { MessageActionBarOverlay(channelID: channelID) }
+            // Who reacted, over the chip the pointer rests on — composed over
+            // the canvas for the pill's reason. See `ReactionTooltipOverlay`.
+            .overlay { ReactionTooltipOverlay(channelID: channelID) }
             // **The transcript runs to the window's foot, under the composer.**
             //
             // Left inset by the bar, the scroll view stops above it — so the

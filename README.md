@@ -145,6 +145,10 @@ predecessor sat at 300–425 MB.
   answer, and the topic a live stage is started with
 - Mini and full profiles, and the cards behind a server tag and any expression —
   including the server behind an emoji or sticker from somewhere you are not in
+- **Super reactions**, as Discord draws them: the chip tinted from the emoji's
+  own colours with its glow, the effect Discord would play for that reaction —
+  on hover, when one lands, and now and then by itself — and a switch in the
+  reaction picker for accounts with Nitro
 - Expression picker with Nitro gating, and three composer completions that
   share one shape: `:shortcode`, `@` for people and `@everyone`, `#` for
   channels
@@ -177,7 +181,7 @@ predecessor sat at 300–425 MB.
 and the reason it is not half-done is in `docs/HANDOFF.md` §"Do this next".
 
 Threads, forums, search, notifications, attachments *outbound*,
-message-component interactions, super reactions, and every Discord commerce
+message-component interactions, and every Discord commerce
 surface — including
 buying or reconfiguring a game server, which is why that page offers an address
 and no lifecycle buttons. Each is a case on an existing enum rather than a new

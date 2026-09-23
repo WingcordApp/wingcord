@@ -449,6 +449,8 @@ final class SessionController {
         model.soundboardCache = nil
         model.dismissMessageSurfaces()
         model.messageHover = nil
+        model.reactionHover = nil
+        model.reactorCache = [:]
         model.forwardRequest = nil
         model.forwardsInFlight = []
         model.deleteRequest = nil
@@ -936,17 +938,31 @@ final class SessionController {
         case .streamServerChanged(let server):
             voice.apply(streamServer: server)
 
-        case .reactionAdded(let messageID, let channelID, let emoji, let userID):
+        case .reactionAdded(let messageID, let channelID, let emoji, let userID, let kind, let colors):
             model.applyReaction(
-                emoji, to: messageID, in: channelID, added: true,
+                emoji, kind: kind, to: messageID, in: channelID, added: true,
+                isMine: userID == model.currentUserID, colors: colors
+            )
+            // **Every super reaction that lands plays its effect**, the reader's
+            // own echo included — Discord's message list plays one for each
+            // `MESSAGE_REACTION_ADD` of the burst kind that is not an optimistic
+            // write, and the echo is how the reader's own gets one.
+            if kind == .burst { SuperReactionStage.shared.arrived(emoji, on: messageID) }
+
+        case .reactionRemoved(let messageID, let channelID, let emoji, let userID, let kind):
+            model.applyReaction(
+                emoji, kind: kind, to: messageID, in: channelID, added: false,
                 isMine: userID == model.currentUserID
             )
 
-        case .reactionRemoved(let messageID, let channelID, let emoji, let userID):
-            model.applyReaction(
-                emoji, to: messageID, in: channelID, added: false,
-                isMine: userID == model.currentUserID
-            )
+        case .reactionsAdded(let messageID, let channelID, let reactions):
+            model.applyReactionBatch(reactions, to: messageID, in: channelID)
+
+        case .reactionsCleared(let messageID, let channelID):
+            model.clearReactions(nil, on: messageID, in: channelID)
+
+        case .reactionEmojiCleared(let messageID, let channelID, let emoji):
+            model.clearReactions(emoji, on: messageID, in: channelID)
 
         case .guildAvailable(
             let guild, let channels, let voiceChannelInfo, let threads, let roles,

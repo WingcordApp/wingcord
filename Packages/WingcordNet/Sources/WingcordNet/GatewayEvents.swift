@@ -54,6 +54,9 @@ struct GatewayFrame: Decodable, Sendable {
         case messageDelete(MessageDeletePayload)
         case messageReactionAdd(ReactionEventPayload)
         case messageReactionRemove(ReactionEventPayload)
+        case messageReactionRemoveAll(ReactionRemoveAllPayload)
+        case messageReactionRemoveEmoji(ReactionRemoveEmojiPayload)
+        case messageReactionAddMany(ReactionAddManyPayload)
         case guildCreate(GuildDTO)
         case guildDelete(GuildDeletePayload)
         case guildUpdate(GuildDTO)
@@ -200,6 +203,12 @@ struct GatewayFrame: Decodable, Sendable {
             payload = .messageReactionAdd(try decode(ReactionEventPayload.self))
         case "MESSAGE_REACTION_REMOVE":
             payload = .messageReactionRemove(try decode(ReactionEventPayload.self))
+        case "MESSAGE_REACTION_REMOVE_ALL":
+            payload = .messageReactionRemoveAll(try decode(ReactionRemoveAllPayload.self))
+        case "MESSAGE_REACTION_REMOVE_EMOJI":
+            payload = .messageReactionRemoveEmoji(try decode(ReactionRemoveEmojiPayload.self))
+        case "MESSAGE_REACTION_ADD_MANY":
+            payload = .messageReactionAddMany(try decode(ReactionAddManyPayload.self))
         case "GUILD_CREATE": payload = .guildCreate(try decode(GuildDTO.self))
         case "GUILD_UPDATE": payload = .guildUpdate(try decode(GuildDTO.self))
         case "GUILD_EMOJIS_UPDATE":
@@ -430,12 +439,64 @@ struct MessageDeletePayload: Decodable, Sendable {
     var guild_id: GuildID?
 }
 
+/// `MESSAGE_REACTION_ADD` and `MESSAGE_REACTION_REMOVE`.
+///
+/// `type` names the half — `0` plain, `1` super — and a super reaction's add
+/// carries the server's palette for it. Read the way Discord's dispatcher reads
+/// them (module `597643`): `type` is the kind and `burst_colors` the colours.
 struct ReactionEventPayload: Decodable, Sendable {
     var user_id: UserID
     var channel_id: ChannelID
     var message_id: MessageID
     var guild_id: GuildID?
     var emoji: EmojiDTO
+    var type: Int?
+    /// The same fact as `type == 1`, sent beside it. Consulted only when
+    /// `type` is missing, so a payload that carries one without the other is
+    /// still read the way it plainly means.
+    var burst: Bool?
+    var burst_colors: [String]?
+
+    var kind: ReactionKind {
+        switch type {
+        case ReactionKind.burst.rawValue: .burst
+        case nil: burst == true ? .burst : .normal
+        default: .normal
+        }
+    }
+}
+
+/// `MESSAGE_REACTION_REMOVE_ALL`: a moderator cleared every reaction.
+struct ReactionRemoveAllPayload: Decodable, Sendable {
+    var channel_id: ChannelID
+    var message_id: MessageID
+}
+
+/// `MESSAGE_REACTION_REMOVE_EMOJI`: a moderator cleared one emoji, both halves.
+struct ReactionRemoveEmojiPayload: Decodable, Sendable {
+    var channel_id: ChannelID
+    var message_id: MessageID
+    var emoji: EmojiDTO
+}
+
+/// `MESSAGE_REACTION_ADD_MANY`: several plain reactions batched into one
+/// dispatch.
+///
+/// **Its fields are read out of Discord's own reducer, not captured.** The
+/// event arrives on a live session — it is in `session.log` — and Discord's
+/// client hands `reactions` to `addReactionBatch`, which reads `users` and
+/// `emoji` from each entry and adds every user as a *plain* reaction. Every
+/// field is optional so a shape that turns out different costs this one event
+/// rather than failing the frame.
+struct ReactionAddManyPayload: Decodable, Sendable {
+    var channel_id: ChannelID
+    var message_id: MessageID
+    var reactions: [Entry]?
+
+    struct Entry: Decodable, Sendable {
+        var users: [UserID]?
+        var emoji: EmojiDTO?
+    }
 }
 
 struct GuildDeletePayload: Decodable, Sendable {

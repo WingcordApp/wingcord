@@ -116,6 +116,16 @@ nonisolated enum TimelineRowPainter {
         var avatarFrame: CGImage?
         /// One frame of their moving decoration, same rule.
         var decorationFrame: CGImage?
+        /// This row's super reactions whose effect is on screen, and the clock
+        /// time each one appeared.
+        ///
+        /// **The chip hands its emoji to the effect while one plays** — every
+        /// effect draws the emoji itself, bursting out of the chip, and two of
+        /// them would be a picture and its ghost — and shakes for the effect's
+        /// first half second, Discord's `shakeReaction`. On the paint state
+        /// because it comes and goes with a layer the canvas owns and changes
+        /// nothing about the row's geometry.
+        var burstEffects: [ReactionEmojiKey: Double] = [:]
     }
 
     /// - Parameter styledAuthorName: the hovered run head's name, shaped and
@@ -201,6 +211,22 @@ nonisolated enum TimelineRowPainter {
         if state.isHighlighted {
             context.setFillColor(NSColor.controlAccentColor.withAlphaComponent(0.16).cgColor)
             context.fill(rowFrame)
+        }
+
+        // Super reaction glows, before anything else in the row. **Discord's
+        // glow is `z-index: -1`** — under the message, not over it — and it
+        // reaches well past its chip, into the line of text above. Drawn with
+        // the chip it would lie across that line as a faint tint.
+        for slot in row.reactions where slot.kind == .burst {
+            guard let burst = slot.palette?.style(isLight: ThemeInk.current.isLight) else { continue }
+            let frame = slot.rect.offsetBy(dx: rowFrame.minX, dy: rowFrame.minY)
+            let shake = state.burstEffects[slot.emoji.reactionKey].flatMap {
+                SuperReactionShake.offset(at: state.animationTime - $0)
+            }
+            context.saveGState()
+            if let shake { applyShake(shake, around: frame, context: context) }
+            SuperReactionGlow.draw(around: frame, accent: burst.accent, context: context, scale: scale)
+            context.restoreGState()
         }
 
         // The quoted line, and the elbow tying it to the face below. Drawn
@@ -549,7 +575,9 @@ nonisolated enum TimelineRowPainter {
                 style: style,
                 isHovered: state.hoveredComponent == slot.rect.origin,
                 images: images,
-                scale: scale
+                scale: scale,
+                clock: state.animationTime,
+                effectStart: slot.kind == .burst ? state.burstEffects[slot.emoji.reactionKey] : nil
             )
         }
 
@@ -1572,8 +1600,20 @@ nonisolated enum TimelineRowPainter {
         style: MessageTextStyle,
         isHovered: Bool,
         images: ImageStore,
-        scale: CGFloat
+        scale: CGFloat,
+        clock: Double,
+        effectStart: Double?
     ) {
+        // A super reaction's effect shakes the chip it starts from, for half a
+        // second. Everything below — glow, fill, count — shakes with it, as it
+        // does in Discord, where the shaken element is the whole chip.
+        let shake = effectStart.flatMap { SuperReactionShake.offset(at: clock - $0) }
+        if let shake {
+            context.saveGState()
+            applyShake(shake, around: frame, context: context)
+        }
+        defer { if shake != nil { context.restoreGState() } }
+
         // **A rounded square, not a capsule.** See
         // `TimelineMetrics.reactionChipRadius` for the measurement; a lozenge is
         // what this drew and it is what neither reference client draws.
@@ -1583,51 +1623,110 @@ nonisolated enum TimelineRowPainter {
             cornerHeight: TimelineMetrics.reactionChipRadius,
             transform: nil
         )
-        context.addPath(path)
-        // A chip is a control, so it answers the pointer. The reader's own is
-        // already accent-tinted; hovering lifts whichever it is by the same
-        // step, so the two states stay distinguishable in both directions.
-        let base: CGFloat = slot.isMine ? 0.22 : 0.07
-        context.setFillColor(
-            slot.isMine
-                ? NSColor.controlAccentColor.withAlphaComponent(base + (isHovered ? 0.12 : 0)).cgColor
-                : ThemeInk.current.lift(base + (isHovered ? 0.06 : 0))
-        )
-        context.fillPath()
-
-        // The reader's own chip carries an outline as well as a tint: on a busy
-        // row the fill alone is one step of lightness against four other chips,
-        // and "did my reaction land" is the only question the control answers.
-        if slot.isMine {
+        let burst = slot.kind == .burst ? slot.palette?.style(isLight: ThemeInk.current.isLight) : nil
+        if let burst {
+            // **A super reaction wears its emoji's colour**: a tinted fill, a
+            // count in the accent, a glow — drawn behind the whole row, see
+            // `drawMessage` — and, when the reader is one of the people who
+            // sent it, a solid ring in the fill's colour. Discord's numbers,
+            // from `SuperReactionPalette`.
             context.addPath(path)
-            context.setStrokeColor(
-                NSColor.controlAccentColor.withAlphaComponent(0.75).cgColor
-            )
-            context.setLineWidth(1)
-            context.strokePath()
-        }
-
-        let side = TimelineMetrics.reactionGlyphSide
-        let glyphRect = CGRect(
-            x: frame.minX + TimelineMetrics.reactionLeadingInset,
-            y: frame.midY - side / 2,
-            width: side,
-            height: side
-        )
-        if let url = slot.imageURL {
-            // A CUSTOM emoji. Its picture is the only correct answer — its
-            // `name` is a word like "blobcat", not a glyph — so a miss draws the
-            // same soft plate the inline path draws rather than the word.
-            if let image = images.cached(ImageStore.Key(
-                url: url,
-                maximumPixelSize: Int((side * scale).rounded(.up))
-            )) {
-                drawFlipped(image, in: glyphRect, context: context)
-            } else {
-                context.setFillColor(style.codeBackground.withAlphaComponent(0.5).cgColor)
-                context.fillEllipse(in: glyphRect.insetBy(dx: 2, dy: 2))
+            context.setFillColor(SuperReactionInk.color(burst.background, alpha: burst.opacity))
+            context.fillPath()
+            if isHovered {
+                // The same step a plain chip lifts by, on top of the tint, so a
+                // super reaction answers the pointer the way every chip does.
+                context.addPath(path)
+                context.setFillColor(ThemeInk.current.lift(0.06))
+                context.fillPath()
+            }
+            if slot.isMine {
+                context.addPath(path)
+                context.setStrokeColor(SuperReactionInk.color(burst.background))
+                context.setLineWidth(1)
+                context.strokePath()
             }
         } else {
+            context.addPath(path)
+            // A chip is a control, so it answers the pointer. The reader's own
+            // is already accent-tinted; hovering lifts whichever it is by the
+            // same step, so the two states stay distinguishable in both
+            // directions.
+            let base: CGFloat = slot.isMine ? 0.22 : 0.07
+            context.setFillColor(
+                slot.isMine
+                    ? NSColor.controlAccentColor.withAlphaComponent(base + (isHovered ? 0.12 : 0)).cgColor
+                    : ThemeInk.current.lift(base + (isHovered ? 0.06 : 0))
+            )
+            context.fillPath()
+
+            // The reader's own chip carries an outline as well as a tint: on a
+            // busy row the fill alone is one step of lightness against four
+            // other chips, and "did my reaction land" is the only question the
+            // control answers.
+            if slot.isMine {
+                context.addPath(path)
+                context.setStrokeColor(
+                    NSColor.controlAccentColor.withAlphaComponent(0.75).cgColor
+                )
+                context.setLineWidth(1)
+                context.strokePath()
+            }
+        }
+
+        let glyphRect = slot.glyphRect.offsetBy(
+            dx: frame.minX - slot.rect.minX, dy: frame.minY - slot.rect.minY
+        )
+        // While an effect plays, the effect is the emoji.
+        if effectStart == nil {
+            drawReactionGlyph(slot, in: glyphRect, context: context, style: style,
+                              images: images, scale: scale, clock: clock)
+        }
+
+        drawText(
+            String(slot.count),
+            font: style.metadataFont,
+            color: burst.map { SuperReactionInk.ink($0.accent) }
+                ?? (slot.isMine ? NSColor.controlAccentColor : style.secondaryColor),
+            at: CGPoint(x: glyphRect.maxX + TimelineMetrics.reactionGlyphGap, y: frame.midY - 7),
+            maxWidth: max(
+                0,
+                frame.maxX - glyphRect.maxX
+                    - TimelineMetrics.reactionGlyphGap
+                    - TimelineMetrics.reactionTrailingInset
+            ),
+            context: context
+        )
+    }
+
+    /// Moves the context to where a shaking chip is: offset, and turned about
+    /// the chip's own centre — CSS's default `transform-origin`.
+    private static func applyShake(
+        _ shake: (dx: CGFloat, dy: CGFloat, radians: CGFloat),
+        around frame: CGRect,
+        context: CGContext
+    ) {
+        context.translateBy(x: frame.midX + shake.dx, y: frame.midY + shake.dy)
+        context.rotate(by: shake.radians)
+        context.translateBy(x: -frame.midX, y: -frame.midY)
+    }
+
+    /// A chip's emoji: an animated custom one's current frame, a still one's
+    /// picture, or a Unicode one's glyph.
+    ///
+    /// **The filmstrip first for an animated one**, exactly as an inline emoji
+    /// resolves — see `drawTextBlock`. The still is the fallback, because it is
+    /// what is on screen while the strip decodes.
+    private static func drawReactionGlyph(
+        _ slot: ReactionSlot,
+        in glyphRect: CGRect,
+        context: CGContext,
+        style: MessageTextStyle,
+        images: ImageStore,
+        scale: CGFloat,
+        clock: Double
+    ) {
+        guard let url = slot.imageURL else {
             // A Unicode emoji, whose `name` IS the glyph.
             //
             // The box has to be at least as wide as the glyph advances or tail
@@ -1638,25 +1737,27 @@ nonisolated enum TimelineRowPainter {
                 slot.emoji.name,
                 font: NSFont.systemFont(ofSize: TimelineMetrics.reactionEmojiFontSize),
                 color: style.primaryColor,
-                at: CGPoint(x: glyphRect.minX, y: glyphRect.midY - side / 2 + 2),
+                at: CGPoint(x: glyphRect.minX, y: glyphRect.minY + 2),
                 maxWidth: glyphRect.width,
                 context: context
             )
+            return
         }
-
-        drawText(
-            String(slot.count),
-            font: style.metadataFont,
-            color: slot.isMine ? NSColor.controlAccentColor : style.secondaryColor,
-            at: CGPoint(x: glyphRect.maxX + TimelineMetrics.reactionGlyphGap, y: frame.midY - 7),
-            maxWidth: max(
-                0,
-                frame.maxX - glyphRect.maxX
-                    - TimelineMetrics.reactionGlyphGap
-                    - TimelineMetrics.reactionTrailingInset
-            ),
-            context: context
-        )
+        // A CUSTOM emoji. Its picture is the only correct answer — its `name`
+        // is a word like "blobcat", not a glyph — so a miss draws the same soft
+        // plate the inline path draws rather than the word.
+        let pixels = Int((glyphRect.width * scale).rounded(.up))
+        let frame: CGImage? = slot.emoji.isAnimated
+            ? AnimatedImageStore.shared
+                .cached(AnimatedImageStore.Key(url: url, maximumPixelSize: pixels))
+                .map { $0.frames[$0.index(at: clock)] }
+            : nil
+        if let image = frame ?? images.cached(ImageStore.Key(url: url, maximumPixelSize: pixels)) {
+            drawFlipped(image, in: glyphRect, context: context)
+        } else {
+            context.setFillColor(style.codeBackground.withAlphaComponent(0.5).cgColor)
+            context.fillEllipse(in: glyphRect.insetBy(dx: 2, dy: 2))
+        }
     }
 
     /// Draws a bitmap the right way up.

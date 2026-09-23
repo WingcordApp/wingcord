@@ -1498,8 +1498,21 @@ public enum GatewayUpdate: Sendable {
     )
     case messageUpdated(Message)
     case messageDeleted(MessageID, channelID: ChannelID)
-    case reactionAdded(MessageID, channelID: ChannelID, emoji: EmojiRef, userID: UserID)
-    case reactionRemoved(MessageID, channelID: ChannelID, emoji: EmojiRef, userID: UserID)
+    /// One reaction of one kind. `colors` is the server's palette for a super
+    /// reaction, the first three of `burst_colors`; empty for a plain one.
+    case reactionAdded(
+        MessageID, channelID: ChannelID, emoji: EmojiRef, userID: UserID,
+        kind: ReactionKind, colors: [UInt32]
+    )
+    case reactionRemoved(
+        MessageID, channelID: ChannelID, emoji: EmojiRef, userID: UserID, kind: ReactionKind
+    )
+    /// Several plain reactions at once, as `(emoji, users)` pairs.
+    case reactionsAdded(MessageID, channelID: ChannelID, reactions: [(EmojiRef, [UserID])])
+    /// A moderator cleared every reaction on a message.
+    case reactionsCleared(MessageID, channelID: ChannelID)
+    /// A moderator cleared one emoji — both kinds, everybody's.
+    case reactionEmojiCleared(MessageID, channelID: ChannelID, emoji: EmojiRef)
     case guildAvailable(
         Guild,
         channels: [Channel],
@@ -1680,14 +1693,35 @@ public enum GatewayUpdate: Sendable {
                 payload.message_id,
                 channelID: payload.channel_id,
                 emoji: payload.emoji.domain,
-                userID: payload.user_id
+                userID: payload.user_id,
+                kind: payload.kind,
+                colors: ReactionDTO.palette(payload.burst_colors)
             )
         case .messageReactionRemove(let payload):
             self = .reactionRemoved(
                 payload.message_id,
                 channelID: payload.channel_id,
                 emoji: payload.emoji.domain,
-                userID: payload.user_id
+                userID: payload.user_id,
+                kind: payload.kind
+            )
+        case .messageReactionAddMany(let payload):
+            self = .reactionsAdded(
+                payload.message_id,
+                channelID: payload.channel_id,
+                reactions: (payload.reactions ?? []).compactMap { entry in
+                    guard let emoji = entry.emoji, let users = entry.users, !users.isEmpty
+                    else { return nil }
+                    return (emoji.domain, users)
+                }
+            )
+        case .messageReactionRemoveAll(let payload):
+            self = .reactionsCleared(payload.message_id, channelID: payload.channel_id)
+        case .messageReactionRemoveEmoji(let payload):
+            self = .reactionEmojiCleared(
+                payload.message_id,
+                channelID: payload.channel_id,
+                emoji: payload.emoji.domain
             )
         case .guildCreate(let dto):
             let guild = dto.domain

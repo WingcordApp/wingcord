@@ -239,6 +239,32 @@ nonisolated enum TimelineImageRequests {
                 }
             }
 
+            // **The emoji on reaction chips, which nothing asked for.** The
+            // painter peeked for them and this pass never requested one, so
+            // every custom emoji under a message drew as a grey plate for the
+            // life of the channel — the trap this type exists to close, missed
+            // for one asset kind. Keyed exactly as `drawReactionGlyph` peeks:
+            // the chip's own URL at the glyph's side. An emoji with both a plain
+            // and a super chip is one request; the key is the same.
+            for slot in row.reactions {
+                guard let url = slot.imageURL else { continue }
+                let key = ImageStore.Key(
+                    url: url,
+                    maximumPixelSize: Int((TimelineMetrics.reactionGlyphSide * scale).rounded(.up))
+                )
+                guard seen.insert(key).inserted else { continue }
+                // The strip for an animated one, as for an inline emoji, so a
+                // reaction moves the way the same emoji in the text above does.
+                if slot.emoji.isAnimated, playsAnimatedEmoji {
+                    let film = AnimatedImageStore.Key(url: url, maximumPixelSize: key.maximumPixelSize)
+                    if AnimatedImageStore.shared.cached(film) == nil {
+                        requests.append(Request(key: key, source: .film))
+                    }
+                } else if ImageStore.shared.cached(key) == nil {
+                    requests.append(Request(key: key, source: .still(.thumbnail)))
+                }
+            }
+
             // A button's emoji rides the ordinary inline-emoji rung.
             for slot in row.components {
                 guard let id = slot.emoji?.id,

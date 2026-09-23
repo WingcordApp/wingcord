@@ -32,6 +32,13 @@ struct ExpressionPicker: View {
     var mode: ExpressionMode
     var onPick: (ExpressionItem) -> Void
     var onPickGIF: (GIF) -> Void
+    /// Where a pick goes while the super reaction switch is on.
+    ///
+    /// **Set only by a reaction picker, for a reader who can send one** — its
+    /// presence is what puts the switch in the search row, so the composer, a
+    /// status and an account without Nitro never see a control that cannot
+    /// work.
+    var onPickSuperReaction: ((ExpressionItem) -> Void)? = nil
 
     @Environment(AppModel.self) private var model
     @Environment(\.motion) private var motion
@@ -54,6 +61,9 @@ struct ExpressionPicker: View {
     /// time any one of them changes. This is the one thing here worth a
     /// measurement — see `INVARIANTS.md` §2.
     @State private var chromeHeight: CGFloat = 0
+    /// Whether every pick is a super reaction. Starts off each time the picker
+    /// opens, as Discord's does.
+    @State private var isSuperReaction = false
 
     /// The panel's size. A popover has no natural one, and a grid inside a
     /// container that sizes to its content has no width to lay out against.
@@ -111,7 +121,7 @@ struct ExpressionPicker: View {
                     // A search result set is one flat section; jumping into it
                     // has no meaning and would fight the reader's scroll.
                     jump: query.isEmpty ? jump : nil,
-                    onPick: onPick,
+                    onPick: isSuperReaction ? (onPickSuperReaction ?? onPick) : onPick,
                     onTopSectionChange: { topSection = $0 },
                     onHover: { hover = $0 }
                 )
@@ -245,7 +255,10 @@ struct ExpressionPicker: View {
                     .font(.system(.subheadline))
                     .foregroundStyle(Ink.tertiary)
 
-                TextField(mode.searchPlaceholder, text: $query)
+                TextField(
+                    isSuperReaction ? "Search Super Reactions" : mode.searchPlaceholder,
+                    text: $query
+                )
                     .textFieldStyle(.plain)
                     .font(.system(.subheadline))
 
@@ -263,8 +276,39 @@ struct ExpressionPicker: View {
             .frame(minHeight: Metrics.control)
             .chromeOverMedia()
 
+            if onPickSuperReaction != nil { superReactionSwitch }
             if mode == .emoji { skinTone }
         }
+    }
+
+    /// The super reaction switch — between the field and the skin tone, where
+    /// Discord puts it.
+    ///
+    /// **Its state is in its material**: accent-tinted glass while every pick
+    /// will be a super reaction, clear while none will, so the picker says
+    /// which it is doing without the tooltip. The mark turns a full circle on
+    /// each change, as Discord's does, and holds still under Reduce Motion.
+    private var superReactionSwitch: some View {
+        Button { isSuperReaction.toggle() } label: {
+            SuperReactionGlyph()
+                .foregroundStyle(isSuperReaction ? Color.white : InkColor.secondary)
+                .frame(width: 16, height: 16)
+                .rotationEffect(.degrees(isSuperReaction && !motion.reduceMotion ? 360 : 0))
+                .frame(width: Metrics.control, height: Metrics.control)
+                .contentShape(.circle)
+        }
+        .buttonStyle(.plain)
+        .glassEffect(
+            isSuperReaction
+                ? .clear.tint(Palette.accent.opacity(0.7)).interactive()
+                : .clear.interactive(),
+            in: .circle
+        )
+        .animation(motion.glassMorph, value: isSuperReaction)
+        .help(isSuperReaction ? "Super Reactions enabled" : "Enable Super Reactions")
+        .accessibilityLabel("Super Reaction")
+        .accessibilityValue(isSuperReaction ? "On" : "Off")
+        .accessibilityAddTraits(.isToggle)
     }
 
     /// The tone every emoji that takes one is drawn in.

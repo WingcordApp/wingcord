@@ -20,12 +20,14 @@ let package = Package(
         // encoder callback are threads with deadlines, and the app target
         // inverts Swift's default to put everything on the main actor.
         .package(path: "Packages/WingcordVoice"),
-        // The one third-party dependency in the app, and it earns its place:
-        // eight of Discord's fourteen standard sticker packs are Lottie, and a
-        // Lottie sticker has no bitmap on the CDN at all — both the `.png` and
-        // `.gif` endpoints answer 404. It is used ONLY as a rasteriser, at load
-        // time, off the main thread; nothing in the running UI is a Lottie view.
-        // See `LottieFilmstrip`.
+        // The one third-party dependency in the app, and it earns its place
+        // twice. Eight of Discord's fourteen standard sticker packs are Lottie,
+        // and a Lottie sticker has no bitmap on the CDN at all — both the `.png`
+        // and `.gif` endpoints answer 404 — so those are rasterised once into
+        // filmstrips; see `LottieFilmstrip`. And a super reaction's effect is a
+        // Lottie played live, once, on the Core Animation engine, where the
+        // render server runs it and the main thread does nothing per frame —
+        // seventeen of the eighteen; see `SuperReactionEffects`.
         .package(url: "https://github.com/airbnb/lottie-ios", from: "4.5.0"),
     ],
     targets: [
@@ -55,7 +57,15 @@ let package = Package(
             // 64 kbit, so the difference is inaudible and the bundle is a third
             // the size. They are decoded lazily, on the first event that plays
             // one; a session that never joins a call decodes none of them.
-            resources: [.copy("Resources/Fonts"), .copy("Resources/Sounds")],
+            //
+            // The super reaction effects are Discord's own Lottie files, LZFSE
+            // compressed — see `Resources/SuperReactions/README.md`. Read one
+            // at a time, when a reaction first plays that effect.
+            resources: [
+                .copy("Resources/Fonts"),
+                .copy("Resources/Sounds"),
+                .copy("Resources/SuperReactions"),
+            ],
             swiftSettings: [
                 .defaultIsolation(MainActor.self),
                 .swiftLanguageMode(.v6),

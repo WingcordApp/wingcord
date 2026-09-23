@@ -253,6 +253,7 @@ private struct OverlayChatBody: View {
             // The one composed thing over the drawn transcript, and there is
             // exactly one of it at a time.
             .overlay { MessageActionBarOverlay(channelID: channelID) }
+            .overlay { ReactionTooltipOverlay(channelID: channelID) }
             // **The transcript runs to the panel's foot, UNDER the composer**,
             // and this one modifier is the whole of "the composer floats".
             //

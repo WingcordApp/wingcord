@@ -176,6 +176,15 @@ nonisolated enum TimelineMetrics {
     static let reactionGlyphGap: CGFloat = 4
     static let reactionTrailingInset: CGFloat = 7
 
+    /// A super reaction chip's glow: Discord's `box-shadow: 0 0 16px`, at the
+    /// 35 % its glow element is drawn at.
+    ///
+    /// **Scaled to this chip, not copied.** Discord's chip is 30 pixels tall
+    /// and this one 22 points; the glow is part of the chip's silhouette, so it
+    /// keeps the chip's proportion rather than Discord's absolute size.
+    static let superReactionGlowBlur: CGFloat = (16 * reactionChipHeight / 30).rounded()
+    static let superReactionGlowOpacity: CGFloat = 0.35
+
     /// A chip's width, given the width its count label measured to.
     static func reactionChipWidth(countWidth: CGFloat) -> CGFloat {
         reactionLeadingInset + reactionGlyphSide + reactionGlyphGap

@@ -58,6 +58,10 @@ struct TimelineView: NSViewRepresentable {
     /// reason the accents are — a drawn canvas is only told what SwiftUI
     /// re-evaluates.
     var bookmarks: Set<MessageID>
+    /// Whether the reader can send super reactions — Nitro. A super reaction
+    /// chip is a control only when this is true; see
+    /// `TimelineCanvasView.apply(canSuperReact:)`.
+    var canSuperReact: Bool
     var model: AppModel
 
     func makeCoordinator() -> TimelineCoordinator {
@@ -81,7 +85,8 @@ struct TimelineView: NSViewRepresentable {
             spotifyRevision: spotifyRevision,
             playingPreview: playingPreview,
             isCovered: isCovered,
-            bookmarks: bookmarks
+            bookmarks: bookmarks,
+            canSuperReact: canSuperReact
         )
     }
 
@@ -250,9 +255,11 @@ final class TimelineCoordinator: NSObject {
                 anchor: canvas.anchorInHostingRoot(rect)
             )
         }
-        canvas.onToggleReaction = { [weak self] messageID, emoji in
+        canvas.onToggleReaction = { [weak self] messageID, emoji, kind in
             guard let self, let channelID = self.channelID else { return }
-            self.model.toggleReaction(emoji, on: messageID, in: channelID)
+            self.model.toggleReaction(
+                emoji, kind: kind, location: .inlineButton, on: messageID, in: channelID
+            )
         }
         // The same two acts the hover bar and the message menu already offer,
         // reached from the reaction row itself. Routed through the store rather
@@ -284,6 +291,10 @@ final class TimelineCoordinator: NSObject {
             // generates these at the pace a person moves a mouse.
             guard self.model.messageHover != hover else { return }
             self.model.messageHover = hover
+        }
+        canvas.onHoverReaction = { [weak self] hover in
+            guard let self, self.model.reactionHover != hover else { return }
+            self.model.reactionHover = hover
         }
         canvas.onOpenMenu = { [weak self] messageID, rect in
             guard let self, let channelID = self.channelID, let canvas = self.canvas else {
@@ -455,6 +466,8 @@ final class TimelineCoordinator: NSObject {
         canvas?.onPlayActivity = nil
         canvas?.onPressComponent = nil
         canvas?.onDismissEphemeral = nil
+        canvas?.onToggleReaction = nil
+        canvas?.onHoverReaction = nil
         (scrollView as? TimelineScrollView)?.acceptsScrollInput = { true }
         // The clock holds a closure over the canvas; a subscriber that outlives
         // its transcript is a display link running for a channel nobody is
@@ -490,10 +503,12 @@ final class TimelineCoordinator: NSObject {
         spotifyRevision: UInt64,
         playingPreview: URL?,
         isCovered: Bool,
-        bookmarks: Set<MessageID>
+        bookmarks: Set<MessageID>,
+        canSuperReact: Bool
     ) {
         canvas?.apply(isCovered: isCovered)
         canvas?.apply(bookmarks: bookmarks)
+        canvas?.apply(canSuperReact: canSuperReact)
         canvas?.apply(activityAccents: activityAccents)
         canvas?.apply(playingPreview: playingPreview)
         canvas?.apply(activityInviteStatuses: activityInviteStatuses)
@@ -572,6 +587,7 @@ final class TimelineCoordinator: NSObject {
             pendingJump = nil
         }
         self.channelID = channelID
+        canvas?.apply(channelID: channelID)
 
         if let jump, jump.channelID == channelID, jump.token != appliedJumpToken {
             appliedJumpToken = jump.token

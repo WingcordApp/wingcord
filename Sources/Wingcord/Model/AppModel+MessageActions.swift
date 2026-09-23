@@ -35,7 +35,8 @@ extension AppModel {
 
     // MARK: Reacting
 
-    /// Adds or removes the reader's own reaction, whichever the chip is not.
+    /// Adds or takes back the reader's own reaction of `kind`, whichever the
+    /// chip is not.
     ///
     /// **Applied optimistically and then sent**, for the reason a vote is: the
     /// chip is the only feedback the click has, and a count that moves one round
@@ -46,21 +47,65 @@ extension AppModel {
     /// starting a new one needs `ADD_REACTIONS`. Collapsing the two would grey
     /// out every chip in exactly the channels where the existing chips are the
     /// only ones anybody may use.
-    func toggleReaction(_ emoji: EmojiRef, on messageID: MessageID, in channelID: ChannelID) {
+    ///
+    /// A super reaction adds three rules, all Discord's:
+    ///
+    ///  - **It is Nitro's**, to add and to take back. Discord answers either
+    ///    without it with an upsell; this client sells nothing, so it answers
+    ///    with nothing, and the chip does not offer itself as a control.
+    ///  - **One emoji is one kind per person.** Somebody who reacted plainly
+    ///    with an emoji cannot super react with it, or the other way round —
+    ///    Discord explains that before sending anything, in the words below.
+    ///  - **Its colours come first.** The optimistic write carries the palette
+    ///    Discord derives from the emoji's own picture, and the reducer keeps it
+    ///    over the server's — so the send waits for the picture, which the chip
+    ///    has almost always already drawn.
+    func toggleReaction(
+        _ emoji: EmojiRef,
+        kind: ReactionKind = .normal,
+        location: ReactionLocation,
+        on messageID: MessageID,
+        in channelID: ChannelID
+    ) {
         guard let message = message(messageID, in: channelID) else { return }
-        let existing = message.reactions.first { $0.emoji == emoji }
+        let existing = message.reactions.first { $0.emoji.isSameReaction(as: emoji) }
         let permitted = permissionGate.actions(for: message)
         let needed: MessageActions = existing == nil ? .addReaction : .joinReaction
-        guard permitted.contains(needed) else { return }
+        guard permitted.contains(needed), kind == .normal || hasNitro else { return }
 
-        let pending = PendingReaction(messageID: messageID, emoji: emoji)
+        let adding = !(existing?.isMine(kind) ?? false)
+        if adding, existing?.isMine(kind == .burst ? .normal : .burst) == true {
+            reportActionFailure(
+                "You can’t react and super react with the same emoji. There’s a lot of "
+                    + "emoji to choose from, so maybe try another one."
+            )
+            return
+        }
+
+        let pending = PendingReaction(messageID: messageID, emoji: emoji.reactionKey, kind: kind)
         guard reactionsInFlight.insert(pending).inserted else { return }
 
-        let adding = !(existing?.isMine ?? false)
-        applyReaction(emoji, to: messageID, in: channelID, added: adding, isMine: true)
-        sessionController.writeReaction(
-            emoji, on: messageID, in: channelID, adding: adding, pending: pending
-        )
+        guard kind == .burst, adding else {
+            applyReaction(emoji, kind: kind, to: messageID, in: channelID, added: adding, isMine: true)
+            sessionController.writeReaction(
+                emoji, kind: kind, location: location,
+                on: messageID, in: channelID, adding: adding, pending: pending
+            )
+            return
+        }
+        let scale = NSScreen.main?.backingScaleFactor ?? 2
+        Task { [weak self] in
+            let colors = await SuperReactionArt.palette(for: emoji, scale: scale)
+            guard let self else { return }
+            applyReaction(
+                emoji, kind: .burst, to: messageID, in: channelID,
+                added: true, isMine: true, colors: colors
+            )
+            sessionController.writeReaction(
+                emoji, kind: .burst, location: location,
+                on: messageID, in: channelID, adding: true, pending: pending
+            )
+        }
     }
 
     /// Opens the picker beside a message.

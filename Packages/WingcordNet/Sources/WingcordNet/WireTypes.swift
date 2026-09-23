@@ -759,11 +759,32 @@ struct EmojiDTO: Decodable, Sendable {
     }
 }
 
+/// One emoji's reactions on a message.
+///
+/// **Captured**, `lottiesuperreaction.har`, for an emoji with nothing but super
+/// reactions:
+///
+/// ```json
+/// {"emoji": {"id": "1122960370512957560", "name": "x_shaq"},
+///  "count": 194, "count_details": {"burst": 194, "normal": 0},
+///  "burst_colors": ["#000000", "#301111", "#401b17", …ten…],
+///  "me_burst": false, "burst_me": false, "me": false, "burst_count": 194}
+/// ```
+///
+/// `count` is the **total** of both kinds. Discord's client replaces it with
+/// `count_details.normal` the moment a message is decoded, and so does this —
+/// reading `count` as the plain tally is what drew every super reaction twice.
 struct ReactionDTO: Decodable, Sendable {
     var emoji: EmojiDTO
     var count: Int?
     var me: Bool?
+    var me_burst: Bool?
+    /// The same bit under a second name. Both arrive, carrying the same value.
+    var burst_me: Bool?
+    /// Only read when `count_details` is absent, exactly as Discord does.
+    var burst_count: Int?
     var count_details: CountDetails?
+    var burst_colors: [String]?
 
     struct CountDetails: Decodable, Sendable {
         var burst: Int?
@@ -771,12 +792,29 @@ struct ReactionDTO: Decodable, Sendable {
     }
 
     var domain: Reaction {
-        Reaction(
+        // Discord's own normalisation, from the message record's builder: the
+        // details win when they are there, and neither count goes below zero.
+        let normal = count_details.map { $0.normal ?? 0 } ?? (count ?? 0)
+        let burst = count_details.map { $0.burst ?? 0 } ?? (burst_count ?? 0)
+        return Reaction(
             emoji: emoji.domain,
-            count: count ?? 0,
+            count: max(0, normal),
             isMine: me ?? false,
-            burstCount: count_details?.burst ?? 0
+            burstCount: max(0, burst),
+            isMineBurst: me_burst ?? burst_me ?? false,
+            burstColors: Self.palette(burst_colors)
         )
+    }
+
+    /// The first three `burst_colors`, packed. See `Reaction.burstColors` for
+    /// why three.
+    static func palette(_ colors: [String]?) -> [UInt32] {
+        guard let colors else { return [] }
+        return colors.prefix(3).compactMap { text in
+            let hex = text.hasPrefix("#") ? text.dropFirst() : Substring(text)
+            guard hex.utf8.count == 6 else { return nil }
+            return UInt32(hex, radix: 16)
+        }
     }
 }
 

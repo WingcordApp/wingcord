@@ -182,43 +182,93 @@ extension AppModel {
         sessionController.acknowledge(newest, in: channelID)
     }
 
-    /// Applies a reaction add or remove to a loaded message.
+    /// Applies one reaction arriving or leaving, of one kind, to a loaded
+    /// message.
     ///
-    /// Reactions arrive as deltas, so the count is adjusted rather than
+    /// Reactions arrive as deltas, so the tally is adjusted rather than
     /// replaced — Discord does not resend the whole list, and rebuilding it
-    /// would need a fetch per reaction.
+    /// would need a fetch per reaction. The arithmetic is Discord's own, in
+    /// `ReactionTally`.
+    ///
+    /// - Parameter colors: a super reaction's palette. Kept only when the
+    ///   emoji had none yet — see `ReactionTally.adding`.
     func applyReaction(
         _ emoji: EmojiRef,
+        kind: ReactionKind,
         to messageID: MessageID,
         in channelID: ChannelID,
         added: Bool,
-        isMine: Bool
+        isMine: Bool,
+        colors: [UInt32] = []
     ) {
-        mutateBox(channelID) { box in
-            guard let index = box.messages.firstIndex(where: { $0.id == messageID }) else {
-                return
-            }
-            var message = box.messages[index]
-            var reactions = message.reactions
-            if let position = reactions.firstIndex(where: { $0.emoji == emoji }) {
-                var reaction = reactions[position]
-                reaction.count += added ? 1 : -1
-                if isMine { reaction.isMine = added }
-                if reaction.count <= 0 {
-                    reactions.remove(at: position)
-                } else {
-                    reactions[position] = reaction
-                }
-            } else if added {
-                reactions.append(Reaction(emoji: emoji, count: 1, isMine: isMine))
-            }
+        let isDirectMessage = channelIndex[channelID]?.kind == .directMessage
+        updateReactions(of: messageID, in: channelID) { reactions in
+            added
+                ? ReactionTally.adding(
+                    emoji, kind: kind, isMine: isMine, colors: colors,
+                    isDirectMessage: isDirectMessage, to: reactions
+                )
+                : ReactionTally.removing(emoji, kind: kind, isMine: isMine, from: reactions)
+        }
+    }
 
+    /// `MESSAGE_REACTION_ADD_MANY`: several plain reactions in one dispatch,
+    /// applied as Discord's `addReactionBatch` applies them — one add per
+    /// person, in order.
+    func applyReactionBatch(
+        _ batch: [(EmojiRef, [UserID])],
+        to messageID: MessageID,
+        in channelID: ChannelID
+    ) {
+        let isDirectMessage = channelIndex[channelID]?.kind == .directMessage
+        let reader = currentUserID
+        updateReactions(of: messageID, in: channelID) { reactions in
+            var result = reactions
+            var changed = false
+            for (emoji, users) in batch {
+                for user in users {
+                    guard let next = ReactionTally.adding(
+                        emoji, kind: .normal, isMine: user == reader,
+                        isDirectMessage: isDirectMessage, to: result
+                    ) else { continue }
+                    result = next
+                    changed = true
+                }
+            }
+            return changed ? result : nil
+        }
+    }
+
+    /// A moderator cleared every reaction on a message, or one emoji's.
+    func clearReactions(_ emoji: EmojiRef?, on messageID: MessageID, in channelID: ChannelID) {
+        updateReactions(of: messageID, in: channelID) { reactions in
+            guard let emoji else { return reactions.isEmpty ? nil : [] }
+            return ReactionTally.removingEmoji(emoji, from: reactions)
+        }
+    }
+
+    /// The one write every reaction change goes through.
+    ///
+    /// **Nothing is written when nothing changed.** The reducer answers nil for
+    /// the gateway's echo of the reader's own reaction, which the optimistic
+    /// write already counted — and a write here would rebuild the payload,
+    /// bump the content revision and re-lay-out the row for a count that did
+    /// not move.
+    private func updateReactions(
+        of messageID: MessageID,
+        in channelID: ChannelID,
+        _ transform: ([Reaction]) -> [Reaction]?
+    ) {
+        guard let index = messageBoxes[channelID]?.messages.firstIndex(where: { $0.id == messageID }),
+              let message = messageBoxes[channelID]?.messages[index],
+              let reactions = transform(message.reactions)
+        else { return }
+        mutateBox(channelID) { box in
             // The payload box is immutable and shared, so a change builds a new
             // one rather than mutating what other holders can see — through the
             // copy helper, which is the one place that knows every field.
-            message.payload = (message.payload ?? MessagePayload())
+            box.messages[index].payload = (message.payload ?? MessagePayload())
                 .replacingReactions(reactions)
-            box.messages[index] = message
         }
         messageContentRevision &+= 1
     }

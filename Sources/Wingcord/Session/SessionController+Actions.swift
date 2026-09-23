@@ -16,6 +16,8 @@ extension SessionController {
 
     func writeReaction(
         _ emoji: EmojiRef,
+        kind: ReactionKind,
+        location: ReactionLocation,
         on messageID: MessageID,
         in channelID: ChannelID,
         adding: Bool,
@@ -26,20 +28,50 @@ extension SessionController {
             defer { model.reactionsInFlight.remove(pending) }
             do {
                 if adding {
-                    try await rest.addReaction(emoji, to: messageID, in: channelID)
+                    try await rest.addReaction(
+                        emoji, kind: kind, location: location, to: messageID, in: channelID
+                    )
                 } else {
-                    try await rest.removeReaction(emoji, from: messageID, in: channelID)
+                    try await rest.removeReaction(
+                        emoji, kind: kind, location: location, from: messageID, in: channelID
+                    )
                 }
             } catch {
-                Self.trace("reaction \(messageID) failed: \(Self.describe(error))")
+                Self.trace("reaction \(messageID) \(kind) failed: \(Self.describe(error))")
                 // The exact inverse of the optimistic write. The gateway echoes
                 // the reader's own reaction back as well, and the store's
-                // reducer is idempotent on `isMine`, so a revert that crosses
-                // an echo settles on the same count either way.
+                // reducer is idempotent on the reader's own, so a revert that
+                // crosses an echo settles on the same count either way.
                 model.applyReaction(
-                    emoji, to: messageID, in: channelID, added: !adding, isMine: true
+                    emoji, kind: kind, to: messageID, in: channelID,
+                    added: !adding, isMine: true
                 )
+                // **Said, not only undone.** A chip that quietly changes back
+                // reads as a click that missed; Discord's own words — too many
+                // reactions on the message, or a super reaction the account
+                // cannot send — say what actually happened.
+                model.reportActionFailure(Self.describe(error))
             }
+        }
+    }
+
+    /// The first people who reacted with `emoji` of `kind`, harvested into the
+    /// store so their names resolve — a reactor is very often somebody in no
+    /// roster the reader has loaded. Nil when the route refuses.
+    func reactors(
+        of emoji: EmojiRef,
+        kind: ReactionKind,
+        on messageID: MessageID,
+        in channelID: ChannelID
+    ) async -> [UserID]? {
+        do {
+            let users = try await rest.reactors(of: emoji, kind: kind, on: messageID, in: channelID)
+            // One write for the batch, as a page of history is harvested.
+            model.users.merge(users.map { ($0.id, $0) }) { existing, new in new.merged(over: existing) }
+            return users.map(\.id)
+        } catch {
+            Self.trace("reactors \(messageID) failed: \(Self.describe(error))")
+            return nil
         }
     }
 

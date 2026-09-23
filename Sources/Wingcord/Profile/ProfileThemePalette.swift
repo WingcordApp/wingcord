@@ -160,8 +160,19 @@ nonisolated enum ProfileThemePalette {
     /// `PaletteHarmony` takes a colour rather than a packed integer — see
     /// `AppIconGradient`. One sampling and one quantiser for both surfaces.
     static func swatches(from image: CGImage) -> [SIMD3<UInt8>] {
+        Array(palette(of: image).prefix(2))
+    }
+
+    /// The whole palette, most significant swatch first: `S4` itself, before
+    /// anything takes a slice of it.
+    ///
+    /// **A super reaction reads further into it than a profile does.** Its
+    /// optimistic colours are `getEmojiColors`, which is this over the emoji's
+    /// 32-point rendition — and `SuperReactionPalette` looks at the first
+    /// three, where a profile keeps two.
+    static func palette(of image: CGImage) -> [SIMD3<UInt8>] {
         guard let pixels = sample(image), !pixels.isEmpty else { return [] }
-        return Array(MedianCutQuantizer.palette(of: pixels, count: swatchCount).prefix(2))
+        return MedianCutQuantizer.palette(of: pixels, count: swatchCount)
     }
 
     /// Discord's `createPixelArray`, exactly — checked against the module's

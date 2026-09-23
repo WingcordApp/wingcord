@@ -435,12 +435,41 @@ nonisolated struct ThreadChipSlot: Sendable {
     var nameWidth: CGFloat
 }
 
+/// One chip under a message: one half of one emoji's reactions.
+///
+/// **An emoji with both kinds is two chips**, the super one first — Discord's
+/// own order, from the reactions row in module `279182`, which pushes an
+/// emoji's burst half before its plain half.
 nonisolated struct ReactionSlot: Sendable {
     var rect: CGRect
     var emoji: EmojiRef
+    /// Which half this chip is. A click adds or takes back a reaction of THIS
+    /// kind, never the other.
+    var kind: ReactionKind
     var count: Int
     var isMine: Bool
     var imageURL: URL?
+    /// A super reaction chip's colours, for both rooms. Resolved here, once per
+    /// layout, rather than per repaint: the derivation is a contrast search, and
+    /// the only thing that can change its answer — the palette — changes the
+    /// message and so re-lays-out the row. Which room applies is read at paint
+    /// time, so a theme switch never waits on a relayout to recolour a chip.
+    ///
+    /// Nil on a plain chip, and on a super chip that arrived with no colours,
+    /// which Discord draws plain as well.
+    var palette: SuperReactionPalette?
+
+    /// The emoji's box inside the chip — where the picture is drawn, where an
+    /// animated one's frames are repainted, and what an effect is centred on.
+    var glyphRect: CGRect {
+        let side = TimelineMetrics.reactionGlyphSide
+        return CGRect(
+            x: rect.minX + TimelineMetrics.reactionLeadingInset,
+            y: rect.midY - side / 2,
+            width: side,
+            height: side
+        )
+    }
 }
 
 /// One of the two square controls at the end of a message's reaction row.
@@ -1480,11 +1509,17 @@ nonisolated struct TimelineLayoutEngine: Sendable {
         var y = startY + TimelineMetrics.reactionGap
         var x = contentX
 
-        for reaction in reactions {
+        func place(
+            _ reaction: Reaction,
+            kind: ReactionKind,
+            imageURL: URL?,
+            palette: SuperReactionPalette?
+        ) {
+            let count = reaction.count(of: kind)
             // Built from the same parts the painter draws, so the chip cannot be
             // narrower than its own contents.
             let chipWidth = TimelineMetrics.reactionChipWidth(
-                countWidth: measure("\(reaction.count)", font: style.metadataFont)
+                countWidth: measure("\(count)", font: style.metadataFont)
             )
             if x + chipWidth > contentX + width, x > contentX {
                 x = contentX
@@ -1496,13 +1531,35 @@ nonisolated struct TimelineLayoutEngine: Sendable {
                     width: chipWidth, height: TimelineMetrics.reactionChipHeight
                 ),
                 emoji: reaction.emoji,
-                count: reaction.count,
-                isMine: reaction.isMine,
-                imageURL: reaction.emoji.id.flatMap {
-                    CDN.emoji(id: $0, animated: reaction.emoji.isAnimated, side: 16)
-                }
+                kind: kind,
+                count: count,
+                isMine: reaction.isMine(kind),
+                imageURL: imageURL,
+                palette: palette
             ))
             x += chipWidth + 4
+        }
+
+        for reaction in reactions {
+            // **At the side the chip draws it**, which is also the key the
+            // painter peeks and the prefetch asks for. This used to ask the CDN
+            // for a 16-point rendition and draw it at 19.
+            let imageURL = reaction.emoji.id.flatMap {
+                CDN.emoji(
+                    id: $0,
+                    animated: reaction.emoji.isAnimated,
+                    side: TimelineMetrics.reactionGlyphSide
+                )
+            }
+            if reaction.burstCount > 0 {
+                place(
+                    reaction, kind: .burst, imageURL: imageURL,
+                    palette: SuperReactionPalette(colors: reaction.burstColors)
+                )
+            }
+            if reaction.count > 0 {
+                place(reaction, kind: .normal, imageURL: imageURL, palette: nil)
+            }
         }
 
         // The two controls wrap with the chips rather than being pinned to the
@@ -2236,8 +2293,13 @@ nonisolated struct TimelineLayoutEngine: Sendable {
         // The total rather than each emoji: "six reactions" is the fact, and
         // naming all six is a sentence nobody listens to the end of.
         if !reactions.isEmpty, !muted.contains(.reactionCounts) {
-            let total = reactions.reduce(0) { $0 + $1.count }
-            label += total == 1 ? ". 1 reaction" : ". \(total) reactions"
+            // The two kinds are spoken apart, as they are drawn apart. `count`
+            // is the plain tally alone, so summing only it would leave a
+            // message with nothing but super reactions saying it has none.
+            let plain = reactions.reduce(0) { $0 + $1.count }
+            let burst = reactions.reduce(0) { $0 + $1.burstCount }
+            if plain > 0 { label += plain == 1 ? ". 1 reaction" : ". \(plain) reactions" }
+            if burst > 0 { label += burst == 1 ? ". 1 super reaction" : ". \(burst) super reactions" }
         }
         // Spoken, not only drawn. Whether a message is private to the reader is
         // exactly the kind of fact a note in the quietest ink on the row is the

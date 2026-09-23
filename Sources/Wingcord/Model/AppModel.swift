@@ -374,6 +374,13 @@ final class AppModel {
     /// What the pointer is resting on in the transcript. Drives the hover pill
     /// and nothing else, so a hover invalidates one small overlay.
     var messageHover: MessageHover?
+    /// The reaction chip the pointer is resting on. Drives the reaction
+    /// tooltip and nothing else — see `ReactionTooltipOverlay`.
+    var reactionHover: ReactionHover?
+    /// Who reacted, per chip, and the count they were fetched at — a tooltip
+    /// shown again over a chip whose count has not moved asks nobody.
+    /// Not observed: no view reads it, only the tooltip's fetch.
+    @ObservationIgnored var reactorCache: [ReactorKey: (count: Int, users: [UserID])] = [:]
     var messageMenu: MessageMenuRequest?
     var reactionPicker: ReactionPickerRequest?
     var forwardRequest: ForwardRequest?
@@ -1434,7 +1441,8 @@ final class AppModel {
 /// cannot grow a stale key the way a nested table can.
 struct PendingReaction: Hashable, Sendable {
     var messageID: MessageID
-    var emoji: EmojiRef
+    var emoji: ReactionEmojiKey
+    var kind: ReactionKind
 }
 
 /// An act that did not land.
