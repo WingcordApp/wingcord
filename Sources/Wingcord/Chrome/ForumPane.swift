@@ -204,7 +204,7 @@ private struct ForumPostRow: View, Equatable {
         // relative-light idea the roster's lift uses, so it survives Reduce
         // Transparency and the system glass-intensity setting.
         .overlay {
-            card.strokeBorder(Color.white.opacity(isHovering ? 0.10 : 0.05), lineWidth: 1)
+            card.strokeBorder(isHovering ? Palette.hairlineHovered : Palette.hairline, lineWidth: 1)
         }
         .animation(motion.hover, value: isHovering)
         .contentShape(card)
@@ -330,7 +330,7 @@ private struct ForumPostCard: View, Equatable {
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(Palette.surface.opacity(isHovering ? 0.9 : 0.55), in: card)
             .overlay {
-                card.strokeBorder(Color.white.opacity(isHovering ? 0.10 : 0.05), lineWidth: 1)
+                card.strokeBorder(isHovering ? Palette.hairlineHovered : Palette.hairline, lineWidth: 1)
             }
             .animation(motion.hover, value: isHovering)
             .contentShape(card)
@@ -486,7 +486,7 @@ struct ForumTagChip: View {
         .padding(.horizontal, Spacing.base)
         .padding(.vertical, isCompact ? 3 : Spacing.tight)
         .background(
-            isOn ? Palette.accent.opacity(0.18) : Color.white.opacity(0.07),
+            isOn ? Palette.accent.opacity(0.18) : Palette.hoverFill,
             in: .capsule
         )
     }
@@ -681,7 +681,7 @@ private struct ForumTagList: View {
                     .frame(minWidth: 16)
                     .padding(.vertical, 2)
                     .background(
-                        selected.isEmpty ? AnyShapeStyle(Color.white.opacity(0.2))
+                        selected.isEmpty ? AnyShapeStyle(Palette.edgeStrong)
                             : AnyShapeStyle(Palette.accent),
                         in: .capsule
                     )
@@ -850,7 +850,7 @@ private struct ForumGuidelines: View {
             .foregroundStyle(Ink.tertiary)
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(Spacing.snug)
-            .background(Color.white.opacity(0.04), in: .rect(cornerRadius: Radius.glass))
+            .background(Palette.groupedFill, in: .rect(cornerRadius: Radius.glass))
     }
 }
 

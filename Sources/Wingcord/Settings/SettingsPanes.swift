@@ -149,16 +149,37 @@ private struct AppearancePane: View {
     @State private var settings = AppSettings.shared
     @State private var theme = ThemeStore.shared
     @Environment(\.motion) private var motion
+    /// The selection ring's, and owned here because it has to span both
+    /// galleries: the choice is one choice. See `ThemeGallery`.
+    @Namespace private var themeRing
 
     var body: some View {
         SettingsGroup("Theme") {
-            ThemeGallery()
+            ThemeGallery(ring: themeRing)
+            SettingsCard {
+                SettingsSliderRow(
+                    title: "Vividness",
+                    help: "How far a theme's colour and light come forward, here and "
+                        + "in Discord's themes. Names that would stop reading on a "
+                        + "brighter ground are lifted just enough to stay legible. "
+                        + "True Black and Porcelain are stated rather than derived, "
+                        + "and stay exactly as they are.",
+                    value: $theme.vividness,
+                    range: 0...1,
+                    step: 0.05,
+                    format: { "\(Int(($0 * 100).rounded()))%" },
+                    onEditingChanged: { editing in
+                        if editing { theme.beginAdjusting() } else { theme.endAdjusting() }
+                    }
+                )
+                .disabled(theme.choice.preset?.isStated == true)
+            }
             SettingsFootnote(
                 "A theme colours the ground the app is read on and the one accent it spends — "
                     + "never a role, an avatar or anything else that came from a person. Every "
-                    + "one of them is built on the same three steps of lightness, so the "
+                    + "dark one is built on the same three steps of lightness, so the "
                     + "separation between the reading surface, a card on it and a row inside "
-                    + "that card is the same whichever you pick.",
+                    + "that card is the same whichever you pick. Porcelain is the light room.",
                 symbolName: "circle.lefthalf.filled"
             )
         }
@@ -181,6 +202,16 @@ private struct AppearancePane: View {
             }
         }
         .animation(motion.standard, value: theme.choice.isCustom)
+
+        SettingsGroup("Discord Themes") {
+            DiscordThemeGallery(ring: themeRing)
+            SettingsFootnote(
+                "Discord's own gradient themes, with the colours, stops and angles its client "
+                    + "ships and the veils it reads them through. The first eight are light, and "
+                    + "turn the whole window light, as they do in Discord.",
+                symbolName: "swatchpalette"
+            )
+        }
 
         SettingsGroup("Picture") {
             BackdropCard()

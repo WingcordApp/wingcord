@@ -148,6 +148,10 @@ final class OverlayPanel {
         )
         panel.isOpaque = false
         panel.backgroundColor = .clear
+        // **No appearance of its own.** The widgets paint the theme's grounds —
+        // `Palette.canvas`, `surface`, `surfaceRaised` — so the panel has to
+        // be the theme's room too: pinned dark under a light theme, it put
+        // dark-mode white type on the light theme's grounds.
         panel.hasShadow = false
         panel.isMovable = false
         panel.isMovableByWindowBackground = false

@@ -92,11 +92,11 @@ struct TypingIndicator: View, Equatable {
                     dots
                     Text(sentence)
                         .font(Typeface.rowSubtitle)
-                        // Fixed white rather than the hierarchy: this floats
-                        // over the transcript, so a `.secondary` line resolves
-                        // against whatever message happens to be scrolling under
-                        // it — which is exactly how it got lost.
-                        .foregroundStyle(.white)
+                        // Solid rather than the hierarchy: this floats over the
+                        // transcript, so a `.secondary` line resolves against
+                        // whatever message happens to be scrolling under it —
+                        // which is exactly how it got lost. See `InkColor.solid`.
+                        .foregroundStyle(InkColor.solid)
                         .lineLimit(1)
                         .truncationMode(.middle)
                 }
@@ -126,7 +126,7 @@ struct TypingIndicator: View, Equatable {
     private var dots: some View {
         let glyph = Image(systemName: "ellipsis")
             .font(.system(.caption, weight: .bold))
-            .foregroundStyle(.white.opacity(0.7))
+            .foregroundStyle(InkColor.solid.opacity(0.7))
         if motion.reduceMotion {
             // Reduce Motion removes the movement, not the meaning: the dots stay
             // and stop pulsing.

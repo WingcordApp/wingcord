@@ -311,10 +311,11 @@ struct Composer: View {
                 TextField(placeholder, text: fieldText, axis: .vertical)
                     .textFieldStyle(.plain)
                     .font(Typeface.messageBody)
-                    // White across the whole bar rather than the hierarchy: a
+                    // Solid across the whole bar rather than the hierarchy: a
                     // `.secondary` glyph washes out on glass, and a composer
-                    // whose placeholder is invisible reads as broken.
-                    .foregroundStyle(.white)
+                    // whose placeholder is invisible reads as broken. See
+                    // `InkColor.solid`.
+                    .foregroundStyle(InkColor.solid)
                     .lineLimit(1...Metrics.composerMaxLines)
                     .focused($isFocused)
                     .onSubmit(pressedReturn)

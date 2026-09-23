@@ -248,7 +248,7 @@ private struct NowBarControl: View {
                 .frame(width: Metrics.compactControl, height: Metrics.compactControl)
                 .background {
                     Circle()
-                        .fill(isActive ? accent.opacity(0.22) : Color.white.opacity(isHovering ? 0.16 : 0.09))
+                        .fill(isActive ? accent.opacity(0.22) : isHovering ? nowBarControlHovered : Palette.edge)
                 }
                 .contentShape(.circle)
         }
@@ -419,3 +419,7 @@ private struct NowBarPlate: View {
         }
     }
 }
+
+/// A now-bar control under the pointer: light on a dark room's glass, shade on a
+/// light one's.
+private let nowBarControlHovered = Color.relative(dark: 0.16, light: 0.14)

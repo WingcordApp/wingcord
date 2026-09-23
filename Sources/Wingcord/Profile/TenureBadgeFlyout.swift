@@ -106,8 +106,8 @@ struct TenureBadgeFlyout: View {
         // **Its ground is the app's, so its ink is too.** The card is opaque
         // `Palette.surfaceRaised` whatever the profile behind it did to
         // `colorScheme`, and inheriting a light scheme out of a light profile
-        // put dark type on it.
-        .environment(\.colorScheme, .dark)
+        // put dark type on it — as a hard-coded dark would in a light room.
+        .appColorScheme()
         .contentShape(.rect)
         .onTapGesture(perform: open)
         .onHover(perform: hovering)

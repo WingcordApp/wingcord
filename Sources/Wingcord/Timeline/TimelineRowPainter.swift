@@ -194,7 +194,7 @@ nonisolated enum TimelineRowPainter {
             context.setFillColor(NSColor.systemYellow.withAlphaComponent(0.7).cgColor)
             context.fill(CGRect(x: rowFrame.minX, y: rowFrame.minY, width: 2, height: rowFrame.height))
         } else if state.isHovered {
-            context.setFillColor(NSColor.white.withAlphaComponent(0.035).cgColor)
+            context.setFillColor(ThemeInk.current.lift(0.035))
             context.fill(rowFrame)
         }
 
@@ -1462,7 +1462,7 @@ nonisolated enum TimelineRowPainter {
         )
         context.addPath(path)
         context.setFillColor(
-            NSColor.white.withAlphaComponent(isHovered ? 0.10 : 0.05).cgColor
+            ThemeInk.current.lift(isHovered ? 0.10 : 0.05)
         )
         context.fillPath()
 
@@ -1540,7 +1540,7 @@ nonisolated enum TimelineRowPainter {
         context.setFillColor(
             isOn
                 ? NSColor.controlAccentColor.withAlphaComponent(base + (isHovered ? 0.12 : 0)).cgColor
-                : NSColor.white.withAlphaComponent(base + (isHovered ? 0.06 : 0)).cgColor
+                : ThemeInk.current.lift(base + (isHovered ? 0.06 : 0))
         )
         context.fillPath()
 
@@ -1554,7 +1554,7 @@ nonisolated enum TimelineRowPainter {
         }
         drawSymbol(
             symbol,
-            tint: isOn ? .controlAccentColor : NSColor.white.withAlphaComponent(0.75),
+            tint: isOn ? .controlAccentColor : Self.restingActionGlyph,
             in: CGRect(
                 x: (frame.midX - side / 2).rounded(),
                 y: (frame.midY - side / 2).rounded(),
@@ -1591,7 +1591,7 @@ nonisolated enum TimelineRowPainter {
         context.setFillColor(
             slot.isMine
                 ? NSColor.controlAccentColor.withAlphaComponent(base + (isHovered ? 0.12 : 0)).cgColor
-                : NSColor.white.withAlphaComponent(base + (isHovered ? 0.06 : 0)).cgColor
+                : ThemeInk.current.lift(base + (isHovered ? 0.06 : 0))
         )
         context.fillPath()
 
@@ -1872,7 +1872,7 @@ nonisolated enum TimelineRowPainter {
         context.addPath(CGPath(
             roundedRect: frame, cornerWidth: corner, cornerHeight: corner, transform: nil
         ))
-        context.setFillColor(NSColor.white.withAlphaComponent(0.12).cgColor)
+        context.setFillColor(ThemeInk.current.lift(0.12))
         context.fillPath()
 
         var textX = frame.minX + MemberRowGeometry.tagChipPadding
@@ -1943,7 +1943,7 @@ nonisolated enum TimelineRowPainter {
         let inset = TimelineMetrics.horizontalMargin
         let gap: CGFloat = 10
 
-        context.setStrokeColor(NSColor.white.withAlphaComponent(0.08).cgColor)
+        context.setStrokeColor(ThemeInk.current.lift(0.08))
         context.setLineWidth(1)
         context.move(to: CGPoint(x: frame.minX + inset, y: midY))
         context.addLine(to: CGPoint(x: frame.midX - width / 2 - gap, y: midY))
@@ -2222,7 +2222,7 @@ nonisolated enum TimelineRowPainter {
     /// expensive rows would trade one stall for another.
     private static func drawSkeleton(index: Int, in frame: CGRect, context: CGContext) {
         let inset = TimelineMetrics.horizontalMargin
-        let tint = NSColor.white.withAlphaComponent(0.05).cgColor
+        let tint = ThemeInk.current.lift(0.05)
         context.setFillColor(tint)
         context.fillEllipse(in: CGRect(
             x: frame.minX + inset,
@@ -2250,5 +2250,17 @@ nonisolated enum TimelineRowPainter {
             context.setFillColor(tint)
             context.fillPath()
         }
+    }
+}
+
+nonisolated extension TimelineRowPainter {
+    /// An action glyph at rest: white at 75 % in a dark room, black at 60 % in
+    /// a light one. A painter-side static rather than `ThemeInk`, because a
+    /// symbol's tint is handed to AppKit, which resolves a dynamic colour
+    /// against the canvas it is drawn in.
+    static let restingActionGlyph = NSColor(name: nil) { appearance in
+        appearance.bestMatch(from: [.darkAqua, .aqua]) == .aqua
+            ? NSColor(srgbRed: 0, green: 0, blue: 0, alpha: 0.60)
+            : NSColor(srgbRed: 1, green: 1, blue: 1, alpha: 0.75)
     }
 }

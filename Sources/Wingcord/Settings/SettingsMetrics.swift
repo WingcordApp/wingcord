@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 // MARK: - Settings metrics
@@ -135,6 +136,10 @@ nonisolated enum SettingsMetrics {
 // the reference window over black, grey, white, red and blue and fitting the
 // compositing equation. All five backdrops agreed to within a least significant
 // bit, which is what says the model is right.
+//
+// **The light-theme halves are NOT measured.** They are first values, set by
+// the system's own light settings window rather than fitted against a capture,
+// and they are the ones to tune.
 
 nonisolated enum SettingsSurface {
 
@@ -145,7 +150,14 @@ nonisolated enum SettingsSurface {
     /// The system substitutes an opaque material for the glass underneath, and a
     /// scrim measured against a translucent ground then lands on top of an
     /// already-dark solid and takes the pane most of the way to black.
-    private static let paneScrim = Color.black.opacity(0.333)
+    ///
+    /// **Under a light theme the pane is the material *plus* light instead** —
+    /// the reading side of a light window is the brighter one, as it is in the
+    /// system's own settings.
+    private static let paneScrim = Color.adaptive(
+        dark: NSColor(srgbRed: 0, green: 0, blue: 0, alpha: 0.333),
+        light: NSColor(srgbRed: 1, green: 1, blue: 1, alpha: 0.40)
+    )
 
     /// What goes behind the detail pane's content.
     ///
@@ -166,40 +178,49 @@ nonisolated enum SettingsSurface {
     static let opaqueGround = Palette.surface
 
     /// A card, lifted off the pane.
-    static let card = Color.white.opacity(0.027)
+    ///
+    /// **Still white under a light theme, and much more of it**: a light card is
+    /// lifted by being brighter than its pane, not by being shaded.
+    static let card = Color.adaptive(
+        dark: NSColor(srgbRed: 1, green: 1, blue: 1, alpha: 0.027),
+        light: NSColor(srgbRed: 1, green: 1, blue: 1, alpha: 0.55)
+    )
 
     /// The trough a segmented control sits in, over a card.
-    static let controlTrough = Color.white.opacity(0.034)
+    static let controlTrough = Color.relative(dark: 0.034, light: 0.05)
 
     /// The selected cell of a segmented control, over the trough.
-    static let controlSelected = Color.white.opacity(0.200)
+    static let controlSelected = Color.adaptive(
+        dark: NSColor(srgbRed: 1, green: 1, blue: 1, alpha: 0.200),
+        light: NSColor(srgbRed: 1, green: 1, blue: 1, alpha: 0.90)
+    )
 
     /// The search field, over the bare material.
-    static let searchField = Color.white.opacity(0.061)
+    static let searchField = Color.relative(dark: 0.061, light: 0.05)
 
     /// A selected row in the source list, over the bare material.
-    static let rowSelected = Color.white.opacity(0.104)
+    static let rowSelected = Color.relative(dark: 0.104, light: 0.08)
 
     /// The selected row while the list owns the arrow keys.
     ///
     /// Brighter than the resting selection rather than a ring around the column:
     /// a source list's focus belongs on the row a key press will move from, and
     /// the default focus effect draws a rectangle around the whole column.
-    static let rowFocused = Color.white.opacity(0.165)
+    static let rowFocused = Color.relative(dark: 0.165, light: 0.12)
 
     /// A row under the pointer. Deliberately not half the selection's weight the
     /// way the workspace's is — over a translucent ground a hover that faint is
     /// invisible on a bright wallpaper and shouting on a dark one, so it is a
     /// little more than half.
-    static let rowHover = Color.white.opacity(0.055)
+    static let rowHover = Color.relative(dark: 0.055, light: 0.04)
 
     /// The hairline between two rows of a card.
-    static let hairline = Color.white.opacity(0.099)
+    static let hairline = Color.relative(dark: 0.099, light: 0.08)
 
     /// The hairline between two cells of a segmented control. Fractionally
     /// lighter-handed than the card's, because it sits on the control's trough
     /// rather than on the card, and the trough is already a step up.
-    static let controlHairline = Color.white.opacity(0.084)
+    static let controlHairline = Color.relative(dark: 0.084, light: 0.07)
 
     /// What the scroll-edge band tints the content passing under it.
     ///
@@ -217,5 +238,11 @@ nonisolated enum SettingsSurface {
     /// no accent left to spend. Opaque rather than a white at low opacity: a
     /// switch is a control, and a control that changes value with the wallpaper
     /// behind it is one you cannot read at a glance.
-    static let switchOn = Color(white: 0.675)
+    ///
+    /// Darker in a light room — a light grey switch on a light pane is no
+    /// switch at all. The light value is an estimate; see the note at the top.
+    static let switchOn = Color.adaptive(
+        dark: NSColor(white: 0.675, alpha: 1),
+        light: NSColor(white: 0.40, alpha: 1)
+    )
 }

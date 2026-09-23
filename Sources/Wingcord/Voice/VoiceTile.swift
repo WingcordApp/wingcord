@@ -176,7 +176,7 @@ struct VoiceTile: View {
             .strokeBorder(
                 participant.isSpeaking
                     ? AnyShapeStyle(Palette.presenceOnline)
-                    : AnyShapeStyle(Color.white.opacity(isHovering ? 0.16 : 0.08)),
+                    : AnyShapeStyle(isHovering ? voiceTileHovered : voiceTileResting),
                 lineWidth: participant.isSpeaking ? speakingWidth : 1
             )
             .allowsHitTesting(false)
@@ -347,3 +347,8 @@ struct VoiceTile: View {
         return parts.joined(separator: ", ")
     }
 }
+
+/// A voice tile's fill with no video in it, at rest and under the pointer:
+/// light in a dark room, shade in a light one.
+private let voiceTileResting = Color.relative(dark: 0.08, light: 0.05)
+private let voiceTileHovered = Color.relative(dark: 0.16, light: 0.10)

@@ -1,5 +1,4 @@
 import SwiftUI
-import WingcordCore
 
 /// The strip across the top of a server the reader is only looking at.
 ///
@@ -83,7 +82,7 @@ struct GuildPreviewBanner: View {
         }
         .overlay(alignment: .bottom) {
             Rectangle()
-                .fill(Color.white.opacity(0.08))
+                .fill(Palette.flyoutTint)
                 .frame(height: 1)
         }
         // Enters and leaves along the edge it lives on — §3's spatial symmetry.

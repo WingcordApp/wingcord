@@ -1,5 +1,4 @@
 import SwiftUI
-import WingcordCore
 import WingcordVoice
 
 // MARK: - What you can do while you are in a call
@@ -219,7 +218,7 @@ struct VoiceControl: View {
 
     private var fill: Color {
         if isActive { return accent.opacity(0.22) }
-        return Color.white.opacity(isHovering ? 0.14 : 0)
+        return isHovering ? voiceControlHovered : .clear
     }
 }
 
@@ -382,7 +381,7 @@ struct VoiceDeviceChevron: View {
                 .font(.system(size: isCompact ? 7 : 8, weight: .black))
                 .foregroundStyle(Ink.secondary)
                 .frame(width: isCompact ? 12 : 14, height: side)
-                .background { Capsule().fill(.white.opacity(isHovering ? 0.14 : 0)) }
+                .background { Capsule().fill(isHovering ? voiceControlHovered : .clear) }
                 .contentShape(.capsule)
         }
         .buttonStyle(.plain)
@@ -502,3 +501,7 @@ private struct VoiceDeviceList: View {
         .accessibilityAddTraits(isSelected ? [.isSelected, .isButton] : .isButton)
     }
 }
+
+/// A voice control under the pointer: light on a dark room's glass, shade on a
+/// light one's.
+private let voiceControlHovered = Color.relative(dark: 0.14, light: 0.10)

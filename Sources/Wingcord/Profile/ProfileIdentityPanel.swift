@@ -113,7 +113,7 @@ struct ProfileIdentityPanel: View {
         ))
         .overlay(alignment: .bottom) { footDock }
         .overlay(alignment: .trailing) {
-            Rectangle().fill(.white.opacity(0.10)).frame(width: 1)
+            Rectangle().fill(identityPanelEdge).frame(width: 1)
         }
         // The effect plays over the finished panel and is clipped to it. Its
         // layers are authored at `zIndex` 100+ — above everything — and it must
@@ -1073,3 +1073,7 @@ struct ProfileDateSpan: View {
         }
     }
 }
+
+/// The rule down the identity panel's trailing edge, resolved by the panel's
+/// own scheme.
+private let identityPanelEdge = Color.relative(dark: 0.10, light: 0.10)

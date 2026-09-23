@@ -93,7 +93,7 @@ struct QuickSwitcher: View {
             // `.title3` is the app's own sheet-title size. The field *is* this
             // panel's title, and it is the only thing in it anybody types into.
             .font(.system(.title3))
-            .foregroundStyle(.white)
+            .foregroundStyle(InkColor.solid)
             .lineLimit(1)
             .focused($isFocused)
             .onKeyPress(.upArrow) { move(-1) }

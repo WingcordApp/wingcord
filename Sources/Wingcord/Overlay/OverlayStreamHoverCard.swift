@@ -131,7 +131,7 @@ struct OverlayStreamHoverCard: View {
         .background(Palette.surface, in: .rect(cornerRadius: Radius.glass, style: .continuous))
         .overlay {
             RoundedRectangle(cornerRadius: Radius.glass, style: .continuous)
-                .strokeBorder(.white.opacity(0.10), lineWidth: 1)
+                .strokeBorder(hoverCardEdge, lineWidth: 1)
                 .allowsHitTesting(false)
         }
         .shadow(color: .black.opacity(0.4), radius: 14, y: 4)
@@ -268,3 +268,6 @@ private struct OverlayStreamLines: View {
         }
     }
 }
+
+/// The card's hairline: light in a dark room, shade in a light one.
+private let hoverCardEdge = Color.relative(dark: 0.10, light: 0.10)

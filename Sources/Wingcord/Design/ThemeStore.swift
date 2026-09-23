@@ -46,12 +46,36 @@ final class ThemeStore {
     /// than deriving one from its hue.
     private(set) var customFollowsSystemAccent = false
 
+    /// How far the reader has asked every theme's ground to come forward,
+    /// `0...1`. See `ThemeSeed.vividness`, and `DiscordTheme.readingVeil` for
+    /// what it means for one of Discord's.
+    ///
+    /// **Settable, for the slider's binding** — every other write here is a
+    /// method, but a slider wants a property. The `didSet` is guarded by
+    /// `isLoaded`: an `@Observable`'s observers run during `init`, which is the
+    /// deadlock the note at the top of this type is about.
+    var vividness = 0.0 {
+        didSet {
+            guard isLoaded, vividness != oldValue else { return }
+            defaults.set(vividness, forKey: Key.vividness)
+            apply(notifyingDrawnSurfaces: !isAdjusting)
+        }
+    }
+
     /// The resolved colours every `Palette` token reads.
     ///
     /// Stored rather than computed: it is read many times per frame across the
     /// window, and re-deriving it would run the gamut fit's sixteen bisections
     /// on every one of those reads.
     private(set) var colors: ThemeColors = .trueBlack
+
+    /// What the window's ground is made of, for the views that draw it.
+    ///
+    /// **Its own property, and compared on its own.** Two themes can share every
+    /// flat colour and differ entirely in their ground — Sunset and Midnight
+    /// Blurple derive the same tint — so a change that tested only `colors`
+    /// would leave the window showing the theme before.
+    private(set) var ground: ThemeGround = .trueBlack
 
     // MARK: The picture behind it
 
@@ -65,10 +89,27 @@ final class ThemeStore {
 
     /// The colours a choice would produce, without selecting it. The gallery's
     /// tiles are drawn from this.
-    static func colors(for choice: ThemeChoice, customSeed: ThemeSeed, systemAccent: Bool) -> ThemeColors {
+    static func colors(
+        for choice: ThemeChoice,
+        customSeed: ThemeSeed,
+        systemAccent: Bool,
+        vividness: Double
+    ) -> ThemeColors {
         switch choice {
-        case .preset(let preset): preset.colors
-        case .custom: ThemeColors(customSeed, followsSystemAccent: systemAccent)
+        case .preset(let preset): preset.colors(vividness: vividness)
+        // Discord's flat surfaces are its tokens; vividness thins its veils and
+        // touches nothing else.
+        case .discord(let theme): theme.colors
+        case .custom: ThemeColors(customSeed.at(vividness: vividness), followsSystemAccent: systemAccent)
+        }
+    }
+
+    /// The ground a choice would produce, without selecting it.
+    static func ground(for choice: ThemeChoice, customSeed: ThemeSeed, vividness: Double) -> ThemeGround {
+        switch choice {
+        case .preset(let preset): preset.ground(vividness: vividness)
+        case .discord(let theme): ThemeGround(theme, vividness: vividness)
+        case .custom: ThemeGround(customSeed.at(vividness: vividness))
         }
     }
 
@@ -109,13 +150,9 @@ final class ThemeStore {
         var seed = customSeed
         transform(&seed)
         // Re-run through the initialisers so hue wrapping and every clamp apply
-        // to a value a caller mutated in place.
-        seed = ThemeSeed(
-            head: ThemeStop(hue: seed.head.hue, depth: seed.head.depth),
-            foot: ThemeStop(hue: seed.foot.hue, depth: seed.foot.depth),
-            light: seed.light,
-            accentTurn: seed.accentTurn
-        )
+        // to a value a caller mutated in place — and stored without the
+        // reader's vividness, which belongs to the reader rather than the blend.
+        seed = seed.normalized.at(vividness: 0)
         let choiceChanged = choice != .custom
         guard seed != customSeed || choiceChanged else { return }
         customSeed = seed
@@ -159,12 +196,23 @@ final class ThemeStore {
     /// is what wakes SwiftUI, and a canvas that repaints in response has to find
     /// the new theme already installed or it draws one frame of the old ground.
     private func apply(notifyingDrawnSurfaces: Bool) {
+        // The ground first and on its own test — see `ground`. Written only
+        // when it moved: an `@Observable` setter invalidates its readers
+        // whether or not the value changed.
+        let resolvedGround = Self.ground(for: choice, customSeed: customSeed, vividness: vividness)
+        if resolvedGround != ground { ground = resolvedGround }
+
         let resolved = Self.colors(
             for: choice,
             customSeed: customSeed,
-            systemAccent: customFollowsSystemAccent
+            systemAccent: customFollowsSystemAccent,
+            vividness: vividness
         )
         guard resolved != colors || !isLoaded else { return }
+        // Before the colours go out, so every view woken by them — and the
+        // transcript's text style, rebuilt on the appearance change — resolves
+        // against the room it is about to be in.
+        Self.pinAppearance(resolved.appearance)
         ThemeRuntime.install(resolved)
         colors = resolved
         guard isLoaded, notifyingDrawnSurfaces else { return }
@@ -172,6 +220,20 @@ final class ThemeStore {
         // text, so a colour change is a relayout there even though it is only a
         // repaint everywhere else.
         PresentationRevision.shared.settingsDidChange()
+    }
+
+    /// **The app's appearance follows the theme, never the system.**
+    ///
+    /// Every surface here is built for the room the theme makes, so a dark
+    /// theme in a Mac set to Light has to stay dark: left to the system, it drew
+    /// the system's black labels on this app's near-black ground — which is what
+    /// every build did before a light theme existed, on any Mac in Light mode.
+    /// App-wide rather than per window, so the settings windows, menus and
+    /// alerts are the same room as the workspace.
+    private static func pinAppearance(_ appearance: ThemeAppearance) {
+        let name: NSAppearance.Name = appearance == .light ? .aqua : .darkAqua
+        guard NSApplication.shared.appearance?.name != name else { return }
+        NSApplication.shared.appearance = NSAppearance(named: name)
     }
 
     private let defaults: UserDefaults
@@ -182,6 +244,7 @@ final class ThemeStore {
         customSeed = (defaults.object(forKey: Key.customSeed) as? [Double])
             .flatMap(ThemeSeed.init(storageValue:)) ?? customSeed
         customFollowsSystemAccent = defaults.object(forKey: Key.customSystemAccent) as? Bool ?? false
+        vividness = min(1, max(0, defaults.object(forKey: Key.vividness) as? Double ?? 0))
         choice = (defaults.object(forKey: Key.choice) as? String)
             .flatMap(Self.choice(forStorageValue:)) ?? .preset(.trueBlack)
         backdrop = (defaults.object(forKey: Key.backdrop) as? [String: Any])
@@ -228,15 +291,20 @@ final class ThemeStore {
 
     // MARK: Persistence
 
-    private static func storageValue(for choice: ThemeChoice) -> String {
+    static func storageValue(for choice: ThemeChoice) -> String {
         switch choice {
         case .preset(let preset): preset.rawValue
+        case .discord(let theme): discordStoragePrefix + theme.rawValue
         case .custom: customStorageValue
         }
     }
 
-    private static func choice(forStorageValue value: String) -> ThemeChoice? {
+    static func choice(forStorageValue value: String) -> ThemeChoice? {
         if value == customStorageValue { return .custom }
+        if value.hasPrefix(discordStoragePrefix) {
+            return DiscordTheme(rawValue: String(value.dropFirst(discordStoragePrefix.count)))
+                .map(ThemeChoice.discord)
+        }
         return ThemePreset(rawValue: value).map(ThemeChoice.preset)
     }
 
@@ -245,10 +313,16 @@ final class ThemeStore {
     /// inherit every reader's blend.
     private static let customStorageValue = "·custom"
 
+    /// Discord's themes live in a namespace of their own for the same reason:
+    /// both sets name themes after the sky, and a house preset called "sunset"
+    /// would otherwise quietly become Discord's.
+    private static let discordStoragePrefix = "discord·"
+
     private enum Key {
         static let choice = "appearance.theme"
         static let customSeed = "appearance.themeCustomSeed"
         static let customSystemAccent = "appearance.themeCustomSystemAccent"
+        static let vividness = "appearance.themeVividness"
         static let backdrop = "appearance.backdrop"
     }
 }
@@ -256,23 +330,36 @@ final class ThemeStore {
 // MARK: - Seed storage
 
 extension ThemeSeed {
-    /// Six doubles, in a fixed order: the head's hue and depth, the foot's, then
-    /// the lightness and the accent's turn.
+    /// Doubles in a fixed order: the head's hue and depth, the foot's, the
+    /// lightness, the accent's turn, the angle — then a hue and a depth for
+    /// each colour between the ends, in walk order.
     ///
-    /// An array rather than a dictionary or a `Codable`: it is forty-eight bytes
-    /// written when a gesture ends, and a JSON round trip to store six numbers
-    /// is the expensive way to do it.
+    /// An array rather than a dictionary or a `Codable`: it is a few dozen bytes
+    /// written when a gesture ends, and a JSON round trip to store a handful of
+    /// numbers is the expensive way to do it.
     var storageValue: [Double] {
-        [head.hue, head.depth, foot.hue, foot.depth, light, accentTurn]
+        [head.hue, head.depth, foot.hue, foot.depth, light, accentTurn, angle]
+            + middle.flatMap { [$0.hue, $0.depth] }
     }
 
-    /// **Four is accepted as well as six**, and it is the one-colour form this
-    /// seed had before it grew a second stop. A defaults entry written by an
-    /// earlier build decodes into a theme whose two ends are the same hue, which
-    /// is exactly what it meant — rather than into nothing, which would silently
-    /// reset a reader's blend.
+    /// **Every older form is accepted**, because a blend that fails to decode is
+    /// silently replaced — and a reader who built one would see their theme
+    /// reset for no reason they could find:
+    ///
+    /// - **four**, the one-colour form before the seed grew a second stop,
+    ///   decodes to a theme whose two ends are the same hue;
+    /// - **six**, the two-colour form before it grew an angle and a middle,
+    ///   decodes at the house angle with nothing between the ends.
     init?(storageValue: [Double]) {
-        switch storageValue.count {
+        let count = storageValue.count
+        switch count {
+        case 4:
+            self.init(
+                hue: storageValue[0],
+                depth: storageValue[1],
+                light: storageValue[2],
+                accentTurn: storageValue[3]
+            )
         case 6:
             self.init(
                 head: ThemeStop(hue: storageValue[0], depth: storageValue[1]),
@@ -280,12 +367,17 @@ extension ThemeSeed {
                 light: storageValue[4],
                 accentTurn: storageValue[5]
             )
-        case 4:
+        case 7, 9, 11, 13:
+            let middle = stride(from: 7, to: count, by: 2).map {
+                ThemeStop(hue: storageValue[$0], depth: storageValue[$0 + 1])
+            }
             self.init(
-                hue: storageValue[0],
-                depth: storageValue[1],
-                light: storageValue[2],
-                accentTurn: storageValue[3]
+                head: ThemeStop(hue: storageValue[0], depth: storageValue[1]),
+                middle: middle,
+                foot: ThemeStop(hue: storageValue[2], depth: storageValue[3]),
+                light: storageValue[4],
+                accentTurn: storageValue[5],
+                angle: storageValue[6]
             )
         default:
             return nil

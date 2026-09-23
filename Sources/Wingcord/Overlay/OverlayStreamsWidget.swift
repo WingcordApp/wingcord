@@ -100,7 +100,7 @@ private struct OverlayStreamTile: View {
             .overlay {
                 RoundedRectangle(cornerRadius: Radius.chip, style: .continuous)
                     .strokeBorder(
-                        participant.isWatched ? Palette.accent.opacity(0.8) : .white.opacity(0.10),
+                        participant.isWatched ? Palette.accent.opacity(0.8) : overlayTileEdge,
                         lineWidth: participant.isWatched ? 1.5 : 1
                     )
                     .allowsHitTesting(false)
@@ -252,3 +252,6 @@ private struct OverlayStreamTile: View {
         .accessibilityLabel(help)
     }
 }
+
+/// A tile's resting edge: light in a dark room, shade in a light one.
+private let overlayTileEdge = Color.relative(dark: 0.10, light: 0.10)

@@ -18,6 +18,11 @@ struct RosterMemoKey: Hashable, Sendable {
     /// would keep serving the saturation it was built with until something else
     /// happened to move a revision.
     var colorSaturation: Double
+    /// The ground a role colour is checked against — see
+    /// `AppModel.roleColor(_:)`. In the key for `colorSaturation`'s reason: a
+    /// theme change moves which names need lifting, and nothing else would
+    /// tell this memo so.
+    var inkCeiling: UInt32
 }
 
 extension AppModel {
@@ -65,7 +70,8 @@ extension AppModel {
             presenceRevision: presenceRevision,
             roleRevision: roleRevision,
             structureRevision: channelIndex.structureRevision,
-            colorSaturation: userColorSaturation
+            colorSaturation: userColorSaturation,
+            inkCeiling: ThemeStore.shared.ground.inkCeiling
         )
         // Read the observable inputs before the early return, so a cache hit
         // still registers the dependency the reader needs.

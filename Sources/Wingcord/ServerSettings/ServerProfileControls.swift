@@ -153,7 +153,7 @@ struct BrandSwatch: View {
                 .overlay {
                     RoundedRectangle(cornerRadius: 6, style: .continuous)
                         .strokeBorder(
-                            isSelected ? Color.white : .white.opacity(0.12),
+                            isSelected ? InkColor.solid : swatchRing,
                             lineWidth: isSelected ? 2 : 1
                         )
                 }
@@ -520,3 +520,6 @@ extension GuildBadge {
         }
     }
 }
+
+/// A swatch's resting ring: light in a dark room, shade in a light one.
+private let swatchRing = Color.relative(dark: 0.12, light: 0.14)

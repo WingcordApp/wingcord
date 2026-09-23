@@ -69,7 +69,7 @@ nonisolated extension TimelineRowPainter {
         }
 
         for rule in slot.rules {
-            context.setFillColor(NSColor.white.withAlphaComponent(0.10).cgColor)
+            context.setFillColor(ThemeInk.current.lift(0.10))
             context.fill(rule.offsetBy(dx: offset.x, dy: offset.y))
         }
 
@@ -139,7 +139,7 @@ nonisolated extension TimelineRowPainter {
                 cornerHeight: frame.height / 2,
                 transform: nil
             ))
-            context.setFillColor(NSColor.white.withAlphaComponent(0.12).cgColor)
+            context.setFillColor(ThemeInk.current.lift(0.12))
             context.fillPath()
             let side = frame.height * 0.5
             drawSymbol(
@@ -161,7 +161,7 @@ nonisolated extension TimelineRowPainter {
                 cornerHeight: frame.height / 2,
                 transform: nil
             ))
-            context.setFillColor(NSColor.white.withAlphaComponent(0.12).cgColor)
+            context.setFillColor(ThemeInk.current.lift(0.12))
             context.fillPath()
             let side = frame.height * 0.5
             drawSymbol(
@@ -186,7 +186,7 @@ nonisolated extension TimelineRowPainter {
                 cornerHeight: 4,
                 transform: nil
             ))
-            context.setFillColor(NSColor.white.withAlphaComponent(0.35).cgColor)
+            context.setFillColor(ThemeInk.current.lift(0.35))
             context.fillPath()
             let font = NSFont.systemFont(ofSize: frame.height * 0.5, weight: .bold)
             drawText(
@@ -330,7 +330,11 @@ nonisolated extension TimelineRowPainter {
         context.setFillColor(fill(for: slot, isHovered: isHovered).cgColor)
         context.fillPath()
 
-        let ink = slot.isEnabled ? NSColor.white : style.tertiaryColor
+        // White on a coloured button; the room's own ink on a secondary one,
+        // whose fill is only a shade of the ground — white on a light theme's
+        // shade is no label at all.
+        let ink = !slot.isEnabled ? style.tertiaryColor
+            : slot.style == .secondary ? style.primaryColor : NSColor.white
         var x = frame.minX + TimelineMetrics.componentPadding
 
         if let emoji = slot.emoji {
@@ -455,7 +459,7 @@ nonisolated extension TimelineRowPainter {
         case .primary, .link: NSColor(Palette.accent)
         case .success: NSColor(Palette.affirmative)
         case .danger: NSColor(Palette.destructive)
-        case .secondary: NSColor.white.withAlphaComponent(0.12)
+        case .secondary: NSColor(cgColor: ThemeInk.current.lift(0.12)) ?? .clear
         }
         guard slot.isEnabled else { return base.withAlphaComponent(0.22) }
         return isHovered ? base.blended(withFraction: 0.18, of: .white) ?? base : base
@@ -747,7 +751,7 @@ nonisolated extension TimelineRowPainter {
         // The unfilled ground, and the reader's own pick lit inside it.
         context.addPath(shape)
         context.setFillColor(
-            NSColor.white.withAlphaComponent(isHovered ? 0.12 : 0.06).cgColor
+            ThemeInk.current.lift(isHovered ? 0.12 : 0.06)
         )
         context.fillPath()
 
@@ -763,7 +767,7 @@ nonisolated extension TimelineRowPainter {
             // its weight and its check instead, so the two never compete.
             let tint = slot.isWinner
                 ? NSColor(Palette.affirmative).withAlphaComponent(0.30)
-                : NSColor.white.withAlphaComponent(0.10)
+                : NSColor(cgColor: ThemeInk.current.lift(0.10)) ?? .clear
             context.setFillColor(tint.cgColor)
             context.fill(CGRect(
                 x: frame.minX,

@@ -1,19 +1,21 @@
 import SwiftUI
 
-// MARK: - The eleven tiles
+// MARK: - The tiles
 //
-// Ten themes and the reader's own, laid out as a grid of the thing itself: each
-// tile IS its theme's ramp, top-lit, with the accent as a short bar along the
-// foot. Nothing here is a swatch standing in for a colour — the gradient is the
-// reading surface fading up to a raised row, which is exactly the separation the
-// window will have if you pick it.
+// Two galleries, one vocabulary. The house gallery is ten themes and the
+// reader's own, each tile IS the room its theme makes — the page, the frame
+// down its leading edge, the light in its corner — with the accent as a short
+// bar where the send arrow is. The Discord gallery is Discord's themes, each
+// tile its gradient at Discord's own angle, the way Discord's picker shows it.
 //
 // **The selection is a travelling ring, and the caption's weight.** Not a
 // checkmark: the settings window already says elsewhere that weight is how a
 // selected thing is marked and that a second mark for one state is noise. The
 // ring moves between tiles with `matchedGeometryEffect` rather than fading out
 // and in, which is the same treatment the channel list's pill gets and for the
-// same reason — a morph beats a transition every time.
+// same reason — a morph beats a transition every time. **One ring across both
+// galleries**: they are one choice, so the ring travels from a house tile to a
+// Discord one rather than vanishing from one grid and appearing in the other.
 
 /// Layout for the theme surfaces. Design, not measurement — unlike
 /// `SettingsMetrics`, none of this came off a reference window, so these are
@@ -34,48 +36,124 @@ nonisolated enum ThemeMetrics {
     /// gradient it is marking.
     static let ringWidth: CGFloat = 2
     static let ringGap: CGFloat = 2.5
+    /// How much of a house tile's width is the sidebar: about what the column
+    /// is of a window, so the tile is the room at a glance.
+    static let frameShare: CGFloat = 0.26
+    /// The edge between a swatch and the card it sits on — so it follows the
+    /// window's room rather than the tile's.
+    static let hairline = Color.relative(dark: 0.10, light: 0.12)
+    static let hairlineHovered = Color.relative(dark: 0.28, light: 0.30)
 }
 
 struct ThemeGallery: View {
-    @State private var theme = ThemeStore.shared
-    @Namespace private var ring
+    /// Shared with `DiscordThemeGallery`. See the note at the top.
+    var ring: Namespace.ID
 
-    private static let columns = [
-        GridItem(
-            .adaptive(minimum: ThemeMetrics.tileMinimumWidth, maximum: ThemeMetrics.tileMaximumWidth),
-            spacing: ThemeMetrics.tileSpacing,
-            alignment: .top
-        )
-    ]
+    @State private var theme = ThemeStore.shared
 
     var body: some View {
-        LazyVGrid(columns: Self.columns, spacing: ThemeMetrics.tileSpacing) {
+        // Read once here, so each tile is handed a value rather than each
+        // registering its own dependency on it.
+        let vividness = theme.vividness
+        ThemeGrid {
             ForEach(ThemePreset.allCases) { preset in
                 ThemeTile(
                     title: preset.title,
                     help: preset.summary,
-                    colors: preset.colors,
-                    glyph: nil,
                     isSelected: theme.choice == .preset(preset),
                     ring: ring
                 ) {
                     theme.select(.preset(preset))
+                } swatch: {
+                    RoomSwatch(
+                        ground: preset.ground(vividness: vividness),
+                        accent: preset.colors(vividness: vividness).accent
+                    )
                 }
             }
-            ThemeTile(
-                title: "Plumage",
-                help: "Your own blend. Choosing this opens the instrument below.",
-                colors: ThemeStore.colors(
+            PlumageTile(ring: ring)
+        }
+    }
+}
+
+/// The reader's own blend, in its own view.
+///
+/// **So a Plumage drag redraws one tile, not eleven.** The blend changes on
+/// every event of a drag; read in the gallery's body, that dependency would
+/// re-derive every preset's room per event to redraw the one tile that moved.
+private struct PlumageTile: View {
+    var ring: Namespace.ID
+
+    @State private var theme = ThemeStore.shared
+
+    var body: some View {
+        ThemeTile(
+            title: "Plumage",
+            help: "Your own blend. Choosing this opens the instrument below.",
+            isSelected: theme.choice.isCustom,
+            ring: ring
+        ) {
+            theme.select(.custom)
+        } swatch: {
+            RoomSwatch(
+                ground: ThemeStore.ground(
                     for: .custom,
                     customSeed: theme.customSeed,
-                    systemAccent: theme.customFollowsSystemAccent
+                    vividness: theme.vividness
                 ),
-                glyph: "paintbrush.pointed.fill",
-                isSelected: theme.choice.isCustom,
-                ring: ring
-            ) {
-                theme.select(.custom)
+                accent: ThemeStore.colors(
+                    for: .custom,
+                    customSeed: theme.customSeed,
+                    systemAccent: theme.customFollowsSystemAccent,
+                    vividness: theme.vividness
+                ).accent,
+                glyph: "paintbrush.pointed.fill"
+            )
+        }
+    }
+}
+
+struct DiscordThemeGallery: View {
+    /// Shared with `ThemeGallery`. See the note at the top.
+    var ring: Namespace.ID
+
+    @State private var theme = ThemeStore.shared
+
+    var body: some View {
+        ThemeGrid {
+            ForEach(DiscordTheme.allCases) { discord in
+                ThemeTile(
+                    title: discord.title,
+                    help: nil,
+                    isSelected: theme.choice == .discord(discord),
+                    ring: ring
+                ) {
+                    theme.select(.discord(discord))
+                } swatch: {
+                    DiscordSwatch(theme: discord)
+                }
             }
+        }
+    }
+}
+
+/// The card both galleries sit in.
+private struct ThemeGrid<Content: View>: View {
+    @ViewBuilder var content: Content
+
+    private static var columns: [GridItem] {
+        [
+            GridItem(
+                .adaptive(minimum: ThemeMetrics.tileMinimumWidth, maximum: ThemeMetrics.tileMaximumWidth),
+                spacing: ThemeMetrics.tileSpacing,
+                alignment: .top
+            )
+        ]
+    }
+
+    var body: some View {
+        LazyVGrid(columns: Self.columns, spacing: ThemeMetrics.tileSpacing) {
+            content
         }
         .padding(SettingsMetrics.cardContentInset)
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -86,16 +164,16 @@ struct ThemeGallery: View {
 
 // MARK: - One tile
 
-private struct ThemeTile: View {
+private struct ThemeTile<Swatch: View>: View {
     var title: String
-    var help: String
-    var colors: ThemeColors
-    /// Drawn faintly in the corner. Only the reader's own tile has one — the ten
-    /// are told apart by their colour, which is the whole point of them.
-    var glyph: String?
+    /// The tooltip and the VoiceOver hint. Nil where there is nothing to say
+    /// beyond the name — Discord's themes carry no descriptions of their own,
+    /// and inventing them would put words in Discord's mouth.
+    var help: String?
     var isSelected: Bool
     var ring: Namespace.ID
     var select: () -> Void
+    @ViewBuilder var swatch: Swatch
 
     @Environment(\.motion) private var motion
     @State private var isHovered = false
@@ -103,7 +181,7 @@ private struct ThemeTile: View {
     var body: some View {
         Button(action: select) {
             VStack(spacing: Spacing.tight + 1) {
-                swatch
+                framedSwatch
                 Text(title)
                     // Weight, not colour. See the note at the top.
                     .font(isSelected
@@ -119,9 +197,9 @@ private struct ThemeTile: View {
         .onHover { isHovered = $0 }
         .animation(motion.hover, value: isHovered)
         .animation(motion.glassMorph, value: isSelected)
-        .help(help)
+        .help(help ?? "")
         .accessibilityLabel(title)
-        .accessibilityHint(help)
+        .accessibilityHint(help ?? "")
         .accessibilityAddTraits(isSelected ? [.isSelected, .isButton] : .isButton)
     }
 
@@ -130,30 +208,17 @@ private struct ThemeTile: View {
     // the hover alone, and a tile that also dipped would be the one control here
     // that moves.
 
-    private var swatch: some View {
-        RoundedRectangle(cornerRadius: ThemeMetrics.tileRadius, style: .continuous)
-            .fill(
-                // **The window's own two stops, in the window's own order** —
-                // the darker head at the top, the lit foot at the bottom. A tile that
-                // showed the ramp instead (a card's colour fading to the ground)
-                // would be a picture of a *card*, and the reader is choosing a
-                // room.
-                LinearGradient(
-                    colors: [Color(hex: colors.canvas), Color(hex: colors.canvasLit)],
-                    startPoint: .top,
-                    endPoint: .bottom
-                )
-            )
+    private var framedSwatch: some View {
+        swatch
             .frame(height: ThemeMetrics.tileHeight)
-            .overlay(alignment: .bottomLeading) { accentBar }
-            .overlay(alignment: .topTrailing) { cornerGlyph }
+            .clipShape(.rect(cornerRadius: ThemeMetrics.tileRadius, style: .continuous))
             .overlay {
                 // A hairline at rest, because a dark tile on a dark card with no
                 // edge is a region rather than an object — the same reason a
                 // card on the reading surface carries one.
                 RoundedRectangle(cornerRadius: ThemeMetrics.tileRadius, style: .continuous)
                     .strokeBorder(
-                        Color.white.opacity(isHovered ? 0.28 : 0.10),
+                        isHovered ? ThemeMetrics.hairlineHovered : ThemeMetrics.hairline,
                         lineWidth: 1
                     )
             }
@@ -169,8 +234,50 @@ private struct ThemeTile: View {
                 }
             }
     }
+}
 
-    /// The accent, as a short bar rather than a dot.
+// MARK: - The two kinds of swatch
+
+/// A house theme, drawn as **the room it makes**: the page's field at the
+/// window's own angle, the frame down the leading edge where the sidebar is, and
+/// the light in the bottom-trailing corner. A tile that showed the ramp instead
+/// (a card's colour fading to the ground) would be a picture of a *card*, and
+/// the reader is choosing a room.
+///
+/// A `Canvas` for the same reason as `DiscordSwatch`: the angle is laid out
+/// against the tile's real size.
+private struct RoomSwatch: View {
+    var ground: ThemeGround
+    var accent: UInt32?
+    /// Drawn faintly in the corner. Only the reader's own tile has one — the ten
+    /// are told apart by their colour, which is the whole point of them.
+    var glyph: String?
+
+    var body: some View {
+        Canvas { context, size in
+            let box = CGRect(origin: .zero, size: size)
+            // One line for both columns, exactly as the window has it.
+            let (start, end) = GradientAxis.endpoints(angle: ground.angle, in: box)
+            context.fill(Path(box), with: .linearGradient(ground.page, startPoint: start, endPoint: end))
+            if ground.paintsFrame {
+                let frame = CGRect(x: 0, y: 0, width: size.width * ThemeMetrics.frameShare, height: size.height)
+                context.fill(Path(frame), with: .linearGradient(ground.frame, startPoint: start, endPoint: end))
+            }
+            if let glow = ground.glow {
+                context.fill(Path(box), with: .radialGradient(
+                    glow,
+                    center: CGPoint(x: size.width, y: size.height),
+                    startRadius: 0,
+                    endRadius: ThemeGround.glowReach * hypot(size.width, size.height)
+                ))
+            }
+        }
+        .overlay(alignment: .bottomTrailing) { accentBar }
+        .overlay(alignment: .topTrailing) { cornerGlyph }
+    }
+
+    /// The accent, as a short bar rather than a dot — in the bottom-trailing
+    /// corner, which is where the window spends it: the send arrow.
     ///
     /// A theme that keeps the reader's system accent has none of its own to
     /// show, and drawing the system's here would say the tile contains a colour
@@ -178,7 +285,10 @@ private struct ThemeTile: View {
     /// honest about being nothing.
     private var accentBar: some View {
         Capsule()
-            .fill(colors.accent.map { Color(hex: $0) } ?? Color.white.opacity(0.22))
+            // Against the swatch, not the window: a light room's tile sits in a
+            // dark settings window as often as the other way round.
+            .fill(accent.map { Color(hex: $0) }
+                ?? (ground.appearance == .light ? Color.black : Color.white).opacity(0.22))
             .frame(width: ThemeMetrics.accentBarWidth, height: ThemeMetrics.accentBarHeight)
             .padding(ThemeMetrics.accentBarInset)
     }
@@ -188,8 +298,36 @@ private struct ThemeTile: View {
         if let glyph {
             Image(systemName: glyph)
                 .font(.system(size: 11, weight: .semibold))
-                .foregroundStyle(.white.opacity(0.55))
+                .foregroundStyle((ground.appearance == .light ? Color.black : Color.white).opacity(0.55))
                 .padding(ThemeMetrics.accentBarInset)
+        }
+    }
+}
+
+/// One of Discord's themes: its gradient **bare and at its own angle**, which is
+/// how Discord's picker shows it and what makes each one recognisable.
+///
+/// Not the window's veiled ground, deliberately. Under the reading surface's
+/// 80 % the fourteen are fourteen near-blacks, and the difference between
+/// Sunset and Mars is the whole reason to be choosing between them.
+///
+/// **No accent bar.** All fourteen keep the reader's system accent, so the bar
+/// would be the same mark on every tile and say nothing about any of them.
+///
+/// A `Canvas` because the angle is laid out the way CSS lays it out, against
+/// the tile's real size — see `GradientAxis` — and a canvas is handed that size
+/// without a geometry reader or a state write.
+private struct DiscordSwatch: View {
+    var theme: DiscordTheme
+
+    var body: some View {
+        Canvas { context, size in
+            let box = CGRect(origin: .zero, size: size)
+            let (start, end) = GradientAxis.endpoints(angle: theme.angle, in: box)
+            context.fill(
+                Path(box),
+                with: .linearGradient(theme.gradient, startPoint: start, endPoint: end)
+            )
         }
     }
 }

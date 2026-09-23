@@ -36,7 +36,7 @@ struct CommandComposerBar: View {
         HStack(spacing: Spacing.tight) {
             Text("/\(pending.command.name)")
                 .font(.system(.subheadline, weight: .semibold))
-                .foregroundStyle(.white)
+                .foregroundStyle(InkColor.solid)
                 .lineLimit(1)
         }
         .padding(.horizontal, Spacing.base)

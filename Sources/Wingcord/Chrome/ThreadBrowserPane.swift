@@ -314,7 +314,7 @@ private struct ThreadFaceStack: View {
                     .foregroundStyle(Ink.secondary)
                     .padding(.horizontal, Spacing.base)
                     .padding(.vertical, 2)
-                    .background(Color.white.opacity(0.07), in: .capsule)
+                    .background(Palette.hoverFill, in: .capsule)
             }
         }
         .accessibilityHidden(true)

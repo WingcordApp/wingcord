@@ -29,6 +29,9 @@ struct MediaViewerPresenter: ViewModifier {
                         step: { model.stepMedia(by: $0) },
                         close: { model.mediaViewer = nil }
                     )
+                    // Dark whatever the theme: a picture is looked at against
+                    // black, and a light room around it is glare.
+                    .environment(\.colorScheme, .dark)
                     // Glass materialises rather than fading — §3 — and a
                     // dismiss gesture has already begun the scale, so the two
                     // compose into one movement instead of a snap followed by a

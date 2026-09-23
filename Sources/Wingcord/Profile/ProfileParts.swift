@@ -111,8 +111,8 @@ struct BadgeRow: View {
                     // on this app's near-black popover with the card's dark ink
                     // on it, unreadable. Anything that escapes a themed surface
                     // into a window of its own has to restate the scheme it is
-                    // actually drawn against.
-                    .environment(\.colorScheme, .dark)
+                    // actually drawn against — the app's.
+                    .appColorScheme()
                     .accessibilityLabel(Text(badge.label))
                     .accessibilityAddTraits(tenure == nil ? [] : .isButton)
             }
@@ -299,7 +299,7 @@ struct ProfileSkeleton: View {
             VStack(alignment: .leading, spacing: Spacing.tight) {
                 ForEach(Array(Self.fractions.enumerated()), id: \.offset) { _, fraction in
                     Capsule()
-                        .fill(Color.white.opacity(0.08))
+                        .fill(profileSkeletonLine)
                         .frame(width: contentWidth * fraction, height: 9)
                 }
             }
@@ -584,7 +584,7 @@ private struct MutualCountButton<List: View>: View {
                 // The list carries the material; the popover must carry none,
                 // or two are stacked and the result reads as frost.
                 .presentationBackground(.clear)
-                .environment(\.colorScheme, .dark)
+                .appColorScheme()
         }
     }
 }
@@ -785,7 +785,7 @@ struct GuildTagChip: View {
                     .presentationBackground(.clear)
                     // A server's card is the app's own surface, not the
                     // person's — see the badge flyout above.
-                    .environment(\.colorScheme, .dark)
+                    .appColorScheme()
                 }
             } else {
                 chip
@@ -995,7 +995,7 @@ struct PrivateProfileBanner: View {
         .padding(.vertical, Spacing.base)
         // Over the person's own ground rather than a grey plate, so the strip
         // belongs to the card instead of sitting on it.
-        .background(.white.opacity(0.10))
+        .background(profilePrivateStrip)
         .accessibilityElement(children: .combine)
         .accessibilityLabel(Text("This profile is private"))
     }
@@ -1423,3 +1423,10 @@ struct ProfileAvatar: View {
             .compositingGroup()
     }
 }
+
+/// Relative fills on a profile card, resolved by the card's own scheme — light
+/// on a dark card, shade on a light one. They were plain white, which was
+/// invisible on every light-themed profile before an unthemed card could be
+/// light too.
+private let profileSkeletonLine = Color.relative(dark: 0.08, light: 0.07)
+private let profilePrivateStrip = Color.relative(dark: 0.10, light: 0.06)

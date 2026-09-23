@@ -215,9 +215,15 @@ extension AppModel {
     /// colour at all. Both are answered here so the roster, its section headers
     /// and the transcript's author names cannot disagree — a name grey in one
     /// surface and coloured in another is worse than either.
+    ///
+    /// **And lifted, if it has to be, to read on the ground it lands on.** A
+    /// role colour was picked by a server against no ground at all; a navy that
+    /// reads on True Black is mud on a vivid Nightfall. `InkContrast.legible`
+    /// moves it in lightness only — the hue that makes it the role stays — and
+    /// only as far as body text needs. Most role colours pass through untouched.
     func roleColor(_ value: UInt32?) -> UInt32? {
         guard AppSettings.shared.roleColorPlacement.tintsNames else { return nil }
-        return userColor(value)
+        return userColor(value).map { InkContrast.legible($0, on: ThemeStore.shared.ground.inkCeiling) }
     }
 
     /// A profile's two colours, chosen or derived.

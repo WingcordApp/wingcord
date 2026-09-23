@@ -19,8 +19,10 @@ import Foundation
 //    Baking a theme colour into them would break all three.
 //  - **True Black is stated, not derived.** It is the app's measured house
 //    palette and the default, so it must come out bit-for-bit as it always has.
-//    The other nine themes and anything the reader builds are derived; this one
-//    is a literal triple, and the tests pin it.
+//    Porcelain, the light room, is stated too: the ramp below is built for a
+//    dark ground and cannot reach a light one. The other nine themes and
+//    anything the reader builds are derived; those two are literal triples, and
+//    the tests pin them.
 //
 // THE RAMP IS THE INVARIANT. Every derived theme uses the same three Oklab
 // lightness steps, so the separation between the reading surface, a card on it
@@ -29,10 +31,10 @@ import Foundation
 
 /// One end of a theme's ground: a hue, and how much of it the ground carries.
 ///
-/// Two of these make a theme. **The window is lit from above and the two stops
-/// are the two ends of that light** — `head` is what is behind the toolbar, and
-/// `foot` is what is behind the composer and down the whole sidebar. A theme
-/// with one colour is a coloured rectangle; a theme with two is a room.
+/// Two of these make a theme. **They are the two ends of the window's light** —
+/// `head` is the dark top-leading corner, behind the toolbar, and `foot` the lit
+/// bottom-trailing one, behind the composer. A theme with one colour is a
+/// coloured rectangle; a theme with two is a room.
 nonisolated struct ThemeStop: Hashable, Sendable {
     /// Oklab hue in degrees, wrapped into `0..<360`.
     var hue: Double
@@ -45,37 +47,106 @@ nonisolated struct ThemeStop: Hashable, Sendable {
     }
 }
 
-/// The numbers a theme is made of: two stops, one lightness, one accent.
+/// The numbers a theme is made of: two to five stops, one lightness, one
+/// accent, one angle.
 ///
 /// A seed rather than a list of colours, for three reasons that all matter:
-/// it is what the picker manipulates, it is what persists (six doubles instead
-/// of a palette), and it is what guarantees a theme somebody built cannot be
-/// structurally different from one that shipped.
+/// it is what the picker manipulates, it is what persists (a handful of doubles
+/// instead of a palette), and it is what guarantees a theme somebody built
+/// cannot be structurally different from one that shipped.
 ///
 /// **One lightness for both stops, and that is deliberate.** The gap between the
-/// head and the foot is `ThemeColors.washRise` and it is fixed, because it is
+/// head and the foot is `washRise` and it is fixed, because it is
 /// the *window's* sense of depth rather than the theme's — a reader who could
 /// set both ends independently could invert it, and an app lit from below reads
 /// as broken rather than as themed. What the two stops choose is colour.
 nonisolated struct ThemeSeed: Hashable, Sendable {
     /// Behind the toolbar — the darker end, and the theme's stated colour.
     var head: ThemeStop
+    /// The colours the walk passes through between the two ends, in order:
+    /// none to `maximumMiddle`, so a theme is two to five colours. Evenly
+    /// spaced along the line, the way the ends are.
+    var middle: [ThemeStop]
     /// Behind the composer — the lit end, and the one the accent comes from.
     var foot: ThemeStop
     /// How bright the ground is overall, `0...1`.
     var light: Double
-    /// Where the accent sits relative to the **head**, in turns of the wheel.
+    /// Where the accent sits relative to the **foot**, in turns of the wheel.
     /// `0` is that stop's own hue; `0.5` is its opposite.
     var accentTurn: Double
+    /// The line the field runs along, in CSS degrees. `fieldAngle` for every
+    /// preset; the reader's own blend may turn it.
+    var angle: Double
+    /// How far the reader has asked the ground to come forward, `0...1`: more
+    /// colour, more light, a stronger glow. See `vividLift`.
+    ///
+    /// **The reader's, not the seed's** — it is one setting applied to
+    /// whichever theme is on — so it is not part of `storageValue`, and the
+    /// store sets it on every seed it resolves.
+    var vividness = 0.0
 
-    init(head: ThemeStop, foot: ThemeStop, light: Double, accentTurn: Double = 0) {
+    init(
+        head: ThemeStop,
+        middle: [ThemeStop] = [],
+        foot: ThemeStop,
+        light: Double,
+        accentTurn: Double = 0,
+        angle: Double = ThemeSeed.fieldAngle
+    ) {
         self.head = head
+        self.middle = Array(middle.prefix(Self.maximumMiddle))
         self.foot = foot
         self.light = min(1, max(0, light))
         // Wrapped rather than clamped: a turn is circular, so −0.1 and 0.9 are
         // the same accent and clamping one of them to zero would silently
         // change the answer.
         self.accentTurn = accentTurn - (accentTurn.rounded(.down))
+        self.angle = Self.wrap(angle)
+    }
+
+    /// Five colours at most: a walk with more turns than that in a window's
+    /// width is a rainbow, not a room.
+    static let maximumMiddle = 3
+
+    /// Every stop in walk order, head first.
+    var anchors: [ThemeStop] { [head] + middle + [foot] }
+
+    /// Replaces the stop at `index` in walk order.
+    mutating func setAnchor(_ index: Int, to stop: ThemeStop) {
+        if index == 0 {
+            head = stop
+        } else if index == middle.count + 1 {
+            foot = stop
+        } else if middle.indices.contains(index - 1) {
+            middle[index - 1] = stop
+        }
+    }
+
+    /// Where the stop at `index` sits along the line, `0...1`.
+    func position(ofAnchor index: Int) -> Double {
+        Double(index) / Double(middle.count + 1)
+    }
+
+    /// The same seed with every clamp and wrap applied again — for a value a
+    /// caller mutated in place, which bypasses the initialisers.
+    var normalized: ThemeSeed {
+        var seed = ThemeSeed(
+            head: ThemeStop(hue: head.hue, depth: head.depth),
+            middle: middle.map { ThemeStop(hue: $0.hue, depth: $0.depth) },
+            foot: ThemeStop(hue: foot.hue, depth: foot.depth),
+            light: light,
+            accentTurn: accentTurn,
+            angle: angle
+        )
+        seed.vividness = min(1, max(0, vividness))
+        return seed
+    }
+
+    /// This seed at the reader's vividness.
+    func at(vividness: Double) -> ThemeSeed {
+        var seed = self
+        seed.vividness = min(1, max(0, vividness))
+        return seed
     }
 
     /// The one-colour form, for a theme whose two ends are the same hue.
@@ -145,7 +216,25 @@ nonisolated struct ThemeSeed: Hashable, Sendable {
 
     var groundLightness: Double {
         Self.darkestGround + light * (Self.lightestGround - Self.darkestGround)
+            + vividness * Self.vividLift
     }
+
+    // MARK: Vividness
+    //
+    // The ramp above is the calm end of the range, and it stays the default.
+    // Vividness walks the whole ramp forward from there toward the brighter,
+    // more colourful grounds a reference client ships — L 0.25–0.36 at chroma
+    // near 0.08 — without changing a single one of its steps: a card is still a
+    // card's height above the ground at every setting.
+
+    /// How far the whole ramp is lifted at full vividness: about a ramp step.
+    static let vividLift = 0.050
+
+    /// How much more colour the ground may carry at full vividness.
+    static let vividChroma = 0.035
+
+    /// The corner light's strength, calm to vivid.
+    var glowStrength: Double { 0.28 + vividness * 0.12 }
 
     /// Chroma for a stop at a given step of the ramp.
     ///
@@ -157,44 +246,144 @@ nonisolated struct ThemeSeed: Hashable, Sendable {
     func chroma(depth: Double, atLightness lightness: Double) -> Double {
         let ground = groundLightness
         guard ground > 0 else { return 0 }
-        return depth * Self.maximumGroundChroma * (lightness / ground)
+        let ceiling = Self.maximumGroundChroma + vividness * Self.vividChroma
+        return depth * ceiling * (lightness / ground)
     }
 
-    /// The ground behind the toolbar — the theme's stated colour, and the
-    /// darker of its two ends.
-    var canvas: Oklch {
-        let lightness = groundLightness
+    /// The brightest ground on the page a line of coloured type can land on:
+    /// the lit end, with the corner light at full strength over it.
+    ///
+    /// Conservative on purpose. The light peaks in one corner, but a name in
+    /// the roster sits exactly there, and a colour checked against anywhere
+    /// dimmer would fail in the one place the reader is looking.
+    var inkCeiling: UInt32 {
+        InkContrast.composite(glow.packedRGB(), over: canvasLit.packedRGB(), opacity: glowStrength)
+    }
+
+    /// How much lighter the foot of the window is than its head.
+    ///
+    /// Half again a ramp step, which is a *lot* — and it is measured rather than
+    /// chosen: the reference this was checked against runs L 0.175 at one end
+    /// of its window to 0.276 at the other, which is more than two steps. A wash
+    /// any gentler than this is invisible on a window seven hundred points tall,
+    /// which is exactly what the first attempt here was.
+    ///
+    /// **The light is at the foot, and that is measured rather than chosen.**
+    /// Both of the clients this was checked against put the saturated, lit end
+    /// of a theme down where the composer is: the top of a chat window is
+    /// chrome, and the bottom is where somebody is actually typing.
+    static let washRise = surfaceStep * 1.5
+
+    /// The ground in the window's top-leading corner — the theme's stated
+    /// colour, and the darker of its two ends. `Palette.canvas`.
+    var canvas: Oklch { field(at: 0) }
+
+    /// The ground in the window's bottom-trailing corner, behind the composer:
+    /// the lit end.
+    var canvasLit: Oklch { field(at: 1) }
+
+    // MARK: The field
+
+    /// The angle every house theme's field is laid at — CSS degrees, clockwise
+    /// from "to top". See `GradientAxis`.
+    ///
+    /// **A diagonal that is still mostly a fall.** The head sits in the window's
+    /// top-leading corner and the foot in its bottom-trailing one, behind the
+    /// composer, where the light has always been; the lean is what lets a hue
+    /// travel *across* the window instead of stacking in bands. One angle for
+    /// all of them, for the ramp's reason: choosing a hue is a choice, never a
+    /// retune.
+    static let fieldAngle = 150.0
+
+    /// A point on the walk from the head to the foot, `t` of the way along it.
+    ///
+    /// **Walked in Oklch, and that is what lets the two ends sit far apart.** A
+    /// straight line through RGB between two hues a quarter of the wheel apart
+    /// passes through grey in the middle — the seam that used to hold every
+    /// theme's ends within fifty degrees of each other. Here the hue turns the
+    /// short way round and depth and lightness move in straight lines, so the
+    /// middle of the walk is the hue between the ends at the same colourfulness.
+    func field(at t: Double) -> Oklch {
+        let lightness = groundLightness + Self.washRise * t
+        let stop = stop(at: t)
         return Oklch(
             lightness: lightness,
-            chroma: chroma(depth: head.depth, atLightness: lightness),
-            hue: head.hue
+            chroma: chroma(depth: stop.depth, atLightness: lightness),
+            hue: stop.hue
         )
     }
 
-    /// The ground behind the composer, and the lit end of the window.
-    var canvasLit: Oklch {
-        let lightness = groundLightness + ThemeColors.washRise
-        return Oklch(
-            lightness: lightness,
-            chroma: chroma(depth: foot.depth, atLightness: lightness),
-            hue: foot.hue
+    /// The hue and depth `t` of the way along the walk, through every stop.
+    ///
+    /// **Stop to stop, each leg the short way round.** Lightness is not a stop's
+    /// to choose — it rises across the whole line by `washRise` — so this is
+    /// only the colour, and `field(at:)` lights it.
+    func stop(at t: Double) -> ThemeStop {
+        let anchors = anchors
+        let legs = Double(anchors.count - 1)
+        let along = min(1, max(0, t)) * legs
+        let leg = min(Int(along), anchors.count - 2)
+        let from = anchors[leg]
+        let to = anchors[leg + 1]
+        let u = along - Double(leg)
+        return ThemeStop(
+            hue: Self.mixHue(from.hue, to.hue, u),
+            depth: from.depth + (to.depth - from.depth) * u
         )
     }
 
-    /// Where a panel and a row inside it sit between the two stops.
+    /// The same point in the **frame** — the sidebar column.
+    ///
+    /// **The frame carries the colour, and the page stays calm.** That is
+    /// Discord's arrangement, read out of its stylesheet: its channel list shows
+    /// a quarter of the gradient where its chat shows a fifth. The page is where
+    /// the reading happens, so it keeps the ramp's quiet ground; the column of
+    /// contents beside it is where a theme can afford to be seen. It replaces a
+    /// recess that ran the other way — six percent of black — and made the one
+    /// region nobody reads for long the darkest part of the room.
+    func frame(at t: Double) -> Oklch {
+        let page = field(at: t)
+        return Oklch(
+            lightness: page.lightness + Self.frameLift,
+            chroma: page.chroma * Self.frameChroma,
+            hue: page.hue
+        )
+    }
+
+    /// How much lighter the frame is than the page beside it: under half a ramp
+    /// step, so the two read as one room lit unevenly rather than as two grounds.
+    static let frameLift = 0.022
+
+    /// How much more colour the frame carries than the page.
+    static let frameChroma = 1.35
+
+    /// The light in the window's bottom-trailing corner: the foot's hue, lifted
+    /// well clear of the ground and carrying more colour than it.
+    ///
+    /// A picture of light rather than a second colour, so it takes the foot's
+    /// depth too — Graphite's is a grey glow, and a theme with a faint foot has
+    /// a faint light.
+    var glow: Oklch {
+        let lit = canvasLit
+        return Oklch(
+            lightness: lit.lightness + Self.glowRise,
+            chroma: foot.depth * Self.glowChroma,
+            hue: lit.hue
+        )
+    }
+
+    static let glowRise = 0.20
+    static let glowChroma = 0.14
+
+    /// Where a panel and a row inside it sit along the walk.
     ///
     /// **Halfway, and it has to be.** A card is drawn at every height of the
     /// window — a settings card near the toolbar, an embed halfway down, a
     /// reaction chip beside the composer — so a card that belonged to one end
     /// would be visibly the wrong colour at the other. Taking the midpoint means
     /// it is a little wrong everywhere instead of very wrong somewhere, which is
-    /// the trade every shared surface in a two-tone room makes.
-    private var midStop: ThemeStop {
-        ThemeStop(
-            hue: Self.mixHue(foot.hue, head.hue, 0.5),
-            depth: (foot.depth + head.depth) / 2
-        )
-    }
+    /// the trade every shared surface in a many-toned room makes.
+    private var midStop: ThemeStop { stop(at: 0.5) }
 
     var surface: Oklch {
         let lightness = groundLightness + Self.surfaceStep
@@ -230,33 +419,21 @@ nonisolated struct ThemeSeed: Hashable, Sendable {
 
 // MARK: - The resolved colours
 
-/// A theme after the arithmetic — what the app actually paints with.
+/// A theme after the arithmetic — the colours the app paints *things* with.
+///
+/// What the window's ground is made of is `ThemeGround`, resolved beside this
+/// and read only by the SwiftUI views that draw it.
 ///
 /// **Packed integers, not `Color`s.** This value is read from the drawn canvases
 /// off the main actor, through a lock, on a path that runs per row. A `Color` is
 /// reference-counted, so a struct of a dozen of them costs a retain and a
-/// release per field on every snapshot; a struct of `UInt32`s is a memcpy of
-/// forty bytes and touches no allocator at all.
+/// release per field on every snapshot; a struct of `UInt32`s is a memcpy and
+/// touches no allocator at all.
 nonisolated struct ThemeColors: Hashable, Sendable {
-    /// The reading surface. `Palette.canvas`.
+    /// The reading surface as one flat colour — for what has to sit *on* the
+    /// ground and match it: a ring cut around an avatar, a sheet's backing.
+    /// `Palette.canvas`.
     var canvas: UInt32
-    /// The lit end of the ground, at the **foot** of the window.
-    ///
-    /// **The light is at the bottom, and that is measured rather than chosen.**
-    /// Both of the clients this was checked against put the saturated end of a
-    /// theme down where the composer is and let it fall away toward the toolbar,
-    /// and it is the right way round for a reason that is about the window
-    /// rather than about colour: the top of a chat window is chrome — a title, a
-    /// row of controls — and the bottom is where somebody is actually typing. A
-    /// gradient lit from the top puts its brightest region behind the least
-    /// interesting part of the app.
-    ///
-    /// **Equal to `canvas` for the house theme, and only for it.** True Black is
-    /// stated rather than derived precisely so the default appearance cannot
-    /// drift, and a wash over it would be a change to that appearance rather
-    /// than a theme. Everything else is washed, Graphite included — a lifted
-    /// neutral is still a choice somebody made.
-    var canvasLit: UInt32
     /// Structural, non-floating surfaces. `Palette.surface`.
     var surface: UInt32
     /// A grouped row inside a structural surface. `Palette.surfaceRaised`.
@@ -270,45 +447,49 @@ nonisolated struct ThemeColors: Hashable, Sendable {
     /// that states a hue is opting out of that deliberately, which is the point
     /// of choosing one.
     var accent: UInt32?
-    /// What the sidebar column — the guild rail *and* the channel list — is
-    /// painted with, and how strongly.
-    ///
-    /// Zero opacity means the column is painted with **nothing at all**, which
-    /// is `INVARIANTS.md` §1's rule and is what the house theme does. See
-    /// `ThemeColors.railVeilOpacity`.
-    var railVeil: UInt32
-    var railVeilOpacity: Double
-
-    /// Whether the ground carries a wash at all.
-    var isWashed: Bool { canvasLit != canvas }
+    /// Whether this is a dark room or a light one. The window's appearance
+    /// follows it — see `ThemeStore.apply` — and so does every relative fill.
+    var appearance: ThemeAppearance
+    /// A colour mixed into the transcript's text, or nil for none: Discord's
+    /// slight text tint, which only its themes carry. See
+    /// `MessageTextStyle.current`.
+    var textTint: UInt32?
 
     /// The house palette, stated rather than derived. See the note at the top.
     static let trueBlack = ThemeColors(
         canvas: 0x0A_0A_0C,
-        canvasLit: 0x0A_0A_0C,
         surface: 0x14_14_17,
         surfaceRaised: 0x1C_1C_20,
+        accent: nil
+    )
+
+    /// The house's light room, stated for True Black's reason: the seed's ramp
+    /// is built for a dark ground, and a light one is a different ladder, not
+    /// the same one turned over. The steps run *up* — a card is brighter than
+    /// the page it sits on, and a row brighter again — because on a light
+    /// ground that is what "in front" looks like.
+    static let porcelain = ThemeColors(
+        canvas: 0xF4_F3_F0,
+        surface: 0xFA_F9_F7,
+        surfaceRaised: 0xFF_FF_FF,
         accent: nil,
-        railVeil: 0x14_14_17,
-        railVeilOpacity: 0
+        appearance: .light
     )
 
     init(
         canvas: UInt32,
-        canvasLit: UInt32,
         surface: UInt32,
         surfaceRaised: UInt32,
         accent: UInt32?,
-        railVeil: UInt32,
-        railVeilOpacity: Double
+        appearance: ThemeAppearance = .dark,
+        textTint: UInt32? = nil
     ) {
         self.canvas = canvas
-        self.canvasLit = canvasLit
         self.surface = surface
         self.surfaceRaised = surfaceRaised
         self.accent = accent
-        self.railVeil = railVeil
-        self.railVeilOpacity = railVeilOpacity
+        self.appearance = appearance
+        self.textTint = textTint
     }
 
     /// Derived from a seed.
@@ -317,91 +498,27 @@ nonisolated struct ThemeColors: Hashable, Sendable {
     /// happen once per theme change rather than once per read.
     init(_ seed: ThemeSeed, followsSystemAccent: Bool = false) {
         canvas = seed.canvas.packedRGB()
-        canvasLit = seed.canvasLit.packedRGB()
         surface = seed.surface.packedRGB()
         surfaceRaised = seed.surfaceRaised.packedRGB()
-        accent = followsSystemAccent ? nil : seed.accent.packedRGB()
-        // **A derived theme always paints the sidebar**, and the colour is the
-        // foot rather than the panel above it: the reading surface carries a
-        // wash that lifts it, so the two columns then read the way a themed
-        // window ought to — a lit page beside a darker column of contents.
-        railVeil = canvas
-        railVeilOpacity = Self.paintedRailOpacity
+        // **Checked against the brightest ground it can land on.** The accent
+        // is spent on links and on the glyphs of the controls it marks, so it
+        // is ink first; on the calm ramp it clears the bar with room to spare,
+        // and it is the vivid end of the range that moves it.
+        accent = followsSystemAccent
+            ? nil
+            : InkContrast.legible(seed.accent.packedRGB(), on: seed.inkCeiling)
+        appearance = .dark
+        textTint = nil
     }
-
-    /// How much lighter the very top of the reading surface is than its foot.
-    ///
-    /// Half again a ramp step, which is a *lot* — and it is measured rather than
-    /// chosen: the reference this was checked against runs L 0.175 at the foot
-    /// of its window to 0.276 behind its toolbar, which is more than two steps.
-    /// A wash any gentler than this is invisible on a window seven hundred
-    /// points tall, which is exactly what the first attempt here was.
-    ///
-    /// **It is spent in the top half and flat below** — see `washMidpoint`. That
-    /// is what lets it be this large without breaking the one thing the ramp
-    /// guarantees: a card is a step above the ground it sits on, and a wash that
-    /// carried a step and a half all the way down would swallow every embed in
-    /// the transcript.
-    static let washRise = ThemeSeed.surfaceStep * 1.5
-
-    /// Where the wash has finished falling off, as a fraction of the reading
-    /// surface's height.
-    ///
-    /// Above it the ground is lit; below it, flat. Fifty-five percent puts the
-    /// whole of it in the region a scrolled transcript keeps *behind* its
-    /// content — the toolbar's band, the first message or two — and leaves the
-    /// composer's end of the window at the theme's stated colour.
-    static let washMidpoint = 0.55
-
-    /// How strongly a theme paints the sidebar column.
-    ///
-    /// **The one place this system knowingly breaks `INVARIANTS.md` §1**, and
-    /// the exception is worth stating precisely. §1 says the sidebar column is
-    /// painted with nothing, because AppKit paints it with behind-window
-    /// vibrancy and that vibrancy *is* the bleed — the wallpaper and the
-    /// menu-bar accent coming through the rail and the channel list. Painting it
-    /// throws that away, and the app then has to hand-roll what it just covered
-    /// up.
-    ///
-    /// **So the house theme still paints nothing, and every other theme paints.**
-    /// That is the whole rule, and it is a rule about *consent* rather than about
-    /// colour: the bleed is what Wingcord looks like until somebody says
-    /// otherwise, and choosing a theme is saying otherwise. A first attempt here
-    /// gated on the theme having a hue and veiled at a third, on the reasoning
-    /// that a thin tint keeps the bleed *and* carries the colour. It does not —
-    /// over behind-window vibrancy a third of a near-black is invisible, and the
-    /// result was a themed transcript beside a sidebar that had plainly not
-    /// heard about it.
-    ///
-    /// **Opaque, and the six percent that used to be left is a measured
-    /// mistake.** Leaving a sliver of vibrancy through sounded like keeping a
-    /// trace of the bleed. What it actually did was make the column's colour a
-    /// function of the *wallpaper*: sampled on a bright sky, the sidebar read
-    /// #02230D at the top of the window against the transcript's #011309 beside
-    /// it — visibly lighter, and lighter by a different amount at every height,
-    /// because the desktop is. The two columns share one field now precisely so
-    /// they cannot disagree, and six percent of somebody's photograph is enough
-    /// to make them.
-    ///
-    /// The bleed is the house theme's, and the house theme still has all of it.
-    static let paintedRailOpacity = 1.0
-
-    /// How much darker the sidebar column is than the page beside it.
-    ///
-    /// **The only difference left between the two columns**, now that they share
-    /// one field. It used to be far more than this and by accident: the detail
-    /// column carried a wash and the sidebar carried one flat fill, so the two
-    /// were lit independently and met at a hard seam down the split view. A
-    /// reader described the result as two tones rather than a theme, and they
-    /// were right — it was two themes.
-    ///
-    /// Six percent of black over the shared field. Enough that a table of
-    /// contents reads as one step behind the page, which is what every client
-    /// that does this well draws; not enough to be a second colour.
-    static let sidebarRecess = 0.06
 }
 
-// MARK: - The ten
+/// A dark room or a light one.
+nonisolated enum ThemeAppearance: Hashable, Sendable {
+    case dark
+    case light
+}
+
+// MARK: - The presets
 
 /// A theme the app ships with.
 ///
@@ -412,6 +529,7 @@ nonisolated struct ThemeColors: Hashable, Sendable {
 enum ThemePreset: String, CaseIterable, Identifiable, Hashable, Sendable {
     case trueBlack
     case graphite
+    case porcelain
     case ember
     case rosewood
     case mulberry
@@ -427,6 +545,7 @@ enum ThemePreset: String, CaseIterable, Identifiable, Hashable, Sendable {
         switch self {
         case .trueBlack: "True Black"
         case .graphite: "Graphite"
+        case .porcelain: "Porcelain"
         case .ember: "Ember"
         case .rosewood: "Rosewood"
         case .mulberry: "Mulberry"
@@ -444,6 +563,7 @@ enum ThemePreset: String, CaseIterable, Identifiable, Hashable, Sendable {
         switch self {
         case .trueBlack: "The house palette. Near-black, and no colour at all."
         case .graphite: "The same room with the lights up. Neutral, and a step lighter."
+        case .porcelain: "A light room. Warm white, glazed, and the system's accent."
         case .ember: "Banked coals. Warm ground, amber on top."
         case .rosewood: "Dark grain and a rust accent."
         case .mulberry: "Wine in a dark glass."
@@ -468,57 +588,76 @@ enum ThemePreset: String, CaseIterable, Identifiable, Hashable, Sendable {
             ThemeSeed(hue: 286, depth: 0.086, light: 0.305)
         case .graphite:
             ThemeSeed(hue: 286, depth: 0.075, light: 0.560)
+        case .porcelain:
+            // Stated, like True Black — see `ThemeColors.porcelain`. The seed is
+            // where Plumage would put its beads if opened from here: the
+            // porcelain's own warm cast, at the brightest the dark ramp allows.
+            ThemeSeed(hue: 80, depth: 0.10, light: 1)
+        // **Each keeps its old centre and spreads out from it.** The ends used to
+        // sit 24 to 36 degrees apart, which is what a straight line through RGB
+        // could survive; walked in Oklch they can sit 67 to 80 apart, which is
+        // what makes the window read as a room with light moving through it. No
+        // foot lands in 70–100°: olive at this lightness is a dirty grey at any
+        // depth — see `PlumageShuffle.hueBands`.
         case .ember:
+            // Crimson coals under amber.
             ThemeSeed(
-                head: ThemeStop(hue: 32, depth: 0.62),
-                foot: ThemeStop(hue: 68, depth: 0.80),
+                head: ThemeStop(hue: 358, depth: 0.72),
+                foot: ThemeStop(hue: 68, depth: 0.88),
                 light: 0.400
             )
         case .rosewood:
+            // Plum grain to rust.
             ThemeSeed(
-                head: ThemeStop(hue: 8, depth: 0.68),
-                foot: ThemeStop(hue: 32, depth: 0.82),
+                head: ThemeStop(hue: 320, depth: 0.74),
+                foot: ThemeStop(hue: 30, depth: 0.86),
                 light: 0.395,
                 accentTurn: 0.030
             )
         case .mulberry:
+            // Purple to wine.
             ThemeSeed(
-                head: ThemeStop(hue: 322, depth: 0.66),
-                foot: ThemeStop(hue: 352, depth: 0.86),
+                head: ThemeStop(hue: 290, depth: 0.74),
+                foot: ThemeStop(hue: 358, depth: 0.90),
                 light: 0.425,
                 accentTurn: 0.020
             )
         case .nebula:
+            // Blue-violet dust to a magenta light.
             ThemeSeed(
-                head: ThemeStop(hue: 282, depth: 0.70),
-                foot: ThemeStop(hue: 318, depth: 0.88),
+                head: ThemeStop(hue: 255, depth: 0.76),
+                foot: ThemeStop(hue: 335, depth: 0.92),
                 light: 0.425,
                 accentTurn: 0.015
             )
         case .nightfall:
+            // Dusk blue to violet.
             ThemeSeed(
-                head: ThemeStop(hue: 258, depth: 0.72),
-                foot: ThemeStop(hue: 292, depth: 0.92),
+                head: ThemeStop(hue: 222, depth: 0.76),
+                foot: ThemeStop(hue: 300, depth: 0.94),
                 light: 0.435,
                 accentTurn: 0.015
             )
         case .deepSea:
+            // Abyssal indigo up to the teal the light reaches.
             ThemeSeed(
-                head: ThemeStop(hue: 258, depth: 0.68),
-                foot: ThemeStop(hue: 232, depth: 0.90),
+                head: ThemeStop(hue: 280, depth: 0.74),
+                foot: ThemeStop(hue: 200, depth: 0.92),
                 light: 0.415,
                 accentTurn: -0.030
             )
         case .lagoon:
+            // Lagoon blue to shallow turquoise.
             ThemeSeed(
-                head: ThemeStop(hue: 212, depth: 0.66),
-                foot: ThemeStop(hue: 186, depth: 0.84),
+                head: ThemeStop(hue: 235, depth: 0.72),
+                foot: ThemeStop(hue: 165, depth: 0.88),
                 light: 0.400
             )
         case .conifer:
+            // Dusky teal to pine.
             ThemeSeed(
-                head: ThemeStop(hue: 166, depth: 0.62),
-                foot: ThemeStop(hue: 138, depth: 0.80),
+                head: ThemeStop(hue: 195, depth: 0.70),
+                foot: ThemeStop(hue: 128, depth: 0.86),
                 light: 0.395,
                 accentTurn: -0.020
             )
@@ -533,21 +672,31 @@ enum ThemePreset: String, CaseIterable, Identifiable, Hashable, Sendable {
     /// on the Mac and it tracks Increase Contrast.
     var followsSystemAccent: Bool {
         switch self {
-        case .trueBlack, .graphite: true
+        case .trueBlack, .graphite, .porcelain: true
         default: false
         }
     }
 
-    var colors: ThemeColors {
-        // Stated, not derived — see the note at the top of this file.
-        if self == .trueBlack { return .trueBlack }
-        return ThemeColors(seed, followsSystemAccent: followsSystemAccent)
+    var colors: ThemeColors { colors(vividness: 0) }
+
+    /// At the reader's vividness. **True Black ignores it**: stated, not
+    /// derived — see the note at the top of this file — and a house palette
+    /// that drifted with a slider would not be one.
+    func colors(vividness: Double) -> ThemeColors {
+        switch self {
+        case .trueBlack: .trueBlack
+        case .porcelain: .porcelain
+        default: ThemeColors(seed.at(vividness: vividness), followsSystemAccent: followsSystemAccent)
+        }
     }
+
+    /// The two whose colours are written down rather than derived.
+    var isStated: Bool { self == .trueBlack || self == .porcelain }
 }
 
 // MARK: - What is selected
 
-/// One of the ten, or the reader's own.
+/// One of the presets, one of Discord's, or the reader's own.
 ///
 /// The custom seed lives **beside** the selection rather than inside it, so
 /// stepping through the presets to compare them and coming back to Custom finds
@@ -555,6 +704,7 @@ enum ThemePreset: String, CaseIterable, Identifiable, Hashable, Sendable {
 /// reader's work every time they looked at something else.
 enum ThemeChoice: Hashable, Sendable {
     case preset(ThemePreset)
+    case discord(DiscordTheme)
     case custom
 
     var preset: ThemePreset? {

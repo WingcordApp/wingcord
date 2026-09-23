@@ -87,7 +87,7 @@ struct OverlayChatWidget: View {
         .clipShape(.rect(cornerRadius: Radius.card, style: .continuous))
         .overlay {
             RoundedRectangle(cornerRadius: Radius.card, style: .continuous)
-                .strokeBorder(.white.opacity(0.10), lineWidth: 1)
+                .strokeBorder(chatWidgetEdge, lineWidth: 1)
                 .allowsHitTesting(false)
         }
         .shadow(color: .black.opacity(0.4), radius: 18, y: 6)
@@ -415,3 +415,6 @@ struct OverlayRestingSlot: View {
         .accessibilityElement(children: .combine)
     }
 }
+
+/// The widget's hairline: light in a dark room, shade in a light one.
+private let chatWidgetEdge = Color.relative(dark: 0.10, light: 0.10)

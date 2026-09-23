@@ -75,7 +75,7 @@ struct OverlaySidebarWidget: View {
 
     private func ground(for identity: OverlayIdentity) -> ProfileGround {
         // A widget over somebody's game is chrome, not a profile page: it
-        // keeps the app's dark ink whatever the reader's own colours are.
+        // keeps the app's own room whatever the reader's own colours are.
         ProfileGround(themeColorValues: identity.themeColorValues, followsAppTheme: true)
     }
 

@@ -91,7 +91,7 @@ struct GuildRailFolder: View {
 
             Image(systemName: "folder.fill")
                 .font(.system(size: side * 0.36))
-                .foregroundStyle(tint ?? Color.white.opacity(0.8))
+                .foregroundStyle(tint ?? InkColor.solid.opacity(0.8))
                 .opacity(folder.isExpanded ? 1 : 0)
         }
         .frame(width: side, height: side)

@@ -58,9 +58,6 @@ nonisolated enum ThemeRuntime {
     static func install(_ colors: ThemeColors) {
         box.withLock { $0 = colors }
         ThemeInk.install(colors)
-        // The two drawn canvases paint the ground themselves and observe
-        // nothing. See `CanvasGround`.
-        CanvasGround.invalidate()
     }
 }
 
@@ -106,8 +103,9 @@ nonisolated struct ThemeInk: @unchecked Sendable {
     let cardFill: CGColor
     let accent: CGColor
     /// A row under the pointer on a drawn canvas, and the rule down the side of
-    /// a quote. White at 7% and 15% — **relative fills, deliberately unthemed**,
-    /// and here only so a painter does not have to bridge a `Color` to get them.
+    /// a quote. White at 7% and 15%, or black at 5% and 9% in a light room —
+    /// **relative fills, deliberately unthemed**, and here only so a painter does
+    /// not have to bridge a `Color` to get them.
     let hoverFill: CGColor
     let selectionFill: CGColor
     /// The pill behind a member row's typing dots.
@@ -118,6 +116,19 @@ nonisolated struct ThemeInk: @unchecked Sendable {
     /// theme's accent, which is what the app already uses for "this is
     /// happening now".
     let typingPill: CGColor
+    /// Whether the theme is a light room. See `lift(_:)`.
+    let isLight: Bool
+
+    /// A painter's relative fill: white at `alpha` in a dark room, black at
+    /// three quarters of it in a light one — `Color.relative` for a context that
+    /// has no appearance to ask, resolved from the theme rather than from the
+    /// thread, because a painter runs off the main actor and a thread's current
+    /// appearance there is not the window's.
+    func lift(_ alpha: CGFloat) -> CGColor {
+        isLight
+            ? CGColor(srgbRed: 0, green: 0, blue: 0, alpha: alpha * 0.75)
+            : CGColor(srgbRed: 1, green: 1, blue: 1, alpha: alpha)
+    }
 
     private static let box = Mutex(ThemeInk(.trueBlack, systemAccent: Self.fallbackAccent))
 
@@ -143,9 +154,19 @@ nonisolated struct ThemeInk: @unchecked Sendable {
         // therefore draws with the reader's control accent, resolved once — which
         // is what the per-row `NSColor` bridge was doing anyway.
         accent = colors.accent.map(Self.color) ?? systemAccent
-        hoverFill = CGColor(srgbRed: 1, green: 1, blue: 1, alpha: 0.07)
-        selectionFill = CGColor(srgbRed: 1, green: 1, blue: 1, alpha: 0.15)
+        // `Palette.hoverFill` and `selectionFill`, resolved for the theme's own
+        // appearance: a painter draws into a context, not into a view with an
+        // appearance to ask.
+        switch colors.appearance {
+        case .dark:
+            hoverFill = CGColor(srgbRed: 1, green: 1, blue: 1, alpha: 0.07)
+            selectionFill = CGColor(srgbRed: 1, green: 1, blue: 1, alpha: 0.15)
+        case .light:
+            hoverFill = CGColor(srgbRed: 0, green: 0, blue: 0, alpha: 0.05)
+            selectionFill = CGColor(srgbRed: 0, green: 0, blue: 0, alpha: 0.09)
+        }
         typingPill = accent
+        isLight = colors.appearance == .light
     }
 
     private static func color(_ packed: UInt32) -> CGColor {

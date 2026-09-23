@@ -84,7 +84,7 @@ private struct OverlayVideoTile: View {
         .overlay {
             RoundedRectangle(cornerRadius: Radius.chip, style: .continuous)
                 .strokeBorder(
-                    participant.isSpeaking ? Palette.presenceOnline : .white.opacity(0.10),
+                    participant.isSpeaking ? Palette.presenceOnline : videoTileEdge,
                     lineWidth: participant.isSpeaking ? 2 : 1
                 )
                 .allowsHitTesting(false)
@@ -169,3 +169,6 @@ private struct OverlayVideoTile: View {
         )
     }
 }
+
+/// A tile's resting edge: light in a dark room, shade in a light one.
+private let videoTileEdge = Color.relative(dark: 0.10, light: 0.10)

@@ -380,7 +380,7 @@ private struct SettingsHistoryControl: View {
                 isEnabled: history.canGoBack,
                 action: history.goBack
             )
-            Color.white.opacity(0.20)
+            Palette.edgeStrong
                 .frame(width: SettingsMetrics.hairline, height: 12)
             Half(
                 symbol: "chevron.right",

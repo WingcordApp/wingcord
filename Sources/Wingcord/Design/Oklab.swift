@@ -80,6 +80,17 @@ nonisolated struct Oklch: Hashable, Sendable {
             ?? 0
     }
 
+    /// The sRGB value a **browser** would paint for this colour: out-of-gamut
+    /// channels clipped, where `packedRGB()` gives chroma up instead.
+    ///
+    /// For reproducing a CSS colour exactly, and nothing else. Near white, a
+    /// `color-mix(in oklab, …)` of two in-gamut colours lands just outside sRGB
+    /// — seven of Discord's twenty-four light surfaces do — and Chrome clips
+    /// each channel. The house fit would come back a unit off on three of them.
+    func clippedRGB() -> UInt32 {
+        Self.pack(linear: linearRGB(chroma: chroma), clamping: true) ?? 0
+    }
+
     /// Linear-light sRGB, unclamped, at an arbitrary chroma.
     private func linearRGB(chroma: Double) -> SIMD3<Double> {
         let hueRadians = hue * .pi / 180
@@ -121,6 +132,36 @@ nonisolated struct Oklch: Hashable, Sendable {
             packed = packed << 8 | UInt32((encoded * 255).rounded())
         }
         return packed
+    }
+
+    // MARK: Mixing
+
+    /// CSS `color-mix(in oklab, …)`: `weight` of the way from this colour to
+    /// `other`, along a straight line through Oklab's **rectangular** form.
+    ///
+    /// Rectangular and not polar, because that is what the CSS space names and
+    /// because the difference is not small: mixing in Oklch walks the hue round
+    /// the wheel, and a grey — which has no hue — would drag the answer toward
+    /// pink-red. Against Chrome's own `color-mix` over Discord's surfaces this
+    /// lands on the same byte every time.
+    func mixed(with other: Oklch, weight: Double) -> Oklch {
+        let (a1, b1) = rectangular
+        let (a2, b2) = other.rectangular
+        let a = a1 + (a2 - a1) * weight
+        let b = b1 + (b2 - b1) * weight
+        let chroma = (a * a + b * b).squareRoot()
+        var hue = chroma < 1e-9 ? 0 : atan2(b, a) * 180 / .pi
+        if hue < 0 { hue += 360 }
+        return Oklch(
+            lightness: lightness + (other.lightness - lightness) * weight,
+            chroma: chroma,
+            hue: hue
+        )
+    }
+
+    private var rectangular: (a: Double, b: Double) {
+        let radians = hue * .pi / 180
+        return (chroma * cos(radians), chroma * sin(radians))
     }
 
     // MARK: From sRGB

@@ -642,7 +642,7 @@ private struct RowAccessory: View {
                 .font(.system(size: 9, weight: .semibold))
                 .foregroundStyle(isHovering ? AnyShapeStyle(tint) : AnyShapeStyle(Ink.secondary))
                 .frame(width: 18, height: 18)
-                .background { Circle().fill(Color.white.opacity(isHovering ? 0.14 : 0)) }
+                .background { Circle().fill(isHovering ? sidebarGlyphHovered : .clear) }
                 .contentShape(.circle)
         }
         .buttonStyle(.plain)
@@ -782,3 +782,7 @@ private nonisolated struct ThreadHook: Shape {
         return path
     }
 }
+
+/// A round glyph button in a sidebar row, under the pointer: light in a dark
+/// room, shade in a light one.
+private let sidebarGlyphHovered = Color.relative(dark: 0.14, light: 0.10)

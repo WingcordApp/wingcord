@@ -2,7 +2,6 @@ import AppKit
 import CoreGraphics
 import CoreText
 import Foundation
-import WingcordCore
 
 /// Draws the picker's grid: section headings, and cells that are either a glyph
 /// or a picture.
@@ -67,7 +66,7 @@ nonisolated enum ExpressionGridPainter {
             height: headerPillHeight
         )
 
-        context.setFillColor(NSColor.white.withAlphaComponent(0.14).cgColor)
+        context.setFillColor(ThemeInk.current.lift(0.14))
         context.addPath(CGPath(
             roundedRect: pill,
             cornerWidth: pill.height / 2,
@@ -173,7 +172,7 @@ nonisolated enum ExpressionGridPainter {
                     x: frame.minX, y: 0, width: frame.width, height: frame.height
                 ))
             } else {
-                context.setFillColor(NSColor.white.withAlphaComponent(0.16).cgColor)
+                context.setFillColor(ThemeInk.current.lift(0.16))
                 context.fill(frame)
                 context.restoreGState()
                 let font = NSFont.systemFont(ofSize: 8, weight: .bold)
@@ -209,7 +208,7 @@ nonisolated enum ExpressionGridPainter {
     ) {
         if isHovered {
             let target = frame.insetBy(dx: highlightInset, dy: highlightInset)
-            context.setFillColor(NSColor.white.withAlphaComponent(0.12).cgColor)
+            context.setFillColor(ThemeInk.current.lift(0.12))
             context.addPath(CGPath(
                 roundedRect: target,
                 cornerWidth: Radius.row,

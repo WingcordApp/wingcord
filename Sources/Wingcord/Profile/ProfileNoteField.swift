@@ -99,7 +99,7 @@ struct ProfileNoteField: View {
                     // used in.
                     RoundedRectangle(cornerRadius: form.corner, style: .continuous)
                         .strokeBorder(
-                            isFocused ? Palette.accent : Color.white.opacity(0.08),
+                            isFocused ? Palette.accent : noteFieldEdge,
                             lineWidth: 1
                         )
                 }
@@ -129,3 +129,6 @@ struct ProfileNoteField: View {
         model.setNote(draft, for: userID)
     }
 }
+
+/// The note field's resting edge, resolved by the card's own scheme.
+private let noteFieldEdge = Color.relative(dark: 0.08, light: 0.10)

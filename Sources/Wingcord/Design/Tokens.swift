@@ -21,7 +21,10 @@ import WingcordCore
 // the only definition that survives the system glass-intensity setting, Reduce
 // Transparency, and a wallpaper showing through the sidebar column. Baking a
 // theme colour into any of them breaks all three, and would also make them wrong
-// over a backdrop picture, which is a ground this app does not choose.
+// over a backdrop picture, which is a ground this app does not choose. **On a
+// light theme they are black, a step lighter-handed** — the surface *minus*
+// light — resolved per view by `Color.relative`, so a surface that pins its own
+// appearance still gets the right one.
 //
 // THE ONE MACOS DIFFERENCE, and it decides where these may be used:
 // `NavigationSplitView`'s sidebar column is painted by AppKit with behind-window
@@ -58,11 +61,14 @@ nonisolated enum Palette {
     /// showing through the sidebar column. An absolute hex here cannot stay
     /// correct, because on this platform the ground behind it is the user's
     /// desktop.
-    static let selectionFill = Color.white.opacity(0.15)
+    ///
+    /// **Black at 9% on a light ground** — the same relationship said the other
+    /// way round: on white, the only way to mark a surface is to take light out.
+    static let selectionFill = Color.relative(dark: 0.15, light: 0.09)
 
     /// A row under the pointer, before it is selected. Half the selection's
     /// weight: a hover must be legible as *not yet chosen*.
-    static let hoverFill = Color.white.opacity(0.07)
+    static let hoverFill = Color.relative(dark: 0.07, light: 0.05)
 
     /// The single accent. Used only for: primary buttons, the send arrow, focus
     /// rings. Nothing else in the chrome.
@@ -91,7 +97,10 @@ nonisolated enum Palette {
     /// needs a value of its own to be seen at rest. Kept low: past about a tenth
     /// the surface stops lensing what passes beneath and starts reading as a
     /// painted panel, which is the thing it is being rescued from.
-    static let flyoutTint = Color.white.opacity(0.08)
+    ///
+    /// A shade of black on a light ground, for the same reason: clear glass over
+    /// near-white has as little to refract as over near-black.
+    static let flyoutTint = Color.relative(dark: 0.08, light: 0.035)
 
     /// A grouped container *inside* a presentation — the inbox's channel cards.
     ///
@@ -105,7 +114,17 @@ nonisolated enum Palette {
     ///
     /// Below `hoverFill` (0.07) on purpose, so hovering a card still reads as a
     /// step up from its own ground rather than as a change of shade.
-    static let groupedFill = Color.white.opacity(0.04)
+    static let groupedFill = Color.relative(dark: 0.04, light: 0.03)
+
+    /// The hairline round a card on the ground, at rest and under the pointer.
+    static let hairline = Color.relative(dark: 0.05, light: 0.08)
+    static let hairlineHovered = Color.relative(dark: 0.10, light: 0.14)
+
+    /// A heavier edge — an unchecked box, a resting chip's ring — that has to
+    /// read as a control rather than as a division, at rest and under the
+    /// pointer.
+    static let edge = Color.relative(dark: 0.09, light: 0.12)
+    static let edgeStrong = Color.relative(dark: 0.20, light: 0.22)
 
     /// The ground under a custom status bubble, and under its tail.
     ///
@@ -181,6 +200,14 @@ nonisolated enum InkColor {
     static let primary = Color(nsColor: .labelColor)
     static let secondary = Color(nsColor: .secondaryLabelColor)
     static let tertiary = Color(nsColor: .tertiaryLabelColor)
+
+    /// Full-strength ink for text and glyphs that float over *moving* content —
+    /// the composer's field, a pill over the transcript: white in a dark room,
+    /// black in a light one, and never vibrant. Vibrancy resolves against
+    /// whatever message happens to be scrolling underneath, which is exactly how
+    /// these used to get lost; and plain white, which is what they were, is
+    /// invisible on a light theme's glass.
+    static let solid = Color.adaptive(dark: .white, light: .black)
 }
 
 // MARK: - Spacing
@@ -689,6 +716,29 @@ nonisolated enum Typeface {
 // MARK: - Hex convenience
 
 extension Color {
+    /// One colour under a dark appearance and another under a light one,
+    /// resolved wherever it is drawn.
+    ///
+    /// **Resolved by the view's own appearance, not the theme's.** A surface
+    /// that pins its own — a profile card over dark artwork forces dark — gets
+    /// the dark answer inside a light window, which is exactly right: the fill
+    /// belongs to what is under it.
+    nonisolated static func adaptive(dark: NSColor, light: NSColor) -> Color {
+        Color(nsColor: NSColor(name: nil) { appearance in
+            appearance.bestMatch(from: [.darkAqua, .aqua]) == .aqua ? light : dark
+        })
+    }
+
+    /// The surface *plus light* on a dark ground, *minus light* on a light one:
+    /// white at `dark`, black at `light`. What every relative fill in `Palette`
+    /// is made of.
+    nonisolated static func relative(dark: Double, light: Double) -> Color {
+        adaptive(
+            dark: NSColor(srgbRed: 1, green: 1, blue: 1, alpha: dark),
+            light: NSColor(srgbRed: 0, green: 0, blue: 0, alpha: light)
+        )
+    }
+
     /// Builds a colour from a 24-bit RGB literal, e.g. `Color(hex: 0x0A0A0C)`.
     ///
     /// sRGB: the palette is achromatic near-black, so there is nothing to gain

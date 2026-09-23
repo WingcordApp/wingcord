@@ -7,7 +7,7 @@ import Testing
 @Suite("User colour setting")
 struct UserColorSettingTests {
 
-    private func key(saturation: Double) -> RosterMemoKey {
+    private func key(saturation: Double, inkCeiling: UInt32 = 0x18_18_1A) -> RosterMemoKey {
         RosterMemoKey(
             guildID: GuildID(rawValue: 1),
             channelID: ChannelID(rawValue: 2),
@@ -15,7 +15,8 @@ struct UserColorSettingTests {
             presenceRevision: 4,
             roleRevision: 5,
             structureRevision: 6,
-            colorSaturation: saturation
+            colorSaturation: saturation,
+            inkCeiling: inkCeiling
         )
     }
 
@@ -28,6 +29,13 @@ struct UserColorSettingTests {
         // nothing else would.
         #expect(key(saturation: 1) != key(saturation: 0.5))
         #expect(key(saturation: 1) == key(saturation: 1))
+    }
+
+    @Test("The roster memo can tell two grounds apart")
+    func rosterKeyCarriesTheGround() {
+        // The same trap from the other side: a theme change moves which role
+        // colours need lifting, and no member revision moves with it.
+        #expect(key(saturation: 1, inkCeiling: 0x18_18_1A) != key(saturation: 1, inkCeiling: 0x3A_24_4C))
     }
 
     @Test("Turning it fully down greys a role without flattening the list")

@@ -98,12 +98,19 @@ enum ProfileGround: Equatable {
     ///                                      measured 15,66,90 → 32, 6,28   (P3)
     /// ```
     ///
-    /// An unthemed card follows the app too, which is dark at every preset this
-    /// app ships.
+    /// **An unthemed card follows the app too** — dark in a dark room, light in
+    /// a light one. It used to answer `true` outright, on the grounds that every
+    /// theme this app shipped was dark; the first light theme made every
+    /// profile without colours of its own a white card with white type on it.
     var isDark: Bool {
-        guard let pair, !followsAppTheme else { return true }
+        guard let pair, !followsAppTheme else { return Self.appIsDark }
         return ProfileThemeColors.isDark(pair.primary)
     }
+
+    /// The app's own room — the theme's, which the window's appearance follows.
+    /// Read through `ThemeAccess`, so a card evaluating it is redrawn when the
+    /// theme changes.
+    private static var appIsDark: Bool { ThemeAccess.colors.appearance == .dark }
 
     /// Whether a surface painting this ground needs **dark** ink on it.
     ///
@@ -111,7 +118,7 @@ enum ProfileGround: Equatable {
     /// app is a hierarchical style — a light card needs `.colorScheme(.light)`
     /// rather than a light variant of every label, divider and control in the
     /// profile. It is also what the system's own controls read.
-    var wantsDarkInk: Bool { pair != nil && !isDark }
+    var wantsDarkInk: Bool { !isDark }
 
     // MARK: The card
 
@@ -184,13 +191,17 @@ enum ProfileGround: Equatable {
     /// sticker cut out and pasted down. Over glass there is no theme to borrow
     /// from, so it keeps the neutral hairline every other floating surface uses.
     var borderStyle: AnyShapeStyle {
-        guard let pair else { return AnyShapeStyle(Color.white.opacity(0.10)) }
+        guard let pair else { return AnyShapeStyle(Self.neutralRim) }
         return AnyShapeStyle(LinearGradient(
             colors: [Color(hex: pair.primary), Color(hex: pair.secondary)],
             startPoint: .top,
             endPoint: .bottom
         ))
     }
+
+    /// The hairline round an unthemed card: light in a dark room, shade in a
+    /// light one.
+    private static let neutralRim = Color.relative(dark: 0.10, light: 0.10)
 
     /// How heavy that edge is drawn. A themed rim is a light source and needs
     /// body; a neutral hairline is a separation and must stay a hairline.
@@ -310,7 +321,7 @@ enum ProfileGround: Equatable {
         let base = ProfileThemeColors.modalBackground(
             primary: pair.primary,
             secondary: pair.secondary,
-            forcedDark: followsAppTheme ? true : nil
+            forcedDark: followsAppTheme ? Self.appIsDark : nil
         )
         return Color(hex: ProfileThemeColors.veiled(base, dark: isDark, alpha: 0.9))
     }

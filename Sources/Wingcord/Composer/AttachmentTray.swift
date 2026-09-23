@@ -1,6 +1,5 @@
 import AppKit
 import SwiftUI
-import WingcordCore
 
 /// The files staged for the next message, above the composer.
 ///
@@ -112,7 +111,7 @@ private struct AttachmentTile: View {
                 .clipShape(.rect(cornerRadius: Radius.row, style: .continuous))
                 .overlay {
                     RoundedRectangle(cornerRadius: Radius.row, style: .continuous)
-                        .strokeBorder(Color.white.opacity(0.08), lineWidth: 1)
+                        .strokeBorder(attachmentEdge, lineWidth: 1)
                 }
                 .overlay(alignment: .bottom) {
                     if let progress = attachment.progress {
@@ -203,3 +202,7 @@ private struct AttachmentTile: View {
         .frame(width: Self.side, height: Self.side)
     }
 }
+
+/// The edge round a pending attachment: light on a dark room's glass, shade on
+/// a light one's.
+private let attachmentEdge = Color.relative(dark: 0.08, light: 0.10)

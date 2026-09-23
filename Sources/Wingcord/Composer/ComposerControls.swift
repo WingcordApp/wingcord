@@ -93,7 +93,7 @@ struct ComposerControlButton<Mark: View>: View {
 
     private func body(of mark: Mark) -> some View {
         mark
-            .foregroundStyle(isActive ? AnyShapeStyle(Palette.accent) : AnyShapeStyle(.white))
+            .foregroundStyle(isActive ? AnyShapeStyle(Palette.accent) : AnyShapeStyle(InkColor.solid))
             .frame(width: Metrics.composerControl, height: Metrics.composerControl)
             // A region inside the bar's own material, never a body on top of
             // it — `INVARIANTS.md` §4 rule 2. The fill is the whole of the
@@ -104,7 +104,7 @@ struct ComposerControlButton<Mark: View>: View {
 
     private var fill: Color {
         if isActive { return Palette.accent.opacity(0.18) }
-        return .white.opacity(isHovering ? 0.14 : 0)
+        return isHovering ? ComposerControlFill.hover : .clear
     }
 }
 
@@ -148,7 +148,7 @@ struct ComposerAttachButton: View {
             ComposerCircleBody(action: action) {
                 Image(systemName: "plus")
                     .font(Typeface.controlGlyph)
-                    .foregroundStyle(.white)
+                    .foregroundStyle(InkColor.solid)
             }
             .help("Add attachment")
             .accessibilityLabel(Text("Add attachment"))
@@ -196,7 +196,7 @@ struct ComposerSendButton: View {
         arrow
             .frame(width: Metrics.composerControl, height: Metrics.composerControl)
             .background {
-                Circle().fill(isArmed ? Palette.accent.opacity(0.85) : .white.opacity(0.1))
+                Circle().fill(isArmed ? Palette.accent.opacity(0.85) : ComposerControlFill.resting)
             }
             .contentShape(.circle)
     }
@@ -212,6 +212,16 @@ struct ComposerSendButton: View {
 ///
 /// One type for `+` and for send, because they are the same object at the two
 /// ends of the bar and two copies is two places for the diameter to drift.
+/// The composer's relative fills — light on a dark room's glass, shade on a
+/// light one's. Here rather than on the generic views that use them, which
+/// cannot hold a stored constant.
+private nonisolated enum ComposerControlFill {
+    /// A control under the pointer.
+    static let hover = Color.relative(dark: 0.14, light: 0.10)
+    /// A round control at rest.
+    static let resting = Color.relative(dark: 0.10, light: 0.07)
+}
+
 private struct ComposerCircleBody<Mark: View>: View {
     var tint: Color?
     var action: (() -> Void)?

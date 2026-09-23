@@ -27,7 +27,7 @@ struct SoundboardPicker: View {
     var body: some View {
         HStack(spacing: 0) {
             rail
-            Divider().overlay(Color.white.opacity(0.06))
+            Divider().overlay(soundboardDivider)
             VStack(spacing: 0) {
                 search
                 grid
@@ -311,3 +311,6 @@ struct SoundboardPickerContainer: View {
         .presentationBackground(.clear)
     }
 }
+
+/// The rule under the picker's head: light in a dark room, shade in a light one.
+private let soundboardDivider = Color.relative(dark: 0.06, light: 0.08)

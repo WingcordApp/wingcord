@@ -835,7 +835,7 @@ private struct FollowCheckbox: View {
                 .fill(isOn ? AnyShapeStyle(Palette.accent) : AnyShapeStyle(Palette.hoverFill))
                 .overlay {
                     RoundedRectangle(cornerRadius: 5, style: .continuous)
-                        .strokeBorder(isOn ? Color.clear : Color.white.opacity(isHovering ? 0.35 : 0.18))
+                        .strokeBorder(isOn ? Color.clear : isHovering ? checkEdgeHovered : checkEdge)
                 }
                 .overlay {
                     if isOn {
@@ -894,3 +894,8 @@ private struct CheckboxHover: ViewModifier {
         }
     }
 }
+
+/// An unchecked box's edge, at rest and under the pointer: light in a dark room,
+/// shade in a light one.
+private let checkEdge = Color.relative(dark: 0.18, light: 0.20)
+private let checkEdgeHovered = Color.relative(dark: 0.35, light: 0.32)

@@ -178,7 +178,7 @@ struct ConnectionRow: View {
                             .foregroundStyle(InkColor.secondary)
                             .padding(.horizontal, 5)
                             .padding(.vertical, 1)
-                            .background(Capsule().fill(Color.white.opacity(0.1)))
+                            .background(Capsule().fill(profileFlagFill))
                     }
                 }
             }
@@ -210,3 +210,6 @@ struct ConnectionRow: View {
         }
     }
 }
+
+/// A flag's capsule on a profile slab, resolved by the slab's own scheme.
+private let profileFlagFill = Color.relative(dark: 0.10, light: 0.07)

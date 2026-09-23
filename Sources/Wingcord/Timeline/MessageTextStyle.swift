@@ -91,9 +91,9 @@ nonisolated struct MessageTextStyle: @unchecked Sendable {
             metadataFont: NSFont.systemFont(
                 ofSize: NSFont.preferredFont(forTextStyle: .caption1).pointSize * scale
             ),
-            primaryColor: .labelColor,
-            secondaryColor: .secondaryLabelColor,
-            tertiaryColor: .tertiaryLabelColor,
+            primaryColor: tinted(.labelColor),
+            secondaryColor: tinted(.secondaryLabelColor),
+            tertiaryColor: tinted(.tertiaryLabelColor),
             linkColor: .linkColor,
             underlinesLinks: AppSettings.shared.underlinesLinks,
             mentionColor: NSColor(Palette.accent),
@@ -107,6 +107,37 @@ nonisolated struct MessageTextStyle: @unchecked Sendable {
             emojiDescent: abs(body.descender),
             lineSpacing: 2,
             paragraphSpacing: 4
+        )
+    }
+
+    /// A label colour with the theme's text tint mixed in, or the label colour
+    /// itself when the theme carries none.
+    ///
+    /// **Discord's mix on the system's hierarchy.** Discord runs every text
+    /// token through `color-mix(in oklab, <text> 100%, <tint> 38%)`; here the
+    /// three label colours go through the same mix with their own alphas kept,
+    /// so the hierarchy is still macOS's and only the hue moves. Resolved
+    /// against the app's appearance — pinned by the theme — because a mixed
+    /// colour is a plain one and cannot follow an appearance change by itself;
+    /// the theme change that would move it rebuilds this style anyway.
+    @MainActor
+    private static func tinted(_ label: NSColor) -> NSColor {
+        guard let tint = ThemeStore.shared.colors.textTint else { return label }
+        var resolved = label
+        NSApp.effectiveAppearance.performAsCurrentDrawingAppearance {
+            resolved = label.usingColorSpace(.sRGB) ?? label
+        }
+        let rgb = UInt32((resolved.redComponent * 255).rounded()) << 16
+            | UInt32((resolved.greenComponent * 255).rounded()) << 8
+            | UInt32((resolved.blueComponent * 255).rounded())
+        let mixed = Oklch(packedRGB: rgb)
+            .mixed(with: Oklch(packedRGB: tint), weight: DiscordTheme.textTintWeight)
+            .clippedRGB()
+        return NSColor(
+            srgbRed: CGFloat((mixed >> 16) & 0xFF) / 255,
+            green: CGFloat((mixed >> 8) & 0xFF) / 255,
+            blue: CGFloat(mixed & 0xFF) / 255,
+            alpha: resolved.alphaComponent
         )
     }
 

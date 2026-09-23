@@ -26,7 +26,11 @@ struct SettingsMessagePreview: View {
         PreviewCanvas(presentationRevision: revision.value)
             .frame(height: PreviewCanvas.height)
             .frame(maxWidth: .infinity)
-            .background(Palette.canvas)
+            // The real ground, not `Palette.canvas`: under a gradient theme the
+            // flat token is a colour the window never shows, and a preview on
+            // it would be confidently wrong about the one thing the reader is
+            // choosing a theme for.
+            .readingSurface()
             .clipShape(.settingsRect(SettingsMetrics.cardRadius))
             .accessibilityHidden(true)
     }

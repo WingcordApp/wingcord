@@ -376,11 +376,15 @@ struct SettingsSliderRow: View {
     var range: ClosedRange<Double>
     var step: Double
     var format: (Double) -> String
+    /// True while the knob is held. For a setting whose every change costs a
+    /// relayout of the drawn transcript, so the relayout can wait for the
+    /// release — see `ThemeStore.beginAdjusting`.
+    var onEditingChanged: (Bool) -> Void = { _ in }
 
     var body: some View {
         SettingsControlRow(title, help: help) {
             HStack(spacing: Spacing.snug) {
-                Slider(value: $value, in: range, step: step)
+                Slider(value: $value, in: range, step: step, onEditingChanged: onEditingChanged)
                     .controlSize(.small)
                     // Neutral, for the same reason the switches are: the accent
                     // is spent on primary buttons, the send arrow and focus

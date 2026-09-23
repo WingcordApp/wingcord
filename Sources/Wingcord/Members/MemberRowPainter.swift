@@ -440,7 +440,7 @@ nonisolated enum MemberRowPainter {
             context.endTransparencyLayer()
 
             if isHovered {
-                context.setFillColor(NSColor.white.withAlphaComponent(0.06).cgColor)
+                context.setFillColor(ThemeInk.current.lift(0.06))
                 context.fill(rect)
             }
             context.restoreGState()
@@ -683,7 +683,7 @@ nonisolated enum MemberRowPainter {
         context.addPath(CGPath(
             roundedRect: frame, cornerWidth: corner, cornerHeight: corner, transform: nil
         ))
-        context.setFillColor((fill ?? NSColor.white.withAlphaComponent(0.12)).cgColor)
+        context.setFillColor(fill?.cgColor ?? ThemeInk.current.lift(0.12))
         context.fillPath()
 
         var textX = frame.minX + MemberRowGeometry.tagChipPadding

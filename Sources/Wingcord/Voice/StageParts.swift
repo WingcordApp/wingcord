@@ -297,7 +297,7 @@ struct StageControlBar: View {
                 .padding(.horizontal, Spacing.snug)
                 .frame(height: 30)
                 .background {
-                    Capsule().fill(Color.white.opacity(0.09))
+                    Capsule().fill(Palette.edge)
                 }
                 .contentShape(.capsule)
         }

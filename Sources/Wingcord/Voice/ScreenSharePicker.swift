@@ -112,7 +112,7 @@ struct ScreenSharePicker: View {
         .overlay {
             RoundedRectangle(cornerRadius: Radius.glass, style: .continuous)
                 .strokeBorder(
-                    selected == target ? Palette.accent : Color.white.opacity(0.06),
+                    selected == target ? Palette.accent : screenShareEdge,
                     lineWidth: selected == target ? 2 : 1
                 )
         }
@@ -181,3 +181,6 @@ struct ScreenSharePicker: View {
         }
     }
 }
+
+/// A capture target's resting edge: light in a dark room, shade in a light one.
+private let screenShareEdge = Color.relative(dark: 0.06, light: 0.08)

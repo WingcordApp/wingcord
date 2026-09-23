@@ -69,6 +69,11 @@ final class HotkeyFlyoutPanel {
         )
         panel.isOpaque = false
         panel.backgroundColor = .clear
+        // **Dark whatever the theme.** Its keycaps, dividers and lift are values
+        // measured against a dark reference; a light room has no measured
+        // counterpart, and a guessed one would be the one surface here that is
+        // neither the reference nor the app.
+        panel.appearance = NSAppearance(named: .darkAqua)
         // The shadow is drawn by the view, inside the panel's own bounds — see
         // `HotkeyMetrics.shadowMargin`. A window shadow as well would be two.
         panel.hasShadow = false

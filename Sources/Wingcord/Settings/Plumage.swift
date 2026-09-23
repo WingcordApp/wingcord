@@ -14,23 +14,25 @@ import SwiftUI
 // depth down. What a bead is standing on is what the window behind this one
 // becomes.
 //
-// TWO BEADS, JOINED BY A THREAD. A theme is two colours — one behind the
-// toolbar, one behind the composer and down the sidebar — so the instrument has
-// two of everything the eye needs to see that: two beads, each showing the
-// ground it selects, and a thread between them drawn in the very gradient they
-// make. Drag either. The thread follows, and it is the only preview anybody
-// needs of what two hues will look like as one room.
+// BEADS, JOINED BY A THREAD. A theme is two to five colours — the darker one
+// behind the toolbar, the lit one behind the composer, and up to three the
+// light passes through between them — so the instrument has one bead per
+// colour, each showing the ground it selects, and a thread through them drawn
+// in the very gradient they make. Drag any. The thread follows, and it is the
+// only preview anybody needs of what the hues will look like as one room.
 //
 // So there is no wheel, no eyedropper and no hex box.
 //
-// FOUR CONTROLS:
+// THE CONTROLS:
 //
-//   - **The field.** Two stops, each a hue and a depth, tracked 1:1, wrapping
+//   - **The field.** Every stop a hue and a depth, tracked 1:1, wrapping
 //     horizontally because hue is circular and rubber-banding vertically
 //     because depth is not.
 //   - **The light track.** How bright the ground is, drawn as the actual ramp
 //     it selects from.
-//   - **The accent row.** Five relationships to the head stop, each drawn in the
+//   - **The dial.** Which way the colours run across the window.
+//   - **Minus and plus.** A colour fewer or more between the two ends.
+//   - **The accent row.** Five relationships to the lit stop, each drawn in the
 //     colour it would produce. No sixth picker — an accent that can be any
 //     colour at all is how a theme ends up with a ground and a highlight that
 //     have never met.
@@ -40,27 +42,36 @@ import SwiftUI
 struct PlumageCard: View {
     @State private var theme = ThemeStore.shared
     @Environment(\.motion) private var motion
-    /// True for as long as a pointer is on one of the two continuous controls.
-    /// Suppresses the settle animation so the bead cannot lag the pointer.
+    /// True for as long as a pointer is on one of the continuous controls.
+    /// Suppresses the settle animation so a bead cannot lag the pointer.
     @State private var isTracking = false
     @State private var shuffles = 0
+    /// The bead the pointer last grabbed and the arrow keys move. **Held here
+    /// rather than in the field**, because the minus button removes *this*
+    /// colour — the one the reader is looking at — rather than whichever
+    /// happens to be last.
+    @State private var active: PlumageStop = .foot
 
-    private var seed: ThemeSeed { theme.customSeed }
+    /// The blend as the window shows it — at the reader's vividness — so every
+    /// bead, the thread and the track agree with what is behind this window.
+    /// Edits still go to the stored blend, which carries no vividness.
+    private var seed: ThemeSeed { theme.customSeed.at(vividness: theme.vividness) }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             CardHeaderRow(
                 title: "Plumage",
-                help: "Two colours make a theme: the larger bead is the lit "
-                    + "end, down where the composer is, and the smaller one is "
-                    + "the darker end behind the toolbar. Hue across, depth "
-                    + "down. Drag either — the thread between them is the "
-                    + "gradient they make."
+                help: "Two to five colours make a theme: the largest bead is the "
+                    + "lit end, down where the composer is, and the light walks "
+                    + "back through the others to the darkest, behind the "
+                    + "toolbar. Hue across, depth down. Drag any — the thread "
+                    + "through them is the gradient they make."
             )
 
             PlumageField(
                 seed: seed,
                 isTracking: isTracking,
+                active: $active,
                 edit: edit,
                 trackingChanged: setTracking
             )
@@ -73,7 +84,33 @@ struct PlumageCard: View {
                     edit: edit,
                     trackingChanged: setTracking
                 )
-                ShuffleButton(turns: shuffles, action: shuffle)
+                PlumageAngleDial(seed: seed, edit: edit, trackingChanged: setTracking)
+                // One container, so the three read as one cluster of glass and
+                // blend where they sit close — §4.
+                GlassEffectContainer(spacing: Spacing.base) {
+                    HStack(spacing: Spacing.base) {
+                        PlumageRoundButton(
+                            systemName: "minus",
+                            label: "Remove a colour",
+                            help: "Takes out the selected colour between the ends, "
+                                + "or the last one if an end is selected."
+                        ) { removeColour() }
+                        .disabled(seed.middle.isEmpty)
+                        PlumageRoundButton(
+                            systemName: "plus",
+                            label: "Add a colour",
+                            help: "Adds a colour on the widest stretch of the "
+                                + "thread, exactly where the gradient already is."
+                        ) { addColour() }
+                        .disabled(seed.middle.count >= ThemeSeed.maximumMiddle)
+                        PlumageRoundButton(
+                            systemName: "shuffle",
+                            label: "Shuffle",
+                            help: "A blend chosen from the combinations that work.",
+                            turns: shuffles
+                        ) { shuffle() }
+                    }
+                }
             }
             .padding(.horizontal, SettingsMetrics.cardContentInset)
             .padding(.top, Spacing.snug)
@@ -122,28 +159,93 @@ struct PlumageCard: View {
         theme.setCustomFollowsSystemAccent(false)
         theme.editCustom { $0 = next }
     }
+
+    /// A new colour **on the thread**: the midpoint of its longest leg, at the
+    /// hue and depth the walk already has there. The ground does not move until
+    /// the reader moves the new bead — adding a colour is a place to pull from,
+    /// not a change they did not ask for.
+    private func addColour() {
+        let insertion = PlumageStop.widestLeg(in: seed)
+        let from = seed.position(ofAnchor: insertion)
+        let to = seed.position(ofAnchor: insertion + 1)
+        let stop = seed.stop(at: (from + to) / 2)
+        edit { $0.middle.insert(stop, at: insertion) }
+        active = .middle(insertion)
+    }
+
+    private func removeColour() {
+        guard !seed.middle.isEmpty else { return }
+        let removed: Int
+        if case .middle(let index) = active, seed.middle.indices.contains(index) {
+            removed = index
+        } else {
+            removed = seed.middle.count - 1
+        }
+        edit { $0.middle.remove(at: removed) }
+        // The bead that was next along the walk takes the selection, so the
+        // keys go on moving something near where the reader was looking.
+        active = removed < seed.middle.count ? .middle(removed) : .foot
+    }
 }
 
 // MARK: - The field
 
-/// Which of the two stops a gesture or a key press is moving.
-enum PlumageStop: Hashable, Sendable, CaseIterable {
+/// Which colour a gesture or a key press is moving.
+///
+/// **By role, not by index**, so the selection survives the walk changing
+/// shape: adding a colour between the ends leaves the foot the foot, where an
+/// index would quietly have moved the selection onto the new bead.
+enum PlumageStop: Hashable, Sendable {
     case head
+    /// The colour at this index of `ThemeSeed.middle`.
+    case middle(Int)
     case foot
 
-    var label: String {
+    /// Where this stop sits in `ThemeSeed.anchors`, clamped to the stops the
+    /// seed actually has — a middle colour that was just removed falls to the
+    /// foot rather than to nothing.
+    func index(in seed: ThemeSeed) -> Int {
         switch self {
-        case .head: "Head colour, behind the toolbar — the darker end"
-        case .foot: "Foot colour, behind the composer — the lit end"
+        case .head: 0
+        case .middle(let index) where seed.middle.indices.contains(index): index + 1
+        case .middle, .foot: seed.middle.count + 1
         }
     }
 
-    var other: PlumageStop { self == .head ? .foot : .head }
+    static func at(_ index: Int, in seed: ThemeSeed) -> PlumageStop {
+        if index <= 0 { return .head }
+        if index > seed.middle.count { return .foot }
+        return .middle(index - 1)
+    }
+
+    /// The next stop along the walk, wrapping from the foot back to the head.
+    func next(in seed: ThemeSeed) -> PlumageStop {
+        .at((index(in: seed) + 1) % seed.anchors.count, in: seed)
+    }
+
+    func label(in seed: ThemeSeed) -> String {
+        switch Self.at(index(in: seed), in: seed) {
+        case .head: "Head"
+        case .middle(let index): "Colour \(index + 2) of \(seed.anchors.count)"
+        case .foot: "Foot"
+        }
+    }
+
+    /// The leg of the walk that spans the most hue — where a new colour has the
+    /// most room to be different from its neighbours.
+    static func widestLeg(in seed: ThemeSeed) -> Int {
+        let anchors = seed.anchors
+        return anchors.indices.dropLast().max { a, b in
+            PlumageShuffle.separation(anchors[a].hue, anchors[a + 1].hue)
+                < PlumageShuffle.separation(anchors[b].hue, anchors[b + 1].hue)
+        } ?? 0
+    }
 }
 
 private struct PlumageField: View {
     var seed: ThemeSeed
     var isTracking: Bool
+    @Binding var active: PlumageStop
     var edit: (@escaping (inout ThemeSeed) -> Void) -> Void
     var trackingChanged: (Bool) -> Void
 
@@ -151,20 +253,21 @@ private struct PlumageField: View {
     /// How far past the top or bottom edge the pointer has pulled, in points.
     /// Drives the moving bead's overshoot only — the seed is clamped regardless.
     @State private var overshoot: CGFloat = 0
-    /// The stop the pointer grabbed, and the one the arrow keys move. Chosen on
-    /// press by proximity, so there is nothing to select first.
-    @State private var active: PlumageStop = .foot
     @FocusState private var isFocused: Bool
 
     static let height: CGFloat = 152
     private static let radius: CGFloat = 13
-    private static let beadSide: CGFloat = 26
+    fileprivate static let beadSide: CGFloat = 26
     /// One arrow key press. A degree is imperceptible and a tenth of the field
     /// is a jump; this crosses the whole wheel in thirty presses.
     private static let keyStepHue: Double = 12
     private static let keyStepDepth: Double = 0.04
 
     var body: some View {
+        // Resolved once per update and handed to the thread, which draws each
+        // leg from it: the samples are the ground's own, so the thread cannot
+        // disagree with the window.
+        let page = ThemeGround.page(of: seed)
         GeometryReader { proxy in
             let size = proxy.size
             PlumageMesh()
@@ -174,9 +277,14 @@ private struct PlumageField: View {
                     RoundedRectangle(cornerRadius: Self.radius, style: .continuous)
                         .strokeBorder(Color.white.opacity(isFocused ? 0.45 : 0.12), lineWidth: 1)
                 }
-                .overlay(alignment: .topLeading) { thread(in: size) }
-                .overlay(alignment: .topLeading) { bead(.foot, in: size) }
-                .overlay(alignment: .topLeading) { bead(.head, in: size) }
+                .overlay(alignment: .topLeading) { thread(page, in: size) }
+                .overlay(alignment: .topLeading) {
+                    ZStack(alignment: .topLeading) {
+                        ForEach(seed.anchors.indices, id: \.self) { index in
+                            bead(.at(index, in: seed), in: size)
+                        }
+                    }
+                }
                 .contentShape(.rect)
                 .gesture(drag(in: size))
         }
@@ -194,7 +302,7 @@ private struct PlumageField: View {
             case .downArrow: move(depth: Self.keyStepDepth)
             // Space rather than Tab, which belongs to the window's own focus
             // ring and must keep meaning "leave this control".
-            case .space: active = active.other
+            case .space: active = active.next(in: seed)
             default: return .ignored
             }
             return .handled
@@ -202,41 +310,36 @@ private struct PlumageField: View {
         .accessibilityElement()
         .accessibilityLabel("Ground colours")
         .accessibilityValue(value)
-        .accessibilityHint("Arrow keys move the selected stop. Space switches between them.")
+        .accessibilityHint("Arrow keys move the selected colour. Space moves to the next one.")
         .accessibilityAdjustableAction { direction in
             move(hue: direction == .increment ? Self.keyStepHue : -Self.keyStepHue)
         }
     }
 
     private var value: String {
-        let stop = self.stop(active)
-        return "\(active == .head ? "Head" : "Foot") selected. "
+        let stop = seed.anchors[active.index(in: seed)]
+        return "\(active.label(in: seed)) selected. "
             + "Hue \(Int(stop.hue.rounded())) degrees, "
             + "depth \(Int((stop.depth * 100).rounded())) percent."
     }
 
     // MARK: Reading and writing one stop
 
-    private func stop(_ which: PlumageStop) -> ThemeStop {
-        which == .head ? seed.head : seed.foot
-    }
-
     private func write(_ which: PlumageStop, hue: Double, depth: Double) {
         edit { seed in
-            let stop = ThemeStop(hue: hue, depth: depth)
-            if which == .head { seed.head = stop } else { seed.foot = stop }
+            seed.setAnchor(which.index(in: seed), to: ThemeStop(hue: hue, depth: depth))
         }
     }
 
     private func move(hue: Double = 0, depth: Double = 0) {
-        let current = stop(active)
+        let current = seed.anchors[active.index(in: seed)]
         write(active, hue: current.hue + hue, depth: current.depth + depth)
     }
 
     // MARK: Geometry
 
     private func point(_ which: PlumageStop, in size: CGSize) -> CGPoint {
-        let stop = self.stop(which)
+        let stop = seed.anchors[which.index(in: seed)]
         return CGPoint(x: stop.hue / 360 * size.width, y: stop.depth * size.height)
     }
 
@@ -247,16 +350,16 @@ private struct PlumageField: View {
     /// **The ground, not the sheet colour underneath it.** The sheet is drawn at
     /// a fixed, legible lightness so its hues are pickable at all — see
     /// `PlumageMesh` — while a bead's own disc is the real derived surface at the
-    /// lightness the track is holding. That is the division of labour between
-    /// them: the sheet says which colour, the bead says how dark.
+    /// lightness the track is holding, at the stop's own place along the line.
+    /// That is the division of labour between them: the sheet says which
+    /// colour, the bead says how dark.
     private func bead(_ which: PlumageStop, in size: CGSize) -> some View {
         let origin = point(which, in: size)
-        let isActive = which == active
-        // The LIT end is the larger bead: it is the end that carries the
-        // theme's colour, and the one the accent comes from.
-        let side = Self.beadSide * (which == .foot ? 1 : 0.86)
+        let index = which.index(in: seed)
+        let isActive = index == active.index(in: seed)
+        let side = Self.beadSide * Self.scale(of: which)
         return Circle()
-            .fill(Color(hex: which == .foot ? seed.canvasLit.packedRGB() : seed.canvas.packedRGB()))
+            .fill(Color(hex: seed.field(at: seed.position(ofAnchor: index)).packedRGB()))
             .frame(width: side * 0.46, height: side * 0.46)
             .frame(width: side, height: side)
             // `.clear` because what is under it is content — the field is the
@@ -269,6 +372,9 @@ private struct PlumageField: View {
                 x: origin.x - side / 2,
                 y: origin.y + (isActive ? overshoot : 0) - side / 2
             )
+            // The one being moved is drawn over the others, so a bead dragged
+            // across another is never hidden under it mid-gesture.
+            .zIndex(isActive ? 1 : 0)
             // Declared here rather than at the writer: §3 forbids wrapping a
             // store write the whole window observes in `withAnimation`, because
             // that opens a global transaction and everything that re-lays-out
@@ -282,48 +388,67 @@ private struct PlumageField: View {
             .accessibilityHidden(true)
     }
 
-    /// The line between the two beads, drawn in the gradient they make.
-    ///
-    /// **It is the preview.** Two dots on a sheet say what two hues are; a thread
-    /// drawn out of the actual head and foot colours says what they will look
-    /// like *as one ground*, which is the only question the reader is asking.
-    ///
-    /// Hidden when the two stops are nearly on top of each other, where a
-    /// two-point gradient is a smudge under the beads rather than a line.
-    @ViewBuilder
-    private func thread(in size: CGSize) -> some View {
-        let head = point(.head, in: size)
-        let foot = point(.foot, in: size)
-        let span = (head - foot).length
-        if span > Self.beadSide {
-            Path { path in
-                path.move(to: head)
-                path.addLine(to: foot)
-            }
-            .stroke(
-                LinearGradient(
-                    colors: [
-                        Color(hex: seed.canvas.packedRGB()),
-                        Color(hex: seed.canvasLit.packedRGB()),
-                    ],
-                    startPoint: .top,
-                    endPoint: .bottom
-                ),
-                style: StrokeStyle(lineWidth: 3, lineCap: .round)
-            )
-            .overlay {
-                // A hairline of white over the thread, because two near-black
-                // grounds against a dark sheet is a line nobody can see.
-                Path { path in
-                    path.move(to: head)
-                    path.addLine(to: foot)
-                }
-                .stroke(Color.white.opacity(0.30), style: StrokeStyle(lineWidth: 1, lineCap: .round))
-            }
-            .animation(isTracking ? nil : motion.reposition, value: seed)
-            .allowsHitTesting(false)
-            .accessibilityHidden(true)
+    /// The LIT end is the largest bead: it is the end that carries the theme's
+    /// colour, and the one the accent comes from. The colours between are the
+    /// smallest — they shape the walk rather than end it.
+    private static func scale(of which: PlumageStop) -> CGFloat {
+        switch which {
+        case .foot: 1
+        case .head: 0.86
+        case .middle: 0.74
         }
+    }
+
+    /// The line through the beads, drawn in the gradient they make.
+    ///
+    /// **It is the preview.** Dots on a sheet say what hues are; a thread drawn
+    /// out of the actual walk says what they will look like *as one ground*,
+    /// which is the only question the reader is asking. Each leg is drawn from
+    /// its own share of the ground's samples and runs *along the leg*, bead to
+    /// bead, so the colour under every bead is the colour that bead chose.
+    ///
+    /// A leg is skipped when its two beads are nearly on top of each other,
+    /// where a gradient is a smudge under the beads rather than a line.
+    private func thread(_ page: Gradient, in size: CGSize) -> some View {
+        let anchors = seed.anchors.indices.map { PlumageStop.at($0, in: seed) }
+        let legs = anchors.count - 1
+        let perLeg = ThemeGround.samplesPerLeg
+        return ZStack(alignment: .topLeading) {
+            ForEach(0..<legs, id: \.self) { leg in
+                let from = point(anchors[leg], in: size)
+                let to = point(anchors[leg + 1], in: size)
+                if (from - to).length > Self.beadSide {
+                    let samples = page.stops[(leg * perLeg)...((leg + 1) * perLeg)]
+                    let gradient = Gradient(stops: samples.enumerated().map { offset, stop in
+                        Gradient.Stop(color: stop.color, location: CGFloat(offset) / CGFloat(perLeg))
+                    })
+                    let line = Path { path in
+                        path.move(to: from)
+                        path.addLine(to: to)
+                    }
+                    line.stroke(
+                        LinearGradient(
+                            gradient: gradient,
+                            startPoint: UnitPoint(x: from.x / size.width, y: from.y / size.height),
+                            endPoint: UnitPoint(x: to.x / size.width, y: to.y / size.height)
+                        ),
+                        style: StrokeStyle(lineWidth: 3, lineCap: .round)
+                    )
+                    .overlay {
+                        // A hairline of white over the thread, because
+                        // near-black grounds against a dark sheet make a line
+                        // nobody can see.
+                        line.stroke(
+                            Color.white.opacity(0.30),
+                            style: StrokeStyle(lineWidth: 1, lineCap: .round)
+                        )
+                    }
+                }
+            }
+        }
+        .animation(isTracking ? nil : motion.reposition, value: seed)
+        .allowsHitTesting(false)
+        .accessibilityHidden(true)
     }
 
     // MARK: The gesture
@@ -335,9 +460,9 @@ private struct PlumageField: View {
                 if !isTracking {
                     // **Chosen on press, then held for the whole drag.** Picking
                     // the nearer bead on every event instead would hand the
-                    // gesture to the other stop the moment the two crossed,
-                    // which is precisely when somebody is dragging one past the
-                    // other.
+                    // gesture to another stop the moment the two crossed,
+                    // which is precisely when somebody is dragging one past
+                    // another.
                     active = nearestStop(to: value.startLocation, in: size)
                     trackingChanged(true)
                 }
@@ -373,7 +498,9 @@ private struct PlumageField: View {
             if size.width > 0 { dx = min(dx, size.width - dx) }
             return CGPoint(x: dx, y: location.y - target.y).length
         }
-        return distance(to: .head) <= distance(to: .foot) ? .head : .foot
+        return seed.anchors.indices
+            .map { PlumageStop.at($0, in: seed) }
+            .min { distance(to: $0) < distance(to: $1) } ?? .foot
     }
 }
 
@@ -513,12 +640,8 @@ private struct PlumageLightTrack: View {
     /// selects from rather than nine shades of near-black.
     private var stops: [Color] {
         (0..<9).map { step in
-            let sample = ThemeSeed(
-                head: seed.head,
-                foot: seed.foot,
-                light: Double(step) / 8,
-                accentTurn: seed.accentTurn
-            )
+            var sample = seed
+            sample.light = Double(step) / 8
             return Color(hex: sample.canvasLit.packedRGB())
         }
     }
@@ -628,9 +751,11 @@ private struct PlumageAccentRow: View {
         case .system:
             Color.accentColor
         case .turn(let turn):
-            Color(hex: ThemeSeed(
-                head: seed.head, foot: seed.foot, light: seed.light, accentTurn: turn
-            ).accent.packedRGB())
+            Color(hex: {
+                var sample = seed
+                sample.accentTurn = turn
+                return sample.accent.packedRGB()
+            }())
         }
     }
 
@@ -674,34 +799,108 @@ private struct PlumageAccentRow: View {
     }
 }
 
-// MARK: - Shuffle
+// MARK: - The dial
 
-private struct ShuffleButton: View {
-    /// How many times it has been pressed. The glyph turns half a revolution per
-    /// press, so a second press keeps going rather than snapping back.
-    var turns: Int
-    var action: () -> Void
+/// Which way the colours run across the window: a needle pointing where the
+/// light goes, from the darkest colour toward the lit one.
+///
+/// **A dial, not a slider**, because an angle is a direction and a dial is the
+/// one control whose position *is* the answer. It turns from a drag anywhere on
+/// it — measured around its centre, so the pointer does not have to find a
+/// thirty-point knob's edge — and VoiceOver steps it through the compass.
+private struct PlumageAngleDial: View {
+    var seed: ThemeSeed
+    var edit: (@escaping (inout ThemeSeed) -> Void) -> Void
+    var trackingChanged: (Bool) -> Void
 
     @Environment(\.motion) private var motion
     @State private var isHovered = false
 
+    private static var side: CGFloat { PlumageLightTrack.height }
+    /// One VoiceOver step: the eight compass points and the eight between them.
+    private static let step: Double = 22.5
+
+    var body: some View {
+        ZStack {
+            Capsule()
+                .fill(isHovered ? Ink.primary : Ink.secondary)
+                .frame(width: 2, height: Self.side * 0.34)
+                .offset(y: -Self.side * 0.17)
+                // Clockwise from "up", which is what CSS means by an angle.
+                .rotationEffect(.degrees(seed.angle))
+            Circle()
+                .fill(Ink.primary)
+                .frame(width: 4, height: 4)
+        }
+        .frame(width: Self.side, height: Self.side)
+        .contentShape(.circle)
+        .glassEffect(.clear.interactive(), in: .circle)
+        .gesture(turn)
+        .onHover { isHovered = $0 }
+        .animation(motion.hover, value: isHovered)
+        .help("Which way the colours run across the window. Drag around the dial.")
+        .accessibilityElement()
+        .accessibilityLabel("Angle")
+        .accessibilityValue("\(Int(seed.angle.rounded())) degrees")
+        .accessibilityAdjustableAction { direction in
+            edit { $0.angle += direction == .increment ? Self.step : -Self.step }
+        }
+    }
+
+    private var turn: some Gesture {
+        DragGesture(minimumDistance: 0)
+            .onChanged { value in
+                trackingChanged(true)
+                let dx = value.location.x - Self.side / 2
+                let dy = value.location.y - Self.side / 2
+                // The hub itself has no direction; a press dead on it would
+                // flick the needle to wherever rounding pointed.
+                guard dx * dx + dy * dy > 4 else { return }
+                edit { $0.angle = atan2(dx, -dy) * 180 / .pi }
+            }
+            .onEnded { _ in trackingChanged(false) }
+    }
+}
+
+// MARK: - The round buttons
+
+/// Minus, plus and shuffle: a glyph on a circle of glass the height of the
+/// light track beside them.
+private struct PlumageRoundButton: View {
+    var systemName: String
+    var label: String
+    var help: String
+    /// How many times it has been pressed, for a glyph that turns half a
+    /// revolution per press — so a second press keeps going rather than
+    /// snapping back. Zero for one that does not turn.
+    var turns = 0
+    var action: () -> Void
+
+    @Environment(\.motion) private var motion
+    @Environment(\.isEnabled) private var isEnabled
+    @State private var isHovered = false
+
     var body: some View {
         Button(action: action) {
-            Image(systemName: "shuffle")
+            Image(systemName: systemName)
                 .font(.system(size: 13, weight: .semibold))
-                .foregroundStyle(isHovered ? Ink.primary : Ink.secondary)
+                // The glyph dims when there is nothing to do, not the glass:
+                // a material faded as a whole is one of the ways §1.5 paints
+                // black.
+                .foregroundStyle(!isEnabled ? Ink.tertiary : isHovered ? Ink.primary : Ink.secondary)
                 .rotationEffect(.degrees(Double(turns) * 180))
                 .frame(width: PlumageLightTrack.height, height: PlumageLightTrack.height)
                 .contentShape(.circle)
         }
         .buttonStyle(.plain)
-        .glassEffect(.regular.interactive(), in: .circle)
+        // `.clear`: in-window glass on this app is always clear. §4.
+        .glassEffect(.clear.interactive(), in: .circle)
         .onHover { isHovered = $0 }
         .animation(motion.hover, value: isHovered)
         .animation(motion.reposition, value: turns)
-        .help("A blend chosen from the combinations that work.")
-        .accessibilityLabel("Shuffle")
-        .accessibilityHint("Replaces the blend with one chosen at random from the combinations that work.")
+        .help(help)
+        .accessibilityLabel(label)
+        .accessibilityHint(help)
     }
 }
 
@@ -745,13 +944,27 @@ nonisolated enum PlumageShuffle {
 
     /// How far the foot may sit from the head, in degrees, signed.
     ///
-    /// **Analogous, never complementary.** Two hues a third of the wheel apart
+    /// **Analogous, never complementary.** Two hues a quarter of the wheel apart
     /// make a gradient; two hues opposite each other make a *transition*, and a
-    /// window whose top is orange and whose bottom is blue has a visible green
-    /// seam through the middle of the transcript wherever the two meet. Between
-    /// eighteen and fifty-two degrees is the band where the pair still reads as
-    /// one colour changing rather than as two colours meeting.
-    static let footOffsetRange: ClosedRange<Double> = 18...52
+    /// window whose top is orange and whose bottom is blue reads as two colours
+    /// meeting rather than one light moving.
+    ///
+    /// **Wider than it was, and the walk is why.** The band used to stop at
+    /// fifty-two degrees, because the field was a straight line through RGB and
+    /// anything wider passed through grey in the middle of the transcript. It is
+    /// walked in Oklch now — see `ThemeSeed.field(at:)` — so the middle is the
+    /// hue between; the band matches the presets' own spread.
+    static let footOffsetRange: ClosedRange<Double> = 60...85
+
+    /// Which way a shuffled blend runs: always a fall toward the composer, from
+    /// leaning left to leaning right. A shuffle that could turn the light
+    /// upside down would land on a room lit from the toolbar about a third of
+    /// the time — reachable on the dial, never by chance.
+    static let angleRange: ClosedRange<Double> = 115...205
+
+    /// How far a middle colour may stray from the straight walk: enough to give
+    /// the line a turn of its own, not enough to double back on itself.
+    static let middleJitter = 14.0
 
     /// A blend that is not the one already showing.
     ///
@@ -778,15 +991,28 @@ nonisolated enum PlumageShuffle {
 
         let offset = Double.random(in: footOffsetRange, using: &generator)
             * (Bool.random(using: &generator) ? 1 : -1)
-        return ThemeSeed(
+        var next = ThemeSeed(
             head: ThemeStop(hue: hue, depth: .random(in: headDepthRange, using: &generator)),
             foot: ThemeStop(
                 hue: hue + offset,
                 depth: .random(in: footDepthRange, using: &generator)
             ),
             light: .random(in: lightRange, using: &generator),
-            accentTurn: accentTurns.randomElement(using: &generator) ?? 0
+            accentTurn: accentTurns.randomElement(using: &generator) ?? 0,
+            angle: .random(in: angleRange, using: &generator)
         )
+        // **As many colours as the reader chose**, placed along the new walk
+        // and nudged off it. A shuffle that also changed how many beads there
+        // are would undo the one decision the reader made on purpose.
+        let count = current.middle.count
+        next.middle = (0..<count).map { index in
+            let along = next.stop(at: Double(index + 1) / Double(count + 1))
+            return ThemeStop(
+                hue: along.hue + .random(in: -middleJitter...middleJitter, using: &generator),
+                depth: along.depth + .random(in: -0.08...0.08, using: &generator)
+            )
+        }
+        return next
     }
 
     static func next(after current: ThemeSeed) -> ThemeSeed {
