@@ -191,7 +191,8 @@ extension SessionController {
             do {
                 guard let sent = try await rest.sendScheduledMessageNow(id) else { return }
                 if model.messages(in: sent.channelID)?.messages.isEmpty == false {
-                    model.mutateBox(sent.channelID) { $0.upsert(sent) }
+                    let trims = model.mayTrimOldest(in: sent.channelID)
+                    model.mutateBox(sent.channelID) { $0.receiveLive(sent, trimming: trims) }
                 }
                 model.messageContentRevision &+= 1
             } catch {

@@ -45,6 +45,19 @@ struct TimelineView: NSViewRepresentable {
     /// to stop it. Read by the container for the reason the accents are.
     var playingPreview: URL?
     var jump: MessageJump?
+    /// Whether the loaded window reaches the channel's newest message. False
+    /// after a jump, or once scrolling up has trimmed the newest away — see
+    /// `TranscriptWindow`. It decides whether the foot is the present: whether
+    /// to stick there, acknowledge there, or page below it.
+    var reachesPresent: Bool = true
+    /// A request to go to the foot, for this channel only. An input for the
+    /// reason `jump` is one.
+    var present: PresentRequest?
+    /// Where this transcript tells the chrome over it what its position means.
+    var scroll: TranscriptScrollState
+    /// The channel's topics, so the coordinator can say which one the reader
+    /// is in. Oldest first.
+    var topics: [ConversationTopic] = []
     /// Whether a floating layer is drawn over the transcript.
     ///
     /// An INPUT for the reason every other one here is: the canvas is a drawn
@@ -82,6 +95,10 @@ struct TimelineView: NSViewRepresentable {
             topInset: topInset,
             bottomInset: bottomInset,
             jump: jump,
+            reachesPresent: reachesPresent,
+            present: present,
+            scroll: scroll,
+            topics: topics,
             spotifyRevision: spotifyRevision,
             playingPreview: playingPreview,
             isCovered: isCovered,
@@ -159,6 +176,31 @@ final class TimelineCoordinator: NSObject {
     private var appliedJumpToken: UInt64 = 0
     /// A jump asked for before its message had been laid out.
     private var pendingJump: MessageJump?
+
+    /// Whether the loaded window reaches the present. See
+    /// `TimelineView.reachesPresent`.
+    private var reachesPresent = true
+    /// The request to go to the foot already taken, for `appliedJumpToken`'s
+    /// reason.
+    private var appliedPresentToken: UInt64 = 0
+    /// Going to the foot, once the window reaches it. A request made while cut
+    /// off from the present waits for the newest page to land.
+    private var pendingPresent = false
+    /// Where the viewport's top was on the last tick, so a page is asked for in
+    /// the direction the reader is travelling. See `viewportDidChange`.
+    private var lastViewportMinY: CGFloat = 0
+    /// Where the chrome over the transcript reads its position from.
+    private var scroll: TranscriptScrollState?
+    /// What was last told to `scroll` — compared here, so an unchanged answer
+    /// costs no deferred write at all.
+    private var publishedShowsJump = false
+    /// What was last told to the store about this transcript and its foot. Nil
+    /// until the first report, so the first one is always made.
+    private var reportedAwayFromFoot: Bool?
+    /// The channel's topics, oldest first.
+    private var topics: [ConversationTopic] = []
+    /// The reader's place among them, as last reported. See `TopicPlace`.
+    private var topicPlace: TopicPlace?
 
     private var isNearBottom = true
     private var isApplyingUpdate = false
@@ -277,6 +319,9 @@ final class TimelineCoordinator: NSObject {
             // The store decides between the panel and the whole column, on the
             // thread's parent — see `AppModel.openThread`.
             self?.model.openThread(threadID)
+        }
+        canvas.onOpenTopicMarker = { [weak self] in
+            self?.model.reopenTopicPanel()
         }
         canvas.onOpenReplyTarget = { [weak self] messageID in
             guard let self, let channelID = self.channelID else { return }
@@ -413,8 +458,9 @@ final class TimelineCoordinator: NSObject {
     ///
     /// Three conditions, and each is a different way of not reading: the app has
     /// to be in front, the transcript has to be at the foot of the channel — a
-    /// reader scrolled up in history has *not* seen what arrived below them —
-    /// and there has to be a channel. `AppModel.markRead` and
+    /// reader scrolled up in history has *not* seen what arrived below them, and
+    /// neither has one at the foot of a window cut off from the present — and
+    /// there has to be a channel. `AppModel.markRead` and
     /// `SessionController.acknowledge` settle the rest: the newest id, the
     /// suppression latch behind Mark Unread, and the guard that makes a repeat
     /// call free.
@@ -423,7 +469,9 @@ final class TimelineCoordinator: NSObject {
     /// single event that covers them: a channel opening, a page landing, a
     /// scroll reaching the bottom, and the app coming forward.
     private func acknowledgeIfRead() {
-        guard !isTornDown, isNearBottom, NSApp.isActive, let channelID else { return }
+        guard !isTornDown, isNearBottom, reachesPresent, NSApp.isActive, let channelID else {
+            return
+        }
         model.markRead(channelID)
     }
 
@@ -468,6 +516,7 @@ final class TimelineCoordinator: NSObject {
         canvas?.onDismissEphemeral = nil
         canvas?.onToggleReaction = nil
         canvas?.onHoverReaction = nil
+        canvas?.onOpenTopicMarker = nil
         (scrollView as? TimelineScrollView)?.acceptsScrollInput = { true }
         // The clock holds a closure over the canvas; a subscriber that outlives
         // its transcript is a display link running for a channel nobody is
@@ -475,6 +524,12 @@ final class TimelineCoordinator: NSObject {
         canvas?.stopStickerAnimation()
         highlightTask?.cancel()
         highlightTask = nil
+        // A transcript that is gone is not away from anybody's foot, and one
+        // that stayed on the record would keep that channel from ever trimming.
+        if let channelID {
+            model.setTranscript(channelID, isAwayFromFoot: false, viewer: ObjectIdentifier(self))
+        }
+        scroll = nil
         canvas = nil
         documentView = nil
         scrollView = nil
@@ -500,12 +555,18 @@ final class TimelineCoordinator: NSObject {
         topInset: CGFloat,
         bottomInset: CGFloat,
         jump: MessageJump?,
+        reachesPresent: Bool,
+        present: PresentRequest?,
+        scroll: TranscriptScrollState,
+        topics: [ConversationTopic],
         spotifyRevision: UInt64,
         playingPreview: URL?,
         isCovered: Bool,
         bookmarks: Set<MessageID>,
         canSuperReact: Bool
     ) {
+        self.scroll = scroll
+        self.topics = topics
         canvas?.apply(isCovered: isCovered)
         canvas?.apply(bookmarks: bookmarks)
         canvas?.apply(canSuperReact: canSuperReact)
@@ -540,7 +601,7 @@ final class TimelineCoordinator: NSObject {
             // The scrollable range just changed by the delta. A reader sitting
             // at the bottom has to stay there, or growing the composer by a line
             // silently scrolls the newest message out from under them.
-            if isNearBottom, !isTornDown { scrollToBottom() }
+            if isNearBottom, self.reachesPresent, !isTornDown { scrollToBottom() }
         }
         guard !isTornDown else { return }
 
@@ -568,6 +629,17 @@ final class TimelineCoordinator: NSObject {
 
         let channelChanged = channelID != self.channelID
         if channelChanged {
+            // The channel being left is no longer anybody's to trim around.
+            if let previous = self.channelID {
+                model.setTranscript(previous, isAwayFromFoot: false, viewer: ObjectIdentifier(self))
+            }
+            reportedAwayFromFoot = nil
+            topicPlace = nil
+            pendingPresent = false
+            // **The new channel's answer, before it is laid out.** There is no
+            // move between two channels for the rule below to protect, and a
+            // window left cut off from the present has to open as one.
+            self.reachesPresent = reachesPresent
             // A different conversation shares nothing with the previous one, and
             // keeping its layouts would hold every text block and decoded image
             // of a channel nobody is looking at.
@@ -596,12 +668,54 @@ final class TimelineCoordinator: NSObject {
             // page lands rather than dropped.
             pendingJump = jump
         }
+        // A request made while the window reaches the present glides there; one
+        // made while it is cut off waits for the newest page and lands at once,
+        // because the rows it would glide across are not the ones it lands on.
+        var glides = false
+        if let present, present.channelID == channelID, present.token != appliedPresentToken {
+            appliedPresentToken = present.token
+            pendingPresent = true
+            glides = self.reachesPresent && reachesPresent
+            consume(present)
+        }
 
         if channelChanged || items != self.items {
             self.items = items
+            // **Laid out against what the window reached BEFORE this update.**
+            // A newer page that just reconnected it to the present lands while
+            // the reader is at the old foot, and sticking to the new one would
+            // skip them past a hundred messages they have not read.
             runLayout(preservingPosition: !channelChanged)
         }
+        self.reachesPresent = reachesPresent
+        if pendingPresent, reachesPresent {
+            pendingPresent = false
+            goToPresent(gliding: glides)
+        }
         applyPendingJump()
+        publishPosition()
+        trackTopicPlace()
+    }
+
+    /// Clears a jump the store is holding once it has been taken, for the
+    /// present request's reason below.
+    private func consume(_ jump: MessageJump) {
+        Task { @MainActor [weak self] in
+            guard let self, self.model.pendingJump?.token == jump.token else { return }
+            self.model.pendingJump = nil
+        }
+    }
+
+    /// Clears a request the store is holding once it has been taken, so a
+    /// transcript built later for the same channel does not take it again.
+    ///
+    /// **Deferred**, because this runs inside `updateNSView`, and a store write
+    /// there is a write in the middle of the pass that is reading the store.
+    private func consume(_ present: PresentRequest) {
+        Task { @MainActor [weak self] in
+            guard let self, self.model.presentRequest == present else { return }
+            self.model.presentRequest = nil
+        }
     }
 
     // MARK: Jumping
@@ -636,6 +750,7 @@ final class TimelineCoordinator: NSObject {
         scrollView.contentView.scroll(to: NSPoint(x: 0, y: min(maximum, max(0, target))))
         scrollView.reflectScrolledClipView(scrollView.contentView)
         isApplyingUpdate = false
+        lastViewportMinY = scrollView.contentView.bounds.minY
         isNearBottom = TimelineViewportPolicy.isNearBottom(
             viewport: scrollView.contentView.bounds,
             documentHeight: canvas.contentHeight,
@@ -643,6 +758,11 @@ final class TimelineCoordinator: NSObject {
         )
         positionCanvas()
 
+        guard jump.highlights else {
+            // Consumed all the same, for the reason the task below clears it.
+            consume(jump)
+            return
+        }
         canvas.highlight(jump.messageID)
         highlightTask?.cancel()
         highlightTask = Task { [weak self] in
@@ -713,10 +833,28 @@ final class TimelineCoordinator: NSObject {
         let height = canvas.apply(rows: rows)
         resizeDocument(to: height)
 
-        if wasNearBottom {
+        // **The foot is only somewhere to stick when it is the present.** The
+        // foot of a window cut off from it is a page boundary with a runway
+        // under it, and sticking there would drag the reader into the runway
+        // every time a page landed.
+        if wasNearBottom, reachesPresent {
             scrollToBottom()
         } else if let anchor {
             restore(anchor)
+            // Recomputed from where the reader actually is. An anchored pass
+            // can leave somebody far from a foot they were near, and a stale
+            // answer would stick the next live message to the wrong place.
+            isNearBottom = TimelineViewportPolicy.isNearBottom(
+                viewport: scrollView.contentView.bounds,
+                documentHeight: canvas.contentHeight,
+                wasNearBottom: false
+            )
+        } else if !preservingPosition, !reachesPresent {
+            // A window cut off from the present opens on its newest loaded
+            // message: the runway under it is where the next page lands, not
+            // where the reader was.
+            scrollToLastMessage()
+            isNearBottom = false
         }
         isApplyingUpdate = false
 
@@ -778,14 +916,26 @@ final class TimelineCoordinator: NSObject {
         if abs(viewport.height - lastViewportHeight) > 0.5 {
             let grew = viewport.height > lastViewportHeight
             lastViewportHeight = viewport.height
-            if grew, isNearBottom, !canvas.isScrolling { scrollToBottom() }
+            if grew, isNearBottom, reachesPresent, !canvas.isScrolling { scrollToBottom() }
         }
         positionCanvas()
-        requestEarlierHistoryIfNeeded(viewport: viewport)
+        // **Pages go the way the reader is travelling.** A trim leaves the far
+        // edge of the window a page away, well inside the prefetch distance —
+        // so asking in both directions on every tick would fetch back each page
+        // a trim had just dropped, and a reader scrolling up would pay for two
+        // pages per page. A still tick (a resize, a first layout) asks both.
+        let current = scrollView.contentView.bounds
+        let movement = current.minY - lastViewportMinY
+        lastViewportMinY = current.minY
+        if movement <= 0 { requestEarlierHistoryIfNeeded(viewport: current) }
+        if movement >= 0 { requestLaterHistoryIfNeeded(viewport: current) }
         schedulePrefetch()
         // Scrolling down to the end is the reader saying they have seen what
         // was below them, and it is the one path a layout cannot cover.
         acknowledgeIfRead()
+        publishPosition()
+        trackTopicPlace()
+        clearTopicMarkerIfPassed(viewport: current)
     }
 
     private func positionCanvas() {
@@ -852,6 +1002,78 @@ final class TimelineCoordinator: NSObject {
         )
         scrollView.contentView.scroll(to: NSPoint(x: 0, y: target))
         scrollView.reflectScrolledClipView(scrollView.contentView)
+        lastViewportMinY = scrollView.contentView.bounds.minY
+    }
+
+    /// Puts the newest LOADED message at the foot of the readable band.
+    ///
+    /// For a window cut off from the present, whose document ends in a runway:
+    /// `scrollToBottom` would land in the placeholders, below everything the
+    /// reader was looking at.
+    private func scrollToLastMessage() {
+        guard let scrollView, let canvas,
+              let index = canvas.rows.lastIndex(where: { $0.messageID != nil })
+        else {
+            scrollToBottom()
+            return
+        }
+        let clip = scrollView.contentView
+        let target = canvas.rowFrame(at: index).maxY
+            + scrollView.contentInsets.bottom
+            - clip.bounds.height
+        clip.scroll(to: NSPoint(x: 0, y: max(-scrollView.contentInsets.top, target)))
+        scrollView.reflectScrolledClipView(clip)
+        lastViewportMinY = clip.bounds.minY
+    }
+
+    /// Takes the reader to the foot of a window that reaches the present.
+    ///
+    /// **A glide for a request made while already there** — the control, or
+    /// Escape — and a cut for everything else: a window that was just replaced
+    /// by the newest page has nothing in common with the rows a glide would
+    /// cross. The glide is the `reposition` class's response with an ease-out,
+    /// the nearest an `NSAnimationContext` comes to a critically damped spring,
+    /// and it holds the scroll gate like any other scroll so optional work
+    /// waits it out.
+    ///
+    /// **Far away, it cuts to a screen above the foot first.** Gliding across a
+    /// few hundred rows repaints the canvas every time it runs out of overscan,
+    /// for motion nobody can read at that speed.
+    private func goToPresent(gliding: Bool) {
+        guard let scrollView, let documentView, !isTornDown else { return }
+        isNearBottom = true
+        let clip = scrollView.contentView
+        let target = max(
+            -scrollView.contentInsets.top,
+            documentView.frame.height + scrollView.contentInsets.bottom - clip.bounds.height
+        )
+        guard gliding, target - clip.bounds.minY > 1,
+              !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+        else {
+            scrollToBottom()
+            positionCanvas()
+            acknowledgeIfRead()
+            return
+        }
+        if target - clip.bounds.minY > clip.bounds.height * 1.5 {
+            clip.scroll(to: NSPoint(x: 0, y: target - clip.bounds.height))
+            scrollView.reflectScrolledClipView(clip)
+            positionCanvas()
+        }
+        setScrolling(true)
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = Motion.reposition.response
+            context.timingFunction = CAMediaTimingFunction(name: .easeOut)
+            context.allowsImplicitAnimation = true
+            clip.animator().setBoundsOrigin(NSPoint(x: 0, y: target))
+        } completionHandler: { [weak self] in
+            MainActor.assumeIsolated {
+                guard let self, !self.isTornDown, let scrollView = self.scrollView else { return }
+                scrollView.reflectScrolledClipView(scrollView.contentView)
+                self.setScrolling(false)
+                self.viewportDidChange()
+            }
+        }
     }
 
     /// What the viewport is looking at, so a prepend can put it back.
@@ -875,6 +1097,91 @@ final class TimelineCoordinator: NSObject {
         let target = canvas.rowFrame(at: index).minY - anchor.offsetFromViewportTop
         scrollView.contentView.scroll(to: NSPoint(x: 0, y: max(0, target)))
         scrollView.reflectScrolledClipView(scrollView.contentView)
+        lastViewportMinY = scrollView.contentView.bounds.minY
+    }
+
+    /// Asks for the page below a window cut off from the present, when the
+    /// reader is running out of it.
+    private func requestLaterHistoryIfNeeded(viewport: CGRect) {
+        guard let channelID, let canvas,
+              let box = model.messages(in: channelID),
+              TimelineViewportPolicy.shouldLoadLater(
+                  viewport: viewport,
+                  documentHeight: canvas.contentHeight,
+                  hasMore: box.hasMoreNewer && !box.newerPageFailed,
+                  isLoading: box.isLoadingNewer
+              )
+        else { return }
+        model.loadLaterHistory(in: channelID)
+    }
+
+    /// Tells the chrome over the transcript whether to offer the way back to
+    /// the present, and the store whether this transcript is away from its
+    /// channel's foot. Each only when its answer changes.
+    ///
+    /// **The chrome's write is deferred**: this runs inside `updateNSView` as
+    /// often as inside a scroll tick, and the control is a view the same pass
+    /// may be reading. The store's is not — it is unobserved, and nothing
+    /// redraws for it.
+    private func publishPosition() {
+        guard !isTornDown, let scrollView, let canvas, let channelID else { return }
+        let away = !(isNearBottom && reachesPresent)
+        if reportedAwayFromFoot != away {
+            reportedAwayFromFoot = away
+            model.setTranscript(channelID, isAwayFromFoot: away, viewer: ObjectIdentifier(self))
+        }
+        let shows = TimelineViewportPolicy.showsJumpToPresent(
+            viewport: scrollView.contentView.bounds,
+            documentHeight: canvas.contentHeight,
+            bottomInset: scrollView.contentInsets.bottom,
+            reachesPresent: reachesPresent,
+            wasShowing: publishedShowsJump
+        )
+        guard shows != publishedShowsJump else { return }
+        publishedShowsJump = shows
+        Task { @MainActor [weak self] in
+            // Only the latest answer lands: two flips in one pass must not
+            // leave the first one showing.
+            guard let self, self.publishedShowsJump == shows,
+                  let scroll = self.scroll, scroll.showsJumpToPresent != shows
+            else { return }
+            scroll.showsJumpToPresent = shows
+        }
+    }
+
+    /// Reports which topic the reader is in, and asks for topics when their
+    /// place has left the ones loaded — each only when the place changes, which
+    /// is once per topic boundary crossed rather than once per tick.
+    ///
+    /// Deferred, for `publishPosition`'s reason: this also runs inside
+    /// `updateNSView`, and both answers are store and state writes.
+    private func trackTopicPlace() {
+        guard !isTornDown, let channelID, model.topicsApply(to: channelID) else { return }
+        let anchor = isNearBottom && reachesPresent ? nil : currentAnchor()?.messageID
+        let place = TopicPlace(anchor: anchor, topics: topics)
+        guard place != topicPlace else { return }
+        topicPlace = place
+        Task { @MainActor [weak self] in
+            guard let self, !self.isTornDown, self.topicPlace == place else { return }
+            self.model.loadTopicsIfNeeded(in: channelID, anchor: anchor)
+            if let scroll = self.scroll, scroll.topicIndex != place.index {
+                scroll.topicIndex = place.index
+            }
+        }
+    }
+
+    /// Forgets the open topic once its marker has scrolled out of view —
+    /// Discord's own rule — unless its panel is up or a jump is still landing.
+    private func clearTopicMarkerIfPassed(viewport: CGRect) {
+        guard let channelID, let canvas, pendingJump == nil,
+              let open = model.openTopic, open.channelID == channelID, !open.showsPanel,
+              let index = canvas.rows.firstIndex(where: {
+                  if case .topicMarker = $0.kind { true } else { false }
+              })
+        else { return }
+        let frame = canvas.rowFrame(at: index)
+        guard frame.maxY < viewport.minY || frame.minY > viewport.maxY else { return }
+        Task { @MainActor [weak self] in self?.model.clearOpenTopic(in: channelID) }
     }
 
     private func requestEarlierHistoryIfNeeded(viewport: CGRect) {

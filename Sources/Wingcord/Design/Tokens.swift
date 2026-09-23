@@ -102,6 +102,19 @@ nonisolated enum Palette {
     /// near-white has as little to refract as over near-black.
     static let flyoutTint = Color.relative(dark: 0.08, light: 0.035)
 
+    /// The dimming behind a clear-glass layer in the window that holds text —
+    /// the quick switcher, a topic's panel.
+    ///
+    /// **What makes clear glass legible without a presentation's backdrop.**
+    /// Walked up on the quick switcher, not picked: at 0.45 a message body and
+    /// a blue link read plainly through the rows and the footer was illegible;
+    /// at 0.62 a heading over a paragraph still competed. 0.78 leaves the
+    /// window's shapes showing through the glass and its text as a ghost, which
+    /// is what a lensing material over a dimmed window should look like. One
+    /// value, because two layers of the same kind dimmed differently would read
+    /// as two different kinds of layer.
+    static let modalScrim = Color.black.opacity(0.78)
+
     /// A grouped container *inside* a presentation — the inbox's channel cards.
     ///
     /// **A flat fill, and deliberately not `.structuralSurface()`.** That

@@ -136,4 +136,39 @@ nonisolated enum TimelineViewportPolicy {
     ) -> Bool {
         hasMore && !isLoading && viewport.minY < TimelineMetrics.historyPrefetchDistance
     }
+
+    /// Whether the page below a window cut off from the present should be
+    /// requested: `shouldLoadEarlier`'s rule, at the other end.
+    static func shouldLoadLater(
+        viewport: CGRect,
+        documentHeight: CGFloat,
+        hasMore: Bool,
+        isLoading: Bool
+    ) -> Bool {
+        hasMore && !isLoading
+            && documentHeight - viewport.maxY < TimelineMetrics.historyPrefetchDistance
+    }
+
+    /// Whether the control that returns to the present should show.
+    ///
+    /// **Always, while the window is cut off from the present** — nothing else
+    /// on screen says so, and its foot looks like any other. Otherwise once
+    /// the reader is more than a screen above the foot, which is where finding
+    /// the way back by hand starts to cost; with hysteresis, so a transcript
+    /// parked near that line does not flicker the control on every late
+    /// relayout.
+    ///
+    /// - Parameter bottomInset: the composer's cover. The foot is where the
+    ///   clip view rests scrolled fully down, one inset past the document.
+    static func showsJumpToPresent(
+        viewport: CGRect,
+        documentHeight: CGFloat,
+        bottomInset: CGFloat,
+        reachesPresent: Bool,
+        wasShowing: Bool
+    ) -> Bool {
+        guard reachesPresent else { return true }
+        let distance = documentHeight + bottomInset - viewport.maxY
+        return distance > viewport.height * (wasShowing ? 0.5 : 1)
+    }
 }

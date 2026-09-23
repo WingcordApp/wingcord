@@ -136,6 +136,40 @@ final class AppModel {
     private var boxRecency: [ChannelID] = []
     static let residentChannelLimit = 3
 
+    /// Each channel's running slowmode wait. See `SlowmodeCooldown`.
+    ///
+    /// **Beside the transcripts, not in a `MessageBox`.** Writing to a box
+    /// publishes the whole transcript table, so every open transcript would
+    /// re-read its rows for a countdown it does not draw — and leaving a channel
+    /// does not make the reader any less rate-limited in it.
+    var slowmodeCooldowns: [ChannelID: SlowmodeCooldown] = [:]
+    /// The last send held back for slowmode, so the indicator can flash for
+    /// it. See `SlowmodeNudge`.
+    var slowmodeNudge: SlowmodeNudge?
+    /// Distinguishes two identical holds. `@ObservationIgnored` because nothing
+    /// reads it — it exists only to make `slowmodeNudge` differ.
+    @ObservationIgnored var slowmodeNudgeToken: UInt64 = 0
+
+    // MARK: Topics
+
+    /// Each channel's topics — Discord's conversations. See `ChannelTopics`.
+    var conversationTopics: [ChannelID: ChannelTopics] = [:]
+    /// The first few messages of each topic the pointer rested on, for its
+    /// preview flyout. Bounded; see `AppModel+Topics`.
+    var topicPreviews: [ConversationTopicID: [Message]] = [:]
+    /// Whole topics, for the panel. Bounded the same way.
+    var topicMessages: [ConversationTopicID: [Message]] = [:]
+    /// Insertion order for the two tables above, oldest first.
+    @ObservationIgnored var topicCacheOrder: [ConversationTopicID] = []
+    /// Topics whose messages are being fetched, so a pointer resting on one
+    /// title twice asks once.
+    @ObservationIgnored var topicFetchesInFlight: Set<ConversationTopicID> = []
+    /// The topic marked in the transcript, and whether its panel is up.
+    var openTopic: OpenTopic?
+    /// Asks the session for topics or a topic's messages. A closure for the
+    /// reason `historyLoader` is one.
+    @ObservationIgnored var topicLoader: ((ChannelID, TopicRequest) -> Void)?
+
     // MARK: Navigation
 
     var selectedGuildID: GuildID?
@@ -364,6 +398,23 @@ final class AppModel {
     /// Distinguishes two jumps to the same message. `@ObservationIgnored`
     /// because nothing reads it — it exists only to make `pendingJump` differ.
     @ObservationIgnored var jumpToken: UInt64 = 0
+    /// A transcript asked to go to its foot — the jump control, Escape, or a
+    /// send made while cut off from the present. Consumed by the coordinator,
+    /// for `pendingJump`'s reason: whoever asks has no reference to the view
+    /// that owns the scroll.
+    var presentRequest: PresentRequest?
+    /// Distinguishes two requests for the same channel, for `jumpToken`'s
+    /// reason.
+    @ObservationIgnored var presentToken: UInt64 = 0
+    /// The transcripts scrolled away from each channel's foot, by coordinator.
+    ///
+    /// **What a live message is allowed to trim.** A channel sat open at its
+    /// foot for an afternoon only ever grows, so the oldest go once the window
+    /// is full — but a second transcript of the same channel (the overlay's
+    /// chat beside the main window) may be reading exactly those. The oldest
+    /// go only when nobody is away from the foot. Not observed: it decides a
+    /// store write, and nothing draws it.
+    @ObservationIgnored var viewersAwayFromFoot: [ChannelID: Set<ObjectIdentifier>] = [:]
 
     // MARK: What a message raises
     //
@@ -437,6 +488,12 @@ final class AppModel {
     /// and publishing it would invalidate the pane on the write that fills it.
     @ObservationIgnored
     var pinnedCardCache: (key: PinnedCardKey, messages: [Message], value: [MessageCard])?
+    /// The open topic's panel, laid out — see `topicCards(for:in:width:)`.
+    @ObservationIgnored
+    var topicCardCache: (key: TopicCardKey, messages: [Message], value: [MessageCard])?
+    /// The hovered topic's preview, laid out, for the same reason.
+    @ObservationIgnored
+    var topicPreviewCardCache: (key: TopicCardKey, messages: [Message], value: MessageCard?)?
     /// The same memo for the search panel. Its own slot rather than a shared
     /// one: the pinned pane and the search panel are open at the same time on a
     /// wide window, and one cache would be cleared by whichever drew last.
@@ -1099,12 +1156,13 @@ final class AppModel {
     @ObservationIgnored
     var overlaySidebarCache: (key: OverlaySidebarMemoKey, value: OverlaySidebarPresentation)?
 
-    /// Asks the session for a page of history above what is loaded.
+    /// Asks the session for a page of history — above the window, below it, or
+    /// the newest page in its place. See `HistoryRequest`.
     ///
     /// A closure rather than a direct call into the network layer, so the store
     /// stays free of it: the store is what a test constructs, and a store that
     /// reaches for a socket is a store that cannot be constructed in a test.
-    @ObservationIgnored var historyLoader: ((ChannelID, MessageID?) -> Void)?
+    @ObservationIgnored var historyLoader: ((ChannelID, HistoryRequest) -> Void)?
 
     /// What the reader may do, cached.
     ///
@@ -1462,6 +1520,16 @@ enum ReportSubmissionState: Hashable, Sendable {
     case failed(String)
 }
 
+/// What the composer held when a send left it.
+///
+/// **Carried with the send, never read back from the box afterwards.** By the
+/// time a send fails the box has been cleared, and it may already hold the
+/// next message.
+struct UnsentDraft: Sendable {
+    var text: String
+    var replyingTo: MessageID?
+}
+
 /// One channel's loaded transcript and the state that belongs with it.
 struct MessageBox: Sendable {
     /// Oldest first. Kept sorted by the store, never re-sorted per read — a
@@ -1469,6 +1537,23 @@ struct MessageBox: Sendable {
     var messages: [Message] = []
     var hasMoreHistory = true
     var isLoadingHistory = false
+    /// Whether the channel has messages newer than the loaded window — the
+    /// reader jumped back, or scrolled far enough up that the newest were
+    /// trimmed. See `TranscriptWindow`.
+    ///
+    /// While it is true the transcript is **cut off from the present**: live
+    /// messages are held aside rather than appended, nothing is acknowledged,
+    /// the transcript does not stick to its foot, and the jump control shows.
+    var hasMoreNewer = false
+    /// A page below the window, or the newest page, is in flight.
+    var isLoadingNewer = false
+    /// The last page below the window did not land and is not worth asking for
+    /// again by scrolling — a refusal, or a second failure. Returning to the
+    /// present clears it; without it the viewport would ask on every tick.
+    var newerPageFailed = false
+    /// Live messages that arrived while cut off, held so that reconnecting to
+    /// the present cannot leave a gap. See `TranscriptWindow.heldLimit`.
+    var heldLive: [Message] = []
     /// Why the last history request failed, in the reader's words. Nil when the
     /// last request succeeded or none has been made. A reason rather than a
     /// flag, because "you cannot read this channel" and "the network dropped"
@@ -1507,9 +1592,13 @@ struct MessageBox: Sendable {
     mutating func evictTranscript() {
         messages.removeAll(keepingCapacity: false)
         typing.removeAll(keepingCapacity: false)
+        heldLive.removeAll(keepingCapacity: false)
         hasMoreHistory = true
         isLoadingHistory = false
         historyFailure = nil
+        hasMoreNewer = false
+        isLoadingNewer = false
+        newerPageFailed = false
     }
 
     /// Inserts or replaces one message, keeping the array sorted.
@@ -1537,5 +1626,7 @@ struct MessageBox: Sendable {
 
     mutating func remove(_ messageID: MessageID) {
         messages.removeAll { $0.id == messageID }
+        // A message deleted while held must not come back when it is merged.
+        heldLive.removeAll { $0.id == messageID }
     }
 }

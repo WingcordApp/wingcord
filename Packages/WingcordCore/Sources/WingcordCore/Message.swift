@@ -393,6 +393,30 @@ public final class MessagePayload: Hashable, Sendable, Codable {
         )
     }
 
+    /// The same box with a different reply header. See `replacingReactions`.
+    public func replacingReference(_ reference: MessageReference?) -> MessagePayload {
+        MessagePayload(
+            attachments: attachments,
+            embeds: embeds,
+            reactions: reactions,
+            stickers: stickers,
+            components: components,
+            displayComponents: displayComponents,
+            poll: poll,
+            mentionedUserIDs: mentionedUserIDs,
+            mentionedRoleIDs: mentionedRoleIDs,
+            mentionsEveryone: mentionsEveryone,
+            reference: reference,
+            forwarded: forwarded,
+            webhookID: webhookID,
+            nonce: nonce,
+            activityInvite: activityInvite,
+            interaction: interaction,
+            applicationID: applicationID,
+            thread: thread
+        )
+    }
+
     /// Whether the box is worth allocating. A decoder that builds one of these
     /// for every plain message has undone the point of the type.
     public var isEmpty: Bool {

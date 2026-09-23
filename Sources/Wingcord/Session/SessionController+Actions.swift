@@ -234,7 +234,8 @@ extension SessionController {
                     // a box with a single message in it is a resident slot spent
                     // on a channel the reader is not reading.
                     guard model.messages(in: target)?.messages.isEmpty == false else { continue }
-                    model.mutateBox(target) { $0.upsert(message) }
+                    let trims = model.mayTrimOldest(in: target)
+                    model.mutateBox(target) { $0.receiveLive(message, trimming: trims) }
                     model.messageContentRevision &+= 1
                 } catch {
                     Self.trace("forward to \(target) failed: \(Self.describe(error))")

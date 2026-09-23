@@ -70,6 +70,60 @@ struct TimelineReducerTests {
         }
     }
 
+    @Test("A window cut off from the present gets a runway below it too")
+    func newerRunway() {
+        let rows = TimelineReducer.rows(
+            messages: [message(1, author: 10, at: 0), message(2, author: 10, at: 1)],
+            hasMoreHistory: true,
+            hasMoreNewer: true
+        )
+        // Twenty above, twenty below, the messages between — and no two rows
+        // the same value, so the index runs on rather than restarting.
+        let skeletonIndices = rows.compactMap { item -> Int? in
+            if case .historySkeleton(let index) = item { index } else { nil }
+        }
+        #expect(skeletonIndices == Array(0..<40))
+        // Runway, the day, two messages, runway.
+        #expect(rows.lastIndex { $0.messageID != nil } == 22)
+        #expect(rows.count == 43)
+    }
+
+    @Test("The open topic is marked above its first message, which heads a run")
+    func topicMarker() {
+        let first = message(1, author: 10, at: 0)
+        let start = message(2, author: 10, at: 1)
+        let topic = ConversationTopic(
+            id: ConversationTopicID(rawValue: 2),
+            title: "Game state concerns",
+            startMessageID: start.id,
+            endMessageID: start.id,
+            messageCount: 31
+        )
+        let rows = TimelineReducer.rows(messages: [first, start], topicMarker: topic)
+        let markerIndex = rows.firstIndex { if case .topicMarker = $0 { true } else { false } }
+        #expect(markerIndex != nil)
+        #expect(rows[(markerIndex ?? 0) + 1].messageID == start.id)
+        // Same author a second later, and still a run head: the marker is
+        // between them.
+        #expect(messages(rows).last?.isRunHead == true)
+
+        // One message is not a topic worth marking.
+        var single = topic
+        single.messageCount = 1
+        let unmarked = TimelineReducer.rows(messages: [first, start], topicMarker: single)
+        #expect(!unmarked.contains { if case .topicMarker = $0 { true } else { false } })
+    }
+
+    @Test("A window that reaches the present ends on its newest message")
+    func noNewerRunway() {
+        let rows = TimelineReducer.rows(
+            messages: [message(1, author: 10, at: 0)],
+            hasMoreHistory: false,
+            hasMoreNewer: false
+        )
+        #expect(rows.last?.messageID != nil)
+    }
+
     @Test("A page that failed says so, rather than loading forever")
     func failedFirstPage() {
         // "Loading" and "failed" are the same picture from the reader's side,

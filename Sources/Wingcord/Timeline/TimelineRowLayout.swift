@@ -19,6 +19,9 @@ nonisolated struct TimelineRow: Sendable {
         case unreadDivider
         case conversationStart(ConversationStartSlot)
         case skeleton(index: Int)
+        /// The open topic's marker. Drawn from the title alone: one line, cut
+        /// to the row, with nothing in it that a layout pass has to measure.
+        case topicMarker(title: String)
         case loadingFirstPage
         case historyUnavailable(reason: String)
         case message(MessageRow)
@@ -701,6 +704,12 @@ nonisolated struct TimelineLayoutEngine: Sendable {
                 rows.append(TimelineRow(
                     height: TimelineMetrics.skeletonHeight,
                     kind: .skeleton(index: index)
+                ))
+
+            case .topicMarker(_, let title):
+                rows.append(TimelineRow(
+                    height: TimelineMetrics.topicMarkerHeight,
+                    kind: .topicMarker(title: title)
                 ))
 
             case .loadingFirstPage:

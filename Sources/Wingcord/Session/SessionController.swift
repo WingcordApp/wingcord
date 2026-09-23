@@ -361,8 +361,11 @@ final class SessionController {
         let socket = GatewaySocket(metadata: metadata)
         self.socket = socket
         voice.attach(socket: socket)
-        model.historyLoader = { [weak self] channelID, before in
-            self?.loadHistory(in: channelID, before: before)
+        model.historyLoader = { [weak self] channelID, request in
+            self?.loadHistory(in: channelID, request)
+        }
+        model.topicLoader = { [weak self] channelID, request in
+            self?.loadTopics(in: channelID, request)
         }
 
         eventTask = Task { [weak self] in
@@ -420,6 +423,17 @@ final class SessionController {
         hasLoadedDiscoveryCategories = false
         hasLoadedAppDirectoryCategories = false
         model.clearAllMessages()
+        // A wait is the account's, not the window's: the next account has sent
+        // nothing yet.
+        model.slowmodeCooldowns = [:]
+        model.slowmodeNudge = nil
+        // Topics are the account's view of each server, and so is what is open.
+        model.conversationTopics = [:]
+        model.topicPreviews = [:]
+        model.topicMessages = [:]
+        model.topicCacheOrder = []
+        model.topicFetchesInFlight = []
+        model.openTopic = nil
         // Everything a message action or a person's row holds. **Per-account,
         // every one of them** — a note, a block and a channel's pins all answer
         // for the account that fetched them, and a switch keeps the process.
@@ -479,6 +493,7 @@ final class SessionController {
         presenceFlushTask = nil
         pendingPresences.removeAll(keepingCapacity: false)
         model.historyLoader = nil
+        model.topicLoader = nil
         if let socket {
             Task { await socket.stop() }
         }
@@ -839,7 +854,10 @@ final class SessionController {
                 model.users[quotedAuthor.id] = quotedAuthor
                 model.identityRevision &+= 1
             }
-            model.mutateBox(message.channelID) { $0.upsert(message) }
+            // Held aside while the window is cut off from the present, and the
+            // oldest trimmed once it is full — see `MessageBox.receiveLive`.
+            let trims = model.mayTrimOldest(in: message.channelID)
+            model.mutateBox(message.channelID) { $0.receiveLive(message, trimming: trims) }
             model.channelIndex.patchLastMessage(message.id, in: message.channelID)
             model.messageContentRevision &+= 1
             bumpUnread(for: message)
@@ -1044,6 +1062,8 @@ final class SessionController {
 
         case .threadUpserted(let thread, _, let membership):
             model.applyThreadUpsert(thread, membership: membership)
+            // A thread carries its own limit, and a moderator can change it.
+            model.reconcileSlowmode(in: thread.id)
 
         case .threadRemoved(let threadID, _):
             model.applyThreadRemoval(threadID)
@@ -1062,6 +1082,8 @@ final class SessionController {
         case .channelUpserted(let channel):
             model.channelIndex.upsert(channel)
             model.permissionGate.invalidate()
+            // A moderator changing the limit moves a wait that is running.
+            model.reconcileSlowmode(in: channel.id)
             model.sidebarRevision &+= 1
             model.roleRevision &+= 1
 
@@ -1314,48 +1336,58 @@ final class SessionController {
 
     // MARK: Requests
 
-    func loadHistory(in channelID: ChannelID, before: MessageID?, attempt: Int = 1) {
+    /// Fetches one page of a channel's history and lands it in the window.
+    ///
+    /// All three directions share one path, because what happens to a page
+    /// after it arrives — its authors, its threads, its unfurls, the one retry
+    /// — does not depend on which way it came from. Where it lands does, and
+    /// that is `TranscriptWindow`'s business.
+    func loadHistory(in channelID: ChannelID, _ request: HistoryRequest, attempt: Int = 1) {
         Task { [weak self] in
             guard let self else { return }
             do {
-                let page = try await rest.messages(in: channelID, before: before)
+                let page = switch request {
+                case .older(let before): try await rest.messages(in: channelID, before: before)
+                case .newer(let after): try await rest.messages(in: channelID, after: after)
+                case .present: try await rest.messages(in: channelID)
+                }
                 Self.trace(
-                    "history \(channelID): \(page.messages.count) messages, "
+                    "history \(channelID) \(request): \(page.messages.count) messages, "
                     + "\(page.authors.count) authors"
                 )
-                // Authors first: a row laid out before its author is known draws
-                // "Unknown" and would need a second relayout to correct itself.
-                //
-                // The revision moves only if a name actually changed. It is the
-                // mention table's memo key, and that table is proportional to
-                // the whole account — so bumping it for a page whose authors
-                // were all already known rebuilds every name in the session to
-                // discover that none of them moved.
-                var namesChanged = false
-                for (userID, author) in page.authors {
-                    let merged = author.merged(over: model.users[userID])
-                    guard model.users[userID] != merged else { continue }
-                    model.users[userID] = merged
-                    namesChanged = true
-                }
-                if namesChanged { model.identityRevision &+= 1 }
-                model.applyThreadsFromMessages(page.threads)
+                absorb(page)
+                var landed = true
                 model.mutateBox(channelID) { box in
-                    for message in page.messages { box.upsert(message) }
-                    box.isLoadingHistory = false
-                    box.historyFailure = nil
-                    // A short page is the only signal history has run out. The
-                    // limit and this test read the SAME constant: drifting them
-                    // either stops paging early or offers a load that can never
-                    // land.
-                    box.hasMoreHistory = page.messages.count >= DiscordREST.historyPageSize
+                    switch request {
+                    case .older(let before):
+                        landed = box.receiveOlder(page.messages, before: before)
+                        box.isLoadingHistory = false
+                        box.historyFailure = nil
+                    case .newer(let after):
+                        landed = box.receiveNewer(page.messages, after: after)
+                        box.isLoadingNewer = false
+                    case .present:
+                        box.receivePresent(page.messages)
+                        box.isLoadingNewer = false
+                        box.isLoadingHistory = false
+                        box.historyFailure = nil
+                    }
+                }
+                // **A page the window moved away from is dropped whole** — see
+                // `MessageBox.receiveOlder`. Nothing about it is resolved:
+                // members and unfurls for rows nobody will see are requests
+                // the reader pays for.
+                guard landed else {
+                    Self.trace("history \(channelID) \(request): window moved, page dropped")
+                    return
                 }
                 model.messageContentRevision &+= 1
                 resolveSpotifyUnfurls(in: page.messages)
                 resolveMessageMembers(in: page.messages, channelID: channelID)
             } catch {
                 Self.trace(
-                    "history \(channelID) FAILED (attempt \(attempt)): \(Self.describe(error))"
+                    "history \(channelID) \(request) FAILED (attempt \(attempt)): "
+                    + Self.describe(error)
                 )
                 Self.log.error("history load failed: \(Self.describe(error), privacy: .public)")
 
@@ -1368,26 +1400,64 @@ final class SessionController {
                     try? await Task.sleep(for: .milliseconds(1200))
                     guard !Task.isCancelled else { return }
                     // Still wanted? The reader may have moved on.
-                    guard model.messages(in: channelID)?.isLoadingHistory == true else { return }
-                    loadHistory(in: channelID, before: before, attempt: attempt + 1)
+                    let box = model.messages(in: channelID)
+                    let stillWanted = switch request {
+                    case .older: box?.isLoadingHistory == true
+                    case .newer, .present: box?.isLoadingNewer == true
+                    }
+                    guard stillWanted else { return }
+                    loadHistory(in: channelID, request, attempt: attempt + 1)
                     return
                 }
 
                 model.mutateBox(channelID) { box in
-                    box.isLoadingHistory = false
-                    box.historyFailure = Self.describe(error)
-                    // A refusal is not a gap in the history; there is nothing
-                    // above to page to. Leaving `hasMoreHistory` true keeps the
-                    // viewport asking for a page that can never land.
-                    if !Self.isWorthRetrying(error) { box.hasMoreHistory = false }
+                    switch request {
+                    case .older:
+                        box.isLoadingHistory = false
+                        box.historyFailure = Self.describe(error)
+                        // A refusal is not a gap in the history; there is
+                        // nothing above to page to. Leaving `hasMoreHistory`
+                        // true keeps the viewport asking for a page that can
+                        // never land.
+                        if !Self.isWorthRetrying(error) { box.hasMoreHistory = false }
+                    case .newer, .present:
+                        // The runway below stays, and the jump control is the
+                        // way out: returning to the present clears this and
+                        // asks again. Scrolling does not, or it would ask on
+                        // every tick.
+                        box.isLoadingNewer = false
+                        box.newerPageFailed = true
+                    }
                 }
                 model.messageContentRevision &+= 1
             }
         }
     }
 
+    /// Everything a page teaches the store beyond its rows: who wrote it, and
+    /// the threads hanging off it.
+    ///
+    /// Authors first: a row laid out before its author is known draws
+    /// "Unknown" and would need a second relayout to correct itself.
+    ///
+    /// The revision moves only if a name actually changed. It is the mention
+    /// table's memo key, and that table is proportional to the whole account —
+    /// so bumping it for a page whose authors were all already known rebuilds
+    /// every name in the session to discover that none of them moved.
+    func absorb(_ page: MessagePage) {
+        var namesChanged = false
+        for (userID, author) in page.authors {
+            let merged = author.merged(over: model.users[userID])
+            guard model.users[userID] != merged else { continue }
+            model.users[userID] = merged
+            namesChanged = true
+        }
+        if namesChanged { model.identityRevision &+= 1 }
+        model.applyThreadsFromMessages(page.threads)
+    }
+
     /// Whether asking again could plausibly answer differently.
-    private static func isWorthRetrying(_ error: any Error) -> Bool {
+    static func isWorthRetrying(_ error: any Error) -> Bool {
         switch error {
         case DiscordREST.Failure.forbidden,
              DiscordREST.Failure.unauthorized,
@@ -1435,7 +1505,7 @@ final class SessionController {
             box.isLoadingHistory = true
             box.historyFailure = nil
         }
-        loadHistory(in: channelID, before: nil)
+        loadHistory(in: channelID, .older(before: nil))
         subscribeToMemberList(for: channelID)
     }
 
@@ -1664,11 +1734,13 @@ final class SessionController {
     /// ago and the newest page are two disjoint runs, and keeping both would put
     /// a silent gap in the middle of the transcript with nothing to say it is
     /// there.
-    func jumpToMessage(_ messageID: MessageID, in channelID: ChannelID) {
+    /// - Parameter highlights: whether the landing message is lit — see
+    ///   `MessageJump.highlights`.
+    func jumpToMessage(_ messageID: MessageID, in channelID: ChannelID, highlights: Bool = true) {
         model.selectChannel(channelID)
 
         if model.messages(in: channelID)?.messages.contains(where: { $0.id == messageID }) == true {
-            model.requestJump(to: messageID, in: channelID)
+            model.requestJump(to: messageID, in: channelID, highlights: highlights)
             return
         }
         guard jumpFetches.insert(channelID).inserted else { return }
@@ -1681,25 +1753,26 @@ final class SessionController {
             defer { jumpFetches.remove(channelID) }
             do {
                 let page = try await rest.messages(in: channelID, around: messageID)
-                var namesChanged = false
-                for (userID, author) in page.authors {
-                    let merged = author.merged(over: model.users[userID])
-                    guard model.users[userID] != merged else { continue }
-                    model.users[userID] = merged
-                    namesChanged = true
-                }
-                if namesChanged { model.identityRevision &+= 1 }
-                model.applyThreadsFromMessages(page.threads)
+                absorb(page)
+                // **A jump can leave the transcript cut off from the present**,
+                // and this is where it finds out: Discord's own arithmetic over
+                // where the target landed in the page.
+                let edges = TranscriptWindow.edges(
+                    ofAround: page.messages.map(\.id),
+                    target: messageID,
+                    limit: DiscordREST.historyPageSize,
+                    newestInChannel: model.channelIndex[channelID]?.lastMessageID
+                )
                 model.mutateBox(channelID) { box in
-                    box.messages = page.messages
+                    box.receiveAround(page.messages, edges: edges)
                     box.isLoadingHistory = false
+                    box.isLoadingNewer = false
                     box.historyFailure = nil
-                    box.hasMoreHistory = page.messages.count >= DiscordREST.historyPageSize
                 }
                 model.messageContentRevision &+= 1
                 resolveSpotifyUnfurls(in: page.messages)
                 resolveMessageMembers(in: page.messages, channelID: channelID)
-                model.requestJump(to: messageID, in: channelID)
+                model.requestJump(to: messageID, in: channelID, highlights: highlights)
             } catch {
                 Self.trace("jump \(messageID) failed: \(Self.describe(error))")
                 model.mutateBox(channelID) { box in
@@ -1748,7 +1821,13 @@ final class SessionController {
         Task { [weak self] in
             guard let self else { return }
             do {
-                try await rest.typing(in: channelID)
+                // **The answer is a slowmode clock.** It is the one place a
+                // send made on another device shows up here, so the countdown
+                // is on screen before the reader presses Return rather than
+                // after the server refuses them. See `DiscordREST.typing`.
+                if let remaining = try await rest.typing(in: channelID) {
+                    model.applySlowmode(remaining: remaining, in: channelID)
+                }
             } catch {
                 // A dropped typing signal costs a reader three dots they never
                 // knew were coming. It is never worth a retry and never worth a
@@ -1863,21 +1942,39 @@ final class SessionController {
         Task { try? await rest.acknowledge(messageID, in: channelID) }
     }
 
+    /// Whether a send has anything in it: words, a sticker or a file.
+    ///
+    /// **One rule for both of its callers.** The composer asks before holding a
+    /// send for slowmode — an empty Return is not a send and must not flash a
+    /// refusal — and `send` asks before sending. Two copies would drift.
+    static func isSendable(
+        _ content: String,
+        stickerIDs: [UInt64],
+        attachments: [PendingAttachment]
+    ) -> Bool {
+        !stickerIDs.isEmpty || !attachments.isEmpty
+            || !content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
     /// - Parameter stickerIDs: Stickers to send. A sticker is a message on its
     ///   own, so this is the one path where empty content is legitimate.
     /// - Parameter attachments: Files already staged in the composer. A message
     ///   may be nothing but these, which is the second such path.
+    /// - Parameter draft: what the composer held when this left it, put back if
+    ///   the send does not land. Nil for a send that did not come from the
+    ///   composer — the overlay's reply field keeps its own text.
     func send(
         _ content: String,
         in channelID: ChannelID,
         replyingTo: MessageID?,
         stickerIDs: [UInt64] = [],
-        attachments: [PendingAttachment] = []
+        attachments: [PendingAttachment] = [],
+        restoring draft: UnsentDraft? = nil
     ) {
-        let trimmed = content.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty || !stickerIDs.isEmpty || !attachments.isEmpty,
+        guard Self.isSendable(content, stickerIDs: stickerIDs, attachments: attachments),
               model.currentUserID != nil
         else { return }
+        let trimmed = content.trimmingCharacters(in: .whitespacesAndNewlines)
         // A nonce, so the gateway's echo can be matched to this send and replace
         // the optimistic row rather than appearing beside it.
         let nonce = String(UInt64(Date.now.timeIntervalSince1970 * 1000))
@@ -1899,13 +1996,34 @@ final class SessionController {
                     stickerIDs: stickerIDs,
                     attachments: uploaded
                 )
+                let trims = model.mayTrimOldest(in: channelID)
                 model.mutateBox(channelID) { box in
-                    box.upsert(message)
+                    box.receiveLive(message, trimming: trims)
                     box.attachments.removeAll()
                 }
                 model.messageContentRevision &+= 1
+                // **Sending from older messages brings the reader back.** A
+                // message sent while cut off from the present is held, not
+                // drawn, and somebody who has just said something wants to see
+                // it land — so the transcript goes to where it did.
+                if model.messages(in: channelID)?.hasMoreNewer == true {
+                    model.jumpToPresent(in: channelID)
+                }
+                // **When Discord has taken it, not when Return was pressed** —
+                // Discord's own `SLOWMODE_RESET_COOLDOWN` follows the POST.
+                // Started earlier, a send that fails would leave the reader
+                // waiting out a cooldown for a message nobody received.
+                model.startSlowmode(afterSendIn: channelID)
             } catch {
                 Self.log.error("send failed: \(Self.describe(error), privacy: .public)")
+                if case DiscordREST.Failure.slowmode(let retryAfter) = error {
+                    model.applySlowmodeRefusal(retryAfter: retryAfter, in: channelID)
+                }
+                // **What the reader wrote comes back.** The composer cleared
+                // itself when the send left, so a send that does not land —
+                // slowmode, a dropped connection, a refusal — used to take the
+                // message with it and say so only in the log.
+                if let draft { model.restoreDraft(draft, in: channelID) }
                 // **The files stay staged.** A refused upload that also cleared
                 // the tray would ask somebody to find five pictures again
                 // because the network dropped; the reason goes where the tray
@@ -1977,6 +2095,8 @@ final class SessionController {
         case DiscordREST.Failure.notFound: "That no longer exists."
         case DiscordREST.Failure.api(let status, _, let message):
             message ?? "Discord returned \(status)."
+        case DiscordREST.Failure.slowmode:
+            "Slowmode is enabled. Wait a moment, then send it again."
         case DiscordREST.Failure.transport(let reason): reason
         case DiscordREST.Failure.decoding: "Discord sent something this client could not read."
         default: error.localizedDescription

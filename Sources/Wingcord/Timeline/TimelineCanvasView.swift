@@ -377,6 +377,8 @@ final class TimelineCanvasView: NSView {
     var onToggleBookmark: ((MessageID) -> Void)?
     /// A reply's quoted line was clicked: go to what it quotes.
     var onOpenReplyTarget: ((MessageID) -> Void)?
+    /// The open topic's marker was clicked: bring its panel back.
+    var onOpenTopicMarker: (() -> Void)?
     /// The thread chip under a message was clicked: open that thread.
     var onOpenThread: ((ChannelID) -> Void)?
     /// The pointer moved onto, or off, a message row. The rect is in the CLIP
@@ -1236,10 +1238,13 @@ final class TimelineCanvasView: NSView {
 
     override func mouseDown(with event: NSEvent) {
         let point = convert(event.locationInWindow, from: nil)
-        guard let index = rowIndex(at: point.y),
-              rows.indices.contains(index),
-              case .message(let row) = rows[index].kind
-        else { return }
+        guard let index = rowIndex(at: point.y), rows.indices.contains(index) else { return }
+        // The whole marker is its control: it is one band with one meaning.
+        if case .topicMarker = rows[index].kind {
+            onOpenTopicMarker?()
+            return
+        }
+        guard case .message(let row) = rows[index].kind else { return }
 
         switch target(in: row, at: point, rowIndex: index) {
         case .spoiler(let spoilerIndex):
@@ -1709,6 +1714,8 @@ final class TimelineCanvasView: NSView {
             case nil:
                 break
             }
+        } else if let index, rows.indices.contains(index), case .topicMarker = rows[index].kind {
+            cursor = .pointingHand
         }
         applyCursor(cursor)
 

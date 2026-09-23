@@ -30,6 +30,14 @@ public actor DiscordREST {
         case notFound
         /// Discord's own error envelope: an HTTP status plus its JSON code.
         case api(status: Int, code: Int?, message: String?)
+        /// A message refused by the channel's slowmode (code 20016), and how
+        /// long Discord says is left — nil when the body did not say.
+        ///
+        /// **Its own case because it is not a rate limit.** A 429 anywhere else
+        /// is the route's budget running out, which the limiter waits out and
+        /// retries; this one is about the reader in one channel, and waiting it
+        /// out can take six hours. See `slowmodeRefusal(status:data:)`.
+        case slowmode(retryAfter: TimeInterval?)
         case transport(String)
         case decoding(String)
     }
@@ -512,13 +520,40 @@ public actor DiscordREST {
         )
     }
 
-    public func typing(in channelID: ChannelID) async throws {
-        _ = try await requestData(
+    /// Tells the channel the reader is typing, and hears how much of its
+    /// slowmode the reader still has to wait out.
+    ///
+    /// **The answer is the only place a send made elsewhere shows up.** A 204
+    /// means no cooldown is running; a 200 carries it —
+    /// `{"message_send_cooldown_ms":1096,"thread_create_cooldown_ms":0}`,
+    /// captured in `conversations + slowmode + jump to recent.har`. Somebody who
+    /// posted from their phone ten seconds ago is refused here until the rest of
+    /// it passes, and this is how the composer knows before they press Return.
+    /// Discord's own composer reads it for exactly that (module `741961`).
+    ///
+    /// - Returns: what is left of the message cooldown, in seconds, or nil
+    ///   when nothing is.
+    public func typing(in channelID: ChannelID) async throws -> TimeInterval? {
+        let data = try await requestData(
             method: "POST",
             path: "/channels/\(channelID.rawValue)/typing",
             route: "channels/\(channelID.rawValue)/typing",
             body: Optional<Never>.none
         )
+        return Self.slowmodeCooldown(typingResponse: data)
+    }
+
+    /// The message cooldown in a typing answer. Nil for the 204's empty body,
+    /// and for a zero — the field is present and 0 when only a *thread*
+    /// cooldown is running.
+    static func slowmodeCooldown(typingResponse data: Data) -> TimeInterval? {
+        struct Answer: Decodable { var message_send_cooldown_ms: Int? }
+        guard !data.isEmpty,
+              let milliseconds = (try? decoder.decode(Answer.self, from: data))?
+                  .message_send_cooldown_ms,
+              milliseconds > 0
+        else { return nil }
+        return TimeInterval(milliseconds) / 1000
     }
 
     // MARK: Plumbing
@@ -624,6 +659,17 @@ public actor DiscordREST {
 
         guard let http = response as? HTTPURLResponse else {
             throw Failure.transport("no HTTP response")
+        }
+        // **Before the limiter hears about it.** A slowmode refusal is a 429,
+        // and the limiter would file its `Retry-After` against this route —
+        // which a channel's history fetches share with its sends — and the 429
+        // branch below would sleep it out and send again. Both are wrong for a
+        // wait that belongs to the reader in one channel and can run to six
+        // hours: the history stalls, and the message goes out long after the
+        // reader stopped expecting it to.
+        if http.statusCode == 429, let refusal = Self.slowmodeRefusal(status: 429, data: data) {
+            Self.traceRefusal(status: 429, route: route, data: data)
+            throw refusal
         }
         await limiter.update(
             route: route,
@@ -786,7 +832,33 @@ public actor DiscordREST {
         sink("HTTP \(status) \(route): \(body)")
     }
 
+    /// Discord's code for a message refused by slowmode.
+    static let slowmodeCode = 20016
+
+    /// The refusal, when it is slowmode's; nil for every other response.
+    ///
+    /// Read the way Discord's own client reads it (module `148494`): a 4xx
+    /// whose body carries code 20016, with `retry_after` in seconds beside it.
+    /// **Not captured** — nothing in `conversations + slowmode + jump to
+    /// recent.har` was sent into a running cooldown — so both fields are
+    /// optional, and a different shape of body loses the wait rather than the
+    /// refusal.
+    static func slowmodeRefusal(status: Int, data: Data) -> Failure? {
+        struct Refusal: Decodable {
+            var code: Int?
+            var retry_after: Double?
+        }
+        guard (400..<500).contains(status),
+              let refusal = try? decoder.decode(Refusal.self, from: data),
+              refusal.code == slowmodeCode
+        else { return nil }
+        return .slowmode(retryAfter: refusal.retry_after.flatMap { $0 > 0 ? $0 : nil })
+    }
+
     static func apiFailure(status: Int, data: Data) -> Failure {
+        // Every path that turns a body into a failure — the ordinary one, the
+        // captcha retry — reports slowmode as itself.
+        if let refusal = slowmodeRefusal(status: status, data: data) { return refusal }
         struct ErrorEnvelope: Decodable {
             var code: Int?
             var message: String?

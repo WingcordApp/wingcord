@@ -142,36 +142,9 @@ struct PinnedMessagesPane: View {
     }
 
     private func prefetch(_ cards: [MessageCard]) async {
-        let requests = TimelineImageRequests.requests(
-            for: cards.flatMap(\.messageRows),
-            scale: 2,
-            loadsArtwork: AppSettings.shared.loadsImagesAutomatically,
-            playsAnimatedEmoji: AnimationClock.playsAnimatedEmoji
-        )
-        guard !requests.isEmpty else { return }
-        await ScrollWorkGate.waitUntilInactive()
-        guard !Task.isCancelled else { return }
-        await withTaskGroup(of: Void.self) { group in
-            for request in requests {
-                group.addTask {
-                    switch request.source {
-                    case .still(let bucket):
-                        _ = await ImageStore.shared.image(for: request.key, bucket: bucket)
-                    case .film:
-                        _ = await AnimatedImageStore.shared.image(
-                            for: AnimatedImageStore.Key(
-                                url: request.key.url,
-                                maximumPixelSize: request.key.maximumPixelSize
-                            )
-                        )
-                    }
-                }
-            }
-        }
-        guard !Task.isCancelled else { return }
         // One nudge for the batch: the cards peek the caches on their next
         // draw, and a repaint per picture would repaint the pane per avatar.
-        artworkGeneration &+= 1
+        if await MessageCardArtwork.prefetch(cards) { artworkGeneration &+= 1 }
     }
 }
 

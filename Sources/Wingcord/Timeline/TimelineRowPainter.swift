@@ -163,6 +163,8 @@ nonisolated enum TimelineRowPainter {
             )
         case .skeleton(let index):
             drawSkeleton(index: index, in: rowFrame, context: context)
+        case .topicMarker(let title):
+            drawTopicMarker(title: title, in: rowFrame, context: context, style: style)
         case .loadingFirstPage:
             drawLoadingFirstPage(in: rowFrame, context: context, style: style)
         case .historyUnavailable(let reason):
@@ -2032,6 +2034,55 @@ nonisolated enum TimelineRowPainter {
     }
 
     // MARK: Separators
+
+    /// The open topic's marker: its title in a band across the transcript,
+    /// and the glyph that says the band opens the topic's panel.
+    ///
+    /// **A band rather than a divider.** Discord draws this as the header of
+    /// the topic's own card, and it is what the card comes back to when it is
+    /// put away — a line of text between two rules would read as one more day
+    /// heading.
+    private static func drawTopicMarker(
+        title: String,
+        in frame: CGRect,
+        context: CGContext,
+        style: MessageTextStyle
+    ) {
+        let inset = TimelineMetrics.horizontalMargin
+        let band = CGRect(
+            x: frame.minX + inset,
+            y: frame.midY - TimelineMetrics.topicMarkerBandHeight / 2,
+            width: frame.width - inset * 2,
+            height: TimelineMetrics.topicMarkerBandHeight
+        )
+        context.addPath(CGPath(
+            roundedRect: band, cornerWidth: Radius.row, cornerHeight: Radius.row, transform: nil
+        ))
+        context.setFillColor(ThemeInk.current.lift(0.06))
+        context.fillPath()
+
+        let padding: CGFloat = 10
+        let glyph = TimelineMetrics.topicMarkerGlyphSide
+        drawSymbol(
+            "arrow.up.left.and.arrow.down.right",
+            tint: style.secondaryColor,
+            in: CGRect(
+                x: band.maxX - padding - glyph,
+                y: band.midY - glyph / 2,
+                width: glyph,
+                height: glyph
+            ),
+            context: context
+        )
+        drawText(
+            title,
+            font: style.authorFont,
+            color: style.primaryColor,
+            at: CGPoint(x: band.minX + padding, y: band.midY - style.authorFont.pointSize * 0.62),
+            maxWidth: band.width - padding * 3 - glyph,
+            context: context
+        )
+    }
 
     private static func drawDaySeparator(
         label: String,

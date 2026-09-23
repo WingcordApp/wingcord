@@ -128,7 +128,7 @@ struct MessageCard: Identifiable, Sendable {
             // failure row are all statements about a whole channel's history.
             // In an excerpt they are false.
             case .conversationStart, .historySkeleton, .loadingFirstPage,
-                 .historyUnavailable: false
+                 .historyUnavailable, .topicMarker: false
             }
         }
         guard !items.isEmpty else { return nil }
@@ -165,6 +165,122 @@ struct MessageCard: Identifiable, Sendable {
         )
     }
 
+    /// A long run of messages as several excerpts, cut only where a run
+    /// begins — for a list that shows a whole topic.
+    ///
+    /// **Not `excerpt(of:)` per slice.** Each slice would open on its own day
+    /// heading and re-decide its runs; reduced once and then cut, the headings
+    /// fall where the day changes and every author line is where the
+    /// transcript would draw it.
+    ///
+    /// **Several cards rather than one**, because each card is a canvas with
+    /// a backing store the height of its content: a fifty-message topic as one
+    /// card is a bitmap ten thousand points tall, where a lazy list of slices
+    /// only holds the ones on screen.
+    static func excerpts(
+        of messages: [Message],
+        rowsPerCard: Int,
+        width: CGFloat,
+        engine: TimelineLayoutEngine,
+        style: MessageTextStyle,
+        settings: TimelineSettings,
+        mentions: MentionContext,
+        mentionedIDs: Set<UInt64>,
+        channelName: String,
+        authors: [UserID: TimelineLayoutEngine.AuthorInfo]
+    ) -> [MessageCard] {
+        let items = TimelineReducer.rows(messages: messages, mentionedIDs: mentionedIDs)
+            .filter { if case .conversationStart = $0 { false } else { true } }
+        var slices: [[TimelineItem]] = []
+        var slice: [TimelineItem] = []
+        for item in items {
+            // A day heading belongs to the message after it, so it opens a new
+            // slice rather than closing one.
+            let opensRun = switch item {
+            case .message(let message): message.isRunHead
+            case .daySeparator: true
+            default: false
+            }
+            if opensRun, slice.count >= rowsPerCard, !(slice.last.map(isDayHeading) ?? false) {
+                slices.append(slice)
+                slice = []
+            }
+            slice.append(item)
+        }
+        if !slice.isEmpty { slices.append(slice) }
+
+        var cache: [MessageID: TimelineLayoutEngine.CacheEntry] = [:]
+        return slices.compactMap { slice in
+            guard let first = slice.lazy.compactMap(\.messageID).first else { return nil }
+            let rows = engine.layout(
+                TimelineLayoutEngine.Input(
+                    items: slice,
+                    width: width,
+                    style: style,
+                    mentions: mentions,
+                    channelName: channelName,
+                    authors: authors,
+                    calendar: .current,
+                    settings: settings
+                ),
+                cache: &cache
+            )
+            return MessageCard(
+                id: first,
+                rows: rows,
+                height: rows.reduce(0) { $0 + $1.height },
+                accessibilityLabel: rows.compactMap { row -> String? in
+                    if case .message(let message) = row.kind { return message.accessibilityLabel }
+                    return nil
+                }.joined(separator: ". ")
+            )
+        }
+
+        func isDayHeading(_ item: TimelineItem) -> Bool {
+            if case .daySeparator = item { true } else { false }
+        }
+    }
+}
+
+/// The pictures a set of cards draws, asked for once.
+///
+/// **The painter only peeks** (`INVARIANTS.md` §2), so a surface that draws
+/// cards has to ask for their pictures itself — and three do: the pinned pane,
+/// a topic's preview and a topic's panel. One loop, behind the scroll gate like
+/// every other optional fetch, over the one request builder the transcript
+/// uses.
+enum MessageCardArtwork {
+    /// - Returns: whether anything was fetched, so the caller repaints once for
+    ///   the batch rather than once per picture.
+    static func prefetch(_ cards: [MessageCard]) async -> Bool {
+        let requests = TimelineImageRequests.requests(
+            for: cards.flatMap(\.messageRows),
+            scale: 2,
+            loadsArtwork: AppSettings.shared.loadsImagesAutomatically,
+            playsAnimatedEmoji: AnimationClock.playsAnimatedEmoji
+        )
+        guard !requests.isEmpty else { return false }
+        await ScrollWorkGate.waitUntilInactive()
+        guard !Task.isCancelled else { return false }
+        await withTaskGroup(of: Void.self) { group in
+            for request in requests {
+                group.addTask {
+                    switch request.source {
+                    case .still(let bucket):
+                        _ = await ImageStore.shared.image(for: request.key, bucket: bucket)
+                    case .film:
+                        _ = await AnimatedImageStore.shared.image(
+                            for: AnimatedImageStore.Key(
+                                url: request.key.url,
+                                maximumPixelSize: request.key.maximumPixelSize
+                            )
+                        )
+                    }
+                }
+            }
+        }
+        return !Task.isCancelled
+    }
 }
 
 /// Paints a `MessageCard`.

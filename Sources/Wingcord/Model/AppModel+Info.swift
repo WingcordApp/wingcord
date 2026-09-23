@@ -340,12 +340,13 @@ extension AppModel {
     /// The token is what makes the *same* message reachable twice: without it
     /// the request value is unchanged, the representable sees no difference, and
     /// the second click reads as a broken link.
-    func requestJump(to messageID: MessageID, in channelID: ChannelID) {
+    func requestJump(to messageID: MessageID, in channelID: ChannelID, highlights: Bool = true) {
         jumpToken &+= 1
         pendingJump = MessageJump(
             channelID: channelID,
             messageID: messageID,
-            token: jumpToken
+            token: jumpToken,
+            highlights: highlights
         )
     }
 

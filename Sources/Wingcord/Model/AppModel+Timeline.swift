@@ -15,6 +15,7 @@ extension AppModel {
         let box = messageBoxes[channelID]
         let readState = readStates[channelID]
         let mentionable = mentionableIDs
+        let marker = openTopic.flatMap { $0.channelID == channelID ? $0.topic : nil }
         let key = TimelineMemoKey(
             channelID: channelID,
             messageCount: box?.messages.count ?? 0,
@@ -22,6 +23,8 @@ extension AppModel {
             oldestID: box?.messages.first?.id,
             anchor: readState?.lastAcknowledgedID,
             hasMoreHistory: box?.hasMoreHistory ?? false,
+            hasMoreNewer: box?.hasMoreNewer ?? false,
+            topicMarker: marker?.id,
             failure: box?.historyFailure,
             contentRevision: messageContentRevision
         )
@@ -32,6 +35,8 @@ extension AppModel {
             unreadAnchor: readState?.lastAcknowledgedID,
             mentionedIDs: mentionable,
             hasMoreHistory: box?.hasMoreHistory ?? false,
+            hasMoreNewer: box?.hasMoreNewer ?? false,
+            topicMarker: marker,
             failure: box?.historyFailure
         )
         timelineCache = (key, value)
@@ -286,7 +291,73 @@ extension AppModel {
         box.historyFailure = nil
         box.isLoadingHistory = true
         setMessages(box, in: channelID)
-        historyLoader?(channelID, box.messages.first?.id)
+        historyLoader?(channelID, .older(before: box.messages.first?.id))
+    }
+
+    /// Asks for the page below a window cut off from the present. Guarded the
+    /// way the page above is, and for the same reason.
+    func loadLaterHistory(in channelID: ChannelID) {
+        guard var box = messageBoxes[channelID], box.hasMoreNewer, !box.isLoadingNewer,
+              !box.newerPageFailed, let last = box.messages.last?.id
+        else { return }
+        box.isLoadingNewer = true
+        setMessages(box, in: channelID)
+        historyLoader?(channelID, .newer(after: last))
+    }
+
+    /// Takes a transcript to its foot.
+    ///
+    /// **One entry point for the control, for Escape and for a send**, and it
+    /// does one of two things. A window that reaches the present is scrolled —
+    /// the coordinator owns that, so this only asks. One cut off from it cannot
+    /// be scrolled there: the newest page is fetched in its place, which is
+    /// Discord's own `jumpToPresent` (module `148494`) without the cache of
+    /// trimmed pages it keeps to skip the fetch.
+    func jumpToPresent(in channelID: ChannelID) {
+        presentToken &+= 1
+        presentRequest = PresentRequest(channelID: channelID, token: presentToken)
+        guard var box = messageBoxes[channelID], box.hasMoreNewer else { return }
+        box.isLoadingNewer = true
+        box.newerPageFailed = false
+        setMessages(box, in: channelID)
+        historyLoader?(channelID, .present)
+    }
+
+    /// Escape's last step in the composer, for the transcript behind it: a
+    /// topic's panel goes first, then a transcript cut off from the present
+    /// goes back to it — Discord's own last binding (module `92960`).
+    ///
+    /// - Returns: whether it did anything, so a press that found nothing to
+    ///   do can fall through.
+    func escapeTranscript(in channelID: ChannelID) -> Bool {
+        if let open = openTopic, open.channelID == channelID, open.showsPanel {
+            closeTopicPanel()
+            return true
+        }
+        guard messageBoxes[channelID]?.hasMoreNewer == true else { return false }
+        jumpToPresent(in: channelID)
+        return true
+    }
+
+    /// Records whether one transcript is away from its channel's foot. See
+    /// `viewersAwayFromFoot`.
+    func setTranscript(
+        _ channelID: ChannelID,
+        isAwayFromFoot: Bool,
+        viewer: ObjectIdentifier
+    ) {
+        if isAwayFromFoot {
+            viewersAwayFromFoot[channelID, default: []].insert(viewer)
+        } else if viewersAwayFromFoot[channelID]?.remove(viewer) != nil,
+                  viewersAwayFromFoot[channelID]?.isEmpty == true
+        {
+            viewersAwayFromFoot[channelID] = nil
+        }
+    }
+
+    /// Whether a live message may trim the oldest of this channel's window.
+    func mayTrimOldest(in channelID: ChannelID) -> Bool {
+        viewersAwayFromFoot[channelID] == nil
     }
 }
 
@@ -310,6 +381,8 @@ struct TimelineMemoKey: Hashable, Sendable {
     var oldestID: MessageID?
     var anchor: MessageID?
     var hasMoreHistory: Bool
+    var hasMoreNewer: Bool
+    var topicMarker: ConversationTopicID?
     var failure: String?
     /// Moves when a message's *content* changes without the set changing — an
     /// edit, a reaction, an embed unfurling. Without it, editing a message in

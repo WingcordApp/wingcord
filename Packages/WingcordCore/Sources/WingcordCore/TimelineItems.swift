@@ -25,12 +25,21 @@ public enum TimelineItem: Hashable, Sendable {
     /// also means the request goes out earlier, because the placeholder
     /// materialises as the viewport approaches it rather than when it arrives.
     ///
-    /// **It only appears ABOVE messages that already exist.** A runway is a
-    /// gesture affordance — somewhere for a flick that is already travelling to
-    /// go — and there is no such gesture on a channel that has not loaded yet.
-    /// Twenty placeholder groups filling an empty viewport is not a loading
-    /// state, it is a wall of grey bars that looks like the real content failed.
+    /// **It only appears BESIDE messages that already exist** — above them while
+    /// older history remains, and below them while the transcript is cut off
+    /// from the present. A runway is a gesture affordance — somewhere for a
+    /// flick that is already travelling to go — and there is no such gesture on
+    /// a channel that has not loaded yet. Twenty placeholder groups filling an
+    /// empty viewport is not a loading state, it is a wall of grey bars that
+    /// looks like the real content failed.
+    ///
+    /// The index runs on across both runways, so no two rows of one transcript
+    /// are equal values.
     case historySkeleton(index: Int)
+    /// The open topic's marker, above the message it begins with — Discord's
+    /// conversation header (module `247933`), which is where the topic's panel
+    /// goes back to and how it is found again.
+    case topicMarker(ConversationTopicID, title: String)
     /// The first page is still in flight. One quiet row, not a runway.
     case loadingFirstPage
     /// The first page was asked for and did not arrive.
@@ -123,6 +132,10 @@ public enum TimelineReducer {
     ///   - mentionedIDs: The reader's own id and every role they hold, so a
     ///     mention test is one set lookup rather than a scan.
     ///   - hasMoreHistory: Whether to lay a skeleton runway above the first row.
+    ///   - hasMoreNewer: Whether to lay one below the last — the transcript is
+    ///     a window cut off from the present, and newer pages are still to come.
+    ///   - topicMarker: the open topic, marked above its first message when
+    ///     that message is loaded.
     ///   - calendar: Injected so a test can pin a time zone.
     public static func rows(
         messages: [Message],
@@ -130,6 +143,8 @@ public enum TimelineReducer {
         mentionedIDs: Set<UInt64> = [],
         mentionsEveryoneCountsAsMention: Bool = true,
         hasMoreHistory: Bool = false,
+        hasMoreNewer: Bool = false,
+        topicMarker: ConversationTopic? = nil,
         failure: String? = nil,
         skeletonDepth: Int = 20,
         calendar: Calendar = .current
@@ -147,7 +162,11 @@ public enum TimelineReducer {
         // runway; reserving the common case avoids the array growing four times
         // on a 100-message page.
         var rows: [TimelineItem] = []
-        rows.reserveCapacity(messages.count + 8 + (hasMoreHistory ? skeletonDepth : 1))
+        rows.reserveCapacity(
+            messages.count + 8
+                + (hasMoreHistory ? skeletonDepth : 1)
+                + (hasMoreNewer ? skeletonDepth : 0)
+        )
 
         if hasMoreHistory {
             for index in 0..<skeletonDepth { rows.append(.historySkeleton(index: index)) }
@@ -174,12 +193,19 @@ public enum TimelineReducer {
                 anchor: unreadAnchor
             )
 
-            // A day change, an unread divider, a different author, a system
-            // event, a reply, or too long a gap all break the run. Each of these
-            // puts something between the two messages, and a run whose members
-            // are not adjacent is not a run.
+            // **Only over a topic of more than one message**, as Discord's own
+            // stream does: a marker over a single line labels nothing.
+            let startsTopic = topicMarker.map {
+                $0.messageCount > 1 && $0.startMessageID == message.id
+            } ?? false
+
+            // A day change, an unread divider, a topic's marker, a different
+            // author, a system event, a reply, or too long a gap all break the
+            // run. Each of these puts something between the two messages, and a
+            // run whose members are not adjacent is not a run.
             let breaksRun = startsDay
                 || isUnreadBoundary
+                || startsTopic
                 || previous?.authorID != message.authorID
                 || message.kind == .reply
                 || message.isSystemEvent
@@ -198,6 +224,9 @@ public enum TimelineReducer {
             if isUnreadBoundary {
                 rows.append(.unreadDivider)
                 dividerPlaced = true
+            }
+            if startsTopic, let topicMarker {
+                rows.append(.topicMarker(topicMarker.id, title: topicMarker.title))
             }
 
             var flags: TimelineMessage.RunFlags = []
@@ -221,6 +250,12 @@ public enum TimelineReducer {
         // The newest message always closes its run.
         if let index = lastMessageRowIndex { Self.setTail(in: &rows, at: index) }
         _ = openHeadIndex
+
+        if hasMoreNewer {
+            for index in skeletonDepth..<(skeletonDepth * 2) {
+                rows.append(.historySkeleton(index: index))
+            }
+        }
 
         return rows
     }

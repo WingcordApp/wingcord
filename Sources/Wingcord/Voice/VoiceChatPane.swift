@@ -56,7 +56,7 @@ struct VoiceChatPane: View {
         TimelineContainer(channelID: channelID, topInset: 0, bottomInset: composerHeight)
             .safeAreaBar(edge: .bottom, spacing: 0) {
                 VStack(spacing: 0) {
-                    TypingIndicatorContainer(channelID: channelID)
+                    ComposerStatusRow(channelID: channelID)
                     ComposerContainer(channelID: channelID)
                 }
                 .background {

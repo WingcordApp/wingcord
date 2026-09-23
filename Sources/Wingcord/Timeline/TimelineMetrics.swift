@@ -102,6 +102,11 @@ nonisolated enum TimelineMetrics {
     static let skeletonHeight: CGFloat = 56
     /// The quiet "still loading" line shown before the first page lands.
     static let loadingRowHeight: CGFloat = 36
+    /// The open topic's marker: a band with the title in it, and the band.
+    static let topicMarkerHeight: CGFloat = 40
+    static let topicMarkerBandHeight: CGFloat = 30
+    /// The expand glyph at the band's trailing end.
+    static let topicMarkerGlyphSide: CGFloat = 13
     /// The "this did not load" block: a symbol, a headline and the reason.
     static let historyUnavailableHeight: CGFloat = 108
 

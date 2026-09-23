@@ -71,6 +71,10 @@ struct Composer: View {
     /// Replies to the newest message. Returns false when there is nothing to
     /// reply to, so Up falls through to the text view instead of dying.
     var replyToLatest: () -> Bool = { false }
+    /// Escape's last step, for the transcript this composer belongs to — see
+    /// `AppModel.escapeTranscript(in:)`. Returns false when there was nothing
+    /// to do, so the key falls through.
+    var escapeTranscript: () -> Bool = { false }
     var attach: () -> Void = {}
     /// Whether `+` and the drop target are offered at all. A channel that
     /// refuses files gets neither — `INVARIANTS.md` §5.5.
@@ -543,6 +547,8 @@ struct Composer: View {
     ///
     /// A list dismisses first, then a command is abandoned, then an edit — so
     /// one press never throws away both a command and the message underneath it.
+    /// Only a press none of them wanted reaches the transcript behind the bar,
+    /// which is where Discord's own chain ends (module `92960`).
     private func pressedEscape() -> KeyPress.Result {
         if pendingCommand != nil {
             cancelCommand()
@@ -560,9 +566,11 @@ struct Composer: View {
             dismissCompletions()
             return .handled
         }
-        guard isEditing else { return .ignored }
-        cancelEdit()
-        return .handled
+        if isEditing {
+            cancelEdit()
+            return .handled
+        }
+        return escapeTranscript() ? .handled : .ignored
     }
 
     /// The four controls at the bar's trailing end, in the reader's own order.

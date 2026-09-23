@@ -665,6 +665,7 @@ enum DemoFixtures {
 
         if let channelID = model.selectedChannelID {
             model.setMessages(transcript(in: channelID, users: users), in: channelID)
+            populateTopics(model, in: channelID, guildID: first)
         }
 
         // **The guide's first resource gets a transcript too**, so the preview
@@ -677,6 +678,15 @@ enum DemoFixtures {
             .first
         if let resourceChannelID {
             model.setMessages(transcript(in: resourceChannelID, users: users), in: resourceChannelID)
+            // **Slowmode, on the one other channel that has a transcript**, so
+            // the composer's slowmode line can be looked at without a server
+            // that sets one — and the channel the demo opens on stays as it
+            // was. Half a minute is a common real limit and long enough to
+            // read the countdown.
+            if var channel = model.channelIndex[resourceChannelID] {
+                channel.rateLimitPerUser = 30
+                model.channelIndex.upsert(channel)
+            }
         }
 
         // The guide's welcome is written by the owner, and the crown beside it
@@ -1767,6 +1777,50 @@ enum DemoFixtures {
         box.messages = messages
         box.hasMoreHistory = true
         return box
+    }
+
+    /// Topics over the demo channel's own transcript, so the minimap, its
+    /// flyouts, the panel and the marker can all be looked at without a server
+    /// that summarises.
+    ///
+    /// **Everything a fetch would bring is put in place up front**: `--demo`
+    /// has no session, so a preview or a panel that had to ask for its messages
+    /// would never have any. Each topic takes every other message of its
+    /// stretch, the way a real one gathers a conversation from among others.
+    private static func populateTopics(_ model: AppModel, in channelID: ChannelID, guildID: GuildID) {
+        model.guilds[guildID]?.features.insert(AppModel.topicsFeature)
+        let messages = model.messages(in: channelID)?.messages ?? []
+        let titles: [(String, String)] = [
+            ("Iris 1.9 shaders", "Which shader packs already run on the new pipeline, and which still need an update."),
+            ("Voxy distant horizons", "How far Voxy renders before it costs frames, and the settings people landed on."),
+            ("Crash on world load", "A crash when joining a world, narrowed to one mod's mixin and a workaround."),
+            ("Screenshot contest rules", "What counts as an entry, how voting works and when it closes."),
+            ("Mac performance tips", "What helps on Apple silicon: memory, render distance, and a JVM flag."),
+        ]
+        let stretch = messages.count / (titles.count + 1)
+        guard stretch >= 8 else { return }
+        var topics: [ConversationTopic] = []
+        for (offset, (title, summary)) in titles.enumerated() {
+            let slice = messages[(offset * stretch)..<((offset + 1) * stretch)]
+            let gathered = slice.enumerated().filter { $0.offset % 2 == 0 }.map(\.element)
+            guard let start = gathered.first, let end = gathered.last else { continue }
+            let topic = ConversationTopic(
+                id: ConversationTopicID(rawValue: start.id.rawValue),
+                title: title,
+                summary: summary,
+                startMessageID: start.id,
+                endMessageID: end.id,
+                messageCount: gathered.count
+            )
+            topics.append(topic)
+            model.topicMessages[topic.id] = gathered
+        }
+        model.conversationTopics[channelID] = ChannelTopics(
+            topics: topics,
+            coversPresent: true,
+            reachedOldest: true,
+            fetchedAt: .now
+        )
     }
 
     /// The bot avatars behind those apps, where a capture recorded one.

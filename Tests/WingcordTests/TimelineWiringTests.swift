@@ -51,6 +51,7 @@ struct TimelineWiringTests {
         #expect(canvas.isFavoriteGIF != nil, "which way that star points")
         #expect(canvas.onTogglePreview != nil, "a music card's Preview chip")
         #expect(canvas.onOpenMusicPlayer != nil, "a music card's Open chip")
+        #expect(canvas.onOpenTopicMarker != nil, "an open topic's marker")
 
         // Keeps the coordinator alive to here. See the note above.
         withExtendedLifetime(coordinator) {}

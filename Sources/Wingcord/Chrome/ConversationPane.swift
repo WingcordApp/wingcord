@@ -138,7 +138,7 @@ struct ConversationPane: View {
                         // Above the composer, not below it. The composer floats
                         // at the window's foot, so a line under it is a line
                         // jammed against the edge of the screen.
-                        TypingIndicatorContainer(channelID: channelID)
+                        ComposerStatusRow(channelID: channelID)
                         ComposerContainer(channelID: channelID)
                     }
                 }

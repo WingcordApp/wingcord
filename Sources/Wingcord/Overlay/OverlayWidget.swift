@@ -444,9 +444,10 @@ private struct OverlayToast: View {
     private func send() {
         let text = controller.replyDraft
         guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
-        // Cleared before the send so a second Return on a slow round trip cannot
-        // post the same line twice.
-        controller.cancelReply()
+        // **Not cleared here.** A reply that goes dismisses its toast, which
+        // closes the field with it — synchronously, so a second Return on a
+        // slow round trip finds nothing to post twice. One held back for
+        // slowmode keeps its text for the next Return.
         model.replyFromOverlay(text, to: notice)
     }
 }

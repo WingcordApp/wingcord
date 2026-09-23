@@ -133,7 +133,11 @@ extension AppModel {
     /// for a conversation they already dealt with.
     func replyFromOverlay(_ text: String, to notice: OverlayNotice) {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return }
+        // **Held inside a slowmode wait, and the toast stays up with the reply
+        // still in its field** — there is no composer to put it back in.
+        // Dismissing is what clears the field, so a reply that goes cannot be
+        // posted twice by a second Return.
+        guard !trimmed.isEmpty, !holdsForSlowmode(notice.channelID) else { return }
         sessionController.send(trimmed, in: notice.channelID, replyingTo: notice.messageID)
         sessionController.acknowledge(notice.messageID, in: notice.channelID)
         overlay.dismiss(notice)

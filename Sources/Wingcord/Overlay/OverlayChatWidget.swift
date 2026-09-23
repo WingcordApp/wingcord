@@ -269,7 +269,7 @@ private struct OverlayChatBody: View {
             // as a bar, which is what the scroll edge effect keys off.
             .safeAreaBar(edge: .bottom, spacing: 0) {
                 VStack(spacing: 0) {
-                    TypingIndicatorContainer(channelID: channelID)
+                    ComposerStatusRow(channelID: channelID)
                     ComposerContainer(channelID: channelID)
                 }
                 // **Floating, not flush.** The window is a rounded panel and a

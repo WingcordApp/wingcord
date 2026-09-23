@@ -45,14 +45,8 @@ struct QuickSwitcherPresenter: ViewModifier {
     /// roles"). The scrim is this panel's answer to the same problem, and it
     /// keeps the material where the card had to give it up.
     ///
-    /// Walked up, not picked. At 0.45 — the profile card's — a message body and
-    /// a blue link were plainly readable across the rows and the footer was
-    /// illegible; at 0.62 the heading over a paragraph still competed. 0.78
-    /// leaves the window's shapes showing through the glass and its *text* as a
-    /// ghost, which is what a lensing material over a dimmed window should look
-    /// like. It is also the honest signal: this is the most modal surface in the
-    /// app, because it takes the whole keyboard.
-    private static let scrim: Double = 0.78
+    /// `Palette.modalScrim` records how its strength was walked up, on this
+    /// panel; a topic's panel shares it.
 
     func body(content: Content) -> some View {
         content.overlay {
@@ -88,7 +82,7 @@ struct QuickSwitcherPresenter: ViewModifier {
     /// the panel then lenses.
     private var dismissLayer: some View {
         Button { model.closeQuickSwitch() } label: {
-            Color.black.opacity(Self.scrim).contentShape(.rect)
+            Palette.modalScrim.contentShape(.rect)
         }
         .buttonStyle(.plain)
         .keyboardShortcut(.cancelAction)

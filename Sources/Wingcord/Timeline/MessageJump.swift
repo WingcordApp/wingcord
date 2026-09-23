@@ -17,6 +17,9 @@ struct MessageJump: Equatable, Sendable {
     var channelID: ChannelID
     var messageID: MessageID
     var token: UInt64
+    /// Whether the landing message is lit. False where something else already
+    /// marks the place — a topic's marker, above the message it opens on.
+    var highlights = true
 
     /// How long the landing mark stays lit.
     ///
@@ -25,4 +28,16 @@ struct MessageJump: Equatable, Sendable {
     /// mark is how the app answers "here". `INVARIANTS.md` §3 exempts exactly
     /// this category from the 200 ms bar.
     static let highlightDuration: Duration = .seconds(1)
+}
+
+/// A request to put a transcript at its foot: the newest message, above the
+/// composer.
+///
+/// `MessageJump`'s shape and for its reasons — a value on the store, because
+/// what asks has no reference to the scroll view, and a token, because asking
+/// twice is two requests. No message and no mark: the foot is not a message
+/// to find, and landing there is its own answer.
+struct PresentRequest: Equatable, Sendable {
+    var channelID: ChannelID
+    var token: UInt64
 }

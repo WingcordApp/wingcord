@@ -64,7 +64,7 @@ struct ThreadPanel: View {
 
     private var foot: some View {
         VStack(spacing: 0) {
-            TypingIndicatorContainer(channelID: presentation.channelID)
+            ComposerStatusRow(channelID: presentation.channelID)
             if presentation.canSend {
                 ComposerContainer(channelID: presentation.channelID)
             } else {

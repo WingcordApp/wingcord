@@ -67,6 +67,7 @@ struct ComposerContainer: View {
             cancelReply: { model.cancelReply(in: channelID) },
             cancelEdit: { model.cancelEdit(in: channelID) },
             replyToLatest: { model.replyToLatestMessage() },
+            escapeTranscript: { model.escapeTranscript(in: channelID) },
             attach: { isChoosingFiles = true },
             canAttach: model.canAttachFiles(in: channelID),
             attachments: box?.attachments ?? [],

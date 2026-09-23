@@ -35,6 +35,10 @@ extension AppModel {
         // A banner about a channel the reader is now reading is chrome
         // describing something they have already done.
         notifier.clear(channelID)
+        // **A topic stays with the channel it was opened in** — Discord clears
+        // it on `CHANNEL_SELECT` — or coming back would bring a panel up that
+        // the reader put down by leaving.
+        if let open = openTopic, open.channelID != channelID { openTopic = nil }
         sessionController.openChannel(channelID)
     }
 
@@ -43,7 +47,19 @@ extension AppModel {
         in channelID: ChannelID,
         stickerIDs: [UInt64] = []
     ) {
-        guard let box = messages(in: channelID) else {
+        let box = messages(in: channelID)
+        // An empty Return is not a send, so it must not flash a slowmode
+        // refusal at somebody who has not tried to say anything.
+        guard SessionController.isSendable(
+            content, stickerIDs: stickerIDs, attachments: box?.attachments ?? []
+        ) else { return }
+        guard box?.isUploading != true else { return }
+        // **Held inside a slowmode wait, with everything left where it was** —
+        // the draft, the reply and the tray. Discord's composer refuses the
+        // same way (module `806150`): a send it knows the server will refuse
+        // is not attempted.
+        guard !holdsForSlowmode(channelID) else { return }
+        guard let box else {
             sessionController.send(content, in: channelID, replyingTo: nil, stickerIDs: stickerIDs)
             return
         }
@@ -51,19 +67,34 @@ extension AppModel {
         // the send is what removes them once Discord has taken them — clearing
         // now means a refused upload has nothing left to retry with. The draft
         // and the reply are cleared, because those the composer has already
-        // committed.
-        guard !box.isUploading else { return }
+        // committed — and they travel with the send, so one that does not land
+        // can put them back.
         sessionController.send(
             content,
             in: channelID,
             replyingTo: box.replyingTo,
             stickerIDs: stickerIDs,
-            attachments: box.attachments
+            attachments: box.attachments,
+            restoring: UnsentDraft(text: box.draft, replyingTo: box.replyingTo)
         )
         mutateBox(channelID) {
             $0.draft = ""
             $0.replyingTo = nil
             $0.attachmentRefusal = nil
+        }
+    }
+
+    /// Puts back what the composer held when a send that did not land left it.
+    ///
+    /// **Only into an empty composer.** Somebody who started the next message
+    /// while the first was in flight keeps what they are typing; losing that
+    /// instead would be the same defect aimed at a different message.
+    func restoreDraft(_ draft: UnsentDraft, in channelID: ChannelID) {
+        guard !draft.text.isEmpty || draft.replyingTo != nil else { return }
+        mutateBox(channelID) { box in
+            guard box.draft.isEmpty else { return }
+            box.draft = draft.text
+            if box.replyingTo == nil { box.replyingTo = draft.replyingTo }
         }
     }
 
@@ -176,9 +207,12 @@ extension AppModel {
     }
 
     func markRead(_ channelID: ChannelID) {
-        guard let newest = messageBoxes[channelID]?.messages.last?.id
-            ?? channelIndex[channelID]?.lastMessageID
-        else { return }
+        // **The channel's newest, not the window's, when it is cut off from
+        // the present.** The last loaded message is then a year old, and
+        // acknowledging it would mark the channel read up to a year ago.
+        let box = messageBoxes[channelID]
+        let loaded = box?.hasMoreNewer == true ? nil : box?.messages.last?.id
+        guard let newest = loaded ?? channelIndex[channelID]?.lastMessageID else { return }
         sessionController.acknowledge(newest, in: channelID)
     }
 
