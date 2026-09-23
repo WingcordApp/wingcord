@@ -1,5 +1,4 @@
 import SwiftUI
-import WingcordCore
 
 // MARK: - What these pages need that the app's own settings never did
 //

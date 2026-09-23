@@ -192,12 +192,7 @@ final class BackdropRenderer {
             // Released rather than kept: a picture nobody is drawing is a couple
             // of megabytes of resident bitmap, and the reader just said they did
             // not want it.
-            if image != nil {
-                image = nil
-                // The drawn canvases paint the same ground and observe nothing,
-                // so they are told. See `CanvasGround`.
-                CanvasGround.invalidate()
-            }
+            if image != nil { image = nil }
             return
         }
 
@@ -221,7 +216,6 @@ final class BackdropRenderer {
             // write a stale picture into shared state.
             guard !Task.isCancelled, renderedKey == key else { return }
             image = rendered
-            CanvasGround.invalidate()
         }
     }
 

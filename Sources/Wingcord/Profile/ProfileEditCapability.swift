@@ -1,5 +1,4 @@
 import Foundation
-import WingcordCore
 
 /// What the reader is actually allowed to change, field by field.
 ///

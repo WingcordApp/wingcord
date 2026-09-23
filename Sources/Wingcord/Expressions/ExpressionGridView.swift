@@ -2,7 +2,6 @@ import AppKit
 import CoreGraphics
 import Foundation
 import SwiftUI
-import WingcordCore
 
 // MARK: - The canvas
 

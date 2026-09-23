@@ -1,5 +1,4 @@
 import SwiftUI
-import WingcordCore
 
 /// "Game Collection" on the small card: a label, a few covers, and how many more
 /// there are.

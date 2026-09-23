@@ -1,5 +1,4 @@
 import SwiftUI
-import WingcordCore
 
 // MARK: - The vocabulary the three server pages are built from
 //

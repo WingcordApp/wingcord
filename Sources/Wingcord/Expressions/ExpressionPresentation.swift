@@ -1,6 +1,5 @@
 import CoreGraphics
 import Foundation
-import WingcordCore
 
 // MARK: - What the picker draws
 //

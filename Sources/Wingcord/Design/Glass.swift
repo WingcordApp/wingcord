@@ -197,8 +197,8 @@ extension View {
     ///
     /// The top keeps its soft edge: what a list passes under up there is the
     /// window's own opaque chrome, which is the case the effect exists for.
-    /// This is the same split the transcript already has — `ScrollEdgeBlur` at
-    /// the top, nothing at the composer.
+    /// This is the same split the transcript already has — AppKit's scroll
+    /// pocket at the top, nothing at the composer.
     func softScrollEdgeTopOnly() -> some View {
         scrollEdgeEffectStyle(.soft, for: .top)
             .scrollEdgeEffectHidden(true, for: .bottom)

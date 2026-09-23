@@ -1,6 +1,5 @@
 import SwiftUI
 import WingcordCore
-import WingcordNet
 
 /// The board, while the reader is editing their own profile.
 ///

@@ -1,5 +1,4 @@
 import SwiftUI
-import WingcordCore
 
 /// The window's one row of chrome.
 ///

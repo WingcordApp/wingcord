@@ -1,5 +1,4 @@
 import SwiftUI
-import WingcordCore
 
 /// The channel name, in the toolbar.
 ///

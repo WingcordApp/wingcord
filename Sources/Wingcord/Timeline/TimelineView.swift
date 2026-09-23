@@ -103,8 +103,6 @@ final class TimelineCoordinator: NSObject {
     private unowned let model: AppModel
 
     private var scrollView: NSScrollView?
-    /// The ground and the scroll-edge strip. See `CanvasChrome`.
-    private var chrome: CanvasChrome?
     private var documentView: TimelineDocumentView?
     private var canvas: TimelineCanvasView?
 
@@ -343,15 +341,6 @@ final class TimelineCoordinator: NSObject {
         self.canvas = canvas
         self.documentView = document
         self.scrollView = scrollView
-        // The reading surface's ground, and the strip where rows pass under the
-        // window's chrome. The transcript's strip needs no pointer: a reader
-        // looking at a channel is looking at exactly the content going under
-        // the bar, and the treatment is what tells them it continues up there.
-        chrome = CanvasChrome(
-            installedIn: scrollView,
-            role: .reading,
-            trigger: .contentBehind
-        )
 
         observe(scrollView)
         return scrollView
@@ -474,8 +463,6 @@ final class TimelineCoordinator: NSObject {
         highlightTask?.cancel()
         highlightTask = nil
         canvas = nil
-        chrome?.tearDown()
-        chrome = nil
         documentView = nil
         scrollView = nil
         ScrollWorkGate.endIfOwned(by: ObjectIdentifier(self))
@@ -517,12 +504,13 @@ final class TimelineCoordinator: NSObject {
             // the content scrollable under the bar, where extra canvas padding
             // would leave dead space that can never hold a message.
             //
-            // **The top one is what gives the toolbar something to treat.** The
-            // transcript used to stop at the toolbar's foot, so the strip across
-            // the top of the window had nothing behind it but the ground and
-            // read as a painted slab. Running underneath and paying for it with
-            // an inset is the same trade the composer's end already makes, and
-            // it is the whole of what a scroll-edge effect needs to exist.
+            // **The top one is the whole scroll edge.** A scroll view that runs
+            // under the toolbar with a top inset gets AppKit's own scroll pocket
+            // across that inset — the soft blur the system draws wherever content
+            // passes under a window's chrome. Nothing here draws it or gates it:
+            // over an empty ground it is invisible, and over rows it is the edge.
+            // Stopped at the toolbar's foot instead, the transcript had nothing
+            // passing under the bar and there was no edge to draw.
             //
             // The bottom arithmetic elsewhere in this file is unaffected: an
             // `NSClipView` scrolled fully down still sits at
@@ -534,10 +522,6 @@ final class TimelineCoordinator: NSObject {
             scrollView.scrollerInsets = NSEdgeInsets(
                 top: max(0, topInset), left: 0, bottom: max(0, bottomInset), right: 0
             )
-            // The treatment is the chrome's height, so it is told the same
-            // number the inset is — not a constant of its own that can drift
-            // from it.
-            chrome?.chromeHeight = max(0, topInset)
             // The scrollable range just changed by the delta. A reader sitting
             // at the bottom has to stay there, or growing the composer by a line
             // silently scrolls the newest message out from under them.
@@ -636,9 +620,6 @@ final class TimelineCoordinator: NSObject {
         scrollView.contentView.scroll(to: NSPoint(x: 0, y: min(maximum, max(0, target))))
         scrollView.reflectScrolledClipView(scrollView.contentView)
         isApplyingUpdate = false
-        // The scroll that just happened raised its bounds notification inside
-        // the suppression window above, so the strip has not been told.
-        chrome?.refreshEngagement()
         isNearBottom = TimelineViewportPolicy.isNearBottom(
             viewport: scrollView.contentView.bounds,
             documentHeight: canvas.contentHeight,
@@ -722,7 +703,6 @@ final class TimelineCoordinator: NSObject {
             restore(anchor)
         }
         isApplyingUpdate = false
-        chrome?.refreshEngagement()
 
         positionCanvas()
         schedulePrefetch()
@@ -733,10 +713,6 @@ final class TimelineCoordinator: NSObject {
 
     private func resizeDocument(to height: CGFloat) {
         guard let documentView, let scrollView else { return }
-        // The strip is gated on how much content is under the chrome, which the
-        // document's own height cannot answer — it is padded out to the
-        // viewport below. See `CanvasChrome.overlap(in:)`.
-        chrome?.contentHeight = height
         let viewport = scrollView.contentView.bounds
         let size = NSSize(
             // The document is pinned to the viewport's width. A transient wider
@@ -758,11 +734,6 @@ final class TimelineCoordinator: NSObject {
 
     private func viewportDidChange() {
         guard !isTornDown, !isApplyingUpdate, let scrollView, let canvas else { return }
-        // **Before the early returns below.** Both of them are the first-layout
-        // path, which is exactly when the ground and the strip have never been
-        // sized — and a strip that misses it stays at zero width for the life of
-        // the window.
-        chrome?.viewportDidChange()
         let viewport = scrollView.contentView.bounds
 
         // The bootstrap case, and the resize case, are the same case: the width

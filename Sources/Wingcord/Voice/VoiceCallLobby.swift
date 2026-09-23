@@ -1,5 +1,4 @@
 import SwiftUI
-import WingcordCore
 
 // MARK: - A call that is already happening, without you
 //

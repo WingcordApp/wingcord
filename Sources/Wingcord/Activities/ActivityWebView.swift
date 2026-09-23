@@ -1,6 +1,5 @@
 import SwiftUI
 import WebKit
-import WingcordCore
 
 /// The activity itself, framed.
 ///

@@ -71,6 +71,15 @@ struct MainWindow: View {
                 )
         } detail: {
             WorkspacePane(presentation: model.workspacePresentation)
+                // **An empty title, not a removed one.** The channel is named by
+                // its own toolbar item, so the window's title has nothing to
+                // say — but `.toolbar(removing: .title)` also takes away what
+                // AppKit's scroll pocket needs: with the title removed, the soft
+                // edge a scroll view gets where it runs under the toolbar is
+                // installed and draws nothing. Measured by swapping one for the
+                // other and nothing else. An empty title keeps the edge and
+                // shows no words.
+                .navigationTitle("")
                 // **The system's own search item, which is Finder's control.**
                 // `.searchable` in a window with a real toolbar becomes an
                 // `NSSearchToolbarItem`: a circular button that expands into a
@@ -204,9 +213,6 @@ struct MainWindow: View {
                 }
         }
         .navigationSplitViewStyle(.balanced)
-        .clearsTitlebarMaterial()
-        // The title is drawn by the toolbar, not by the window's own title bar.
-        .toolbar(removing: .title)
         .capsWindowMinimumSize()
     }
 }
@@ -298,60 +304,6 @@ private struct SidebarColumn: View {
         // Drawn HERE, outside the rail's own `ScrollView` — which clips — and on
         // the one view wide enough to hold a chip beside the 68-point column.
         .railHoverLabelHost()
-    }
-}
-
-// MARK: - The titlebar's own material
-
-/// Makes the titlebar strip transparent, so the window's ground runs through it.
-///
-/// **`INVARIANTS.md` §1 says the `Window` scene takes no `NSWindow`
-/// configuration, and this is the one exception it now has.** The rule is about
-/// the switches that change what the *window* is — `isOpaque`, a hand-rolled
-/// vibrancy, a background colour of its own — because each of those puts the app
-/// in the business of painting what the system was already painting. This takes
-/// a mark away and paints nothing.
-///
-/// It is here because SwiftUI could not do it.
-/// `toolbarBackgroundVisibility(.hidden, for: .windowToolbar)` is the modifier
-/// for exactly this and it did not remove the slab, on the split view or on the
-/// view owning the toolbar. What settled it was a red probe painted over the
-/// ground: the ground reaches the full height of the strip and is simply covered
-/// there, so what is on top belongs to `NSTitlebarView` rather than to anything
-/// this app draws. The settings window has made the same call since it was
-/// built, for the same reason and in the same one place.
-///
-/// The workspace window stays **opaque** — that half of §1 is untouched, and it
-/// is the half that keeps a transcript readable over a photograph.
-private struct TitlebarMaterialClearer: NSViewRepresentable {
-    func makeNSView(context: Context) -> NSView { Probe() }
-    func updateNSView(_ view: NSView, context: Context) {}
-
-    private final class Probe: NSView {
-        override func viewDidMoveToWindow() {
-            super.viewDidMoveToWindow()
-            guard let window else { return }
-            // **Both, and each removes a different slab.**
-            //
-            // `titlebarAppearsTransparent` is what stops `NSTitlebarView`
-            // painting its own material: without it AppKit draws an
-            // `NSTitlebarBackgroundView` per split column across the top 52
-            // points — over the ground, over the reader's picture, and over the
-            // edge treatment this window draws for itself. It reads as a dark
-            // shadow ruled along the window's top edge.
-            //
-            // `fullSizeContentView` is what stops the strip being a hole
-            // instead: transparent with the content still starting below it,
-            // the app trades a slab for the desktop.
-            window.titlebarAppearsTransparent = true
-            window.styleMask.insert(.fullSizeContentView)
-        }
-    }
-}
-
-extension View {
-    fileprivate func clearsTitlebarMaterial() -> some View {
-        background(TitlebarMaterialClearer().frame(width: 0, height: 0))
     }
 }
 

@@ -1,7 +1,6 @@
 import Foundation
 import Testing
 @testable import Wingcord
-@testable import WingcordCore
 
 /// The Threads flyout's arithmetic.
 ///

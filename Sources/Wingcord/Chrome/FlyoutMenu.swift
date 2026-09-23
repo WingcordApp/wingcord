@@ -1,5 +1,4 @@
 import SwiftUI
-import WingcordCore
 
 // MARK: - The vocabulary every glass flyout in this app is built from
 //

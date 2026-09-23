@@ -1,5 +1,4 @@
 import SwiftUI
-import WingcordCore
 
 // MARK: - The detail pane
 //

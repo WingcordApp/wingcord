@@ -1,5 +1,4 @@
 import SwiftUI
-import WingcordCore
 
 /// One titled row of the launcher.
 ///

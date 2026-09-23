@@ -1,5 +1,4 @@
 import Foundation
-import WingcordCore
 
 // MARK: - The Embedded App SDK's wire protocol
 //

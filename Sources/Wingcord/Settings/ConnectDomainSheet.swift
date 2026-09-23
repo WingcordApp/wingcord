@@ -1,5 +1,4 @@
 import SwiftUI
-import WingcordCore
 
 // MARK: - Connect your Domain
 //

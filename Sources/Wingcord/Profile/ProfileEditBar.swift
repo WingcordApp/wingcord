@@ -1,5 +1,4 @@
 import SwiftUI
-import WingcordCore
 
 /// The bar that appears when the profile has unsaved changes.
 ///

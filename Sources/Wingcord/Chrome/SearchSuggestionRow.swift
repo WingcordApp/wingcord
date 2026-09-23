@@ -1,5 +1,4 @@
 import SwiftUI
-import WingcordCore
 
 /// One row of the search field's suggestion list.
 ///

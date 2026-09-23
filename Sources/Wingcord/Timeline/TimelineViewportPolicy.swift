@@ -40,29 +40,6 @@ nonisolated enum TimelineViewportPolicy {
         max(0, viewport - max(0, topInset) - max(0, bottomInset))
     }
 
-    /// How many points of drawn content are currently passing under the chrome.
-    ///
-    /// What gates `ScrollEdgeBlur`: a treatment over a surface with nothing
-    /// beneath it is a slab, whatever it is made of.
-    ///
-    /// A top content inset moves the clip view's *minimum* to `-topInset`, so
-    /// `scrollTop` is how far the reader has gone past the very top and the
-    /// chrome's foot falls at `scrollTop + chromeHeight` in document space.
-    /// Content occupies `0 ..< contentHeight` there, so the answer is the
-    /// intersection of those two ranges.
-    ///
-    /// **Measured against the content, never against the document.** The
-    /// document view is padded out to the readable band, so an empty channel
-    /// still has a document — and a version of this written against that height
-    /// lit the strip over a transcript with nothing in it at all.
-    static func chromeOverlap(
-        scrollTop: CGFloat,
-        chromeHeight: CGFloat,
-        contentHeight: CGFloat
-    ) -> CGFloat {
-        min(contentHeight, scrollTop + chromeHeight) - max(0, scrollTop)
-    }
-
     static func geometry(
         viewport rawViewport: CGRect,
         documentHeight: CGFloat,

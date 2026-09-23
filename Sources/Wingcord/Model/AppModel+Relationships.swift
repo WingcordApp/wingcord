@@ -1,7 +1,6 @@
 import CoreGraphics
 import Foundation
 import WingcordCore
-import WingcordNet
 
 // MARK: - What a reader can do about a person
 //

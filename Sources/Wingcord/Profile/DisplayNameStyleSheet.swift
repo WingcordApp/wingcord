@@ -1,6 +1,5 @@
 import SwiftUI
 import WingcordCore
-import WingcordNet
 
 /// "Change Display Name Style" — a face, an effect, and the colours the effect
 /// takes.

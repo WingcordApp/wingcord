@@ -102,13 +102,16 @@ struct ConversationPane: View {
             // Extending underneath and paying for it with a content inset is
             // what puts moving content beneath the material.
             .ignoresSafeArea(.container, edges: [.top, .bottom])
-            // **No `scrollEdgeEffectStyle` here, and it is not an oversight.**
-            // Measured on this window in both styles, with and without
-            // `.fullSizeContentView` and with the titlebar's material left
-            // alone: it draws nothing. The API reaches SwiftUI `ScrollView`s and
-            // titlebar accessories; `NSScrollView` has no property for it. The
-            // transcript's own edge is `ScrollEdgeBlur`, installed inside the
-            // scroll view — which is the only place a backdrop can see it.
+            // **The soft edge under the toolbar is AppKit's own.** A scroll view
+            // that runs beneath the titlebar with a top content inset gets a
+            // scroll pocket across that inset, and nothing here draws or gates
+            // it. Two things in this window used to stop it and both are gone:
+            // a title REMOVED rather than left empty (see `MainWindow`), and a
+            // titlebar forced transparent. `scrollEdgeEffectStyle` is absent on
+            // purpose — measured, `.soft` and `.hard` render byte-identically on
+            // an `NSScrollView`, so here it would be a modifier that does
+            // nothing. AppKit puts no pocket over the bottom inset, which keeps
+            // the rows under the composer sharp for its glass to refract.
             // `safeAreaBar`, not `safeAreaInset`: the composer registers as a
             // bar, which is what the scroll edge effect keys off.
             .safeAreaBar(edge: .bottom, spacing: 0) {

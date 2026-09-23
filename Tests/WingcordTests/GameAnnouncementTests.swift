@@ -1,6 +1,5 @@
 import Foundation
 import Testing
-import WingcordCore
 @testable import Wingcord
 
 /// The digest a game's announcement shelf carries.

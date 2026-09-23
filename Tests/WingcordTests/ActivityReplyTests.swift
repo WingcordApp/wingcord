@@ -1,6 +1,5 @@
 import Foundation
 import Testing
-import WingcordCore
 @testable import Wingcord
 
 /// The frames this client sends an activity.
