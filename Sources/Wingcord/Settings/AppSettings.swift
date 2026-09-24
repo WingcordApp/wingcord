@@ -642,6 +642,19 @@ final class AppSettings {
         didSet { defaults.set(showsNameplateInNowBar, forKey: Key.nowBarNameplate) }
     }
 
+    /// Whether a channel's summaries bar is shown — the toolbar's Hide / Show
+    /// Summaries.
+    ///
+    /// **One switch for every channel, kept on this Mac**, as Discord keeps
+    /// it: its summary store persists `shouldShowTopicsBar` locally (module
+    /// `822074`) and syncs nothing. On by default, as Discord's is.
+    var showsSummaryBar = true {
+        didSet {
+            guard showsSummaryBar != oldValue else { return }
+            defaults.set(showsSummaryBar, forKey: Key.showsSummaryBar)
+        }
+    }
+
     // MARK: Media
 
     /// The viewer's playback volume, shared by every clip.
@@ -919,6 +932,7 @@ final class AppSettings {
         composerControls = defaults.stringArray(forKey: Key.composerControls)
             .map(ComposerControlOrder.init(storage:)) ?? .default
         showsNameplateInNowBar = defaults.object(forKey: Key.nowBarNameplate) as? Bool ?? true
+        showsSummaryBar = defaults.object(forKey: Key.showsSummaryBar) as? Bool ?? true
         suppressedCosmetics = CosmeticSuppression(
             rawValue: UInt8(truncatingIfNeeded:
                 defaults.object(forKey: Key.suppressedCosmetics) as? Int ?? 0)
@@ -1089,6 +1103,7 @@ final class AppSettings {
         static let legacyComposerShape = "appearance.composerShape"
         static let composerControls = "appearance.composerControls"
         static let nowBarNameplate = "appearance.nowBarNameplate"
+        static let showsSummaryBar = "chat.showsSummaryBar"
         static let suppressedCosmetics = "accessibility.suppressedCosmetics"
         static let suppressesOwnCosmetics = "accessibility.suppressesOwnCosmetics"
         static let underlinesLinks = "accessibility.underlinesLinks"

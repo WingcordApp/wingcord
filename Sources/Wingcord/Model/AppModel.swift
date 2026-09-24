@@ -170,10 +170,43 @@ final class AppModel {
     /// reason `historyLoader` is one.
     @ObservationIgnored var topicLoader: ((ChannelID, TopicRequest) -> Void)?
 
+    // MARK: Summaries
+
+    /// Each channel's summaries — Discord's older summaries feature, drawn as
+    /// the bar under the toolbar. See `ChannelSummaries`.
+    var channelSummaries: [ChannelID: ChannelSummaries] = [:]
+    /// The summary the reader went to, marked above its first message.
+    var selectedSummary: SelectedSummary?
+    /// Distinguishes two goings to the same summary, so the second is a jump
+    /// too. Nothing reads it but the next selection.
+    @ObservationIgnored var selectedSummaryToken: UInt64 = 0
+    /// Asks the session for a channel's summaries or for one of them. A
+    /// closure for the reason `historyLoader` is one.
+    @ObservationIgnored var summaryLoader: ((ChannelID, SummaryRequest) -> Void)?
+    /// When each summary was last asked for on its own — Discord re-asks one
+    /// at most every five seconds.
+    @ObservationIgnored var summaryRefreshes: [ChannelSummaryID: Date] = [:]
+
+    // MARK: Server themes
+
+    /// Whose theme a themed server is drawn in, from the reader's synced
+    /// settings. See `ServerThemePreferences`.
+    var serverThemePreferences = ServerThemePreferences()
+
     // MARK: Navigation
 
     var selectedGuildID: GuildID?
-    var selectedChannelID: ChannelID?
+    var selectedChannelID: ChannelID? {
+        didSet {
+            // Discord forgets the summary the reader went to when they leave
+            // its channel (`CHANNEL_SELECT`), and at no other time. Here rather
+            // than in `selectChannel`, because a link, a jump and a change of
+            // server all move the channel without going through it.
+            if let selectedSummary, selectedSummary.channelID != selectedChannelID {
+                self.selectedSummary = nil
+            }
+        }
+    }
     /// The server page the detail column is showing instead of a transcript.
     ///
     /// **Beside the channel rather than instead of it**, so leaving the page

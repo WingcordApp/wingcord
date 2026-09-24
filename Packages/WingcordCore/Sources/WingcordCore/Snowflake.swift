@@ -151,11 +151,13 @@ public enum StageInstanceTag: Sendable {}
 public enum ScheduledEventTag: Sendable {}
 public enum JoinRequestTag: Sendable {}
 public enum ConversationTopicTag: Sendable {}
+public enum ChannelSummaryTag: Sendable {}
 
 public typealias GuildID = Snowflake<GuildTag>
 public typealias ChannelID = Snowflake<ChannelTag>
 public typealias MessageID = Snowflake<MessageTag>
 public typealias ConversationTopicID = Snowflake<ConversationTopicTag>
+public typealias ChannelSummaryID = Snowflake<ChannelSummaryTag>
 public typealias UserID = Snowflake<UserTag>
 public typealias RoleID = Snowflake<RoleTag>
 public typealias EmojiID = Snowflake<EmojiTag>

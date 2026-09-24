@@ -36,10 +36,9 @@ public enum TimelineItem: Hashable, Sendable {
     /// The index runs on across both runways, so no two rows of one transcript
     /// are equal values.
     case historySkeleton(index: Int)
-    /// The open topic's marker, above the message it begins with — Discord's
-    /// conversation header (module `247933`), which is where the topic's panel
-    /// goes back to and how it is found again.
-    case topicMarker(ConversationTopicID, title: String)
+    /// A titled mark above the message a stretch of the channel begins with —
+    /// the open topic's, or the summary the reader went to. See `TimelineMark`.
+    case marker(TimelineMark.Kind, id: UInt64, title: String)
     /// The first page is still in flight. One quiet row, not a runway.
     case loadingFirstPage
     /// The first page was asked for and did not arrive.
@@ -98,6 +97,53 @@ public struct TimelineMessage: Hashable, Sendable, Identifiable {
     public var isRunTail: Bool { flags.contains(.tail) }
 }
 
+/// A stretch of the channel marked in its transcript, above the message it
+/// begins with.
+///
+/// **Two of Discord's, one row shape.** Its stream builder (module `247933`)
+/// places a summary's divider and a conversation's header at the same point —
+/// before the stretch's first message, and only when the stretch is more than
+/// one message — and differs only in what the row does.
+public struct TimelineMark: Hashable, Sendable {
+    public enum Kind: Hashable, Sendable {
+        /// The open topic — Discord's conversation header. The topic's panel
+        /// goes back to it, so it is a control.
+        case topic
+        /// The summary the reader went to — Discord's summary divider. A label;
+        /// it opens nothing.
+        case summary
+    }
+
+    public var kind: Kind
+    /// The topic's or the summary's own id. Two id spaces, both snowflakes, so
+    /// no two marks of one transcript share one.
+    public var id: UInt64
+    public var title: String
+    public var startMessageID: MessageID
+    public var messageCount: Int
+
+    public init(
+        kind: Kind,
+        id: UInt64,
+        title: String,
+        startMessageID: MessageID,
+        messageCount: Int
+    ) {
+        self.kind = kind
+        self.id = id
+        self.title = title
+        self.startMessageID = startMessageID
+        self.messageCount = messageCount
+    }
+
+    /// Whether this mark goes above `messageID` — **only over a stretch of more
+    /// than one message**, as Discord's own stream does: a mark over a single
+    /// line labels nothing.
+    func starts(at messageID: MessageID) -> Bool {
+        messageCount > 1 && startMessageID == messageID
+    }
+}
+
 /// Turns a channel's messages into the rows a transcript draws.
 ///
 /// Pure, `nonisolated`, and the single place run grouping is decided — so the
@@ -134,8 +180,9 @@ public enum TimelineReducer {
     ///   - hasMoreHistory: Whether to lay a skeleton runway above the first row.
     ///   - hasMoreNewer: Whether to lay one below the last — the transcript is
     ///     a window cut off from the present, and newer pages are still to come.
-    ///   - topicMarker: the open topic, marked above its first message when
-    ///     that message is loaded.
+    ///   - marks: the stretches marked in the transcript, each above its first
+    ///     message when that message is loaded — in the order they are drawn
+    ///     when two begin at one message.
     ///   - calendar: Injected so a test can pin a time zone.
     public static func rows(
         messages: [Message],
@@ -144,7 +191,7 @@ public enum TimelineReducer {
         mentionsEveryoneCountsAsMention: Bool = true,
         hasMoreHistory: Bool = false,
         hasMoreNewer: Bool = false,
-        topicMarker: ConversationTopic? = nil,
+        marks: [TimelineMark] = [],
         failure: String? = nil,
         skeletonDepth: Int = 20,
         calendar: Calendar = .current
@@ -193,19 +240,18 @@ public enum TimelineReducer {
                 anchor: unreadAnchor
             )
 
-            // **Only over a topic of more than one message**, as Discord's own
-            // stream does: a marker over a single line labels nothing.
-            let startsTopic = topicMarker.map {
-                $0.messageCount > 1 && $0.startMessageID == message.id
-            } ?? false
+            // No allocation per message: the list is one or two marks at most,
+            // and a filter here would build an empty array for every message
+            // of a three-hundred-message window.
+            let startsMark = marks.contains { $0.starts(at: message.id) }
 
-            // A day change, an unread divider, a topic's marker, a different
-            // author, a system event, a reply, or too long a gap all break the
-            // run. Each of these puts something between the two messages, and a
-            // run whose members are not adjacent is not a run.
+            // A day change, an unread divider, a mark, a different author, a
+            // system event, a reply, or too long a gap all break the run. Each
+            // of these puts something between the two messages, and a run whose
+            // members are not adjacent is not a run.
             let breaksRun = startsDay
                 || isUnreadBoundary
-                || startsTopic
+                || startsMark
                 || previous?.authorID != message.authorID
                 || message.kind == .reply
                 || message.isSystemEvent
@@ -225,8 +271,10 @@ public enum TimelineReducer {
                 rows.append(.unreadDivider)
                 dividerPlaced = true
             }
-            if startsTopic, let topicMarker {
-                rows.append(.topicMarker(topicMarker.id, title: topicMarker.title))
+            if startsMark {
+                for mark in marks where mark.starts(at: message.id) {
+                    rows.append(.marker(mark.kind, id: mark.id, title: mark.title))
+                }
             }
 
             var flags: TimelineMessage.RunFlags = []

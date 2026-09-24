@@ -163,8 +163,8 @@ nonisolated enum TimelineRowPainter {
             )
         case .skeleton(let index):
             drawSkeleton(index: index, in: rowFrame, context: context)
-        case .topicMarker(let title):
-            drawTopicMarker(title: title, in: rowFrame, context: context, style: style)
+        case .marker(let kind, let title):
+            drawMarker(kind, title: title, in: rowFrame, context: context, style: style)
         case .loadingFirstPage:
             drawLoadingFirstPage(in: rowFrame, context: context, style: style)
         case .historyUnavailable(let reason):
@@ -2042,6 +2042,63 @@ nonisolated enum TimelineRowPainter {
     /// the topic's own card, and it is what the card comes back to when it is
     /// put away — a line of text between two rules would read as one more day
     /// heading.
+    private static func drawMarker(
+        _ kind: TimelineMark.Kind,
+        title: String,
+        in frame: CGRect,
+        context: CGContext,
+        style: MessageTextStyle
+    ) {
+        switch kind {
+        case .topic: drawTopicMarker(title: title, in: frame, context: context, style: style)
+        case .summary: drawSummaryMarker(title: title, in: frame, context: context, style: style)
+        }
+    }
+
+    /// The summary the reader went to: its glyph and title in the link colour,
+    /// then a rule to the far edge — Discord's summary divider, as a fact.
+    ///
+    /// **A rule, not the topic's band**, because it is not a control: the band
+    /// is where a topic's panel goes back to and carries the glyph that says
+    /// so, and a second band that did nothing would teach the reader that the
+    /// first one does nothing either (§5.5).
+    private static func drawSummaryMarker(
+        title: String,
+        in frame: CGRect,
+        context: CGContext,
+        style: MessageTextStyle
+    ) {
+        let inset = TimelineMetrics.horizontalMargin
+        let glyph = TimelineMetrics.topicMarkerGlyphSide
+        let gap: CGFloat = 8
+        let midY = frame.midY
+        drawSymbol(
+            "scroll",
+            tint: style.linkColor,
+            in: CGRect(x: frame.minX + inset, y: midY - glyph / 2, width: glyph, height: glyph),
+            context: context
+        )
+        let textX = frame.minX + inset + glyph + gap
+        let available = frame.maxX - inset - textX
+        // Measured from the string that is drawn, cut to what fits — §2.8.
+        let width = min(TimelineLayoutEngine.measure(title, font: style.authorFont), available)
+        drawText(
+            title,
+            font: style.authorFont,
+            color: style.linkColor,
+            at: CGPoint(x: textX, y: midY - style.authorFont.pointSize * 0.62),
+            maxWidth: available,
+            context: context
+        )
+        let ruleStart = textX + width + gap
+        guard ruleStart < frame.maxX - inset else { return }
+        context.setStrokeColor(ThemeInk.current.lift(0.08))
+        context.setLineWidth(1)
+        context.move(to: CGPoint(x: ruleStart, y: midY))
+        context.addLine(to: CGPoint(x: frame.maxX - inset, y: midY))
+        context.strokePath()
+    }
+
     private static func drawTopicMarker(
         title: String,
         in frame: CGRect,

@@ -117,6 +117,9 @@ public struct ChannelFlags: OptionSet, Hashable, Sendable, Codable {
     public static let requireTag = ChannelFlags(rawValue: 1 << 4)
     /// Discord's own spam classification for a thread.
     public static let isSpam = ChannelFlags(rawValue: 1 << 5)
+    /// The server turned summaries off for this one channel. Discord's
+    /// `SUMMARIES_DISABLED`, 2048 in its channel-flag table.
+    public static let summariesDisabled = ChannelFlags(rawValue: 1 << 11)
 }
 
 /// What a forum's post list was asked for.

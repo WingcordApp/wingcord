@@ -51,6 +51,14 @@ public struct Guild: Hashable, Sendable, Identifiable, Codable {
     /// one thing that stops the inbox showing a server's history from before
     /// the reader was in it. See `AppModel.unreadInboxChannels`.
     public var joinedAt: Date?
+    /// The server's own theme, as it arrived — on or off. See `GuildTheme`.
+    public var theme: GuildTheme?
+    /// The owner marked the whole server age-restricted.
+    ///
+    /// Discord's `owner_configured_content_level` of explicit or age-restricted
+    /// (1 or 3) — its client's test for a server whose channels are never
+    /// summarised (module `260509`).
+    public var isAgeRestricted: Bool
 
     public init(
         id: GuildID,
@@ -68,7 +76,9 @@ public struct Guild: Hashable, Sendable, Identifiable, Codable {
         rulesChannelID: ChannelID? = nil,
         isLarge: Bool = false,
         defaultMessageNotifications: NotificationLevel = .allMessages,
-        joinedAt: Date? = nil
+        joinedAt: Date? = nil,
+        theme: GuildTheme? = nil,
+        isAgeRestricted: Bool = false
     ) {
         self.id = id
         self.name = name
@@ -86,6 +96,8 @@ public struct Guild: Hashable, Sendable, Identifiable, Codable {
         self.isLarge = isLarge
         self.defaultMessageNotifications = defaultMessageNotifications
         self.joinedAt = joinedAt
+        self.theme = theme
+        self.isAgeRestricted = isAgeRestricted
     }
 
     public var hasAnimatedIcon: Bool { iconHash?.hasPrefix("a_") ?? false }

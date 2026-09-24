@@ -367,6 +367,9 @@ final class SessionController {
         model.topicLoader = { [weak self] channelID, request in
             self?.loadTopics(in: channelID, request)
         }
+        model.summaryLoader = { [weak self] channelID, request in
+            self?.loadSummaries(in: channelID, request)
+        }
 
         eventTask = Task { [weak self] in
             await socket.connect(token: token)
@@ -494,6 +497,7 @@ final class SessionController {
         pendingPresences.removeAll(keepingCapacity: false)
         model.historyLoader = nil
         model.topicLoader = nil
+        model.summaryLoader = nil
         if let socket {
             Task { await socket.stop() }
         }
@@ -579,6 +583,14 @@ final class SessionController {
         var guilds: [GuildID: Guild] = [:]
         guilds.reserveCapacity(snapshot.guilds.count)
         for guild in snapshot.guilds { guilds[guild.id] = guild }
+        // **Worth keeping, for the threads count's reason**: a server's theme
+        // was captured on a join's answer, never on READY, and this line is
+        // what says whether READY carries it — `themes=0` on an account in a
+        // themed server means the field arrives somewhere else.
+        Self.trace(
+            "ready: themes=\(snapshot.guilds.count { $0.theme?.resolved != nil }) "
+            + "summaries=\(snapshot.guilds.count { $0.features.contains("SUMMARIES_ENABLED_GA") })"
+        )
 
         var readStates = snapshot.readStates
         for channelID in snapshot.mutedChannelIDs {
@@ -627,6 +639,10 @@ final class SessionController {
         model.activityPrivacy = snapshot.settings.activityPrivacy
         model.activityPrivacyRaw = snapshot.settings.privacyRaw
         model.activityStatusRaw = snapshot.settings.statusRaw
+        // Whose theme a themed server is drawn in. See `GuildThemeSource`.
+        model.serverThemePreferences = snapshot.settings.serverThemes
+        // A new session may have missed summaries while it was away.
+        model.markSummariesStale()
         model.mutedGuildIDs = snapshot.mutedGuildIDs
         model.notificationPreferences = snapshot.notificationPreferences
         model.guildUserSettings = snapshot.guildUserSettings
@@ -956,6 +972,9 @@ final class SessionController {
         case .streamServerChanged(let server):
             voice.apply(streamServer: server)
 
+        case .summariesUpdated(let channelID, let summaries):
+            model.mergeSummaries(summaries, in: channelID)
+
         case .reactionAdded(let messageID, let channelID, let emoji, let userID, let kind, let colors):
             model.applyReaction(
                 emoji, kind: kind, to: messageID, in: channelID, added: true,
@@ -1026,7 +1045,8 @@ final class SessionController {
         case .stageEnded(let channelID):
             model.applyStageEnded(channelID)
 
-        case .guildUpdated(let guild):
+        case .guildUpdated(var guild, let carriesTheme):
+            if !carriesTheme { guild.theme = model.guilds[guild.id]?.theme }
             model.guilds[guild.id] = guild
             model.railRevision &+= 1
             model.sidebarRevision &+= 1

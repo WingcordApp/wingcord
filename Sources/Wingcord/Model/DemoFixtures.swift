@@ -666,6 +666,15 @@ enum DemoFixtures {
         if let channelID = model.selectedChannelID {
             model.setMessages(transcript(in: channelID, users: users), in: channelID)
             populateTopics(model, in: channelID, guildID: first)
+            populateSummaries(model, in: channelID, guildID: first)
+        }
+
+        // **A server theme on the second server**, so stepping over to it shows
+        // one arriving and stepping back shows the reader's own returning —
+        // Fire, the red of the server that prompted the feature.
+        if let themed = guilds.keys.sorted(by: { $0.rawValue < $1.rawValue }).first(where: { $0 != first }) {
+            model.guilds[themed]?.features.insert(AppModel.serverThemeFeature)
+            model.guilds[themed]?.theme = GuildTheme(isEnabled: true, presetID: 3)
         }
 
         // **The guide's first resource gets a transcript too**, so the preview
@@ -1820,6 +1829,48 @@ enum DemoFixtures {
             coversPresent: true,
             reachedOldest: true,
             fetchedAt: .now
+        )
+    }
+
+    /// Summaries over the demo channel's own transcript, so the bar, its
+    /// arrows, the flyout and the mark can all be looked at without a server
+    /// that has them.
+    ///
+    /// **Interleaved, as real ones are**: each takes a stretch that overlaps the
+    /// next one's start, which is what makes the bar's choice of name — the
+    /// newest stretch on screen — a choice at all. Marked as answered, because
+    /// `--demo` has no session to ask.
+    private static func populateSummaries(_ model: AppModel, in channelID: ChannelID, guildID: GuildID) {
+        model.guilds[guildID]?.features.formUnion(AppModel.summaryFeatures)
+        let messages = model.messages(in: channelID)?.messages ?? []
+        let entries: [(String, String)] = [
+            ("Shader packs on the new pipeline", "Which packs already run on Iris 1.9, and the two that still need an update."),
+            ("Render distance on Apple silicon", "Where frames start to drop, and the memory setting that moved it."),
+            ("The world-load crash", "A crash joining a world, traced to one mod's mixin, with a workaround until it is fixed."),
+            ("Screenshot contest", "What counts as an entry, how the vote works, and when it closes."),
+        ]
+        let stretch = messages.count / (entries.count + 1)
+        guard stretch >= 8 else { return }
+        var summaries: [ChannelSummary] = []
+        for (offset, (topic, sentence)) in entries.enumerated() {
+            let lower = offset * stretch
+            let upper = min(messages.count, lower + stretch + stretch / 3)
+            let slice = messages[lower..<upper]
+            guard let start = slice.first, let end = slice.last else { continue }
+            var seen = Set<UserID>()
+            summaries.append(ChannelSummary(
+                id: ChannelSummaryID(rawValue: end.id.rawValue + 1),
+                topic: topic,
+                summary: sentence,
+                people: slice.map(\.authorID).filter { seen.insert($0).inserted },
+                startMessageID: start.id,
+                endMessageID: end.id,
+                messageCount: slice.count
+            ))
+        }
+        model.channelSummaries[channelID] = ChannelSummaries(
+            summaries: ChannelSummary.newestFirst(summaries),
+            hasFetched: true
         )
     }
 

@@ -356,8 +356,8 @@ nonisolated enum DiscordTheme: String, CaseIterable, Identifiable, Hashable, Sen
     var surfaceTint: UInt32 {
         let (lighter, darker) = ends
         switch base {
-        case .dark: return Self.adjusted(darker, lightness: 0.05)
-        case .light: return Self.adjusted(lighter, lightness: 0.9)
+        case .dark: return ChromaHSL.saturated(darker, lightness: 0.05)
+        case .light: return ChromaHSL.saturated(lighter, lightness: 0.9)
         }
     }
 
@@ -391,32 +391,11 @@ nonisolated enum DiscordTheme: String, CaseIterable, Identifiable, Hashable, Sen
     private var ends: (lighter: UInt32, darker: UInt32) {
         let stops = stops
         guard let first = stops.first?.color, let last = stops.last?.color else { return (0, 0) }
-        let (lighter, darker) = Self.luminance(first) > Self.luminance(last)
+        let (lighter, darker) = ChromaHSL.luminance(first) > ChromaHSL.luminance(last)
             ? (first, last)
             : (last, first)
         let darkerHue = ChromaHSL(darker).hue
         return (lighter, darkerHue.isNaN || darkerHue == 0 ? lighter : darker)
-    }
-
-    /// `color.set("hsl.s", 1).set("hsl.l", lightness)`, rounding between the
-    /// two steps exactly as chroma.js does.
-    private static func adjusted(_ color: UInt32, lightness: Double) -> UInt32 {
-        var saturated = ChromaHSL(color)
-        saturated.saturation = 1
-        var result = ChromaHSL(saturated.packed)
-        result.lightness = lightness
-        return result.packed
-    }
-
-    /// Relative luminance, as chroma.js computes it — with WCAG 2.0's `0.03928`
-    /// knee rather than sRGB's `0.04045`. It only ever decides which of two ends
-    /// is darker, and it decides it the way Discord's copy does.
-    private static func luminance(_ packed: UInt32) -> Double {
-        func channel(_ shift: UInt32) -> Double {
-            let value = Double((packed >> shift) & 0xFF) / 255
-            return value <= 0.03928 ? value / 12.92 : pow((value + 0.055) / 1.055, 2.4)
-        }
-        return 0.2126 * channel(16) + 0.7152 * channel(8) + 0.0722 * channel(0)
     }
 }
 
@@ -430,7 +409,7 @@ nonisolated enum DiscordTheme: String, CaseIterable, Identifiable, Hashable, Sen
 /// - **Converting back rounds every channel to a whole byte**, so a colour that
 ///   goes through two adjustments carries the first one's rounding into the
 ///   second. See `DiscordTheme.surfaceTint`.
-private nonisolated struct ChromaHSL {
+nonisolated struct ChromaHSL {
     /// Degrees in `0..<360`, or `NaN` for a grey.
     var hue: Double
     var saturation: Double
@@ -459,6 +438,34 @@ private nonisolated struct ChromaHSL {
         }
         degrees *= 60
         hue = degrees < 0 ? degrees + 360 : degrees
+    }
+
+    /// Relative luminance, as chroma.js computes it — with WCAG 2.0's `0.03928`
+    /// knee rather than sRGB's `0.04045`. It only ever decides which of two
+    /// colours is darker, and it decides it the way Discord's copy does.
+    static func luminance(_ packed: UInt32) -> Double {
+        func channel(_ shift: UInt32) -> Double {
+            let value = Double((packed >> shift) & 0xFF) / 255
+            return value <= 0.03928 ? value / 12.92 : pow((value + 0.055) / 1.055, 2.4)
+        }
+        return 0.2126 * channel(16) + 0.7152 * channel(8) + 0.0722 * channel(0)
+    }
+
+    /// `chroma(color).set("hsl.l", lightness)`: one step, rounded to whole
+    /// bytes as chroma.js rounds it.
+    static func settingLightness(_ packed: UInt32, to lightness: Double) -> UInt32 {
+        var color = ChromaHSL(packed)
+        color.lightness = lightness
+        return color.packed
+    }
+
+    /// `chroma(color).set("hsl.s", 1).set("hsl.l", lightness)`: two steps, and
+    /// the first one's rounding carries into the second — see
+    /// `DiscordTheme.surfaceTint`.
+    static func saturated(_ packed: UInt32, lightness: Double) -> UInt32 {
+        var color = ChromaHSL(packed)
+        color.saturation = 1
+        return settingLightness(color.packed, to: lightness)
     }
 
     /// Back to 24-bit sRGB, rounding each channel the way chroma.js does.

@@ -199,6 +199,7 @@ struct MainWindow: View {
                                 }
                             )
                         },
+                        toggleSummaries: { AppSettings.shared.showsSummaryBar.toggle() },
                         isInboxShown: model.isInboxShown,
                         toggleInbox: { model.toggleInbox() },
                         inboxContent: {

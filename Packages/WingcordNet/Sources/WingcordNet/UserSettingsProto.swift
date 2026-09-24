@@ -41,8 +41,29 @@ enum UserSettingsProto {
         /// own `InboxTab` enum. That is the whole derivation, and it pins both
         /// the outer field number and the inner one.
         static let inbox = 2
+        /// `AllGuildSettings guilds = 3`.
+        static let guilds = 3
         static let status = 11
+        /// `AppearanceSettings appearance = 13`.
+        static let appearance = 13
         static let guildFolders = 14
+    }
+
+    /// The server-theme preference, **read out of Discord's compiled
+    /// descriptor** (module `873298`), not captured:
+    ///
+    /// ```
+    /// AppearanceSettings { GuildThemeSourcePreference default_guild_theme_preference = 14 }
+    /// AllGuildSettings   { map<fixed64, GuildSettings> guilds = 1 }
+    /// GuildSettings      { GuildThemeSourcePreference guild_theme_source_preference = 13 }
+    /// ```
+    ///
+    /// Both are **bare enums** — varints, not wrapper messages — and a value of
+    /// zero is never on the wire, which is proto3: absent is unspecified.
+    private enum ThemeField {
+        static let defaultPreference = 14
+        static let guildsMap = 1
+        static let guildPreference = 13
     }
 
     private enum InboxField {
@@ -89,10 +110,23 @@ enum UserSettingsProto {
         var folders: [GuildFolder] = []
         var guildPositions: [GuildID] = []
         var inboxTab: InboxTab = .fallback
+        var serverThemes = ServerThemePreferences()
 
         var reader = ProtobufReader(data)
         while let field = reader.next() {
             switch field.number {
+            case Field.appearance:
+                var inner = reader.reader(for: field)
+                while let entry = inner.next() {
+                    guard entry.number == ThemeField.defaultPreference, entry.wireType == 0 else {
+                        continue
+                    }
+                    serverThemes.default = GuildThemeSource(wire: entry.value)
+                }
+
+            case Field.guilds:
+                serverThemes.overrides = decodeGuildThemeOverrides(reader.reader(for: field))
+
             case Field.inbox:
                 var inner = reader.reader(for: field)
                 while let entry = inner.next() {
@@ -160,8 +194,80 @@ enum UserSettingsProto {
             inboxTab: inboxTab,
             activityPrivacy: privacy.privacy,
             privacyRaw: privacy.raw,
-            statusRaw: privacy.statusRaw
+            statusRaw: privacy.statusRaw,
+            serverThemes: serverThemes
         )
+    }
+
+    /// Each server's own theme preference, where one is set.
+    ///
+    /// `AllGuildSettings` is a map, so each entry is a message of key 1 (the
+    /// guild, `fixed64`) and value 2 (that guild's `GuildSettings`). Everything
+    /// else a guild's settings hold — its channel overrides, its dismissed
+    /// notices — is skipped unread.
+    private static func decodeGuildThemeOverrides(_ source: ProtobufReader) -> [GuildID: GuildThemeSource] {
+        var reader = source
+        var overrides: [GuildID: GuildThemeSource] = [:]
+        while let entry = reader.next() {
+            guard entry.number == ThemeField.guildsMap, entry.wireType == 2 else { continue }
+            var pair = reader.reader(for: entry)
+            var guildID: GuildID?
+            var preference = GuildThemeSource.unspecified
+            while let field = pair.next() {
+                switch field.number {
+                case MapEntryField.key where field.wireType == 1:
+                    guildID = GuildID(rawValue: field.value)
+                case MapEntryField.value where field.wireType == 2:
+                    var settings = pair.reader(for: field)
+                    while let setting = settings.next() {
+                        guard setting.number == ThemeField.guildPreference,
+                              setting.wireType == 0
+                        else { continue }
+                        preference = GuildThemeSource(wire: setting.value)
+                    }
+                default:
+                    break
+                }
+            }
+            if let guildID, preference != .unspecified { overrides[guildID] = preference }
+        }
+        return overrides
+    }
+
+    /// The body of `PATCH /users/@me/settings-proto/1` for "Default theme in
+    /// servers".
+    ///
+    /// **Spliced into the whole `appearance` message, not sent alone.** The
+    /// route is proved to merge at the top level — the inbox capture's six
+    /// bytes against an eight-thousand-byte blob — but not *inside* a message,
+    /// and `appearance` holds the reader's Discord theme, their client
+    /// gradient and a dozen switches this client has never read. Every byte
+    /// but field 14 goes back as it came (`ActivityPrivacyProto.replacing`), so
+    /// the write is safe whichever way the server merges.
+    ///
+    /// - Parameter blob: the whole settings blob, fetched just before — see
+    ///   `DiscordREST.setDefaultServerTheme`.
+    ///
+    /// The value is Discord's own option (`APPEARANCE_GUILD_THEME_DEFAULT_PREFERENCE`
+    /// in its settings module): "Use the server's theme" writes 2 and "Use my
+    /// theme" writes 1.
+    static func patchDefaultServerTheme(_ source: GuildThemeSource, in blob: Data) -> String {
+        var appearance = Data()
+        var reader = ProtobufReader(blob)
+        while let field = reader.next() {
+            guard field.number == Field.appearance, let data = reader.data(for: field) else { continue }
+            appearance = data
+        }
+        var value = ProtobufWriter()
+        value.varint(field: ThemeField.defaultPreference, UInt64(source.rawValue))
+        let merged = ActivityPrivacyProto.replacing(
+            field: ThemeField.defaultPreference,
+            with: value.data,
+            in: appearance
+        )
+        var outer = ProtobufWriter()
+        outer.message(field: Field.appearance, merged)
+        return outer.base64
     }
 
     /// The body of `PATCH /users/@me/settings-proto/1` for one inbox tab.

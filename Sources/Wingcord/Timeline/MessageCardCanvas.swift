@@ -128,7 +128,7 @@ struct MessageCard: Identifiable, Sendable {
             // failure row are all statements about a whole channel's history.
             // In an excerpt they are false.
             case .conversationStart, .historySkeleton, .loadingFirstPage,
-                 .historyUnavailable, .topicMarker: false
+                 .historyUnavailable, .marker: false
             }
         }
         guard !items.isEmpty else { return nil }

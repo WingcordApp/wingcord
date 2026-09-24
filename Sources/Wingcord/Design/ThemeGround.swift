@@ -201,6 +201,26 @@ struct ThemeGround: Equatable {
         inkCeiling = Self.underRoster(InkContrast.composite(veilColor, over: brightest, opacity: veil))
     }
 
+    /// A server's theme: its two colours spread evenly along its angle, under
+    /// its own veils — Discord's `custom-client-theme` arrangement, which is
+    /// the reader's Discord-theme arrangement with the veils set by the
+    /// server's mix. No light of its own, and the reader's vividness does not
+    /// reach it: it is the server's, stated.
+    init(server theme: ServerTheme) {
+        let gradient = Gradient(colors: theme.stops.map { Color(hex: $0) })
+        angle = theme.angle
+        page = gradient
+        frame = gradient
+        pageVeil = theme.pageVeil
+        frameVeil = theme.frameVeil
+        paintsFrame = true
+        glow = nil
+        appearance = theme.room
+        let veilColor: UInt32 = theme.room == .light ? 0xFF_FF_FF : 0
+        let brightest = theme.stops.max { InkContrast.luminance($0) < InkContrast.luminance($1) } ?? 0
+        inkCeiling = Self.underRoster(InkContrast.composite(veilColor, over: brightest, opacity: pageVeil))
+    }
+
     private init(
         angle: Double, page: Gradient, frame: Gradient,
         pageVeil: Double, frameVeil: Double, paintsFrame: Bool, glow: Gradient?,
@@ -343,8 +363,8 @@ private struct ThemeGroundModifier: ViewModifier {
             ThemeGroundLayer(
                 role: role,
                 ground: theme.ground,
-                choice: theme.choice,
-                backdrop: theme.backdrop,
+                identity: theme.groundIdentity,
+                backdrop: theme.shownBackdrop,
                 picture: renderer.image,
                 spreads: spreads
             )
@@ -374,9 +394,9 @@ extension View {
 private struct ThemeGroundLayer: View {
     var role: ThemeGroundRole
     var ground: ThemeGround
-    /// Read only to tell a *choice* of theme from an edit to one. See
-    /// `outgoing`.
-    var choice: ThemeChoice
+    /// Read only to tell a *choice* of theme — or going into or out of a
+    /// themed server — from an edit to one. See `outgoing`.
+    var identity: ThemeStore.GroundIdentity
     var backdrop: Backdrop?
     var picture: CGImage?
     var spreads: Bool
@@ -398,13 +418,14 @@ private struct ThemeGroundLayer: View {
     ///
     /// **A choice, never an edit.** Dragging the picker changes the ground on
     /// every event without changing the choice, and a fade per event would stack
-    /// a dozen translucent windows under the pointer.
+    /// a dozen translucent windows under the pointer. Stepping into a server
+    /// with a theme of its own is a choice in this sense — the server's.
     @State private var outgoing: ThemeGround?
 
     /// What the change is keyed on: the ground that was on screen, and whether
     /// the choice moved with it.
     private struct Shown: Equatable {
-        var choice: ThemeChoice
+        var identity: ThemeStore.GroundIdentity
         var ground: ThemeGround
     }
 
@@ -433,8 +454,8 @@ private struct ThemeGroundLayer: View {
         // where a reader is an extra layout container and an extra pass on
         // every resize.
         .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { mine = $0 }
-        .onChange(of: Shown(choice: choice, ground: ground)) { old, new in
-            guard old.choice != new.choice else { return }
+        .onChange(of: Shown(identity: identity, ground: ground)) { old, new in
+            guard old.identity != new.identity else { return }
             outgoing = old.ground
         }
         // **Removed on the next turn, not in the same one.** Put in and taken

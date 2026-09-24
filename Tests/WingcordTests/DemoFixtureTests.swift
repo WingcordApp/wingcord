@@ -82,5 +82,27 @@ struct DemoFixtureTests {
         #expect(bands.contains(.online))
         #expect(sections.allSatisfy { !$0.people.isEmpty })
     }
-}
 
+    @Test("The channel the demo opens on has interleaved summaries, and another server has a theme")
+    func summariesAndServerTheme() throws {
+        let model = self.model()
+        let channelID = try #require(model.selectedChannelID)
+        #expect(model.summariesApply(to: channelID))
+        let summaries = model.summaries(in: channelID)
+        #expect(summaries.count >= 3)
+        // Newest first, and the stretches overlap — which is what makes the
+        // bar's choice of name a choice.
+        #expect(zip(summaries, summaries.dropFirst()).allSatisfy {
+            $0.startMessageID > $1.startMessageID && $1.endMessageID > $0.startMessageID
+        })
+        #expect(summaries.allSatisfy { $0.messageCount > 1 && !$0.people.isEmpty })
+        #expect(model.channelChrome.canShowSummaries)
+
+        // The demo's own server wears the reader's theme; the themed one is
+        // a step away on the rail.
+        #expect(model.activeServerTheme == nil)
+        let themed = try #require(model.guilds.values.first { $0.theme != nil })
+        model.selectedGuildID = themed.id
+        #expect(model.activeServerTheme?.theme.resolved == .preset(3))
+    }
+}

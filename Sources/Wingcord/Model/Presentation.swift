@@ -563,4 +563,11 @@ struct ChannelChrome: Hashable, Sendable {
     /// Whether this is a voice channel with a chat to show beside it.
     var canShowVoiceChat: Bool
     var isVoiceChatShown: Bool
+    /// Whether the summaries toggle is offered: a channel that can have
+    /// summaries **and has some**. With none there is no bar to hide, and a
+    /// toggle for nothing is the inert control §5.5 is about.
+    var canShowSummaries = false
+    /// The bar is showing — one switch for every channel. See
+    /// `AppSettings.showsSummaryBar`.
+    var areSummariesShown = false
 }

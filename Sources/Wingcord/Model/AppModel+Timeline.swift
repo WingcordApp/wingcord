@@ -15,7 +15,20 @@ extension AppModel {
         let box = messageBoxes[channelID]
         let readState = readStates[channelID]
         let mentionable = mentionableIDs
-        let marker = openTopic.flatMap { $0.channelID == channelID ? $0.topic : nil }
+        // The summary's mark before the topic's where both begin at one
+        // message — the order Discord's stream pushes them in. Empty, which
+        // allocates nothing, for nearly every channel.
+        var marks: [TimelineMark] = []
+        if let summary = summaryMark(in: channelID) { marks.append(summary) }
+        if let topic = openTopic, topic.channelID == channelID {
+            marks.append(TimelineMark(
+                kind: .topic,
+                id: topic.topic.id.rawValue,
+                title: topic.topic.title,
+                startMessageID: topic.topic.startMessageID,
+                messageCount: topic.topic.messageCount
+            ))
+        }
         let key = TimelineMemoKey(
             channelID: channelID,
             messageCount: box?.messages.count ?? 0,
@@ -24,7 +37,7 @@ extension AppModel {
             anchor: readState?.lastAcknowledgedID,
             hasMoreHistory: box?.hasMoreHistory ?? false,
             hasMoreNewer: box?.hasMoreNewer ?? false,
-            topicMarker: marker?.id,
+            marks: marks,
             failure: box?.historyFailure,
             contentRevision: messageContentRevision
         )
@@ -36,7 +49,7 @@ extension AppModel {
             mentionedIDs: mentionable,
             hasMoreHistory: box?.hasMoreHistory ?? false,
             hasMoreNewer: box?.hasMoreNewer ?? false,
-            topicMarker: marker,
+            marks: marks,
             failure: box?.historyFailure
         )
         timelineCache = (key, value)
@@ -382,7 +395,9 @@ struct TimelineMemoKey: Hashable, Sendable {
     var anchor: MessageID?
     var hasMoreHistory: Bool
     var hasMoreNewer: Bool
-    var topicMarker: ConversationTopicID?
+    /// The marks themselves, titles included: a refreshed summary re-titles
+    /// its mark without anything else here moving.
+    var marks: [TimelineMark]
     var failure: String?
     /// Moves when a message's *content* changes without the set changing — an
     /// edit, a reaction, an embed unfurling. Without it, editing a message in

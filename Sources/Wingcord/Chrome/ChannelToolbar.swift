@@ -35,6 +35,7 @@ struct ChannelToolbar: ToolbarContent {
     /// closure: it is opened a few times a session and the bar is evaluated on
     /// every navigation.
     var threadsContent: () -> AnyView = { AnyView(EmptyView()) }
+    var toggleSummaries: () -> Void = {}
 
     // MARK: The inbox
     //
@@ -174,6 +175,21 @@ struct ChannelToolbar: ToolbarContent {
                     )
                 }
                 .help(chrome.isUserProfileShown ? "Hide user profile" : "Show user profile")
+            }
+        }
+
+        // Discord's own words, and its own condition: only where the channel
+        // has summaries, so the item is a hole everywhere else — the bar it
+        // hides does not exist there either.
+        ToolbarItem(placement: .primaryAction) {
+            if chrome.canShowSummaries {
+                Button(action: toggleSummaries) {
+                    Label(
+                        chrome.areSummariesShown ? "Hide Summaries" : "Show Summaries",
+                        systemImage: chrome.areSummariesShown ? "scroll.fill" : "scroll"
+                    )
+                }
+                .help(chrome.areSummariesShown ? "Hide Summaries" : "Show Summaries")
             }
         }
 

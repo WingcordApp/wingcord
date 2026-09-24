@@ -122,7 +122,8 @@ nonisolated struct MessageTextStyle: @unchecked Sendable {
     /// the theme change that would move it rebuilds this style anyway.
     @MainActor
     private static func tinted(_ label: NSColor) -> NSColor {
-        guard let tint = ThemeStore.shared.colors.textTint else { return label }
+        let colors = ThemeStore.shared.colors
+        guard let tint = colors.textTint else { return label }
         var resolved = label
         NSApp.effectiveAppearance.performAsCurrentDrawingAppearance {
             resolved = label.usingColorSpace(.sRGB) ?? label
@@ -131,7 +132,7 @@ nonisolated struct MessageTextStyle: @unchecked Sendable {
             | UInt32((resolved.greenComponent * 255).rounded()) << 8
             | UInt32((resolved.blueComponent * 255).rounded())
         let mixed = Oklch(packedRGB: rgb)
-            .mixed(with: Oklch(packedRGB: tint), weight: DiscordTheme.textTintWeight)
+            .mixed(with: Oklch(packedRGB: tint), weight: colors.textTintWeight)
             .clippedRGB()
         return NSColor(
             srgbRed: CGFloat((mixed >> 16) & 0xFF) / 255,

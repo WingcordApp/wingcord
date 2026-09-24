@@ -58,6 +58,12 @@ struct TimelineView: NSViewRepresentable {
     /// The channel's topics, so the coordinator can say which one the reader
     /// is in. Oldest first.
     var topics: [ConversationTopic] = []
+    /// The channel's summaries, newest first, for the same question — empty
+    /// where no bar is shown, which is also what switches the tracking off.
+    var summaries: [ChannelSummary] = []
+    /// The summary the reader last went to in this channel. See
+    /// `TimelineCoordinator.highlightedSummary`.
+    var selectedSummary: SelectedSummary?
     /// Whether a floating layer is drawn over the transcript.
     ///
     /// An INPUT for the reason every other one here is: the canvas is a drawn
@@ -99,6 +105,8 @@ struct TimelineView: NSViewRepresentable {
             present: present,
             scroll: scroll,
             topics: topics,
+            summaries: summaries,
+            selectedSummary: selectedSummary,
             spotifyRevision: spotifyRevision,
             playingPreview: playingPreview,
             isCovered: isCovered,
@@ -201,6 +209,19 @@ final class TimelineCoordinator: NSObject {
     private var topics: [ConversationTopic] = []
     /// The reader's place among them, as last reported. See `TopicPlace`.
     private var topicPlace: TopicPlace?
+    /// The channel's summaries, newest first. Empty where no bar is shown.
+    private var summaries: [ChannelSummary] = []
+    /// The selection already taken, so an unrelated update does not name the
+    /// summary again after the reader has scrolled away from it.
+    private var appliedSummaryToken: UInt64 = 0
+    /// The summary the reader just went to, named by the bar **until they
+    /// scroll** — Discord's highlighted summary, cleared by the first move of
+    /// its automatic anchor after the jump. Without it the bar would name
+    /// whichever newer summary also overlaps the landing, since stretches
+    /// interleave.
+    private var highlightedSummary: ChannelSummaryID?
+    /// The reader's place among the summaries, as last reported.
+    private var summaryPlace: SummaryPlace?
 
     private var isNearBottom = true
     private var isApplyingUpdate = false
@@ -559,6 +580,8 @@ final class TimelineCoordinator: NSObject {
         present: PresentRequest?,
         scroll: TranscriptScrollState,
         topics: [ConversationTopic],
+        summaries: [ChannelSummary],
+        selectedSummary: SelectedSummary?,
         spotifyRevision: UInt64,
         playingPreview: URL?,
         isCovered: Bool,
@@ -567,6 +590,7 @@ final class TimelineCoordinator: NSObject {
     ) {
         self.scroll = scroll
         self.topics = topics
+        self.summaries = summaries
         canvas?.apply(isCovered: isCovered)
         canvas?.apply(bookmarks: bookmarks)
         canvas?.apply(canSuperReact: canSuperReact)
@@ -635,6 +659,8 @@ final class TimelineCoordinator: NSObject {
             }
             reportedAwayFromFoot = nil
             topicPlace = nil
+            summaryPlace = nil
+            highlightedSummary = nil
             pendingPresent = false
             // **The new channel's answer, before it is laid out.** There is no
             // move between two channels for the rule below to protect, and a
@@ -660,6 +686,11 @@ final class TimelineCoordinator: NSObject {
         }
         self.channelID = channelID
         canvas?.apply(channelID: channelID)
+
+        if let selectedSummary, selectedSummary.token != appliedSummaryToken {
+            appliedSummaryToken = selectedSummary.token
+            highlightedSummary = selectedSummary.summaryID
+        }
 
         if let jump, jump.channelID == channelID, jump.token != appliedJumpToken {
             appliedJumpToken = jump.token
@@ -695,6 +726,7 @@ final class TimelineCoordinator: NSObject {
         applyPendingJump()
         publishPosition()
         trackTopicPlace()
+        trackSummaryPlace()
     }
 
     /// Clears a jump the store is holding once it has been taken, for the
@@ -927,6 +959,12 @@ final class TimelineCoordinator: NSObject {
         let current = scrollView.contentView.bounds
         let movement = current.minY - lastViewportMinY
         lastViewportMinY = current.minY
+        // The reader moved: the summary they went to stops being named, and
+        // the bar goes back to naming what is on screen. The jump's own scroll
+        // never reaches here — it runs inside `isApplyingUpdate`.
+        if movement != 0, highlightedSummary != nil, pendingJump == nil {
+            highlightedSummary = nil
+        }
         if movement <= 0 { requestEarlierHistoryIfNeeded(viewport: current) }
         if movement >= 0 { requestLaterHistoryIfNeeded(viewport: current) }
         schedulePrefetch()
@@ -935,6 +973,7 @@ final class TimelineCoordinator: NSObject {
         acknowledgeIfRead()
         publishPosition()
         trackTopicPlace()
+        trackSummaryPlace()
         clearTopicMarkerIfPassed(viewport: current)
     }
 
@@ -1176,12 +1215,51 @@ final class TimelineCoordinator: NSObject {
         guard let channelID, let canvas, pendingJump == nil,
               let open = model.openTopic, open.channelID == channelID, !open.showsPanel,
               let index = canvas.rows.firstIndex(where: {
-                  if case .topicMarker = $0.kind { true } else { false }
+                  if case .marker(.topic, _) = $0.kind { true } else { false }
               })
         else { return }
         let frame = canvas.rowFrame(at: index)
         guard frame.maxY < viewport.minY || frame.minY > viewport.maxY else { return }
         Task { @MainActor [weak self] in self?.model.clearOpenTopic(in: channelID) }
+    }
+
+    /// Reports where the reader is among the summaries — once per change,
+    /// which is once per stretch boundary crossed rather than once per tick.
+    ///
+    /// Deferred, for `publishPosition`'s reason.
+    private func trackSummaryPlace() {
+        guard !isTornDown, !summaries.isEmpty else { return }
+        let range = isNearBottom && reachesPresent ? nil : readableMessageRange()
+        let place = SummaryPlace(
+            top: range?.top,
+            bottom: range?.bottom,
+            highlighted: highlightedSummary,
+            summaries: summaries
+        )
+        guard place != summaryPlace else { return }
+        summaryPlace = place
+        Task { @MainActor [weak self] in
+            guard let self, !self.isTornDown, self.summaryPlace == place,
+                  let scroll = self.scroll, scroll.summaryPlace != place
+            else { return }
+            scroll.summaryPlace = place
+        }
+    }
+
+    /// The first and last messages that can be read: below the chrome over the
+    /// transcript's top — the toolbar and the summaries bar — and above the
+    /// composer. What Discord's anchors are, in this transcript's terms.
+    private func readableMessageRange() -> (top: MessageID, bottom: MessageID)? {
+        guard let scrollView, let canvas, !canvas.rows.isEmpty else { return nil }
+        let viewport = scrollView.contentView.bounds
+        guard var first = canvas.rowIndex(at: viewport.minY + scrollView.contentInsets.top),
+              var last = canvas.rowIndex(at: viewport.maxY - scrollView.contentInsets.bottom)
+        else { return nil }
+        while first < last, canvas.rows[first].messageID == nil { first += 1 }
+        while last > first, canvas.rows[last].messageID == nil { last -= 1 }
+        guard let top = canvas.rows[first].messageID, let bottom = canvas.rows[last].messageID
+        else { return nil }
+        return (top, bottom)
     }
 
     private func requestEarlierHistoryIfNeeded(viewport: CGRect) {

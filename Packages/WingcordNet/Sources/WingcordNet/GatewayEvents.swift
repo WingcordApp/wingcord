@@ -140,6 +140,8 @@ struct GatewayFrame: Decodable, Sendable {
         /// separate session from the call carrying it, with its own endpoint
         /// and token, and this is the only frame that names them.
         case streamServerUpdate(StreamServerUpdateDTO)
+        /// Discord summed up a new stretch of a channel, or updated one.
+        case conversationSummaryUpdate(SummaryUpdatePayload)
         /// Anything this client does not act on. `d` is never decoded.
         case unhandled(name: String?)
     }
@@ -290,6 +292,8 @@ struct GatewayFrame: Decodable, Sendable {
             payload = .streamDelete(try decode(StreamEventDTO.self))
         case "STREAM_SERVER_UPDATE":
             payload = .streamServerUpdate(try decode(StreamServerUpdateDTO.self))
+        case "CONVERSATION_SUMMARY_UPDATE":
+            payload = .conversationSummaryUpdate(try decode(SummaryUpdatePayload.self))
         default: payload = .unhandled(name: name)
         }
     }
@@ -497,6 +501,18 @@ struct ReactionAddManyPayload: Decodable, Sendable {
         var users: [UserID]?
         var emoji: EmojiDTO?
     }
+}
+
+/// `CONVERSATION_SUMMARY_UPDATE`: new or changed summaries for one channel.
+///
+/// **Read out of Discord's own dispatcher and store, not captured.** The
+/// dispatcher forwards `d` whole, and the summary store (module `822074`) reads
+/// `channel_id` and `summaries` — each entry the same wire object the list
+/// route answers with, mapped by the same function. Everything past the channel
+/// is optional, so a different shape costs this one event rather than the frame.
+struct SummaryUpdatePayload: Decodable, Sendable {
+    var channel_id: ChannelID
+    var summaries: [SummaryDTO]?
 }
 
 struct GuildDeletePayload: Decodable, Sendable {

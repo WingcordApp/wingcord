@@ -16,6 +16,9 @@ final class TranscriptScrollState {
     /// The topic the reader is in, as an index into the channel's topics — the
     /// one the minimap centres on. Nil when there are none. See `TopicPlace`.
     var topicIndex: Int?
+    /// Where the reader is among the channel's summaries — what the bar names
+    /// and where its arrows go. Nil until first reported. See `SummaryPlace`.
+    var summaryPlace: SummaryPlace?
     /// The pointer is on chrome over the transcript — the minimap, the jump
     /// control — so the canvas under it must not light the row there.
     ///

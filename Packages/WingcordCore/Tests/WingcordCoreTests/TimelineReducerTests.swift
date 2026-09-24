@@ -88,30 +88,49 @@ struct TimelineReducerTests {
         #expect(rows.count == 43)
     }
 
-    @Test("The open topic is marked above its first message, which heads a run")
+    @Test("A mark goes above its first message, which heads a run")
     func topicMarker() {
         let first = message(1, author: 10, at: 0)
         let start = message(2, author: 10, at: 1)
-        let topic = ConversationTopic(
-            id: ConversationTopicID(rawValue: 2),
+        let topic = TimelineMark(
+            kind: .topic,
+            id: 2,
             title: "Game state concerns",
             startMessageID: start.id,
-            endMessageID: start.id,
             messageCount: 31
         )
-        let rows = TimelineReducer.rows(messages: [first, start], topicMarker: topic)
-        let markerIndex = rows.firstIndex { if case .topicMarker = $0 { true } else { false } }
+        let rows = TimelineReducer.rows(messages: [first, start], marks: [topic])
+        let markerIndex = rows.firstIndex { if case .marker = $0 { true } else { false } }
         #expect(markerIndex != nil)
         #expect(rows[(markerIndex ?? 0) + 1].messageID == start.id)
         // Same author a second later, and still a run head: the marker is
         // between them.
         #expect(messages(rows).last?.isRunHead == true)
 
-        // One message is not a topic worth marking.
+        // One message is not a stretch worth marking.
         var single = topic
         single.messageCount = 1
-        let unmarked = TimelineReducer.rows(messages: [first, start], topicMarker: single)
-        #expect(!unmarked.contains { if case .topicMarker = $0 { true } else { false } })
+        let unmarked = TimelineReducer.rows(messages: [first, start], marks: [single])
+        #expect(!unmarked.contains { if case .marker = $0 { true } else { false } })
+    }
+
+    @Test("A summary and a topic beginning at one message are both marked, in order")
+    func twoMarksAtOneMessage() {
+        let start = message(2, author: 10, at: 1)
+        let summary = TimelineMark(
+            kind: .summary, id: 7, title: "Nitro Credits Bug",
+            startMessageID: start.id, messageCount: 19
+        )
+        let topic = TimelineMark(
+            kind: .topic, id: 9, title: "Credits",
+            startMessageID: start.id, messageCount: 4
+        )
+        let rows = TimelineReducer.rows(messages: [start], marks: [summary, topic])
+        let kinds = rows.compactMap { row -> TimelineMark.Kind? in
+            if case .marker(let kind, _, _) = row { kind } else { nil }
+        }
+        #expect(kinds == [.summary, .topic])
+        #expect(rows.last?.messageID == start.id)
     }
 
     @Test("A window that reaches the present ends on its newest message")

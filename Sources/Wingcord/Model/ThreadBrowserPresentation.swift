@@ -23,18 +23,12 @@ struct ThreadBrowserRow: Hashable, Sendable, Identifiable {
     /// user objects behind them, so a session that has not met these people has
     /// nothing to draw and a row of grey circles is noise. The count beside it
     /// carries the information either way.
-    var faces: [ThreadBrowserFace]
+    var faces: [StackedFace]
     /// "50+" or "+24" — see `ThreadBrowserPresentation`.
     var memberBadge: String?
     var isArchived: Bool
     var isLocked: Bool
     var isFollowed: Bool
-}
-
-struct ThreadBrowserFace: Hashable, Sendable, Identifiable {
-    var id: UserID
-    var url: URL?
-    var monogram: String
 }
 
 struct ThreadBrowserPresentation: Hashable, Sendable {
@@ -117,20 +111,8 @@ extension AppModel {
     }
 
     /// The faces a row can draw, in the order Discord sent them.
-    private func faces(of thread: Channel, inGuild guildID: GuildID?) -> [ThreadBrowserFace] {
-        var faces: [ThreadBrowserFace] = []
-        faces.reserveCapacity(thread.memberIDsPreview.count)
-        for userID in thread.memberIDsPreview {
-            guard let user = users[userID] else { continue }
-            faces.append(
-                ThreadBrowserFace(
-                    id: userID,
-                    url: avatarURL(forUserID: userID, inGuild: guildID, side: Metrics.avatarInline),
-                    monogram: user.monogram
-                )
-            )
-        }
-        return faces
+    private func faces(of thread: Channel, inGuild guildID: GuildID?) -> [StackedFace] {
+        stackedFaces(of: thread.memberIDsPreview, inGuild: guildID)
     }
 
     /// The count beside a row's faces.

@@ -640,6 +640,12 @@ struct GuildDTO: Decodable, Sendable {
     /// When the reader joined, at the top level. Nested on READY — see
     /// `GuildProperties.joined_at`.
     var joined_at: Date?
+    /// The server's own theme. See `GuildThemeField` for why absent and null
+    /// are told apart.
+    var theme: GuildThemeField?
+    /// 0 default, 1 explicit, 2 safe, 3 age-restricted — Discord's
+    /// `GuildNSFWContentLevel`. Only "is it 1 or 3" is kept.
+    var owner_configured_content_level: Int?
 
     /// Discord moved a guild's own fields into a nested `properties` object on
     /// the READY payload while leaving them at the top level everywhere else.
@@ -675,7 +681,19 @@ struct GuildDTO: Decodable, Sendable {
         /// `properties`; a tag decoded from only one of the two shapes is a tag
         /// that appears for some servers and not others.
         var profile: GuildIdentityDTO?
+        /// Nested here on READY, like every field beside it — `INVARIANTS.md`
+        /// §5.9: a type with a nested form reads every field from both.
+        var theme: GuildThemeField?
+        var owner_configured_content_level: Int?
     }
+
+    /// Whether this payload said anything about the theme at all.
+    ///
+    /// **A GUILD_UPDATE is applied by replacement**, so a payload that left the
+    /// key out would otherwise take a server's theme away. Discord's own record
+    /// keeps the previous theme when the key is absent (`void 0 === e.theme`),
+    /// and the session does the same with this.
+    var carriesTheme: Bool { theme != nil || properties?.theme != nil }
 
     /// `guild.profile`, reduced to the two fields a tag is *worn* as.
     struct GuildIdentityDTO: Decodable, Sendable {
@@ -704,8 +722,104 @@ struct GuildDTO: Decodable, Sendable {
                     ?? properties?.default_message_notifications
                     ?? 0
             ),
-            joinedAt: joined_at ?? properties?.joined_at
+            joinedAt: joined_at ?? properties?.joined_at,
+            theme: (theme ?? properties?.theme)?.domain,
+            isAgeRestricted: (owner_configured_content_level
+                ?? properties?.owner_configured_content_level)
+                .map { $0 == 1 || $0 == 3 } ?? false
         )
+    }
+}
+
+/// A guild's `theme` as it can arrive: an object, an explicit `null`, or not
+/// at all.
+///
+/// **Absent and null are different answers**, and the synthesised
+/// `decodeIfPresent` folds them together — see `GuildDTO.carriesTheme` for the
+/// one place that asks. The overload below is what keeps them apart: it is more
+/// specific than the generic one, so the synthesised initialiser picks it.
+///
+/// **And it never throws.** The object rides every READY, and a field nobody
+/// else reads is exactly the kind that takes a bootstrap down when its shape
+/// moves (`INVARIANTS.md` §5.58.5). A theme this client cannot read draws as no
+/// theme.
+enum GuildThemeField: Decodable, Sendable {
+    case cleared
+    case set(GuildTheme)
+
+    init(from decoder: any Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        guard !container.decodeNil(),
+              let dto = try? container.decode(GuildThemeDTO.self)
+        else {
+            self = .cleared
+            return
+        }
+        self = .set(dto.domain)
+    }
+
+    var domain: GuildTheme? {
+        if case .set(let theme) = self { theme } else { nil }
+    }
+}
+
+extension KeyedDecodingContainer {
+    /// Present-and-null is `.cleared`; absent is nil. See `GuildThemeField`.
+    func decodeIfPresent(_ type: GuildThemeField.Type, forKey key: Key) throws -> GuildThemeField? {
+        guard contains(key) else { return nil }
+        return try decode(GuildThemeField.self, forKey: key)
+    }
+}
+
+/// `guild.theme`, captured: `{"preset_id": null, "custom_user_theme_settings":
+/// {"colors": ["#77C579"], "gradient_color_stops": [], "gradient_angle": 0,
+/// "base_mix": 0}, "enabled": true}`.
+struct GuildThemeDTO: Decodable, Sendable {
+    var enabled: Bool?
+    var preset_id: Int?
+    var custom_user_theme_settings: Custom?
+
+    struct Custom: Decodable, Sendable {
+        var colors: [String]?
+        /// Only whether there are any: Discord's test refuses a custom theme
+        /// that carries stops, and the capture's are empty — so their element
+        /// shape has never been seen and is not assumed.
+        var gradient_color_stops: ElementCount?
+        var gradient_angle: Double?
+        var base_mix: Double?
+    }
+
+    /// How many elements a JSON array holds, whatever they are.
+    struct ElementCount: Decodable, Sendable {
+        var count: Int
+
+        init(from decoder: any Decoder) throws {
+            count = (try? decoder.unkeyedContainer())?.count ?? 0
+        }
+    }
+
+    /// Discord's own conversion (module `679787`): the angle and the mix
+    /// default to zero, and a colour list with anything unreadable in it is no
+    /// colour list — dropping the bad entry could turn two colours into the one
+    /// a custom theme needs.
+    var domain: GuildTheme {
+        let custom = custom_user_theme_settings
+        let parsed = (custom?.colors ?? []).map(Self.rgb)
+        return GuildTheme(
+            isEnabled: enabled ?? false,
+            presetID: preset_id,
+            colors: parsed.contains(nil) ? [] : parsed.compactMap(\.self),
+            hasGradientStops: (custom?.gradient_color_stops?.count ?? 0) > 0,
+            angle: custom?.gradient_angle ?? 0,
+            baseMix: custom?.base_mix ?? 0
+        )
+    }
+
+    /// `#RRGGBB` → 24-bit, or nil.
+    private static func rgb(_ hex: String) -> UInt32? {
+        let digits = hex.hasPrefix("#") ? hex.dropFirst() : Substring(hex)
+        guard digits.count == 6 else { return nil }
+        return UInt32(digits, radix: 16)
     }
 }
 
@@ -1362,6 +1476,8 @@ public struct ClientSettings: Sendable {
     /// never opened the pane.
     public var privacyRaw: Data?
     public var statusRaw: Data?
+    /// Whose theme a themed server is drawn in. See `GuildThemeSource`.
+    public var serverThemes = ServerThemePreferences()
 
     public init(
         folders: [GuildFolder],
@@ -1371,7 +1487,8 @@ public struct ClientSettings: Sendable {
         inboxTab: InboxTab = .fallback,
         activityPrivacy: ActivityPrivacy = ActivityPrivacy(),
         privacyRaw: Data? = nil,
-        statusRaw: Data? = nil
+        statusRaw: Data? = nil,
+        serverThemes: ServerThemePreferences = ServerThemePreferences()
     ) {
         self.folders = folders
         self.guildPositions = guildPositions
@@ -1381,6 +1498,7 @@ public struct ClientSettings: Sendable {
         self.activityPrivacy = activityPrivacy
         self.privacyRaw = privacyRaw
         self.statusRaw = statusRaw
+        self.serverThemes = serverThemes
     }
 }
 

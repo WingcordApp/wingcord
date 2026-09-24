@@ -87,7 +87,8 @@ struct ConversationPane: View {
         TimelineContainer(
             channelID: channelID,
             topInset: chromeHeight + callHeight + activityHeight,
-            bottomInset: composerHeight
+            bottomInset: composerHeight,
+            hostsSummaries: true
         )
             // **The one composed thing over the drawn transcript.** It is glass,
             // Core Graphics cannot draw glass, and there is exactly one of it at

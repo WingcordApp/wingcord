@@ -1,6 +1,7 @@
 import AppKit
 import Foundation
 import Observation
+import WingcordCore
 
 /// The reader's theme, and the picture behind it.
 ///
@@ -85,6 +86,33 @@ final class ThemeStore {
     /// every view in the app that happens to read a `Palette` token.
     private(set) var backdrop: Backdrop?
 
+    // MARK: A server's theme
+
+    /// The theme of the server the reader is in, while it is the one drawn —
+    /// see `AppModel.activeServerTheme`. Nil is the reader's own.
+    ///
+    /// **An override, never a choice.** Nothing here is persisted and nothing
+    /// the reader chose moves: leaving the server puts their own theme back
+    /// exactly as it was, because it never stopped being the selection.
+    private(set) var serverTheme: ActiveServerTheme?
+
+    /// What the window's ground cross-fades on: a change of choice, or going
+    /// into or out of a themed server — never an edit. See `ThemeGroundLayer`.
+    var groundIdentity: GroundIdentity {
+        GroundIdentity(choice: choice, server: serverTheme?.guildID)
+    }
+
+    /// The reader's picture, unless a server's theme is on — which **replaces
+    /// the room, picture and all**. A server theme under a photograph would
+    /// reach nothing but the surfaces, and "Use my theme" is the setting for a
+    /// reader who wants their own.
+    var shownBackdrop: Backdrop? { serverTheme == nil ? backdrop : nil }
+
+    struct GroundIdentity: Equatable {
+        var choice: ThemeChoice
+        var server: GuildID?
+    }
+
     // MARK: Reading
 
     /// The colours a choice would produce, without selecting it. The gallery's
@@ -114,6 +142,13 @@ final class ThemeStore {
     }
 
     // MARK: Writing
+
+    /// Puts a server's theme on, or takes it off.
+    func setServerTheme(_ theme: ActiveServerTheme?) {
+        guard theme != serverTheme else { return }
+        serverTheme = theme
+        apply(notifyingDrawnSurfaces: true)
+    }
 
     func select(_ choice: ThemeChoice) {
         guard choice != self.choice else { return }
@@ -196,18 +231,24 @@ final class ThemeStore {
     /// is what wakes SwiftUI, and a canvas that repaints in response has to find
     /// the new theme already installed or it draws one frame of the old ground.
     private func apply(notifyingDrawnSurfaces: Bool) {
-        // The ground first and on its own test — see `ground`. Written only
-        // when it moved: an `@Observable` setter invalidates its readers
-        // whether or not the value changed.
-        let resolvedGround = Self.ground(for: choice, customSeed: customSeed, vividness: vividness)
-        if resolvedGround != ground { ground = resolvedGround }
-
-        let resolved = Self.colors(
+        let own = Self.colors(
             for: choice,
             customSeed: customSeed,
             systemAccent: customFollowsSystemAccent,
             vividness: vividness
         )
+        // A server's theme is drawn in the reader's own room: it carries a
+        // version for each, and choosing which is the reader's theme's job.
+        let server = serverTheme.flatMap { ServerTheme($0.theme, room: own.appearance) }
+
+        // The ground first and on its own test — see `ground`. Written only
+        // when it moved: an `@Observable` setter invalidates its readers
+        // whether or not the value changed.
+        let resolvedGround = server.map(ThemeGround.init(server:))
+            ?? Self.ground(for: choice, customSeed: customSeed, vividness: vividness)
+        if resolvedGround != ground { ground = resolvedGround }
+
+        let resolved = server?.colors ?? own
         guard resolved != colors || !isLoaded else { return }
         // Before the colours go out, so every view woken by them — and the
         // transcript's text style, rebuilt on the appearance change — resolves

@@ -371,7 +371,9 @@ extension AppModel {
                     $0.channelID == channelID && $0.userID != currentUserID
                 },
             canShowVoiceChat: channel.kind == .voice || channel.kind == .stage,
-            isVoiceChatShown: isVoiceChatShown
+            isVoiceChatShown: isVoiceChatShown,
+            canShowSummaries: summariesApply(to: channelID) && !summaries(in: channelID).isEmpty,
+            areSummariesShown: AppSettings.shared.showsSummaryBar
         )
     }
 
@@ -788,6 +790,23 @@ extension AppModel {
             return CDN.defaultAvatar(index: user.defaultAvatarIndex)
         }
         return CDN.avatar(userID: user.id, hash: hash, side: side)
+    }
+
+    /// Faces for the people this account knows, in the order given — a
+    /// person the store has never heard of has no face to draw and is left
+    /// out, as Discord leaves them out (`getUser(e) ?? null`, filtered).
+    func stackedFaces(of userIDs: [UserID], inGuild guildID: GuildID?) -> [StackedFace] {
+        var faces: [StackedFace] = []
+        faces.reserveCapacity(userIDs.count)
+        for userID in userIDs {
+            guard let user = users[userID] else { continue }
+            faces.append(StackedFace(
+                id: userID,
+                url: avatarURL(forUserID: userID, inGuild: guildID, side: Metrics.avatarInline),
+                monogram: user.monogram
+            ))
+        }
+        return faces
     }
 
     /// The avatar to draw for a person in a guild, honouring a per-guild

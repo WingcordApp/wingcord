@@ -454,6 +454,11 @@ nonisolated struct ThemeColors: Hashable, Sendable {
     /// slight text tint, which only its themes carry. See
     /// `MessageTextStyle.current`.
     var textTint: UInt32?
+    /// How much of `textTint` goes in, as one weight on the tint.
+    ///
+    /// **Not a constant**: Discord's own themes mix it at 38 %, and a server's
+    /// theme at 30 % in a dark room and 40 % in a light one — see `ServerTheme`.
+    var textTintWeight: Double
 
     /// The house palette, stated rather than derived. See the note at the top.
     static let trueBlack = ThemeColors(
@@ -482,7 +487,8 @@ nonisolated struct ThemeColors: Hashable, Sendable {
         surfaceRaised: UInt32,
         accent: UInt32?,
         appearance: ThemeAppearance = .dark,
-        textTint: UInt32? = nil
+        textTint: UInt32? = nil,
+        textTintWeight: Double = DiscordTheme.textTintWeight
     ) {
         self.canvas = canvas
         self.surface = surface
@@ -490,6 +496,7 @@ nonisolated struct ThemeColors: Hashable, Sendable {
         self.accent = accent
         self.appearance = appearance
         self.textTint = textTint
+        self.textTintWeight = textTintWeight
     }
 
     /// Derived from a seed.
@@ -509,6 +516,7 @@ nonisolated struct ThemeColors: Hashable, Sendable {
             : InkContrast.legible(seed.accent.packedRGB(), on: seed.inkCeiling)
         appearance = .dark
         textTint = nil
+        textTintWeight = DiscordTheme.textTintWeight
     }
 }
 

@@ -213,6 +213,16 @@ private struct AppearancePane: View {
             )
         }
 
+        SettingsGroup("Server Themes") {
+            ServerThemePreferenceCard()
+            SettingsFootnote(
+                "Some servers set a theme of their own. While you are in one, it takes the "
+                    + "place of yours — your picture included — in the version for your light "
+                    + "or dark room. Saved to your account, so Discord follows it too.",
+                symbolName: "paintpalette"
+            )
+        }
+
         SettingsGroup("Picture") {
             BackdropCard()
         }
@@ -375,6 +385,38 @@ private struct AppearancePane: View {
                 "Wingcord follows both system settings. There is no app-level copy of either, so there is never a question of which one won.",
                 symbolName: "info.circle"
             )
+        }
+    }
+}
+
+/// Appearance → "Default theme in servers": Discord's own setting, and its own
+/// two answers.
+///
+/// **Synced, not local**, which is why it reads the store rather than
+/// `AppSettings`: it is `appearance.default_guild_theme_preference` in the
+/// account's settings, so choosing here changes Discord too. Never touched
+/// reads as the server's theme, as it does in Discord.
+private struct ServerThemePreferenceCard: View {
+    @Environment(AppModel.self) private var model
+
+    var body: some View {
+        SettingsCard {
+            CardHeaderRow(
+                title: "Default theme in servers",
+                help: "Whose theme a server with a theme of its own is shown in."
+            )
+            SettingsSegmentedControl(
+                selection: Binding(
+                    get: { model.serverThemePreferences.default == .personal ? .personal : .guild },
+                    set: { model.sessionController.setDefaultServerTheme($0) }
+                ),
+                options: [
+                    .init(GuildThemeSource.guild, "Use the server's theme", symbolName: "paintpalette"),
+                    .init(GuildThemeSource.personal, "Use my theme", symbolName: "person.crop.circle"),
+                ]
+            )
+            // A write needs the account; signed out there is nothing to change.
+            .disabled(model.connectionState != .ready)
         }
     }
 }

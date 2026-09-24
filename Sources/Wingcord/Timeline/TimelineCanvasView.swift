@@ -1239,8 +1239,9 @@ final class TimelineCanvasView: NSView {
     override func mouseDown(with event: NSEvent) {
         let point = convert(event.locationInWindow, from: nil)
         guard let index = rowIndex(at: point.y), rows.indices.contains(index) else { return }
-        // The whole marker is its control: it is one band with one meaning.
-        if case .topicMarker = rows[index].kind {
+        // A topic's whole marker is its control: it is one band with one
+        // meaning. A summary's mark is a label and takes no click.
+        if case .marker(.topic, _) = rows[index].kind {
             onOpenTopicMarker?()
             return
         }
@@ -1714,7 +1715,7 @@ final class TimelineCanvasView: NSView {
             case nil:
                 break
             }
-        } else if let index, rows.indices.contains(index), case .topicMarker = rows[index].kind {
+        } else if let index, rows.indices.contains(index), case .marker(.topic, _) = rows[index].kind {
             cursor = .pointingHand
         }
         applyCursor(cursor)

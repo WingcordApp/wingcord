@@ -1536,7 +1536,9 @@ public enum GatewayUpdate: Sendable {
         /// `GuildDTO.stage_instances`.
         stages: [StageInstance]
     )
-    case guildUpdated(Guild)
+    /// A server changed. `carriesTheme` is false when the payload left `theme`
+    /// out, which keeps the theme already held — see `GuildDTO.carriesTheme`.
+    case guildUpdated(Guild, carriesTheme: Bool)
     /// A stage went live, or its topic changed.
     case stageChanged(StageInstance)
     /// A stage ended. The channel and everybody in it stay; only the stage
@@ -1660,6 +1662,9 @@ public enum GatewayUpdate: Sendable {
     /// The other half of a Go Live credential. Arrives in **either order**
     /// relative to `streamChanged`, exactly as a call's two halves do.
     case streamServerChanged(GoLiveServer)
+    /// New or changed summaries for one channel, to be merged over the ones
+    /// held. See `SummaryUpdatePayload`.
+    case summariesUpdated(ChannelID, [ChannelSummary])
 
     /// - Parameter currentUserID: who we are, for the thread events whose
     ///   membership payload leaves `user_id` out because the account is
@@ -1758,7 +1763,7 @@ public enum GatewayUpdate: Sendable {
                 stages: (dto.stage_instances ?? []).compactMap(\.domain)
             )
         case .guildUpdate(let dto):
-            self = .guildUpdated(dto.domain)
+            self = .guildUpdated(dto.domain, carriesTheme: dto.carriesTheme)
         case .stageInstanceUpsert(let dto):
             guard let stage = dto.domain else { return nil }
             self = .stageChanged(stage)
@@ -2009,6 +2014,10 @@ public enum GatewayUpdate: Sendable {
         case .streamServerUpdate(let dto):
             guard let server = dto.domain else { return nil }
             self = .streamServerChanged(server)
+        case .conversationSummaryUpdate(let payload):
+            let summaries = (payload.summaries ?? []).compactMap(\.domain)
+            guard !summaries.isEmpty else { return nil }
+            self = .summariesUpdated(payload.channel_id, summaries)
         case .relationshipRemove(let dto):
             // A removal carries the type that *was*, not one to apply — so the
             // event is normalised to `.none` here rather than at the store,

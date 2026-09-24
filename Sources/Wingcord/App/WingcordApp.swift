@@ -94,6 +94,7 @@ struct WingcordApp: App {
                 // both of them. See `ThemeGround.swift`.
                 .backdropSpace()
                 .mirrorsUnreadCountOnDock()
+                .wearsServerThemes()
                 .installsGlobalHotkey()
                 .providesSettingsWindow()
                 .providesServerSettingsWindow()
