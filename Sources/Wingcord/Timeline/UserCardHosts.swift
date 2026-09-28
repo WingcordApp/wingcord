@@ -102,7 +102,7 @@ struct UserLinkCard: View {
         )) {
             MiniProfileCard(
                 profile: profile,
-                openFullProfile: { model.openProfile(key.userID, anchor: .zero, depth: .full) },
+                openFullProfile: { model.openProfile(key.userID, anchor: .zero, depth: .full, tab: $0) },
                 width: Self.width,
                 form: .embed,
                 showsEffect: !isMeasuring

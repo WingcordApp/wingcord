@@ -634,7 +634,7 @@ final class MemberListCanvas: NSView {
             var label = entry.name
             if entry.isBot { label += ", app" }
             label += ", \(entry.status.label)"
-            if let subtitle = entry.subtitle { label += ", \(subtitle)" }
+            if let line = entry.activityLine { label += ", \(line.spokenText)" }
             element.setAccessibilityLabel(label)
             element.setAccessibilityParent(self)
             element.setAccessibilityFrameInParentSpace(rowFrame(at: index))

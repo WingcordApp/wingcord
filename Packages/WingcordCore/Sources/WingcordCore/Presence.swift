@@ -81,18 +81,36 @@ public struct Presence: Hashable, Sendable {
         activities?.list.first { $0.kind == .custom }
     }
 
-    /// The activity worth showing in a row: the first that is not a custom
-    /// status. A person can be playing a game *and* have a custom status, and
-    /// the row shows the game.
+    /// The activity worth showing on its own: the first in Discord's order that
+    /// is not a custom status — Competing, then Streaming, then Playing, then
+    /// the rest (`ActivityOrder`). A person can be playing a game *and* have a
+    /// custom status, and the game is the activity.
+    ///
+    /// `.unknown` is Discord's hang status, which no surface lists.
     public var primaryActivity: Activity? {
-        activities?.list.first { $0.kind != .custom }
+        activities?.list.first { $0.kind != .custom && $0.kind != .unknown }
+    }
+
+    /// Everything a profile draws a card for, in Discord's order — every
+    /// activity that is not a custom status, each application once (module
+    /// `343129`). `primaryActivity` is the first of them.
+    public var liveActivities: [Activity] {
+        var cards: [Activity] = []
+        for activity in activities?.list ?? [] where activity.kind != .custom && activity.kind != .unknown {
+            guard !cards.contains(where: { $0.isSameSource(as: activity) }) else { continue }
+            cards.append(activity)
+        }
+        return cards
     }
 }
 
 /// The activity list, boxed.
 public final class PresenceActivities: Hashable, Sendable {
+    /// **In Discord's order, and with Discord's one Playing** — see
+    /// `ActivityOrder`. Every surface reads this list and none of them sorts
+    /// it, so the order is decided once, here, where a presence is made.
     public let list: [Activity]
-    public init(list: [Activity]) { self.list = list }
+    public init(list: [Activity]) { self.list = ActivityOrder.presented(list) }
 
     public static func == (lhs: PresenceActivities, rhs: PresenceActivities) -> Bool {
         lhs === rhs || lhs.list == rhs.list
@@ -170,6 +188,40 @@ public struct Activity: Hashable, Sendable {
     /// from this array alone is a control that opens nothing, which is the inert
     /// control `INVARIANTS.md` §5.5 forbids.
     public var buttons: [String]
+    /// When the app first published this activity.
+    ///
+    /// **The last tie-break in Discord's order** — see `ActivityOrder`. Nil
+    /// sorts as the oldest, as Discord's `created_at ?? 0` does.
+    public var createdAt: Date?
+    /// An Activity launched in a voice channel — Discord's `EMBEDDED` flag
+    /// (256). It changes the icon a one-line summary draws and the words it
+    /// says.
+    public var isEmbedded: Bool
+    /// Which of its lines the app asked to be named by in a one-line summary.
+    public var statusDisplay: StatusDisplay?
+    /// The party's id.
+    ///
+    /// **Read only to recognise Spotify**, whose parties are `spotify:<id>` —
+    /// Discord's own test (module `90644`), because a listening activity named
+    /// "Spotify" alone is something any app can publish.
+    public var partyID: String?
+    /// Whether the app sent join or spectate secrets. Only their presence is
+    /// kept: Discord counts them when it decides whether an activity is a rich
+    /// presence at all.
+    public var hasSecrets: Bool
+    /// Where it is running — `"xbox"`, `"ps5"`, `"desktop"`. Read for the
+    /// card's "Playing on Xbox".
+    public var platform: String?
+    /// Where the details line and the state line link to, when the app said.
+    public var detailsURL: URL?
+    public var stateURL: URL?
+
+    /// `status_display_type`.
+    public enum StatusDisplay: Int, Hashable, Sendable {
+        case name = 0
+        case state = 1
+        case details = 2
+    }
 
     public init(
         kind: Kind,
@@ -188,8 +240,24 @@ public struct Activity: Hashable, Sendable {
         endsAt: Date? = nil,
         partySize: [Int]? = nil,
         sessionID: String? = nil,
-        buttons: [String] = []
+        buttons: [String] = [],
+        createdAt: Date? = nil,
+        isEmbedded: Bool = false,
+        statusDisplay: StatusDisplay? = nil,
+        partyID: String? = nil,
+        hasSecrets: Bool = false,
+        platform: String? = nil,
+        detailsURL: URL? = nil,
+        stateURL: URL? = nil
     ) {
+        self.platform = platform
+        self.detailsURL = detailsURL
+        self.stateURL = stateURL
+        self.createdAt = createdAt
+        self.isEmbedded = isEmbedded
+        self.statusDisplay = statusDisplay
+        self.partyID = partyID
+        self.hasSecrets = hasSecrets
         self.partySize = partySize
         self.kind = kind
         self.name = name

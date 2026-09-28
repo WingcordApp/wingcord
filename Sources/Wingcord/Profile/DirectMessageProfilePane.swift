@@ -25,9 +25,9 @@ struct DirectMessageProfileContainer: View {
                 anchor: .zero,
                 depth: .full
             )),
-            openFullProfile: { model.openProfile(userID, anchor: .zero, depth: .full) },
+            openFullProfile: { model.openProfile(userID, anchor: .zero, depth: .full, tab: $0) },
             openLink: { model.openLink($0) },
-            gameCollection: model.gameCollection(for: userID)
+            widgetPreviews: model.widgetPreviews(for: userID)
         )
         .task(id: userID) {
             model.sessionController.loadProfile(of: userID, inGuild: nil)
@@ -57,13 +57,14 @@ struct DirectMessageProfileContainer: View {
 /// scroll view inside it carries only the content.
 struct DirectMessageProfilePane: View {
     var profile: ProfilePresentation?
-    var openFullProfile: () -> Void
+    /// Opens the full profile, on a tab when a peek asked for one.
+    var openFullProfile: (ProfileTab?) -> Void
     /// Passed through to the card's prose. The pane holds no model reference —
     /// see the container above — so the opener arrives as a closure like every
     /// other action on this surface.
     var openLink: ((String) -> Void)?
-    /// Their board's covers, resolved by the container for the same reason.
-    var gameCollection: GameCollection?
+    /// Their widgets, resolved by the container for the same reason.
+    var widgetPreviews: [WidgetPreview] = []
 
     private static let width: CGFloat = Proportions.profileColumnIdeal
 
@@ -84,7 +85,7 @@ struct DirectMessageProfilePane: View {
                         profile: profile,
                         openFullProfile: openFullProfile,
                         openLink: openLink,
-                        gameCollection: gameCollection,
+                        widgetPreviews: widgetPreviews,
                         width: Self.width,
                         form: .column
                     )

@@ -23,6 +23,14 @@ struct RailMemoKey: Hashable, Sendable {
     /// no tile draws; this one moves on a voice state, which is exactly what the
     /// mark is about.
     var voiceRevision: UInt64
+    /// A mark counts only rooms the reader can see, so a channel's overwrites
+    /// moving can move it.
+    var channelStructure: UInt64
+    /// A muted server carries no mark, and blocked or ignored people count for
+    /// nothing. Small sets, almost always empty, so comparing them is a count.
+    var mutedGuildIDs: Set<GuildID>
+    var blockedUserIDs: Set<UserID>
+    var ignoredUserIDs: Set<UserID>
 }
 
 struct SidebarMemoKey: Hashable, Sendable {
@@ -107,7 +115,11 @@ extension AppModel {
             selectedGuildID: selectedGuildID,
             expandedFolders: expandedFolderIDs,
             showsUnreadCounts: AppSettings.shared.showsUnreadCounts,
-            voiceRevision: voiceRevision
+            voiceRevision: voiceRevision,
+            channelStructure: channelIndex.structureRevision,
+            mutedGuildIDs: mutedGuildIDs,
+            blockedUserIDs: blockedUserIDs,
+            ignoredUserIDs: ignoredUserIDs
         )
         // Reading `guilds` and `folders` here — not inside the builder — is what
         // registers the dependency on a cache hit. Arrays and dictionaries are
@@ -190,7 +202,7 @@ extension AppModel {
             avatarURL: user.flatMap { avatarURL(for: $0, side: Metrics.avatarRow) },
             monogram: user?.monogram ?? "?",
             status: selfStatus,
-            customStatus: selfCustomStatus?.current()?.text,
+            activityLine: nowBarActivityLine(user: user),
             isMuted: isSelfMuted,
             isDeafened: isSelfDeafened,
             // Offered only when the reader asked for it. The strip is fetched at
@@ -533,11 +545,15 @@ extension AppModel {
                 // name.
                 status: partnerID.map { presences[$0]?.status ?? .offline },
                 isTyping: partnerID.map { isTypingInDirectMessage(channelID, partner: $0) } ?? false,
-                subtitle: presence?.primaryActivity?.rowSubtitle
-                    ?? presence?.customStatus?.rowSubtitle,
-                subtitleEmoji: presence?.primaryActivity == nil
-                    ? presence?.customStatus?.emoji
-                    : nil,
+                activityLine: partnerID.flatMap { partnerID in
+                    let voice = voicePlace(of: partnerID)
+                    return Self.activityLine(
+                        presence: presence,
+                        isBot: partner?.isBot ?? false,
+                        voice: voice.place,
+                        isStreaming: voice.isStreaming
+                    )
+                },
                 tag: decoration?.primaryGuildTag,
                 tagBadgeURL: decoration.flatMap { decoration in
                     guard let guildID = decoration.primaryGuildID,

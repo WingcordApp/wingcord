@@ -14,75 +14,195 @@ import WingcordCore
 @MainActor
 struct RailHoverPresenceTests {
 
+    private let reader = UserID(rawValue: 1)
     private let here = GuildID(rawValue: 1000)
     private let elsewhere = GuildID(rawValue: 2000)
+    /// An ordinary voice room in `here`.
+    private let room = ChannelID(rawValue: 1001)
+    /// `here`'s AFK room.
+    private let afk = ChannelID(rawValue: 1002)
+    /// A voice room `@everyone` may not see.
+    private let staff = ChannelID(rawValue: 1003)
+    /// A stage channel, live unless a test says otherwise.
+    private let stage = ChannelID(rawValue: 1004)
+    /// `elsewhere`'s room.
+    private let lounge = ChannelID(rawValue: 2001)
 
+    /// Two servers shaped the way the rail meets them: a room, an AFK room, a
+    /// room the reader cannot see and a live stage, with `@everyone` allowed to
+    /// see and join — or the permission gate hides every room and each test
+    /// fails for a reason nothing in it says.
     private func model() -> AppModel {
         let model = AppModel()
-        model.currentUserID = UserID(rawValue: 1)
+        model.currentUserID = reader
+        let owner = UserID(rawValue: 9)
+        model.guilds = [
+            here: Guild(id: here, name: "Here", ownerID: owner, afkChannelID: afk),
+            elsewhere: Guild(id: elsewhere, name: "Elsewhere", ownerID: owner),
+        ]
+        let hereEveryone = RoleID(rawValue: here.rawValue)
+        var index = ChannelIndex()
+        index.replaceChannels(
+            [
+                Channel(id: room, kind: .voice, guildID: here, name: "General"),
+                Channel(id: afk, kind: .voice, guildID: here, name: "AFK"),
+                Channel(
+                    id: staff, kind: .voice, guildID: here, name: "Staff",
+                    overwrites: [PermissionOverwrite(
+                        id: hereEveryone.rawValue, subject: .role, allow: [], deny: [.viewChannel]
+                    )]
+                ),
+                Channel(id: stage, kind: .stage, guildID: here, name: "Town Hall"),
+            ],
+            inGuild: here
+        )
+        index.replaceChannels(
+            [Channel(id: lounge, kind: .voice, guildID: elsewhere, name: "Lounge")],
+            inGuild: elsewhere
+        )
+        model.channelIndex = index
+        for guild in [here, elsewhere] {
+            let everyone = RoleID(rawValue: guild.rawValue)
+            model.roles[guild] = [
+                everyone: Role(
+                    id: everyone, name: "@everyone", position: 0,
+                    permissions: [.viewChannel, .connect, .speak]
+                ),
+            ]
+            model.members[guild] = [reader: Member(userID: reader, roleIDs: [])]
+        }
+        model.stageInstances[stage] = StageInstance(
+            id: 1, guildID: here, channelID: stage, topic: "Q&A"
+        )
         return model
     }
 
     private func join(
         _ model: AppModel,
         _ id: UInt64,
-        guild: GuildID,
+        in channelID: ChannelID? = nil,
         streaming: Bool = false,
-        camera: Bool = false
+        camera: Bool = false,
+        suppressed: Bool = false
     ) {
+        let channelID = channelID ?? room
         let userID = UserID(rawValue: id)
         model.users[userID] = User(id: userID, username: "person\(id)")
         model.voiceStates[userID] = VoiceState(
             userID: userID,
-            channelID: ChannelID(rawValue: guild.rawValue + 1),
-            guildID: guild,
+            channelID: channelID,
+            guildID: model.channelIndex[channelID]?.guildID,
             sessionID: "s",
             isStreaming: streaming,
-            isCameraOn: camera
+            isCameraOn: camera,
+            isSuppressed: suppressed
         )
     }
 
-    @Test("Only this server's people, in join order")
+    private func ids(_ row: RailHoverPresence.Row) -> [UserID] {
+        row.faces.map(\.id)
+    }
+
+    // MARK: Who the chip names
+
+    @Test("Only this server's people, in id order")
     func scopedToItsOwnServer() {
         let model = model()
-        join(model, 30, guild: here)
-        join(model, 20, guild: here)
-        join(model, 40, guild: elsewhere)
+        join(model, 30)
+        join(model, 20)
+        join(model, 40, in: lounge)
 
         let presence = model.railHoverPresence(for: here)
-        // Ordered by id, which is join time — by name it would reshuffle
-        // whenever somebody was renamed, and by nothing on every rehash.
-        #expect(presence.voice.map(\.id) == [UserID(rawValue: 20), UserID(rawValue: 30)])
-        #expect(presence.voiceOverflow == 0)
-        #expect(presence.live.isEmpty)
+        // Ordered by id: by name it would reshuffle whenever somebody was
+        // renamed, and by nothing on every rehash.
+        #expect(ids(presence.voice) == [UserID(rawValue: 20), UserID(rawValue: 30)])
+        #expect(presence.voice.overflow == 0)
+        #expect(presence.streams.isEmpty)
         #expect(presence.rowCount == 1)
     }
 
-    /// **A camera counts as well as a screen share**, because the row answers
-    /// "is there something to watch" and both are.
-    @Test("The live row is the people worth watching, and they are also in voice")
-    func liveRow() {
+    /// **The count that was wrong**: Discord draws a screen share in its own
+    /// row and not again in voice, and a camera is somebody in voice.
+    @Test("A screen share is drawn once, in its own row; a camera stays in voice")
+    func streamsAreApartFromVoice() {
         let model = model()
-        join(model, 20, guild: here)
-        join(model, 21, guild: here, streaming: true)
-        join(model, 22, guild: here, camera: true)
+        join(model, 20)
+        join(model, 21, streaming: true)
+        join(model, 22, camera: true)
 
         let presence = model.railHoverPresence(for: here)
-        #expect(presence.voice.count == 3)
-        #expect(presence.live.map(\.id) == [UserID(rawValue: 21), UserID(rawValue: 22)])
+        #expect(ids(presence.voice) == [UserID(rawValue: 20), UserID(rawValue: 22)])
+        #expect(ids(presence.streams) == [UserID(rawValue: 21)])
         #expect(presence.rowCount == 2)
     }
 
-    /// Discord draws five faces and then a count. The count is what is *left*,
-    /// not the total — "+60" beside five faces means sixty-five people.
-    @Test("Past the limit the row counts the remainder")
-    func overflowIsTheRemainder() {
+    /// The other three differences, each one somebody Discord does not count:
+    /// parked for being idle, in a room the reader cannot see, or blocked.
+    @Test("The AFK room, hidden rooms and blocked people are not in voice")
+    func discordsExclusions() {
         let model = model()
-        for id in 20..<85 { join(model, UInt64(id), guild: here) }
+        join(model, 20)
+        join(model, 21, in: afk)
+        join(model, 22, in: staff)
+        join(model, 23)
+        join(model, 24)
+        model.blockedUserIDs = [UserID(rawValue: 23)]
+        model.ignoredUserIDs = [UserID(rawValue: 24)]
 
         let presence = model.railHoverPresence(for: here)
-        #expect(presence.voice.count == RailHoverPresence.faceLimit)
-        #expect(presence.voiceOverflow == 65 - RailHoverPresence.faceLimit)
+        #expect(ids(presence.voice) == [UserID(rawValue: 20)])
+    }
+
+    /// A stage is not a voice room: its speakers get a row of three and its
+    /// audience is a count, and neither lands in voice.
+    @Test("A live stage draws its speakers and counts its listeners")
+    func stageRow() {
+        let model = model()
+        join(model, 20)
+        join(model, 30, in: stage)
+        join(model, 31, in: stage)
+        for id in 40..<45 { join(model, UInt64(id), in: stage, suppressed: true) }
+
+        let presence = model.railHoverPresence(for: here)
+        #expect(ids(presence.stage) == [UserID(rawValue: 30), UserID(rawValue: 31)])
+        #expect(presence.stageListeners == 5)
+        #expect(ids(presence.voice) == [UserID(rawValue: 20)])
+        #expect(presence.rowCount == 2)
+    }
+
+    @Test("A stage that is not live is not a row")
+    func darkStageIsNoRow() {
+        let model = model()
+        model.stageInstances = [:]
+        join(model, 30, in: stage)
+
+        #expect(model.railHoverPresence(for: here).isEmpty)
+    }
+
+    /// **Discord's facepile, exactly.** A full row draws everybody; an
+    /// overflowing one gives its last slot to the count, which is what is
+    /// *left* — five faces and "+62" is sixty-seven people.
+    @Test("A row draws all it can hold, then five faces and the remainder", arguments: [
+        (count: 5, faces: 5, overflow: 0),
+        (count: 6, faces: 6, overflow: 0),
+        (count: 7, faces: 5, overflow: 2),
+        (count: 67, faces: 5, overflow: 62),
+        (count: 400, faces: 5, overflow: 99),
+    ])
+    func facepile(count: Int, faces: Int, overflow: Int) {
+        let pile = RailHoverPresence.pile(count: count, slots: RailHoverPresence.faceSlots)
+        #expect(pile.faces == faces)
+        #expect(pile.overflow == overflow)
+    }
+
+    @Test("Six people in voice are six faces and no count")
+    func sixIsAFullRow() {
+        let model = model()
+        for id in 20..<26 { join(model, UInt64(id)) }
+
+        let presence = model.railHoverPresence(for: here)
+        #expect(presence.voice.faces.count == 6)
+        #expect(presence.voice.overflow == 0)
     }
 
     /// **The common case, and the one that must cost nothing.** Almost every
@@ -91,7 +211,7 @@ struct RailHoverPresenceTests {
     @Test("A quiet server adds nothing to the chip")
     func quietServerIsUnchanged() {
         let model = model()
-        join(model, 20, guild: elsewhere)
+        join(model, 20, in: lounge)
 
         let presence = model.railHoverPresence(for: here)
         #expect(presence.isEmpty)
@@ -104,39 +224,95 @@ struct RailHoverPresenceTests {
     @Test("Somebody who has left is not in the room")
     func departedIsNotDrawn() {
         let model = model()
-        join(model, 20, guild: here)
+        model.stageInstances = [:]
+        join(model, 20)
         model.voiceStates[UserID(rawValue: 20)]?.channelID = nil
 
         #expect(model.railHoverPresence(for: here).isEmpty)
         #expect(model.voiceMarksByGuild.isEmpty)
     }
 
-    /// **The correction this suite was extended for.** The first version marked
-    /// a tile only when somebody was streaming, so every busy server where
-    /// nobody happened to be sharing — which is most of them — carried nothing,
-    /// while Discord draws a speaker on all of them.
-    @Test("A server with anybody in a room is marked, streaming or not")
+    // MARK: The mark on the tile
+
+    @Test("A server with anybody talking in a room is marked")
     func quietRoomsAreStillMarked() {
         let model = model()
-        join(model, 20, guild: here)
-        join(model, 21, guild: elsewhere, streaming: true)
+        model.stageInstances = [:]
+        join(model, 20)
+        join(model, 21, in: lounge, streaming: true)
 
         let marks = model.voiceMarksByGuild
         #expect(marks[here] == .voice)
-        #expect(marks[elsewhere] == .live)
+        #expect(marks[elsewhere] == .screenShare)
     }
 
-    /// **Whichever order the table is walked in.** It is a dictionary, so the
-    /// order is not stable across runs, and a rule written as "last writer wins"
-    /// would draw a speaker on a server with a stream in it about half the time.
-    @Test("A stream wins over a quiet room in the same server")
-    func liveWinsOverVoice() {
+    /// Discord's ranking, and whichever order the table is walked in: it is a
+    /// dictionary, so a rule written as "last writer wins" would draw a
+    /// speaker on a server with a stream in it about half the time.
+    @Test("Stage over screen over camera over voice")
+    func ranking() {
         let model = model()
-        // The streamer joins first, so a naive later write would overwrite it.
-        join(model, 20, guild: here, streaming: true)
-        for id in 21..<40 { join(model, UInt64(id), guild: here) }
+        model.stageInstances = [:]
+        join(model, 20, streaming: true)
+        for id in 21..<40 { join(model, UInt64(id)) }
+        #expect(model.voiceMarksByGuild[here] == .screenShare)
 
-        #expect(model.voiceMarksByGuild[here] == .live)
+        model.voiceStates[UserID(rawValue: 20)]?.isStreaming = false
+        model.voiceStates[UserID(rawValue: 30)]?.isCameraOn = true
+        #expect(model.voiceMarksByGuild[here] == .video)
+
+        model.stageInstances[stage] = StageInstance(
+            id: 1, guildID: here, channelID: stage, topic: "Q&A"
+        )
+        #expect(model.voiceMarksByGuild[here] == .stage)
+    }
+
+    @Test("Rooms the chip leaves out do not mark the tile either")
+    func markUsesTheChipsRooms() {
+        let model = model()
+        model.stageInstances = [:]
+        join(model, 20, in: afk)
+        join(model, 21, in: staff)
+        #expect(model.voiceMarksByGuild[here] == nil)
+    }
+
+    @Test("A muted server carries no mark")
+    func mutedServerIsUnmarked() {
+        let model = model()
+        model.stageInstances = [:]
+        join(model, 20)
+        model.mutedGuildIDs = [here]
+        #expect(model.voiceMarksByGuild[here] == nil)
+    }
+
+    /// **The server the reader is in a call in describes their own room**, and
+    /// a mute does not take that away: the reader is in it.
+    @Test("The reader's own call decides its server's mark")
+    func ownRoomDecides() {
+        let model = model()
+        model.mutedGuildIDs = [here]
+        join(model, 20, in: lounge)
+        join(model, 21, in: room, streaming: true)
+        join(model, 1)
+        model.connectedVoiceChannelID = room
+
+        // A live stage elsewhere in the server, and somebody streaming in the
+        // reader's own room: neither is what the reader is doing.
+        #expect(model.voiceMarksByGuild[here] == .voice)
+
+        model.voiceStates[UserID(rawValue: 21)]?.isCameraOn = true
+        #expect(model.voiceMarksByGuild[here] == .video)
+    }
+
+    /// A server nobody is in has no mark at all — nil rather than a `.voice`
+    /// for everything, which would put a speaker on the whole rail.
+    @Test("A silent server carries no mark")
+    func silenceIsNoMark() {
+        let model = model()
+        model.stageInstances = [:]
+        join(model, 20, in: lounge)
+
+        #expect(model.voiceMarksByGuild[here] == nil)
     }
 
     // MARK: The hole the mark sits in
@@ -210,15 +386,5 @@ struct RailHoverPresenceTests {
                     .boundingRect
         )
         #expect(plain.contains(CGPoint(x: 36, y: 8), eoFill: true))
-    }
-
-    /// A server nobody is in has no mark at all — nil rather than a `.voice`
-    /// for everything, which would put a speaker on the whole rail.
-    @Test("A silent server carries no mark")
-    func silenceIsNoMark() {
-        let model = model()
-        join(model, 20, guild: elsewhere)
-
-        #expect(model.voiceMarksByGuild[here] == nil)
     }
 }

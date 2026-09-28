@@ -384,7 +384,7 @@ struct GameCover: View {
     }
 }
 
-/// A game's square mark, for the strip on the small card.
+/// A game's square mark.
 ///
 /// The other half of `GameArtKind`: at thirty points box art is a smudge and the
 /// app icon is what a reader recognises. Squircle rather than circle — measured

@@ -254,18 +254,36 @@ enum ProfileGround: Equatable {
         wantsDarkInk ? .white.opacity(0.72) : .white.opacity(0.08)
     }
 
-    /// A grouped panel sitting on this ground — an activity card, a row that
-    /// answers to the pointer.
+    /// A card sitting on this ground — an activity, a widget, the games strip,
+    /// a row that answers to the pointer.
     ///
-    /// Discord's `PROFILE_GRADIENT_SECTION_BOX`: black at 45 % on a dark card,
-    /// white at 45 % on a light one. Not glass — the ground under it is already
-    /// the lower surface, and §4's answer when two glass surfaces would stack is
-    /// to make one of them solid.
+    /// **Discord's `--user-profile-overlay-background`**, the surface its
+    /// activity and widget cards are built on: `--opacity-16` — a cool grey,
+    /// hsl(240 4% 61%), at 16 % — on a dark profile, and white at 24 % on a
+    /// light one. Translucent, so the person's own colour runs through it.
+    ///
+    /// **This was black at 45 %**, Discord's `PROFILE_GRADIENT_SECTION_BOX` —
+    /// which is the status bubble's token, not a card's, and which on a dark
+    /// theme drew every activity card as a black slab.
+    ///
+    /// Not glass: the card's ground is opaque paint with nothing behind it to
+    /// refract (§4 rule 3).
     var panelFill: AnyShapeStyle {
         guard pair != nil else { return AnyShapeStyle(Palette.surfaceRaised) }
-        return AnyShapeStyle(wantsDarkInk
-            ? Color.white.opacity(0.45)
-            : Color.black.opacity(0.45))
+        return AnyShapeStyle(wantsDarkInk ? Self.overlayLight : Self.overlayDark)
+    }
+
+    /// `--opacity-16`: 151,151,159 at 41/255.
+    private static let overlayDark = Color(red: 151 / 255, green: 151 / 255, blue: 159 / 255)
+        .opacity(41 / 255)
+    /// `--opacity-white-24`: white at 61/255.
+    private static let overlayLight = Color.white.opacity(61 / 255)
+
+    /// The edge a card on this ground wears. **Only on a light profile**, as
+    /// Discord draws it (`--border-muted`): on a dark one the overlay is
+    /// already lighter than its ground, and an edge adds a line nobody needs.
+    var panelEdge: Color? {
+        wantsDarkInk ? Color.black.opacity(0.08) : nil
     }
 
     /// The custom status bubble's plate.

@@ -26,7 +26,7 @@ struct ProfileTabTests {
             handle: "blahaj",
             monogram: "B",
             status: .online,
-            activity: activity,
+            activities: activity.map { [$0] } ?? [],
             isBot: false,
             badges: [],
             roles: [],

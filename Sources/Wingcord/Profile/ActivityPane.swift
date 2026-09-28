@@ -1,17 +1,22 @@
 import SwiftUI
 import WingcordCore
 
-/// What somebody is doing right now.
+/// What somebody is doing right now — Discord's activity card, line for line.
 ///
-/// **The whole of a rich presence, which this client used to throw most of
-/// away.** An app publishes a large image, a small image that rides its corner,
-/// hover text for each, two lines of prose, a clock and up to two buttons —
-/// Medal sends every one of them — and the old card drew a game-controller
-/// glyph and the app's name.
+/// **Which line says what is `ActivityCardContent`'s**, read out of Discord's
+/// bundle and tested there; this view lays it out. The card Discord draws:
 ///
-/// The two images are separate assets and are resolved separately: the large one
-/// is the game's art and the small one is the *publisher's* mark, which is what
-/// makes "Counter-Strike 2 **with Medal**" legible as two things at once.
+/// ```
+/// Watching YouTube ▶︎                    the header, with the platform's mark
+/// ┌──────┐ How to setup BL2 Mods          title
+/// │ art  │ WholyMilk                      subtitle, then any third line
+/// └──────┘ 🖥 0:02                         the clock, in the kind's glyph
+/// [ Watch on YouTube                 ]    the app's buttons, stacked
+/// ```
+///
+/// The two images are separate assets and are resolved separately: the large
+/// one is the game's art and the small one is the *publisher's* mark, which is
+/// what makes "Counter-Strike 2 **with Medal**" legible as two things at once.
 struct CurrentActivityCard: View {
     var activity: Activity
     /// The links behind the buttons, in the same order as their labels. Empty
@@ -25,87 +30,7 @@ struct CurrentActivityCard: View {
     /// Opens the game this activity is about. Nil where there is nothing to
     /// open, which is every activity that is not a game.
     var openGame: (() -> Void)?
-
-    @Environment(\.openURL) private var openURL
-
-    private static let artworkSide: CGFloat = 68
-    private static let badgeSide: CGFloat = 26
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: Spacing.snug) {
-            header
-            HStack(alignment: .top, spacing: Spacing.snug) {
-                artwork
-                VStack(alignment: .leading, spacing: 2) {
-                    title
-                    if let details = activity.details, !details.isEmpty {
-                        Text(details)
-                            .font(.system(.subheadline))
-                            .foregroundStyle(InkColor.secondary)
-                            .lineLimit(2)
-                    }
-                    if let state = activity.state, !state.isEmpty {
-                        Text(state)
-                            .font(.system(.subheadline))
-                            .foregroundStyle(InkColor.tertiary)
-                            .lineLimit(2)
-                    }
-                    clock
-                }
-                Spacer(minLength: 0)
-            }
-            buttons
-            store
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        // **A plate of its own, which this card has never had.** Discord draws
-        // the whole block — verb, art, lines, clock and buttons — on a
-        // translucent panel, so on a themed profile it reads as an object lying
-        // on the person's colour rather than as text typed onto it. It is the
-        // ground's own `panelFill`, which is Discord's `PROFILE_GRADIENT_SECTION_BOX`
-        // — black at 45 % on a dark card and white at 45 % on a light one — so
-        // it inverts with the card instead of needing a second rule.
-        .padding(platesItself ? Spacing.snug : 0)
-        .background {
-            if platesItself {
-                RoundedRectangle(cornerRadius: Radius.card, style: .continuous)
-                    .fill(ground.panelFill)
-            }
-        }
-    }
-
-    /// "Playing", "Listening to Spotify" — the verb, with a live dot in front.
-    private var header: some View {
-        HStack(spacing: 6) {
-            Circle()
-                .fill(Palette.presenceOnline)
-                .frame(width: 6, height: 6)
-            Text(kindLabel)
-                .font(Typeface.sectionHeader)
-                .foregroundStyle(InkColor.tertiary)
-                .textCase(.uppercase)
-        }
-        .accessibilityElement(children: .combine)
-    }
-
-    private var kindLabel: String {
-        switch activity.kind {
-        case .playing: "Playing"
-        case .streaming: "Streaming"
-        case .listening: "Listening"
-        case .watching: "Watching"
-        case .competing: "Competing"
-        case .custom, .unknown: "Now"
-        }
-    }
-
-    /// The large asset, with the small one riding its corner.
-    ///
-    /// **A plate under both**, because an activity that publishes no art at all
-    /// is the common case and an empty 68-point hole is worse than a mark. The
-    /// plate is the ground's own panel fill, so it belongs to the person's
-    /// surface rather than being a grey box dropped on it.
-    /// The app's own icon, and the request that fetches it.
+    /// The app's own icon, which stands in where a presence publishes no art.
     ///
     /// Passed in rather than read from the store here: this view holds no
     /// model reference, which is what lets the pane above it be compared.
@@ -113,38 +38,97 @@ struct CurrentActivityCard: View {
     /// Whether this card draws its own plate.
     ///
     /// **False where a surface already puts it in one.** The full profile wraps
-    /// this in a `ProfileSlab`, and adding a second plate inside the first is a
-    /// card drawn inside a card — which is what happened the moment the mini
-    /// profile got the plate it was missing. The mini card has no slab, so it
-    /// carries the plate itself.
+    /// this in a `ProfileSlab`, and a plate inside that is a card drawn inside a
+    /// card. The mini card has no slab, so it carries the plate itself.
     var platesItself: Bool = true
 
-    private var artwork: some View {
+    @Environment(\.openURL) private var openURL
+
+    /// Discord's popout art, and the badge that rides its corner.
+    private static let artworkSide: CGFloat = 60
+    private static let badgeSide: CGFloat = 22
+    /// Concentric with the card around it: its 24-point corner less the
+    /// 16-point margin the card sits in. Discord's own is 8.
+    private static let corner = Radius.row
+
+    var body: some View {
+        let content = ActivityCardContent(activity)
+        VStack(alignment: .leading, spacing: Spacing.base) {
+            if let header = content.header {
+                headerRow(header, platform: content.platform)
+            }
+            HStack(alignment: .center, spacing: Spacing.base) {
+                artwork(placeholder: content.clockGlyph)
+                VStack(alignment: .leading, spacing: Spacing.tight) {
+                    title(content)
+                    if let subtitle = content.subtitle {
+                        line(subtitle, url: content.subtitleURL)
+                    }
+                    if let detail = content.detail {
+                        line(detail, url: content.detailURL)
+                    }
+                    entries(content)
+                    if content.showsProgress, let start = activity.startedAt, let end = activity.endsAt {
+                        ActivityProgressBar(start: start, end: end)
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            buttons
+            store
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(platesItself ? Spacing.base : 0)
+        .background {
+            if platesItself { plate }
+        }
+    }
+
+    // MARK: The parts
+
+    /// "Watching YouTube", and the platform's mark in the quiet ink Discord
+    /// masks it in — a brand's own colour would shout over the words.
+    private func headerRow(_ text: String, platform: String?) -> some View {
+        HStack(spacing: Spacing.tight) {
+            Text(text)
+                .font(.system(.caption, weight: .medium))
+                .foregroundStyle(InkColor.primary)
+                .lineLimit(1)
+            if let platform, BrandMark.mark(for: platform) != nil {
+                BrandGlyph(service: platform)
+                    .fill(InkColor.tertiary)
+                    .frame(width: 12, height: 12)
+            }
+        }
+        .accessibilityElement(children: .combine)
+    }
+
+    /// The large asset, with the small one riding its corner.
+    ///
+    /// **A plate under both**, because an activity that publishes no art at all
+    /// is the common case and an empty hole is worse than a mark. The plate is
+    /// the ground's own panel fill, so it belongs to the person's surface rather
+    /// than being a grey box dropped on it.
+    private func artwork(placeholder: ActivityStatusLine.Glyph) -> some View {
         ZStack(alignment: .bottomTrailing) {
             RemoteImage(
                 // **The application's own icon where the presence has no
                 // artwork.** Rich presence art is optional and plenty of games
-                // publish none — Roblox publishes a name and nothing else —
-                // which drew a grey plate with a controller in it where
-                // Discord draws the app icon it has for every one of them.
+                // publish none — Roblox publishes a name and nothing else.
                 url: activity.largeArtworkURL(side: Self.artworkSide) ?? applicationIconURL,
                 side: Self.artworkSide,
                 bucket: .artwork
             ) {
                 ZStack {
                     Rectangle().fill(ground.panelFill)
-                    Image(systemName: activity.kind == .listening ? "music.note" : "gamecontroller.fill")
-                        .font(.system(size: 22))
+                    Image(systemName: placeholder.symbolName)
+                        .font(.system(size: 20))
                         .foregroundStyle(InkColor.tertiary)
                 }
             }
             .aspectRatio(contentMode: .fill)
             .frame(width: Self.artworkSide, height: Self.artworkSide)
-            .clipShape(.rect(cornerRadius: Radius.chip, style: .continuous))
-            .overlay {
-                RoundedRectangle(cornerRadius: Radius.chip, style: .continuous)
-                    .strokeBorder(Ink.quaternary, lineWidth: 1)
-            }
+            .clipShape(.rect(cornerRadius: Self.corner, style: .continuous))
 
             if let small = activity.smallArtworkURL(side: Self.badgeSide) {
                 RemoteImage(url: small, side: Self.badgeSide, bucket: .thumbnail) {
@@ -155,7 +139,7 @@ struct CurrentActivityCard: View {
                 // The ring is what separates the badge from the art under it.
                 // Without it a dark mark on dark box art disappears.
                 .overlay { Circle().strokeBorder(Palette.canvas, lineWidth: 2) }
-                .offset(x: 7, y: 7)
+                .offset(x: 6, y: 6)
                 .help(activity.smallText ?? "")
                 .accessibilityLabel(Text(activity.smallText ?? "Publisher"))
             }
@@ -164,80 +148,77 @@ struct CurrentActivityCard: View {
         .help(activity.largeText ?? "")
     }
 
-    /// The activity's name, and a way into the game when there is one.
+    /// The card's title, and a way in when there is one.
     ///
-    /// **A button only where it opens something.** An app with no game profile
-    /// behind it stays plain text rather than becoming a control that does
-    /// nothing when clicked — `INVARIANTS.md` §5.5.
+    /// **A button only where it opens something** — the game's profile, or
+    /// the page the app linked the line to. Anything else stays plain text
+    /// rather than becoming a control that does nothing — `INVARIANTS.md` §5.5.
     @ViewBuilder
-    private var title: some View {
+    private func title(_ content: ActivityCardContent) -> some View {
+        let label = Text(content.title)
+            .font(.system(.subheadline, weight: .semibold))
+            .foregroundStyle(InkColor.primary)
+            .lineLimit(1)
         if let openGame {
-            Button(action: openGame) {
-                Text(activity.name)
-                    .font(.system(.headline))
-                    .foregroundStyle(InkColor.primary)
-                    .lineLimit(1)
-                    .contentShape(.rect)
-            }
-            .buttonStyle(.plain)
-            .help("Open \(activity.name)")
+            Button(action: openGame) { label.contentShape(.rect) }
+                .buttonStyle(.plain)
+                .help("Open \(activity.name)")
+        } else if let url = content.titleURL {
+            link(label, to: url)
         } else {
-            Text(activity.name)
-                .font(.system(.headline))
-                .foregroundStyle(InkColor.primary)
+            label
+        }
+    }
+
+    @ViewBuilder
+    private func line(_ text: String, url: URL?) -> some View {
+        let label = Text(text)
+            .font(.system(.caption))
+            .foregroundStyle(InkColor.secondary)
+            .lineLimit(1)
+        if let url { link(label, to: url) } else { label }
+    }
+
+    private func link(_ label: some View, to url: URL) -> some View {
+        Button { openURL(url) } label: { label.contentShape(.rect) }
+            .buttonStyle(.plain)
+            .help(url.host ?? url.absoluteString)
+            .accessibilityHint(Text("Opens \(url.host ?? "a website") in your browser"))
+    }
+
+    /// The row under the lines: a game's party, the clock, a show's episode.
+    @ViewBuilder
+    private func entries(_ content: ActivityCardContent) -> some View {
+        if content.party != nil || content.clockStart != nil || content.episode != nil {
+            HStack(spacing: Spacing.base) {
+                if let party = content.party {
+                    entry(symbol: "person.2.fill", text: party)
+                }
+                if let start = content.clockStart {
+                    ActivityClock(start: start, glyph: content.clockGlyph)
+                }
+                if let episode = content.episode {
+                    entry(symbol: "scroll.fill", text: episode)
+                }
+            }
+        }
+    }
+
+    private func entry(symbol: String, text: String) -> some View {
+        HStack(spacing: 3) {
+            Image(systemName: symbol)
+                .font(.system(size: 10, weight: .semibold))
+            Text(text)
+                .font(.system(.caption))
                 .lineLimit(1)
         }
+        .foregroundStyle(InkColor.secondary)
+        .accessibilityElement(children: .combine)
     }
 
-    /// The clock, ticking.
-    ///
-    /// **Two shapes, and which one is drawn is a fact about the payload.** An
-    /// activity with an end — a track — counts toward it and prints the pair;
-    /// one without counts up from its start. An activity with neither prints
-    /// nothing, which is most of them.
-    ///
-    /// `SwiftUI.TimelineView` fully qualified: this app has a `TimelineView` of
-    /// its own, and the unqualified name resolves to the message canvas.
-    @ViewBuilder
-    private var clock: some View {
-        if let startedAt = activity.startedAt {
-            SwiftUI.TimelineView(.periodic(from: .now, by: 1)) { context in
-                HStack(spacing: 5) {
-                    Image(systemName: "clock")
-                        .font(.system(size: 10))
-                    Text(clockLabel(now: context.date, from: startedAt))
-                        .font(.system(.caption).monospacedDigit())
-                }
-                // **`inkAccent`, not `accent`.** The second is a surface
-                // colour — for a derived theme it is the avatar's own dominant
-                // colour — and setting text in it drew a black clock on a dark
-                // card for anybody with a dark avatar.
-                .foregroundStyle(ground.inkAccent ?? InkColor.secondary)
-            }
-            .padding(.top, 3)
-        }
-    }
-
-    private func clockLabel(now: Date, from startedAt: Date) -> String {
-        let elapsed = max(0, Int(now.timeIntervalSince(startedAt)))
-        guard let endsAt = activity.endsAt else {
-            return Self.clock(elapsed) + " elapsed"
-        }
-        let total = max(0, Int(endsAt.timeIntervalSince(startedAt)))
-        return "\(Self.clock(min(elapsed, total))) / \(Self.clock(total))"
-    }
-
-    /// `mm:ss` under an hour, `h:mm:ss` over it. A two-hour session written
-    /// "127:14" is a number nobody parses — the same rule the invitation card's
-    /// status line already follows.
-    static func clock(_ seconds: Int) -> String {
-        let s = seconds % 60, m = (seconds / 60) % 60, h = seconds / 3600
-        return h > 0
-            ? String(format: "%d:%02d:%02d", h, m, s)
-            : String(format: "%d:%02d", m, s)
-    }
-
-    /// The app's own two buttons.
+    /// The app's own buttons, **stacked and full width** — Discord's popout
+    /// puts each on a row of its own rather than squeezing two labels into
+    /// one.
     ///
     /// **Paired by index, and a label with no address is not drawn.** The labels
     /// arrive over the gateway and the links come from a separate route, so
@@ -248,7 +229,7 @@ struct CurrentActivityCard: View {
     private var buttons: some View {
         let pairs = zip(activity.buttons, buttonURLs).map { ($0, $1) }
         if !pairs.isEmpty {
-            HStack(spacing: Spacing.base) {
+            VStack(spacing: Spacing.base) {
                 ForEach(Array(pairs.enumerated()), id: \.offset) { _, pair in
                     Button { openURL(pair.1) } label: {
                         Text(pair.0)
@@ -270,16 +251,15 @@ struct CurrentActivityCard: View {
     /// Where to get the game.
     ///
     /// **Under the app's own buttons, never instead of them.** Discord composes
-    /// it the same way — its activity section puts the store call to action
-    /// after whatever primary control the activity already has, in the same
-    /// column — because the app's Join or Listen is what somebody came to the
-    /// card for and the store is what they do if they cannot.
+    /// it the same way — its store call to action comes after whatever primary
+    /// control the activity already has, in the same column — because the
+    /// app's Join or Listen is what somebody came to the card for and the store
+    /// is what they do if they cannot.
     ///
-    /// **One store is a button; two are a menu.** That is Discord's own shape
-    /// and it is the right one: two full-width buttons stacked under a 68-point
-    /// card make the card mostly chrome, and the second store is a choice
-    /// rather than a second action. The menu's word is *Play*, which is what
-    /// Discord puts on it, and each row then names the store it opens.
+    /// **One store is a button; two are a menu.** Two full-width buttons
+    /// stacked under a small card make the card mostly chrome, and the second
+    /// store is a choice rather than a second action. The menu's word is
+    /// *Play*, which is what Discord puts on it.
     @ViewBuilder
     private var store: some View {
         if storeOffers.count == 1, let offer = storeOffers.first {
@@ -292,10 +272,8 @@ struct CurrentActivityCard: View {
             .accessibilityHint(Text("Opens \(offer.store.title) in your browser"))
         } else if storeOffers.count > 1 {
             // The frame, the hit region and the material go on the MENU, after
-            // the style — a borderless menu lays its own label out and anything
-            // put on the label sizes a control of the menu's choosing instead.
-            // `INVARIANTS.md` §1, "A borderless menu ignores a frame set on its
-            // label".
+            // the style — a borderless menu lays its own label out. §1, "A
+            // borderless menu ignores a frame set on its label".
             Menu {
                 ForEach(storeOffers) { offer in
                     Button(offer.store.title) { openURL(offer.url) }
@@ -328,6 +306,76 @@ struct CurrentActivityCard: View {
         .frame(maxWidth: .infinity)
         .padding(.vertical, 7)
         .contentShape(.capsule)
+    }
+
+    private var plate: some View {
+        ProfilePanelPlate(ground: ground)
+    }
+}
+
+/// The clock, ticking, in the activity's own glyph.
+///
+/// **Green, as Discord draws it** — the one live thing on the card — in the
+/// system's own green, which holds its contrast in either room. Its own view so
+/// the second-by-second redraw is the clock and nothing else on the card.
+///
+/// `SwiftUI.TimelineView` fully qualified: this app has a `TimelineView` of its
+/// own, and the unqualified name resolves to the message canvas.
+private struct ActivityClock: View {
+    var start: Date
+    var glyph: ActivityStatusLine.Glyph
+
+    var body: some View {
+        HStack(spacing: 3) {
+            Image(systemName: glyph.symbolName)
+                .font(.system(size: 10, weight: .semibold))
+            SwiftUI.TimelineView(.periodic(from: .now, by: 1)) { context in
+                Text(ActivityCardContent.clock(Int(context.date.timeIntervalSince(start))))
+                    .font(.system(.caption).monospacedDigit())
+            }
+        }
+        .foregroundStyle(Palette.affirmative)
+        .accessibilityElement(children: .combine)
+    }
+}
+
+/// Music or a video with both ends known: elapsed, a bar, and the whole.
+///
+/// **Measured inside the overlay that draws it**, and consumed in the same
+/// pass — the one place a proportion has to be drawn against a box's own
+/// width (§1, "A surface sizes to its content with a nil proposal").
+private struct ActivityProgressBar: View {
+    var start: Date
+    var end: Date
+
+    var body: some View {
+        SwiftUI.TimelineView(.periodic(from: .now, by: 1)) { context in
+            let total = max(0, end.timeIntervalSince(start))
+            let elapsed = min(total, max(0, context.date.timeIntervalSince(start)))
+            HStack(spacing: Spacing.base) {
+                Text(ActivityCardContent.clock(Int(elapsed)))
+                Capsule()
+                    .fill(Palette.edge)
+                    .frame(height: 2)
+                    .overlay(alignment: .leading) {
+                        GeometryReader { proxy in
+                            Capsule()
+                                .fill(InkColor.primary)
+                                // Discord's floor: a bar that has started is
+                                // never an empty track.
+                                .frame(width: max(4, proxy.size.width * (total > 0 ? elapsed / total : 0)))
+                        }
+                    }
+                Text(ActivityCardContent.clock(Int(total)))
+            }
+            .font(.system(.caption, design: .monospaced))
+            .foregroundStyle(InkColor.secondary)
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(Text("Playback progress"))
+            .accessibilityValue(Text(
+                "\(ActivityCardContent.clock(Int(elapsed))) of \(ActivityCardContent.clock(Int(total)))"
+            ))
+        }
     }
 }
 

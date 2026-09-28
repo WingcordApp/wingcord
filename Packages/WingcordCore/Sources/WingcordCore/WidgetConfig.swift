@@ -142,12 +142,55 @@ public struct WidgetSurface: Hashable, Sendable {
             // config carries six and filled three — so it draws nothing rather
             // than a gap with a blank label under it.
             guard !value.isEmpty || !label.isEmpty else { return nil }
-            return ResolvedStat(key: key, value: value, label: label)
+            return ResolvedStat(key: key, value: value, label: label, iconURL: image(key, "icon"))
+        }
+
+        // **The popout's one stat is `stat`, with no number** — Discord's
+        // `mini_profile_*` layouts name it that, and a filter on `stat_` never
+        // saw it. It reads "Label: text" when it has a label (module `779300`),
+        // which is how Arknights' "Authority Level: 60" is written.
+        let headline: ResolvedStat? = components["stat"].flatMap { _ in
+            let value = text("stat")
+            let label = text("stat", "label")
+            guard value != nil || label != nil else { return nil }
+            let shown = value ?? "\u{2013}"
+            return ResolvedStat(
+                key: "stat",
+                value: label.map { "\($0): \(shown)" } ?? shown,
+                label: "",
+                iconURL: image("stat", "icon")
+            )
         }
 
         let subtitleKeys = components.keys
             .filter { $0.hasPrefix("subtitle") }
             .sorted(by: Self.byTrailingNumber)
+
+        // **`current` and `max`, not `value`** — the progress layout's own
+        // field names (module `794248`). Reading `value` found nothing, and
+        // the card fell back to printing the raw fraction as a stat.
+        let progress: ResolvedProgress? = components["progress"].map { _ in
+            ResolvedProgress(
+                current: field("progress", "current")?.resolveNumber(in: profile),
+                maximum: field("progress", "max")?.resolveNumber(in: profile),
+                name: text("objective", "name"),
+                detail: text("objective", "description"),
+                imageURL: image("objective")
+            )
+        }
+
+        let items: [ResolvedItem] = components.keys
+            .filter { $0.hasPrefix("item_") }
+            .sorted(by: Self.byTrailingNumber)
+            .compactMap { key in
+                let item = ResolvedItem(
+                    key: key,
+                    name: text(key, "name"),
+                    detail: text(key, "description"),
+                    imageURL: image(key)
+                )
+                return item.name == nil && item.detail == nil && item.imageURL == nil ? nil : item
+            }
 
         return ResolvedSurface(
             layout: layout,
@@ -155,8 +198,11 @@ public struct WidgetSurface: Hashable, Sendable {
             title: text("title"),
             subtitles: subtitleKeys.compactMap { text($0) }.filter { !$0.isEmpty },
             heroImageURL: image("hero_image") ?? image("image") ?? image("icon"),
+            containedImageURL: image("contained_image"),
             stats: stats,
-            progress: components["progress"]?.fields["value"]?.resolveNumber(in: profile)
+            headline: headline,
+            progress: progress,
+            items: items
         )
     }
 
@@ -292,7 +338,7 @@ public indirect enum WidgetField: Hashable, Sendable {
         return standby?.resolveText(in: profile)
     }
 
-    /// The number behind a progress component, when there is one.
+    /// The number behind a progress component's `current` or `max`.
     public func resolveNumber(in profile: ApplicationProfile?) -> Double? {
         let value = primary
         switch value.valueType {
@@ -379,9 +425,17 @@ public struct ResolvedSurface: Hashable, Sendable {
     public var title: String?
     public var subtitles: [String]
     public var heroImageURL: URL?
+    /// A picture drawn in a box beside the words rather than behind them — the
+    /// `…_contained_*` layouts' `contained_image`.
+    public var containedImageURL: URL?
     public var stats: [ResolvedStat]
-    /// `widget_bottom_progress`'s value, when the layout is that one.
-    public var progress: Double?
+    /// The one stat a popout card leads with — `mini_profile_*`'s `stat`.
+    public var headline: ResolvedStat?
+    /// `widget_bottom_progress`: one goal and how far along it is.
+    public var progress: ResolvedProgress?
+    /// `widget_bottom_collection`: up to four things, each a picture and two
+    /// lines.
+    public var items: [ResolvedItem]
 
     public init(
         layout: String,
@@ -389,20 +443,109 @@ public struct ResolvedSurface: Hashable, Sendable {
         title: String? = nil,
         subtitles: [String] = [],
         heroImageURL: URL? = nil,
+        containedImageURL: URL? = nil,
         stats: [ResolvedStat] = [],
-        progress: Double? = nil
+        headline: ResolvedStat? = nil,
+        progress: ResolvedProgress? = nil,
+        items: [ResolvedItem] = []
     ) {
         self.layout = layout
         self.isHero = isHero
         self.title = title
         self.subtitles = subtitles
         self.heroImageURL = heroImageURL
+        self.containedImageURL = containedImageURL
         self.stats = stats
+        self.headline = headline
         self.progress = progress
+        self.items = items
     }
 
     public var isEmpty: Bool {
-        title == nil && subtitles.isEmpty && heroImageURL == nil && stats.isEmpty
+        title == nil && subtitles.isEmpty && heroImageURL == nil && containedImageURL == nil
+            && stats.isEmpty && headline == nil && progress == nil && items.isEmpty
+    }
+}
+
+/// `widget_bottom_progress`, resolved (module `794248`): the goal's badge, its
+/// name and line, and the bar.
+public struct ResolvedProgress: Hashable, Sendable {
+    public var name: String?
+    public var detail: String?
+    public var imageURL: URL?
+    /// How full the bar is, in whole percent, 0 to 100.
+    public var percent: Int
+    /// What the bar's end says: "69%", or "5/10" when the template names a
+    /// maximum. Nil while the number itself is missing.
+    public var caption: String?
+
+    public init(
+        name: String? = nil,
+        detail: String? = nil,
+        imageURL: URL? = nil,
+        percent: Int,
+        caption: String?
+    ) {
+        self.name = name
+        self.detail = detail
+        self.imageURL = imageURL
+        self.percent = percent
+        self.caption = caption
+    }
+
+    /// Discord's arithmetic (module `779300`): `current` alone is a fraction
+    /// of one; with `max` it is a count out of that. Rounded to whole
+    /// percent, clamped, and an empty or zero maximum is an empty bar.
+    public init(
+        current: Double?,
+        maximum: Double?,
+        name: String? = nil,
+        detail: String? = nil,
+        imageURL: URL? = nil
+    ) {
+        func percent(_ fraction: Double) -> Int {
+            fraction.isNaN ? 0 : Int(min(max((fraction * 100).rounded(), 0), 100))
+        }
+        let filled: Int
+        let caption: String?
+        switch (current, maximum) {
+        case (nil, _):
+            filled = 0
+            caption = nil
+        case (let current?, nil):
+            filled = percent(current)
+            caption = "\(filled)%"
+        case (let current?, let maximum?):
+            filled = maximum == 0 ? 0 : percent(current / maximum)
+            caption = "\(Self.plain(current))/\(Self.plain(maximum))"
+        }
+        self.init(name: name, detail: detail, imageURL: imageURL, percent: filled, caption: caption)
+    }
+
+    /// A number the way Discord's template string prints it: `5`, not `5.0`.
+    static func plain(_ value: Double) -> String {
+        if value.rounded() == value, abs(value) < 1e15 { return String(Int64(value)) }
+        return String(value)
+    }
+
+    public var isEmpty: Bool { name == nil && detail == nil && imageURL == nil && caption == nil }
+}
+
+/// One of `widget_bottom_collection`'s four things.
+public struct ResolvedItem: Hashable, Sendable, Identifiable {
+    /// The component key — `item_1` to `item_4`.
+    public var key: String
+    public var name: String?
+    public var detail: String?
+    public var imageURL: URL?
+
+    public var id: String { key }
+
+    public init(key: String, name: String? = nil, detail: String? = nil, imageURL: URL? = nil) {
+        self.key = key
+        self.name = name
+        self.detail = detail
+        self.imageURL = imageURL
     }
 }
 
@@ -412,13 +555,17 @@ public struct ResolvedStat: Hashable, Sendable, Identifiable {
     public var key: String
     public var value: String
     public var label: String
+    /// The picture after the number — Gramophone's waveform after its
+    /// scrobbles. Discord draws every stat's `icon` field one line tall.
+    public var iconURL: URL?
 
     public var id: String { key }
 
-    public init(key: String, value: String, label: String) {
+    public init(key: String, value: String, label: String, iconURL: URL? = nil) {
         self.key = key
         self.value = value
         self.label = label
+        self.iconURL = iconURL
     }
 }
 

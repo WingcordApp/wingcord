@@ -69,23 +69,29 @@ private struct RailHoverChip: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             name
+            // Discord's order: the stage, the rooms, then the screens. Each
+            // row carries the glyph its tile mark would, so the chip and the
+            // mark it explains speak one vocabulary.
+            if !presence.stage.isEmpty {
+                row(
+                    symbol: RailVoiceMark.stage.symbolName,
+                    row: presence.stage,
+                    label: "speaking on stage",
+                    listeners: presence.stageListeners
+                )
+            }
             if !presence.voice.isEmpty {
                 row(
-                    symbol: "speaker.wave.2.fill",
-                    faces: presence.voice,
-                    overflow: presence.voiceOverflow,
+                    symbol: RailVoiceMark.voice.symbolName,
+                    row: presence.voice,
                     label: "in voice"
                 )
             }
-            if !presence.live.isEmpty {
-                // The share glyph, not a second speaker: this row answers
-                // "is there something to watch", which is a different question
-                // from "who is here".
+            if !presence.streams.isEmpty {
                 row(
-                    symbol: "rectangle.inset.filled.on.rectangle",
-                    faces: presence.live,
-                    overflow: presence.liveOverflow,
-                    label: "streaming"
+                    symbol: RailVoiceMark.screenShare.symbolName,
+                    row: presence.streams,
+                    label: "sharing their screen"
                 )
             }
         }
@@ -122,11 +128,13 @@ private struct RailHoverChip: View {
     /// is a list; a stack that overlaps reads as a group, which is what a room
     /// full of people is — and it is how the count at the end stays close enough
     /// to belong to them.
+    /// - Parameter listeners: a stage's audience, drawn as a count after its
+    ///   speakers. Nil on every other row.
     private func row(
         symbol: String,
-        faces: [RailHoverPresence.Face],
-        overflow: Int,
-        label: String
+        row: RailHoverPresence.Row,
+        label: String,
+        listeners: Int? = nil
     ) -> some View {
         HStack(spacing: Spacing.base) {
             Image(systemName: symbol)
@@ -135,7 +143,7 @@ private struct RailHoverChip: View {
                 .frame(width: 16)
 
             HStack(spacing: -Self.faceOverlap) {
-                ForEach(faces) { face in
+                ForEach(row.faces) { face in
                     AvatarView(
                         url: face.avatarURL,
                         monogram: face.monogram,
@@ -148,21 +156,47 @@ private struct RailHoverChip: View {
                         Circle().strokeBorder(Palette.canvas, lineWidth: 1.5)
                     }
                 }
-                if overflow > 0 {
-                    Text("+\(overflow)")
+                if row.overflow > 0 {
+                    Text("+\(row.overflow)")
                         .font(.system(size: 11, weight: .semibold))
                         .foregroundStyle(Ink.secondary)
                         .padding(.leading, Self.faceOverlap + Spacing.tight)
                         .fixedSize()
                 }
             }
+
+            if let listeners {
+                listenerCount(listeners)
+            }
         }
         .padding(.horizontal, Spacing.snug)
         .frame(height: Self.rowHeight, alignment: .leading)
-        // One node per row: "in voice, six people" rather than six unlabelled
-        // pictures.
+        // One node per row: "six in voice" rather than six unlabelled pictures.
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel(Text("\(faces.count + overflow) \(label)"))
+        .accessibilityLabel(Text(
+            listeners.map { "\(row.count) \(label), \($0) listening" }
+                ?? "\(row.count) \(label)"
+        ))
+    }
+
+    /// Everybody in a stage's audience, as one count — Discord draws the
+    /// speakers and counts the listeners rather than drawing a crowd.
+    ///
+    /// **A region inside the chip's material, not a body on it** — §4: the fill
+    /// is the one a now-bar control wears at rest.
+    private func listenerCount(_ count: Int) -> some View {
+        HStack(spacing: 3) {
+            Image(systemName: "headphones")
+                .font(.system(size: 9, weight: .semibold))
+            Text(count, format: .number)
+                .font(.system(size: 11, weight: .semibold))
+                .monospacedDigit()
+        }
+        .foregroundStyle(Ink.secondary)
+        .padding(.horizontal, 6)
+        .frame(height: Self.faceSide)
+        .background { Capsule().fill(Palette.edge) }
+        .fixedSize()
     }
 
     private static let faceSide: CGFloat = 20

@@ -187,8 +187,10 @@ extension AppModel {
         // has never featured — would otherwise show a header and nothing else,
         // while the numbers to fill it are already in hand. The labels are the
         // field names in title case rather than the game's authored ones; see
-        // `ApplicationProfile.fallbackStats`.
-        if bottom == nil || bottom?.stats.isEmpty == true,
+        // `ApplicationProfile.fallbackStats`. A goal or a collection is a
+        // template too: keyed on stats alone, a progress widget fell through
+        // to here and printed its raw fraction as "0,69 Progress".
+        if bottom?.isEmpty ?? true,
            let stats = profile?.fallbackStats, !stats.isEmpty
         {
             bottom = ResolvedSurface(
@@ -216,9 +218,8 @@ extension AppModel {
             applicationID: applicationID,
             name: application.name,
             iconURL: application.iconHash.flatMap {
-                CDN.applicationIcon(id: applicationID, hash: $0, side: 20)
+                CDN.applicationIcon(id: applicationID, hash: $0, side: 16)
             },
-            isVerified: application.isVerified,
             top: top,
             bottom: bottom,
             characterImageURL: profile?.featuredCharacterImageURL,
@@ -240,57 +241,107 @@ extension AppModel {
         return nil
     }
 
-    // MARK: The mini card's strip
+    // MARK: The popout's stack
 
-    /// The covers the small card shows, and how many it could not fit.
+    /// The popout's widget cards, in the person's widget order — Discord's
+    /// stack (module `657538`).
     ///
-    /// **One flat list in widget order, deduplicated.** A game can sit in three
-    /// of somebody's tiles at once — one captured board has Genshin Impact in
-    /// both the rotation and the liked list — and a strip that drew it twice
+    /// **Not one card per widget.** An application widget is a card only once
+    /// its application, its template and the person's identity have all
+    /// arrived and the template has a `mini_profile` surface; every game list
+    /// together is one "Game Collection" strip, at the first list's place; a
+    /// widget the person wrote is its own card.
+    func widgetPreviews(for userID: UserID) -> [WidgetPreview] {
+        guard let widgets = profileWidgets[userID], !widgets.isEmpty else { return [] }
+        let identities = applicationIdentities[userID] ?? []
+        var previews: [WidgetPreview] = []
+        var hasGames = false
+        for widget in widgets {
+            switch widget.content {
+            case .application(let applicationID):
+                if let mini = miniApplicationWidget(applicationID, identities: identities) {
+                    previews.append(.application(mini))
+                }
+            case .favouriteGames, .currentGames, .playedGames, .wantToPlayGames:
+                guard !hasGames, let collection = gameCollection(of: widgets) else { continue }
+                hasGames = true
+                previews.append(.games(collection))
+            case .personal(let personal):
+                previews.append(.personal(id: widget.id, widget: personal))
+            case .unknown:
+                continue
+            }
+        }
+        return previews
+    }
+
+    private func miniApplicationWidget(
+        _ applicationID: ApplicationID,
+        identities: [ApplicationIdentity]
+    ) -> MiniApplicationWidget? {
+        guard let application = widgetApplications[applicationID],
+              let config = widgetConfigs[applicationID],
+              let identity = identities.first(where: { $0.applicationID == applicationID }),
+              let surface = config.resolve(.miniProfile, with: identity.profile, assetURL: { id, assetID in
+                  CDN.applicationAsset(id: id, assetID: assetID, side: 256)
+              })
+        else { return nil }
+        return MiniApplicationWidget(
+            applicationID: applicationID,
+            name: application.name,
+            iconURL: application.iconHash.flatMap {
+                CDN.applicationIcon(id: applicationID, hash: $0, side: 16)
+            },
+            surface: surface
+        )
+    }
+
+    /// Every game the board names, as the strip draws them.
+    ///
+    /// **One flat list in widget order, deduplicated**, and an application
+    /// widget's own game is in it too, as Discord counts it. A game can sit in
+    /// three of somebody's tiles at once — one captured board has Genshin Impact
+    /// in both the rotation and the liked list — and a strip that drew it twice
     /// would be claiming a larger collection than there is.
     ///
-    /// The count is the honest one: covers shown plus `overflow` equals the
-    /// collection. Discord's own chip reads **one lower** than that on both
-    /// captured cards, which is either an off-by-one in its overflow arithmetic
-    /// or a rule no capture here can distinguish it from. A chip that
-    /// under-reports is a chip that lies about a number the reader can go and
-    /// count, so this reports the total.
-    func gameCollection(for userID: UserID, coverSide: CGFloat = 64) -> GameCollection? {
-        guard let widgets = profileWidgets[userID] else { return nil }
+    /// A game `/games` has answered for with no art at all is skipped rather
+    /// than drawn as a blank, as Discord skips it; one still on its way draws a
+    /// plate so the strip does not reflow when it lands.
+    private func gameCollection(of widgets: [ProfileWidget]) -> GameCollection? {
         var seen = Set<ApplicationID>()
         var ordered: [ApplicationID] = []
         for widget in widgets {
-            for game in widget.games where seen.insert(game.gameID).inserted {
-                ordered.append(game.gameID)
+            let ids = widget.applicationID.map {
+                widgetApplications[$0]?.primaryGameID.map { [$0] } ?? []
+            } ?? widget.games.map(\.gameID)
+            for id in ids where seen.insert(id).inserted {
+                ordered.append(id)
             }
         }
         guard !ordered.isEmpty else { return nil }
 
-        let fits = ordered.count <= GameCollection.slots
-        let shown = fits ? ordered : Array(ordered.prefix(GameCollection.slots - 1))
-        let covers = shown.map { id -> BoardGame in
-            guard let game = games[id] else { return BoardGame(gameID: id, tags: []) }
-            return BoardGame(
+        var covers: [BoardGame] = []
+        for id in ordered where covers.count < GameCollection.slots {
+            guard let game = games[id] else {
+                covers.append(BoardGame(gameID: id, tags: []))
+                continue
+            }
+            // **Marks, not covers.** The strip is twenty-four points tall;
+            // box art at that size is a smudge, and the square icon is what a
+            // reader recognises.
+            guard let url = gameArtURL(game, kind: .mark, side: GameArt.markSide) else { continue }
+            covers.append(BoardGame(
                 gameID: id,
                 name: game.name,
-                // **Marks here, not covers.** This strip is thirty points tall;
-                // box art at that size is a smudge, and the square icon is what
-                // a reader recognises.
-                coverURL: gameArtURL(game, kind: .mark, side: coverSide),
+                coverURL: url,
                 isCoverArt: false,
                 tags: []
-            )
+            ))
         }
-        return GameCollection(covers: covers, overflow: ordered.count - shown.count)
-    }
-
-    /// Every game id a board names, in the order the tiles do.
-    ///
-    /// What the batched `/games` call is built from. Deduplicated by the caller
-    /// rather than here — `DiscordREST.games(ids:)` already does it, and doing
-    /// it twice is one pass nobody reads.
-    func boardGameIDs(for userID: UserID) -> [ApplicationID] {
-        (profileWidgets[userID] ?? []).flatMap { $0.games.map(\.gameID) }
+        return GameCollection(
+            covers: covers,
+            overflow: ordered.count > GameCollection.slots ? ordered.count - covers.count : 0
+        )
     }
 
     // MARK: A game's profile

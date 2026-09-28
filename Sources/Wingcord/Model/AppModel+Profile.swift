@@ -85,7 +85,7 @@ extension AppModel {
             status: presence?.status ?? .offline,
             customStatus: presence?.customStatus?.state,
             customStatusEmoji: presence?.customStatus?.emoji,
-            activity: presence?.primaryActivity,
+            activities: presence?.liveActivities ?? [],
             activityButtonURLs: presence?.primaryActivity?.sessionID
                 .flatMap { activityButtonURLs[$0] } ?? [],
             activityStoreOffers: presence?.primaryActivity?.applicationID
@@ -336,9 +336,10 @@ extension AppModel {
     /// section for it and the tab strip that would gate on it does not exist
     /// there — so asking for it when a card opens would be one request per
     /// avatar anybody clicks.
-    func expandProfile() {
+    func expandProfile(tab: ProfileTab? = nil) {
         guard let request = profileRequest, request.depth != .full else { return }
         profileRequest?.depth = .full
+        profileRequest?.tab = tab
         sessionController.loadRecentActivity(of: request.userID)
     }
 
@@ -459,12 +460,18 @@ extension AppModel {
     /// the click rather than on the round trip. The banner, bio and theme
     /// colours are the only things the request adds, and they arrive into a card
     /// that is already on screen.
-    func openProfile(_ userID: UserID, anchor: CGRect, depth: ProfileRequest.Depth = .mini) {
+    func openProfile(
+        _ userID: UserID,
+        anchor: CGRect,
+        depth: ProfileRequest.Depth = .mini,
+        tab: ProfileTab? = nil
+    ) {
         profileRequest = ProfileRequest(
             userID: userID,
             guildID: selectedGuildID,
             anchor: anchor,
-            depth: depth
+            depth: depth,
+            tab: tab
         )
         sessionController.loadProfile(of: userID, inGuild: selectedGuildID)
         // The buttons on a rich presence, for both depths: the card draws the

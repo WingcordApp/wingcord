@@ -56,9 +56,9 @@ struct MemberEntry: Hashable, Sendable, Identifiable {
     var displayNameFont: DisplayNameFont?
     var status: PresenceStatus
     var isOnMobile: Bool
-    /// The activity or custom-status line beneath the name. Nil collapses the
-    /// row to one line.
-    var subtitle: String?
+    /// The line beneath the name — what they are doing and their custom
+    /// status, as Discord draws it. Nil collapses the row to one line.
+    var activityLine: ActivityStatusLine?
     var isBot: Bool
     /// The clan / guild tag chip beside the name.
     var tag: String?
@@ -176,6 +176,17 @@ nonisolated enum MemberRowGeometry {
             + (hasBadge ? tagBadgeSide + tagBadgeGap : 0)
     }
 
+    // The line under a name — see `MemberRowPainter.drawActivityLine`. The
+    // painter and the prefetch both read these, and the emoji's side is half of
+    // the image key the painter peeks with.
+
+    /// The glyph in front of the activity.
+    static let activityGlyphSide: CGFloat = 12
+    /// A custom status's emoji.
+    static let statusEmojiSide: CGFloat = 14
+    /// Between the pieces of the line.
+    static let activityGap: CGFloat = 4
+
     /// Where a nameplate's artwork lands inside its plate.
     ///
     /// **Fit to the plate's HEIGHT, anchored to its trailing edge**, and
@@ -208,6 +219,11 @@ nonisolated enum MemberRowGeometry {
         )
     }
 
+    /// The hoisted role's mark in a section heading. Matched to the label's
+    /// cap height rather than to its line box, so a heading with a mark and one
+    /// without sit on the same baseline.
+    static let sectionIconSide: CGFloat = 14
+
     /// The width nameplate art is fetched and drawn at, in points.
     ///
     /// **The strip's width at the plate's height**, which is the only number
@@ -220,11 +236,6 @@ nonisolated enum MemberRowGeometry {
     /// the still was decoded at the source's full 672 pixels for a picture
     /// drawn at 470. It matters more now than it did, because the moving form
     /// is thirty-nine of those.
-    /// The hoisted role's mark in a section heading. Matched to the label's
-    /// cap height rather than to its line box, so a heading with a mark and one
-    /// without sit on the same baseline.
-    static let sectionIconSide: CGFloat = 14
-
     static let nameplateArtWidth: CGFloat = ((rowHeight - 2) * Nameplate.artworkAspect)
         .rounded()
 }

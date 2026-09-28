@@ -28,7 +28,9 @@ import WingcordCore
 /// **the avatar is the target** — it just is not a chrome slab any more.
 struct MiniProfileCard: View {
     var profile: ProfilePresentation
-    var openFullProfile: () -> Void
+    /// Opens the full profile — on a tab, when a stack's peek asks for the one
+    /// its cards continue on.
+    var openFullProfile: (ProfileTab?) -> Void
     /// What a click on an emoji in this person's prose does. Nil leaves them
     /// inert pictures, which is the honest answer on a surface with no route to
     /// ask about one.
@@ -37,12 +39,13 @@ struct MiniProfileCard: View {
     /// accent text and takes no clicks, which is what a surface with no opener
     /// can honestly offer — `INVARIANTS.md` §5.5.
     var openLink: ((String) -> Void)?
-    /// The strip of game covers, or nil where they have arranged no board.
+    /// Their widgets as the popout stacks them, empty where they have no board.
     ///
     /// Resolved by the presenter for the same reason the full profile's board
-    /// is: joining the widgets to the games is a table lookup per cover, and
-    /// doing it in this body would redo it on every hover anywhere on the card.
-    var gameCollection: GameCollection?
+    /// is: joining the widgets to their games, templates and identities is a
+    /// table lookup per card, and doing it in this body would redo it on every
+    /// hover anywhere on the card.
+    var widgetPreviews: [WidgetPreview] = []
 
     /// The emoji whose card is open, if any. One popover per surface rather
     /// than one per picture in somebody's prose.
@@ -162,33 +165,25 @@ struct MiniProfileCard: View {
                         )
                     }
                 }
-                // **Between the bio and the roles**, which is where Discord puts it
-                // and where it belongs regardless: the bio is what someone says
-                // about themselves and the roles are what a server says about them,
-                // so the games — which they also chose — sit with the first group.
-                if !profile.isLoading, let gameCollection {
-                    GameCollectionRow(
-                        collection: gameCollection,
+                // **Between the bio and the activities**, which is where Discord
+                // puts them and where they belong regardless: the bio is what
+                // someone says about themselves, and the widgets are what else
+                // they chose to show.
+                if !profile.isLoading {
+                    ProfileWidgetStack(
+                        previews: widgetPreviews,
                         ground: ground,
-                        openBoard: openFullProfile
-                    )
-                        .padding(.horizontal, Spacing.margin)
-                        .padding(.bottom, Spacing.snug)
-                }
-                // **Above the roles and below the mutuals**, which is where the
-                // reference puts it: being in a call is a thing happening now, and
-                // it belongs with what somebody is doing rather than with what a
-                // server says about them.
-                if let voice = model.profileVoice(for: profile.userID) {
-                    ProfileVoiceCard(
-                        voice: voice,
                         width: contentWidth,
-                        join: { model.joinVoice($0) }
+                        isColumn: form == .column,
+                        openBoard: { openFullProfile(.board) }
                     )
                     .padding(.horizontal, Spacing.margin)
-                    .padding(.bottom, Spacing.snug)
+                    .padding(.bottom, widgetPreviews.isEmpty ? 0 : Spacing.snug)
                 }
-                currentActivity
+                // **Above the roles**: what somebody is doing now belongs with
+                // what they chose to show, not with what a server says about
+                // them.
+                activityStack
                 if !profile.isLoading, !profile.roles.isEmpty {
                     section("Roles") {
                         // **Two rows, then a count.** A card is a summary that opens
@@ -331,7 +326,7 @@ struct MiniProfileCard: View {
     /// **Glass, like Open Server on a server's card** — the one control on a
     /// surface that is otherwise entirely somebody's own colours.
     private var viewProfileButton: some View {
-        Button(action: openFullProfile) {
+        Button { openFullProfile(nil) } label: {
             Text("View Profile")
                 .font(.system(.subheadline, weight: .semibold))
                 .frame(maxWidth: .infinity)
@@ -426,7 +421,7 @@ struct MiniProfileCard: View {
                 profile: profile,
                 drop: avatarDrop,
                 dotSide: 16,
-                openFullProfile: openFullProfile
+                openFullProfile: { openFullProfile(nil) }
             )
 
             // **On the reader's own card the bubble is ALWAYS there, and it is
@@ -632,34 +627,49 @@ struct MiniProfileCard: View {
         }
     }
 
-    /// What they are doing right now, drawn in full.
+    /// What they are doing, as Discord's popout stacks it (module `646986`):
+    /// every activity in `ActivityOrder`, then the call they are in. The first
+    /// is drawn whole, the edge of the next shows beneath it, and the rest are
+    /// one press away on the full profile's Activity tab.
     ///
-    /// **The whole rich presence, and it used to be one grey line.** The card
-    /// said "Playing Counter-Strike 2 with Medal" in caption type under the
-    /// badges, which threw away the game's art, the publisher's mark riding its
-    /// corner, the two lines the app wrote, the clock and both of its buttons.
-    /// Every one of those is on the wire and the card has room for them.
+    /// **A custom status is not a card** — it is the bubble on the banner.
     ///
     /// **No recent activity here, and that is deliberate.** A card is a summary
     /// that opens beside a row; twenty inventory entries would make it taller
-    /// than the window, and they are what the full profile's Activity tab is
-    /// for. What somebody is doing *now* is the one thing on that tab worth
-    /// answering before the reader has asked for it.
+    /// than the window, and they are what the Activity tab is for.
     @ViewBuilder
-    private var currentActivity: some View {
-        if !profile.isLoading, let activity = profile.activity, activity.kind != .custom {
-            CurrentActivityCard(
-                activity: activity,
-                buttonURLs: profile.activityButtonURLs,
-                storeOffers: profile.activityStoreOffers,
-                ground: ground,
-                openGame: openGame(for: activity),
-                applicationIconURL: model.applicationIconURL(
-                    activity.applicationID, side: Metrics.avatarProfile
-                )
-            )
-            .padding(.horizontal, Spacing.margin)
-            .padding(.bottom, Spacing.snug)
+    private var activityStack: some View {
+        if !profile.isLoading {
+            let voice = model.profileVoice(for: profile.userID)
+            let cards = profile.activities.count + (voice == nil ? 0 : 1)
+            if cards > 0 {
+                ProfileCardStack(
+                    hasMore: cards > 1,
+                    ground: ground,
+                    expand: { openFullProfile(.activity) }
+                ) {
+                    if let first = profile.activities.first {
+                        CurrentActivityCard(
+                            activity: first,
+                            buttonURLs: profile.activityButtonURLs,
+                            storeOffers: profile.activityStoreOffers,
+                            ground: ground,
+                            openGame: openGame(for: first),
+                            applicationIconURL: model.applicationIconURL(
+                                first.applicationID, side: Metrics.avatarProfile
+                            )
+                        )
+                    } else if let voice {
+                        ProfileVoiceCard(
+                            voice: voice,
+                            width: contentWidth,
+                            join: { model.joinVoice($0) }
+                        )
+                    }
+                }
+                .padding(.horizontal, Spacing.margin)
+                .padding(.bottom, Spacing.snug)
+            }
         }
     }
 

@@ -118,20 +118,17 @@ struct ApplicationInstallTests {
             var integration_type: Int
             var location_context: LocationContext
         }
-        func object(_ body: Body) throws -> [String: Any] {
-            try #require(
-                try JSONSerialization.jsonObject(with: JSONEncoder().encode(body))
-                    as? [String: Any]
-            )
+        func object(_ body: Body) throws -> [String: Any]? {
+            try JSONSerialization.jsonObject(with: JSONEncoder().encode(body)) as? [String: Any]
         }
         let context = LocationContext(
             guild_id: DiscordREST.dmLocationGuildID,
             channel_id: "1424759145021837325",
             channel_type: 1
         )
-        let user = try object(
+        let user = try #require(try object(
             Body(guild_id: nil, permissions: "0", integration_type: 1, location_context: context)
-        )
+        ))
         #expect(user["guild_id"] == nil)
         #expect(user["permissions"] as? String == "0")
         #expect(user["integration_type"] as? Int == 1)
@@ -139,14 +136,14 @@ struct ApplicationInstallTests {
             (user["location_context"] as? [String: Any])?["guild_id"] as? String == "10000"
         )
 
-        let guild = try object(
+        let guild = try #require(try object(
             Body(
                 guild_id: "1539662512004059260",
                 permissions: "277025754184",
                 integration_type: 0,
                 location_context: context
             )
-        )
+        ))
         #expect(guild["guild_id"] as? String == "1539662512004059260")
         #expect(guild["permissions"] as? String == "277025754184")
         #expect(guild["integration_type"] as? Int == 0)

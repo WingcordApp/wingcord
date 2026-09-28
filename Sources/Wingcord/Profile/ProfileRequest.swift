@@ -50,6 +50,10 @@ struct ProfileRequest: Equatable, Identifiable {
     /// opened from four places and only one of them is asking for the controls:
     /// clicking your own name in a transcript opens the card to *read*.
     var showsOwnActions = false
+    /// The tab the full profile opens on. **Set by a peek**: the edge of a
+    /// second card under an activity opens Activity, under a widget opens the
+    /// board — Discord's own destinations. Nil is the sheet's own default.
+    var tab: ProfileTab?
 
     var id: UInt64 { userID.rawValue }
 }
@@ -105,7 +109,11 @@ struct ProfilePresentation: Equatable, Sendable {
     /// apart, and because a status that is *only* an emoji is a real state that
     /// a single concatenated string cannot represent.
     var customStatusEmoji: EmojiRef?
-    var activity: Activity?
+    /// Everything they are doing, in Discord's order — one card each.
+    var activities: [Activity] = []
+    /// The first of them: the activity a surface with room for one shows, and
+    /// the one whose buttons and store offers are fetched.
+    var activity: Activity? { activities.first }
     /// Where that activity's custom buttons go, once the metadata route has
     /// answered.
     ///

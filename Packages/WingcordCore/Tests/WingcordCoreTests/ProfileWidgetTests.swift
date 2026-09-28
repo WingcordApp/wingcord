@@ -276,4 +276,196 @@ struct ProfileWidgetTests {
         #expect(ApplicationProfileValue.number(2.29).formatted(as: .duration) == "2 hrs")
         #expect(ApplicationProfileValue.number(0.5).formatted(as: .duration) == "30 min")
     }
+
+    // MARK: Numbers
+
+    /// Discord's widget number (module `108089`): the locale's compact form,
+    /// **truncated** — Gramophone's six as its card prints them, and the
+    /// boundaries either side of a unit.
+    @Test("A number is compacted and truncated, never rounded", arguments: [
+        (102_312.0, "102K"), (72, "72"), (13, "13"), (7_948, "7.9K"), (4_550, "4.5K"),
+        (2_624, "2.6K"), (999, "999"), (1_000, "1K"), (1_999_999, "1.9M"), (0, "0"),
+    ])
+    func compactNumbers(value: Double, text: String) {
+        #expect(ApplicationProfileValue.compact(value, locale: Locale(identifier: "en-US")) == text)
+    }
+
+    // MARK: The popout and the other bottoms
+
+    private func data(_ name: String, _ presentation: WidgetField.PresentationType) -> WidgetField {
+        .field(WidgetField.Value(valueType: .data, presentationType: presentation, value: name))
+    }
+
+    private func custom(_ text: String) -> WidgetField {
+        .field(WidgetField.Value(valueType: .customString, presentationType: .text, value: text))
+    }
+
+    private let icon = URL(string: "https://images-ext-1.discordapp.net/external/i/graphic_eq.png")!
+    private let art = URL(string: "https://images-ext-1.discordapp.net/external/a/preview.png")!
+
+    /// Gramophone's popout card as captured: `mini_profile_contained_stat`,
+    /// whose one stat is `stat` with its words in `text`, not `value`.
+    @Test("The popout's stat is read from its text, with its icon and a boxed picture")
+    func miniProfileHeadline() throws {
+        let config = WidgetConfig(
+            configID: "c",
+            applicationID: application,
+            displayName: "Gramophone",
+            surfaces: [
+                "mini_profile": WidgetSurface(
+                    layout: "mini_profile_contained_stat",
+                    components: [
+                        "stat": WidgetComponent(fields: [
+                            "text": data("preview_value", .text),
+                            "icon": data("preview_icon", .image),
+                        ]),
+                        "contained_image": WidgetComponent(fields: ["image": data("preview_image", .image)]),
+                    ]
+                ),
+            ]
+        )
+        let profile = ApplicationProfile(fields: [
+            "preview_value": .text("102.3k Scrobbles"),
+            "preview_icon": .image(icon),
+            "preview_image": .image(art),
+        ])
+        let surface = try #require(config.resolve(.miniProfile, with: profile, assetURL: assetURL))
+        #expect(surface.headline?.value == "102.3k Scrobbles")
+        #expect(surface.headline?.iconURL == icon)
+        #expect(surface.containedImageURL == art)
+        #expect(!surface.isHero)
+    }
+
+    @Test("A labelled popout stat reads \"Label: value\", and a missing value is a dash")
+    func labelledHeadline() throws {
+        func headline(_ fields: [String: WidgetField]) throws -> String? {
+            let config = WidgetConfig(
+                configID: "c",
+                applicationID: application,
+                displayName: "Arknights Endfield",
+                surfaces: [
+                    "mini_profile": WidgetSurface(
+                        layout: "mini_profile_hero_stat",
+                        components: ["stat": WidgetComponent(fields: fields)]
+                    ),
+                ]
+            )
+            let profile = ApplicationProfile(fields: ["level": .number(60)])
+            return try #require(config.resolve(.miniProfile, with: profile, assetURL: assetURL)).headline?.value
+        }
+        #expect(try headline(["text": data("level", .number), "label": custom("Authority Level")])
+            == "Authority Level: 60")
+        #expect(try headline(["text": data("missing", .number), "label": custom("Authority Level")])
+            == "Authority Level: \u{2013}")
+    }
+
+    @Test("A stat's icon comes with it")
+    func statIcons() throws {
+        let config = WidgetConfig(
+            configID: "c",
+            applicationID: application,
+            displayName: "Gramophone",
+            surfaces: [
+                "widget_bottom": WidgetSurface(
+                    layout: "widget_bottom_stats",
+                    components: [
+                        "stat_1": WidgetComponent(fields: [
+                            "value": data("f0", .number),
+                            "label": data("f0l", .text),
+                            "icon": data("f0i", .image),
+                        ]),
+                    ]
+                ),
+            ]
+        )
+        let profile = ApplicationProfile(fields: [
+            "f0": .number(102_312), "f0l": .text("Scrobbles"), "f0i": .image(icon),
+        ])
+        let stat = try #require(config.resolve(.widgetBottom, with: profile, assetURL: assetURL)?.stats.first)
+        #expect(stat.value == ApplicationProfileValue.compact(102_312))
+        #expect(stat.label == "Scrobbles")
+        #expect(stat.iconURL == icon)
+    }
+
+    /// Vexlor's "User Stats" goal as captured: the bar reads `current`, the
+    /// goal is `objective`, and its badge is an application asset.
+    @Test("A goal's bar reads current, and its words and badge are the objective's")
+    func progressGoal() throws {
+        let config = WidgetConfig(
+            configID: "c",
+            applicationID: application,
+            displayName: "User Stats",
+            surfaces: [
+                "widget_bottom": WidgetSurface(
+                    layout: "widget_bottom_progress",
+                    components: [
+                        "progress": WidgetComponent(fields: ["current": data("progress", .number)]),
+                        "objective": WidgetComponent(fields: [
+                            "description": custom("Any sort of plant counts"),
+                            "image": .field(WidgetField.Value(
+                                valueType: .applicationAsset, presentationType: .image, value: "GrassBadge"
+                            )),
+                            "name": custom("Don't touch grass for 10 years"),
+                        ]),
+                    ]
+                ),
+            ],
+            assets: ["GrassBadge": WidgetAsset(key: "GrassBadge", assetID: "1520454752198879302")]
+        )
+        let profile = ApplicationProfile(username: "some_username", fields: ["progress": .number(0.69)])
+        let surface = try #require(config.resolve(.widgetBottom, with: profile, assetURL: assetURL))
+        let progress = try #require(surface.progress)
+        #expect(progress.percent == 69)
+        #expect(progress.caption == "69%")
+        #expect(progress.name == "Don't touch grass for 10 years")
+        #expect(progress.detail == "Any sort of plant counts")
+        #expect(progress.imageURL?.absoluteString == "https://cdn.test/\(application.rawValue)/1520454752198879302.png")
+        // Not a stats block: nothing for the identity's fields to stand in for.
+        #expect(surface.stats.isEmpty)
+        #expect(!surface.isEmpty)
+    }
+
+    @Test("With a maximum the bar is a count out of it", arguments: [
+        (5.0, 10.0, 50, "5/10"),
+        (3, 0, 0, "3/0"),
+        (12, 10, 100, "12/10"),
+        (0.5, 2, 25, "0.5/2"),
+    ])
+    func progressWithMaximum(current: Double, maximum: Double, percent: Int, caption: String) {
+        let progress = ResolvedProgress(current: current, maximum: maximum)
+        #expect(progress.percent == percent)
+        #expect(progress.caption == caption)
+    }
+
+    @Test("A fraction is clamped, and no number is an empty bar with no caption")
+    func progressBounds() {
+        #expect(ResolvedProgress(current: 1.7, maximum: nil).percent == 100)
+        #expect(ResolvedProgress(current: -0.2, maximum: nil).percent == 0)
+        let missing = ResolvedProgress(current: nil, maximum: 10)
+        #expect(missing.percent == 0)
+        #expect(missing.caption == nil)
+    }
+
+    @Test("A collection's items come in their keys' order, and an empty slot is dropped")
+    func collectionItems() throws {
+        func item(_ name: String) -> WidgetComponent {
+            WidgetComponent(fields: ["name": custom(name)])
+        }
+        let config = WidgetConfig(
+            configID: "c",
+            applicationID: application,
+            displayName: "Shelf",
+            surfaces: [
+                "widget_bottom": WidgetSurface(
+                    layout: "widget_bottom_collection",
+                    components: [
+                        "item_3": item("Third"), "item_1": item("First"),
+                        "item_2": WidgetComponent(fields: [:]), "item_4": item("Fourth"),
+                    ]
+                ),
+            ]
+        )
+        let surface = try #require(config.resolve(.widgetBottom, with: nil, assetURL: assetURL))
+        #expect(surface.items.map(\.name) == ["First", "Third", "Fourth"])
+    }
 }

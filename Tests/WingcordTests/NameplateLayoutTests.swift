@@ -95,15 +95,15 @@ struct NameplateLayoutTests {
         // grew for artwork would give a roster of mixed members a ragged edge.
         var bare = MemberEntry(
             userID: UserID(rawValue: 1), name: "a", monogram: "A",
-            status: .online, isOnMobile: false, subtitle: nil, isBot: false
+            status: .online, isOnMobile: false, activityLine: nil, isBot: false
         )
         var plated = bare
         plated.nameplateURL = URL(string: "https://example.invalid/static.png")
         plated.nameplatePalette = .cobalt
         #expect(MemberRowGeometry.height(for: bare) == MemberRowGeometry.height(for: plated))
 
-        bare.subtitle = "Roblox"
-        plated.subtitle = "Roblox"
+        bare.activityLine = ActivityStatusLine(glyph: .game, text: "Roblox")
+        plated.activityLine = ActivityStatusLine(glyph: .game, text: "Roblox")
         #expect(MemberRowGeometry.height(for: bare) == MemberRowGeometry.height(for: plated))
     }
 

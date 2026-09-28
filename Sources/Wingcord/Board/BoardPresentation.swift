@@ -83,8 +83,9 @@ nonisolated enum GameArt {
     static let rowWidth: CGFloat = 68
     static let gridWidth: CGFloat = 92
     static let shelfWidth: CGFloat = 116
-    /// The strip on the small card, which draws marks rather than covers.
-    static let markSide: CGFloat = 30
+    /// The strip on the popout, which draws marks rather than covers —
+    /// Discord's twenty-four.
+    static let markSide: CGFloat = 24
 }
 
 /// An application widget, resolved against its config and the person's identity.
@@ -94,7 +95,6 @@ struct BoardApplicationTile: Hashable, Sendable {
     /// the config's `display_name`, which is the author's private label.
     var name: String
     var iconURL: URL?
-    var isVerified: Bool
     /// The header: a title, its subtitles and the artwork behind them.
     var top: ResolvedSurface?
     /// The stats block under it.
@@ -113,22 +113,50 @@ struct BoardApplicationTile: Hashable, Sendable {
     }
 }
 
-/// The strip of game covers on the mini card.
+/// One card of the popout's widget stack, in the person's own widget order —
+/// Discord's `UserProfileStackedWidgetPreviews` (module `657538`).
+enum WidgetPreview: Hashable, Sendable, Identifiable {
+    /// An application widget's `mini_profile` surface.
+    case application(MiniApplicationWidget)
+    /// "Game Collection": every game the board names, as one strip, at the
+    /// place of the first game list.
+    case games(GameCollection)
+    /// A widget the person wrote.
+    case personal(id: String, widget: PersonalWidget)
+
+    var id: String {
+        switch self {
+        case .application(let widget): "application-\(widget.applicationID.rawValue)"
+        case .games: "games"
+        case .personal(let id, _): id
+        }
+    }
+}
+
+/// An application widget as the popout draws it: the name, the one stat its
+/// `mini_profile` surface leads with, and a picture.
+struct MiniApplicationWidget: Hashable, Sendable {
+    var applicationID: ApplicationID
+    var name: String
+    var iconURL: URL?
+    var surface: ResolvedSurface
+}
+
+/// The strip of game marks on the popout.
 ///
 /// **A summary, and it opens onto the board.** It is the one thing on the small
-/// card that says a person has a board at all, so its click target is the Board
-/// tab of their full profile rather than any single game.
+/// card that says a person has games on their board, so its click target is
+/// the Board tab of their full profile rather than any single game.
 struct GameCollection: Hashable, Sendable {
-    /// The covers to draw, already capped.
+    /// The marks to draw, at most `slots`.
     var covers: [BoardGame]
-    /// How many more there are behind the last slot. Zero draws no chip.
+    /// Every game not drawn — printed over the last mark, which is dimmed
+    /// under it. Zero draws no count.
+    ///
+    /// **The dimmed mark counts as drawn**, which is Discord's arithmetic
+    /// (module `657538`): seventeen games are four marks and "+13".
     var overflow: Int
 
-    /// Slots on the card.
-    ///
-    /// Four, measured off two captured cards: one drawing three covers and a
-    /// chip over a seventeen-game board, the other the same over an eight-game
-    /// one.
     static let slots = 4
 }
 

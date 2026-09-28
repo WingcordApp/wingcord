@@ -607,6 +607,7 @@ struct GuildDTO: Decodable, Sendable {
     var features: [String]?
     var member_count: Int?
     var rules_channel_id: ChannelID?
+    var afk_channel_id: ChannelID?
     var large: Bool?
     /// What the server tells a member who has set nothing. 0 all, 1 mentions.
     var default_message_notifications: Int?
@@ -676,6 +677,8 @@ struct GuildDTO: Decodable, Sendable {
         var premium_tier: Int?
         var features: [String]?
         var rules_channel_id: ChannelID?
+        /// Nested here on READY with everything else — §5.9.
+        var afk_channel_id: ChannelID?
         /// **The server's own notification floor, and READY is the only place
         /// it arrives.** It was declared at the top level and nowhere here, so
         /// on a payload where Discord nests a guild's fields — which is every
@@ -732,6 +735,7 @@ struct GuildDTO: Decodable, Sendable {
             tagBadgeHash: profile?.badge ?? properties?.profile?.badge,
             memberCount: member_count,
             rulesChannelID: rules_channel_id ?? properties?.rules_channel_id,
+            afkChannelID: afk_channel_id ?? properties?.afk_channel_id,
             isLarge: large ?? false,
             defaultMessageNotifications: NotificationLevel(
                 rawValue: default_message_notifications
@@ -1367,6 +1371,25 @@ struct ActivityDTO: Decodable, Sendable {
     /// for most activities; an activity without one has no reachable metadata
     /// at all, so its buttons are not drawn.
     var session_id: String?
+    /// Milliseconds. The last key of Discord's order — `ActivityOrder`.
+    var created_at: Double?
+    /// `EMBEDDED` (256) is the one bit anything here reads.
+    var flags: Int?
+    /// Which line a one-line summary names the activity by.
+    var status_display_type: Int?
+    /// Join and spectate secrets. **Only whether they are there is read**, so
+    /// the value is never looked into — a shape nobody decodes cannot throw.
+    var secrets: Opaque?
+    /// `"xbox"`, `"ps5"`, `"desktop"` — where it is running.
+    var platform: String?
+    /// Where the details and state lines link to.
+    var details_url: String?
+    var state_url: String?
+
+    /// Any JSON value, accepted and discarded.
+    struct Opaque: Decodable, Sendable {
+        init(from decoder: any Decoder) throws {}
+    }
 
     /// `size` is `[current, maximum]`. The id is carried but not read: apps
     /// spell it however they like — Watch Together sends the instance reversed
@@ -1413,7 +1436,15 @@ struct ActivityDTO: Decodable, Sendable {
             sessionID: session_id,
             // At most two: the wire caps it there and a third would be a row
             // this layout has no room for.
-            buttons: Array((buttons ?? []).prefix(2))
+            buttons: Array((buttons ?? []).prefix(2)),
+            createdAt: created_at.map { Date(timeIntervalSince1970: $0 / 1000) },
+            isEmbedded: (flags ?? 0) & 256 != 0,
+            statusDisplay: status_display_type.flatMap(Activity.StatusDisplay.init(rawValue:)),
+            partyID: party?.id,
+            hasSecrets: secrets != nil,
+            platform: platform,
+            detailsURL: details_url.flatMap(URL.init(string:)),
+            stateURL: state_url.flatMap(URL.init(string:))
         )
     }
 }
@@ -1874,14 +1905,16 @@ struct CollectiblesProductDTO: Decodable, Sendable {
     /// is the whole of how a frame becomes pictures, and it is not derivable
     /// from any other collectible's path.
     ///
-    /// `type` (`"staple"`) and `responsive` are sent and not read: every
-    /// captured layer is a non-responsive staple, so there is no observation of
-    /// what either alternative does, and this file does not decode a field it
-    /// cannot place.
+    /// `type` says how the piece is drawn — `staple`, `rail` or `border` — and
+    /// `responsive` hides a rail on a short card. Fantasy Galaxy sends a
+    /// responsive rail; drawn as the staple it was taken for, its 1312 × 2528
+    /// artwork was fitted into the card and pulled its side clouds inward.
     struct FrameLayer: Decodable, Sendable {
         var id: String?
+        var type: String?
         var order: String?
         var anchor: String?
+        var responsive: Bool?
     }
 
     /// The product, as whichever kind of collectible it turned out to be.
@@ -1928,17 +1961,23 @@ extension CollectiblesProductDTO.Item {
     func frame(sku: String) -> ProfileFrame? {
         let pieces: [ProfileFrame.Layer] = (layers ?? []).compactMap { layer in
             guard let id = layer.id,
-                  let url = CDN.profileFrameLayer(sku: sku, layerID: id)
+                  let url = CDN.profileFrameLayer(sku: sku, layerID: id),
+                  // A kind Discord itself draws nothing for (module `744808`)
+                  // is skipped; a missing one is the staple every early
+                  // capture was.
+                  let kind = layer.type.map(ProfileFrame.Kind.init(rawValue:)) ?? .staple
             else { return nil }
             return ProfileFrame.Layer(
                 id: id,
                 url: url,
+                kind: kind,
                 // An unrecognised anchor or order costs one misplaced picture,
-                // never the frame: `.top` and `.front` are what every captured
-                // layer says, and they are the safe reading of a value this
-                // client has not seen before.
+                // never the frame: `.top` and `.front` are what nearly every
+                // captured layer says, and they are the safe reading of a value
+                // this client has not seen before.
                 anchor: layer.anchor.flatMap(ProfileFrame.Anchor.init(rawValue:)) ?? .top,
-                order: layer.order.flatMap(ProfileFrame.Order.init(rawValue:)) ?? .front
+                order: layer.order.flatMap(ProfileFrame.Order.init(rawValue:)) ?? .front,
+                isResponsive: layer.responsive ?? false
             )
         }
         guard !pieces.isEmpty, let inner = inner_width, inner > 0 else { return nil }

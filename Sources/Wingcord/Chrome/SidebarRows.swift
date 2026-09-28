@@ -303,17 +303,8 @@ struct SidebarChannelRow: View {
                         SidebarTagChip(text: tag, badgeURL: channel.tagBadgeURL)
                     }
                 }
-                if let subtitle = channel.subtitle {
-                    HStack(spacing: Spacing.hair) {
-                        if let emoji = channel.subtitleEmoji {
-                            InlineEmojiMark(emoji: emoji, side: 11)
-                        }
-                        Text(subtitle)
-                            .font(Typeface.rowSubtitle)
-                            .foregroundStyle(Ink.tertiary)
-                            .lineLimit(1)
-                            .truncationMode(.tail)
-                    }
+                if let line = channel.activityLine {
+                    ActivityLineView(line: line)
                 }
             }
         } else {
@@ -332,7 +323,7 @@ struct SidebarChannelRow: View {
         var parts = [channel.name]
         if channel.isTyping { parts.append("typing") }
         if let tag = channel.tag { parts.append(tag) }
-        if let subtitle = channel.subtitle { parts.append(subtitle) }
+        if let line = channel.activityLine { parts.append(line.spokenText) }
         return parts.joined(separator: ", ")
     }
 

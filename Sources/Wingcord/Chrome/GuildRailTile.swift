@@ -109,7 +109,7 @@ struct GuildRailTile: View {
                 // about you, the other is about the room.
                 .overlay(alignment: .topTrailing) {
                     if let mark = guild.voiceMark {
-                        LiveVoiceMark(mark: mark)
+                        LiveVoiceMark(mark: mark, isConnected: guild.isConnectedToVoice)
                             .offset(x: RailMarkGeometry.inset.x, y: RailMarkGeometry.inset.y)
                     }
                 }
@@ -379,34 +379,32 @@ struct DiscoverRailTile: View {
     }
 }
 
-/// The mark on a rail tile that says somebody in that server is sharing a
-/// screen or on camera.
+/// The mark on a rail tile that says what that server's rooms are doing — a
+/// stage, a screen, a camera or a conversation, whichever ranks highest.
 ///
-/// **The one thing on the rail that says there is something to watch without
-/// being hovered.** Everything else a tile carries is about the reader — an
-/// unread, a mention, the call they are in; this is about the room, which is
-/// why it takes the opposite corner rather than competing for the same one.
+/// **The one thing on the rail that says a room is busy without being
+/// hovered.** Everything else a tile carries is about the reader — an unread, a
+/// mention; this is about the room, which is why it takes the opposite corner
+/// rather than competing for the same one.
 ///
 /// A filled plate rather than a bare glyph: the tile behind it is somebody's
 /// artwork, and a monochrome symbol laid straight on it disappears against half
 /// the servers on the rail.
 struct LiveVoiceMark: View {
     var mark: RailVoiceMark
+    /// Whether the reader is in a call in this server. **Green, as Discord
+    /// draws it** (`isCurrentUserConnected`): the one mark on the rail that is
+    /// about the reader rather than about the room.
+    var isConnected = false
 
     var body: some View {
-        // A speaker means there are people in a room; a screen means one of
-        // them is worth watching. Two facts, two glyphs.
-        Image(
-            systemName: mark == .live
-                ? "rectangle.inset.filled.on.rectangle"
-                : "speaker.wave.2.fill"
-        )
+        Image(systemName: mark.symbolName)
             .font(.system(size: 8, weight: .bold))
-            .foregroundStyle(Palette.canvas)
+            .foregroundStyle(isConnected ? Color.white : Palette.canvas)
             .frame(width: RailMarkGeometry.side, height: RailMarkGeometry.side)
             .background {
                 RoundedRectangle(cornerRadius: 5, style: .continuous)
-                    .fill(Ink.primary)
+                    .fill(isConnected ? AnyShapeStyle(Palette.presenceOnline) : AnyShapeStyle(Ink.primary))
             }
             // It reports what is happening; the tile under it is the control.
             .allowsHitTesting(false)

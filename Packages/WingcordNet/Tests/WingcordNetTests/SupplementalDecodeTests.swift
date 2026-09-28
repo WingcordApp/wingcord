@@ -483,6 +483,38 @@ struct VoiceChannelInfoDecodeTests {
         #expect(levels[GuildID(rawValue: 3)] == .allMessages)
     }
 
+    /// The AFK room is read from both shapes for the same reason — §5.9: a
+    /// field declared at one level is a field every READY drops.
+    @Test("A guild's AFK channel is read from either level")
+    func guildAFKChannelComesFromEitherLevel() throws {
+        let ready = try Self.decode(ReadyPayload.self, """
+        {
+          "user": { "id": "1", "username": "me", "discriminator": "0" },
+          "session_id": "s",
+          "guilds": [
+            {
+              "id": "1",
+              "properties": { "id": "1", "name": "Nested", "afk_channel_id": "10" }
+            },
+            {
+              "id": "2",
+              "properties": { "id": "2", "name": "Flat" },
+              "afk_channel_id": "20"
+            },
+            { "id": "3", "properties": { "id": "3", "name": "None", "afk_channel_id": null } }
+          ]
+        }
+        """)
+        let rooms = Dictionary(
+            uniqueKeysWithValues: ReadySnapshot(payload: ready).guilds.map {
+                ($0.id, $0.afkChannelID)
+            }
+        )
+        #expect(rooms[GuildID(rawValue: 1)] == ChannelID(rawValue: 10))
+        #expect(rooms[GuildID(rawValue: 2)] == ChannelID(rawValue: 20))
+        #expect(rooms[GuildID(rawValue: 3)] == .some(nil))
+    }
+
     /// **A read cursor of `"0"` is "never read", not a message id.**
     ///
     /// Discord sends it for every channel the reader has no position in, and

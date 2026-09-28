@@ -44,11 +44,17 @@ struct ProfileSheet: View {
     var saveEdits: () -> Void
     var presentPicker: (ProfileEditPicker) -> Void
     var dismiss: () -> Void
+    /// The tab to open on — Activity from an activity's peek, the board from a
+    /// widget's. Nil is the board.
+    var initialTab: ProfileTab? = nil
 
     @Environment(AppModel.self) private var model
     @Environment(\.motion) private var motion
     @State private var inspectedEmoji: EmojiRef?
-    @State private var selectedTab: ProfileTab = .board
+    /// The tab the reader chose, once they have. **Only their choice is
+    /// state**; where the sheet opened is an input, so it needs no write after
+    /// the first frame to take effect.
+    @State private var chosenTab: ProfileTab?
 
     /// Never shorter than this, whatever the content says. Below it the panel's
     /// own banner and avatar stop having room to be a portrait at all.
@@ -152,7 +158,8 @@ struct ProfileSheet: View {
     /// made, and a stored selection corrected in an `onChange` is a second write
     /// that invalidates the whole sheet.
     private var currentTab: ProfileTab {
-        tabs.contains(selectedTab) ? selectedTab : (tabs.first ?? .mutuals)
+        let wanted = chosenTab ?? initialTab ?? .board
+        return tabs.contains(wanted) ? wanted : (tabs.first ?? .mutuals)
     }
 
     /// The servers whose tag the reader could wear.
@@ -251,7 +258,7 @@ struct ProfileSheet: View {
                     options: tabs.map { SegmentedPicker.Option($0, $0.title) },
                     selection: Binding(
                         get: { currentTab },
-                        set: { selectedTab = $0 }
+                        set: { chosenTab = $0 }
                     )
                 )
             }
@@ -408,12 +415,15 @@ struct ProfileSheet: View {
     @ViewBuilder
     private var activityPane: some View {
         VStack(alignment: .leading, spacing: 14) {
-            if let current = profile.activity {
+            // **Every activity, in Discord's order** — `ActivityOrder` — one
+            // slab each. Only the first one's buttons and store are fetched,
+            // so the rest draw without them rather than with dead ones.
+            ForEach(Array(profile.activities.enumerated()), id: \.offset) { index, current in
                 ProfileSlab(ground: ground) {
                     CurrentActivityCard(
                         activity: current,
-                        buttonURLs: profile.activityButtonURLs,
-                        storeOffers: profile.activityStoreOffers,
+                        buttonURLs: index == 0 ? profile.activityButtonURLs : [],
+                        storeOffers: index == 0 ? profile.activityStoreOffers : [],
                         ground: ground,
                         openGame: gameOpener(for: current),
                         applicationIconURL: model.applicationIconURL(

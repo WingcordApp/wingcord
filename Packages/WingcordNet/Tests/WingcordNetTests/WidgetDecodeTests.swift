@@ -599,4 +599,137 @@ struct WidgetDecodeTests {
         #expect(personal.fields[0].image?.fileID == "1547211860244681699")
         #expect(personal.fields[1].image == nil)
     }
+
+    // MARK: Two captured widgets, end to end
+
+    /// Resolves one surface of a captured config against a captured identity,
+    /// the way the board does.
+    private func resolve(
+        _ kind: WidgetSurface.Kind,
+        config: String,
+        identities: String
+    ) throws -> ResolvedSurface {
+        let decoder = JSONDecoder()
+        let config = try #require(
+            try decoder.decode([WidgetConfigDTO].self, from: Data(config.utf8)).compactMap(\.domain).first
+        )
+        let profile = try decoder
+            .decode(ApplicationIdentitiesDTO.self, from: Data(identities.utf8))
+            .domain.first?.profile
+        return try #require(config.resolve(kind, with: profile) { id, assetID in
+            CDN.applicationAsset(id: id, assetID: assetID, side: 48)
+        })
+    }
+
+    /// Gramophone's template as captured on dargy's profile — six numbers,
+    /// each with a label and an icon from the person's identity — and its
+    /// popout surface.
+    private let gramophoneConfig = """
+    [{"config_id":"1490331470288085223","application_id":"1490329489337981836","display_name":"Gramophone","status":"published",
+      "surfaces":{
+        "widget_bottom":{"layout":"widget_bottom_stats","components":{
+          "stat_5":{"fields":{"value":{"value_type":"data","presentation_type":"number","value":"f4"},"icon":{"value_type":"data","presentation_type":"image","value":"f4i"},"label":{"value_type":"data","presentation_type":"text","value":"f4l"}}},
+          "stat_1":{"fields":{"value":{"value_type":"data","presentation_type":"number","value":"f0"},"icon":{"value_type":"data","presentation_type":"image","value":"f0i"},"label":{"value_type":"data","presentation_type":"text","value":"f0l"}}},
+          "stat_3":{"fields":{"value":{"value_type":"data","presentation_type":"number","value":"f2"},"icon":{"value_type":"data","presentation_type":"image","value":"f2i"},"label":{"value_type":"data","presentation_type":"text","value":"f2l"}}},
+          "stat_2":{"fields":{"value":{"value_type":"data","presentation_type":"number","value":"f1"},"icon":{"value_type":"data","presentation_type":"image","value":"f1i"},"label":{"value_type":"data","presentation_type":"text","value":"f1l"}}},
+          "stat_4":{"fields":{"value":{"value_type":"data","presentation_type":"number","value":"f3"},"icon":{"value_type":"data","presentation_type":"image","value":"f3i"},"label":{"value_type":"data","presentation_type":"text","value":"f3l"}}},
+          "stat_6":{"fields":{"value":{"value_type":"data","presentation_type":"number","value":"f5"},"icon":{"value_type":"data","presentation_type":"image","value":"f5i"},"label":{"value_type":"data","presentation_type":"text","value":"f5l"}}}}},
+        "mini_profile":{"layout":"mini_profile_contained_stat","components":{
+          "stat":{"fields":{"text":{"value_type":"data","presentation_type":"text","value":"preview_value"},"icon":{"value_type":"data","presentation_type":"image","value":"preview_icon"}}},
+          "contained_image":{"fields":{"image":{"value_type":"data","presentation_type":"image","value":"preview_image"}}}}},
+        "widget_top":{"layout":"widget_top_hero","components":{
+          "title":{"fields":{"text":{"value_type":"data","presentation_type":"text","value":"name"}}},
+          "subtitle_1":{"fields":{"text":{"value_type":"data","presentation_type":"text","value":"sub01"}}},
+          "hero_image":{"fields":{"image":{"value_type":"data","presentation_type":"image","value":"primary_image"}}}}}},
+      "updated_at":"2026-05-12T21:49:54.341713+00:00","published_at":"2026-05-12T21:44:37.265298+00:00"}]
+    """
+
+    /// The identity behind it, in the captured shape: every picture a media
+    /// object with a proxy beside it. The name and the pictures that would
+    /// identify somebody are replaced; the numbers are the captured ones.
+    private let gramophoneIdentities: String = {
+        func picture(_ id: String, _ file: String) -> String {
+            """
+            {"id":"\(id)","url":"https://origin.test/\(file)","proxy_url":"https://images-ext-1.discordapp.net/external/p/\(file)",\
+            "width":2048,"height":2048,"placeholder":"zQeKBQAeB7iHeICNtweHAAAABzeHh3ByOA==","placeholder_version":1,\
+            "content_type":"image/png","loading_state":2,"flags":0}
+            """
+        }
+        let stats = [(102_312.0, "Scrobbles"), (72, "Loved Tracks"), (13, "Friends"),
+                     (7_948, "Tracks"), (4_550, "Albums"), (2_624, "Artists")]
+        let dynamic = [
+            #"{"type":1,"name":"name","value":"someone"}"#,
+            #"{"type":1,"name":"sub01","value":"@someone"}"#,
+            #"{"type":3,"name":"primary_image","value":\#(picture("1", "avatar.png"))}"#,
+            #"{"type":3,"name":"preview_icon","value":\#(picture("2", "graphic_eq.png"))}"#,
+            #"{"type":3,"name":"preview_image","value":\#(picture("3", "avatar.png"))}"#,
+            #"{"type":1,"name":"preview_value","value":"102.3k Scrobbles"}"#,
+        ] + stats.enumerated().flatMap { index, stat in [
+            #"{"type":2,"name":"f\#(index)","value":\#(stat.0)}"#,
+            #"{"type":1,"name":"f\#(index)l","value":"\#(stat.1)"}"#,
+            #"{"type":3,"name":"f\#(index)i","value":\#(picture("1\(index)", "icon\(index).png"))}"#,
+        ] }
+        return """
+        {"identities":[{"application_id":"1490329489337981836","provider_issued_user_id":"1",
+          "profile":{"username":"someone","metadata":null,"data":{"dynamic":[\(dynamic.joined(separator: ","))]},
+          "data_trusted":true,"connection_visible":true}}]}
+        """
+    }()
+
+    @Test("Gramophone's numbers come out as Discord prints them, each with its icon")
+    func gramophoneStats() throws {
+        let surface = try resolve(.widgetBottom, config: gramophoneConfig, identities: gramophoneIdentities)
+        #expect(surface.stats.map(\.label) == ["Scrobbles", "Loved Tracks", "Friends", "Tracks", "Albums", "Artists"])
+        // Through the one formatter the card uses; its exact output — "102K",
+        // "7.9K" — is pinned in Core, where the locale can be fixed.
+        #expect(surface.stats.map(\.value) == [102_312.0, 72, 13, 7_948, 4_550, 2_624].map {
+            ApplicationProfileValue.number($0).formatted(as: .number)
+        })
+        // **The proxy, not the origin**, for every icon.
+        #expect(surface.stats.map { $0.iconURL?.absoluteString } == (0..<6).map {
+            "https://images-ext-1.discordapp.net/external/p/icon\($0).png"
+        })
+    }
+
+    @Test("Gramophone's popout card: its own words, its icon and a boxed picture")
+    func gramophonePopout() throws {
+        let surface = try resolve(.miniProfile, config: gramophoneConfig, identities: gramophoneIdentities)
+        #expect(surface.layout == "mini_profile_contained_stat")
+        #expect(surface.headline?.value == "102.3k Scrobbles")
+        #expect(surface.headline?.iconURL?.absoluteString
+            == "https://images-ext-1.discordapp.net/external/p/graphic_eq.png")
+        #expect(surface.containedImageURL?.absoluteString
+            == "https://images-ext-1.discordapp.net/external/p/avatar.png")
+    }
+
+    /// Vexlor's "User Stats" as captured — every word a custom string, one
+    /// number from the identity, and the badge an application asset.
+    @Test("A progress widget's goal: 69 %, its words, and its badge")
+    func vexlorProgress() throws {
+        let config = """
+        [{"config_id":"1520454015315789357","application_id":"1520453075142642700","display_name":"User Stats","status":"published",
+          "surfaces":{"widget_bottom":{"layout":"widget_bottom_progress","components":{
+            "progress":{"fields":{"current":{"value_type":"data","presentation_type":"number","value":"progress"}}},
+            "objective":{"fields":{
+              "description":{"value_type":"custom_string","presentation_type":"text","value":"Any sort of plant counts"},
+              "image":{"value_type":"application_asset","presentation_type":"image","value":"GrassBadge"},
+              "name":{"value_type":"custom_string","presentation_type":"text","value":"Don't touch grass for 10 years"}}}}}},
+          "resolved_assets":[{"key":"GrassBadge","asset_id":"1520454752198879302","asset_type":"image",
+            "metadata":{"width":256,"height":256,"content_type":"image/png","is_animated":false},
+            "updated_at":"2026-06-27T15:44:25.863000+00:00","visibility":"public"}]}]
+        """
+        let identities = """
+        {"identities":[{"application_id":"1520453075142642700","provider_issued_user_id":"0",
+          "profile":{"username":"some_username","metadata":null,"data":{"dynamic":[{"type":2,"name":"progress","value":0.69}]},
+          "data_trusted":true,"connection_visible":true}}]}
+        """
+        let surface = try resolve(.widgetBottom, config: config, identities: identities)
+        let progress = try #require(surface.progress)
+        #expect(progress.percent == 69)
+        #expect(progress.caption == "69%")
+        #expect(progress.name == "Don't touch grass for 10 years")
+        #expect(progress.detail == "Any sort of plant counts")
+        #expect(progress.imageURL?.path() == "/app-assets/1520453075142642700/1520454752198879302.png")
+        #expect(surface.stats.isEmpty)
+    }
 }

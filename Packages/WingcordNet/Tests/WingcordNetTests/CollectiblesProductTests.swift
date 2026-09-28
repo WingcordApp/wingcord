@@ -313,6 +313,7 @@ struct ProfileFrameAnchorTests {
         }
         #expect(frame.frontLayers.count == 3)
         #expect(frame.frontLayers.map(\.anchor) == [.center, .top, .bottom])
+        #expect(frame.frontLayers.map(\.kind) == [.border, .staple, .staple])
         #expect(frame.innerWidth == 1200)
         #expect(frame.overflowTop == 304)
         #expect(frame.overflowBottom == 135)
@@ -349,5 +350,49 @@ struct ProfileFrameAnchorTests {
         }
         #expect(frame.frontLayers.count == 3)
         #expect(frame.frontLayers[0].anchor == .top)
+    }
+}
+
+/// Fantasy Galaxy (White), captured live on vexlor's profile — the frame whose
+/// side clouds are a **rail**, and whose second staple is **behind** the card.
+@Suite("Profile frame kinds")
+struct ProfileFrameKindTests {
+
+    private let fantasyGalaxy = """
+    {"sku_id":"1524193380492509345","name":"Fantasy Galaxy (White)","type":3,
+     "items":[{"type":3,"sku_id":"1524193380492509345",
+       "label":"Soft white planets and dreamy cosmic clouds float above the profile against a pale sky",
+       "layers":[
+         {"id":"1526660354694844456","type":"rail","order":"front","anchor":"top","responsive":true},
+         {"id":"1526660358712852691","type":"staple","order":"front","anchor":"top","responsive":false},
+         {"id":"1526660363071000666","type":"staple","order":"back","anchor":"top","responsive":false}],
+       "inner_width":1200,"overflow_top":304,"overflow_bottom":0,"overflow_horizontal":56}]}
+    """
+
+    private func frame(_ json: String) throws -> ProfileFrame {
+        let dto = try JSONDecoder().decode(CollectiblesProductDTO.self, from: Data(json.utf8))
+        guard case .frame(let frame)? = dto.domain else {
+            throw CancellationError()
+        }
+        return frame
+    }
+
+    @Test("A rail is a rail, it knows it is responsive, and the back staple goes behind")
+    func railDecodes() throws {
+        let frame = try frame(fantasyGalaxy)
+        #expect(frame.frontLayers.map(\.kind) == [.rail, .staple])
+        #expect(frame.frontLayers.map(\.isResponsive) == [true, false])
+        #expect(frame.backLayers.map(\.id) == ["1526660363071000666"])
+        #expect(frame.overflowBottom == 0)
+    }
+
+    /// Discord draws nothing for a kind it does not know (module `744808`),
+    /// and an early capture sent no kind at all.
+    @Test("An unknown kind is skipped; a missing one is a staple")
+    func unknownKinds() throws {
+        let unknown = try frame(fantasyGalaxy.replacingOccurrences(of: #""type":"rail""#, with: #""type":"swirl""#))
+        #expect(unknown.frontLayers.map(\.id) == ["1526660358712852691"])
+        let missing = try frame(fantasyGalaxy.replacingOccurrences(of: #""type":"rail","#, with: ""))
+        #expect(missing.frontLayers.first?.kind == .staple)
     }
 }

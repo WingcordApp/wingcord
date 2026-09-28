@@ -367,6 +367,21 @@ final class MemberListCoordinator: NSObject {
                     requests.append((key, .artwork))
                 }
             }
+            // A custom status's own emoji, at the size and in the slot
+            // `TimelineRowPainter.drawEmojiInBox` peeks at. A Unicode emoji is
+            // a glyph and needs nothing.
+            if let emoji = entry.activityLine?.statusEmoji, let id = emoji.id {
+                let side = MemberRowGeometry.statusEmojiSide
+                if let url = CDN.emoji(id: id, animated: emoji.isAnimated, side: side) {
+                    let key = ImageStore.Key(
+                        url: url,
+                        maximumPixelSize: Int((side * scale).rounded(.up))
+                    )
+                    if seen.insert(key).inserted, ImageStore.shared.cached(key) == nil {
+                        requests.append((key, .thumbnail))
+                    }
+                }
+            }
         }
         // **Cancelled only when there is something new to ask for.** This runs
         // on every viewport change and on every row the pointer crosses, and a

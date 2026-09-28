@@ -144,20 +144,65 @@ public enum ApplicationProfileValue: Hashable, Sendable {
             case .duration:
                 return Self.duration(hours: number)
             default:
-                return Self.number(number)
+                return Self.compact(number)
             }
         }
     }
 
-    /// **Integral values lose their decimal point.** Every number on the wire is
-    /// a JSON float, so an authority level of sixty arrives as `60.0` and a
-    /// client that printed it verbatim would put "60.0 Authority Level" on a
-    /// card.
-    static func number(_ value: Double) -> String {
-        if value == value.rounded(), abs(value) < 1e15 {
-            return Int64(value).formatted(.number)
+    /// The locale a widget's numbers are written in: the reader's language,
+    /// **without their region's override** — Discord writes "7.9K" for an
+    /// English client wherever its reader lives, and `Locale.current` on a Mac
+    /// set to English with a Moldovan region would write "7,9K".
+    static let numberLocale = Locale(identifier: Locale.preferredLanguages.first ?? "en-US")
+
+    /// Discord's widget number (module `108089`): the locale's compact form,
+    /// **truncated, never rounded**. 102,312 is "102K", 7,948 is "7.9K" and
+    /// 4,550 is "4.5K", not "4.6K"; below a thousand a number is itself.
+    ///
+    /// Discord keeps two significant figures under ten units and whole units
+    /// above, then asks the locale to write the result — so the unit a locale
+    /// counts in is read off the locale itself, as Discord reads it, rather
+    /// than assumed to be a thousand.
+    static func compact(_ value: Double, locale: Locale = numberLocale) -> String {
+        let style = FloatingPointFormatStyle<Double>.number.notation(.compactName).locale(locale)
+        guard value != 0, value.isFinite else { return value.formatted(style) }
+        let magnitude = exponent(of: abs(value))
+        var unit = 1.0
+        if magnitude >= 0 {
+            let power = pow(10, Double(magnitude))
+            if let shown = leadingNumber(in: power.formatted(style), locale: locale), shown > 0 {
+                unit = power / shown
+            }
         }
-        return value.formatted(.number.precision(.fractionLength(0...2)))
+        let scaled = value / unit
+        let kept = max(min(exponent(of: abs(scaled)) - 1, 0), -15)
+        let factor = pow(10, Double(-kept))
+        let truncated = (scaled * factor).rounded(.down) / factor * unit
+        return (truncated.isFinite ? truncated : value).formatted(style)
+    }
+
+    /// The power of ten at or below `value`, corrected for `log10`'s rounding
+    /// at the boundaries — Discord's own loop.
+    private static func exponent(of value: Double) -> Int {
+        guard value > 0 else { return 0 }
+        var exponent = Int(log10(value).rounded(.down))
+        while pow(10, Double(exponent)) > value { exponent -= 1 }
+        while pow(10, Double(exponent + 1)) <= value { exponent += 1 }
+        return exponent
+    }
+
+    /// The number a compact string shows — "100" out of "100K", "1" out of "1万".
+    private static func leadingNumber(in text: String, locale: Locale) -> Double? {
+        let decimal = locale.decimalSeparator ?? "."
+        var digits = ""
+        for character in text {
+            if let digit = character.wholeNumberValue {
+                digits.append(String(digit))
+            } else if String(character) == decimal {
+                digits.append(".")
+            }
+        }
+        return Double(digits)
     }
 
     /// Playtime, which is the one documented field sent in hours.
@@ -166,6 +211,6 @@ public enum ApplicationProfileValue: Hashable, Sendable {
             let minutes = Int((hours * 60).rounded())
             return "\(minutes) min"
         }
-        return "\(number(hours.rounded(.down))) hrs"
+        return "\(Int64(min(hours, 1e15).rounded(.down)).formatted(.number)) hrs"
     }
 }

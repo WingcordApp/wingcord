@@ -27,6 +27,23 @@ struct RosterMemoKey: Hashable, Sendable {
     /// not a revision: somebody typing in another channel moves nothing here,
     /// and a roster of five hundred is not rebuilt for it.
     var typers: Set<UserID>
+    /// Who is talking where, for the "In voice" a row's line can say — the
+    /// facts, for `typers`' reason. See `RosterVoiceFacts`.
+    var voice: RosterVoiceFacts
+}
+
+/// The voice facts the member list's lines draw, for the conversation on screen.
+///
+/// **The facts, not a revision.** `voiceRevision` moves whenever anybody in any
+/// server joins, leaves or mutes, and a roster of five hundred is not rebuilt
+/// for a call in another server. Resolved on every read — one pass over the
+/// voice table, with visibility a cached lookup — and compared as two small
+/// tables, which costs far less than the rebuild it spares.
+struct RosterVoiceFacts: Hashable, Sendable {
+    /// Where each person is talking, where the reader can see the room.
+    var places: [UserID: ActivityStatusLine.VoicePlace] = [:]
+    /// Who among them is sharing a screen.
+    var sharing: Set<UserID> = []
 }
 
 extension AppModel {
@@ -76,7 +93,8 @@ extension AppModel {
             structureRevision: channelIndex.structureRevision,
             colorSaturation: userColorSaturation,
             inkCeiling: ThemeStore.shared.ground.inkCeiling,
-            typers: selectedChannelID.map { Set(typers(in: $0).keys) } ?? []
+            typers: selectedChannelID.map { Set(typers(in: $0).keys) } ?? [],
+            voice: rosterVoiceFacts()
         )
         // Read the observable inputs before the early return, so a cache hit
         // still registers the dependency the reader needs.
@@ -85,7 +103,7 @@ extension AppModel {
 
         if let rosterCache, rosterCache.key == key { return rosterCache.value }
 
-        let value = buildRoster(members: memberTable, presences: presenceTable)
+        let value = buildRoster(members: memberTable, presences: presenceTable, voice: key.voice)
         rosterCache = (key, value)
         return value
     }
@@ -96,7 +114,8 @@ extension AppModel {
     /// change while the array is being built.
     private func buildRoster(
         members memberTable: [GuildID: [UserID: Member]],
-        presences presenceTable: [UserID: Presence]
+        presences presenceTable: [UserID: Presence],
+        voice: RosterVoiceFacts
     ) -> [MemberSection] {
         let saturation = userColorSaturation
         // A group conversation has a roster of its own — its recipients — and
@@ -105,7 +124,7 @@ extension AppModel {
            let channel = channelIndex[channelID],
            channel.kind == .groupDirectMessage
         {
-            return buildGroupRoster(channel, presences: presenceTable)
+            return buildGroupRoster(channel, presences: presenceTable, voice: voice)
         }
         guard let guildID = selectedGuildID,
               let guildMembers = memberTable[guildID]
@@ -160,8 +179,12 @@ extension AppModel {
                 displayNameFont: cosmetics(of: user)?.displayNameStyle?.font,
                 status: status,
                 isOnMobile: presence?.isOnMobile ?? false,
-                subtitle: presence?.primaryActivity?.rowSubtitle
-                    ?? presence?.customStatus?.rowSubtitle,
+                activityLine: Self.activityLine(
+                    presence: presence,
+                    isBot: user.isBot,
+                    voice: voice.places[userID],
+                    isStreaming: voice.sharing.contains(userID)
+                ),
                 isBot: user.isBot,
                 tag: cosmetics(of: user)?.primaryGuildTag,
                 tagBadgeURL: cosmetics(of: user).flatMap { decoration in
@@ -241,7 +264,8 @@ extension AppModel {
     /// hoisted into a section of one.
     private func buildGroupRoster(
         _ channel: Channel,
-        presences presenceTable: [UserID: Presence]
+        presences presenceTable: [UserID: Presence],
+        voice: RosterVoiceFacts
     ) -> [MemberSection] {
         var online: [MemberEntry] = []
         var offline: [MemberEntry] = []
@@ -271,8 +295,12 @@ extension AppModel {
                 displayNameFont: cosmetics(of: user)?.displayNameStyle?.font,
                 status: status,
                 isOnMobile: presence?.isOnMobile ?? false,
-                subtitle: presence?.primaryActivity?.rowSubtitle
-                    ?? presence?.customStatus?.rowSubtitle,
+                activityLine: Self.activityLine(
+                    presence: presence,
+                    isBot: user.isBot,
+                    voice: voice.places[userID],
+                    isStreaming: voice.sharing.contains(userID)
+                ),
                 isBot: user.isBot,
                 tag: cosmetics(of: user)?.primaryGuildTag,
                 tagBadgeURL: cosmetics(of: user).flatMap { decoration in
@@ -340,16 +368,35 @@ extension AppModel {
     }
 }
 
-private extension Activity {
-    /// A custom status becomes a subtitle only when it has text; an emoji-only
-    /// status is drawn beside the name instead, not on a line of its own.
-    var rowSubtitle_customOnly: String? {
-        kind == .custom ? state : nil
-    }
-}
+extension AppModel {
 
-private extension Optional where Wrapped == Activity {
-    var rowSubtitle: String? {
-        self?.rowSubtitle_customOnly
+    /// Who is talking where, for the roster on screen — see `RosterVoiceFacts`.
+    ///
+    /// A server's list counts the rooms in that server the reader can see —
+    /// Discord's own gate on the voice channel it names (module `714114`); a
+    /// group's counts its own call.
+    fileprivate func rosterVoiceFacts() -> RosterVoiceFacts {
+        var facts = RosterVoiceFacts()
+        let group = selectedChannelID
+            .flatMap { channelIndex[$0] }
+            .flatMap { $0.kind == .groupDirectMessage ? $0 : nil }
+        guard group != nil || selectedGuildID != nil else { return facts }
+        for state in voiceStates.values {
+            guard let channelID = state.channelID else { continue }
+            let place: ActivityStatusLine.VoicePlace
+            if let group {
+                guard channelID == group.id else { continue }
+                place = .call
+            } else {
+                guard state.guildID == selectedGuildID,
+                      let kind = channelIndex[channelID]?.kind,
+                      permissionGate.canView(channelID)
+                else { continue }
+                place = kind == .stage ? .stage : .voiceChannel
+            }
+            facts.places[state.userID] = place
+            if state.isStreaming { facts.sharing.insert(state.userID) }
+        }
+        return facts
     }
 }

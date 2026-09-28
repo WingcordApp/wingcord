@@ -123,8 +123,7 @@ struct UserSettingsProtoTests {
         // a container nobody created.
         let data = Self.blob(folders: [Self.folder(ids: [999])])
         let settings = UserSettingsProto.decode(data)
-        let folder = try? #require(settings.folders.first)
-        #expect(folder?.isRealFolder == false)
+        #expect(settings.folders.first?.isRealFolder == false)
     }
 
     @Test("Guild positions are read, and separately from the folders")

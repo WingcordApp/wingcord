@@ -287,10 +287,10 @@ struct VoiceSessionClock: View {
         .accessibilityHidden(true)
     }
 
-    /// `h:mm:ss` over an hour, `mm:ss` under it — the same shape the activity
+    /// `h:mm:ss` over an hour, `m:ss` under it — the same shape the activity
     /// card's clock takes, because a reader who has learned one has learned
     /// both.
     static func elapsed(since startedAt: Date, at now: Date) -> String {
-        CurrentActivityCard.clock(max(0, Int(now.timeIntervalSince(startedAt))))
+        ActivityCardContent.clock(Int(now.timeIntervalSince(startedAt)))
     }
 }

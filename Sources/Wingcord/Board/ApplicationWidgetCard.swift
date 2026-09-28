@@ -1,223 +1,357 @@
 import SwiftUI
 import WingcordCore
 
-/// An application's own widget: a linked game's stats, or something a developer
-/// authored.
+/// An application's own widget on the board: a linked game's stats, or
+/// something a developer authored — Discord's `widget_top` over its
+/// `widget_bottom` (module `479299`, drawn by `794248`).
 ///
-/// **Two halves, and either can be absent.** The `widget_top` surface is a
-/// header — a title, a line under it and artwork behind them — and
-/// `widget_bottom` is a grid of stats. A config may define one, the other or
-/// both, so this draws a divider only where there is something on each side of
-/// it.
+/// ```
+/// ▣ Gramophone           ░▒▓███    the name; the picture fills the right
+///                        ░▒▓███    half to the card's top and trailing
+/// dargy                  ░▒▓███    edges and dissolves in from its left
+/// @okdargy               ░▒▓███
+/// ──────────────────────────────
+/// 102K ≋     72 ♥       13 ☺       three across, each value's icon after it
+/// Scrobbles  Loved…     Friends
+/// ```
 ///
-/// The card takes no padding of its own on the header: the artwork is authored
-/// to run to the tile's edges, which is what makes a linked game's character
-/// stand at the card's right rather than inside a box.
+/// **The picture fades; nothing is laid over it.** It used to sit under a black
+/// wash from the leading edge so the title had ground, and on a light profile
+/// that wash was a dark smudge in the card's top corner. Discord keeps the text
+/// in the left half and dissolves the picture instead, so there is nothing to
+/// smudge in either room.
 struct ApplicationWidgetCard: View {
     var tile: BoardApplicationTile
     var ground: ProfileGround
 
-    /// **Discord's own height, measured off their card at the same scale.**
-    /// This was 118, and at 118 a 300 × 450 character is a figure in a
-    /// letterbox with her boots sliced off at the divider.
-    ///
-    /// Fixed, where Discord's is not: their two captured cards come out at 167
-    /// and 147.5 with their text at identical offsets from the top, so the
-    /// height there follows the artwork's natural size. Nothing here can know
-    /// that size — `RemoteImage` draws a `resizable` image and reports no
-    /// intrinsic size — without reading a decode into `@State`, which is a
-    /// measurement that outlives what it measured and a card whose height jumps
-    /// when the picture lands. So: their taller card's number, for every card.
-    private static let headerHeight: CGFloat = 167
-    /// How far the name clears the divider.
-    ///
-    /// Measured the same way: Discord's "Server:" line sits 54 points above it,
-    /// not the 12 the application's own label uses at the top. The room under it
-    /// is where the character's body shows, and pinning the block at 12 instead
-    /// would put the whole of the new height in one void above the name.
-    private static let titleClearance: CGFloat = 52
-    /// Three across, which is what makes six stats two rows — the shape both
-    /// captured linked games publish.
-    private static let statColumns = 3
+    @Environment(AppModel.self) private var model
+    @State private var isHoveringName = false
+
+    private static let columns = 3
+    /// A stat's icon is one line of its value tall — Discord's `1lh`.
+    private static let statIconSide: CGFloat = 14
+    /// The picture's decode size: the widest the right half of a board tile
+    /// gets.
+    private static let pictureSide: CGFloat = 320
+    /// `widget_top_contained`'s picture: square, and no larger than this.
+    private static let containedSide: CGFloat = 150
+    /// A progress goal's badge and a collection item's picture.
+    private static let badgeSide: CGFloat = 48
+    /// Discord's `--opacity-32`: the cool grey of `ProfileGround.panelFill`
+    /// at twice the strength, so the empty bar reads on either ground.
+    private static let barTrack = Color(red: 151 / 255, green: 151 / 255, blue: 159 / 255)
+        .opacity(0.32)
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            header
-            if let bottom = tile.bottom, !bottom.stats.isEmpty {
-                if tile.top != nil {
-                    Rectangle()
-                        .fill(ground.borderStyle)
-                        .frame(height: 1)
-                        .opacity(0.6)
+            top
+            if let bottom = tile.bottom, !bottom.isEmpty {
+                Rectangle()
+                    .fill(ground.borderStyle)
+                    .frame(height: 1)
+                    .opacity(0.6)
+                Group {
+                    if let progress = bottom.progress {
+                        progressRow(progress)
+                    } else if !bottom.items.isEmpty {
+                        itemGrid(bottom.items)
+                    } else {
+                        statGrid(bottom.stats)
+                    }
                 }
-                statGrid(bottom.stats)
+                .padding(.top, Spacing.group)
+                .padding(.horizontal, Spacing.margin)
+                .padding(.bottom, Spacing.margin)
             }
         }
     }
 
-    // MARK: The header
+    // MARK: The top
 
-    @ViewBuilder
-    private var header: some View {
-        // **`Color.clear` with the artwork as an overlay, never the artwork as a
-        // sibling.** A filling image reports the image's own size to the layout,
-        // so a stack holding one grows past the card and takes the stats grid
-        // with it. Clear takes whatever width it is offered and the picture stays
-        // decorative — the same arrangement the profile banner uses.
-        Color.clear
-            .frame(height: Self.headerHeight)
-            .background { artwork }
-            .overlay(alignment: .topLeading) { applicationLabel }
-            .overlay(alignment: .bottomLeading) { titleBlock }
+    /// Whether there is a band under the name at all: words, or a picture to
+    /// show behind where they would be.
+    private var hasBand: Bool {
+        (tile.top.map { !$0.isEmpty } ?? false) || heroURL != nil
     }
 
-    @ViewBuilder
-    private var artwork: some View {
-        if let url = tile.top?.heroImageURL ?? tile.characterImageURL {
-            // **Trailing-aligned, and that is the whole of why this is not a
-            // plain fill.** The art both captured games publish is a portrait
-            // character on transparency, authored to stand at the card's right
-            // with the text clear of them. Filling the box centres them behind
-            // the title instead.
-            HStack(spacing: 0) {
-                Spacer(minLength: 0)
-                // **Filled into a square of the header's height, anchored to its
-                // top, and that is the correction.** Fitted, a portrait
-                // character shrinks to the header's height and stands as a strip
-                // at the edge — 78 points wide at Arknights' 300 × 450. Discord
-                // fills a box the header's own height instead, so what arrives
-                // is the head and torso at a size worth drawing and the legs go
-                // past the bottom. Measured on their card: 165 points of
-                // character across a 432-point widget, against ours at 78.
-                RemoteImage(url: url, side: Self.headerHeight * 1.5, bucket: .artwork) {
-                    Color.clear
+    /// The name, then the title block in the left half — `widget_top_hero`'s
+    /// grid, whose right column holds nothing in flow.
+    private var top: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            applicationName
+            if hasBand {
+                HStack(spacing: Spacing.tight) {
+                    titleBlock
+                        .padding(.vertical, Spacing.section)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    rightColumn
+                        .frame(maxWidth: .infinity, alignment: .trailing)
                 }
-                .aspectRatio(contentMode: .fill)
-                .frame(width: Self.headerHeight, height: Self.headerHeight, alignment: .top)
-                .clipped()
-                // **And the crop is dissolved, not cut.** A figure sliced flat
-                // along the divider reads as a clipping defect whatever is above
-                // it; the same crop under a fade reads as the card ending. The
-                // ramp is over the last quarter, so it starts below the torso
-                // whatever the character is doing with their arms.
-                .mask(
-                    LinearGradient(
-                        stops: [
-                            .init(color: .black, location: 0),
-                            .init(color: .black, location: 0.75),
-                            .init(color: .clear, location: 1),
-                        ],
-                        startPoint: .top,
-                        endPoint: .bottom
-                    )
-                )
-            }
-            .frame(height: Self.headerHeight)
-            // A wash from the leading edge so the title always has ground under
-            // it, whatever the artwork happens to be there. Over the picture
-            // rather than under it — a scrim behind transparent art does
-            // nothing.
-            .overlay {
-                LinearGradient(
-                    colors: [.black.opacity(0.55), .black.opacity(0.15), .clear],
-                    startPoint: .leading,
-                    endPoint: .trailing
-                )
             }
         }
+        .padding(.top, Spacing.snug)
+        .padding(.horizontal, Spacing.margin)
+        .padding(.bottom, hasBand ? 0 : Spacing.snug)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background { heroPicture }
     }
 
-    /// The application's name and mark, over the artwork's top corner.
-    private var applicationLabel: some View {
-        HStack(spacing: 6) {
+    /// The application's mark and name, and the way to its game when it is
+    /// one — Discord's header underlines under the pointer and opens the game.
+    @ViewBuilder
+    private var applicationName: some View {
+        let label = HStack(spacing: Spacing.tight) {
             RemoteImage(url: tile.iconURL, side: 16) {
-                RoundedRectangle(cornerRadius: 4, style: .continuous)
-                    .fill(Palette.surfaceRaised)
+                RoundedRectangle(cornerRadius: 2, style: .continuous)
+                    .fill(Palette.groupedFill)
             }
             .frame(width: 16, height: 16)
-            .clipShape(.rect(cornerRadius: 4, style: .continuous))
+            .clipShape(.rect(cornerRadius: 2, style: .continuous))
 
             Text(tile.name)
-                .font(.system(.caption, weight: .semibold))
+                .font(.system(.subheadline, weight: .medium))
                 .foregroundStyle(InkColor.primary)
+                .underline(isHoveringName)
                 .lineLimit(1)
-
-            if tile.isVerified {
-                Image(systemName: "checkmark.seal.fill")
-                    .font(.system(size: 9))
-                    .foregroundStyle(Palette.affirmative)
-            }
         }
-        .padding(.horizontal, Spacing.snug)
-        .padding(.top, Spacing.snug)
-        // Room for the tile's own "…", which floats over this corner.
+        .frame(height: 24)
+        // Room for the tile's "…", which floats over this corner.
         .padding(.trailing, Metrics.control)
+
+        if let gameID = tile.gameID {
+            Button { model.openGameProfile(gameID) } label: { label }
+                .buttonStyle(.plain)
+                .onHover { hovering in
+                    guard isHoveringName != hovering else { return }
+                    isHoveringName = hovering
+                }
+                .accessibilityHint(Text("Opens the game's profile"))
+        } else {
+            label
+        }
     }
 
-    @ViewBuilder
     private var titleBlock: some View {
-        if let top = tile.top, !top.isEmpty {
-            VStack(alignment: .leading, spacing: 2) {
-                if let title = top.title {
-                    Text(title)
-                        .font(.system(.title3, weight: .bold))
-                        .foregroundStyle(InkColor.primary)
-                        .lineLimit(1)
-                }
-                ForEach(Array(top.subtitles.enumerated()), id: \.offset) { _, subtitle in
-                    Text(subtitle)
-                        .font(.system(.subheadline))
-                        .foregroundStyle(InkColor.secondary)
-                        .lineLimit(1)
-                }
+        VStack(alignment: .leading, spacing: 2) {
+            if let title = tile.top?.title {
+                Text(title)
+                    .font(.system(.title3, weight: .medium))
+                    .foregroundStyle(InkColor.primary)
+                    .lineLimit(2)
+                    .padding(.bottom, Spacing.tight)
             }
-            .padding(.horizontal, Spacing.snug)
-            .padding(.bottom, Self.titleClearance)
-            // The artwork occupies a square of the header's height at the
-            // trailing edge, so the text is held clear of it rather than drawn
-            // over the character's face.
-            .padding(.trailing, Self.headerHeight)
+            ForEach(Array((tile.top?.subtitles ?? []).enumerated()), id: \.offset) { _, subtitle in
+                Text(subtitle)
+                    .font(.system(.subheadline))
+                    .foregroundStyle(InkColor.secondary)
+                    .lineLimit(2)
+            }
+        }
+    }
+
+    private var heroURL: URL? {
+        guard let top = tile.top else { return tile.characterImageURL }
+        return top.isHero ? top.heroImageURL ?? tile.characterImageURL : nil
+    }
+
+    /// The right half, from the card's top edge to the divider, behind the
+    /// text: the picture fills its width, hangs from its top, is cut at the
+    /// divider and dissolves in from its left.
+    ///
+    /// **Its natural height, not a fill.** A portrait character runs past the
+    /// divider and is cut there; a landscape picture ends above it — Discord's
+    /// `width: 100%`, which a fill would instead stretch to the height by
+    /// cropping its sides.
+    @ViewBuilder
+    private var heroPicture: some View {
+        if let heroURL {
+            HStack(spacing: Spacing.tight) {
+                Color.clear
+                Color.clear
+                    .overlay(alignment: .top) {
+                        RemoteImage(url: heroURL, side: Self.pictureSide, bucket: .artwork) {
+                            Color.clear
+                        }
+                        .aspectRatio(contentMode: .fit)
+                        .fixedSize(horizontal: false, vertical: true)
+                    }
+                    .clipped()
+                    .fadingInFromLeading()
+            }
+            .accessibilityHidden(true)
+        }
+    }
+
+    /// The right half in flow: `widget_top_contained`'s picture, a square box
+    /// whole rather than cropped — or nothing, a zero-height column that holds
+    /// the words to the left half while a hero picture fills it from behind.
+    @ViewBuilder
+    private var rightColumn: some View {
+        if let top = tile.top, !top.isHero, let url = top.containedImageURL {
+            RemoteImage(url: url, side: Self.containedSide) { Color.clear }
+                .aspectRatio(contentMode: .fit)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .aspectRatio(1, contentMode: .fit)
+                .frame(maxWidth: Self.containedSide)
+                .background(Palette.groupedFill)
+                .clipShape(.rect(cornerRadius: Radius.chip, style: .continuous))
+                .overlay {
+                    RoundedRectangle(cornerRadius: Radius.chip, style: .continuous)
+                        .strokeBorder(Palette.hairline, lineWidth: 1)
+                }
+                .padding(.top, Spacing.snug)
+                .padding(.bottom, Spacing.margin)
+                .accessibilityHidden(true)
+        } else {
+            Color.clear.frame(height: 0)
         }
     }
 
     // MARK: The stats
 
-    /// A fixed three columns.
+    /// Three across, rows of equal columns, 24 points between everything —
+    /// Discord's `statsGrid`.
     ///
-    /// **Not a flow and not adaptive.** Both captured widgets publish exactly six
-    /// stats and Discord lays them out three across; a flow layout would put four
-    /// short labels on one row and two long ones on the next, which is what makes
-    /// a stats block read as a paragraph instead of a table. Empty cells keep the
-    /// last row's columns aligned with the first's.
+    /// **Not a flow and not adaptive**: a flow puts four short labels on one
+    /// row and two long ones on the next, which is what makes a stats block
+    /// read as a paragraph instead of a table. A short last row keeps its empty
+    /// columns so it lines up with the first.
     private func statGrid(_ stats: [ResolvedStat]) -> some View {
-        Grid(alignment: .topLeading, horizontalSpacing: Spacing.snug, verticalSpacing: Spacing.snug) {
+        Grid(alignment: .topLeading, horizontalSpacing: Spacing.group, verticalSpacing: Spacing.group) {
             ForEach(Array(rows(of: stats).enumerated()), id: \.offset) { _, row in
                 GridRow {
                     ForEach(row) { stat in
-                        VStack(alignment: .leading, spacing: 1) {
-                            Text(stat.value)
-                                .font(.system(.subheadline, weight: .semibold).monospacedDigit())
-                                .foregroundStyle(InkColor.primary)
-                                .lineLimit(1)
-                            Text(stat.label)
-                                .font(.system(size: 10))
-                                .foregroundStyle(InkColor.secondary)
-                                .fixedSize(horizontal: false, vertical: true)
-                        }
-                        .frame(maxWidth: .infinity, alignment: .leading)
+                        statCell(stat)
+                            .frame(maxWidth: .infinity, alignment: .leading)
                     }
-                    ForEach(0..<(Self.statColumns - row.count), id: \.self) { _ in
-                        Color.clear.gridCellUnsizedAxes([.horizontal, .vertical])
+                    ForEach(0..<(Self.columns - row.count), id: \.self) { _ in
+                        Color.clear
+                            .frame(maxWidth: .infinity)
+                            .gridCellUnsizedAxes(.vertical)
                     }
                 }
             }
         }
-        .padding(Spacing.snug)
+    }
+
+    private func statCell(_ stat: ResolvedStat) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: 2) {
+                Text(stat.value)
+                    .font(.system(.subheadline, weight: .medium))
+                    .foregroundStyle(InkColor.primary)
+                    .lineLimit(2)
+                if let icon = stat.iconURL {
+                    RemoteImage(url: icon, side: Self.statIconSide) { Color.clear }
+                        .aspectRatio(contentMode: .fit)
+                        .frame(width: Self.statIconSide, height: Self.statIconSide)
+                        .accessibilityHidden(true)
+                }
+            }
+            Text(stat.label)
+                .font(.system(.caption))
+                .foregroundStyle(InkColor.secondary)
+                .lineLimit(2)
+        }
+        .accessibilityElement(children: .combine)
     }
 
     private func rows(of stats: [ResolvedStat]) -> [[ResolvedStat]] {
-        stride(from: 0, to: stats.count, by: Self.statColumns).map { start in
-            Array(stats[start..<min(start + Self.statColumns, stats.count)])
+        stride(from: 0, to: stats.count, by: Self.columns).map { start in
+            Array(stats[start..<min(start + Self.columns, stats.count)])
+        }
+    }
+
+    // MARK: A goal
+
+    /// `widget_bottom_progress`: the goal's badge, then the bar over its name
+    /// and line, with how far along it is at the bar's end.
+    private func progressRow(_ progress: ResolvedProgress) -> some View {
+        HStack(spacing: Spacing.snug) {
+            badge(progress.imageURL, bordered: true)
+            VStack(alignment: .leading, spacing: Spacing.tight) {
+                Capsule()
+                    .fill(Self.barTrack)
+                    .frame(height: 6)
+                    .overlay(alignment: .leading) {
+                        GeometryReader { proxy in
+                            Capsule()
+                                .fill(InkColor.primary)
+                                .frame(width: proxy.size.width * CGFloat(progress.percent) / 100)
+                        }
+                    }
+                HStack(alignment: .top, spacing: 2) {
+                    twoLines(progress.name, progress.detail, spacing: 0)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    if let caption = progress.caption {
+                        Text(caption)
+                            .font(.system(.subheadline, weight: .medium))
+                            .foregroundStyle(InkColor.primary)
+                            .lineLimit(1)
+                    }
+                }
+            }
+        }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(Text(progress.name ?? tile.name))
+        .accessibilityValue(Text(progress.caption ?? ""))
+    }
+
+    // MARK: A collection
+
+    /// `widget_bottom_collection`: two by two, each a picture and two lines.
+    private func itemGrid(_ items: [ResolvedItem]) -> some View {
+        Grid(alignment: .leading, horizontalSpacing: Spacing.margin, verticalSpacing: Spacing.margin) {
+            ForEach(Array(stride(from: 0, to: items.count, by: 2)), id: \.self) { start in
+                GridRow {
+                    ForEach(items[start..<min(start + 2, items.count)]) { item in
+                        HStack(spacing: Spacing.snug) {
+                            badge(item.imageURL, bordered: false)
+                            twoLines(item.name, item.detail, spacing: Spacing.tight)
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .accessibilityElement(children: .combine)
+                    }
+                    if items.count - start < 2 {
+                        Color.clear
+                            .frame(maxWidth: .infinity)
+                            .gridCellUnsizedAxes(.vertical)
+                    }
+                }
+            }
+        }
+    }
+
+    // MARK: Parts
+
+    private func badge(_ url: URL?, bordered: Bool) -> some View {
+        let shape = RoundedRectangle(cornerRadius: Radius.row, style: .continuous)
+        return RemoteImage(url: url, side: Self.badgeSide) { Color.clear }
+            .aspectRatio(contentMode: .fit)
+            .frame(width: Self.badgeSide, height: Self.badgeSide)
+            .background(Palette.groupedFill, in: shape)
+            .clipShape(shape)
+            .overlay {
+                if bordered { shape.strokeBorder(Palette.hairline, lineWidth: 1) }
+            }
+            .accessibilityHidden(true)
+    }
+
+    /// A name over a quieter line, either of which may be missing.
+    private func twoLines(_ name: String?, _ detail: String?, spacing: CGFloat) -> some View {
+        VStack(alignment: .leading, spacing: spacing) {
+            if let name {
+                Text(name)
+                    .font(.system(.subheadline, weight: .medium))
+                    .foregroundStyle(InkColor.primary)
+                    .lineLimit(2)
+            }
+            if let detail {
+                Text(detail)
+                    .font(.system(.caption, weight: .medium))
+                    .foregroundStyle(InkColor.secondary)
+                    .lineLimit(2)
+            }
         }
     }
 }

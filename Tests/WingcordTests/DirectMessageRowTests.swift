@@ -60,9 +60,51 @@ struct DirectMessageRowTests {
             status: .online,
             activities: PresenceActivities(list: [Activity(kind: .playing, name: "Xcode")])
         )
-        #expect(row(model(presence: playing))?.subtitle?.contains("Xcode") == true)
+        let line = row(model(presence: playing))?.activityLine
+        // The member list's line: the game's glyph and its name, no verb.
+        #expect(line?.glyph == .game)
+        #expect(line?.text == "Xcode")
         // Nothing to say is a real state, and the row keeps its height.
-        #expect(row(model())?.subtitle == nil)
+        #expect(row(model())?.activityLine == nil)
+    }
+
+    /// Discord's rule, and the one Alex asked for: a custom status with words
+    /// takes the text, and the activity keeps only its glyph.
+    @Test("A custom status takes the text from the activity")
+    func customStatusTakesTheText() {
+        let both = Presence(
+            userID: them,
+            status: .online,
+            activities: PresenceActivities(list: [
+                Activity(kind: .playing, name: "Xcode"),
+                Activity(kind: .custom, name: "Custom Status", state: "shipping", emoji: EmojiRef(name: "🚢")),
+            ])
+        )
+        let line = row(model(presence: both))?.activityLine
+        #expect(line?.glyph == .game)
+        #expect(line?.text == nil)
+        #expect(line?.statusText == "shipping")
+        #expect(line?.statusEmoji?.name == "🚢")
+    }
+
+    @Test("Somebody invisible has no line, whatever they are doing")
+    func invisibleHasNoLine() {
+        let hidden = Presence(
+            userID: them,
+            status: .invisible,
+            activities: PresenceActivities(list: [Activity(kind: .playing, name: "Xcode")])
+        )
+        #expect(row(model(presence: hidden))?.activityLine == nil)
+    }
+
+    @Test("A private call is 'In a call'")
+    func privateCall() {
+        let model = model(presence: Presence(userID: them, status: .online))
+        model.voiceStates[them] = VoiceState(userID: them, channelID: channelID, guildID: nil)
+        model.voiceRevision &+= 1
+        let line = row(model)?.activityLine
+        #expect(line?.glyph == .voice)
+        #expect(line?.text == "In a call")
     }
 
     @Test("The plate, the tag and the name style all reach the row")
@@ -92,6 +134,6 @@ struct DirectMessageRowTests {
             activities: PresenceActivities(list: [Activity(kind: .playing, name: "Xcode")])
         )
         model.presenceRevision &+= 1
-        #expect(row(model)?.subtitle?.contains("Xcode") == true)
+        #expect(row(model)?.activityLine?.text == "Xcode")
     }
 }

@@ -710,8 +710,7 @@ struct ServerDraftTests {
     @Test("A new prompt id is a millisecond timestamp, as the capture sends")
     func onboardingID() {
         let id = OnboardingDraft.newID()
-        let value = try? #require(Int(id))
-        #expect(value != nil)
+        #expect(Int(id) != nil)
         // Milliseconds, not seconds — a seconds value would be ten digits.
         #expect(id.count >= 13)
     }

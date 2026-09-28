@@ -35,6 +35,13 @@ public struct Guild: Hashable, Sendable, Identifiable, Codable {
     public var memberCount: Int?
     /// The rules channel, for a community guild.
     public var rulesChannelID: ChannelID?
+    /// Where the server parks members who have gone idle in voice.
+    ///
+    /// **Nobody in it is counted as being in voice.** Discord's rail chip and
+    /// the tile's own mark both skip this channel (modules `24594` and
+    /// `34162`): somebody moved here for being away is not in a conversation,
+    /// and on a busy server the room can hold dozens of them.
+    public var afkChannelID: ChannelID?
     /// Whether this guild's member list can be fetched over the lazy-load
     /// subscription. Large guilds only send members on request.
     public var isLarge: Bool
@@ -79,6 +86,7 @@ public struct Guild: Hashable, Sendable, Identifiable, Codable {
         tagBadgeHash: String? = nil,
         memberCount: Int? = nil,
         rulesChannelID: ChannelID? = nil,
+        afkChannelID: ChannelID? = nil,
         isLarge: Bool = false,
         defaultMessageNotifications: NotificationLevel = .allMessages,
         joinedAt: Date? = nil,
@@ -98,6 +106,7 @@ public struct Guild: Hashable, Sendable, Identifiable, Codable {
         self.tagBadgeHash = tagBadgeHash
         self.memberCount = memberCount
         self.rulesChannelID = rulesChannelID
+        self.afkChannelID = afkChannelID
         self.isLarge = isLarge
         self.defaultMessageNotifications = defaultMessageNotifications
         self.joinedAt = joinedAt

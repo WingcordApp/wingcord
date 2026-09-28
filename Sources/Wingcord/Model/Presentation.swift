@@ -53,18 +53,34 @@ struct RailGuild: Hashable, Sendable, Identifiable {
 
 /// What a rail tile's voice mark says.
 ///
-/// **Two states, because Discord draws two glyphs and they mean different
-/// things**: a speaker says there are people in a room, and a screen says one of
-/// them is worth watching. The first version of this drew the screen only, so
-/// every busy server with nobody streaming — which is most of them — carried no
-/// mark at all.
-enum RailVoiceMark: Hashable, Sendable {
-    /// Somebody is in a voice channel here.
+/// **One glyph per tile, chosen by Discord's own ranking** (module `771640`):
+/// a live stage, then a screen share, then a camera, then a room with people
+/// talking in it. `Comparable` in that order, so the one pass that finds them
+/// keeps the highest whatever order the voice table is walked in.
+///
+/// The first version drew a screen for a stream *or* a camera and nothing for a
+/// quiet room; the second added the room. Discord keeps a camera and a screen
+/// apart, and a stage is not a voice channel at all.
+enum RailVoiceMark: Int, Hashable, Sendable, Comparable {
+    /// Somebody is talking in a voice channel here.
     case voice
-    /// ...and somebody is sharing a screen or on camera. **Wins over `voice`**:
-    /// a room with a stream in it is still a room with people in it, and the
-    /// more specific fact is the one worth a glyph.
-    case live
+    /// …and somebody in one has a camera on.
+    case video
+    /// …and somebody is sharing their screen.
+    case screenShare
+    /// A stage is live.
+    case stage
+
+    static func < (lhs: Self, rhs: Self) -> Bool { lhs.rawValue < rhs.rawValue }
+
+    var symbolName: String {
+        switch self {
+        case .voice: "speaker.wave.2.fill"
+        case .video: "video.fill"
+        case .screenShare: "rectangle.inset.filled.on.rectangle"
+        case .stage: "person.wave.2.fill"
+        }
+    }
 }
 
 /// Who is in voice in one server, for the chip that names it.
@@ -81,24 +97,49 @@ struct RailHoverPresence: Hashable, Sendable {
         var monogram: String
     }
 
-    /// Everybody in a voice channel here, capped.
-    var voice: [Face] = []
-    /// How many more there are than the row can hold. Zero draws nothing.
-    var voiceOverflow: Int = 0
-    /// The subset sharing a screen or on camera. **A separate row rather than a
-    /// mark on a face**, because it answers a different question — "is there
-    /// something to watch" rather than "who is here" — and Discord splits them
-    /// for the same reason.
-    var live: [Face] = []
-    var liveOverflow: Int = 0
+    /// One row of faces, and the count drawn after them.
+    struct Row: Hashable, Sendable {
+        var faces: [Face] = []
+        /// How many people the row stands for and does not draw. Zero draws
+        /// nothing.
+        var overflow: Int = 0
 
-    /// The most faces a row draws before it starts counting.
-    static let faceLimit = 5
+        var isEmpty: Bool { faces.isEmpty }
+        /// Everybody the row stands for, for the one sentence VoiceOver reads.
+        var count: Int { faces.count + overflow }
+    }
 
-    var isEmpty: Bool { voice.isEmpty && live.isEmpty }
+    /// Who is speaking on this server's live stages.
+    var stage = Row()
+    /// Everybody else on those stages, as a count beside the speakers.
+    var stageListeners = 0
+    /// Everybody talking in a voice channel here who is not in the row below.
+    var voice = Row()
+    /// Everybody sharing a screen. **Not a camera**: somebody with video on is
+    /// somebody in voice, and Discord lists them there.
+    var streams = Row()
+
+    /// The slots in a row of voices or streams — Discord's own `max: 6`.
+    static let faceSlots = 6
+    /// A stage's speakers get three.
+    static let stageFaceSlots = 3
+
+    var isEmpty: Bool { stage.isEmpty && voice.isEmpty && streams.isEmpty }
     /// How many rows the chip grows by. Pure arithmetic, so the host can centre
     /// the chip on its tile without measuring it — §2.
-    var rowCount: Int { (voice.isEmpty ? 0 : 1) + (live.isEmpty ? 0 : 1) }
+    var rowCount: Int { [stage, voice, streams].count { !$0.isEmpty } }
+
+    /// How many faces a row of `slots` draws for `count` people, and the count
+    /// it shows after them.
+    ///
+    /// **Discord's facepile, exactly** (module `104171`). A row that fits, or is
+    /// exactly full, draws everybody; one that overflows gives its last slot to
+    /// the count. So six people are six faces, and sixty-seven are five faces
+    /// and "+62". The count stops at 99.
+    static func pile(count: Int, slots: Int) -> (faces: Int, overflow: Int) {
+        let faces = min(count == slots ? slots : slots - 1, count)
+        return (faces, count > faces ? min(count - faces, 99) : 0)
+    }
 }
 
 struct RailFolder: Hashable, Sendable, Identifiable {
@@ -245,11 +286,10 @@ struct SidebarChannel: Hashable, Sendable, Identifiable {
     // `MemberEntry` — resolved into the same shapes, so the two surfaces cannot
     // disagree about what somebody looks like.
 
-    /// What they are doing: an activity, or a custom status. Nil is a real
-    /// state and the row keeps its height either way.
-    var subtitle: String?
-    /// The emoji beside a custom status, when they set one.
-    var subtitleEmoji: EmojiRef?
+    /// What they are doing and their custom status — the member list's line,
+    /// on the same rules. Nil is a real state and the row keeps its height
+    /// either way.
+    var activityLine: ActivityStatusLine?
     /// A server tag, worn beside the name.
     var tag: String?
     var tagBadgeURL: URL?
@@ -405,7 +445,9 @@ struct NowBarPresentation: Hashable, Sendable {
     var avatarURL: URL?
     var monogram: String
     var status: PresenceStatus
-    var customStatus: String?
+    /// The line under the name — the member list's, on the reader's own
+    /// terms. Nil draws the status's own word, "Online" or "Idle".
+    var activityLine: ActivityStatusLine?
     var isMuted: Bool
     var isDeafened: Bool
     /// The reader's own nameplate, when they wear one.

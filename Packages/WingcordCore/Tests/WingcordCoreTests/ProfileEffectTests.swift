@@ -69,8 +69,7 @@ struct ProfileEffectTests {
         // The pass ended at 7.4; the next begins at 11.4.
         #expect(layer.phase(at: 8) == nil)
         #expect(layer.phase(at: 11) == nil)
-        let second = try? #require(layer.phase(at: 12.4))
-        #expect(second == 1)
+        #expect(layer.phase(at: 12.4) == 1)
         // Still a loop, however long the gap.
         #expect(!layer.isFinished(at: 10_000))
     }

@@ -30,7 +30,11 @@ extension SessionController {
                 }
                 if !applicationIDs.isEmpty {
                     group.addTask { await self.loadWidgetIdentities(of: userID) }
-                    group.addTask { await self.loadWidgetApplications(ids: applicationIDs) }
+                    group.addTask {
+                        await self.loadWidgetApplications(ids: applicationIDs)
+                        // No strip without a game list, so no fetch for one.
+                        if !gameIDs.isEmpty { await self.loadApplicationGames(applicationIDs) }
+                    }
                     group.addTask { await self.loadWidgetConfigs(for: applicationIDs) }
                 }
             }
@@ -67,6 +71,13 @@ extension SessionController {
         } catch {
             Self.trace("games failed: \(Self.describe(error))")
         }
+    }
+
+    /// The games application widgets are about. The popout's game strip
+    /// counts an application widget's own game (module `657538`), and its mark
+    /// is a `/games` answer like the rest.
+    private func loadApplicationGames(_ applicationIDs: [ApplicationID]) async {
+        await loadGames(ids: applicationIDs.compactMap { model.widgetApplications[$0]?.primaryGameID })
     }
 
     private func loadWidgetIdentities(of userID: UserID) async {

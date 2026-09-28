@@ -401,55 +401,85 @@ extension AppModel {
 
     /// The faces the rail's hover chip draws for one server.
     ///
-    /// **Asked for one server at a time, while the pointer is on it.** The whole
-    /// account's voice states are one flat table, so this is a single pass over
-    /// it with a guild comparison — cheap enough to run per hover, and far
-    /// cheaper than carrying a face list on every tile in a memo that rebuilds
-    /// on every inbound message.
+    /// **Discord's own rule** (`useGuildTooltipActivity`, module `24594`),
+    /// ported after two rounds of counts that came out higher than its:
     ///
-    /// **Ordered by join time, which is what the id encodes.** Sorting by name
-    /// would reshuffle the row whenever somebody was renamed, and sorting by
-    /// nothing reshuffles it on every dictionary rehash — which reads as the
-    /// faces twitching while the chip is open.
+    ///  - **Voice** is everybody in a voice channel the reader can see, less
+    ///    the AFK room, less whoever the streams row already draws.
+    ///  - **Streams** are screen shares, wherever they are. A camera is
+    ///    somebody in voice with video on, and it stays in voice.
+    ///  - **Stage** is the speakers on a live stage the reader can see, with a
+    ///    count of everybody listening beside them. A stage is not a voice
+    ///    channel and is in neither row above.
+    ///  - **Blocked and ignored people are drawn nowhere**, though the listener
+    ///    count still includes them, as Discord's does.
+    ///
+    /// Discord also lifts people inside an embedded Activity into a row of
+    /// their own. This client does not track who is in one, so they stay in
+    /// voice — the one place the two counts can still differ.
+    ///
+    /// **Asked for one server at a time, while the pointer is on it**: one pass
+    /// over the account's voice table, where visibility is a cached lookup per
+    /// channel in `PermissionGate`.
     func railHoverPresence(for guildID: GuildID) -> RailHoverPresence {
-        var voice: [VoiceState] = []
-        var live: [VoiceState] = []
+        var voice: [UserID] = []
+        var streams: [UserID] = []
+        var speakers: [UserID] = []
+        var listeners = 0
         for state in voiceStates.values where state.guildID == guildID {
-            guard state.channelID != nil else { continue }
-            voice.append(state)
-            if state.isStreaming || state.isCameraOn { live.append(state) }
+            guard let channelID = state.channelID else { continue }
+            let isHidden = isHiddenFromVoice(state.userID)
+            if state.isStreaming, !isHidden { streams.append(state.userID) }
+            if isCountedVoiceRoom(channelID, inGuild: guildID) {
+                // Somebody sharing their screen is drawn once, in that row.
+                if !state.isStreaming, !isHidden { voice.append(state.userID) }
+            } else if isVisibleLiveStage(channelID) {
+                if state.isSuppressed {
+                    listeners += 1
+                } else if !isHidden {
+                    speakers.append(state.userID)
+                }
+            }
         }
-        guard !voice.isEmpty else { return RailHoverPresence() }
-        voice.sort { $0.userID.rawValue < $1.userID.rawValue }
-        live.sort { $0.userID.rawValue < $1.userID.rawValue }
-
-        let limit = RailHoverPresence.faceLimit
         return RailHoverPresence(
-            voice: faces(voice.prefix(limit)),
-            voiceOverflow: max(0, voice.count - limit),
-            live: faces(live.prefix(limit)),
-            liveOverflow: max(0, live.count - limit)
+            stage: railHoverRow(speakers, slots: RailHoverPresence.stageFaceSlots, in: guildID),
+            stageListeners: listeners,
+            voice: railHoverRow(voice, slots: RailHoverPresence.faceSlots, in: guildID),
+            streams: railHoverRow(streams, slots: RailHoverPresence.faceSlots, in: guildID)
         )
     }
 
-    private func faces(
-        _ states: some Sequence<VoiceState>
-    ) -> [RailHoverPresence.Face] {
-        states.map { state in
-            let user = users[state.userID]
-            return RailHoverPresence.Face(
-                id: state.userID,
-                // **Guild-aware**, so somebody wearing a different face in this
-                // server is drawn with it — the same answer the roster and the
-                // sidebar give, rather than a third one.
-                avatarURL: avatarURL(
-                    forUserID: state.userID,
-                    inGuild: state.guildID,
-                    side: Metrics.avatarInline
-                ),
-                monogram: user?.monogram ?? "?"
-            )
-        }
+    /// One row, cut the way Discord's facepile cuts it.
+    ///
+    /// **Ordered by id before the cut**, so which faces make the row is stable.
+    /// Discord orders by affinity scores this client does not have; ordering by
+    /// nothing reshuffles on every dictionary rehash, which reads as the faces
+    /// twitching while the chip is open.
+    private func railHoverRow(
+        _ people: [UserID],
+        slots: Int,
+        in guildID: GuildID
+    ) -> RailHoverPresence.Row {
+        let pile = RailHoverPresence.pile(count: people.count, slots: slots)
+        guard pile.faces > 0 else { return RailHoverPresence.Row() }
+        let drawn = people.sorted { $0.rawValue < $1.rawValue }.prefix(pile.faces)
+        return RailHoverPresence.Row(
+            faces: drawn.map { userID in
+                RailHoverPresence.Face(
+                    id: userID,
+                    // **Guild-aware**, so somebody wearing a different face in
+                    // this server is drawn with it — the answer the roster and
+                    // the sidebar give, rather than a third one.
+                    avatarURL: avatarURL(
+                        forUserID: userID,
+                        inGuild: guildID,
+                        side: Metrics.avatarInline
+                    ),
+                    monogram: users[userID]?.monogram ?? "?"
+                )
+            },
+            overflow: pile.overflow
+        )
     }
 
     /// What each server's voice channels are doing, in one pass.
@@ -459,22 +489,77 @@ extension AppModel {
     /// five hundred states, on a memo that rebuilds whenever any message
     /// arrives anywhere in the account.
     ///
-    /// A server with anybody in a room gets a mark. **That is the whole
-    /// correction**: this used to answer only for servers with a stream in
-    /// them, so every busy server where nobody happened to be sharing — which
-    /// is most of them — carried nothing.
+    /// **Discord's `GuildMediaStateStore`, rule for rule** (module `34162`):
+    /// a room counts on the terms the hover chip counts it on, a screen share
+    /// counts wherever it is, a live stage counts if the reader can see it,
+    /// and blocked or ignored people count for nothing. Two rules are about
+    /// the reader rather than the room:
+    ///
+    ///  - **A muted server carries no mark at all.** Muting is the reader
+    ///    saying they do not want to hear from it.
+    ///  - **The server the reader is in a call in describes their own room**,
+    ///    whatever the rest of it is doing — and it is the mark drawn green.
     var voiceMarksByGuild: [GuildID: RailVoiceMark] {
         var found: [GuildID: RailVoiceMark] = [:]
+        // The more specific fact wins whichever order the table is walked in —
+        // a rule written as "last writer wins" would draw a speaker on a
+        // server with a stream in it about half the time.
+        func raise(_ guildID: GuildID, to mark: RailVoiceMark) {
+            if let current = found[guildID], current >= mark { return }
+            found[guildID] = mark
+        }
         for state in voiceStates.values {
-            guard let guildID = state.guildID, state.channelID != nil else { continue }
-            if state.isStreaming || state.isCameraOn {
-                found[guildID] = .live
-            } else if found[guildID] == nil {
-                // Never over a `.live` already found: the more specific fact
-                // wins whichever order the table happens to be walked in.
-                found[guildID] = .voice
-            }
+            guard let guildID = state.guildID, let channelID = state.channelID,
+                  !mutedGuildIDs.contains(guildID),
+                  !isHiddenFromVoice(state.userID)
+            else { continue }
+            if state.isStreaming { raise(guildID, to: .screenShare) }
+            guard isCountedVoiceRoom(channelID, inGuild: guildID) else { continue }
+            raise(guildID, to: state.isCameraOn ? .video : .voice)
+        }
+        for channelID in stageInstances.keys where isVisibleLiveStage(channelID) {
+            guard let guildID = channelIndex[channelID]?.guildID,
+                  !mutedGuildIDs.contains(guildID)
+            else { continue }
+            raise(guildID, to: .stage)
+        }
+        if let ownChannelID = connectedVoiceChannelID,
+           let own = channelIndex[ownChannelID], let guildID = own.guildID
+        {
+            found[guildID] = ownRoomMark(own)
         }
         return found
+    }
+
+    /// The mark for the server the reader is in a call in.
+    private func ownRoomMark(_ channel: Channel) -> RailVoiceMark {
+        if channel.kind == .stage { return .stage }
+        if let userID = currentUserID, voiceStates[userID]?.isStreaming == true {
+            return .screenShare
+        }
+        let hasVideo = voiceStates.values.contains {
+            $0.channelID == channel.id && $0.isCameraOn
+        }
+        return hasVideo ? .video : .voice
+    }
+
+    /// A room the rail counts people in: a voice channel the reader can see,
+    /// and not the one idle members are parked in. A stage is counted apart.
+    private func isCountedVoiceRoom(_ channelID: ChannelID, inGuild guildID: GuildID) -> Bool {
+        channelID != guilds[guildID]?.afkChannelID
+            && channelIndex[channelID]?.kind == .voice
+            && permissionGate.canView(channelID)
+    }
+
+    /// A stage that is on, in a channel the reader can see.
+    private func isVisibleLiveStage(_ channelID: ChannelID) -> Bool {
+        stageInstances[channelID] != nil
+            && channelIndex[channelID]?.kind == .stage
+            && permissionGate.canView(channelID)
+    }
+
+    /// Somebody the rail leaves out of every face and every mark.
+    private func isHiddenFromVoice(_ userID: UserID) -> Bool {
+        blockedUserIDs.contains(userID) || ignoredUserIDs.contains(userID)
     }
 }

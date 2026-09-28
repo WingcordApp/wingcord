@@ -141,8 +141,7 @@ nonisolated enum MemberRowPainter {
         // 3. Name, tag chip, activity.
         let textX = MemberRowGeometry.textOriginX(in: rowFrame)
         let available = plate.maxX - textX - MemberRowGeometry.contentInset
-        let hasSubtitle = entry.subtitle != nil
-        let nameY = hasSubtitle ? plate.midY - 15 : plate.midY - 8
+        let nameY = entry.activityLine != nil ? plate.midY - 15 : plate.midY - 8
 
         // Room for whatever chip follows the name, reserved before the name is
         // drawn so the name truncates to leave space rather than colliding.
@@ -246,14 +245,15 @@ nonisolated enum MemberRowPainter {
             }
         }
 
-        if let subtitle = entry.subtitle {
-            TimelineRowPainter.drawText(
-                subtitle,
-                font: style.metadataFont,
-                color: style.tertiaryColor,
+        if let line = entry.activityLine {
+            drawActivityLine(
+                line,
                 at: CGPoint(x: textX, y: plate.midY + 2),
                 maxWidth: max(20, available),
-                context: context
+                context: context,
+                style: style,
+                images: images,
+                scale: scale
             )
         }
 
@@ -268,6 +268,112 @@ nonisolated enum MemberRowPainter {
             context.setBlendMode(.destinationOut)
             context.fill(plate)
             context.restoreGState()
+        }
+    }
+
+    // MARK: The line under the name
+
+    /// Discord's `ActivityStatus`, drawn: a glyph, the lead's words, a count,
+    /// then the custom status after a bullet.
+    ///
+    /// **One run of words takes what is left.** Discord gives the custom status
+    /// the words whenever it has any, so at most one of the two texts is drawn
+    /// beside the fixed pieces — the glyph, the count, the bullet and the emoji.
+    /// Those are measured first and the words truncate against the remainder,
+    /// rather than a long game title pushing the count off the row.
+    private static func drawActivityLine(
+        _ line: ActivityStatusLine,
+        at origin: CGPoint,
+        maxWidth: CGFloat,
+        context: CGContext,
+        style: MessageTextStyle,
+        images: ImageStore,
+        scale: CGFloat
+    ) {
+        let font = style.metadataFont
+        let ink = style.tertiaryColor
+        let gap = MemberRowGeometry.activityGap
+        let glyphSide = MemberRowGeometry.activityGlyphSide
+        let emojiSide = MemberRowGeometry.statusEmojiSide
+        // Centred on the capitals, as the chip beside the name is: a line box's
+        // centre sits visibly low beside words with no descenders.
+        let capCenter = origin.y + font.ascender - font.capHeight / 2
+        let limit = origin.x + maxWidth
+
+        let count = line.overflow > 0 ? "+\(line.overflow)" : nil
+        let countWidth = count.map { ceil(TimelineLayoutEngine.measure($0, font: font)) } ?? 0
+        let bullet = line.hasLead && line.hasStatus ? "•" : nil
+        let bulletWidth = bullet.map { ceil(TimelineLayoutEngine.measure($0, font: font)) } ?? 0
+        // What must still fit after the lead's words.
+        var afterWords: CGFloat = 0
+        if count != nil { afterWords += gap + countWidth }
+        if bullet != nil { afterWords += gap + bulletWidth }
+        if line.statusEmoji != nil { afterWords += gap + emojiSide }
+
+        var x = origin.x
+        if let glyph = line.glyph {
+            TimelineRowPainter.drawSymbol(
+                glyph.symbolName,
+                tint: glyph.isLive ? NSColor(Palette.presenceOnline) : ink,
+                in: CGRect(x: x, y: capCenter - glyphSide / 2, width: glyphSide, height: glyphSide),
+                context: context
+            )
+            x += glyphSide + gap
+        }
+        if let text = line.text {
+            x += TimelineRowPainter.drawText(
+                text,
+                font: font,
+                color: ink,
+                at: CGPoint(x: x, y: origin.y),
+                maxWidth: max(0, limit - x - afterWords),
+                context: context
+            ) + gap
+        }
+        if let count {
+            // **Green once the status has the words** — Discord's own colour
+            // for it, and what keeps a bare count from reading as a stray digit.
+            TimelineRowPainter.drawText(
+                count,
+                font: font,
+                color: line.statusText != nil ? NSColor(Palette.presenceOnline) : ink,
+                at: CGPoint(x: x, y: origin.y),
+                maxWidth: countWidth + 1,
+                context: context
+            )
+            x += countWidth + gap
+        }
+        if let bullet {
+            TimelineRowPainter.drawText(
+                bullet,
+                font: font,
+                color: ink,
+                at: CGPoint(x: x, y: origin.y),
+                maxWidth: bulletWidth + 1,
+                context: context
+            )
+            x += bulletWidth + gap
+        }
+        if let emoji = line.statusEmoji {
+            TimelineRowPainter.drawEmojiInBox(
+                emoji,
+                in: CGRect(x: x, y: capCenter - emojiSide / 2, width: emojiSide, height: emojiSide),
+                context: context,
+                color: ink,
+                images: images,
+                scale: scale
+            )
+            x += emojiSide + gap
+        }
+        if let statusText = line.statusText {
+            TimelineRowPainter.drawText(
+                statusText,
+                font: font,
+                color: ink,
+                at: CGPoint(x: x, y: origin.y),
+                maxWidth: max(0, limit - x),
+                context: context
+            )
         }
     }
 

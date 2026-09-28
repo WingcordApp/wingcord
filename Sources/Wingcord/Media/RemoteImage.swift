@@ -20,6 +20,14 @@ struct RemoteImage<Placeholder: View>: View {
     /// The side this will be drawn at, in points. Decides the decode size.
     var side: CGFloat
     var bucket: ImageStore.Bucket = .thumbnail
+    /// Repeats the picture down and across its frame, each copy this many
+    /// points wide — a profile frame's `border`. Nil stretches it to the
+    /// frame, which is every other caller.
+    var tileWidth: CGFloat? = nil
+    /// How a picture that lands after the placeholder was drawn comes in. Nil
+    /// swaps it, which is right for a row; one already in memory is drawn on
+    /// the first frame either way.
+    var arrival: Animation? = nil
     @ViewBuilder var placeholder: Placeholder
 
     @Environment(\.displayScale) private var displayScale
@@ -59,14 +67,15 @@ struct RemoteImage<Placeholder: View>: View {
     }
 
     var body: some View {
+        let resolved = resolved
         Group {
             if let resolved {
-                Image(decorative: resolved, scale: displayScale)
-                    .resizable()
+                image(resolved)
             } else {
                 placeholder
             }
         }
+        .animation(arrival, value: resolved == nil)
         .task(id: key) {
             guard let key else {
                 decoded = nil
@@ -94,6 +103,18 @@ struct RemoteImage<Placeholder: View>: View {
             decoded = image
             decodedURL = image == nil ? nil : key.url
         }
+    }
+}
+
+extension RemoteImage {
+    private func image(_ decoded: CGImage) -> Image {
+        if let tileWidth, tileWidth > 0 {
+            // The copy's width in points is the decode's in pixels over this
+            // scale — so the scale is what makes one copy `tileWidth` wide.
+            return Image(decorative: decoded, scale: CGFloat(decoded.width) / tileWidth)
+                .resizable(resizingMode: .tile)
+        }
+        return Image(decorative: decoded, scale: displayScale).resizable()
     }
 }
 

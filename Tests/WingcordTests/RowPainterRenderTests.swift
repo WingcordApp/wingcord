@@ -36,7 +36,7 @@ struct RowPainterRenderTests {
         name: String = "Blåhaj",
         colorValue: UInt32? = 0xE67E22,
         status: PresenceStatus = .online,
-        subtitle: String? = nil,
+        activityLine: ActivityStatusLine? = nil,
         isBot: Bool = false,
         tag: String? = nil
     ) -> MemberEntry {
@@ -49,7 +49,7 @@ struct RowPainterRenderTests {
             decorationURL: nil,
             status: status,
             isOnMobile: false,
-            subtitle: subtitle,
+            activityLine: activityLine,
             isBot: isBot,
             tag: tag,
             nameplateURL: nil
@@ -97,7 +97,7 @@ struct RowPainterRenderTests {
     }
 
     @Test("A two-line member row paints more than a one-line one")
-    func subtitleAddsInk() {
+    func activityLineAddsInk() {
         let plain = inkFraction(height: 46) { context, frame in
             MemberRowPainter.drawMember(
                 self.entry(),
@@ -107,7 +107,7 @@ struct RowPainterRenderTests {
         }
         let withSubtitle = inkFraction(height: 46) { context, frame in
             MemberRowPainter.drawMember(
-                self.entry(subtitle: "Playing Xcode"),
+                self.entry(activityLine: ActivityStatusLine(glyph: .game, text: "Xcode")),
                 in: frame, context: context, style: self.style,
                 isHovered: false, images: ImageStore.shared, scale: 1
             )

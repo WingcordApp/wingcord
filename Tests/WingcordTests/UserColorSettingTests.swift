@@ -17,7 +17,8 @@ struct UserColorSettingTests {
             structureRevision: 6,
             colorSaturation: saturation,
             inkCeiling: inkCeiling,
-            typers: []
+            typers: [],
+            voice: RosterVoiceFacts()
         )
     }
 

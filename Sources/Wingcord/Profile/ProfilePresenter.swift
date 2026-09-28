@@ -178,7 +178,8 @@ struct ProfilePresenter: ViewModifier {
                 selectScope: { switchScope(to: $0.scope, for: profile.userID) },
                 saveEdits: { commit(profile) },
                 presentPicker: { picker = $0 },
-                dismiss: { model.profileRequest = nil }
+                dismiss: { model.profileRequest = nil },
+                initialTab: request.tab
             )
             // **Keyed on the one value that can change under the draft**, not on
             // the whole presentation: resolving a profile per body evaluation to
@@ -371,16 +372,16 @@ struct ProfilePresenter: ViewModifier {
         )
         return MiniProfileCard(
             profile: profile,
-            openFullProfile: {
+            openFullProfile: { tab in
                 // Set the new depth synchronously. Deferring a presentation by
                 // a timer to let the first one go is a race that gets lost: the
                 // flag lives on the store while the code setting it runs inside
                 // a view being torn down, and a missed window drops the request
                 // silently.
-                model.expandProfile()
+                model.expandProfile(tab: tab)
             },
             openLink: { model.openLink($0) },
-            gameCollection: model.gameCollection(for: request.userID),
+            widgetPreviews: model.widgetPreviews(for: request.userID),
             width: Self.cardWidth,
             // Only where the caller asked for them — see
             // `ProfileRequest.showsOwnActions`. Opening your own card from a

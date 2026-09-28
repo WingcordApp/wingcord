@@ -69,17 +69,50 @@ public struct ProfileFrame: Hashable, Sendable {
     public struct Layer: Hashable, Sendable, Identifiable {
         public var id: String
         public var url: URL
+        /// How the piece is drawn.
+        public var kind: Kind
         /// Which edge of the card this piece hangs from.
         public var anchor: Anchor
         /// Whether it sits over the card or behind it.
         public var order: Order
+        /// A rail that only a tall card has room for: Discord hides it on a
+        /// card whose width is 300/480 of its height or more.
+        public var isResponsive: Bool
 
-        public init(id: String, url: URL, anchor: Anchor, order: Order) {
+        public init(
+            id: String,
+            url: URL,
+            kind: Kind = .staple,
+            anchor: Anchor,
+            order: Order,
+            isResponsive: Bool = false
+        ) {
             self.id = id
             self.url = url
+            self.kind = kind
             self.anchor = anchor
             self.order = order
+            self.isResponsive = isResponsive
         }
+    }
+
+    /// How a piece is drawn — the layer's `type` (module `744808`).
+    ///
+    /// Every kind is drawn at the composition's width — the card plus both
+    /// horizontal overflows, which is the artwork's own authored width — and
+    /// at its **own** aspect. Nothing is stretched.
+    public enum Kind: String, Hashable, Sendable {
+        /// A cap: hangs from the composition's edge its anchor names, past the
+        /// card — Dark Roses' corners, Fantasy Galaxy's planets.
+        case staple
+        /// Drawn **inside the card's height**, from the card edge its anchor
+        /// names, and cut at the other — Fantasy Galaxy's side clouds, whose
+        /// artwork is 1312 × 2528 and runs to the card's foot only on a tall one.
+        case rail
+        /// Repeated down the card's height from its top edge, and cut at the
+        /// foot — Kawaii Cat's two pink rails, authored uniform along y so the
+        /// copies join.
+        case border
     }
 
     /// **Strings, not integers.** The unofficial documentation types these as
@@ -89,18 +122,8 @@ public struct ProfileFrame: Hashable, Sendable {
     public enum Anchor: String, Hashable, Sendable {
         case top
         case bottom
-        /// Runs the whole height of the composition, **stretched**.
-        ///
-        /// Captured from Kawaii Cat, whose `type: "border"` layer is anchored
-        /// `center` and is 1312x2528 — far taller than any card, so it cannot be
-        /// fitted. Measured, the artwork is **uniform along its whole height**:
-        /// identical opaque pixel count and identical x-extent in every band
-        /// down all 2528 rows. It is two vertical rails and nothing else, so
-        /// stretching it distorts nothing — the corners and caps are the top and
-        /// bottom staples drawn over it.
-        ///
-        /// Fitting one instead is what drew two pale rails down the middle of a
-        /// card and past both its ends.
+        /// A rail centred on the card's height; a staple at the card's top.
+        /// Kawaii Cat's border sends it, where it changes nothing.
         case center
     }
 

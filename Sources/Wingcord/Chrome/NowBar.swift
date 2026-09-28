@@ -42,6 +42,8 @@ struct NowBar: View, Equatable {
     /// Whether the pointer is on the bar, which is when the reader's own plate
     /// plays.
     @State private var isHoveringPlate = false
+    /// Whether the pointer is on the name, which rolls the line to the handle.
+    @State private var isHoveringIdentity = false
 
     private var cornerRadius: CGFloat {
         shape.cornerRadius(forHeight: Metrics.nowBarHeight)
@@ -172,21 +174,21 @@ struct NowBar: View, Equatable {
                         .font(.system(.subheadline, weight: .semibold))
                         .foregroundStyle(Ink.primary)
                         .lineLimit(1)
-                    Text(presentation.customStatus ?? presentation.status.label)
-                        .font(Typeface.rowSubtitle)
-                        .foregroundStyle(
-                            presentation.customStatus == nil
-                                ? AnyShapeStyle(presentation.status.tint)
-                                : AnyShapeStyle(Ink.secondary)
-                        )
-                        .lineLimit(1)
+                    subtitle
                 }
             }
             .contentShape(.rect)
         }
         .buttonStyle(.plain)
+        .onHover { hovering in
+            guard isHoveringIdentity != hovering else { return }
+            isHoveringIdentity = hovering
+        }
         .accessibilityLabel(Text(presentation.displayName))
-        .accessibilityValue(Text(presentation.status.label))
+        .accessibilityValue(Text(
+            presentation.activityLine.map { "\(presentation.status.label), \($0.spokenText)" }
+                ?? presentation.status.label
+        ))
         .accessibilityHint("Open your profile")
         // **The card is raised through the store, not presented here.** It was a
         // `.popover` for one build and that was the bug: a popover is an
@@ -195,6 +197,39 @@ struct NowBar: View, Equatable {
         // nothing. `INVARIANTS.md` §2. `ProfilePresenter` draws it at the window
         // root, where every other profile card in the app already is.
         .reportsPresentationAnchor { anchor = $0 }
+    }
+
+    /// The second line, and the handle it rolls to under the pointer — Discord's
+    /// account panel, where the line rolls up to show the username.
+    ///
+    /// **Both leave upward and come back downward**, so the roll reads as one
+    /// strip passing behind a slot rather than two labels cross-fading. Under
+    /// Reduce Motion it is the fade alone.
+    private var subtitle: some View {
+        ZStack(alignment: .leading) {
+            if isHoveringIdentity {
+                Text(presentation.handle)
+                    .font(Typeface.rowSubtitle)
+                    .foregroundStyle(Ink.secondary)
+                    .lineLimit(1)
+                    .transition(roll(from: .bottom))
+            } else if let line = presentation.activityLine {
+                ActivityLineView(line: line, ink: Ink.secondary)
+                    .transition(roll(from: .top))
+            } else {
+                Text(presentation.status.label)
+                    .font(Typeface.rowSubtitle)
+                    .foregroundStyle(presentation.status.tint)
+                    .lineLimit(1)
+                    .transition(roll(from: .top))
+            }
+        }
+        .clipped()
+        .animation(motion.hover, value: isHoveringIdentity)
+    }
+
+    private func roll(from edge: Edge) -> AnyTransition {
+        motion.reduceMotion ? .opacity : .move(edge: edge).combined(with: .opacity)
     }
 
     private var controls: some View {

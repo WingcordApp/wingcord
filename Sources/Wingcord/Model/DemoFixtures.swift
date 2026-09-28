@@ -35,8 +35,8 @@ enum DemoFixtures {
     private static let profileFrame: ProfileFrame? = {
         let sku = "1515124557290410204"
         let pieces = frameLayers(sku: sku, [
-            ("1515124885113012234", .top),
-            ("1515124888313266236", .bottom),
+            ("1515124885113012234", .staple, .top),
+            ("1515124888313266236", .staple, .bottom),
         ])
         guard !pieces.isEmpty else { return nil }
         return ProfileFrame(
@@ -54,18 +54,17 @@ enum DemoFixtures {
     /// Kawaii Cat, exactly as `GET /collectibles-products/{sku}` sent it.
     ///
     /// **Here beside Dark Roses rather than instead of it, because it is the
-    /// captured frame with a `center` border** — the layer that is *stretched*
-    /// to the card rather than fitted to its own aspect, and therefore the only
-    /// one whose height is a decision this app makes. With only staples in the
-    /// fixture that decision was never on screen without a live account, and it
-    /// was wrong: the rails ran the whole composition and stood ninety points
-    /// clear of the cat's own head. See `FrameLayerFit`.
+    /// captured frame with a `border`** — the layer repeated down the card's
+    /// own height rather than hung past it. With only staples in the fixture
+    /// that rule was never on screen without a live account, and it was wrong:
+    /// the rails ran the whole composition and stood ninety points clear of
+    /// the cat's own head. See `FrameLayerFit`.
     private static let catFrame: ProfileFrame? = {
         let sku = "1489396533643448380"
         let pieces = frameLayers(sku: sku, [
-            ("1511832450052133044", .center),
-            ("1511832453369827559", .top),
-            ("1511832456381071471", .bottom),
+            ("1511832450052133044", .border, .center),
+            ("1511832453369827559", .staple, .top),
+            ("1511832456381071471", .staple, .bottom),
         ])
         guard !pieces.isEmpty else { return nil }
         return ProfileFrame(
@@ -80,26 +79,54 @@ enum DemoFixtures {
         )
     }()
 
-    /// Every captured layer is `front`; `back` is in the payload's vocabulary
-    /// and no frame on the shop has ever used it.
+    /// Fantasy Galaxy (White), exactly as `GET /collectibles-products/{sku}`
+    /// sent it: the captured frame with a **rail** — side clouds drawn inside
+    /// the card's height, and hidden on a short card — and a staple **behind**
+    /// the card.
+    private static let galaxyFrame: ProfileFrame? = {
+        let sku = "1524193380492509345"
+        var pieces = frameLayers(sku: sku, [
+            ("1526660354694844456", .rail, .top),
+            ("1526660358712852691", .staple, .top),
+        ])
+        guard !pieces.isEmpty else { return nil }
+        pieces[0].isResponsive = true
+        if let url = CDN.profileFrameLayer(sku: sku, layerID: "1526660363071000666") {
+            pieces.append(ProfileFrame.Layer(
+                id: "1526660363071000666", url: url, anchor: .top, order: .back
+            ))
+        }
+        return ProfileFrame(
+            skuID: sku,
+            label: "Soft white planets and dreamy cosmic clouds float above the profile "
+                + "against a pale sky",
+            innerWidth: 1200,
+            overflowTop: 304,
+            overflowBottom: 0,
+            overflowHorizontal: 56,
+            layers: pieces
+        )
+    }()
+
     private static func frameLayers(
         sku: String,
-        _ layers: [(String, ProfileFrame.Anchor)]
+        _ layers: [(String, ProfileFrame.Kind, ProfileFrame.Anchor)]
     ) -> [ProfileFrame.Layer] {
-        layers.compactMap { id, anchor in
+        layers.compactMap { id, kind, anchor in
             CDN.profileFrameLayer(sku: sku, layerID: id).map {
-                ProfileFrame.Layer(id: id, url: $0, anchor: anchor, order: .front)
+                ProfileFrame.Layer(id: id, url: $0, kind: kind, anchor: anchor, order: .front)
             }
         }
     }
 
     /// Which frame a roster member wears, if any.
     ///
-    /// Two of the ten, so a walk down the list reaches a card with a border, a
-    /// card with only staples, and a card with neither.
+    /// Three of the ten, so a walk down the list reaches a card with a border,
+    /// one with a rail, one with only staples, and one with none.
     private static func frame(for offset: Int) -> ProfileFrame? {
         switch offset % 10 {
         case 2: profileFrame
+        case 5: galaxyFrame
         case 7: catFrame
         default: nil
         }

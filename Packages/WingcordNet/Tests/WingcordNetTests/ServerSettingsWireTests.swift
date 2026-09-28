@@ -347,8 +347,8 @@ struct ServerSettingsWireTests {
     func auditValueRendering() throws {
         struct Box: Decodable { var value: AuditValue }
         func rendered(_ json: String) throws -> String? {
-            try JSONDecoder().decode(Box.self, from: Data(#"{"value":\#(json)}"#.utf8))
-                .value.rendered
+            let box = try JSONDecoder().decode(Box.self, from: Data(#"{"value":\#(json)}"#.utf8))
+            return box.value.rendered
         }
         #expect(try rendered("2222085186768449") == "2222085186768449")
         #expect(try rendered("0.47") == "0.47")

@@ -5,11 +5,11 @@ import Testing
 
 /// The joins that turn four tables into a board.
 ///
-/// **The counting tests are the important ones.** The strip on the small card
+/// **The counting tests are the important ones.** The strip on the popout
 /// reports a number the reader can go and count for themselves on the board one
-/// click away, and the two can only agree if the deduplication and the overflow
-/// arithmetic agree. A test that only checked which covers were drawn would
-/// pass on an implementation whose chip was off by one.
+/// click away, and it matches Discord's only if the deduplication and the
+/// overflow arithmetic both do. A test that only checked which marks were drawn
+/// would pass on an implementation whose count was off by one.
 @MainActor
 @Suite("Board presentation")
 struct BoardPresentationTests {
@@ -39,15 +39,22 @@ struct BoardPresentationTests {
         ProfileWidgetGame(gameID: id, tags: tags)
     }
 
-    // MARK: The strip on the small card
+    // MARK: The popout's stack
 
-    @Test("The strip's covers plus its overflow is the whole collection")
+    private func strip(_ model: AppModel) -> GameCollection? {
+        for preview in model.widgetPreviews(for: owner) {
+            if case .games(let collection) = preview { return collection }
+        }
+        return nil
+    }
+
+    /// **Discord's arithmetic** (module `657538`): four marks, the last dimmed
+    /// under the count, and the count is every game not drawn — the dimmed one
+    /// is drawn. Six games are four marks and "+2".
+    @Test("Past four, the fourth mark carries the count of every game not drawn")
     func overflowCounts() throws {
-        // Six distinct games across four tiles, which is the demo fixture's own
-        // shape and roughly a real board's.
         let model = model(
             widgets: [
-                ProfileWidget(id: "a", content: .application(application)),
                 ProfileWidget(id: "f", content: .favouriteGames([game(sims)])),
                 ProfileWidget(
                     id: "r",
@@ -64,14 +71,12 @@ struct BoardPresentationTests {
             ],
             games: [sims, beatSaber, endfield, zenless]
         )
-        let collection = try #require(model.gameCollection(for: owner))
-        #expect(collection.covers.count == 3)
-        #expect(collection.overflow == 3)
-        // The chip and the board agree: three drawn, three behind it, six there.
-        #expect(collection.covers.count + collection.overflow == 6)
+        let collection = try #require(strip(model))
+        #expect(collection.covers.map(\.gameID) == [sims, beatSaber, endfield, zenless])
+        #expect(collection.overflow == 2)
     }
 
-    @Test("A collection that fits draws every cover and no chip")
+    @Test("A collection that fits draws every mark and no count")
     func noOverflow() throws {
         let model = model(
             widgets: [
@@ -82,12 +87,12 @@ struct BoardPresentationTests {
             ],
             games: [sims, beatSaber, endfield]
         )
-        let collection = try #require(model.gameCollection(for: owner))
+        let collection = try #require(strip(model))
         #expect(collection.covers.count == 3)
         #expect(collection.overflow == 0)
     }
 
-    @Test("Exactly four fills all four slots rather than showing three and a +1")
+    @Test("Exactly four draws four and no count")
     func exactlyFourFits() throws {
         let model = model(
             widgets: [
@@ -100,7 +105,7 @@ struct BoardPresentationTests {
             ],
             games: [sims, beatSaber, endfield, zenless]
         )
-        let collection = try #require(model.gameCollection(for: owner))
+        let collection = try #require(strip(model))
         #expect(collection.covers.count == 4)
         #expect(collection.overflow == 0)
     }
@@ -115,23 +120,122 @@ struct BoardPresentationTests {
             ],
             games: [sims]
         )
-        let collection = try #require(model.gameCollection(for: owner))
+        let collection = try #require(strip(model))
         #expect(collection.covers.count == 1)
         #expect(collection.overflow == 0)
+        // One strip for every list together.
+        #expect(model.widgetPreviews(for: owner).count == 1)
     }
 
-    @Test("An application widget contributes no cover to the strip")
-    func applicationWidgetIsNotAGame() {
+    @Test("An application widget's own game is in the strip, where its widget is")
+    func applicationGameCounts() throws {
+        let model = model(
+            widgets: [
+                ProfileWidget(id: "a", content: .application(application)),
+                ProfileWidget(id: "f", content: .favouriteGames([game(sims)])),
+            ],
+            games: [sims, endfield]
+        )
+        model.widgetApplications[application] = WidgetApplication(
+            id: application,
+            name: "Arknights Endfield",
+            linkedGameIDs: [endfield]
+        )
+        let collection = try #require(strip(model))
+        #expect(collection.covers.map(\.gameID) == [endfield, sims])
+    }
+
+    @Test("Application widgets alone make no strip")
+    func applicationWidgetAloneHasNoStrip() {
         let model = model(widgets: [
             ProfileWidget(id: "a", content: .application(application)),
         ])
-        #expect(model.gameCollection(for: owner) == nil)
+        #expect(strip(model) == nil)
     }
 
-    @Test("Somebody with no board has no strip")
-    func noBoardNoStrip() {
+    @Test("A game answered for with no art is skipped; one on its way is a plate")
+    func artlessGames() throws {
+        let model = model(
+            widgets: [
+                ProfileWidget(
+                    id: "l",
+                    content: .playedGames([game(sims), game(beatSaber), game(endfield)])
+                ),
+            ],
+            games: [sims]
+        )
+        model.games[beatSaber] = Game(id: beatSaber, name: "Beat Saber")
+        let collection = try #require(strip(model))
+        #expect(collection.covers.map(\.gameID) == [sims, endfield])
+        #expect(collection.covers.last?.coverURL == nil)
+    }
+
+    @Test("Somebody with no board has no stack")
+    func noBoardNoStack() {
         let model = AppModel()
-        #expect(model.gameCollection(for: owner) == nil)
+        #expect(model.widgetPreviews(for: owner).isEmpty)
+    }
+
+    /// An application card needs its application, its template and the
+    /// person's identity, and a template with a `mini_profile` surface.
+    @Test("Cards follow the board's order, and an application waits for all it needs")
+    func previewOrder() throws {
+        let personal = PersonalWidget(header: "Now reading", cover: .init(title: "Dune"))
+        let model = model(
+            widgets: [
+                ProfileWidget(id: "p", content: .personal(personal)),
+                ProfileWidget(id: "a", content: .application(application)),
+                ProfileWidget(id: "f", content: .favouriteGames([game(sims)])),
+            ],
+            games: [sims]
+        )
+        #expect(model.widgetPreviews(for: owner).map(\.id) == ["p", "games"])
+
+        model.widgetApplications[application] = WidgetApplication(id: application, name: "Gramophone")
+        model.applicationIdentities[owner] = [
+            ApplicationIdentity(
+                applicationID: application,
+                externalUserID: "1",
+                profile: ApplicationProfile(fields: ["preview_value": .text("102.3k Scrobbles")])
+            ),
+        ]
+        let text = WidgetField.field(.init(valueType: .data, presentationType: .text, value: "preview_value"))
+        model.widgetConfigs[application] = WidgetConfig(
+            configID: "1",
+            applicationID: application,
+            displayName: "Gramophone",
+            surfaces: [
+                "mini_profile": WidgetSurface(
+                    layout: "mini_profile_contained_stat",
+                    components: ["stat": WidgetComponent(fields: ["text": text])]
+                ),
+            ]
+        )
+        let previews = model.widgetPreviews(for: owner)
+        #expect(previews.map(\.id) == ["p", "application-\(application.rawValue)", "games"])
+        if case .application(let mini)? = previews.dropFirst().first {
+            #expect(mini.surface.headline?.value == "102.3k Scrobbles")
+        } else {
+            Issue.record("the application widget should be the second card")
+        }
+    }
+
+    @Test("A template with no mini_profile surface is no card")
+    func noMiniSurfaceNoCard() {
+        let model = model(widgets: [
+            ProfileWidget(id: "a", content: .application(application)),
+        ])
+        model.widgetApplications[application] = WidgetApplication(id: application, name: "Endfield")
+        model.applicationIdentities[owner] = [
+            ApplicationIdentity(applicationID: application, externalUserID: "1"),
+        ]
+        model.widgetConfigs[application] = WidgetConfig(
+            configID: "1",
+            applicationID: application,
+            displayName: "Endfield",
+            surfaces: ["widget_bottom": WidgetSurface(layout: "widget_bottom_stats", components: [:])]
+        )
+        #expect(model.widgetPreviews(for: owner).isEmpty)
     }
 
     // MARK: The board itself
@@ -213,6 +317,49 @@ struct BoardPresentationTests {
         // A card headed by a snowflake is worse than a card that has not
         // appeared yet.
         #expect(model.boardPresentation(for: owner) == nil)
+    }
+
+    /// Vexlor's goal: keyed on stats alone, the board found none and printed
+    /// the identity's raw fraction as "0,69 Progress".
+    @Test("A goal widget draws its bar, not the identity's raw fields")
+    func progressTileKeepsItsTemplate() throws {
+        let model = model(widgets: [
+            ProfileWidget(id: "a", content: .application(application)),
+        ])
+        model.widgetApplications[application] = WidgetApplication(id: application, name: "User Stats")
+        model.applicationIdentities[owner] = [
+            ApplicationIdentity(
+                applicationID: application,
+                externalUserID: "0",
+                profile: ApplicationProfile(
+                    username: "some_username",
+                    fields: ["progress": .number(0.69)],
+                    fieldOrder: ["progress"]
+                )
+            ),
+        ]
+        model.widgetConfigs[application] = WidgetConfig(
+            configID: "1",
+            applicationID: application,
+            displayName: "User Stats",
+            surfaces: [
+                "widget_bottom": WidgetSurface(
+                    layout: "widget_bottom_progress",
+                    components: [
+                        "progress": WidgetComponent(fields: [
+                            "current": .field(.init(valueType: .data, presentationType: .number, value: "progress")),
+                        ]),
+                    ]
+                ),
+            ]
+        )
+        let tile = try #require(model.boardPresentation(for: owner)?.tiles.first)
+        guard case .application(let application) = tile.content else {
+            Issue.record("an application widget should resolve to an application tile")
+            return
+        }
+        #expect(application.bottom?.progress?.caption == "69%")
+        #expect(application.bottom?.stats.isEmpty == true)
     }
 
     @Test("An application tile carries the game its widget is about")

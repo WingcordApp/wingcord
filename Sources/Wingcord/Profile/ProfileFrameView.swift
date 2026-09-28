@@ -25,55 +25,16 @@ import WingcordCore
 ///  └╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┘
 /// ```
 ///
-/// Each layer then pins itself to the edge its `anchor` names and takes its own
-/// aspect from the artwork, so a top garland hangs off the top and a bottom one
-/// off the foot however tall the card turned out to be.
+/// Each layer then draws by its kind — Discord's rules (module `744808`) — at
+/// the composition's width and its own aspect: a staple hangs past the card
+/// from the edge its anchor names, a rail and a border stay inside the card's
+/// height. Nothing is fitted into a box and nothing is stretched, so a layer's
+/// artwork lands where it was authored however tall the card turned out to be.
 ///
 /// **Never a glass element and never inside a `GlassEffectContainer`.** A
 /// container promotes its glass above ordinary siblings and renders it itself —
 /// §4 rule 4 — so a frame joined to one would draw over the card's own controls
 /// instead of around them.
-/// Sizes one layer according to the edge it hangs from.
-///
-/// A branch is safe here where it usually is not: a layer's anchor comes from
-/// the payload and cannot change while the frame is on screen, so the two arms
-/// are never swapped for the same `id` and no image is ever torn down.
-private struct FrameLayerFit: ViewModifier {
-    var anchor: ProfileFrame.Anchor
-    var layout: ProfileFrameLayout
-
-    @ViewBuilder
-    func body(content: Content) -> some View {
-        if anchor == .center {
-            // **No aspect, and the card's height rather than the
-            // composition's.** A border's artwork is authored uniform along y
-            // precisely so it can be pulled to fit, and the height nothing here
-            // knows is the card's — but the stack it is stretched inside has
-            // already been grown by the two overflows, so filling that stack
-            // ran the rails up past the artwork meant to cap them. Measured on
-            // Kawaii Cat (`overflow_top: 304`, `overflow_bottom: 135` against
-            // an `inner_width` of 1200): two bare pink rails stood 91 points
-            // above the cat's own head and 41 below its feet, on either side of
-            // nothing. Padding the overflows back off is what puts the border on
-            // the card and leaves the staples to be its caps.
-            content
-                .frame(width: layout.layerWidth)
-                .frame(maxHeight: .infinity)
-                .padding(.top, layout.top)
-                .padding(.bottom, layout.bottom)
-        } else {
-            // A staple is a cap and keeps its own aspect, hanging from the edge
-            // it names. The width is the card's, and the layer PNG's whole
-            // authored width maps onto it — 1200 + 56 + 56 = 1312, the pixel
-            // width of every layer captured so far.
-            content
-                .aspectRatio(contentMode: .fit)
-                .frame(width: layout.layerWidth)
-                .frame(maxHeight: .infinity, alignment: anchor == .top ? .top : .bottom)
-        }
-    }
-}
-
 struct ProfileFrameView: View {
     var frame: ProfileFrame
     /// The card's width. The only input the layout needs.
@@ -81,9 +42,8 @@ struct ProfileFrameView: View {
     /// Which pass this is: the layers behind the card, or those over it.
     ///
     /// Two views rather than one, because a `back` layer drawn in front covers
-    /// the avatar it was authored to sit behind. Every layer captured so far is
-    /// `front`; `back` is in the payload's vocabulary and costs one comparison
-    /// to honour.
+    /// what it was authored to sit behind — Fantasy Galaxy's second set of
+    /// clouds is one.
     var order: ProfileFrame.Order
 
     private var layers: [ProfileFrame.Layer] {
@@ -94,20 +54,7 @@ struct ProfileFrameView: View {
         let layout = frame.layout(cardWidth: cardWidth)
         ZStack {
             ForEach(layers) { layer in
-                RemoteImage(url: layer.url, side: layout.layerWidth, bucket: .artwork) {
-                    Color.clear
-                }
-                // **A centre-anchored layer stretches over the card; the
-                // others keep their aspect and hang past it.** A border runs the
-                // card's whole height, so its artwork is authored uniform along
-                // y and is meant to be pulled to fit — the *card's* height, not
-                // the composition's, which is the correction `FrameLayerFit`
-                // records. A staple is a cap and hangs from the edge it names at
-                // its own aspect — the width is the card's plus both overflows,
-                // and the layer PNG's whole authored width maps onto it:
-                // 1200 + 56 + 56 = 1312, the pixel width of every layer captured
-                // so far.
-                .modifier(FrameLayerFit(anchor: layer.anchor, layout: layout))
+                FrameLayer(layer: layer, layout: layout, cardWidth: cardWidth)
             }
         }
         .padding(EdgeInsets(
@@ -122,6 +69,96 @@ struct ProfileFrameView: View {
         .allowsHitTesting(false)
         .accessibilityHidden(frame.label == nil)
         .accessibilityLabel(Text(frame.label ?? ""))
+    }
+}
+
+/// One layer, drawn by its kind inside the stack `ProfileFrameView` grew by the
+/// overflows.
+///
+/// A branch is safe here where it usually is not: a layer's kind comes from
+/// the payload and cannot change while the frame is on screen, so the arms are
+/// never swapped for the same `id` and no image is ever torn down.
+private struct FrameLayer: View {
+    var layer: ProfileFrame.Layer
+    var layout: ProfileFrameLayout
+    var cardWidth: CGFloat
+
+    @Environment(\.motion) private var motion
+
+    /// Discord's responsive rail stays only while the card is narrower than
+    /// 300/480 of its height.
+    private static let responsiveAspect: CGFloat = 300 / 480
+    /// A rail's or a border's artwork is about twice as tall as it is wide —
+    /// Fantasy Galaxy's and Kawaii Cat's are both 1312 × 2528 — and a decode
+    /// caps the longer side, so this is what keeps the width sharp.
+    private static let tallDecodeReach: CGFloat = 2
+
+    var body: some View {
+        switch layer.kind {
+        case .staple:
+            picture(side: layout.layerWidth)
+                .frame(maxHeight: .infinity, alignment: layer.anchor == .bottom ? .bottom : .top)
+                // A centre staple is unplaced in Discord's rules, which leaves
+                // it at the card's top edge.
+                .padding(.top, layer.anchor == .center ? layout.top : 0)
+        case .rail:
+            Group {
+                if layer.isResponsive {
+                    // The card's own height, read where it is drawn and kept
+                    // nowhere: it decides only whether the rail has the room.
+                    GeometryReader { proxy in
+                        if cardWidth < proxy.size.height * Self.responsiveAspect { rail }
+                    }
+                } else {
+                    rail
+                }
+            }
+            .clipped()
+            .padding(.top, layout.top)
+            .padding(.bottom, layout.bottom)
+        case .border:
+            RemoteImage(
+                url: layer.url,
+                side: layout.layerWidth * Self.tallDecodeReach,
+                bucket: .artwork,
+                tileWidth: layout.layerWidth,
+                arrival: motion.fade
+            ) {
+                Color.clear
+            }
+            .frame(width: layout.layerWidth)
+            .clipped()
+            .padding(.top, layout.top)
+            .padding(.bottom, layout.bottom)
+        }
+    }
+
+    /// The artwork at the composition's width and its own height — the layer
+    /// PNG's whole authored width mapped onto the card plus both overflows,
+    /// 1200 + 56 + 56 = 1312 on every frame captured so far. Fades in when it
+    /// lands after the card, as Discord's layers do.
+    private func picture(side: CGFloat) -> some View {
+        RemoteImage(url: layer.url, side: side, bucket: .artwork, arrival: motion.fade) {
+            Color.clear
+        }
+        .aspectRatio(contentMode: .fit)
+        .fixedSize(horizontal: false, vertical: true)
+        .frame(width: layout.layerWidth)
+    }
+
+    /// Inside the card's height, from the edge its anchor names; cut at the
+    /// other by the clip around it.
+    private var rail: some View {
+        picture(side: layout.layerWidth * Self.tallDecodeReach)
+            .frame(maxHeight: .infinity, alignment: railAlignment)
+    }
+
+    private var railAlignment: Alignment {
+        switch layer.anchor {
+        case .top: .top
+        case .center: .center
+        case .bottom: .bottom
+        }
     }
 }
 
