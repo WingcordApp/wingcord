@@ -163,7 +163,10 @@ extension AppModel {
             directMessageChannelID: user.id == currentUserID
                 ? nil
                 : directMessageChannel(with: user.id),
-            isLoading: profilesLoading.contains(user.id)
+            isLoading: profilesLoading.contains(user.id),
+            // Read through the filtered decoration like the frame itself, so a
+            // reader who switched frames off is never held for one.
+            isFrameLoading: decoration?.profileFrameSKU.map(collectiblesLoading.contains) ?? false
         )
     }
 

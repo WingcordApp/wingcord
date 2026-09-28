@@ -96,6 +96,15 @@ struct MiniProfileCard: View {
     /// is measured and never shown — an effect is the largest decode the app
     /// makes and changes nothing about the card's size.
     var showsEffect = true
+    /// Whether the banner and the emoji in the bio move.
+    ///
+    /// **The DM column passes its hover.** It stays on screen for as long as
+    /// the conversation does, and a banner looping beside somebody reading is
+    /// motion nobody is looking at — Discord's sidebar plays both only while
+    /// the pointer is on it (`animateOnHoverOrFocusOnly`, `r1`). Its avatar and
+    /// decoration are not gated, and neither are they here. A card opened by a
+    /// click is being looked at, so it always plays.
+    var animates = true
 
     enum Form: Equatable {
         case card
@@ -136,6 +145,8 @@ struct MiniProfileCard: View {
 
 
     var body: some View {
+        // Read once: the shadow and the frame's staples take the same value.
+        let frameShadow = frameShadowOpacity
         VStack(alignment: .leading, spacing: 0) {
             // Above the banner, which is where Discord puts it — the first
             // thing on the card rather than a mark inside it.
@@ -161,7 +172,8 @@ struct MiniProfileCard: View {
                             color: InkColor.secondary,
                             emojiSide: 16,
                             onEmoji: openEmoji ?? { inspectedEmoji = $0 },
-                        onLink: openLink
+                            onLink: openLink,
+                            animates: animates
                         )
                     }
                 }
@@ -296,23 +308,29 @@ struct MiniProfileCard: View {
             }
         }
         .clipShape(.rect(cornerRadius: corner, style: .continuous))
-        // A column casts no shadow: it is not floating over anything.
-        .shadow(color: .black.opacity(form == .card ? 0.45 : 0), radius: 28, y: 10)
-        // **A frame wraps a card's CORNERS, so a column never gets one.** That
-        // is the same distinction `Form` already draws and not a second one: a
-        // card ends where its content does and has four edges to hang artwork
-        // from, while a column is a region running the height of the pane whose
-        // foot is the window's. There is no bottom edge there to anchor to, and
-        // a garland pinned to the bottom of a sidebar is not what anybody
-        // bought.
+        // A column casts no shadow: it is not floating over anything. A card
+        // wearing a frame casts Discord's in place of its own — see
+        // `FrameShadow`. One modifier either way, so the frame landing after
+        // the card changes its values and not its identity.
+        .shadow(
+            color: .black.opacity(form == .card ? frameShadow ?? 0.45 : 0),
+            radius: frameShadow == nil ? 28 : FrameShadow.radius,
+            x: frameShadow == nil ? 0 : FrameShadow.offset,
+            y: frameShadow == nil ? 10 : FrameShadow.offset
+        )
+        // **In a column the frame hangs on the pane, not here.** The column's
+        // card is the pane's rounded box, which runs to the foot of the window;
+        // this view is only what scrolls inside it, and artwork hung off it
+        // would scroll away with the bio — see `DirectMessageProfilePane`.
         //
         // After the shadow, deliberately. Applied before it, the overhanging
         // artwork would be shadowed too — a drop shadow under a rose hanging in
-        // free space, cast by nothing.
-        //
-        // After the shadow, deliberately: applied before it, the artwork would
-        // be shadowed along with the card.
-        .profileFrame(form != .column ? profile.frame : nil, cardWidth: width)
+        // free space, cast by nothing; the staples throw their own instead.
+        .profileFrame(
+            form == .column ? nil : profile.frame,
+            cardWidth: width,
+            shadowOpacity: frameShadow
+        )
         // The card for an emoji somebody put in their bio. A nested popover,
         // one per surface — see `ExpressionInfoPopover`.
         .presentsExpressionInfo(for: $inspectedEmoji)
@@ -320,6 +338,17 @@ struct MiniProfileCard: View {
 
     /// A card has corners; a column is a region of the window and has none.
     private var corner: CGFloat { form == .column ? 0 : Radius.card }
+
+    /// How dark the shadows of a floating card that wears a frame are, and
+    /// nil for every other card — the one case Discord gives a frame shadows
+    /// of its own. See `FrameShadow`.
+    ///
+    /// The theme is read only on that path, so an unframed card registers no
+    /// dependency on it.
+    private var frameShadowOpacity: Double? {
+        guard form == .card, let frame = profile.frame, !frame.isEmpty else { return nil }
+        return FrameShadow.opacity(in: ThemeStore.shared.colors)
+    }
 
     /// Discord's one button on the embed: the full profile, across the foot.
     ///
@@ -371,23 +400,23 @@ struct MiniProfileCard: View {
                             .aspectRatio(contentMode: .fill)
                             // Gone once the film is up: two copies of one
                             // picture composited every frame buys nothing.
-                            // See `bannerPlays` for why the latch is read
+                            // See `bannerFilm` for why the latch is read
                             // beside a question the state cannot answer.
-                            .opacity(bannerIsPlaying && bannerPlays ? 0 : 1)
+                            .opacity(bannerIsPlaying && bannerFilm != nil ? 0 : 1)
 
                             // Only when it can animate — the extension says so,
                             // so a still banner never pays for a second fetch, a
                             // multi-frame decode and a coordinator to learn it
-                            // has one frame.
+                            // has one frame — and only while `animates`.
                             //
                             // **The budget is the whole loop at the drawn
                             // size.** A hand-picked 12 MB bought twenty frames
                             // of a sixty-frame banner here, which is every third
                             // one — see `AnimatedImage.budget(forDrawn:)`, which
                             // is the arithmetic this comment used to describe.
-                            if CDN.canAnimate(bannerURL) {
+                            if let film = bannerFilm {
                                 AnimatedDecoration(
-                                    url: bannerURL,
+                                    url: film,
                                     side: width,
                                     gravity: .resizeAspectFill,
                                     byteBudget: AnimatedImage.budget(
@@ -403,13 +432,20 @@ struct MiniProfileCard: View {
                                 )
                             }
                         }
-                        // A banner that changes has to put its still back while
-                        // the new one resolves, or the strip is empty between.
-                        .onChange(of: bannerURL) { bannerIsPlaying = false }
                     }
                 }
                 .frame(height: Self.bannerHeight)
                 .clipped()
+                // **The still comes back whenever the film over it goes** — a
+                // banner that changed, and in the DM column the pointer
+                // leaving. The filmstrip reports playback from its load and
+                // never from a view update, so it has nothing to say on its way
+                // out: it is simply gone, and a latch left set is a bare plate
+                // where somebody's banner was. Watched here rather than inside
+                // the artwork, which is not there to watch a banner removed.
+                .onChange(of: bannerFilm) {
+                    if bannerIsPlaying { bannerIsPlaying = false }
+                }
             // The avatar's cut-out. See `ProfileAvatar`: the gap around the
             // avatar is a hole in this artwork, so it shows the card's own
             // ground rather than a stroke of flat black painted on top.
@@ -485,16 +521,19 @@ struct MiniProfileCard: View {
         Rectangle().fill(ground.plateStyle(accentColorValue: profile.accentColorValue))
     }
 
-    /// Whether there is a moving form to put up at all.
+    /// The banner's moving form while it is up, and nil while it is not: a
+    /// banner with frames to play, on a card allowed to play them.
     ///
-    /// **Read beside `bannerIsPlaying`, and it is what stops that latch
-    /// sticking.** Only the film clears the latch, and a filmstrip that is
+    /// **One value decides the film, the still over it and the latch
+    /// between them.** Read beside `bannerIsPlaying`, it is what stops that
+    /// latch sticking: only the film clears the latch, and a filmstrip that is
     /// dismantled reports nothing on its way out — so without this the still
     /// stays at zero over a film that is no longer there and the card draws a
     /// bare plate where somebody's banner was. `AvatarView` carries the same
     /// pair, for the same defect.
-    private var bannerPlays: Bool {
-        profile.bannerURL.map(CDN.canAnimate) ?? false
+    private var bannerFilm: URL? {
+        guard animates, let url = profile.bannerURL, CDN.canAnimate(url) else { return nil }
+        return url
     }
 
     /// The widest the display name may come out, after the marks worn beside

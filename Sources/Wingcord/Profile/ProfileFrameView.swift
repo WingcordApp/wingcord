@@ -45,6 +45,15 @@ struct ProfileFrameView: View {
     /// what it was authored to sit behind — Fantasy Galaxy's second set of
     /// clouds is one.
     var order: ProfileFrame.Order
+    /// Whether a layer that lands after the card fades in.
+    ///
+    /// Off in the DM column, which is Discord's own split: its sidebar passes
+    /// `fadeIn: false` (`r1`), while the popout fades a frame that was not
+    /// already loaded when it opened (module `577390`).
+    var fadesIn = true
+    /// How dark the shadows its staples throw are, on a card that floats —
+    /// see `FrameShadow`. Nil everywhere else, where they throw none.
+    var shadowOpacity: Double?
 
     private var layers: [ProfileFrame.Layer] {
         order == .front ? frame.frontLayers : frame.backLayers
@@ -54,7 +63,13 @@ struct ProfileFrameView: View {
         let layout = frame.layout(cardWidth: cardWidth)
         ZStack {
             ForEach(layers) { layer in
-                FrameLayer(layer: layer, layout: layout, cardWidth: cardWidth)
+                FrameLayer(
+                    layer: layer,
+                    layout: layout,
+                    cardWidth: cardWidth,
+                    fadesIn: fadesIn,
+                    shadowOpacity: shadowOpacity
+                )
             }
         }
         .padding(EdgeInsets(
@@ -82,8 +97,14 @@ private struct FrameLayer: View {
     var layer: ProfileFrame.Layer
     var layout: ProfileFrameLayout
     var cardWidth: CGFloat
+    var fadesIn: Bool
+    var shadowOpacity: Double?
 
     @Environment(\.motion) private var motion
+
+    /// How the artwork comes in when it lands after the card. See
+    /// `ProfileFrameView.fadesIn`.
+    private var arrival: Animation? { fadesIn ? motion.fade : nil }
 
     /// Discord's responsive rail stays only while the card is narrower than
     /// 300/480 of its height.
@@ -96,7 +117,7 @@ private struct FrameLayer: View {
     var body: some View {
         switch layer.kind {
         case .staple:
-            picture(side: layout.layerWidth)
+            staple
                 .frame(maxHeight: .infinity, alignment: layer.anchor == .bottom ? .bottom : .top)
                 // A centre staple is unplaced in Discord's rules, which leaves
                 // it at the card's top edge.
@@ -122,7 +143,7 @@ private struct FrameLayer: View {
                 side: layout.layerWidth * Self.tallDecodeReach,
                 bucket: .artwork,
                 tileWidth: layout.layerWidth,
-                arrival: motion.fade
+                arrival: arrival
             ) {
                 Color.clear
             }
@@ -136,14 +157,33 @@ private struct FrameLayer: View {
     /// The artwork at the composition's width and its own height — the layer
     /// PNG's whole authored width mapped onto the card plus both overflows,
     /// 1200 + 56 + 56 = 1312 on every frame captured so far. Fades in when it
-    /// lands after the card, as Discord's layers do.
+    /// lands after the card, as Discord's layers do — where the surface asks.
     private func picture(side: CGFloat) -> some View {
-        RemoteImage(url: layer.url, side: side, bucket: .artwork, arrival: motion.fade) {
+        RemoteImage(url: layer.url, side: side, bucket: .artwork, arrival: arrival) {
             Color.clear
         }
         .aspectRatio(contentMode: .fit)
         .fixedSize(horizontal: false, vertical: true)
         .frame(width: layout.layerWidth)
+    }
+
+    /// A cap, and on a floating card the shadow it throws out from the card —
+    /// up from a top staple, down from a bottom one. Discord gives a centre
+    /// staple none. The branch is the surface's and the layer's, and neither
+    /// changes while the frame is on screen.
+    @ViewBuilder
+    private var staple: some View {
+        if let shadowOpacity, layer.anchor != .center {
+            picture(side: layout.layerWidth)
+                .shadow(
+                    color: .black.opacity(shadowOpacity),
+                    radius: FrameShadow.radius,
+                    x: FrameShadow.offset,
+                    y: layer.anchor == .bottom ? FrameShadow.offset : -FrameShadow.offset
+                )
+        } else {
+            picture(side: layout.layerWidth)
+        }
     }
 
     /// Inside the card's height, from the edge its anchor names; cut at the
@@ -193,11 +233,32 @@ extension View {
     /// the avatar it was authored to sit behind. Every layer captured so far is
     /// `front`; `back` is in the payload's vocabulary and costs one comparison.
     @ViewBuilder
-    func profileFrame(_ frame: ProfileFrame?, cardWidth: CGFloat) -> some View {
+    func profileFrame(
+        _ frame: ProfileFrame?,
+        cardWidth: CGFloat,
+        fadesIn: Bool = true,
+        shadowOpacity: Double? = nil
+    ) -> some View {
         if let frame, !frame.isEmpty {
             self
-                .background { ProfileFrameView(frame: frame, cardWidth: cardWidth, order: .back) }
-                .overlay { ProfileFrameView(frame: frame, cardWidth: cardWidth, order: .front) }
+                .background {
+                    ProfileFrameView(
+                        frame: frame,
+                        cardWidth: cardWidth,
+                        order: .back,
+                        fadesIn: fadesIn,
+                        shadowOpacity: shadowOpacity
+                    )
+                }
+                .overlay {
+                    ProfileFrameView(
+                        frame: frame,
+                        cardWidth: cardWidth,
+                        order: .front,
+                        fadesIn: fadesIn,
+                        shadowOpacity: shadowOpacity
+                    )
+                }
                 .padding(frame.overhang(cardWidth: cardWidth))
         } else {
             self
@@ -248,5 +309,35 @@ extension View {
             .frame(width: width)
             .overlay { ProfileFrameView(frame: frame, cardWidth: width, order: order) }
             .allowsHitTesting(false)
+    }
+}
+
+/// The shadows a framed popout casts — Discord's own (`315513.css`).
+///
+/// **A frame replaces the card's shadow; it does not add one.** Discord unsets
+/// the popout's shadow once a frame is worn (`253781.css`) and casts a
+/// card-shaped one down and to the right instead, and each staple throws its
+/// own the same distance out from the card — so the artwork hanging in free
+/// space casts a shadow of its own shape. Only the floating card casts them:
+/// the DM column, the embed and the full profile wear the same frames with
+/// none.
+enum FrameShadow {
+    /// How far every one of them falls: across, and down — or up, from a top
+    /// staple.
+    static let offset: CGFloat = 20
+    /// Discord's 30-pixel blur. **Measured, not converted by rule:** SwiftUI's
+    /// radius 15 and Chrome's `box-shadow` blur of 30 fall off within a
+    /// hundredth of each other at every sample out to 40 points, so a radius
+    /// here is half a CSS blur.
+    static let radius: CGFloat = 15
+
+    /// How dark they are, from the room the card floats in — Discord's
+    /// `--custom-profile-frame-drop-shadow-opacity` (`629972.css`): 0.13 in
+    /// its light theme, 0.2 in its dark one, 0.6 in Midnight. True Black is
+    /// this app's Midnight; every other dark room sits on Discord's dark base,
+    /// as its gradient themes do.
+    static func opacity(in colors: ThemeColors) -> Double {
+        if colors.appearance == .light { return 0.13 }
+        return colors == .trueBlack ? 0.6 : 0.2
     }
 }

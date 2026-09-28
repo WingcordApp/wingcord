@@ -696,6 +696,13 @@ final class AppModel {
     /// Profile frames, by SKU and for the same reason: a frame is a purchase,
     /// and a server where twenty people wear Dark Roses resolves it once.
     var profileFrames: [String: ProfileFrame] = [:]
+    /// The collectible SKUs whose artwork is on its way.
+    ///
+    /// **Observed**, because the DM column holds its card at the skeleton while
+    /// a frame it names is in here — see `ProfilePresentation.isFrameLoading`.
+    /// It is also the fetch's dedupe: an effect and a frame are answered by one
+    /// route, so one set keyed by SKU is one request per answer.
+    var collectiblesLoading: Set<String> = []
     // MARK: The profile board
     //
     // Five tables, and the split is by **what the key means** rather than by

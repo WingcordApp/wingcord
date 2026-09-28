@@ -634,8 +634,9 @@ nonisolated enum Proportions {
     /// The profile column beside a direct message.
     ///
     /// The pane insets its rounded box by `Spacing.base` on every side, so the
-    /// column it occupies is this plus twice that — see
-    /// `DirectMessageProfilePane`.
+    /// column it occupies is this plus twice that — and, for somebody wearing a
+    /// profile frame, plus its two side overhangs, because the box keeps this
+    /// width and the column grows around it. See `DirectMessageProfilePane`.
     ///
     /// Wider than the member list because it holds one person rather than a
     /// list of names: a banner, an avatar with its decoration, a bio and a role

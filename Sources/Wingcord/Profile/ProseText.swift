@@ -37,6 +37,14 @@ struct ProseText: View {
     /// takes no clicks, which is the honest answer on a surface with nothing to
     /// open them with — `INVARIANTS.md` §5.5.
     var onLink: ((String) -> Void)?
+    /// Whether this prose's animated emoji may move at all, before the
+    /// reader's own preferences are asked.
+    ///
+    /// **The DM column passes its hover.** It stays on screen for as long as
+    /// the conversation does, and Discord plays a sidebar bio's emoji only
+    /// while the pointer is on the sidebar (`animateOnHoverOrFocusOnly`).
+    /// Everywhere else the prose was opened to be read, and plays.
+    var animates = true
 
     @Environment(\.motion) private var motion
     /// The reader's own animation preference. Read here rather than in the
@@ -45,12 +53,13 @@ struct ProseText: View {
 
     /// Whether a custom emoji in this prose plays.
     ///
-    /// **Both answers, resolved together.** `AppSettings.playsAnimatedContent`
-    /// is the reader's own battery switch and Reduce Motion is the system's;
-    /// honouring one and not the other is how somebody who turned animation off
-    /// in System Settings gets it anyway.
+    /// **Every answer, resolved together.** The caller's gate, then
+    /// `AppSettings.playsAnimatedContent` — the reader's own battery switch —
+    /// and Reduce Motion, which is the system's; honouring one preference and
+    /// not the other is how somebody who turned animation off in System
+    /// Settings gets it anyway.
     private var playsEmoji: Bool {
-        settings.playsAnimatedContent && !motion.reduceMotion
+        animates && settings.playsAnimatedContent && !motion.reduceMotion
     }
 
     var body: some View {

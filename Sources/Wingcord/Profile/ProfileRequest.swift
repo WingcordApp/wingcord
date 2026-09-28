@@ -194,6 +194,14 @@ struct ProfilePresentation: Equatable, Sendable {
     /// cannot tell "this person has no bio" from "the bio has not arrived", and
     /// draws a stripped-down profile that then visibly fills in.
     var isLoading: Bool
+    /// Whether the frame this profile names is still on its way: its SKU has
+    /// arrived and its artwork's description has not.
+    ///
+    /// **Only the DM column waits on it.** There a frame moves the card — the
+    /// column widens by its side overhangs and the card gives up its top and
+    /// bottom — so Discord's sidebar draws nothing until the frame has
+    /// resolved (`r5`). A popout shows the card and fades the frame in.
+    var isFrameLoading = false
 }
 
 /// A clan tag, as it is worn beside a name.

@@ -55,6 +55,14 @@ struct DirectMessageProfileContainer: View {
 /// something that failed to load the rest of itself. Painting the pane means the
 /// ground runs to the foot of the window however short the profile is, and the
 /// scroll view inside it carries only the content.
+///
+/// **That box is the card a frame hangs on, and the frame widens the column.**
+/// Measured on Discord's own stylesheets in Chrome (`561419`, `253781`): the
+/// redesigned sidebar's card keeps its width and the column grows by the
+/// frame's two side overhangs, while the card gives up its top and bottom
+/// overhangs in height. So the box stays `profileColumnIdeal` wide, the
+/// artwork is scaled to that same card with or without it, and what moves is
+/// the column around it.
 struct DirectMessageProfilePane: View {
     var profile: ProfilePresentation?
     /// Opens the full profile, on a tab when a peek asked for one.
@@ -65,6 +73,14 @@ struct DirectMessageProfilePane: View {
     var openLink: ((String) -> Void)?
     /// Their widgets, resolved by the container for the same reason.
     var widgetPreviews: [WidgetPreview] = []
+
+    /// Whether the pointer is on the card, which is when its banner and the
+    /// emoji in its bio move — see `MiniProfileCard.animates`.
+    ///
+    /// **The whole box, not the content in it.** Discord tracks its whole
+    /// card, and this box runs past a short profile to the foot of the window:
+    /// the pointer over its empty lower half is still on the sidebar.
+    @State private var isHovering = false
 
     private static let width: CGFloat = Proportions.profileColumnIdeal
 
@@ -77,17 +93,34 @@ struct DirectMessageProfilePane: View {
         )
     }
 
+    /// The profile as the column draws it: still loading while a frame it
+    /// names is on its way.
+    ///
+    /// **Discord's sidebar draws nothing until the frame has resolved** (`r5`),
+    /// because the frame moves the card. This column shows what the roster
+    /// knows from its first frame, so the header is up before the profile
+    /// route answers and still moves when a frame lands for the first time;
+    /// what the hold keeps back is everything under the header, which then
+    /// arrives once, where it will stay.
+    private var shown: ProfilePresentation? {
+        guard var profile, profile.isFrameLoading else { return profile }
+        profile.isLoading = true
+        return profile
+    }
+
     var body: some View {
+        let shown = shown
         Group {
-            if let profile {
+            if let shown {
                 ScrollView {
                     MiniProfileCard(
-                        profile: profile,
+                        profile: shown,
                         openFullProfile: openFullProfile,
                         openLink: openLink,
                         widgetPreviews: widgetPreviews,
                         width: Self.width,
-                        form: .column
+                        form: .column,
+                        animates: isHovering
                     )
                 }
                 .scrollIndicators(.never)
@@ -108,8 +141,9 @@ struct DirectMessageProfilePane: View {
         // it — and it has to keep its corners, or the person's own surface stops
         // reading as an object and becomes a slab bolted to the window edge.
         //
-        // Filling comes from the frame, the corners from the clip, and the inset
-        // is what gives the corners somewhere to be.
+        // Filling comes from `maxHeight`, the corners from the clip, and the
+        // inset is what gives the corners somewhere to be.
+        .frame(width: Self.width)
         .frame(maxHeight: .infinity, alignment: .top)
         .modifier(ProfileGroundFill(
             ground: ground,
@@ -121,7 +155,17 @@ struct DirectMessageProfilePane: View {
             RoundedRectangle(cornerRadius: Radius.card, style: .continuous)
                 .strokeBorder(ground.borderStyle, lineWidth: ground.borderWidth)
         }
+        .onHover { hovering in
+            // A `@State` write of an equal value still invalidates.
+            guard isHovering != hovering else { return }
+            isHovering = hovering
+        }
+        // **Around the box and inside the column's own inset.** The frame's
+        // padding is what takes the overhangs out of the column, so it wraps
+        // the box and nothing else: the box keeps its width, gives up its top
+        // and bottom, and the column grows by the sides. No fade here —
+        // Discord's sidebar passes `fadeIn: false`.
+        .profileFrame(shown?.frame, cardWidth: Self.width, fadesIn: false)
         .padding(Spacing.base)
-        .frame(width: Self.width + Spacing.base * 2)
     }
 }

@@ -98,7 +98,6 @@ final class SessionController {
     /// Profile fetches in flight, so opening the same card twice — or a hover
     /// and a click on the same row — asks once.
     private var profileFetches: Set<UserID> = []
-    private var collectibleFetches: Set<String> = []
     var paletteFetches: Set<URL> = []
     /// The same guard for an activity's icon. Keyed by application rather than
     /// by URL because an app has one icon and the card asks for it once.
@@ -2019,11 +2018,16 @@ final class SessionController {
     /// keying it per kind would let a frame and an effect with the same SKU
     /// both be in flight, which is one round trip too many for an answer that
     /// can only be one of them.
+    ///
+    /// **The set is the model's**, because the DM column reads it: it holds its
+    /// card until a frame it names has resolved. Inserted before the task
+    /// starts, so no frame can see the profile answered and the frame not yet
+    /// asked for.
     func loadCollectible(sku: String) {
-        guard collectibleFetches.insert(sku).inserted else { return }
+        guard model.collectiblesLoading.insert(sku).inserted else { return }
         Task { [weak self] in
             guard let self else { return }
-            defer { collectibleFetches.remove(sku) }
+            defer { model.collectiblesLoading.remove(sku) }
             do {
                 switch try await rest.collectible(sku: sku) {
                 case .effect(let effect): model.profileEffects[sku] = effect
