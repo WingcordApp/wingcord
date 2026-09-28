@@ -25,7 +25,12 @@ nonisolated struct MessageTextStyle: @unchecked Sendable {
     var boldFont: NSFont
     var italicFont: NSFont
     var boldItalicFont: NSFont
+    /// Inline code: Discord's `code.inline` is 85% of the text around it.
     var codeFont: NSFont
+    /// A fenced block: `.markup code` is `.875rem` against a 1rem body.
+    var codeBlockFont: NSFont
+    /// A mention chip's face — `--font-weight-medium`, not bold.
+    var mentionFont: NSFont
     var authorFont: NSFont
     var metadataFont: NSFont
 
@@ -35,12 +40,9 @@ nonisolated struct MessageTextStyle: @unchecked Sendable {
     var linkColor: NSColor
     /// Whether every link carries a rule as well as its colour. See `link`.
     var underlinesLinks: Bool = false
+    /// A mention's ink. Its plate, and every other plate a text run sits on,
+    /// is resolved at paint time from `ThemeInk` — see `TextRunPlates`.
     var mentionColor: NSColor
-    var mentionBackground: NSColor
-    var selfMentionBackground: NSColor
-    var codeBackground: NSColor
-    var quoteRuleColor: NSColor
-    var spoilerCover: NSColor
 
     /// The em-space the inline emoji box is measured against, so an emoji tracks
     /// the text size rather than being pinned at 20pt forever.
@@ -76,10 +78,10 @@ nonisolated struct MessageTextStyle: @unchecked Sendable {
         let bold = manager.convert(body, toHaveTrait: .boldFontMask)
         let italic = manager.convert(body, toHaveTrait: .italicFontMask)
         let boldItalic = manager.convert(bold, toHaveTrait: .italicFontMask)
-        let code = NSFont.monospacedSystemFont(
-            ofSize: body.pointSize * 0.94,
-            weight: .regular
-        )
+        // Discord's own ratios (`code.inline` 85%, `.markup code` .875rem),
+        // taken against this body rather than Discord's 16 px one.
+        let code = NSFont.monospacedSystemFont(ofSize: body.pointSize * 0.85, weight: .regular)
+        let codeBlock = NSFont.monospacedSystemFont(ofSize: body.pointSize * 0.875, weight: .regular)
 
         return MessageTextStyle(
             bodyFont: body,
@@ -87,6 +89,8 @@ nonisolated struct MessageTextStyle: @unchecked Sendable {
             italicFont: italic,
             boldItalicFont: boldItalic,
             codeFont: code,
+            codeBlockFont: codeBlock,
+            mentionFont: NSFont.systemFont(ofSize: body.pointSize, weight: .medium),
             authorFont: manager.convert(body, toHaveTrait: .boldFontMask),
             metadataFont: NSFont.systemFont(
                 ofSize: NSFont.preferredFont(forTextStyle: .caption1).pointSize * scale
@@ -97,11 +101,6 @@ nonisolated struct MessageTextStyle: @unchecked Sendable {
             linkColor: .linkColor,
             underlinesLinks: AppSettings.shared.underlinesLinks,
             mentionColor: NSColor(Palette.accent),
-            mentionBackground: NSColor(Palette.accent).withAlphaComponent(0.16),
-            selfMentionBackground: NSColor(Palette.accent).withAlphaComponent(0.28),
-            codeBackground: NSColor(Palette.surfaceRaised),
-            quoteRuleColor: NSColor(Palette.selectionFill),
-            spoilerCover: NSColor(Palette.surfaceRaised),
             emojiWidth: body.pointSize * 1.28,
             emojiAscent: body.ascender * 1.05,
             emojiDescent: abs(body.descender),
@@ -184,21 +183,21 @@ nonisolated struct MessageTextStyle: @unchecked Sendable {
         [.font: metadataFont, .foregroundColor: tertiaryColor, .paragraphStyle: bodyParagraph]
     }
 
+    /// Inline code's glyphs. Its plate and hairline are painted from the run's
+    /// measured rectangles — CoreText's `.backgroundColor` is a flat box per
+    /// glyph run, with no corner and no border.
     var inlineCode: [NSAttributedString.Key: Any] {
-        [
-            .font: codeFont,
-            .foregroundColor: primaryColor,
-            .backgroundColor: codeBackground,
-            .paragraphStyle: bodyParagraph,
-        ]
+        [.font: codeFont, .foregroundColor: primaryColor, .paragraphStyle: bodyParagraph]
     }
 
     var codeBlock: [NSAttributedString.Key: Any] {
-        [
-            .font: codeFont,
-            .foregroundColor: primaryColor,
-            .paragraphStyle: codeParagraph,
-        ]
+        [.font: codeBlockFont, .foregroundColor: primaryColor, .paragraphStyle: codeParagraph]
+    }
+
+    /// A quote's own text: Discord draws a blockquote in `--text-subtle`. Runs
+    /// with a colour of their own — a link, a mention — keep it.
+    var quoteBody: [NSAttributedString.Key: Any] {
+        [.font: bodyFont, .foregroundColor: secondaryColor, .paragraphStyle: bodyParagraph]
     }
 
     var listMarker: [NSAttributedString.Key: Any] {
@@ -227,15 +226,15 @@ nonisolated struct MessageTextStyle: @unchecked Sendable {
         return attributes
     }
 
+    /// A mention's glyphs: the chip's medium face, in the role's colour or the
+    /// mention ink. The plate is painted — see `TextRunPlates`.
     func mention(
         base: [NSAttributedString.Key: Any],
-        isSelf: Bool,
         tint: UInt32? = nil
     ) -> [NSAttributedString.Key: Any] {
         var attributes = base
-        attributes[.font] = boldFont
+        attributes[.font] = mentionFont
         attributes[.foregroundColor] = tint.map { NSColor(Color(hex: $0)) } ?? mentionColor
-        attributes[.backgroundColor] = isSelf ? selfMentionBackground : mentionBackground
         return attributes
     }
 
@@ -261,12 +260,10 @@ nonisolated struct MessageTextStyle: @unchecked Sendable {
         if style.contains(.strikethrough) {
             attributes[.strikethroughStyle] = NSUnderlineStyle.single.rawValue
         }
-        if style.contains(.spoiler) {
-            // The concealed state is painted by the row painter over the
-            // measured range; the text still lays out normally underneath, so
-            // revealing one costs a repaint and never a relayout.
-            attributes[.foregroundColor] = NSColor.clear
-        }
+        // **A spoiler's text keeps its ink.** The concealed state is an opaque
+        // plate painted OVER the measured range, so revealing one is a repaint
+        // and the words are there to show — drawn clear, a revealed spoiler
+        // uncovered nothing at all.
     }
 
     private var bodyParagraph: NSParagraphStyle {
@@ -279,21 +276,62 @@ nonisolated struct MessageTextStyle: @unchecked Sendable {
         return style
     }
 
+    /// A fenced block's lines, inset by the box's `.5em` padding on both sides.
+    /// The space above and below the box is added to its first and last line —
+    /// see `MessageTextBuilder` — because every line of a block is a paragraph
+    /// to CoreText.
     private var codeParagraph: NSParagraphStyle {
         let style = NSMutableParagraphStyle()
         style.lineSpacing = 1
-        style.firstLineHeadIndent = 8
-        style.headIndent = 8
+        style.firstLineHeadIndent = codeBlockPadding
+        style.headIndent = codeBlockPadding
+        style.tailIndent = -codeBlockPadding
         style.lineBreakMode = .byCharWrapping
         return style
     }
 
+    /// Discord's `pre code` padding, `.5em` of the block's own face.
+    var codeBlockPadding: CGFloat { (codeBlockFont.pointSize * 0.5).rounded() }
+
+    /// Above a fenced block: `pre`'s `margin-top: 6px`, and the box's own top
+    /// padding, which is drawn inside that space.
+    var codeBlockLeading: CGFloat { 6 + codeBlockPadding }
+
+    /// A quote's lines: the 4-point rule and the 12 points of air after it
+    /// (`padding-inline: 12px 8px`), so the text wraps inside the rule rather
+    /// than under it.
     var quoteParagraph: NSParagraphStyle {
         let style = NSMutableParagraphStyle()
         style.lineSpacing = lineSpacing
-        style.firstLineHeadIndent = 14
-        style.headIndent = 14
+        style.firstLineHeadIndent = Self.quoteIndent
+        style.headIndent = Self.quoteIndent
         style.lineBreakMode = .byWordWrapping
+        return style
+    }
+
+    /// The rule's width, and the text's inset from the block's leading edge.
+    static let quoteRuleWidth: CGFloat = 4
+    static let quoteIndent: CGFloat = quoteRuleWidth + 12
+    /// `.blockquoteContainer`'s `margin-block: 4px`.
+    static let quoteMargin: CGFloat = 4
+
+    /// A chip's side padding: `padding: 0 2px` on a mention and a timestamp,
+    /// `0 .2em` on inline code. Reserved in the line by a zero-glyph run
+    /// delegate either side, so the plate never covers a neighbour.
+    static let chipPadding: CGFloat = 2
+    var codePadding: CGFloat { (codeFont.pointSize * 0.2).rounded() }
+
+    /// A paragraph style with a different space above and below — the first
+    /// and last line of a quote or a fenced block, which is how a box or a
+    /// rule gets its margin when every line is a CoreText paragraph.
+    func paragraph(
+        _ base: NSParagraphStyle,
+        before: CGFloat? = nil,
+        after: CGFloat? = nil
+    ) -> NSParagraphStyle {
+        let style = (base.mutableCopy() as? NSMutableParagraphStyle) ?? NSMutableParagraphStyle()
+        if let before { style.paragraphSpacingBefore = before }
+        if let after { style.paragraphSpacing = after }
         return style
     }
 

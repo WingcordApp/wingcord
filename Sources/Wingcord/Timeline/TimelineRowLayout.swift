@@ -124,6 +124,11 @@ nonisolated struct MessageRow: @unchecked Sendable {
     /// The activity invitation, when the message is one. Like a poll, this IS
     /// the message — the launch carries no body at all.
     var activityInvite: ActivityInviteSlot?
+    /// The invites the text links to, drawn as Discord's invite cards.
+    var inviteCards: [InviteCardSlot] = []
+    /// The profiles the text links to — Discord's user profile embed. Hosted
+    /// over the canvas, not drawn by it; see `UserCardSlot`.
+    var userCards: [UserCardSlot] = []
     var reactions: [ReactionSlot]
     /// Add-a-reaction and bookmark, at the end of the reaction row.
     ///
@@ -540,6 +545,20 @@ nonisolated struct TimelineLayoutEngine: Sendable {
         /// has actually seen, so a channel with no music in it carries an empty
         /// dictionary and pays a lookup that never fires.
         var spotify: [String: SpotifyUnfurl] = [:]
+        /// What each linked invite turned out to be, by code — see
+        /// `AppModel.inviteLookups`. Empty for nearly every channel.
+        var invites: [String: InviteLookup] = [:]
+        /// The profile cards the reader has opened past Discord's fold.
+        var expandedInvites: Set<InviteCardFold> = []
+        /// The colours taken from pictures, by picture — a server card's banner
+        /// is its icon's colour where the server chose none. See
+        /// `AppModel.derivedPalettes`.
+        var palettes: [URL: [UInt32]] = [:]
+        /// What each profile card measured — see `AppModel.userCardSizes`.
+        var userCardSizes: [UserCardKey: CGSize] = [:]
+        /// The server this transcript is in, which the profile cards in it
+        /// wear. Nil in a direct message.
+        var guildID: GuildID?
     }
 
     /// `@unchecked` for the same reason `MessageTextStyle` is: it carries a
@@ -621,7 +640,12 @@ nonisolated struct TimelineLayoutEngine: Sendable {
         /// activity's accent, which resolves late and only repaints, this cannot
         /// live on the paint state. Without it, the first layout of a message
         /// carrying a Spotify link is the only one it ever gets.
-        var spotifyRevision: UInt64
+        var cardRevision: UInt64
+        /// Whether the row can carry a card at all — see `carriesCards(_:)`.
+        /// **Only these rows are rebuilt when a card lands**: comparing the
+        /// revision on every row relaid the whole loaded transcript each time
+        /// one invite resolved, and a chat opens with several resolving.
+        var carriesCards: Bool
         var isRunHead: Bool
         var message: Message
         var row: MessageRow
@@ -631,21 +655,32 @@ nonisolated struct TimelineLayoutEngine: Sendable {
             width: Int,
             presentationRevision: UInt64,
             identityToken: UInt64,
-            spotifyRevision: UInt64,
+            cardRevision: UInt64,
             isRunHead: Bool
         ) -> Bool {
             self.width == width
                 && self.presentationRevision == presentationRevision
                 && self.identityToken == identityToken
-                && self.spotifyRevision == spotifyRevision
+                && (!carriesCards || self.cardRevision == cardRevision)
                 && self.isRunHead == isRunHead
                 && self.message == message
         }
     }
 
     var presentationRevision: UInt64
-    /// Moves when a Spotify card lands. See `CacheEntry.spotifyRevision`.
-    var spotifyRevision: UInt64 = 0
+    /// Moves when a Spotify card lands. See `CacheEntry.cardRevision`.
+    var cardRevision: UInt64 = 0
+
+    /// Whether a message can draw a card that resolves after it is laid out:
+    /// an invite or profile link in its text, or a Spotify embed in it or in
+    /// what it forwards. The same two gates the builders use, so the answer cannot
+    /// disagree with what the row draws.
+    static func carriesCards(_ message: Message) -> Bool {
+        !InviteCard.codes(in: message.content).isEmpty
+            || !UserLink.userIDs(in: message.content).isEmpty
+            || message.embeds.contains { $0.providerName == "Spotify" }
+            || message.forwarded?.embeds.contains { $0.providerName == "Spotify" } == true
+    }
 
     /// The resolved card behind an embed, if it is a Spotify link and Spotify's
     /// own page has answered for it.
@@ -733,7 +768,7 @@ nonisolated struct TimelineLayoutEngine: Sendable {
                        width: width,
                        presentationRevision: presentationRevision,
                        identityToken: input.mentions.token,
-                       spotifyRevision: spotifyRevision,
+                       cardRevision: cardRevision,
                        isRunHead: message.isRunHead
                    )
                 {
@@ -749,7 +784,8 @@ nonisolated struct TimelineLayoutEngine: Sendable {
                     width: width,
                     presentationRevision: presentationRevision,
                     identityToken: input.mentions.token,
-                    spotifyRevision: spotifyRevision,
+                    cardRevision: cardRevision,
+                    carriesCards: Self.carriesCards(message.message),
                     isRunHead: message.isRunHead,
                     message: message.message,
                     row: row
@@ -803,6 +839,8 @@ nonisolated struct TimelineLayoutEngine: Sendable {
         for slot in row.components { bottom = max(bottom, slot.rect.maxY) }
         if let poll = row.poll { bottom = max(bottom, poll.rect.maxY) }
         if let invite = row.activityInvite { bottom = max(bottom, invite.rect.maxY) }
+        for card in row.inviteCards { bottom = max(bottom, card.rect.maxY) }
+        for card in row.userCards { bottom = max(bottom, card.rect.maxY) }
         for slot in row.reactions { bottom = max(bottom, slot.rect.maxY) }
         for slot in row.reactionControls { bottom = max(bottom, slot.rect.maxY) }
         if let chip = row.threadChip { bottom = max(bottom, chip.rect.maxY) }
@@ -1041,6 +1079,13 @@ nonisolated struct TimelineLayoutEngine: Sendable {
         // says, and drawn as an ordinary card it is a grey box listing
         // `victor_answer_id` at somebody. See `Message.pollResult`.
         for embed in input.settings.showsEmbeds ? message.drawableEmbeds : [] {
+            // A profile link's unfurl, where its profile card is drawn instead —
+            // Discord shows the card and not both.
+            if let url = embed.url, let userID = UserLink.userID(inURL: url),
+               input.userCardSizes[UserCardKey(userID: userID, guildID: input.guildID)] != nil
+            {
+                continue
+            }
             y += TimelineMetrics.attachmentGap
             let slot = EmbedLayoutEngine.layout(
                 embed,
@@ -1053,6 +1098,41 @@ nonisolated struct TimelineLayoutEngine: Sendable {
             )
             embeds.append(slot)
             y = slot.rect.maxY
+        }
+
+        // The invites the text links to — Discord's invite card, one per code,
+        // once the answer has arrived. Until then the link is only a link.
+        var inviteCards: [InviteCardSlot] = []
+        for code in InviteCard.codes(in: message.content) {
+            guard let lookup = input.invites[code] else { continue }
+            y += TimelineMetrics.attachmentGap
+            let slot = InviteCardLayoutEngine.layout(
+                code: code,
+                lookup: lookup,
+                sentByReader: input.mentions.selfIDs.contains(message.authorID.rawValue),
+                selfIDs: input.mentions.selfIDs,
+                isExpanded: input.expandedInvites.contains(InviteCardFold(message: message.id, code: code)),
+                palettes: input.palettes,
+                origin: CGPoint(x: contentX, y: y),
+                availableWidth: contentWidth,
+                style: input.style
+            )
+            inviteCards.append(slot)
+            y = slot.rect.maxY
+        }
+
+        // The profiles the text links to, once each card has measured itself.
+        // Until then the link is only a link, exactly as an invite is.
+        var userCards: [UserCardSlot] = []
+        if !input.userCardSizes.isEmpty {
+            for userID in UserLink.userIDs(in: message.content) {
+                let key = UserCardKey(userID: userID, guildID: input.guildID)
+                guard let size = input.userCardSizes[key] else { continue }
+                y += TimelineMetrics.attachmentGap
+                let slot = UserCardSlot(rect: CGRect(x: contentX, y: y, width: size.width, height: size.height), key: key)
+                userCards.append(slot)
+                y = slot.rect.maxY
+            }
         }
 
         // A Components V2 tree, which is the whole body of the message it
@@ -1186,6 +1266,8 @@ nonisolated struct TimelineLayoutEngine: Sendable {
             components: components,
             poll: poll,
             activityInvite: activityInvite,
+            inviteCards: inviteCards,
+            userCards: userCards,
             reactions: reactions,
             reactionControls: reactionControls,
             threadChip: chip.slot,

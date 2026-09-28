@@ -205,8 +205,8 @@ private struct SourceRow: View {
                         .font(.system(.subheadline, weight: .semibold))
                         .foregroundStyle(Ink.primary)
                         .lineLimit(1)
-                    if let standing = source.standing {
-                        GuildStandingBadge(standing: standing, side: 13)
+                    if let mark = source.mark {
+                        GuildMarkBadge(mark: mark, side: 13)
                     }
                 }
                 if let counts {

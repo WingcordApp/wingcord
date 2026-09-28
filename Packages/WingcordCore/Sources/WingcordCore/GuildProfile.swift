@@ -121,40 +121,9 @@ public struct GuildProfile: Hashable, Sendable, Identifiable {
     /// Whether the server may wear a tag at all.
     public var canSetTag: Bool { features.contains("GUILD_TAGS") }
 
-    /// The one standing Discord grants the server, highest first.
-    ///
-    /// **Ordered, not a set.** A partnered server is also a community and
-    /// usually also discoverable; drawing every mark it qualifies for is three
-    /// rosettes saying the same thing. Discord shows one.
-    public var standing: Standing? { Standing(features: features) }
-
-    public enum Standing: Hashable, Sendable {
-        case partner
-        case verified
-        case discoverable
-        case community
-
-        /// The highest standing a feature set qualifies for.
-        ///
-        /// A static resolver as well as an instance property, because a server
-        /// the reader is already in can answer this from the guild object it
-        /// already holds — with no profile fetch and nothing to construct.
-        public init?(features: Set<String>) {
-            if features.contains("PARTNERED") { self = .partner }
-            else if features.contains("VERIFIED") { self = .verified }
-            else if features.contains("DISCOVERABLE") { self = .discoverable }
-            else if features.contains("COMMUNITY") { self = .community }
-            else { return nil }
-        }
-
-        public var label: String {
-            switch self {
-            case .partner: "Discord Partner"
-            case .verified: "Verified"
-            case .discoverable: "Discoverable Server"
-            case .community: "Community Server"
-            }
-        }
+    /// The mark beside the server's name — see `GuildMark`.
+    public var mark: GuildMark? {
+        GuildMark(features: features, boostTier: premiumTier, boostCount: premiumSubscriptionCount)
     }
 }
 

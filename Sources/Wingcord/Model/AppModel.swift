@@ -23,6 +23,12 @@ final class AppModel {
     // MARK: Identity
 
     var currentUserID: UserID?
+    /// What the reader's subscription buys, and their age group.
+    ///
+    /// **Never read the tier off `users[currentUserID]`.** That row is rewritten
+    /// by every route that carries a user object, and the fields that decide a
+    /// perk arrive on only three of them — see `AccountEntitlements`.
+    var entitlements = AccountEntitlements()
     /// Every role the reader holds anywhere, plus their own id, as one flat set.
     /// A mention test is then one lookup rather than a scan over roles per
     /// message per evaluation.
@@ -56,7 +62,31 @@ final class AppModel {
     var guildEmojis: [GuildID: [EmojiRef]] = [:]
     var guildStickers: [GuildID: [StickerRef]] = [:]
     var presences: [UserID: Presence] = [:]
+    /// Who is typing where, and until when — Discord's ten seconds after each
+    /// `TYPING_START`. See `AppModel+Typing`.
+    ///
+    /// **Its own table, never a transcript's box.** A box is a three-slot LRU,
+    /// and writing a DM's typing into one created a box for a conversation
+    /// nobody had open and touched the recency list — evicting the channel
+    /// being read. Unobserved: readers observe the two revisions below, so a
+    /// keystroke in a server never rebuilds the direct-message list.
+    @ObservationIgnored var typingTable: [ChannelID: [UserID: Date]] = [:]
+    /// Moves whenever anybody starts or stops typing anywhere.
+    var typingRevision: UInt64 = 0
+    /// Moves only when somebody starts or stops typing in a direct message —
+    /// the one thing the DM list draws of it.
+    var directMessageTypingRevision: UInt64 = 0
     var readStates: [ChannelID: ReadState] = [:]
+    /// Each server's scheduled-events cursor — see `ReadySnapshot.guildEventAcks`.
+    var guildEventAcks: [GuildID: MessageID] = [:]
+    /// Each server's scheduled events, from READY, `GUILD_CREATE` and the
+    /// `GUILD_SCHEDULED_EVENT_*` dispatches — what the inbox's Events group is
+    /// drawn from.
+    var scheduledEvents: [GuildID: [ScheduledEvent]] = [:]
+    /// Whether the account is on Discord's newer notification settings
+    /// (`notification_settings.flags & 16`). It decides how a channel's unread
+    /// setting resolves — see `AppModel.resolvedUnreadSetting(of:)`.
+    var usesNewNotifications = false
     /// The rail's arrangement, from the account's own client settings.
     var folders: [GuildFolder] = []
     var expandedFolderIDs: Set<UInt64> = []
@@ -461,6 +491,11 @@ final class AppModel {
     /// The reaction chip the pointer is resting on. Drives the reaction
     /// tooltip and nothing else — see `ReactionTooltipOverlay`.
     var reactionHover: ReactionHover?
+    /// The server mark the pointer is resting on, on an invite card. Drives its
+    /// flyout and nothing else — see `GuildMarkTooltipOverlay`.
+    var markHover: GuildMarkHover?
+    /// The unread groups folded in the inbox, from the account's settings.
+    var inboxCollapse = InboxCollapse()
     /// Who reacted, per chip, and the count they were fetched at — a tooltip
     /// shown again over a chip whose count has not moved asks nobody.
     /// Not observed: no view reads it, only the tooltip's fetch.
@@ -468,6 +503,7 @@ final class AppModel {
     var messageMenu: MessageMenuRequest?
     var reactionPicker: ReactionPickerRequest?
     var forwardRequest: ForwardRequest?
+    var shareProfileRequest: ShareProfileRequest?
     /// Channels a forward is being written to. Keyed by target so two can be in
     /// flight and neither blocks the other.
     var forwardsInFlight: Set<ChannelID> = []
@@ -822,6 +858,8 @@ final class AppModel {
     /// checked without content in it. `@ObservationIgnored` because nothing
     /// observes it: it is read once, by `toggleDiscovery`.
     @ObservationIgnored var discoverySeed: DiscoveryState?
+    /// The grid a discovery preview left, for its Back.
+    @ObservationIgnored var discoveryReturn: DiscoveryState?
     /// Discovery's two heading lists, held for the session rather than for the
     /// open page.
     ///
@@ -1230,7 +1268,19 @@ final class AppModel {
     /// activity's accent, which resolves late and only repaints. A row already
     /// laid out would otherwise keep the quiet card for the life of the
     /// session. See `TimelineLayoutEngine.CacheEntry`.
-    var spotifyRevision: UInt64 = 0
+    var cardRevision: UInt64 = 0
+    /// What each invite posted in a message turned out to be, by code — the
+    /// cards the transcript draws under them. Filled once per code per session
+    /// by `SessionController.resolveInvites`; a card landing moves
+    /// `cardRevision`, which is what tells the canvas to lay the row out again.
+    @ObservationIgnored var inviteLookups: [String: InviteLookup] = [:]
+    /// The profile invite cards the reader has opened past Discord's fold.
+    /// Read by the transcript's layout; moved together with `cardRevision`,
+    /// which is what tells the transcript to read it again.
+    @ObservationIgnored var expandedInviteCards: Set<InviteCardFold> = []
+    /// What each profile card in a message measured, by person and server —
+    /// the space the transcript reserves for it. See `UserCardHosts`.
+    @ObservationIgnored var userCardSizes: [UserCardKey: CGSize] = [:]
     /// The preview clip currently playing, if any. Drawn by the card whose chip
     /// started it, so the chip can offer to stop it.
     var spotifyPreviewURL: URL?
@@ -1607,8 +1657,6 @@ struct MessageBox: Sendable {
     /// what they meant. Holding it here also means Escape gives back exactly
     /// what was typed before the command started. See `PendingCommand`.
     var command: PendingCommand?
-    /// Who is typing, and when their indicator expires.
-    var typing: [UserID: Date] = [:]
     /// Files staged for the next message. Survives eviction alongside the
     /// draft — dropping a video and then switching channels to check something
     /// must not throw the video away.
@@ -1624,7 +1672,6 @@ struct MessageBox: Sendable {
     /// Drops the transcript, keeps the user's own input.
     mutating func evictTranscript() {
         messages.removeAll(keepingCapacity: false)
-        typing.removeAll(keepingCapacity: false)
         heldLive.removeAll(keepingCapacity: false)
         hasMoreHistory = true
         isLoadingHistory = false

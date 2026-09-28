@@ -43,7 +43,7 @@ struct ExpressionSourceTests {
         #expect(guild.onlineCount == 596)
         #expect(guild.memberCount == 1916)
         #expect(guild.description?.isEmpty == false)
-        #expect(guild.standing == .discoverable)
+        #expect(guild.mark?.kind == .discoverable)
         #expect(guild.isPublic)
     }
 
@@ -131,7 +131,7 @@ struct ExpressionSourceTests {
         #expect(guild.name == "Grove Street Families")
         #expect(guild.onlineCount == 32_248)
         #expect(guild.memberCount == 209_627)
-        #expect(guild.standing == .discoverable)
+        #expect(guild.mark?.kind == .discoverable)
         #expect(guild.isPublic)
         #expect(guild.sampleStickers.count == 3)
         #expect(guild.sampleStickers[2].format == .apng)

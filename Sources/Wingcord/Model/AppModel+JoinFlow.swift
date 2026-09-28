@@ -396,19 +396,18 @@ extension AppModel {
 
 extension AppModel {
 
-    /// Joins a server from its tag card, or opens its application form.
+    /// The tag card's button: a look inside the server, or its application.
     ///
     /// **Two acts behind one button**, decided by the server rather than by
-    /// the caller — see `guildEntry`. An open server is entered with the same
-    /// request discovery's own Join sends; a gated one raises the form, and
-    /// nothing is joined until the reader answers it.
+    /// the caller — see `guildEntry`. Discord's Join from a tag card is a
+    /// preview (`join from server tag.har`); the membership is the preview's
+    /// own Join, once the reader has seen the place.
     func enterGuild(_ guildID: GuildID) {
         guard guilds[guildID] == nil else { return openGuild(guildID) }
-        let profile = guildProfiles[guildID]
-        if profile?.features.contains("MEMBER_VERIFICATION_GATE_ENABLED") == true {
-            openJoinGate(guildID)
-        } else {
-            sessionController.joinGuildDirectly(guildID)
+        switch guildEntry(for: guildID, profile: guildProfiles[guildID], isJoined: false) {
+        case .apply: openJoinGate(guildID)
+        case .join: previewFromGuildProfile(guildID)
+        case .none, .pending: break
         }
     }
 

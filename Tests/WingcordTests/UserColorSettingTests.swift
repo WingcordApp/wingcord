@@ -16,7 +16,8 @@ struct UserColorSettingTests {
             roleRevision: 5,
             structureRevision: 6,
             colorSaturation: saturation,
-            inkCeiling: inkCeiling
+            inkCeiling: inkCeiling,
+            typers: []
         )
     }
 

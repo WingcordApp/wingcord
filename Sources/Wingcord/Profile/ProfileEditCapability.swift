@@ -21,13 +21,18 @@ import Foundation
 /// nobody.
 struct ProfileEditCapability: Equatable {
 
-    /// Whether the account carries Nitro proper.
+    /// Whether the subscription buys `profilePremiumFeatures` — the account's
+    /// banner, theme colours and effect.
     ///
-    /// **`premium_type == 2` exactly.** Nitro Basic is a paid tier and does not
-    /// carry these — the same distinction `PremiumTier.themesProfile` is written
-    /// about — so a test for "has paid for something" offers Basic accounts
-    /// fields the server refuses.
-    var wearsNitro: Bool
+    /// **Nitro proper only**, from Discord's own perk table: Basic and Classic
+    /// are paid tiers and carry none of these, so a test for "has paid for
+    /// something" offers them fields the server refuses. Read off
+    /// `AccountEntitlements`, never off the reader's user row.
+    var customizesProfile: Bool
+    /// Whether it buys `premiumGuildMemberProfile` — a per-server avatar,
+    /// banner, bio and cosmetics. A perk of its own in Discord's table; the two
+    /// happen to share a tier today.
+    var customizesServerProfile: Bool
     /// Whether this server grants `CHANGE_NICKNAME`. Meaningless in the account
     /// scope, where there is no nickname.
     var canChangeNickname: Bool
@@ -46,9 +51,9 @@ struct ProfileEditCapability: Equatable {
     var canEditPronouns: Bool { true }
 
     /// `theme_colors`, `banner` and `profile_effect_id` are all marked premium.
-    var canEditThemeColors: Bool { wearsNitro }
-    var canEditBanner: Bool { wearsNitro }
-    var canEditProfileEffect: Bool { wearsNitro }
+    var canEditThemeColors: Bool { customizesProfile }
+    var canEditBanner: Bool { customizesProfile }
+    var canEditProfileEffect: Bool { customizesProfile }
 
     // MARK: Per-server — `PATCH /guilds/{id}/members/@me`
 
@@ -60,14 +65,14 @@ struct ProfileEditCapability: Equatable {
     /// Everything else a server profile can carry is premium: `bio`, `banner`,
     /// `avatar`, `avatar_decoration_sku_id`, `collectibles` and the three
     /// `display_name_*` keys.
-    var canEditGuildBio: Bool { wearsNitro }
-    var canEditGuildAvatar: Bool { wearsNitro }
-    var canEditGuildCosmetics: Bool { wearsNitro }
+    var canEditGuildBio: Bool { customizesServerProfile }
+    var canEditGuildAvatar: Bool { customizesServerProfile }
+    var canEditGuildCosmetics: Bool { customizesServerProfile }
 
     /// What the rail's colour section is called, which is the reader-visible
     /// half of `canEditThemeColors`.
     var colourSectionTitle: String {
-        wearsNitro ? "Theme & Banner" : "Banner Colour"
+        customizesProfile ? "Theme & Banner" : "Banner Colour"
     }
 
     /// The line shown against a control the account cannot use.

@@ -44,9 +44,10 @@ struct CollectiblePickerSheet: View {
     /// Whether the reader's account may wear a Nitro-exclusive collectible.
     ///
     /// **`premium_type == 2` exactly.** Nitro Basic is a paid tier and does not
-    /// carry these — the same distinction `PremiumTier.themesProfile` is written
+    /// carry these — the same distinction `PremiumTier.grants(_:)` is written
     /// about — so a test for "has paid for something" would offer Basic accounts
-    /// items the server refuses.
+    /// items the server refuses. `profile` is the reader's own, whose tier the
+    /// projection takes from `AccountEntitlements` rather than the user row.
     private var wearsNitro: Bool { profile.premiumTier == .nitro }
 
     /// Whether this item can be worn at all.

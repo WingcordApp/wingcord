@@ -347,7 +347,12 @@ struct ProfileEditRail: View {
     /// than letting four sheets each answer 403.
     @ViewBuilder
     private var nitroFooter: some View {
-        if profile.premiumTier == .none {
+        // Whatever this scope's perk is, not "pays for nothing": Basic and
+        // Classic are paid and still have half this rail locked.
+        if editor.scope.guildID == nil
+            ? !capability.customizesProfile
+            : !capability.customizesServerProfile
+        {
             VStack(alignment: .leading, spacing: Spacing.base) {
                 Text("Some of these need Nitro.")
                     .font(Typeface.rowSubtitle)

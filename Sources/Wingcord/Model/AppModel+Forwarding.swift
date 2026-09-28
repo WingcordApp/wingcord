@@ -41,8 +41,9 @@ extension AppModel {
     /// model; a client without that history should not invent one.
     ///
     /// The source channel is left out: forwarding a message into the channel it
-    /// is already in is a control with nothing behind it.
-    func forwardTargets(excluding source: ChannelID) -> [ForwardTarget] {
+    /// is already in is a control with nothing behind it. Nil where there is no
+    /// source — a profile being shared.
+    func forwardTargets(excluding source: ChannelID?) -> [ForwardTarget] {
         // Read before the cache is consulted, so a hit still registers the
         // dependencies its reader needs.
         let key = ForwardTargetMemoKey(
@@ -162,5 +163,5 @@ struct ForwardTargetMemoKey: Hashable, Sendable {
     /// Names and handles are drawn on every row, and a nickname change is the
     /// only thing that moves them.
     var identityRevision: UInt64
-    var source: ChannelID
+    var source: ChannelID?
 }

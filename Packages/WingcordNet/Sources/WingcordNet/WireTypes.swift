@@ -38,11 +38,13 @@ struct UserDTO: Decodable, Sendable {
     var collectibles: CollectiblesDTO?
     var display_name_styles: DisplayNameStylesDTO?
     var primary_guild: PrimaryGuildDTO?
-    /// Which Nitro the account carries. **Present on `/users/@me` and on
-    /// nobody else**, which is exactly where it is needed: Nitro is what decides
-    /// whether the reader may use another server's emoji, and that is a question
-    /// only ever asked about the reader.
+    /// Which Nitro the account carries. On the reader's own object — READY's
+    /// `user`, `/users/@me`, `USER_UPDATE` — and read from there into
+    /// `AccountEntitlements`, never off the shared user row; see `entitlements`.
     var premium_type: Int?
+    /// Which age group Discord has placed the account in. The reader's own
+    /// object only, like `premium_type`. See `AgeGroup`.
+    var age_verification_status: Int?
     // **Only ever populated by `GET /users/@me`.** Every other route that
     // carries a user carries a *public* one, so these are nil for everybody
     // else and that is not a failure to decode — see `AccountDetails`.
@@ -50,6 +52,15 @@ struct UserDTO: Decodable, Sendable {
     var phone: String?
     var verified: Bool?
     var mfa_enabled: Bool?
+
+    /// The reader's own account, when this is the reader's own object.
+    var currentAccount: CurrentAccount {
+        CurrentAccount(
+            user: domain,
+            premiumType: premium_type,
+            ageVerificationStatus: age_verification_status
+        )
+    }
 
     var domain: User {
         // The box is built only when there is something to put in it. One
@@ -635,6 +646,11 @@ struct GuildDTO: Decodable, Sendable {
     /// every stage channel as dark until somebody starts one while it is
     /// watching.
     var stage_instances: [StageInstanceDTO]?
+    /// The server's scheduled events — what the inbox's Events group is
+    /// drawn from, and how it knows one is new. **Lossy**: this rides in
+    /// READY, and one event this client cannot read must not cost the reader
+    /// every server they are in.
+    var guild_scheduled_events: LossyList<ScheduledEventDTO>?
     /// Present on the READY payload's guild objects, absent on a plain fetch.
     var properties: GuildProperties?
     /// When the reader joined, at the top level. Nested on READY — see
@@ -1406,6 +1422,14 @@ struct ReadStateDTO: Decodable, Sendable {
     var id: ChannelID
     var last_message_id: MessageID?
     var mention_count: Int?
+    /// `0` or absent for a channel. **The rest are not channels** — `1` a
+    /// server's scheduled events, `2` the notification centre, `3` the server
+    /// home, `4` an onboarding question, `5` message requests — and their `id`
+    /// is a SERVER's or the account's, which a server's oldest channel can
+    /// share. Read into the channel table, one overwrote that channel's cursor.
+    var read_state_type: Int?
+    /// A non-channel state's cursor, where a channel's is `last_message_id`.
+    var last_acked_id: MessageID?
 }
 
 struct ClientSettingsDTO: Decodable, Sendable {
@@ -1478,6 +1502,8 @@ public struct ClientSettings: Sendable {
     public var statusRaw: Data?
     /// Whose theme a themed server is drawn in. See `GuildThemeSource`.
     public var serverThemes = ServerThemePreferences()
+    /// The unread groups folded in the inbox. See `InboxCollapse`.
+    public var inboxCollapse = InboxCollapse()
 
     public init(
         folders: [GuildFolder],
@@ -1488,7 +1514,8 @@ public struct ClientSettings: Sendable {
         activityPrivacy: ActivityPrivacy = ActivityPrivacy(),
         privacyRaw: Data? = nil,
         statusRaw: Data? = nil,
-        serverThemes: ServerThemePreferences = ServerThemePreferences()
+        serverThemes: ServerThemePreferences = ServerThemePreferences(),
+        inboxCollapse: InboxCollapse = InboxCollapse()
     ) {
         self.folders = folders
         self.guildPositions = guildPositions
@@ -1499,6 +1526,7 @@ public struct ClientSettings: Sendable {
         self.privacyRaw = privacyRaw
         self.statusRaw = statusRaw
         self.serverThemes = serverThemes
+        self.inboxCollapse = inboxCollapse
     }
 }
 
@@ -2000,12 +2028,10 @@ struct GuildProfileDTO: Decodable, Sendable {
             name: name ?? "Unknown",
             iconHash: icon_hash,
             // **The two are NOT interchangeable, and folding them was a
-            // bug.** `custom_banner_hash` is a different asset family and no
-            // path this client can build resolves it — measured, see
-            // `CDN.guildProfileBanner`. Folded, every tagged server asked the
-            // CDN for a picture that 404s and then drew the plate; kept apart,
-            // it draws the plate without the request. It is still decoded,
-            // because the Server Profile editor writes it back.
+            // bug.** `custom_banner_hash` is a discovery splash, a different
+            // asset family — measured, see `GuildBannerArt.artworkURL` in the
+            // app. Folded, every tagged server asked the banner path for a
+            // picture that 404s.
             bannerHash: banner_hash,
             description: description.flatMap { $0.isEmpty ? nil : $0 },
             memberCount: member_count,
@@ -2445,5 +2471,30 @@ struct StickerSourceDTO: Decodable, Sendable {
             features: Set(features ?? []),
             sampleStickers: sample
         ))
+    }
+}
+
+/// A list decoded one element at a time: an element that cannot be read is
+/// dropped rather than failing the payload it rides in.
+struct LossyList<Element: Decodable & Sendable>: Decodable, Sendable {
+    var elements: [Element]
+
+    init(from decoder: any Decoder) throws {
+        var container = try decoder.unkeyedContainer()
+        var elements: [Element] = []
+        while !container.isAtEnd {
+            if let element = try? container.decode(Element.self) {
+                elements.append(element)
+            } else {
+                // A failed element leaves the cursor where it was; stepping
+                // over it with a type that reads anything moves it on.
+                _ = try? container.decode(Skipped.self)
+            }
+        }
+        self.elements = elements
+    }
+
+    private struct Skipped: Decodable {
+        init(from decoder: any Decoder) throws {}
     }
 }

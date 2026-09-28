@@ -127,20 +127,20 @@ struct SoundboardGateTests {
     func defaultsAreAlwaysFree() {
         for nitro in [true, false] {
             for guild in [home, elsewhere, nil] {
-                #expect(SoundboardGate.canPlay(sound(nil), hasNitro: nitro, inGuild: guild))
+                #expect(SoundboardGate.canPlay(sound(nil), playsEverywhere: nitro, inGuild: guild))
             }
         }
     }
 
     @Test("A server's own sounds are free in that server")
     func aServerSetIsFreeAtHome() {
-        #expect(SoundboardGate.canPlay(sound(home), hasNitro: false, inGuild: home))
+        #expect(SoundboardGate.canPlay(sound(home), playsEverywhere: false, inGuild: home))
     }
 
     @Test("Another server's sounds need the subscription")
     func elsewhereNeedsNitro() {
-        #expect(!SoundboardGate.canPlay(sound(elsewhere), hasNitro: false, inGuild: home))
-        #expect(SoundboardGate.canPlay(sound(elsewhere), hasNitro: true, inGuild: home))
+        #expect(!SoundboardGate.canPlay(sound(elsewhere), playsEverywhere: false, inGuild: home))
+        #expect(SoundboardGate.canPlay(sound(elsewhere), playsEverywhere: true, inGuild: home))
     }
 
     /// A boosted server that lost its boosts keeps the sounds and cannot play
@@ -149,22 +149,22 @@ struct SoundboardGateTests {
     @Test("An unavailable sound is refused whatever the account carries")
     func unavailableBeatsEverything() {
         #expect(!SoundboardGate.canPlay(
-            sound(home, available: false), hasNitro: true, inGuild: home
+            sound(home, available: false), playsEverywhere: true, inGuild: home
         ))
         #expect(!SoundboardGate.canPlay(
-            sound(nil, available: false), hasNitro: true, inGuild: home
+            sound(nil, available: false), playsEverywhere: true, inGuild: home
         ))
     }
 
     @Test("A refusal says which of the two reasons it is")
     func refusalNamesTheReason() {
         let lost = SoundboardGate.refusal(
-            sound(home, available: false), hasNitro: true, inGuild: home
+            sound(home, available: false), playsEverywhere: true, inGuild: home
         )
         #expect(lost?.contains("boosts") == true)
-        let gated = SoundboardGate.refusal(sound(elsewhere), hasNitro: false, inGuild: home)
+        let gated = SoundboardGate.refusal(sound(elsewhere), playsEverywhere: false, inGuild: home)
         #expect(gated?.contains("Nitro") == true)
-        #expect(SoundboardGate.refusal(sound(nil), hasNitro: false, inGuild: home) == nil)
+        #expect(SoundboardGate.refusal(sound(nil), playsEverywhere: false, inGuild: home) == nil)
     }
 }
 

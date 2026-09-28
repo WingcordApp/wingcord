@@ -192,7 +192,7 @@ struct SoundboardPicker: View {
         .accessibilityHint(Text(sound.isLocked
             ? (SoundboardGate.refusal(
                 SoundboardSound(id: sound.id, name: sound.name, guildID: nil),
-                hasNitro: presentation.hasNitro,
+                playsEverywhere: presentation.playsEverywhere,
                 inGuild: nil
               ) ?? "Not available")
             : "Play this sound in the call"))

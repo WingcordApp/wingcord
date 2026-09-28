@@ -19,7 +19,7 @@ import Foundation
 /// route** — the same server came back with fifty-three features from
 /// `/discoverable-guilds` and six from `/discoverable-guilds/search`. Documented,
 /// and confirmed. So nothing may test a feature's *absence* on a value that came
-/// from a search: `standing` reads the marks that are present and says nothing
+/// from a search: `mark` reads the marks that are present and says nothing
 /// about the ones that are not.
 public struct DiscoverableGuild: Hashable, Sendable, Identifiable {
     public var id: GuildID
@@ -69,11 +69,9 @@ public struct DiscoverableGuild: Hashable, Sendable, Identifiable {
         return letters.isEmpty ? "#" : String(letters).uppercased()
     }
 
-    /// The verified or partnered rosette, resolved the same way every other
-    /// surface in this app resolves it.
-    public var standing: GuildProfile.Standing? {
-        GuildProfile.Standing(features: features)
-    }
+    /// The mark beside the server's name, resolved the same way every other
+    /// surface in this app resolves it — see `GuildMark`.
+    public var mark: GuildMark? { GuildMark(features: features, boostCount: boostCount) }
 
     /// Whether this server can be looked at before joining.
     ///

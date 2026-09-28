@@ -164,7 +164,7 @@ extension AppModel {
                 description: isPublic ? guild.description : nil,
                 onlineCount: isPublic ? guild.onlineCount : nil,
                 memberCount: isPublic ? guild.memberCount : nil,
-                standing: isPublic ? guild.standing : nil,
+                mark: isPublic ? guild.mark : nil,
                 sample: sample,
                 isJoined: false
             )
@@ -214,7 +214,7 @@ extension AppModel {
                 CDN.guildIcon(guildID: guildID, hash: $0, side: Metrics.avatarMessage)
             },
             monogram: guild.monogram,
-            standing: GuildProfile.Standing(features: guild.features),
+            mark: guild.mark,
             isJoined: true
         )
     }
@@ -297,23 +297,23 @@ extension AppModel {
                 if let named = profile?.name { return AppModel.monogram(of: named) }
                 return "?"
             }(),
-            // **Both hashes, because they are two different CDN families** —
-            // see `CDN.guildProfileBanner`. The resident guild's own banner
-            // stands in for a server the reader is already a member of, which
-            // is the one case the profile route may not have been asked for.
-            bannerURL: CDN.guildProfileBanner(
+            // **Discord's rule, not the server's banner.** Its profile card
+            // shows the tag profile's own artwork for a discoverable server and
+            // a glow of the server's colour for every other — never the banner
+            // over the channel list (`_3` and `n6` in module `649640`).
+            bannerURL: GuildBannerArt.artworkURL(
                 guildID: guildID,
-                bannerHash: profile?.bannerHash ?? resident?.bannerHash,
                 customBannerHash: profile?.customBannerHash,
+                features: profile?.features ?? resident?.features ?? [],
                 width: 340
             ),
+            bannerColor: profile?.brandColorPrimary ?? (profile?.iconHash ?? resident?.iconHash).flatMap {
+                GuildBannerArt.paletteURL(guildID: guildID, iconHash: $0).flatMap { derivedPalettes[$0]?.first }
+            },
             badgeURL: profile?.badgeHash.flatMap {
                 CDN.guildTagBadge(guildID: guildID, hash: $0)
             } ?? badgeURL,
-            badgeColorPrimary: profile?.badgeColorPrimary,
-            badgeColorSecondary: profile?.badgeColorSecondary,
-            standing: profile?.standing
-                ?? resident.flatMap { GuildProfile.Standing(features: $0.features) },
+            mark: profile?.mark ?? resident?.mark,
             description: profile?.description,
             memberCount: profile?.memberCount ?? resident?.memberCount,
             onlineCount: profile?.onlineCount,
@@ -413,8 +413,17 @@ extension AppModel {
         // Waiting on a moderator beats offering the form again.
         if pendingJoinRequestGuildIDs.contains(guildID) { return .pending }
         guard let profile else { return .none }
-        return profile.features.contains("MEMBER_VERIFICATION_GATE_ENABLED")
-            ? .apply
-            : .join
+        // **Discord's own button for a card with no invite in hand** (module
+        // `461888`): the application where the server recruits in public, a
+        // look inside where it is discoverable — its Join is a preview, not a
+        // membership — and nothing at all otherwise.
+        let features = profile.features
+        if features.contains("MEMBER_VERIFICATION_GATE_ENABLED"),
+           features.contains("MEMBER_VERIFICATION_MANUAL_APPROVAL"),
+           profile.visibility == 3
+        {
+            return .apply
+        }
+        return features.contains("DISCOVERABLE") ? .join : .none
     }
 }

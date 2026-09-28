@@ -169,7 +169,7 @@ struct DiscoveryCard: Hashable, Sendable, Identifiable {
     var artworkURL: URL?
     var iconURL: URL?
     var monogram: String
-    var standing: GuildProfile.Standing?
+    var mark: GuildMark?
     var memberCount: Int
     var onlineCount: Int
     /// Whether this server can be looked at before joining. A card that cannot

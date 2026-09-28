@@ -161,58 +161,61 @@ extension AppModel {
 
     // MARK: Unreads — derived, not fetched
 
-    /// Every channel with something unread in it, newest activity first.
-    ///
-    /// **Three exclusions, and each removes a row that would be noise:**
-    ///
-    ///  1. **Muted channels and muted servers.** Muting is the reader saying
-    ///     they do not want to be told; an inbox that lists them anyway is the
-    ///     one place the mute does not hold.
-    ///  2. **Channels the reader cannot read.** A stale read state outlives
-    ///     losing access, and the row would open onto a refusal.
-    ///  3. **Channels acknowledged from here this session**, which have not yet
-    ///     been confirmed by the socket.
-    ///
-    /// Ordered by the channel's newest message — the reader's question is "what
-    /// happened most recently", and the channel-list order answers a different
-    /// one.
-    func unreadInboxChannels() -> [Channel] {
-        unreadInboxChannels(firstOnly: false)
+    /// What the Unreads tab lists: a channel, or a server's new scheduled
+    /// events.
+    enum UnreadEntry {
+        case channel(Channel)
+        /// Discord's `guild-events` row: the events created after
+        /// `oldestRead`, up to `newest`.
+        case events(GuildID, oldestRead: UInt64, newest: UInt64)
     }
 
-    /// **Walked over the channels, not over `readStates`** — and the difference
-    /// is a defect a test caught rather than a preference. A channel the reader
-    /// has never opened has *no read state at all*, and the sidebar already
-    /// counts one with a `lastMessageID` as unread (`unreadState(of:)` returns
-    /// `channel.lastMessageID != nil` for a missing entry). Iterating the read
-    /// states instead would never visit it, so every channel in a freshly
-    /// joined server showed unread on the rail and was invisible in the inbox —
-    /// which is exactly the "two definitions of unread" that `ReadState`'s own
-    /// note warns about.
+    /// Every channel the Unreads tab lists, in Discord's order.
+    func unreadInboxChannels() -> [Channel] {
+        unreadInboxEntries(firstOnly: false).compactMap {
+            if case .channel(let channel) = $0 { channel } else { nil }
+        }
+    }
+
+    /// **Discord's own builder, ported rather than inferred** — the inbox
+    /// chunk's walk (`n7`) and filter (`n4`), `7361192fd4542113.js`:
     ///
-    /// `unreadState(of:)` is that single definition and is what decides here.
-    /// The two things it does not know about are added on top: a muted *server*,
-    /// and a channel acknowledged from this flyout a moment ago.
+    /// ```
+    /// conversations, then each server in rail order, its channels in the
+    /// order its list draws them, each followed by the threads the reader
+    /// follows under it, then the server's Events — then a STABLE sort by rank
+    /// ```
     ///
-    /// - Parameter firstOnly: stop at the first hit and skip the sort. What
-    ///   `canMarkAllInboxRead` needs, and it turns a walk over every channel on
-    ///   the account into a walk over a handful — the flyout's header asks that
-    ///   question on every pass, including every hover.
-    private func unreadInboxChannels(firstOnly: Bool) -> [Channel] {
-        var rows: [(channel: Channel, rank: Int)] = []
-        // **Conversations first, then the rail — and then a STABLE sort by
-        // rank.** The insertion order is what survives inside a rank, which is
-        // why the walk and the sort are two steps rather than one comparator.
+    /// The insertion order is what survives inside a rank, which is why the
+    /// walk and the sort are two steps rather than one comparator.
+    ///
+    /// - Parameter firstOnly: stop at the first hit and skip the sort — what
+    ///   `canMarkAllInboxRead` asks on every pass of the flyout's header.
+    func unreadInboxEntries(firstOnly: Bool) -> [UnreadEntry] {
+        var rows: [(entry: UnreadEntry, rank: Int)] = []
+        let now = Date.now
         for channelID in channelIndex.privateChannelIDs() {
-            guard let row = consider(channelID, inGuild: nil) else { continue }
-            rows.append(row)
-            if firstOnly { return [row.channel] }
+            guard let row = consider(channelID, inGuild: nil, now: now) else { continue }
+            if firstOnly { return [.channel(row.channel)] }
+            rows.append((.channel(row.channel), row.rank))
         }
         for guildID in orderedGuildIDs {
             for channelID in sidebarOrderedChannelIDs(inGuild: guildID) {
-                guard let row = consider(channelID, inGuild: guildID) else { continue }
-                rows.append(row)
-                if firstOnly { return [row.channel] }
+                if let row = consider(channelID, inGuild: guildID, now: now) {
+                    if firstOnly { return [.channel(row.channel)] }
+                    rows.append((.channel(row.channel), row.rank))
+                }
+                for threadID in sidebarThreadIDs(inParent: channelID) {
+                    guard let row = consider(threadID, inGuild: guildID, now: now) else { continue }
+                    if firstOnly { return [.channel(row.channel)] }
+                    rows.append((.channel(row.channel), row.rank))
+                }
+            }
+            // Discord's `guild-events` row, at its own rank of 5.
+            if let events = unreadEvents(inGuild: guildID) {
+                let entry = UnreadEntry.events(guildID, oldestRead: events.oldestRead, newest: events.newest)
+                if firstOnly { return [entry] }
+                rows.append((entry, 5))
             }
         }
         // `enumerated` keeps it stable: Swift's `sort` is not, and an unstable
@@ -220,99 +223,160 @@ extension AppModel {
         // payloads — the list twitching every time anything moved.
         return rows.enumerated()
             .sorted { ($0.element.rank, $0.offset) < ($1.element.rank, $1.offset) }
-            .map(\.element.channel)
+            .map(\.element.entry)
     }
 
-    /// How long a channel stays in the recent ranks before it sinks.
-    private static let inboxRecentWindow: TimeInterval = 2 * 24 * 60 * 60
-    private static let inboxStaleWindow: TimeInterval = 10 * 24 * 60 * 60
+    /// A server's events the reader has not seen — Discord's test for the
+    /// `guild-events` row: not muted, nor its new events, and the newest event
+    /// past the events cursor (or, with no cursor, past the day they joined).
+    private func unreadEvents(inGuild guildID: GuildID) -> (oldestRead: UInt64, newest: UInt64)? {
+        guard !inbox.acknowledgedEventGuildIDs.contains(guildID),
+              !mutedGuildIDs.contains(guildID),
+              guildUserSettings[guildID]?.muteScheduledEvents != true,
+              let newest = scheduledEvents[guildID]?.lazy.map(\.id).max(),
+              let cursor = guildEventAcks[guildID]?.rawValue
+                ?? guilds[guildID]?.joinedAt.map({ MessageID(before: $0).rawValue }),
+              newest > cursor
+        else { return nil }
+        return (cursor, newest)
+    }
 
-    /// One channel and the rank it sorts under, or nil when it does not belong.
-    ///
-    /// **Ported from Discord's own inbox rather than inferred.** Every rule
-    /// below is one line of its unread builder, and the four this client had
-    /// wrong are marked. The ranks are its own, and they are a *stable* sort
-    /// over the rail walk above — which is why a run of one server's channels
-    /// stays together.
+    private static let day: TimeInterval = 24 * 60 * 60
+
+    /// One channel and the rank it sorts under, or nil when it does not belong
+    /// — Discord's `n4`, every guard in its order.
     ///
     /// ```
-    ///  0  a favourited channel
-    ///  1  a conversation
-    ///  2  mentioned
-    ///  3  mentioned, low importance            (not modelled — see below)
-    ///  4  quiet, recent, set to All Messages
-    ///  5  quiet, recent, anything else
-    ///  6  older than two days
-    ///  7  set to Nothing
-    ///  8  older than ten days
+    ///  0  a favourited channel          4  quiet, recent, All Messages
+    ///  1  a conversation                5  quiet, recent, anything else
+    ///  2  mentioned                     6  older than two days
+    ///  3  mentioned, low importance     7  set to Nothing
+    ///                                   8  older than ten days
     /// ```
     ///
-    /// **The mute is checked before the mention gate**, so a muted channel is
-    /// dropped even when somebody named the reader. This client had the
-    /// opposite rule on a guess and it was wrong.
-    ///
-    /// **A conversation needs a mention too**, which is what keeps a chat
-    /// nobody is waiting on out: a conversation read years ago has no mentions
-    /// left on its read state, so it drops out rather than sitting above the
-    /// servers that pinged somebody this morning.
-    ///
-    /// **A channel with no read cursor falls back to the reader's JOIN DATE**,
-    /// and a server with no join date is skipped entirely. That is the whole of
-    /// the "unread messages from 2021" fault: with no cursor every message ever
-    /// posted counts as unread, so the summary opened on a server's founding
-    /// conversation. Nothing before the reader arrived can be unread to them.
-    ///
-    /// **Rank 3 is folded into rank 2.** Discord separates a low-importance
-    /// mention — an `@everyone` — from one that named the reader, and this
-    /// client cannot tell them apart: the read state carries a count and not
-    /// its provenance. Folding keeps the two adjacent, which is where they
-    /// belong, and is the smaller error.
-    ///
-    /// **One predicate is unresolved.** Discord admits a *quiet* guild channel
-    /// when a module this capture does not include answers true for it — which
-    /// is what ranks 4 to 8 exist for. Every row observed carried a mention, so
-    /// quiet channels are dropped here; if a channel that should be listed is
-    /// missing, that predicate is where it went.
+    /// **Rank 3 is folded into rank 2**: a read state carries a mention count,
+    /// not whether the mention was an `@everyone`.
     private func consider(
         _ channelID: ChannelID,
-        inGuild guildID: GuildID?
+        inGuild guildID: GuildID?,
+        now: Date
     ) -> (channel: Channel, rank: Int)? {
         guard !inbox.acknowledgedChannelIDs.contains(channelID),
               let channel = channelIndex[channelID],
               channel.kind.isConversation
         else { return nil }
 
-        // Guild, category, or the channel itself.
-        let muted = mutedGuildIDs.contains(where: { $0 == guildID })
-            || notificationPreferences.mutedChannelIDs.contains(channelID)
-            || channel.parentID.map(notificationPreferences.mutedChannelIDs.contains) == true
-        guard !muted else { return nil }
+        // **The mute first**, so a muted channel is dropped even when somebody
+        // named the reader. Discord exempts conversations from it.
+        if !channel.kind.isPrivate, isMutedForInbox(channel, inGuild: guildID) { return nil }
 
-        let state = unreadState(of: channel)
-        guard state.mentions > 0 else { return nil }
-
-        if !channel.kind.isPrivate {
-            guard permissionGate.canView(channelID) else { return nil }
+        let mentions = readStates[channelID]?.mentionCount ?? 0
+        if channel.kind.isPrivate {
+            guard mentions > 0 else { return nil }
+        } else {
+            // **The quiet half of the list** — the predicate the last port left
+            // open, read out of module `455234`: a channel with nothing naming
+            // the reader is listed when it is unread AND its unread setting
+            // resolves to All Messages.
+            guard mentions > 0 || isQuietlyListed(channel, inGuild: guildID, now: now) else {
+                return nil
+            }
+            guard permissionGate.permissions(in: channelID).contains(.readMessageHistory) else {
+                return nil
+            }
         }
 
-        // The cursor, or the day the reader joined.
-        let cursor = readStates[channelID]?.lastAcknowledgedID
-            ?? guildID.flatMap { guilds[$0]?.joinedAt }.map(MessageID.init(before:))
-        guard let cursor, let newest = channel.lastMessageID else { return nil }
-        guard newest.rawValue > cursor.rawValue else { return nil }
-
-        return (channel, rank(for: channel, newest: newest, inGuild: guildID))
+        guard let cursor = unreadCursor(of: channel, inGuild: guildID),
+              let newest = channel.lastMessageID,
+              newest.rawValue > cursor.rawValue
+        else { return nil }
+        return (channel, rank(for: channel, mentions: mentions, newest: newest, inGuild: guildID, now: now))
     }
 
-    private func rank(for channel: Channel, newest: MessageID, inGuild guildID: GuildID?) -> Int {
-        if pinnedChannelIDs.contains(channel.id) { return 0 }
-        if channel.kind.isPrivate { return 1 }
-        // Folded — see `consider`.
-        if unreadState(of: channel).mentions > 0 { return 2 }
-        let age = Date.now.timeIntervalSince(newest.timestamp)
-        if age > Self.inboxStaleWindow { return 8 }
-        if age > Self.inboxRecentWindow { return 6 }
-        let level = NotificationPolicy.resolvedLevel(
+    /// Where the reader's reading stops: the read cursor, or — for a channel
+    /// with none — **the day they joined**, so nothing from before they
+    /// arrived counts. A server with no join date has no cursor at all.
+    func unreadCursor(of channel: Channel, inGuild guildID: GuildID?) -> MessageID? {
+        readStates[channel.id]?.lastAcknowledgedID
+            ?? guildID.flatMap { guilds[$0]?.joinedAt }.map(MessageID.init(before:))
+    }
+
+    /// The server, the category or the channel — or, for a thread, the
+    /// reader's own membership.
+    private func isMutedForInbox(_ channel: Channel, inGuild guildID: GuildID?) -> Bool {
+        if let guildID, mutedGuildIDs.contains(guildID) { return true }
+        if notificationPreferences.mutedChannelIDs.contains(channel.id) { return true }
+        if let parent = channel.parentID {
+            if notificationPreferences.mutedChannelIDs.contains(parent) { return true }
+            // A thread's category is its parent's.
+            if channel.kind.isThread,
+               let category = channelIndex[parent]?.parentID,
+               notificationPreferences.mutedChannelIDs.contains(category)
+            {
+                return true
+            }
+        }
+        return channel.kind.isThread && threadMemberships[channel.id]?.isMutedNow() == true
+    }
+
+    /// Discord's `455234`: unread, and set to count every message.
+    private func isQuietlyListed(_ channel: Channel, inGuild guildID: GuildID?, now: Date) -> Bool {
+        guard canBeUnread(channel, inGuild: guildID, now: now),
+              let newest = channel.lastMessageID,
+              let cursor = unreadCursor(of: channel, inGuild: guildID),
+              newest.rawValue > cursor.rawValue
+        else { return false }
+        return resolvedUnreadSetting(of: channel, inGuild: guildID) == .allMessages
+    }
+
+    /// Discord's `canBeUnread`: a thread must be one the reader follows; in a
+    /// server showing only opted-in channels, a channel quiet for a week
+    /// cannot be unread, nor can one the reader has not opted into, read in
+    /// the last three days or been named in.
+    private func canBeUnread(_ channel: Channel, inGuild guildID: GuildID?, now: Date) -> Bool {
+        if channel.kind.isThread { return threadMemberships[channel.id] != nil }
+        guard let guildID, hidesUnfollowedChannels(inGuild: guildID) else { return true }
+        let lastActivity = channel.lastMessageID?.timestamp ?? .distantPast
+        guard now.timeIntervalSince(lastActivity) <= 7 * Self.day else { return false }
+        let isOptedIn = followedChannelIDs.contains(channel.id)
+            || channel.parentID.map(followedChannelIDs.contains) == true
+        guard !isOptedIn else { return true }
+        let state = readStates[channel.id]
+        let readLately = state?.lastAcknowledgedID
+            .map { now.timeIntervalSince($0.timestamp) < 3 * Self.day } ?? false
+        return readLately || (state?.mentionCount ?? 0) > 0
+    }
+
+    /// Which messages count as unread in a channel — Discord's
+    /// `resolveUnreadSetting`, a separate question from which ones notify.
+    ///
+    /// A conversation, a thread, and every channel of an account still on the
+    /// older notification settings count everything. Otherwise the channel's
+    /// own choice, then its category's, then the server's, then the server's
+    /// notification level: All Messages counts everything, anything else only
+    /// mentions.
+    func resolvedUnreadSetting(of channel: Channel, inGuild guildID: GuildID?) -> UnreadSetting {
+        guard let guildID, !channel.kind.isThread, usesNewNotifications else { return .allMessages }
+        let settings = guildUserSettings[guildID]
+        if let own = UnreadSetting(channelFlags: settings?.channelOverrides[channel.id]?.flags) {
+            return own
+        }
+        if let parent = channel.parentID,
+           let inherited = UnreadSetting(channelFlags: settings?.channelOverrides[parent]?.flags)
+        {
+            return inherited
+        }
+        if let flags = settings?.flags {
+            if flags & GuildUserSettingsFlags.unreadsAllMessages != 0 { return .allMessages }
+            if flags & GuildUserSettingsFlags.unreadsOnlyMentions != 0 { return .onlyMentions }
+        }
+        return notificationLevel(of: channel, inGuild: guildID) == .allMessages
+            ? .allMessages
+            : .onlyMentions
+    }
+
+    private func notificationLevel(of channel: Channel, inGuild guildID: GuildID?) -> MessageNotificationLevel {
+        NotificationPolicy.resolvedLevel(
             NotificationPolicy.Subject(
                 channelID: channel.id,
                 guildID: guildID,
@@ -323,7 +387,29 @@ extension AppModel {
             ),
             preferences: notificationPreferences
         )
-        switch level {
+    }
+
+    private func rank(
+        for channel: Channel,
+        mentions: Int,
+        newest: MessageID,
+        inGuild guildID: GuildID?,
+        now: Date
+    ) -> Int {
+        if pinnedChannelIDs.contains(channel.id) { return 0 }
+        if channel.kind.isPrivate { return 1 }
+        if mentions > 0 { return 2 }
+        let age = now.timeIntervalSince(newest.timestamp)
+        if age > 10 * Self.day { return 8 }
+        if age > 2 * Self.day { return 6 }
+        // A thread ranks by the reader's own setting on it.
+        if channel.kind.isThread {
+            let flags = threadMemberships[channel.id]?.flags ?? []
+            if flags.contains(.allMessages) { return 4 }
+            if flags.contains(.noMessages) { return 7 }
+            return 5
+        }
+        switch notificationLevel(of: channel, inGuild: guildID) {
         case .allMessages: return 4
         case .nothing: return 7
         case .onlyMentions, .inherit: return 5
@@ -362,83 +448,29 @@ extension AppModel {
         return ordered
     }
 
-    /// One channel, or nil when it does not belong in the list.
-    ///
-    /// **The filter is the notification policy, and that is the whole reason
-    /// this tab was a wall of noise.** Every row in Discord's own Unreads
-    /// carries a red mention count — six of six in the capture — and that is
-    /// not a coincidence about those servers: a large server defaults to
-    /// *Only @mentions*, so an unread channel in one earns a place here only
-    /// when somebody named the reader. Listing every channel with anything
-    /// unread instead put a bot spamming a feed channel above a person asking
-    /// a question, and on an account this size that is most of the list.
-    ///
-    /// `NotificationPolicy.resolvedLevel` is the same resolution the banners
-    /// use — channel, then server, then the server's own default, with
-    /// `inherit` a step rather than an answer. One definition of "would this
-    /// have told me", asked by two surfaces, because two would drift.
-    ///
-    /// - Parameter guildMuted: whether the whole server is muted. Passed in so
-    ///   the caller's loop can keep walking a muted server's channels: **a mute
-    ///   silences a channel, it does not hide somebody typing your name.**
-    private func consider(_ channelID: ChannelID, guildMuted: Bool) -> Channel? {
-        guard !inbox.acknowledgedChannelIDs.contains(channelID),
-              let channel = channelIndex[channelID],
-              // A category has no messages and a voice room's unread is its
-              // text side, which is the channel itself — `isConversation` is
-              // what the sidebar uses to decide the same thing.
-              channel.kind.isConversation
-        else { return nil }
-        let state = unreadState(of: channel)
-        guard state.unread else { return nil }
-        guard permissionGate.canView(channelID) else { return nil }
-
-        // A conversation has no levels at all — Discord offers none — so the
-        // mute is its only control, exactly as the policy has it.
-        if channel.kind.isPrivate { return state.muted ? nil : channel }
-
-        let named = state.mentions > 0
-        guard named || !(state.muted || guildMuted) else { return nil }
-
-        let level = NotificationPolicy.resolvedLevel(
-            NotificationPolicy.Subject(
-                channelID: channelID,
-                guildID: channel.guildID,
-                guildDefault: channel.guildID
-                    .flatMap { guilds[$0] }
-                    .map { MessageNotificationLevel(guildDefault: $0.defaultMessageNotifications) }
-                    ?? .allMessages
-            ),
-            preferences: notificationPreferences
-        )
-        switch level {
-        case .nothing:
-            return nil
-        case .allMessages:
-            return channel
-        case .onlyMentions, .inherit:
-            // `.inherit` cannot survive `resolvedLevel`; treated as the quieter
-            // of the two rather than trapped, for the reason the policy gives.
-            return named ? channel : nil
-        }
-    }
-
     private func unreadGroups(width: CGFloat, presentationRevision: UInt64) -> [InboxGroup] {
-        let channels = unreadInboxChannels()
-        guard !channels.isEmpty else { return [] }
+        let entries = unreadInboxEntries(firstOnly: false)
+        guard !entries.isEmpty else { return [] }
 
         let style = PresentationRevision.shared.style
         let settings = PresentationRevision.shared.timeline
         let engine = TimelineLayoutEngine(presentationRevision: presentationRevision)
         let mentions = mentionContext()
 
-        return channels.enumerated().compactMap { index, channel in
+        return entries.enumerated().compactMap { index, entry in
+            let channel: Channel
+            switch entry {
+            case .events(let guildID, let oldestRead, let newest):
+                return eventsGroup(guildID, oldestRead: oldestRead, newest: newest, occurrence: index)
+            case .channel(let unread):
+                channel = unread
+            }
             // **Only what is actually unread, and only what is already loaded.**
             // The bodies come from the transcript's own box when the channel has
             // been opened this session and are fetched otherwise — by the row,
             // when it appears. A tab that fetched every unread channel up front
             // would make sixty requests on open.
-            let anchor = readStates[channel.id]?.lastAcknowledgedID
+            let anchor = unreadCursor(of: channel, inGuild: channel.guildID)
             // **`prefix`, not `suffix` — the OLDEST unread first.** Checked
             // against `unreads.har`: Discord anchors its `?around=` on the read
             // cursor and reads forward from it, so the first thing under the
@@ -520,10 +552,41 @@ extension AppModel {
         }
     }
 
+    /// A server's Events group: the events created since the cursor, oldest
+    /// first — Discord's `su`, which draws each as the event's own card.
+    private func eventsGroup(
+        _ guildID: GuildID,
+        oldestRead: UInt64,
+        newest: UInt64,
+        occurrence: Int
+    ) -> InboxGroup? {
+        guard let guild = guilds[guildID] else { return nil }
+        let events = (scheduledEvents[guildID] ?? [])
+            .filter { $0.id > oldestRead && $0.id <= newest }
+            .sorted { $0.id < $1.id }
+        guard !events.isEmpty else { return nil }
+        // Discord keys the row by the server's id standing in for a channel's.
+        let channelID = ChannelID(rawValue: guildID.rawValue)
+        return InboxGroup(
+            id: InboxGroupID(channelID: channelID, occurrence: occurrence),
+            channelID: channelID,
+            name: "Events",
+            symbolName: "calendar",
+            breadcrumb: guild.name,
+            iconURL: guild.iconHash.flatMap { CDN.guildIcon(guildID: guildID, hash: $0, side: Metrics.avatarRow) },
+            monogram: guild.monogram,
+            mentionCount: 0,
+            canOpen: true,
+            rows: [],
+            eventsGuildID: guildID,
+            events: events
+        )
+    }
+
     /// How many messages one unread channel shows before it is a transcript
     /// rather than a summary. Discord's own inbox caps around here, and past it
     /// the reader should be opening the channel.
-    static let unreadsPerChannel = 12
+    static let unreadsPerChannel = 25
 
     // MARK: Building a group
 
@@ -820,14 +883,49 @@ extension AppModel {
     /// per-channel route is sixty requests through a rate limiter, which is a
     /// visible stall and then a 429.
     func markAllInboxRead() {
-        let updates = unreadInboxChannels().compactMap { channel -> ReadStateUpdate? in
-            guard let newest = channel.lastMessageID else { return nil }
-            return ReadStateUpdate(channelID: channel.id, messageID: newest)
+        // Discord's `markAllRead`: every row, each with its own read-state type.
+        let updates = unreadInboxEntries(firstOnly: false).compactMap { entry -> ReadStateUpdate? in
+            switch entry {
+            case .channel(let channel):
+                guard let newest = channel.lastMessageID else { return nil }
+                inbox.acknowledgedChannelIDs.insert(channel.id)
+                return ReadStateUpdate(channelID: channel.id, messageID: newest)
+            case .events(let guildID, _, let newest):
+                inbox.acknowledgedEventGuildIDs.insert(guildID)
+                guildEventAcks[guildID] = MessageID(rawValue: newest)
+                return ReadStateUpdate(
+                    channelID: ChannelID(rawValue: guildID.rawValue),
+                    messageID: MessageID(rawValue: newest),
+                    kind: .guildEvent
+                )
+            }
         }
         guard !updates.isEmpty else { return }
-        for update in updates { inbox.acknowledgedChannelIDs.insert(update.channelID) }
         inbox.revision &+= 1
         sessionController.acknowledgeAll(updates)
+    }
+
+    /// Marks a server's Events group read — a `GUILD_EVENT` acknowledgement of
+    /// its newest event, which is what Discord's inbox sends.
+    func markInboxEventsRead(_ guildID: GuildID) {
+        guard let newest = scheduledEvents[guildID]?.lazy.map(\.id).max(),
+              inbox.acknowledgedEventGuildIDs.insert(guildID).inserted
+        else { return }
+        guildEventAcks[guildID] = MessageID(rawValue: newest)
+        inbox.revision &+= 1
+        sessionController.acknowledgeAll([ReadStateUpdate(
+            channelID: ChannelID(rawValue: guildID.rawValue),
+            messageID: MessageID(rawValue: newest),
+            kind: .guildEvent
+        )])
+    }
+
+    /// Shows the rows a refused mark-all-read hid.
+    func revertInboxAcknowledgement(of channelIDs: [ChannelID]) {
+        inbox.acknowledgedChannelIDs.subtract(channelIDs)
+        // An Events row is acknowledged under its server's id.
+        inbox.acknowledgedEventGuildIDs.subtract(channelIDs.map { GuildID(rawValue: $0.rawValue) })
+        inbox.revision &+= 1
     }
 
     /// Whether the Unreads tab has anything to mark read — what the header's
@@ -835,7 +933,7 @@ extension AppModel {
     ///
     /// Short-circuits: this is asked on every pass of the flyout's header, and
     /// the answer is almost always yes on the first channel it looks at.
-    var canMarkAllInboxRead: Bool { !unreadInboxChannels(firstOnly: true).isEmpty }
+    var canMarkAllInboxRead: Bool { !unreadInboxEntries(firstOnly: true).isEmpty }
 
     /// Removes a bookmark or a reminder.
     func removeSavedMessage(_ messageID: MessageID, in channelID: ChannelID) {

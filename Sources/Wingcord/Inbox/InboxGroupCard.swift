@@ -26,10 +26,21 @@ struct InboxGroupCard: View {
 
     private var shape: RoundedRectangle { .rect(cornerRadius: Radius.glass) }
 
+    /// Folded in the account's settings — Discord's `collapsedInInbox`. Only
+    /// the Unreads tab folds.
+    private var isCollapsed: Bool {
+        guard tab == .unreads else { return false }
+        if let guildID = group.eventsGuildID { return model.inboxCollapse.guildEvents.contains(guildID) }
+        return model.inboxCollapse.channels.contains(group.channelID)
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             header
-            if !group.rows.isEmpty {
+            if !isCollapsed, !group.events.isEmpty {
+                Divider().opacity(0.4)
+                events
+            } else if !group.rows.isEmpty, !isCollapsed {
                 Divider().opacity(0.4)
                 rows
             }
@@ -46,8 +57,10 @@ struct InboxGroupCard: View {
         // **Only the Unreads tab fetches**, and only for a channel whose
         // messages are not already loaded. The other three tabs arrive with
         // their messages in the same response as their rows.
-        .task(id: group.channelID) {
-            guard tab == .unreads else { return }
+        // Keyed on the fold as well, so unfolding a group loads it — and a
+        // folded one asks for nothing, which is Discord's own rule.
+        .task(id: InboxGroupLoad(channelID: group.channelID, isCollapsed: isCollapsed)) {
+            guard tab == .unreads, !isCollapsed, group.eventsGuildID == nil else { return }
             model.sessionController.loadUnreadGroup(group.channelID)
         }
     }
@@ -57,7 +70,13 @@ struct InboxGroupCard: View {
     private var header: some View {
         HStack(spacing: Spacing.base) {
             Button {
-                model.openInboxChannel(group.channelID)
+                // An Events group opens the server's events, which is where
+                // Discord's own goes.
+                if let guildID = group.eventsGuildID {
+                    ServerSettingsWindow.open(guildID, section: .events)
+                } else {
+                    model.openInboxChannel(group.channelID)
+                }
             } label: {
                 HStack(spacing: Spacing.base) {
                     AvatarView(
@@ -125,10 +144,34 @@ struct InboxGroupCard: View {
     /// be a button that means something different from what it says.
     @ViewBuilder
     private var trailingAction: some View {
+        if tab == .unreads {
+            Button {
+                if let guildID = group.eventsGuildID {
+                    model.sessionController.foldInboxEvents(guildID: guildID, collapsed: !isCollapsed)
+                } else {
+                    model.sessionController.foldInboxGroup(channelID: group.channelID, collapsed: !isCollapsed)
+                }
+            } label: {
+                Image(systemName: "chevron.down")
+                    .font(.system(size: 11, weight: .semibold))
+                    .rotationEffect(.degrees(isCollapsed ? -90 : 0))
+                    .frame(width: 22, height: 22)
+                    .contentShape(.rect)
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(Ink.secondary)
+            .animation(motion.standard, value: isCollapsed)
+            .help(isCollapsed ? "Expand" : "Collapse")
+            .accessibilityLabel(Text(isCollapsed ? "Expand" : "Collapse"))
+        }
         switch tab {
         case .unreads, .mentions:
             Button {
-                model.markInboxGroupRead(group.channelID)
+                if let guildID = group.eventsGuildID {
+                    model.markInboxEventsRead(guildID)
+                } else {
+                    model.markInboxGroupRead(group.channelID)
+                }
             } label: {
                 Label("Mark As Read", systemImage: "checkmark")
                     .labelStyle(.iconOnly)
@@ -141,6 +184,36 @@ struct InboxGroupCard: View {
         case .bookmarks, .reminders, .scheduled:
             EmptyView()
         }
+    }
+
+    // MARK: The events
+
+    /// A server's new events, each on a line of its own: what, and when.
+    private var events: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            ForEach(group.events, id: \.id) { event in
+                HStack(alignment: .firstTextBaseline, spacing: Spacing.base) {
+                    Image(systemName: "calendar")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(Ink.tertiary)
+                        .accessibilityHidden(true)
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text(event.name)
+                            .font(.system(.subheadline, weight: .semibold))
+                            .foregroundStyle(Ink.primary)
+                            .lineLimit(1)
+                        Text(event.startsAt.formatted(date: .abbreviated, time: .shortened))
+                            .font(.system(.caption))
+                            .foregroundStyle(Ink.secondary)
+                    }
+                    Spacer(minLength: 0)
+                }
+                .padding(.horizontal, Spacing.snug)
+                .padding(.vertical, Spacing.tight + 2)
+                .accessibilityElement(children: .combine)
+            }
+        }
+        .padding(.vertical, Spacing.tight)
     }
 
     // MARK: The messages
@@ -505,4 +578,11 @@ struct InboxMessageRow: View {
         guard row.card != nil else { return }
         model.openInboxRow(row.id, in: row.channelID)
     }
+}
+
+/// What an unread group's load is keyed on: the channel, and whether it is
+/// folded.
+private struct InboxGroupLoad: Hashable {
+    var channelID: ChannelID
+    var isCollapsed: Bool
 }

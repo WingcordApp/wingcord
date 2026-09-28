@@ -160,7 +160,7 @@ extension AppModel {
             description: profile.description,
             memberCount: profile.memberCount,
             onlineCount: profile.onlineCount,
-            isVerified: profile.standing == .verified || profile.standing == .partner,
+            isVerified: profile.mark.map { $0.isVerified || $0.kind == .partnered } ?? false,
             inviteCode: code,
             // The reader is in it or they are not, and the button says which.
             isJoined: guilds[profile.id] != nil

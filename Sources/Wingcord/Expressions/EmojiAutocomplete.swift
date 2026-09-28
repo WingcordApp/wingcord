@@ -123,7 +123,7 @@ nonisolated enum EmojiAutocomplete {
         var seen = Set<String>()
 
         for section in custom where !section.isLocked {
-            for item in section.items where item.name.hasPrefix(query) {
+            for item in section.items where !item.isLocked && item.name.hasPrefix(query) {
                 guard seen.insert(item.name).inserted else { continue }
                 results.append(item)
                 if results.count == limit { return results }

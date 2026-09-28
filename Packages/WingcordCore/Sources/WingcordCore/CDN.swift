@@ -289,51 +289,6 @@ public enum CDN {
         URL(string: "\(host)/badge-icons/\(hash).png?size=64")
     }
 
-    /// The header artwork on a server's tag profile.
-    ///
-    /// **Two hashes, two different CDN families, and that is the whole of the
-    /// bug this replaces.** `GET /guilds/{id}/profile` answers with
-    /// `banner_hash` — the ordinary boost banner, which most servers carrying
-    /// a tag do not have — and `custom_banner_hash`, which is the picture the
-    /// popout actually shows. They were folded into one hash and both asked of
-    /// `/banners/`, so every tagged server spent a 404 and drew the fallback
-    /// plate; Nous Research's card was a blue gradient where Discord draws a
-    /// photograph.
-    ///
-    /// The custom banner is a **discovery splash**:
-    /// `/discovery-splashes/{guild}/{hash}` answers 200 for it in png, webp and
-    /// jpg. Which is the case `guildDiscoverySplash`'s own note warned about
-    /// from the other direction — one server sending the same hash for two
-    /// assets is what makes a wrong path look right until it meets a server
-    /// that does not.
-    ///
-    /// Measured before it was known, and kept because a negative result is
-    /// worth as much as the answer: `/banners/` and `/clan-banners/` answer
-    /// **404** for that hash — a real path family with no such asset — while
-    /// `/guild-tag-banners/`, `/guild-profile-banners/`, `/profile-banners/`
-    /// and `/tag-banners/` answer **403**, which is Cloudflare refusing a path
-    /// family that does not exist. 403 means "no such family"; 404 means "not
-    /// this asset". The control passed in the same batch:
-    /// `/clan-badges/{guild}/{badge}.png` answers 200.
-    ///
-    /// Both hashes are taken rather than one, so the choice of path lives here
-    /// with the reason rather than at the call site.
-    public static func guildProfileBanner(
-        guildID: GuildID,
-        bannerHash: String?,
-        customBannerHash: String?,
-        width: CGFloat,
-        scale: CGFloat = 2
-    ) -> URL? {
-        if let bannerHash {
-            return guildBanner(guildID: guildID, hash: bannerHash, width: width, scale: scale)
-        }
-        guard let customBannerHash else { return nil }
-        return guildDiscoverySplash(
-            guildID: guildID, hash: customBannerHash, width: width, scale: scale
-        )
-    }
-
     /// An app's own icon.
     ///
     /// **Two path segments, not one** — `/app-icons/{application_id}/{hash}`.

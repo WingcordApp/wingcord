@@ -29,7 +29,7 @@ extension SessionController {
         channelID: ChannelID? = nil,
         messageID: MessageID? = nil,
         origin: GuildPreview.Origin,
-        location: String,
+        location: String?,
         source: String?,
         recommendationLoadID: String? = nil
     ) {
@@ -45,7 +45,13 @@ extension SessionController {
             return
         }
 
-        model.guildPreview = GuildPreview(guildID: guildID, origin: origin, isStarting: true)
+        model.guildPreview = GuildPreview(
+            guildID: guildID,
+            origin: origin,
+            isStarting: true,
+            returnGuildID: model.selectedGuildID,
+            returnChannelID: model.selectedChannelID
+        )
         model.permissionGate.invalidate()
 
         Task { [weak self] in
@@ -89,6 +95,7 @@ extension SessionController {
             // standing in whatever channel was underneath with a notice about a
             // server they could no longer see. A page stays up until the thing
             // it raised has actually happened.
+            if origin == .discovery { model.discoveryReturn = model.discovery }
             model.closeDiscovery()
             if channelID == nil {
                 // Selected only now, after `GUILD_CREATE` — before it the guild
@@ -216,30 +223,9 @@ extension SessionController {
     }
 }
 
-// MARK: - Joining from outside, and taking an application back
+// MARK: - Applications to join
 
 extension SessionController {
-
-    /// Joins a server the reader is looking at from its tag card.
-    ///
-    /// **No `location` and no `source`.** Both are analytics fields naming
-    /// where the click came from, and this client has no capture of Discord's
-    /// own client joining from a tag popout — inventing a value is inventing a
-    /// fact. The route does not require either; the preview join sends a
-    /// source because that one *was* captured.
-    func joinGuildDirectly(_ guildID: GuildID) {
-        Task { [weak self] in
-            guard let self else { return }
-            do {
-                _ = try await rest.joinGuild(guildID)
-                model.permissionGate.invalidate()
-                model.railRevision &+= 1
-            } catch {
-                Self.trace("join \(guildID.rawValue): \(Self.describe(error))")
-                model.reportActionFailure(Self.describe(error))
-            }
-        }
-    }
 
     /// Reads back which applications are still out.
     ///

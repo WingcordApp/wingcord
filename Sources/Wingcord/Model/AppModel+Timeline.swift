@@ -231,7 +231,10 @@ extension AppModel {
             identityRevision: identityRevision,
             memberRevision: memberRevision,
             structureRevision: channelIndex.structureRevision,
-            roleRevision: roleRevision
+            roleRevision: roleRevision,
+            // A role's colour goes through the reader's role-colour settings
+            // and the room's ink, both of which move this.
+            presentationRevision: PresentationRevision.shared.value
         )
         if let mentionCache, mentionCache.key == key { return mentionCache.value }
 
@@ -239,14 +242,29 @@ extension AppModel {
         context.selfIDs = mentionableIDs
         context.token = identityRevision
 
-        // Only what this guild needs. Copying every user in the session into
+        // **Every server's roles, keyed by id** — Discord resolves a role
+        // mention against the message's own server, and a role id belongs to
+        // exactly one. A table of the selected server's drew the inbox, search
+        // and every forwarded message from elsewhere as "@role". A few hundred
+        // entries on a large account, rebuilt only when this memo misses.
+        for table in roles.values {
+            for (roleID, role) in table {
+                context.roles[roleID] = MentionRole(
+                    name: role.name,
+                    color: roleColor(role.displayColorValue),
+                    gradient: role.colors.flatMap(RoleColors.wrappedStops).flatMap { stops in
+                        // The same projection as the flat colour, stop by stop;
+                        // nil when the reader has role colours off.
+                        let projected = stops.compactMap(roleColor)
+                        return projected.count == stops.count ? projected : nil
+                    }
+                )
+            }
+        }
+        // Only what this guild needs. Copying every channel in the account into
         // this value would make it proportional to the account rather than to
         // the page.
         if let guildID {
-            for (roleID, role) in roles[guildID] ?? [:] {
-                context.roleNames[roleID] = role.name
-                context.roleColors[roleID] = role.displayColorValue
-            }
             for channelID in channelIndex.channelIDs(inGuild: guildID) {
                 guard let channel = channelIndex[channelID], channel.kind != .category else {
                     continue
@@ -385,6 +403,7 @@ struct MentionMemoKey: Hashable, Sendable {
     var memberRevision: UInt64
     var structureRevision: UInt64
     var roleRevision: UInt64
+    var presentationRevision: UInt64
 }
 
 struct TimelineMemoKey: Hashable, Sendable {

@@ -123,6 +123,13 @@ public struct Permissions: OptionSet, Hashable, Sendable, Codable {
     /// Not "read-only": `VIEW_CHANNEL` alone still lists a voice channel, and
     /// connecting to one is a write in every sense that matters here.
     public static let lurker: Permissions = [.viewChannel, .readMessageHistory]
+
+    /// What a lurker keeps in a **public** stage — Discord's one exception
+    /// (`computeLurkerPermissionsAllowList`, the `Uu` set in module `233993`):
+    /// it may come in, listen, and ask to speak.
+    public static let publicStageLurker: Permissions = [
+        .connect, .viewChannel, .readMessageHistory, .requestToSpeak, .speak, .useVAD,
+    ]
 }
 
 /// Resolves what one member may do in one channel.

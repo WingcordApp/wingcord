@@ -94,7 +94,7 @@ struct ServerGuidePresentation: Hashable, Sendable {
     var monogram: String
     var bannerURL: URL?
     var memberCount: Int?
-    var standing: GuildProfile.Standing?
+    var mark: GuildMark?
     var welcome: Welcome?
     var actions: [Row]
     var resources: [Row]
@@ -412,7 +412,7 @@ extension AppModel {
                 CDN.guildBanner(guildID: guildID, hash: $0, width: 720)
             },
             memberCount: guild.memberCount,
-            standing: GuildProfile.Standing(features: guild.features),
+            mark: guild.mark,
             welcome: welcomePresentation(guide?.welcome, ownerID: guild.ownerID),
             actions: actions,
             resources: resources,

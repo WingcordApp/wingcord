@@ -289,8 +289,11 @@ struct SidebarChannelRow: View {
                     StyledDisplayName(
                         text: channel.name,
                         style: channel.nameStyle,
-                        textStyle: .subheadline,
-                        weight: channel.isUnread ? .semibold : .regular,
+                        textStyle: .body,
+                        // Discord's `--font-weight-medium`; unread still steps
+                        // up, the one mark this list uses for it.
+                        weight: channel.isUnread ? .semibold : .medium,
+                        pointSize: Typeface.directMessageNameSize,
                         // Moving while the pointer is on it, and once on a
                         // press. Reduce Motion still wins inside.
                         animates: isHovering || playToken > 0
@@ -327,6 +330,7 @@ struct SidebarChannelRow: View {
     /// accessibility tax §2 is about.
     private var accessibilityLabel: String {
         var parts = [channel.name]
+        if channel.isTyping { parts.append("typing") }
         if let tag = channel.tag { parts.append(tag) }
         if let subtitle = channel.subtitle { parts.append(subtitle) }
         return parts.joined(separator: ", ")
@@ -488,11 +492,17 @@ private struct SidebarRowLeading: View {
             AvatarView(
                 url: channel.avatarURL,
                 monogram: channel.monogram ?? "?",
-                side: Metrics.avatarRow
+                side: Metrics.avatarDirectMessage
             )
             .overlay(alignment: .bottomTrailing) {
+                // **The dots take the dot's place, in its colour** — Discord
+                // swaps the two rather than stacking them in one corner.
                 if let status = channel.status {
-                    PresenceDot(status: status, side: 9).offset(x: 1, y: 1)
+                    if channel.isTyping {
+                        TypingPill(tint: status.tint, height: 10).offset(x: 3, y: 1)
+                    } else {
+                        PresenceDot(status: status, side: 10).offset(x: 1, y: 1)
+                    }
                 }
             }
         default:
@@ -501,6 +511,40 @@ private struct SidebarRowLeading: View {
                 .foregroundStyle(Ink.tertiary)
                 .frame(width: 16)
         }
+    }
+}
+
+/// Three dots in a capsule, where somebody's presence dot would be.
+///
+/// **In the presence colour, never the accent.** Discord paints the pill in the
+/// status it replaces — green for somebody online — so the corner keeps saying
+/// who is there while it says they are typing. The dots are an animated SF
+/// Symbol: the render server pulses them, and no view is invalidated per beat.
+struct TypingPill: View {
+    var tint: Color
+    var height: CGFloat
+
+    @Environment(\.motion) private var motion
+
+    var body: some View {
+        let dots = Image(systemName: "ellipsis")
+            .font(.system(size: height * 0.9, weight: .black))
+            .foregroundStyle(.white)
+        Capsule()
+            .fill(tint)
+            .frame(width: height * 2.2, height: height)
+            .overlay {
+                if motion.reduceMotion {
+                    dots
+                } else {
+                    dots.symbolEffect(.variableColor.iterative.hideInactiveLayers)
+                }
+            }
+            // The same cut the presence dot takes, so it reads as a hole in the
+            // avatar rather than a badge stuck on it.
+            .padding(height * 0.16)
+            .background(Capsule().fill(Color(nsColor: .windowBackgroundColor)))
+            .accessibilityHidden(true)
     }
 }
 

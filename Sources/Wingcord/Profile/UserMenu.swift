@@ -121,6 +121,18 @@ struct UserMenu: View {
             }
             divider
         }
+        // Discord's own item (`share-profile`): the Share Profile sheet, which
+        // sends the profile's link wherever the reader picks.
+        row(
+            id: "share-profile",
+            title: "Share Profile",
+            symbolName: "square.and.arrow.up",
+            opensSurface: true
+        ) {
+            model.userMenu = nil
+            model.shareProfileRequest = ShareProfileRequest(userID: userID)
+        }
+        divider
         if actions.canInvite {
             row(
                 id: "invite",

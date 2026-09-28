@@ -33,6 +33,11 @@ struct WorkspacePane: View {
 
     var body: some View {
         columns
+            // **Measured inside the banner's safe area, not outside it.** Read
+            // after `safeAreaBar` this saw only the toolbar, so the roster —
+            // which runs under the chrome and pays for it as a content inset —
+            // slid its first rows under the preview banner.
+            .onGeometryChange(for: CGFloat.self) { $0.safeAreaInsets.top } action: { chromeHeight = $0 }
             // **The preview banner is declared HERE, above both columns**, so it
             // spans the transcript and the roster the way Discord's does and so
             // every surface a previewed server can show — a channel, a forum, a
@@ -53,7 +58,6 @@ struct WorkspacePane: View {
                     )
                 }
             }
-            .onGeometryChange(for: CGFloat.self) { $0.safeAreaInsets.top } action: { chromeHeight = $0 }
     }
 
     private var columns: some View {

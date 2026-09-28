@@ -99,7 +99,7 @@ final class TimelineCanvasView: NSView {
         ambientPlayed.removeAll()
         pendingArrivals.removeAll()
         hoveredBurst = nil
-        publishReactionHover(nil)
+        clearTooltips()
     }
 
     /// Whether the reader may send super reactions. See `canSuperReact`.
@@ -256,6 +256,10 @@ final class TimelineCanvasView: NSView {
     /// only means anything beside the array it came from, and the canvas keeps
     /// no such array between passes.
     private var hoveredComponent: CGPoint?
+    /// The body's plated link or concealed spoiler under the pointer — see
+    /// `TimelineRowPainter.TextState`.
+    private var hoveredPlate: Int?
+    private var hoveredSpoiler: Int?
     /// Which attachment the pointer is over. Its own field for the reason
     /// `TimelineRowPainter.State.hoveredAttachment` gives.
     private var hoveredAttachment: Int?
@@ -289,11 +293,13 @@ final class TimelineCanvasView: NSView {
     var isScrolling = false {
         didSet {
             guard isScrolling != oldValue else { return }
-            if isScrolling { publishReactionHover(nil) }
+            if isScrolling { clearTooltips() }
             if isScrolling, hoveredRow != nil {
                 let previous = hoveredRow
                 hoveredRow = nil
                 hoveredComponent = nil
+                hoveredPlate = nil
+                hoveredSpoiler = nil
                 styledName = nil
                 invalidateRow(previous)
                 publishHover()
@@ -355,6 +361,14 @@ final class TimelineCanvasView: NSView {
     var isFavoriteGIF: ((GIF) -> Bool)?
     /// The Play button on an activity invitation was pressed.
     var onPlayActivity: ((MessageID) -> Void)?
+    /// An invite card's button was pressed.
+    var onInviteButton: ((InviteCard) -> Void)?
+    /// A profile card was opened past its fold, or folded again.
+    var onToggleInviteFold: ((InviteCardFold) -> Void)?
+    /// Whether the reader is already where an invite leads — Join or Go to
+    /// Server, Add Friend or Send a Message — decided at paint time so joining
+    /// is a repaint, not a relayout.
+    var isInviteSettled: ((InviteCard) -> Bool)?
     /// A poll answer was chosen.
     var onVote: ((MessageID, Int) -> Void)?
     /// A button an application attached, pressed. Carries the message it sits on
@@ -393,6 +407,12 @@ final class TimelineCanvasView: NSView {
     var onHoverReaction: ((ReactionHover?) -> Void)?
     /// The chip last published through `onHoverReaction`.
     private var hoveredReaction: ReactionHover?
+    /// The pointer moved onto, or off, a server's mark on an invite card —
+    /// Discord's flyout for it. The mark's frame is in the CLIP VIEW's space,
+    /// for the reason `onHoverReaction`'s is.
+    var onHoverMark: ((GuildMarkHover?) -> Void)?
+    /// The mark last published through `onHoverMark`.
+    private var hoveredMark: GuildMarkHover?
 
     private var trackingArea: NSTrackingArea?
     /// See `apply(isCovered:)`.
@@ -919,6 +939,28 @@ final class TimelineCanvasView: NSView {
         )
     }
 
+    /// The profile cards in `rect`, in the canvas's coordinates — what
+    /// `UserCardHosts` keeps a live card over. A binary search to the first row
+    /// and a walk to the last, so the cost is the rows in view.
+    func userCardPlacements(in rect: CGRect) -> [UserCardPlacement] {
+        guard !rows.isEmpty, var index = rowIndex(at: max(0, rect.minY)) else { return [] }
+        var placements: [UserCardPlacement] = []
+        while index < rows.count, offsets[index] < rect.maxY {
+            if case .message(let row) = rows[index].kind, !row.userCards.isEmpty {
+                let origin = rowFrame(at: index).origin
+                for (position, card) in row.userCards.enumerated() {
+                    placements.append(UserCardPlacement(
+                        id: .init(message: row.id, index: position),
+                        key: card.key,
+                        frame: card.rect.offsetBy(dx: origin.x, dy: origin.y)
+                    ))
+                }
+            }
+            index += 1
+        }
+        return placements
+    }
+
     /// Marks one row for redraw, in the canvas's own coordinates.
     ///
     /// Invalidating the whole view for a hover change repaints every visible row
@@ -1050,8 +1092,15 @@ final class TimelineCanvasView: NSView {
                     state.isBookmarked = bookmarkedMessageIDs.contains(messageID)
                     state.revealedSpoilers = revealedSpoilers[messageID] ?? []
                     state.revealedAttachments = revealedAttachments[messageID] ?? []
+                    if case .message(let message) = row.kind, !message.inviteCards.isEmpty {
+                        state.settledInviteCodes = Set(message.inviteCards.compactMap { slot in
+                            slot.card.flatMap { isInviteSettled?($0) == true ? slot.code : nil }
+                        })
+                    }
                     if hoveredRow == index {
                         state.hoveredComponent = hoveredComponent
+                        state.hoveredPlate = hoveredPlate
+                        state.hoveredSpoiler = hoveredSpoiler
                         state.hoveredAttachment = hoveredAttachment
                         if let hoveredAttachment,
                            case .message(let message) = row.kind,
@@ -1217,8 +1266,10 @@ final class TimelineCanvasView: NSView {
     private func clearHover() {
         applyCursor(nil)
         hoveredComponent = nil
+        hoveredPlate = nil
+        hoveredSpoiler = nil
         hoveredBurst = nil
-        publishReactionHover(nil)
+        clearTooltips()
         guard hoveredRow != nil else { return }
         let previous = hoveredRow
         hoveredRow = nil
@@ -1302,6 +1353,13 @@ final class TimelineCanvasView: NSView {
         case .activityInvite(let origin):
             // `.zero` means the click landed on the card but not on the button.
             if origin != .zero { onPlayActivity?(row.id) }
+        case .inviteButton(let invite, _):
+            onInviteButton?(invite)
+        case .inviteFold(let fold, _):
+            onToggleInviteFold?(fold)
+        case .inviteMark:
+            // The mark answers the pointer, not a click — see `onHoverMark`.
+            break
         case .reaction(let emoji, let kind, _):
             // A super reaction chip without Nitro is not a control; the click
             // lands on it and stops there. See `canSuperReact`.
@@ -1390,6 +1448,14 @@ final class TimelineCanvasView: NSView {
         /// space so the painter can light it, exactly as a component button
         /// does.
         case activityInvite(origin: CGPoint)
+        /// An invite card's button. Carries its origin in row space so the
+        /// painter can light it; the card's own body takes no click.
+        case inviteButton(InviteCard, origin: CGPoint)
+        /// A folded profile card, which opens where it is clicked, or its Hide
+        /// Details. The origin is the control's, in row space.
+        case inviteFold(InviteCardFold, origin: CGPoint)
+        /// A server's mark on an invite card. Its rect, in row space.
+        case inviteMark(GuildMark, rect: CGRect)
         /// A reaction chip. Clicking it adds or removes the reader's own of the
         /// chip's kind. Carries its origin in row space so the painter can
         /// light the one under the pointer — identified by origin, not index,
@@ -1433,9 +1499,9 @@ final class TimelineCanvasView: NSView {
                 y: local.y - row.textOrigin.y
             )
             let revealed = revealedSpoilers[row.id] ?? []
-            for (spoilerIndex, rect) in block.spoilerRects.enumerated()
-            where !revealed.contains(spoilerIndex) && rect.contains(inBlock) {
-                return .spoiler(spoilerIndex)
+            for (rect, spoiler) in block.spoilerRects
+            where !revealed.contains(spoiler) && rect.contains(inBlock) {
+                return .spoiler(spoiler)
             }
             // Emoji before links, because an emoji sits inside a run that may
             // also carry a link attribute — a custom emoji written inside a
@@ -1492,6 +1558,21 @@ final class TimelineCanvasView: NSView {
         // The whole card is a hit, not only the button: a click anywhere on it
         // must not fall through to the row beneath, and the button is the only
         // part of it that does anything.
+        for card in row.inviteCards where card.rect.contains(local) {
+            if let button = card.button, button.rect.contains(local), let invite = card.card {
+                // Your own friend link's button is drawn and is not a control:
+                // a dead one, which swallows the click and offers no hand.
+                return button.isEnabled
+                    ? .inviteButton(invite, origin: button.rect.origin)
+                    : .component(url: nil, customID: nil, origin: button.rect.origin)
+            }
+            if let mark = card.mark, card.markRect.contains(local) {
+                return .inviteMark(mark, rect: card.markRect)
+            }
+            if let target = card.foldTarget, target.contains(local) {
+                return .inviteFold(InviteCardFold(message: row.id, code: card.code), origin: target.origin)
+            }
+        }
         if let invite = row.activityInvite, invite.rect.contains(local) {
             return .activityInvite(
                 origin: invite.buttonRect.contains(local) ? invite.buttonRect.origin : .zero
@@ -1633,10 +1714,13 @@ final class TimelineCanvasView: NSView {
         // nothing is scrolling.
         var cursor: NSCursor?
         var component: CGPoint?
+        var plate: Int?
+        var spoiler: Int?
         var attachment: Int?
         var embed: Int?
         var burst: (key: SuperReactionEffects.Key, slot: ReactionSlot, row: MessageRow)?
         var reaction: ReactionHover?
+        var markHover: GuildMarkHover?
         if let index, rows.indices.contains(index), case .message(let row) = rows[index].kind {
             // **Resolved from the geometry, not from the click target.** The
             // star is drawn on whichever picture the pointer is over, and the
@@ -1667,6 +1751,18 @@ final class TimelineCanvasView: NSView {
             case .activityInvite(let origin):
                 component = origin
                 cursor = origin == .zero ? nil : .pointingHand
+            case .inviteButton(_, let origin):
+                component = origin
+                cursor = .pointingHand
+            case .inviteFold(_, let origin):
+                component = origin
+                cursor = .pointingHand
+            case .inviteMark(let mark, let rect):
+                let clip = enclosingScrollView?.contentView.bounds.origin ?? .zero
+                markHover = GuildMarkHover(
+                    mark: mark,
+                    frame: rect.offsetBy(dx: rowFrame(at: index).minX - clip.x, dy: offsets[index] - clip.y)
+                )
             case .reaction(let emoji, let kind, let origin):
                 let clip = enclosingScrollView?.contentView.bounds.origin ?? .zero
                 if let slot = row.reactions.first(where: { $0.rect.origin == origin }) {
@@ -1710,6 +1806,17 @@ final class TimelineCanvasView: NSView {
                 cursor = .pointingHand
             case .favoriteEmbedGIF, .previewClip, .openMusicPlayer:
                 cursor = .pointingHand
+            case .spoiler(let index):
+                spoiler = index
+                cursor = .pointingHand
+            case .link:
+                plate = row.textBlock.flatMap { block in
+                    let inBlock = CGPoint(x: local.x - row.textOrigin.x, y: local.y - row.textOrigin.y)
+                    return block.plateRects.first {
+                        $0.rect.contains(inBlock) && block.text.plates[$0.plate].isInteractive
+                    }?.plate
+                }
+                cursor = .pointingHand
             case .some:
                 cursor = .pointingHand
             case nil:
@@ -1728,17 +1835,22 @@ final class TimelineCanvasView: NSView {
             if let burst { playEffect(burst.slot, on: burst.row, trigger: .hover) }
         }
         publishReactionHover(reaction)
+        publishMarkHover(markHover)
 
         // A write of an equal value still costs a redraw request, and the
         // pointer generates these at event rate.
         let rowChanged = index != hoveredRow
         let componentChanged = component != hoveredComponent
+        let textChanged = plate != hoveredPlate || spoiler != hoveredSpoiler
         let attachmentChanged = attachment != hoveredAttachment
         let embedChanged = embed != hoveredEmbed
-        guard rowChanged || componentChanged || attachmentChanged || embedChanged else { return }
+        guard rowChanged || componentChanged || textChanged || attachmentChanged || embedChanged
+        else { return }
         let previous = hoveredRow
         hoveredRow = index
         hoveredComponent = component
+        hoveredPlate = plate
+        hoveredSpoiler = spoiler
         hoveredAttachment = attachment
         hoveredEmbed = embed
         if rowChanged { invalidateRow(previous) }
@@ -1810,6 +1922,19 @@ final class TimelineCanvasView: NSView {
         guard hover != hoveredReaction else { return }
         hoveredReaction = hover
         onHoverReaction?(hover)
+    }
+
+    private func publishMarkHover(_ hover: GuildMarkHover?) {
+        guard hover != hoveredMark else { return }
+        hoveredMark = hover
+        onHoverMark?(hover)
+    }
+
+    /// Both floating answers about the thing under the pointer, withdrawn
+    /// together — `INVARIANTS.md` §5: nothing outlives what it names.
+    private func clearTooltips() {
+        publishReactionHover(nil)
+        publishMarkHover(nil)
     }
 
     // MARK: Highlight

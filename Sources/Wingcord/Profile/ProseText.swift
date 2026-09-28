@@ -335,8 +335,12 @@ struct ProseSegment: Identifiable {
                     let name = mentions?.userNames[id].map { "@\($0)" } ?? "@unknown"
                     word(name, style.asMention)
                 case .roleMention(let id):
-                    let name = mentions?.roleNames[id].map { "@\($0)" } ?? "@role"
-                    word(name, style.asMention)
+                    // Discord's words for a role nobody can name, as plain text.
+                    if let role = mentions?.roles[id] {
+                        word("@\(role.name)", style.asMention)
+                    } else {
+                        word("@unknown-role", style)
+                    }
                 case .channelMention(let id):
                     let name = mentions?.channelNames[id].map { "#\($0)" } ?? "#channel"
                     word(name, style.asMention)

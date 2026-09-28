@@ -46,6 +46,16 @@ struct ForwardRequest: Identifiable, Hashable, Sendable {
     var id: UInt64 { messageID.rawValue }
 }
 
+/// The Share Profile sheet — Discord's forward modal with a person in it.
+struct ShareProfileRequest: Identifiable, Hashable, Sendable {
+    var userID: UserID
+
+    var id: UInt64 { userID.rawValue }
+
+    /// What is sent: Discord's profile link (`f.A` in its share module).
+    var link: String { "https://discord.com/users/\(userID.rawValue)" }
+}
+
 /// A delete waiting to be confirmed.
 ///
 /// **The message's own words travel with the request**, not a pointer back into
@@ -149,6 +159,14 @@ struct ReactionHover: Hashable, Sendable {
     var emoji: EmojiRef
     var kind: ReactionKind
     var chipFrame: CGRect
+}
+
+/// A server's mark under the pointer on an invite card, and where it is in the
+/// transcript's clip view — the space its flyout is laid out in, for the
+/// reason `ReactionHover.chipFrame` is.
+struct GuildMarkHover: Hashable, Sendable {
+    var mark: GuildMark
+    var frame: CGRect
 }
 
 /// One chip's reactors, as the tooltip asks for them.

@@ -21,6 +21,12 @@ struct GuildPreview: Hashable, Sendable {
     /// Whether the lurk has been acknowledged by the server yet. Until it is,
     /// the guild is not in the store and the rail has nothing to draw.
     var isStarting: Bool = true
+    /// Where the reader was when the preview began — what Back returns to.
+    /// **Discord's Back is a step back in history** (`goBack()` on its notice
+    /// bar), so it lands on the server and channel the reader left, not on an
+    /// empty column.
+    var returnGuildID: GuildID?
+    var returnChannelID: ChannelID?
 
     /// What raised the preview.
     ///
@@ -32,9 +38,11 @@ struct GuildPreview: Hashable, Sendable {
     enum Origin: Hashable, Sendable {
         /// Opened from a community announcement on a game's profile.
         case gameProfile(ApplicationID)
-        /// Opened from the discovery tab. Not built yet; the case exists so the
-        /// bar has somewhere to branch rather than assuming a game.
+        /// Opened from the discovery grid.
         case discovery
+        /// Opened from a server tag's card — Discord's `LURK_DISCOVERABLE`
+        /// Join, for a discoverable server with no invite in hand.
+        case guildProfile
     }
 
     /// The game to return to, where there is one.
@@ -63,4 +71,7 @@ struct GuildPreviewPresentation: Equatable, Sendable {
     /// Whether the join is in flight, so the button can say so rather than
     /// looking inert.
     var isJoining: Bool
+    /// What the way back says: Discord's "Back to Discovery" for a preview
+    /// from the grid, and plain "Back" otherwise.
+    var backLabel: String = "Back"
 }

@@ -13,22 +13,30 @@ import WingcordCore
 /// filters it. `AppModel.forwardTargets` walks every channel in the account
 /// through the permission gate, which is not something a search field may do per
 /// keystroke.
-struct ForwardSheet: View {
-    var preview: QuotedMessage
+struct ForwardSheet<Preview: View>: View {
+    var title = "Forward to"
+    var subtitle: String? = "Pick where to send this message."
     var targets: [ForwardTarget]
+    /// Copies what is being sent, where it is a link — Discord's Copy Link
+    /// beside Send when a profile is shared. Nil draws no control.
+    var copyLink: (() -> Void)?
     var send: ([ChannelID], String) -> Void
     var dismiss: () -> Void
+    /// What is being sent: a quoted message, or a person.
+    @ViewBuilder var preview: () -> Preview
 
     @Environment(\.motion) private var motion
     @State private var query = ""
     @State private var chosen: Set<ChannelID> = []
     @State private var comment = ""
+    /// Copy Link says so for a moment after it is pressed.
+    @State private var didCopy = false
     @FocusState private var focus: Field?
 
     private enum Field: Hashable { case search, comment }
 
-    private static let width: CGFloat = 460
-    private static let listHeight: CGFloat = 300
+    private static var width: CGFloat { 460 }
+    private static var listHeight: CGFloat { 300 }
 
     private var matches: [ForwardTarget] {
         guard !query.isEmpty else { return targets }
@@ -41,7 +49,7 @@ struct ForwardSheet: View {
             search
             list
             Divider().overlay(Ink.quaternary)
-            QuotedMessageRow(message: preview)
+            preview()
                 .padding(.horizontal, Spacing.group)
                 .padding(.vertical, Spacing.snug)
             footer
@@ -54,12 +62,14 @@ struct ForwardSheet: View {
     private var header: some View {
         HStack(alignment: .firstTextBaseline) {
             VStack(alignment: .leading, spacing: Spacing.tight) {
-                Text("Forward to")
+                Text(title)
                     .font(.system(.title3, weight: .semibold))
                     .foregroundStyle(Ink.primary)
-                Text("Pick where to send this message.")
-                    .font(.system(.subheadline))
-                    .foregroundStyle(Ink.secondary)
+                if let subtitle {
+                    Text(subtitle)
+                        .font(.system(.subheadline))
+                        .foregroundStyle(Ink.secondary)
+                }
             }
             Spacer()
             Button(action: dismiss) {
@@ -136,6 +146,31 @@ struct ForwardSheet: View {
                 .frame(height: Metrics.composerControlHeight)
                 .background(Palette.surfaceRaised, in: .capsule)
                 .specularEdge()
+
+            if let copyLink {
+                Button {
+                    copyLink()
+                    didCopy = true
+                } label: {
+                    Image(systemName: didCopy ? "checkmark" : "link")
+                        .font(.system(size: 13, weight: .semibold))
+                        .contentTransition(.symbolEffect(.replace))
+                        .frame(width: Metrics.composerControlHeight, height: Metrics.composerControlHeight)
+                        .contentShape(.circle)
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(Ink.primary)
+                .background(Palette.surfaceRaised, in: .circle)
+                .specularEdge()
+                .help(didCopy ? "Link Copied!" : "Copy Link")
+                .accessibilityLabel(Text(didCopy ? "Link Copied!" : "Copy Link"))
+                // Back to the link after a beat, so a second copy reads as one.
+                .task(id: didCopy) {
+                    guard didCopy else { return }
+                    try? await Task.sleep(for: .seconds(1.5))
+                    didCopy = false
+                }
+            }
 
             Button {
                 send(orderedChoice, comment)

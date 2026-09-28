@@ -117,8 +117,8 @@ public actor DiscordREST {
     /// **A token is validated before it is stored.** One that never worked
     /// otherwise gets retried on every launch forever, and the app cannot tell
     /// "offline" from "this credential is dead".
-    public func currentUser() async throws -> User {
-        try await get("/users/@me", route: "users/@me", as: UserDTO.self).domain
+    public func currentUser() async throws -> CurrentAccount {
+        try await get("/users/@me", route: "users/@me", as: UserDTO.self).currentAccount
     }
 
     public func settings() async throws -> ClientSettings {

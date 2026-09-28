@@ -1,49 +1,32 @@
 import SwiftUI
 import WingcordCore
 
-/// Reads the store and works out who is still typing.
+/// Reads the store and works out who is typing.
 ///
-/// **Expiry is driven by one sleeping task, never by a ticking timer.** Discord
-/// gives an indicator ten seconds and sends no "stopped" event, so somebody who
-/// closes their tab mid-word would otherwise be typing forever. A one-second
-/// poll would wake the CPU sixty times a minute in every channel to answer a
-/// question that changes at most twice; instead the view sleeps until the
-/// *earliest* expiry it can see, wakes once, and re-reads the clock. With nobody
-/// typing there is no task at all.
+/// **No clock of its own.** Discord gives an indicator ten seconds and sends no
+/// "stopped" event; the session's one expiry timer prunes the table when an
+/// indicator lapses — see `SessionController.armTypingExpiry` — so what this
+/// reads is already current and the view runs no task at all.
 struct TypingIndicatorContainer: View {
     var channelID: ChannelID
 
     @Environment(AppModel.self) private var model
-    /// Bumped when an indicator lapses. Read by the body so that the recomputed
-    /// `Date()` below actually reaches the screen.
-    @State private var expiryTick: UInt64 = 0
 
     var body: some View {
-        let _ = expiryTick
-        let now = Date()
-        TypingIndicator(names: names(at: now))
-            .task(id: nextExpiry(after: now)) {
-                guard let deadline = nextExpiry(after: Date()) else { return }
-                let interval = deadline.timeIntervalSinceNow
-                guard interval > 0 else { return }
-                try? await Task.sleep(for: .seconds(interval))
-                guard !Task.isCancelled else { return }
-                expiryTick &+= 1
-            }
+        TypingIndicator(names: names)
     }
 
     /// Who is typing, named the way the transcript names them.
     ///
     /// The reader is excluded: an indicator that reports your own keystrokes
     /// back at you is a control that describes itself.
-    private func names(at now: Date) -> [String] {
-        guard let typing = model.messages(in: channelID)?.typing, !typing.isEmpty else {
-            return []
-        }
+    private var names: [String] {
+        let typing = model.typers(in: channelID)
+        guard !typing.isEmpty else { return [] }
         let guildID = model.channelIndex.guildID(of: channelID)
         var result: [String] = []
         result.reserveCapacity(typing.count)
-        for (userID, expiry) in typing where expiry > now && userID != model.currentUserID {
+        for userID in typing.keys where userID != model.currentUserID {
             guard let user = model.users[userID] else { continue }
             let member = guildID.flatMap { model.members[$0]?[userID] }
             result.append(member?.resolvedName(user: user) ?? user.preferredName)
@@ -52,15 +35,6 @@ struct TypingIndicatorContainer: View {
         // sentence under the reader's eyes.
         result.sort { $0.localizedStandardCompare($1) == .orderedAscending }
         return result
-    }
-
-    private func nextExpiry(after now: Date) -> Date? {
-        guard let typing = model.messages(in: channelID)?.typing else { return nil }
-        var earliest: Date?
-        for expiry in typing.values where expiry > now {
-            if earliest == nil || expiry < earliest! { earliest = expiry }
-        }
-        return earliest
     }
 }
 

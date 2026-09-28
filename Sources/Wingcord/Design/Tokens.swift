@@ -431,8 +431,11 @@ nonisolated enum Metrics {
 
     /// The guild rail's tiles.
     static let guildTile: CGFloat = 44
-    /// Member rows, DM rows, the now bar.
+    /// Member rows, the now bar.
     static let avatarRow: CGFloat = 26
+    /// A direct message's face — Discord's 32 against its 16-point name, the
+    /// proportion the DM list reads at.
+    static let avatarDirectMessage: CGFloat = 32
     /// The message author gutter.
     static let avatarMessage: CGFloat = 38
     /// Inline in a reply quote or a preview.
@@ -699,6 +702,13 @@ nonisolated enum Typeface {
     static let rowTitleUnread = Font.system(.body, weight: .semibold)
     /// A message preview, a custom status, an activity line.
     static let rowSubtitle = Font.system(.caption)
+    /// A direct message's name, in points: Discord's 16 against its 13-point
+    /// body, taken as a ratio of the system's own body so it still follows the
+    /// reader's text size. No text style on this platform lands on it — the
+    /// subheadline the row used was 11, a name dwarfed by its own row.
+    @MainActor static var directMessageNameSize: CGFloat {
+        NSFont.preferredFont(forTextStyle: .body).pointSize * 16 / 13
+    }
     /// Somebody's name in the strip under a voice channel. One step down from a
     /// row title, because the strip is nested inside a row and must not compete
     /// with the channel it belongs to.

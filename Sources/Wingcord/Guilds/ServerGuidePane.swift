@@ -275,8 +275,8 @@ private struct GuildHero: View {
                     .font(.system(.title2, weight: .bold))
                     .foregroundStyle(Ink.primary)
                     .lineLimit(2)
-                if let standing = presentation.standing {
-                    GuildStandingBadge(standing: standing)
+                if let mark = presentation.mark {
+                    GuildMarkBadge(mark: mark)
                 }
             }
             if let count = presentation.memberCount {

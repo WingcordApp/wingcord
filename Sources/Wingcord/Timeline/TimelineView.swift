@@ -40,7 +40,7 @@ struct TimelineView: NSViewRepresentable {
     /// reaches it — the same reason `activityAccents` is read by the container.
     /// A card that resolved without this would sit in the store and never be
     /// drawn.
-    var spotifyRevision: UInt64
+    var cardRevision: UInt64
     /// The clip playing anywhere in the app, so the chip that started it offers
     /// to stop it. Read by the container for the reason the accents are.
     var playingPreview: URL?
@@ -107,7 +107,7 @@ struct TimelineView: NSViewRepresentable {
             topics: topics,
             summaries: summaries,
             selectedSummary: selectedSummary,
-            spotifyRevision: spotifyRevision,
+            cardRevision: cardRevision,
             playingPreview: playingPreview,
             isCovered: isCovered,
             bookmarks: bookmarks,
@@ -160,7 +160,9 @@ final class TimelineCoordinator: NSObject {
     private var settings: TimelineSettings = PresentationRevision.shared.timeline
     private var presentationRevision: UInt64 = 0
     /// What the Spotify table was at when the rows were last laid out.
-    private var spotifyRevision: UInt64 = 0
+    private var cardRevision: UInt64 = 0
+    /// The live profile cards over the rows in view — see `UserCardHosts`.
+    private let userCardHosts = UserCardHosts()
 
     /// Laid-out message rows, reused across passes. Swept by the engine.
     private var rowCache: [MessageID: TimelineLayoutEngine.CacheEntry] = [:]
@@ -362,6 +364,19 @@ final class TimelineCoordinator: NSObject {
             guard let self, self.model.reactionHover != hover else { return }
             self.model.reactionHover = hover
         }
+        canvas.onHoverMark = { [weak self] hover in
+            guard let self, self.model.markHover != hover else { return }
+            self.model.markHover = hover
+        }
+        canvas.onInviteButton = { [weak self] card in
+            self?.model.openInvite(card)
+        }
+        canvas.onToggleInviteFold = { [weak self] fold in
+            self?.model.toggleInviteFold(fold)
+        }
+        canvas.isInviteSettled = { [weak self] card in
+            self?.model.isInviteSettled(card) ?? false
+        }
         canvas.onOpenMenu = { [weak self] messageID, rect in
             guard let self, let channelID = self.channelID, let canvas = self.canvas else {
                 return
@@ -519,6 +534,7 @@ final class TimelineCoordinator: NSObject {
         scrollEndedObserver = nil
         activationObserver = nil
         rowCache.removeAll(keepingCapacity: false)
+        userCardHosts.removeAll()
         canvas?.onWidthChange = nil
         canvas?.onOpenLink = nil
         canvas?.onVisibleRangeChange = nil
@@ -537,6 +553,10 @@ final class TimelineCoordinator: NSObject {
         canvas?.onDismissEphemeral = nil
         canvas?.onToggleReaction = nil
         canvas?.onHoverReaction = nil
+        canvas?.onHoverMark = nil
+        canvas?.onInviteButton = nil
+        canvas?.onToggleInviteFold = nil
+        canvas?.isInviteSettled = nil
         canvas?.onOpenTopicMarker = nil
         (scrollView as? TimelineScrollView)?.acceptsScrollInput = { true }
         // The clock holds a closure over the canvas; a subscriber that outlives
@@ -582,7 +602,7 @@ final class TimelineCoordinator: NSObject {
         topics: [ConversationTopic],
         summaries: [ChannelSummary],
         selectedSummary: SelectedSummary?,
-        spotifyRevision: UInt64,
+        cardRevision: UInt64,
         playingPreview: URL?,
         isCovered: Bool,
         bookmarks: Set<MessageID>,
@@ -644,10 +664,10 @@ final class TimelineCoordinator: NSObject {
         }
 
         // A card landing changes a row's HEIGHT, so it is a relayout rather than
-        // a repaint — and only the rows carrying that link are rebuilt, because
-        // the cache matches on the revision and everything else still hits.
-        if spotifyRevision != self.spotifyRevision {
-            self.spotifyRevision = spotifyRevision
+        // a repaint — and only the rows that can carry a card are rebuilt; see
+        // `CacheEntry.carriesCards`. Everything else still hits.
+        if cardRevision != self.cardRevision {
+            self.cardRevision = cardRevision
             if !items.isEmpty { runLayout(preservingPosition: true) }
         }
 
@@ -670,6 +690,7 @@ final class TimelineCoordinator: NSObject {
             // keeping its layouts would hold every text block and decoded image
             // of a channel nobody is looking at.
             rowCache.removeAll(keepingCapacity: true)
+            userCardHosts.removeAll()
             layoutTask?.cancel()
             // **A clip does not follow the reader out of the channel.** The chip
             // that started it is about to stop existing, so the only way to stop
@@ -836,7 +857,7 @@ final class TimelineCoordinator: NSObject {
 
         let engine = TimelineLayoutEngine(
             presentationRevision: presentationRevision,
-            spotifyRevision: spotifyRevision
+            cardRevision: cardRevision
         )
         let channel = channelID.flatMap { model.channelIndex[$0] }
         let input = TimelineLayoutEngine.Input(
@@ -857,7 +878,12 @@ final class TimelineCoordinator: NSObject {
             ),
             calendar: .current,
             settings: settings,
-            spotify: model.spotifyUnfurls
+            spotify: model.spotifyUnfurls,
+            invites: model.inviteLookups,
+            expandedInvites: model.expandedInviteCards,
+            palettes: model.derivedPalettes,
+            userCardSizes: model.userCardSizes,
+            guildID: channelID.flatMap { model.channelIndex.guildID(of: $0) }
         )
 
         isApplyingUpdate = true
@@ -891,6 +917,7 @@ final class TimelineCoordinator: NSObject {
         isApplyingUpdate = false
 
         positionCanvas()
+        reconcileUserCards()
         schedulePrefetch()
         // A page landing is the moment a channel's newest message becomes
         // known, so it is the moment the channel can be acknowledged at all.
@@ -951,6 +978,7 @@ final class TimelineCoordinator: NSObject {
             if grew, isNearBottom, reachesPresent, !canvas.isScrolling { scrollToBottom() }
         }
         positionCanvas()
+        reconcileUserCards()
         // **Pages go the way the reader is travelling.** A trim leaves the far
         // edge of the window a page away, well inside the prefetch distance —
         // so asking in both directions on every tick would fetch back each page
@@ -975,6 +1003,13 @@ final class TimelineCoordinator: NSObject {
         trackTopicPlace()
         trackSummaryPlace()
         clearTopicMarkerIfPassed(viewport: current)
+    }
+
+    /// Puts a live card over each profile link near the viewport. See
+    /// `UserCardHosts`.
+    private func reconcileUserCards() {
+        guard let canvas, let scrollView else { return }
+        userCardHosts.reconcile(in: canvas, visible: scrollView.contentView.bounds, model: model)
     }
 
     private func positionCanvas() {

@@ -79,6 +79,9 @@ struct SidebarMemoKey: Hashable, Sendable {
     /// started a game. Zero here is "this list does not depend on presence",
     /// which is the truth for every server.
     var presenceRevision: UInt64
+    /// Typing, on the same terms: only the DM list draws it, and only a direct
+    /// message's typing moves this — see `AppModel.directMessageTypingRevision`.
+    var typingRevision: UInt64
 }
 
 // MARK: - Projections
@@ -143,7 +146,8 @@ extension AppModel {
             speakingIDs: speakingUserIDs,
             hiddenSelection: hiddenSelectedChannelID,
             surfaceRows: selectedGuildID.map(guildSurfaceRows(for:)) ?? [],
-            presenceRevision: selectedGuildID == nil ? presenceRevision : 0
+            presenceRevision: selectedGuildID == nil ? presenceRevision : 0,
+            typingRevision: selectedGuildID == nil ? directMessageTypingRevision : 0
         )
         let guildTable = guilds
         // Read before the early return, so a cache hit still registers the
@@ -491,10 +495,12 @@ extension AppModel {
             // identical grey circles in the DM list actually was.
             let avatarURL: URL? = switch channel.kind {
             case .directMessage:
-                partner.flatMap { avatarURL(for: $0, side: Metrics.avatarRow) }
+                partner.flatMap { avatarURL(for: $0, side: Metrics.avatarDirectMessage) }
             case .groupDirectMessage:
                 channel.iconHash.flatMap {
-                    CDN.channelIcon(channelID: channelID, hash: $0, side: Metrics.avatarRow)
+                    CDN.channelIcon(
+                        channelID: channelID, hash: $0, side: Metrics.avatarDirectMessage
+                    )
                 }
             default:
                 nil
@@ -526,6 +532,7 @@ extension AppModel {
                 // one of them would be a fact about somebody the row does not
                 // name.
                 status: partnerID.map { presences[$0]?.status ?? .offline },
+                isTyping: partnerID.map { isTypingInDirectMessage(channelID, partner: $0) } ?? false,
                 subtitle: presence?.primaryActivity?.rowSubtitle
                     ?? presence?.customStatus?.rowSubtitle,
                 subtitleEmoji: presence?.primaryActivity == nil
@@ -631,7 +638,8 @@ extension AppModel {
                         hash: $0,
                         width: Proportions.channelColumnMax
                     )
-                }
+                },
+                mark: guild.mark
             ),
             rows: rows
         )
@@ -827,6 +835,9 @@ extension AppModel {
     // MARK: Navigation
 
     func selectGuild(_ guildID: GuildID?) {
+        // Picking a server is leaving discovery, as it is in Discord — the grid
+        // is a page of its own, not something a server is shown inside.
+        if discovery != nil { closeDiscovery() }
         guard selectedGuildID != guildID else { return }
         selectedGuildID = guildID
         // A guide belongs to the server it describes, so it does not survive

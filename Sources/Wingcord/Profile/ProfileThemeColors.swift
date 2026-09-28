@@ -187,6 +187,16 @@ nonisolated enum ProfileThemeColors {
         return pack(colour)
     }
 
+    /// `chroma(colour).brighten(amount)`: CIE Lab lightness up by 18 a step.
+    ///
+    /// Discord's `Pf` — the light half of a server profile banner's glow is the
+    /// brand colour brightened by 1.75 (module `498596`).
+    static func brightened(_ colour: UInt32, by amount: Double) -> UInt32 {
+        var moved = lab(of: channels(colour))
+        moved[0] += 18 * amount
+        return pack(rgb(fromLab: moved))
+    }
+
     // MARK: - Arithmetic
     //
     // Everything below is transcribed: CIE Lab with `chroma-js`'s own D65 white

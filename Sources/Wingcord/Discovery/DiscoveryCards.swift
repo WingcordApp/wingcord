@@ -99,8 +99,8 @@ struct DiscoveryServerCard: View {
 
     private var name: some View {
         HStack(spacing: Spacing.tight) {
-            if let standing = card.standing {
-                GuildStandingBadge(standing: standing, side: 15)
+            if let mark = card.mark {
+                GuildMarkBadge(mark: mark, side: 15)
             }
             Text(card.name)
                 .font(.system(.body, weight: .semibold))

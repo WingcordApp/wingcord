@@ -290,6 +290,18 @@ extension AppModel {
         )
     }
 
+    /// Sends the profile the Share Profile sheet is showing — Discord's
+    /// handler: the link, and under it, after a blank line, whatever the reader
+    /// wrote.
+    func shareProfile(to targets: [ChannelID], comment: String) {
+        guard let request = shareProfileRequest else { return }
+        shareProfileRequest = nil
+        let permitted = targets.filter { permissionGate.canSend(in: $0) }
+        guard !permitted.isEmpty else { return }
+        let words = comment.trimmingCharacters(in: .whitespacesAndNewlines)
+        sessionController.send(words.isEmpty ? request.link : "\(request.link)\n\n\(words)", to: permitted)
+    }
+
     // MARK: The pasteboard
 
     func copyText(of messageID: MessageID, in channelID: ChannelID) {

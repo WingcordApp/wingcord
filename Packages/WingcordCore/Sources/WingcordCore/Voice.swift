@@ -229,9 +229,12 @@ public struct SoundboardSound: Hashable, Sendable, Identifiable {
 /// `MessageActionPolicy` gets, and for the same reason: a gate written at each
 /// call site is a gate that drifts.
 public enum SoundboardGate {
+    /// - Parameter playsEverywhere: whether the subscription buys
+    ///   `soundboardEverywhere` — **Nitro proper only**; Basic and Classic do
+    ///   not carry it. See `PremiumTier.grants(_:)`.
     public static func canPlay(
         _ sound: SoundboardSound,
-        hasNitro: Bool,
+        playsEverywhere: Bool,
         inGuild guildID: GuildID?
     ) -> Bool {
         guard sound.isAvailable else { return false }
@@ -240,16 +243,18 @@ public enum SoundboardGate {
         // A server's own sounds are free **in that server**.
         if let owner = sound.guildID, owner == guildID { return true }
         // Anywhere else, they are the subscription's.
-        return hasNitro
+        return playsEverywhere
     }
 
     /// Why a sound cannot be played, in words the picker can show.
     public static func refusal(
         _ sound: SoundboardSound,
-        hasNitro: Bool,
+        playsEverywhere: Bool,
         inGuild guildID: GuildID?
     ) -> String? {
-        guard !canPlay(sound, hasNitro: hasNitro, inGuild: guildID) else { return nil }
+        guard !canPlay(sound, playsEverywhere: playsEverywhere, inGuild: guildID) else {
+            return nil
+        }
         guard sound.isAvailable else {
             return "This server has lost the boosts that unlocked this sound."
         }

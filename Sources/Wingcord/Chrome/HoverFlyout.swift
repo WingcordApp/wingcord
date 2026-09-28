@@ -18,21 +18,19 @@ import SwiftUI
 /// rail crosses a dozen tiles in half a second, and a flyout per crossing is a
 /// dozen popovers materialising and dying. One task per hover, cancelled the
 /// moment the pointer leaves, costs nothing when nobody is hovering.
-struct HoverFlyout: ViewModifier {
-    var label: String
-    var edge: Edge = .trailing
-    /// The width the label wraps at, or nil for one line that sizes to its text.
-    ///
-    /// A server name is a few words and belongs on one line; a custom status is
-    /// a sentence somebody wrote, and one line of it would be a popover wider
-    /// than the window.
-    var wrapsAt: CGFloat?
+/// How long the pointer has to rest before a hover flyout appears.
+///
+/// Short enough to read as instant on a tile you meant to point at, long enough
+/// that crossing one on the way somewhere else shows nothing. At file scope
+/// because a generic type cannot hold a stored static.
+private let hoverFlyoutDwell = Duration.milliseconds(180)
 
-    /// How long the pointer has to rest before the label appears.
-    ///
-    /// Short enough to read as instant on a tile you meant to point at, long
-    /// enough that crossing one on the way somewhere else shows nothing.
-    private static let dwell = Duration.milliseconds(180)
+struct HoverFlyout<Flyout: View>: ViewModifier {
+    var edge: Edge = .trailing
+    /// What opens. A label for most controls — `FlyoutLabel` — and a small card
+    /// for the few Discord explains at more length, such as a server's mark.
+    @ViewBuilder var flyout: () -> Flyout
+
 
     @State private var isShown = false
     @State private var dwellTask: Task<Void, Never>?
@@ -48,7 +46,7 @@ struct HoverFlyout: ViewModifier {
                     return
                 }
                 dwellTask = Task {
-                    try? await Task.sleep(for: Self.dwell)
+                    try? await Task.sleep(for: hoverFlyoutDwell)
                     guard !Task.isCancelled else { return }
                     isShown = true
                 }
@@ -63,7 +61,7 @@ struct HoverFlyout: ViewModifier {
                 ),
                 arrowEdge: edge
             ) {
-                FlyoutLabel(text: label, wrapsAt: wrapsAt)
+                flyout()
                     // The label carries the material; the popover must carry
                     // none, or two are stacked and the result reads as frost.
                     .presentationBackground(.clear)
@@ -101,11 +99,24 @@ struct FlyoutLabel: View {
 
 extension View {
     /// Names this control beside itself while the pointer rests on it.
+    ///
+    /// - Parameter wrapsAt: the width the label wraps at, or nil for one line
+    ///   that sizes to its text. A server name is a few words and belongs on one
+    ///   line; a custom status is a sentence somebody wrote, and one line of it
+    ///   would be a popover wider than the window.
     func hoverFlyout(
         _ label: String,
         edge: Edge = .trailing,
         wrapsAt: CGFloat? = nil
     ) -> some View {
-        modifier(HoverFlyout(label: label, edge: edge, wrapsAt: wrapsAt))
+        modifier(HoverFlyout(edge: edge) { FlyoutLabel(text: label, wrapsAt: wrapsAt) })
+    }
+
+    /// Opens `flyout` beside this control while the pointer rests on it.
+    func hoverFlyout<Flyout: View>(
+        edge: Edge = .trailing,
+        @ViewBuilder _ flyout: @escaping () -> Flyout
+    ) -> some View {
+        modifier(HoverFlyout(edge: edge, flyout: flyout))
     }
 }

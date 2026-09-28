@@ -21,28 +21,41 @@ struct ProfileEditGatingTests {
     private let readerID = UserID(rawValue: 1)
     private let guildID = GuildID(rawValue: 10)
 
+    /// The tier on the ACCOUNT, and a user row that says nothing about it —
+    /// the shape a real session has, where the row is rewritten by every route
+    /// that carries a user object.
     private func model(tier: PremiumTier) -> AppModel {
         let model = AppModel()
         model.currentUserID = readerID
-        model.users = [
-            readerID: User(
-                id: readerID,
-                username: "reader",
-                decoration: UserDecoration(premiumTier: tier)
-            ),
-        ]
+        model.entitlements = AccountEntitlements(premiumTier: tier)
+        model.users = [readerID: User(id: readerID, username: "reader")]
         return model
     }
 
     @Test("Nitro proper, not merely a paid tier")
     func onlyNitroCounts() {
-        // Nitro Basic is paid and carries none of these — the same distinction
-        // `PremiumTier.themesProfile` is written about. A test for "has paid
-        // for something" offers Basic accounts fields the server refuses.
-        #expect(model(tier: .nitro).profileEditCapability(for: .account).wearsNitro)
-        #expect(!model(tier: .basic).profileEditCapability(for: .account).wearsNitro)
-        #expect(!model(tier: .classic).profileEditCapability(for: .account).wearsNitro)
-        #expect(!model(tier: .none).profileEditCapability(for: .account).wearsNitro)
+        // Nitro Basic is paid and carries none of these — Discord's own perk
+        // table. A test for "has paid for something" offers Basic accounts
+        // fields the server refuses.
+        for tier in [PremiumTier.basic, .classic, .none] {
+            let capability = model(tier: tier).profileEditCapability(for: .account)
+            #expect(!capability.customizesProfile)
+            #expect(!capability.customizesServerProfile)
+        }
+        let nitro = model(tier: .nitro).profileEditCapability(for: .guild(guildID))
+        #expect(nitro.customizesProfile)
+        #expect(nitro.customizesServerProfile)
+    }
+
+    @Test("A thin write of the reader's own row takes no perk away")
+    func tierSurvivesTheUserRow() {
+        // What a Nitro account saw: every gate read the tier off the reader's
+        // row, and the row is replaced whole by the profile route and by
+        // READY's arrays. The account's answer is the only one that counts.
+        let model = model(tier: .nitro)
+        model.users[readerID] = User(id: readerID, username: "reader")
+        #expect(model.profileEditCapability(for: .guild(guildID)).canEditGuildAvatar)
+        #expect(model.hasNitro)
     }
 
     @Test("The banner COLOUR is free; the theme and the banner image are not")

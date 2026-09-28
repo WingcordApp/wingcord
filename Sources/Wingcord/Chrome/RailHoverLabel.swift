@@ -48,6 +48,8 @@ private struct RailHoverKey: PreferenceKey {
 /// geometry you already have the inputs for.
 private struct RailHoverChip: View {
     var label: String
+    /// Discord's mark before the name, for a server that wears one.
+    var mark: GuildMark?
     /// Who is in voice here. Empty for every tile that is not a server, and for
     /// every server with nobody in one — which is the common case and draws
     /// exactly the chip this has always drawn.
@@ -98,14 +100,20 @@ private struct RailHoverChip: View {
         .fixedSize()
     }
 
-    /// The name, in the band it has always had.
+    /// The name, in the band it has always had — after the server's mark,
+    /// which Discord draws at 20 points beside it.
     private var name: some View {
-        Text(label)
-            .font(.system(.subheadline, weight: .semibold))
-            .foregroundStyle(Ink.primary)
-            .lineLimit(1)
-            .padding(.horizontal, Spacing.snug)
-            .frame(height: Self.height, alignment: .leading)
+        HStack(spacing: Spacing.base) {
+            if let mark {
+                GuildMarkBadge(mark: mark, side: 20)
+            }
+            Text(label)
+                .font(.system(.subheadline, weight: .semibold))
+                .foregroundStyle(Ink.primary)
+                .lineLimit(1)
+        }
+        .padding(.horizontal, Spacing.snug)
+        .frame(height: Self.height, alignment: .leading)
     }
 
     /// One row: what it is about, then the faces.
@@ -207,7 +215,11 @@ private struct RailHoverLabelHost: ViewModifier {
                     // tiles in a memo that rebuilds on every message.
                     let presence = item.guildID.map(model.railHoverPresence(for:))
                         ?? RailHoverPresence()
-                    RailHoverChip(label: item.label, presence: presence)
+                    RailHoverChip(
+                        label: item.label,
+                        mark: item.guildID.flatMap { model.guilds[$0]?.mark },
+                        presence: presence
+                    )
                         .offset(
                             x: rect.maxX + Spacing.base,
                             y: rect.midY - RailHoverChip.height(rows: presence.rowCount) / 2

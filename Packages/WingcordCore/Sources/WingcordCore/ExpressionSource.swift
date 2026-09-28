@@ -56,10 +56,9 @@ public enum ExpressionSource: Hashable, Sendable {
             self.sampleStickers = sampleStickers
         }
 
-        /// The mark Discord grants the server, highest first.
-        public var standing: GuildProfile.Standing? {
-            GuildProfile.Standing(features: features)
-        }
+        /// The mark beside the server's name. The route carries no boost
+        /// count, so a boosted server's rosette is the plain one here.
+        public var mark: GuildMark? { GuildMark(features: features) }
 
         /// Whether the server can be looked at by somebody who is not in it.
         ///

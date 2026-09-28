@@ -354,25 +354,27 @@ extension DiscordREST {
 
     // MARK: Read states
 
-    /// Marks many channels read in one request.
+    /// Marks many channels read — Discord's own `BULK_ACK`, as its read-state
+    /// store sends it.
     ///
-    /// **What "mark all read" has to be.** The per-channel ack is one request
-    /// per channel, and an account with sixty unread channels would spend sixty
-    /// of them through a rate limiter — which is a visible stall and then a 429.
+    /// **Its shape, not a guess at one.** The store queues
+    /// `{channel_id, message_id, read_state_type}` for every channel that
+    /// actually has something unread, **always with the type** — zero for a
+    /// channel — and drains the queue a hundred entries per request, a second
+    /// apart. The version this replaced sent everything in one body and left
+    /// the type off, and Discord answered by changing nothing.
     ///
-    /// Two rules this route has that the single ack does not, both from the
-    /// docs and both able to fail silently:
+    /// Two rules this route has that the single ack does not:
     ///
     ///  - **The message id must be greater than zero**, or the entry is ignored
     ///    with no error. Filtered here rather than at the call site.
     ///  - **It takes no `manual` flag**, so it must never be used to move a read
-    ///    cursor *backwards*. Marking read only ever moves it forward, which is
-    ///    the only thing this client asks of it.
+    ///    cursor *backwards*. Marking read only ever moves it forward.
     public func bulkAcknowledge(_ updates: [ReadStateUpdate]) async throws {
         struct Entry: Encodable {
             var channel_id: String
             var message_id: String
-            var read_state_type: Int?
+            var read_state_type: Int
         }
         struct Body: Encodable { var read_states: [Entry] }
 
@@ -381,20 +383,25 @@ extension DiscordREST {
             return Entry(
                 channel_id: update.channelID.description,
                 message_id: update.messageID.description,
-                // Omitted for an ordinary channel: `CHANNEL` is the route's own
-                // default, and sending a field's default value on every entry is
-                // bytes in a body that can carry hundreds of them.
-                read_state_type: update.kind == .channel ? nil : update.kind.rawValue
+                read_state_type: update.kind.rawValue
             )
         }
-        guard !entries.isEmpty else { return }
-        _ = try await requestData(
-            method: "POST",
-            path: "/read-states/ack-bulk",
-            route: "read-states/ack-bulk",
-            body: Body(read_states: entries)
-        )
+        var start = entries.startIndex
+        while start < entries.endIndex {
+            if start > entries.startIndex { try await Task.sleep(for: .seconds(1)) }
+            let end = min(start + Self.bulkAcknowledgeBatch, entries.endIndex)
+            _ = try await requestData(
+                method: "POST",
+                path: "/read-states/ack-bulk",
+                route: "read-states/ack-bulk",
+                body: Body(read_states: Array(entries[start..<end]))
+            )
+            start = end
+        }
     }
+
+    /// Discord's own batch: `ef.splice(0, 100)`.
+    static let bulkAcknowledgeBatch = 100
 }
 
 extension DiscordREST {

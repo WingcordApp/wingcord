@@ -21,9 +21,8 @@ extension AppModel {
     /// has no server — so the boost half is genuinely absent there rather than
     /// zero. See `AttachmentLimits`.
     func uploadLimit(in channelID: ChannelID) -> Int {
-        let tier = currentUserID.flatMap { users[$0] }?.decoration?.premiumTier ?? .none
         let boost = channelIndex.guildID(of: channelID).flatMap { guilds[$0] }?.premiumTier
-        return AttachmentLimits.bytes(forPremium: tier, guildBoostTier: boost)
+        return AttachmentLimits.bytes(forPremium: entitlements.premiumTier, guildBoostTier: boost)
     }
 
     /// Stages files for a channel, refusing the ones this account cannot send.

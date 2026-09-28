@@ -50,6 +50,11 @@ struct ExpressionItem: Hashable, Sendable, Identifiable {
     var name: String
     /// What picking it does.
     var pick: Pick
+    /// This one item cannot be used by this account, wherever it is sent —
+    /// an animated emoji without any Nitro. A whole server that is out of reach
+    /// is `ExpressionSection.isLocked` instead, which costs one flag, not one
+    /// per emoji.
+    var isLocked: Bool = false
 
     enum Pick: Hashable, Sendable {
         /// Typed into the composer — a Unicode glyph or `<:name:id>`.

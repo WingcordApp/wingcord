@@ -84,13 +84,19 @@ nonisolated extension TimelineRowPainter {
             )
         }
 
+        // **The body's own painter**, so a description's quotes, code and
+        // mentions wear the same plates as a message's. Its spoilers have no
+        // click of their own, so they draw uncovered rather than unreadable.
         for text in slot.texts {
-            drawTextFrame(
+            drawTextBlock(
                 text.block,
                 at: CGPoint(x: offset.x + text.origin.x, y: offset.y + text.origin.y),
                 context: context,
+                style: style,
                 images: images,
-                scale: scale
+                scale: scale,
+                time: clock,
+                state: TextState()
             )
         }
 
@@ -299,7 +305,7 @@ nonisolated extension TimelineRowPainter {
         if !drew {
             // A quiet plate at the picture's own size, so nothing reflows when
             // it lands — the box was already reserved.
-            context.setFillColor(style.codeBackground.withAlphaComponent(0.6).cgColor)
+            context.setFillColor(ThemeInk.current.placeholderFill)
             context.fill(frame)
         }
         context.restoreGState()

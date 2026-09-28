@@ -98,6 +98,7 @@ struct ConversationPane: View {
             // Who reacted, over the chip the pointer rests on — composed over
             // the canvas for the pill's reason. See `ReactionTooltipOverlay`.
             .overlay { ReactionTooltipOverlay(channelID: channelID) }
+            .overlay { GuildMarkTooltipOverlay() }
             // **The transcript runs to the window's foot, under the composer.**
             //
             // Left inset by the bar, the scroll view stops above it — so the

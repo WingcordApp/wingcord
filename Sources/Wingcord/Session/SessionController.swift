@@ -99,7 +99,7 @@ final class SessionController {
     /// and a click on the same row — asks once.
     private var profileFetches: Set<UserID> = []
     private var collectibleFetches: Set<String> = []
-    private var paletteFetches: Set<URL> = []
+    var paletteFetches: Set<URL> = []
     /// The same guard for an activity's icon. Keyed by application rather than
     /// by URL because an app has one icon and the card asks for it once.
     var activityAccentFetches: Set<ApplicationID> = []
@@ -217,6 +217,16 @@ final class SessionController {
     var lastConfirmedOnboarding: [GuildID: Set<UInt64>] = [:]
     /// Channels whose transcript is being re-anchored around a linked message.
     private var jumpFetches: Set<ChannelID> = []
+    /// Invite codes asked about this session — see `resolveInvites`.
+    var inviteFetches: Set<String> = []
+    /// Invite cards whose button is being answered: one accept per code at a
+    /// time — see `joinFromInviteCard`.
+    var inviteCardJoins: Set<String> = []
+    /// Profile cards asked about this session — see `resolveUserCards`.
+    var userCardFetches: Set<UserCardKey> = []
+    /// Inbox folds waiting to be written — see `foldInboxGroup`.
+    var pendingInboxFolds: [InboxFoldKey: InboxFold] = [:]
+    var inboxFoldWrite: Task<Void, Never>?
     /// Unread groups whose message bodies the inbox is fetching.
     ///
     /// Its own set rather than `jumpFetches`: both fetch the same route for the
@@ -232,6 +242,9 @@ final class SessionController {
     /// per keystroke.
     private var lastTypingSent: [ChannelID: Date] = [:]
     private static let typingInterval: TimeInterval = 8
+    /// The one timer that lets typing indicators lapse, and when it fires.
+    private var typingExpiryTask: Task<Void, Never>?
+    private var typingExpiryDeadline: Date?
     private var pendingPresences: [UserID: Presence] = [:]
     private var presenceFlushTask: Task<Void, Never>?
     private static let presenceFlushInterval = Duration.milliseconds(200)
@@ -268,7 +281,8 @@ final class SessionController {
             guard let self else { return }
             do {
                 await rest.setToken(token)
-                let user = try await rest.currentUser()
+                let account = try await rest.currentUser()
+                let user = account.user
                 try TokenStore.store(token, forAccount: user.id.description)
                 AccountLedger.upsert(StoredAccount(
                     id: user.id.description,
@@ -276,6 +290,7 @@ final class SessionController {
                     displayName: user.displayName,
                     avatarHash: user.avatarHash
                 ))
+                adoptEntitlements(of: account)
                 connect(token: token)
             } catch DiscordREST.Failure.unauthorized {
                 model.connectionState = .failed("That sign-in did not produce a usable token.")
@@ -336,8 +351,9 @@ final class SessionController {
             await rest.setToken(token)
             Self.trace("validating token")
             do {
-                let user = try await rest.currentUser()
-                Self.trace("validated as \(user.username)")
+                let account = try await rest.currentUser()
+                Self.trace("validated as \(account.user.username)")
+                adoptEntitlements(of: account)
                 connect(token: token)
             } catch DiscordREST.Failure.unauthorized {
                 Self.trace("401 — token rejected")
@@ -351,6 +367,21 @@ final class SessionController {
             }
             startingAccountID = nil
         }
+    }
+
+    /// What the account just validated is entitled to, **replacing** whatever
+    /// the last account had.
+    ///
+    /// The token check already asks `/users/@me`, which carries the tier and the
+    /// age status, and used to throw both away — leaving every perk hanging on
+    /// READY alone. Replaced rather than merged: this is a sign-in, possibly as
+    /// somebody else, and a merge would lend them the previous account's tier.
+    /// READY then merges over it.
+    private func adoptEntitlements(of account: CurrentAccount) {
+        model.entitlements = AccountEntitlements().updated(
+            premiumType: account.premiumType,
+            ageVerificationStatus: account.ageVerificationStatus
+        )
     }
 
     private func connect(token: String) {
@@ -396,6 +427,7 @@ final class SessionController {
         startingAccountID = nil
         teardownConnection()
         model.currentUserID = nil
+        model.entitlements = AccountEntitlements()
         model.mentionableIDs = []
         model.guilds = [:]
         model.channelIndex = ChannelIndex()
@@ -495,6 +527,10 @@ final class SessionController {
         presenceFlushTask?.cancel()
         presenceFlushTask = nil
         pendingPresences.removeAll(keepingCapacity: false)
+        typingExpiryTask?.cancel()
+        typingExpiryTask = nil
+        typingExpiryDeadline = nil
+        model.clearAllTyping()
         model.historyLoader = nil
         model.topicLoader = nil
         model.summaryLoader = nil
@@ -591,6 +627,17 @@ final class SessionController {
             "ready: themes=\(snapshot.guilds.count { $0.theme?.resolved != nil }) "
             + "summaries=\(snapshot.guilds.count { $0.features.contains("SUMMARIES_ENABLED_GA") })"
         )
+        // **Worth keeping, for the same reason.** A Nitro account once saw every
+        // other server's emoji locked, and this line says what READY itself
+        // carried: `absent` and `0` lock the same perks for different reasons.
+        Self.trace(
+            "ready: premium_type=\(snapshot.premiumType.map(String.init) ?? "absent") "
+            + "age_status=\(snapshot.ageVerificationStatus.map(String.init) ?? "absent")"
+        )
+        model.entitlements = model.entitlements.updated(
+            premiumType: snapshot.premiumType,
+            ageVerificationStatus: snapshot.ageVerificationStatus
+        )
 
         var readStates = snapshot.readStates
         for channelID in snapshot.mutedChannelIDs {
@@ -606,6 +653,7 @@ final class SessionController {
         model.friendNicknames = snapshot.friendNicknames
         model.notes = snapshot.notes
         model.stageInstances = snapshot.stages
+        model.scheduledEvents = snapshot.scheduledEvents
         model.voiceChannelInfo = snapshot.voiceChannelInfo
         voiceInfoRequestedGuildIDs.removeAll(keepingCapacity: true)
         spotifyRefusals.removeAll(keepingCapacity: true)
@@ -623,6 +671,8 @@ final class SessionController {
         model.members = snapshot.membersByGuild
         model.presences = snapshot.presences
         model.readStates = readStates
+        model.guildEventAcks = snapshot.guildEventAcks
+        model.usesNewNotifications = (snapshot.notificationFlags ?? 0) & 16 != 0
         model.folders = Self.railOrder(
             settingsFolders: snapshot.settings.folders,
             guildPositions: snapshot.settings.guildPositions,
@@ -641,6 +691,7 @@ final class SessionController {
         model.activityStatusRaw = snapshot.settings.statusRaw
         // Whose theme a themed server is drawn in. See `GuildThemeSource`.
         model.serverThemePreferences = snapshot.settings.serverThemes
+        model.inboxCollapse = snapshot.settings.inboxCollapse
         // A new session may have missed summaries while it was away.
         model.markSummariesStale()
         model.mutedGuildIDs = snapshot.mutedGuildIDs
@@ -874,6 +925,7 @@ final class SessionController {
             // oldest trimmed once it is full — see `MessageBox.receiveLive`.
             let trims = model.mayTrimOldest(in: message.channelID)
             model.mutateBox(message.channelID) { $0.receiveLive(message, trimming: trims) }
+            model.clearTyping(author.id, in: message.channelID)
             model.channelIndex.patchLastMessage(message.id, in: message.channelID)
             model.messageContentRevision &+= 1
             bumpUnread(for: message)
@@ -888,6 +940,8 @@ final class SessionController {
             // minted. See `awaitActivityInstance`.
             resolveActivityLaunch(with: message)
             resolveSpotifyUnfurls(in: [message])
+            resolveInvites(in: [message])
+            resolveUserCards(in: [message], inGuild: model.channelIndex.guildID(of: message.channelID))
             resolveMessageMembers(in: [message], channelID: message.channelID)
 
         case .messageUpdated(let message):
@@ -1003,9 +1057,11 @@ final class SessionController {
 
         case .guildAvailable(
             let guild, let channels, let voiceChannelInfo, let threads, let roles,
-            let members, let users, let presences, let emojis, let stickers, let stages
+            let members, let users, let presences, let emojis, let stickers, let stages,
+            let scheduledEvents
         ):
             model.guilds[guild.id] = guild
+            model.scheduledEvents[guild.id] = scheduledEvents.isEmpty ? nil : scheduledEvents
             model.voiceChannelInfo.merge(voiceChannelInfo) { _, new in new }
             // The stages already running here. A server arriving mid-session
             // is the only place they come from besides READY and the three
@@ -1031,6 +1087,8 @@ final class SessionController {
             model.roleRevision &+= 1
             model.memberRevision &+= 1
             model.expressionRevision &+= 1
+            // A server just joined turns its invite cards' Join into Go to Server.
+            model.inviteSettlementChanged()
 
         case .guildExpressionsUpdated(let guildID, let emojis, let stickers):
             // Each event replaces one half. A nil side did not change, and
@@ -1041,6 +1099,18 @@ final class SessionController {
 
         case .stageChanged(let stage):
             model.applyStage(stage)
+
+        case .scheduledEventChanged(let event):
+            var events = model.scheduledEvents[event.guildID] ?? []
+            events.removeAll { $0.id == event.id }
+            events.append(event)
+            model.scheduledEvents[event.guildID] = events
+            // The inbox's Events group is drawn from these.
+            model.inbox.revision &+= 1
+
+        case .scheduledEventRemoved(let guildID, let eventID):
+            model.scheduledEvents[guildID]?.removeAll { $0.id == eventID }
+            model.inbox.revision &+= 1
 
         case .stageEnded(let channelID):
             model.applyStageEnded(channelID)
@@ -1100,8 +1170,11 @@ final class SessionController {
             model.applyThreadMemberCount(count, in: threadID)
 
         case .channelUpserted(let channel):
+            let isNewConversation = channel.guildID == nil && model.channelIndex[channel.id] == nil
             model.channelIndex.upsert(channel)
             model.permissionGate.invalidate()
+            // A group just entered turns its invite cards' Join Group DM into Joined.
+            if isNewConversation { model.inviteSettlementChanged() }
             // A moderator changing the limit moves a wait that is running.
             model.reconcileSlowmode(in: channel.id)
             model.sidebarRevision &+= 1
@@ -1116,12 +1189,12 @@ final class SessionController {
             enqueue(presence)
 
         case .typingStarted(let channelID, let userID, let at):
-            model.mutateBox(channelID) {
-                // Discord's own indicator expires after ten seconds with no
-                // further signal, and matching that is what stops a "typing…"
-                // from a closed tab hanging on the composer forever.
-                $0.typing[userID] = at.addingTimeInterval(10)
-            }
+            // Discord's own indicator expires after ten seconds with no further
+            // signal, and matching that is what stops a "typing…" from a closed
+            // tab hanging on the composer forever.
+            let expiry = at.addingTimeInterval(10)
+            model.noteTyping(userID, in: channelID, until: expiry)
+            armTypingExpiry(at: expiry)
 
         case .membersChunk(let guildID, let members, let users, let presences),
              .memberListUpdated(let guildID, let members, let users, let presences):
@@ -1143,8 +1216,12 @@ final class SessionController {
             model.sidebarRevision &+= 1
             model.railRevision &+= 1
 
-        case .currentUserUpdated(let user):
+        case .currentUserUpdated(let user, let premiumType, let ageVerificationStatus):
             model.users[user.id] = user.merged(over: model.users[user.id])
+            model.entitlements = model.entitlements.updated(
+                premiumType: premiumType,
+                ageVerificationStatus: ageVerificationStatus
+            )
             model.identityRevision &+= 1
 
         case .friendNicknameChanged(let userID, let nickname):
@@ -1224,6 +1301,8 @@ final class SessionController {
                 }
             }
             model.identityRevision &+= 1
+            // A friendship made or lost moves a friend link's Add Friend.
+            model.inviteSettlementChanged()
         }
     }
 
@@ -1403,6 +1482,8 @@ final class SessionController {
                 }
                 model.messageContentRevision &+= 1
                 resolveSpotifyUnfurls(in: page.messages)
+                resolveInvites(in: page.messages)
+                resolveUserCards(in: page.messages, inGuild: model.channelIndex.guildID(of: channelID))
                 resolveMessageMembers(in: page.messages, channelID: channelID)
             } catch {
                 Self.trace(
@@ -1607,72 +1688,87 @@ final class SessionController {
     /// they land. Making the card wait would trade a complete card for a
     /// spinner, and the fields that arrive late are decorative.
     func loadProfile(of userID: UserID, inGuild guildID: GuildID?) {
-        guard profileFetches.insert(userID).inserted else { return }
+        // Marked loading on the click, not a hop later, so the card that opens
+        // with it already shows its skeleton.
+        guard beginProfileFetch(of: userID) else { return }
+        Task { [weak self] in await self?.applyProfile(of: userID, inGuild: guildID) }
+    }
+
+    /// Fetches somebody's profile and applies it, returning once it is on the
+    /// store — or at once, when a fetch for them is already out.
+    func fetchProfile(of userID: UserID, inGuild guildID: GuildID?) async {
+        guard beginProfileFetch(of: userID) else { return }
+        await applyProfile(of: userID, inGuild: guildID)
+    }
+
+    private func beginProfileFetch(of userID: UserID) -> Bool {
+        guard profileFetches.insert(userID).inserted else { return false }
         model.profilesLoading.insert(userID)
-        Task { [weak self] in
-            guard let self else { return }
-            defer {
-                profileFetches.remove(userID)
-                model.profilesLoading.remove(userID)
+        return true
+    }
+
+    private func applyProfile(of userID: UserID, inGuild guildID: GuildID?) async {
+        defer {
+            profileFetches.remove(userID)
+            model.profilesLoading.remove(userID)
+        }
+        do {
+            let fetched = try await rest.profile(of: userID, inGuild: guildID)
+            let user = fetched.user
+            // **What the card will actually draw from, by value.** The
+            // shape dump beside this one names the response's KEYS, which
+            // cannot tell a field that is absent from one that arrived
+            // null — and those are the same picture on screen and two
+            // different faults. One line per fetch, gated on the sink.
+            Self.trace(Self.describe(profile: user, guildLayer: fetched.guildUser))
+            // **Assigned whole, not merged.** This route is the
+            // authoritative answer for every cosmetic field, so a bio
+            // somebody deleted has to be able to disappear — see
+            // `User.merged(over:)`, which every OTHER write goes through.
+            //
+            // Only if it actually added something. Replacing an equal value
+            // still publishes, and this runs while a popover is open.
+            if model.users[userID] != user {
+                model.users[userID] = user
+                model.identityRevision &+= 1
             }
-            do {
-                let fetched = try await rest.profile(of: userID, inGuild: guildID)
-                let user = fetched.user
-                // **What the card will actually draw from, by value.** The
-                // shape dump beside this one names the response's KEYS, which
-                // cannot tell a field that is absent from one that arrived
-                // null — and those are the same picture on screen and two
-                // different faults. One line per fetch, gated on the sink.
-                Self.trace(Self.describe(profile: user, guildLayer: fetched.guildUser))
-                // **Assigned whole, not merged.** This route is the
-                // authoritative answer for every cosmetic field, so a bio
-                // somebody deleted has to be able to disappear — see
-                // `User.merged(over:)`, which every OTHER write goes through.
-                //
-                // Only if it actually added something. Replacing an equal value
-                // still publishes, and this runs while a popover is open.
-                if model.users[userID] != user {
-                    model.users[userID] = user
+            // The per-server layer, kept beside the account's rather than
+            // folded into it — which is what lets the profile's own menu
+            // offer both. Assigned whole for the same reason the account is:
+            // a per-server bio somebody deleted has to be able to go.
+            if let guildID = fetched.guildID {
+                let guildUser = fetched.guildUser
+                if model.memberProfiles[guildID]?[userID] != guildUser {
+                    model.memberProfiles[guildID, default: [:]][userID] = guildUser
                     model.identityRevision &+= 1
                 }
-                // The per-server layer, kept beside the account's rather than
-                // folded into it — which is what lets the profile's own menu
-                // offer both. Assigned whole for the same reason the account is:
-                // a per-server bio somebody deleted has to be able to go.
-                if let guildID = fetched.guildID {
-                    let guildUser = fetched.guildUser
-                    if model.memberProfiles[guildID]?[userID] != guildUser {
-                        model.memberProfiles[guildID, default: [:]][userID] = guildUser
-                        model.identityRevision &+= 1
-                    }
-                }
-                // The board arrives on this route and nowhere else — assigned
-                // whole for the same reason, so a tile somebody deleted stops
-                // being drawn. Its games, templates and identities are three
-                // further routes, started here rather than from the tab: the tab
-                // only exists because these widgets arrived.
-                if model.profileWidgets[userID] != fetched.widgets {
-                    model.profileWidgets[userID] = fetched.widgets
-                }
-                loadBoard(of: userID, widgets: fetched.widgets)
-                // The profile names each collectible by SKU; the artwork is a
-                // second request, and only for a SKU nothing has resolved yet.
-                if let sku = user.decoration?.profileEffectSKU,
-                   model.profileEffects[sku] == nil
-                {
-                    loadCollectible(sku: sku)
-                }
-                // The frame is a separate purchase from the effect and an
-                // account can wear both, so this is an `if`, not an `else`.
-                if let sku = user.decoration?.profileFrameSKU,
-                   model.profileFrames[sku] == nil
-                {
-                    loadCollectible(sku: sku)
-                }
-                deriveTheme(of: user)
-            } catch {
-                Self.trace("profile \(userID) failed: \(Self.describe(error))")
             }
+            // The board arrives on this route and nowhere else — assigned
+            // whole for the same reason, so a tile somebody deleted stops
+            // being drawn. Its games, templates and identities are three
+            // further routes, started here rather than from the tab: the tab
+            // only exists because these widgets arrived.
+            if model.profileWidgets[userID] != fetched.widgets {
+                model.profileWidgets[userID] = fetched.widgets
+            }
+            loadBoard(of: userID, widgets: fetched.widgets)
+            // The profile names each collectible by SKU; the artwork is a
+            // second request, and only for a SKU nothing has resolved yet.
+            if let sku = user.decoration?.profileEffectSKU,
+               model.profileEffects[sku] == nil
+            {
+                loadCollectible(sku: sku)
+            }
+            // The frame is a separate purchase from the effect and an
+            // account can wear both, so this is an `if`, not an `else`.
+            if let sku = user.decoration?.profileFrameSKU,
+               model.profileFrames[sku] == nil
+            {
+                loadCollectible(sku: sku)
+            }
+            deriveTheme(of: user)
+        } catch {
+            Self.trace("profile \(userID) failed: \(Self.describe(error))")
         }
     }
 
@@ -1695,6 +1791,11 @@ final class SessionController {
             do {
                 let profile = try await rest.guildProfile(of: guildID)
                 model.guildProfiles[guildID] = profile
+                deriveBannerColor(
+                    guildID: guildID,
+                    iconHash: profile.iconHash ?? model.guilds[guildID]?.iconHash,
+                    brandColor: profile.brandColorPrimary
+                )
                 // **The profile names games by id and nothing else**, so the
                 // card's row is blank until the store entries arrive — a name
                 // and an icon are a second request, which is exactly what
@@ -1791,6 +1892,8 @@ final class SessionController {
                 }
                 model.messageContentRevision &+= 1
                 resolveSpotifyUnfurls(in: page.messages)
+                resolveInvites(in: page.messages)
+                resolveUserCards(in: page.messages, inGuild: model.channelIndex.guildID(of: channelID))
                 resolveMessageMembers(in: page.messages, channelID: channelID)
                 model.requestJump(to: messageID, in: channelID, highlights: highlights)
             } catch {
@@ -1854,6 +1957,26 @@ final class SessionController {
                 // message on screen.
                 Self.trace("typing \(channelID) failed: \(Self.describe(error))")
             }
+        }
+    }
+
+    /// Lets typing indicators lapse: one timer for the whole session, due at
+    /// the earliest expiry, re-armed by whatever it prunes.
+    ///
+    /// **One, not one per surface.** The composer's line, the roster's dots and
+    /// the DM list's pill all read the same table, so the table is what keeps
+    /// time — a surface that ran its own clock would be a timer per open
+    /// conversation, each re-deriving the same answer.
+    private func armTypingExpiry(at expiry: Date) {
+        if let deadline = typingExpiryDeadline, deadline <= expiry { return }
+        typingExpiryTask?.cancel()
+        typingExpiryDeadline = expiry
+        typingExpiryTask = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(max(0, expiry.timeIntervalSinceNow)))
+            guard !Task.isCancelled, let self else { return }
+            typingExpiryDeadline = nil
+            typingExpiryTask = nil
+            if let next = model.pruneTyping(now: .now) { armTypingExpiry(at: next) }
         }
     }
 
@@ -2396,6 +2519,9 @@ extension SessionController {
                 case .approved:
                     if let userID = model.currentUserID {
                         model.members[guildID]?[userID]?.isPending = false
+                        // A pending member is masked as a lurker is — see
+                        // `PermissionGate.lurkerMask` — so agreeing opens the channels.
+                        model.permissionGate.invalidate()
                         model.memberRevision &+= 1
                     }
                     model.serverRulesSubmission = nil

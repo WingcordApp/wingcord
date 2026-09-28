@@ -14,10 +14,11 @@ struct GuildProfilePresentation: Equatable, Sendable {
     var iconURL: URL?
     var monogram: String
     var bannerURL: URL?
+    /// The banner's glow where there is no artwork — the brand colour, or the
+    /// icon's; nil for Discord's neutral. See `GuildBannerArt`.
+    var bannerColor: UInt32?
     var badgeURL: URL?
-    var badgeColorPrimary: UInt32?
-    var badgeColorSecondary: UInt32?
-    var standing: GuildProfile.Standing?
+    var mark: GuildMark?
     var description: String?
     var memberCount: Int?
     var onlineCount: Int?
@@ -48,7 +49,7 @@ struct GuildProfilePresentation: Equatable, Sendable {
     enum Entry: Equatable, Sendable {
         /// Nothing to offer: already a member, or the profile has not landed.
         case none
-        /// `PUT /guilds/{id}/members/@me` and you are in.
+        /// A look inside — Discord's Join from a tag card is a preview.
         case join
         /// The server asks first — `MEMBER_VERIFICATION_GATE_ENABLED`.
         case apply

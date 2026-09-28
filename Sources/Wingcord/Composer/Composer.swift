@@ -146,7 +146,7 @@ struct Composer: View {
     var pendingInteractions: [PendingInteraction] = []
 
     @Environment(\.motion) private var motion
-    @FocusState private var isFocused: Bool
+    @State private var isFocused = false
     /// Which of the four trailing controls has its flyout open.
     ///
     /// **Keyed on the control, not on the picker's mode.** Three of the four
@@ -312,28 +312,40 @@ struct Composer: View {
                     CommandComposerBar(pending: pendingCommand, onEdit: focusCommandOption)
                 }
 
-                TextField(placeholder, text: fieldText, axis: .vertical)
-                    .textFieldStyle(.plain)
-                    .font(Typeface.messageBody)
+                // **Discord's box**: the markdown stays visible and styled as it
+                // is typed, and a selection brings up the formatting bar. See
+                // `MarkdownEditor`.
+                MarkdownEditor(
+                    text: fieldText,
+                    isFocused: $isFocused,
+                    placeholder: placeholder,
+                    font: NSFont.preferredFont(forTextStyle: .body),
                     // Solid across the whole bar rather than the hierarchy: a
                     // `.secondary` glyph washes out on glass, and a composer
                     // whose placeholder is invisible reads as broken. See
                     // `InkColor.solid`.
-                    .foregroundStyle(InkColor.solid)
-                    .lineLimit(1...Metrics.composerMaxLines)
-                    .focused($isFocused)
-                    .onSubmit(pressedReturn)
+                    ink: .composerSolid,
+                    lines: 1...Metrics.composerMaxLines,
+                    returnSubmits: true,
                     // Whatever is open owns these keys, and hands them straight
-                    // back when nothing is. Returning `.ignored` is what lets
-                    // Return still send and the arrows still move the caret the
-                    // rest of the time.
-                    .onKeyPress(.upArrow) { pressedUp() }
-                    .onKeyPress(.downArrow) { pressedDown() }
-                    .onKeyPress(.return) { pressedReturnKey() }
-                    .onKeyPress(.tab) { pressedTab() }
-                    .onKeyPress(.delete) { pressedBackspace() }
-                    .onKeyPress(.escape) { pressedEscape() }
-                    .frame(minHeight: Metrics.composerFieldMinHeight)
+                    // back when nothing is. Handing one back is what lets Return
+                    // still send and the arrows still move the caret the rest of
+                    // the time.
+                    onKey: { key in
+                        let result: KeyPress.Result = switch key {
+                        case .up: pressedUp()
+                        case .down: pressedDown()
+                        // Shift-Return is a new line, whatever is open.
+                        case .return(let shift): shift ? .ignored : pressedReturnKey()
+                        case .tab: pressedTab()
+                        case .backspace: pressedBackspace()
+                        case .escape: pressedEscape()
+                        }
+                        return result == .handled
+                    },
+                    onSubmit: pressedReturn
+                )
+                .frame(minHeight: Metrics.composerFieldMinHeight)
             }
             // The field's own air, so a bar grown to three lines keeps it. The
             // row's height comes from this plus the field's minimum, which is

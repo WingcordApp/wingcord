@@ -112,8 +112,7 @@ extension DiscordREST {
     ///
     /// The response nests a `profile` of exactly the shape `/guilds/{id}/profile`
     /// answers with, so it decodes through the same type — including the
-    /// `features` set that `GuildProfile.standing` reads the verified rosette
-    /// out of.
+    /// `features` set that `GuildProfile.mark` reads the server's mark out of.
     public func invitePreview(code: String) async throws -> GuildProfile? {
         struct Reply: Decodable, Sendable {
             var profile: GuildProfileDTO?

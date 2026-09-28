@@ -118,7 +118,7 @@ struct ChannelSidebar: View, Equatable {
         // row is a menu button and a spacer, and a spacer has no hit region.
         .overlay(alignment: .topLeading) {
             if hasBanner, let header = presentation.header {
-                ServerNamePill(name: header.name, guildID: header.guildID)
+                ServerNamePill(name: header.name, guildID: header.guildID, mark: header.mark)
                     .padding(.leading, SidebarBannerLayout.pillLeading)
                     .padding(.trailing, Spacing.snug)
                     .offset(y: layout.pillTop)
@@ -152,7 +152,8 @@ struct ChannelSidebar: View, Equatable {
                         // destination rather than a server: there is nothing to
                         // invite anyone to, nothing to configure, and nothing
                         // to leave.
-                        guildID: header.guildID
+                        guildID: header.guildID,
+                        mark: header.mark
                     )
                     .equatable()
                 }
@@ -415,6 +416,8 @@ struct ChannelSidebar: View, Equatable {
 private struct ServerNamePill: View {
     var name: String
     var guildID: GuildID?
+    /// Discord's mark, before the name — see `GuildMark`.
+    var mark: GuildMark?
 
     @Environment(\.motion) private var motion
 
@@ -459,6 +462,10 @@ private struct ServerNamePill: View {
     /// whatever the artwork happens to be and stops being readable.
     private var label: some View {
         HStack(spacing: Spacing.tight) {
+            if let mark {
+                GuildMarkBadge(mark: mark)
+                    .padding(.trailing, Spacing.hair)
+            }
             Text(name)
                 .font(.system(.subheadline, weight: .semibold))
                 .foregroundStyle(InkColor.primary)
@@ -497,6 +504,8 @@ private struct ServerTitleItem: View, Equatable {
     /// nothing to leave, and a menu offering all three is three commands that
     /// cannot mean anything. Without it this is a label rather than a control.
     var guildID: GuildID?
+    /// Discord's mark, before the name — see `GuildMark`.
+    var mark: GuildMark?
 
     @Environment(\.motion) private var motion
 
@@ -509,6 +518,7 @@ private struct ServerTitleItem: View, Equatable {
         lhs.name == rhs.name
             && lhs.maxWidth == rhs.maxWidth
             && lhs.guildID == rhs.guildID
+            && lhs.mark == rhs.mark
     }
 
     @State private var isMenuOpen = false
@@ -578,8 +588,18 @@ private struct ServerTitleItem: View, Equatable {
     /// has to come out of it rather than be added on top — otherwise the fix for
     /// a cramped short name is what makes a long one disappear.
     private var labelWidthCap: CGFloat {
-        guildID == nil ? max(20, maxWidth - Self.bareLabelInset * 2) : maxWidth
+        let cap = guildID == nil ? max(20, maxWidth - Self.bareLabelInset * 2) : maxWidth
+        // The mark rides in front of the name and is never the part that gives.
+        return max(20, cap - markWidth)
     }
+
+    /// The mark and its gap, which come out of the name's allowance.
+    private var markWidth: CGFloat {
+        mark == nil ? 0 : Self.markSide + Self.markGap
+    }
+
+    private static let markSide: CGFloat = 18
+    private static let markGap = Spacing.tight + Spacing.hair
 
     @ViewBuilder
     private var title: some View {
@@ -589,7 +609,10 @@ private struct ServerTitleItem: View, Equatable {
             .truncationMode(.tail)
             .contentTransition(.interpolate)
 
-        Group {
+        HStack(spacing: Self.markGap) {
+            if let mark {
+                GuildMarkBadge(mark: mark, side: Self.markSide)
+            }
             if naturalWidth > labelWidthCap {
                 label.frame(width: labelWidthCap, alignment: .leading)
             } else {

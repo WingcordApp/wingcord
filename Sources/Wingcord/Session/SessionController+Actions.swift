@@ -245,6 +245,35 @@ extension SessionController {
         }
     }
 
+    /// Sends one message to several conversations — a shared profile.
+    ///
+    /// Sequential, for `forward`'s reason: one rate-limit family, and a failure
+    /// that names its own target.
+    func send(_ content: String, to targets: [ChannelID]) {
+        model.forwardsInFlight.formUnion(targets)
+        let nonce = Self.nonce()
+        Task { [weak self] in
+            guard let self else { return }
+            for (index, target) in targets.enumerated() {
+                defer { model.forwardsInFlight.remove(target) }
+                do {
+                    let message = try await rest.sendMessage(
+                        in: target, content: content, nonce: nonce + String(index)
+                    )
+                    // Only into a transcript that is actually loaded — see
+                    // `forward`.
+                    guard model.messages(in: target)?.messages.isEmpty == false else { continue }
+                    let trims = model.mayTrimOldest(in: target)
+                    model.mutateBox(target) { $0.receiveLive(message, trimming: trims) }
+                    model.messageContentRevision &+= 1
+                } catch {
+                    Self.trace("share to \(target) failed: \(Self.describe(error))")
+                    model.reportActionFailure(Self.describe(error))
+                }
+            }
+        }
+    }
+
     // MARK: Relationships
 
     func writeBlock(_ isBlocked: Bool, userID: UserID) {

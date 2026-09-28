@@ -242,7 +242,7 @@ extension AppModel {
                     CDN.guildIcon(guildID: guild.id, hash: $0, side: Metrics.discoveryCardIcon)
                 },
                 monogram: guild.monogram,
-                standing: guild.standing,
+                mark: guild.mark,
                 memberCount: guild.memberCount,
                 onlineCount: guild.onlineCount,
                 canPreview: guild.canPreview,

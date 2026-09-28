@@ -60,6 +60,11 @@ public struct Guild: Hashable, Sendable, Identifiable, Codable {
     /// summarised (module `260509`).
     public var isAgeRestricted: Bool
 
+    /// The mark beside the server's name — see `GuildMark`.
+    public var mark: GuildMark? {
+        GuildMark(features: features, boostTier: premiumTier, boostCount: premiumSubscriptionCount)
+    }
+
     public init(
         id: GuildID,
         name: String,
@@ -116,7 +121,10 @@ public struct Guild: Hashable, Sendable, Identifiable, Codable {
     /// Discord takes the first letter of each word, which is why "The Iris
     /// Project" reads "TIP" and not "Th". Capped at four so a long name does not
     /// overflow a 44pt tile.
-    public var monogram: String {
+    public var monogram: String { Self.monogram(of: name) }
+
+    /// The same letters for a server known only by its name — an invite's.
+    public static func monogram(of name: String) -> String {
         let letters = name
             .split(separator: " ", omittingEmptySubsequences: true)
             .compactMap(\.first)

@@ -185,3 +185,158 @@ extension InvitePreview {
         return code
     }
 }
+
+/// An invite as the transcript draws it: a server, a group conversation or a
+/// friend request behind a link somebody posted — Discord's invite embed.
+///
+/// **One value for all three**, because every card is an icon, a name, a line
+/// under it and one button. What differs is which of Discord's cards draws it:
+/// a server with a profile gets the profile card (`ct`, `guild_invite_v2`), and
+/// everything else the classic one (`o2`, `oq`, `oX`).
+public struct InviteCard: Hashable, Sendable {
+    public enum Kind: Hashable, Sendable {
+        case server
+        case groupDirectMessage
+        case friend
+    }
+
+    public var code: String
+    public var kind: Kind
+    public var guildID: GuildID?
+    public var channelID: ChannelID?
+    /// The server's name, the group's, or — for a friend invite — the person's.
+    public var name: String
+    /// A server's icon or a group's, by hash. Drawn from the right CDN path by
+    /// `kind`.
+    public var iconHash: String?
+    /// The server's splash, drawn across the top of the classic card.
+    public var splashHash: String?
+    /// The server's feature list: its mark, and whether joining is an
+    /// application rather than a click.
+    public var features: Set<String>
+    public var boostTier: Int
+    public var boostCount: Int
+    public var memberCount: Int?
+    public var onlineCount: Int?
+    /// The channel the invite opens onto, for a server with too few people to
+    /// have counts worth showing.
+    public var channelName: String?
+    /// The server's profile — the whole of Discord's current server card. Nil
+    /// for a group or a friend link, and for a server whose invite carried none.
+    public var profile: GuildProfile?
+    /// Who sent it — drawn on the card with their face.
+    public var inviterID: UserID?
+    public var inviterName: String?
+    /// The inviter's handle, which is the title of a friend link's card.
+    public var inviterUsername: String?
+    public var inviterAvatarHash: String?
+    public var expiresAt: Date?
+
+    public init(
+        code: String,
+        kind: Kind,
+        guildID: GuildID? = nil,
+        channelID: ChannelID? = nil,
+        name: String,
+        iconHash: String? = nil,
+        splashHash: String? = nil,
+        features: Set<String> = [],
+        boostTier: Int = 0,
+        boostCount: Int = 0,
+        memberCount: Int? = nil,
+        onlineCount: Int? = nil,
+        channelName: String? = nil,
+        profile: GuildProfile? = nil,
+        inviterID: UserID? = nil,
+        inviterName: String? = nil,
+        inviterUsername: String? = nil,
+        inviterAvatarHash: String? = nil,
+        expiresAt: Date? = nil
+    ) {
+        self.code = code
+        self.kind = kind
+        self.guildID = guildID
+        self.channelID = channelID
+        self.name = name
+        self.iconHash = iconHash
+        self.splashHash = splashHash
+        self.features = features
+        self.boostTier = boostTier
+        self.boostCount = boostCount
+        self.memberCount = memberCount
+        self.onlineCount = onlineCount
+        self.channelName = channelName
+        self.profile = profile
+        self.inviterID = inviterID
+        self.inviterName = inviterName
+        self.inviterUsername = inviterUsername
+        self.inviterAvatarHash = inviterAvatarHash
+        self.expiresAt = expiresAt
+    }
+
+    /// The server's mark — see `GuildMark`. Nil for a group or a friend link.
+    public var mark: GuildMark? {
+        guard kind == .server else { return nil }
+        return GuildMark(features: features, boostTier: boostTier, boostCount: boostCount)
+    }
+
+    /// Whether joining is an application: Discord's `APPLY_TO_JOIN`, the rules
+    /// gate with manual approval behind it.
+    public var joinsByApplication: Bool {
+        features.contains("MEMBER_VERIFICATION_GATE_ENABLED")
+            && features.contains("MEMBER_VERIFICATION_MANUAL_APPROVAL")
+    }
+
+    /// Discord's header over the classic card, word for word. A server's and a
+    /// group's are about who posted the link (`oU/lsl`/`BoQUFf`,
+    /// `Fyamu8`/`2tr5Qz`); a friend link's is about whose link it is
+    /// (`eQyu1F`/`PYJHW6`), which the caller decides.
+    public func header(sentByReader: Bool) -> String {
+        switch kind {
+        case .server:
+            sentByReader ? "You sent an invite to join a server" : "You've been invited to join a server"
+        case .groupDirectMessage:
+            sentByReader ? "You sent an invite to" : "You've been invited to"
+        case .friend:
+            sentByReader ? "You sent a friend link" : "You've got a friend link"
+        }
+    }
+
+    /// A group conversation's title from its members' names — Discord's own
+    /// joins (`LJpTRF`, `gwRP0Y`, `/KSOKY`, `m5uYso`).
+    public static func groupTitle(_ names: [String]) -> String {
+        switch names.count {
+        case 0: "Unnamed"
+        case 1: names[0]
+        case 2: "\(names[0]), \(names[1])"
+        case 3: "\(names[0]), \(names[1]), and \(names[2])"
+        default: "\(names[0]), \(names[1]) and others"
+        }
+    }
+}
+
+/// What asking about an invite came back with.
+public enum InviteLookup: Hashable, Sendable {
+    case resolved(InviteCard)
+    /// Expired, revoked or never real — Discord draws its own card for it.
+    case invalid
+}
+
+extension InviteCard {
+    /// The invite codes a message's text links to, in order and each once —
+    /// `discord.gg/…`, `discord.com/invite/…` and `discordapp.com/invite/…`,
+    /// which is what Discord draws a card under a message for.
+    public static func codes(in content: String) -> [String] {
+        guard content.contains("discord") else { return [] }
+        var seen = Set<String>()
+        var codes: [String] = []
+        for match in content.matches(of: linkPattern) {
+            let code = String(match.1)
+            if seen.insert(code).inserted { codes.append(code) }
+        }
+        return codes
+    }
+
+    nonisolated(unsafe) private static let linkPattern =
+        /(?i)(?:https?:\/\/)?(?:www\.|ptb\.|canary\.)?(?:discord\.gg|discord(?:app)?\.com\/invite)\/([A-Za-z0-9-]{2,32})/
+}

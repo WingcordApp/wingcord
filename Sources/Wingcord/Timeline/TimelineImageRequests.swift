@@ -221,6 +221,16 @@ nonisolated enum TimelineImageRequests {
                 }
             }
 
+            // An invite card's splash, icon and the face of who sent it.
+            for card in row.inviteCards {
+                for picture in card.pictures {
+                    let key = InviteCardSlot.imageKey(picture.url, in: picture.rect, scale: scale)
+                    if seen.insert(key).inserted, ImageStore.shared.cached(key) == nil {
+                        requests.append(Request(key: key, source: .still(.thumbnail)))
+                    }
+                }
+            }
+
             // A poll's answer glyphs.
             for answer in row.poll?.answers ?? [] {
                 guard let id = answer.emoji?.id,

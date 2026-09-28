@@ -33,8 +33,12 @@ extension SessionController {
     func loadAccountDetails() async {
         guard model.accountDetails == nil else { return }
         do {
-            let account = try await rest.currentAccount()
-            model.accountDetails = account.details
+            let answer = try await rest.currentAccount()
+            model.accountDetails = answer.details
+            model.entitlements = model.entitlements.updated(
+                premiumType: answer.account.premiumType,
+                ageVerificationStatus: answer.account.ageVerificationStatus
+            )
         } catch {
             Self.trace("account details failed: \(Self.describe(error))")
         }

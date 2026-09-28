@@ -405,3 +405,18 @@ public enum InboxGrouping {
         return runs
     }
 }
+
+/// The unread groups the reader folded in the inbox — Discord's
+/// `collapsed_in_inbox`, kept in the account's settings so every client
+/// shows the same groups folded.
+public struct InboxCollapse: Hashable, Sendable {
+    public var channels: Set<ChannelID>
+    /// A server's scheduled-events group, which Discord files under a fixed
+    /// stand-in channel id rather than a real one.
+    public var guildEvents: Set<GuildID>
+
+    public init(channels: Set<ChannelID> = [], guildEvents: Set<GuildID> = []) {
+        self.channels = channels
+        self.guildEvents = guildEvents
+    }
+}

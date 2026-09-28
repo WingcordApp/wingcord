@@ -162,7 +162,7 @@ final class ExpressionGridCanvas: NSView {
                     item,
                     in: cell,
                     isHovered: isHovered,
-                    isDimmed: section.isLocked,
+                    isDimmed: section.isLocked || item.isLocked,
                     images: images,
                     scale: scale,
                     time: time,
@@ -207,8 +207,9 @@ final class ExpressionGridCanvas: NSView {
         // and a click is an action: a cell that looks unavailable and still
         // types `<:blobcat:123>` into the draft sends a message that arrives as
         // literal text, which is worse than either honest answer.
-        guard !sections[cell.section].isLocked else { return }
-        onPick?(sections[cell.section].items[cell.item])
+        let item = sections[cell.section].items[cell.item]
+        guard !sections[cell.section].isLocked, !item.isLocked else { return }
+        onPick?(item)
     }
 
     /// Repaints one heading's row and nothing else — 26 points, a few times per

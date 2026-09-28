@@ -33,6 +33,11 @@ nonisolated enum TimelineRowPainter {
         var showsGutterTimestamp = false
         var isHighlighted = false
         var revealedSpoilers: Set<Int> = []
+        /// The body's plated run under the pointer — a mention, a role — which
+        /// lights the way Discord's `.interactive` does.
+        var hoveredPlate: Int?
+        /// The body's concealed spoiler under the pointer.
+        var hoveredSpoiler: Int?
         /// Which of the row's attachments have had their spoiler lifted.
         ///
         /// **Its own set, keyed by the attachment's position.** A spoiler in the
@@ -40,6 +45,9 @@ nonisolated enum TimelineRowPainter {
         /// into their own list, and sharing one set would have revealing the
         /// first hidden word uncover the second photograph.
         var revealedAttachments: Set<Int> = []
+        /// The invite cards the reader is already settled into: in the
+        /// server, in the group, friends with the person.
+        var settledInviteCodes: Set<String> = []
         /// The origin of the button or poll answer under the pointer, in row
         /// space.
         ///
@@ -463,7 +471,11 @@ nonisolated enum TimelineRowPainter {
                 images: images,
                 scale: scale,
                 time: state.animationTime,
-                revealedSpoilers: state.revealedSpoilers
+                state: TextState(
+                    revealedSpoilers: state.revealedSpoilers,
+                    hoveredPlate: state.hoveredPlate,
+                    hoveredSpoiler: state.hoveredSpoiler
+                )
             )
         }
 
@@ -509,6 +521,18 @@ nonisolated enum TimelineRowPainter {
                 accent: state.activityAccent,
                 status: state.activityInviteStatus,
                 isJoined: state.activityInviteIsJoined,
+                hovered: state.hoveredComponent,
+                images: images,
+                scale: scale
+            )
+        }
+
+        for card in row.inviteCards {
+            drawInviteCard(
+                card,
+                offset: CGPoint(x: rowFrame.minX, y: rowFrame.minY),
+                context: context,
+                isSettled: state.settledInviteCodes.contains(card.code),
                 hovered: state.hoveredComponent,
                 images: images,
                 scale: scale
@@ -652,12 +676,28 @@ nonisolated enum TimelineRowPainter {
 
     // MARK: Text
 
-    /// Draws a laid-out block.
+    /// What the reader and the pointer have done to one block of text.
+    struct TextState {
+        /// Which spoilers have been uncovered. **Nil uncovers every one** — a
+        /// block whose spoilers have no click of their own, an embed's, where
+        /// a cover nobody can lift would be text nobody can read.
+        var revealedSpoilers: Set<Int>?
+        /// The plated run under the pointer, when it is a link.
+        var hoveredPlate: Int?
+        /// The concealed spoiler under the pointer.
+        var hoveredSpoiler: Int?
+    }
+
+    /// Draws a laid-out block: the plates and rules under the words, the words,
+    /// the pictures in the boxes they reserved, and the spoilers over them.
     ///
     /// The context is flipped once around the block rather than per line: CoreText
     /// draws bottom-up and the canvas is top-down, and doing the flip per line
     /// means a CTM save/restore per line of every message on screen.
-    private static func drawTextBlock(
+    ///
+    /// **Everything conditional is a walk over an array that is almost always
+    /// empty**, so a plain message costs the frame draw and nothing else.
+    static func drawTextBlock(
         _ block: TimelineTextBlock,
         at origin: CGPoint,
         context: CGContext,
@@ -667,14 +707,74 @@ nonisolated enum TimelineRowPainter {
         /// The shared clock, so an animated custom emoji resolves to the frame
         /// every other moving picture on this canvas is showing.
         time: Double,
-        revealedSpoilers: Set<Int>
+        state: TextState
     ) {
-        context.saveGState()
-        context.translateBy(x: origin.x, y: origin.y + block.size.height)
-        context.scaleBy(x: 1, y: -1)
-        context.textMatrix = .identity
-        CTFrameDraw(block.frame, context)
-        context.restoreGState()
+        let ink = ThemeInk.current
+
+        // Under the words: a quote's rule, a fenced block's box, a revealed
+        // spoiler's plate, and every chip's.
+        for rule in block.quoteRules {
+            let frame = rule.offsetBy(dx: origin.x, dy: origin.y)
+            context.setFillColor(ink.quoteRule)
+            context.addPath(CGPath(roundedRect: frame, cornerWidth: 2, cornerHeight: 2, transform: nil))
+            context.fillPath()
+        }
+        for box in block.codeBlockRects {
+            drawCodePlate(box.offsetBy(dx: origin.x, dy: origin.y), corner: 4, ink: ink, context: context)
+        }
+        for (rect, spoiler) in block.spoilerRects where state.revealedSpoilers?.contains(spoiler) ?? true {
+            context.setFillColor(ink.spoilerRevealed)
+            context.addPath(CGPath(
+                roundedRect: rect.offsetBy(dx: origin.x, dy: origin.y),
+                cornerWidth: 4, cornerHeight: 4, transform: nil
+            ))
+            context.fillPath()
+        }
+        var overpaint: [(rect: CGRect, plate: Int)] = []
+        for (rect, index) in block.plateRects {
+            let frame = rect.offsetBy(dx: origin.x, dy: origin.y)
+            let isHovered = state.hoveredPlate == index
+            switch block.text.plates[index].kind {
+            case .mention:
+                context.setFillColor(isHovered ? ink.accent : ink.mentionFill)
+                if isHovered { overpaint.append((frame, index)) }
+            case .role(let fill, let hoverFill):
+                context.setFillColor(isHovered ? hoverFill : fill)
+            case .gradientRole(let fill, let hoverFill, _):
+                context.setFillColor(isHovered ? hoverFill : fill)
+                overpaint.append((frame, index))
+            case .timestamp:
+                context.setFillColor(ink.timestampFill)
+            case .code:
+                drawCodePlate(frame, corner: 4, ink: ink, context: context)
+                continue
+            }
+            context.addPath(CGPath(roundedRect: frame, cornerWidth: 3, cornerHeight: 3, transform: nil))
+            context.fillPath()
+        }
+
+        drawFrame(block, at: origin, context: context)
+
+        // Glyphs painted through something other than their ink: a gradient
+        // role, and a hovered mention's white on its solid plate.
+        for (frame, index) in overpaint {
+            switch block.text.plates[index].kind {
+            case .gradientRole(_, _, let gradient):
+                paintGlyphs(of: block, at: origin, in: frame, context: context) {
+                    $0.drawLinearGradient(
+                        gradient,
+                        start: CGPoint(x: frame.minX, y: frame.midY),
+                        end: CGPoint(x: frame.maxX, y: frame.midY),
+                        options: []
+                    )
+                }
+            default:
+                paintGlyphs(of: block, at: origin, in: frame, context: context) {
+                    $0.setFillColor(CGColor.white)
+                    $0.fill(frame)
+                }
+            }
+        }
 
         // Inline emoji, drawn into the boxes the run delegates reserved.
         for entry in block.emojiRects {
@@ -705,35 +805,93 @@ nonisolated enum TimelineRowPainter {
             } else {
                 // A soft plate rather than nothing, so a line does not visibly
                 // reflow when the picture lands — the box was already reserved.
-                context.setFillColor(style.codeBackground.withAlphaComponent(0.5).cgColor)
+                context.setFillColor(ink.placeholderFill)
                 context.fillEllipse(in: frame.insetBy(dx: 2, dy: 2))
             }
         }
 
         // Inline symbols, in the mention's own colour so the glyph and the
-        // name it leads read as one chip.
+        // name it leads read as one chip — white on a hovered one's solid plate.
+        let hoveredFrames = overpaint.map(\.rect)
         for entry in block.symbolRects {
+            let frame = entry.rect.offsetBy(dx: origin.x, dy: origin.y)
             drawSymbol(
                 entry.name,
-                tint: style.mentionColor,
-                in: entry.rect.offsetBy(dx: origin.x, dy: origin.y),
+                tint: hoveredFrames.contains { $0.intersects(frame) } ? .white : style.mentionColor,
+                in: frame,
                 context: context
             )
         }
 
-        // Spoilers, concealed until revealed. The text underneath was laid out
-        // normally and drawn in clear, so revealing one costs a repaint and
-        // never a relayout.
-        for (index, rect) in block.spoilerRects.enumerated() {
-            guard !revealedSpoilers.contains(index) else { continue }
-            let frame = rect.offsetBy(dx: origin.x, dy: origin.y)
-            context.setFillColor(style.spoilerCover.cgColor)
-            let path = CGPath(
-                roundedRect: frame, cornerWidth: 3, cornerHeight: 3, transform: nil
+        // Over everything: a concealed spoiler is an opaque plate on top of the
+        // words it hides, so revealing one is a repaint and never a relayout.
+        for (rect, spoiler) in block.spoilerRects {
+            guard let revealed = state.revealedSpoilers, !revealed.contains(spoiler) else { continue }
+            context.setFillColor(
+                state.hoveredSpoiler == spoiler ? ink.spoilerHiddenHover : ink.spoilerHidden
             )
-            context.addPath(path)
+            context.addPath(CGPath(
+                roundedRect: rect.offsetBy(dx: origin.x, dy: origin.y),
+                cornerWidth: 4, cornerHeight: 4, transform: nil
+            ))
             context.fillPath()
         }
+    }
+
+    /// The block's glyphs, flipped once into the canvas's top-down space.
+    private static func drawFrame(_ block: TimelineTextBlock, at origin: CGPoint, context: CGContext) {
+        context.saveGState()
+        context.translateBy(x: origin.x, y: origin.y + block.size.height)
+        context.scaleBy(x: 1, y: -1)
+        context.textMatrix = .identity
+        CTFrameDraw(block.frame, context)
+        context.restoreGState()
+    }
+
+    /// Inline code's plate and a fenced block's box: the code tint inside a
+    /// hairline, the stroke inset half a point so it lands on whole pixels.
+    private static func drawCodePlate(
+        _ frame: CGRect,
+        corner: CGFloat,
+        ink: ThemeInk,
+        context: CGContext
+    ) {
+        let shape = CGPath(roundedRect: frame, cornerWidth: corner, cornerHeight: corner, transform: nil)
+        context.setFillColor(ink.codeFill)
+        context.addPath(shape)
+        context.fillPath()
+        let stroke = frame.insetBy(dx: 0.5, dy: 0.5)
+        context.setStrokeColor(ink.codeBorder)
+        context.setLineWidth(1)
+        context.addPath(CGPath(
+            roundedRect: stroke,
+            cornerWidth: corner - 0.5, cornerHeight: corner - 0.5, transform: nil
+        ))
+        context.strokePath()
+    }
+
+    /// Repaints the glyphs inside `rect` through `fill` — a gradient, a colour.
+    ///
+    /// **A transparency layer and `.sourceIn`, never a text clip**: Core Text's
+    /// clip modes draw nothing (`INVARIANTS.md` and memory both say so). The
+    /// frame is drawn into the layer clipped to the chip, and the fill keeps
+    /// only what the glyphs covered. Only a gradient role and the one hovered
+    /// mention ever come here.
+    private static func paintGlyphs(
+        of block: TimelineTextBlock,
+        at origin: CGPoint,
+        in rect: CGRect,
+        context: CGContext,
+        fill: (CGContext) -> Void
+    ) {
+        context.saveGState()
+        context.clip(to: rect)
+        context.beginTransparencyLayer(auxiliaryInfo: nil)
+        drawFrame(block, at: origin, context: context)
+        context.setBlendMode(.sourceIn)
+        fill(context)
+        context.endTransparencyLayer()
+        context.restoreGState()
     }
 
     /// One line of plain text.
@@ -935,7 +1093,7 @@ nonisolated enum TimelineRowPainter {
         let x = offset.x + TimelineMetrics.replyElbowX
 
         context.saveGState()
-        context.setStrokeColor(style.quoteRuleColor.cgColor)
+        context.setStrokeColor(ThemeInk.current.selectionFill)
         context.setLineWidth(TimelineMetrics.replyElbowWidth)
         context.setLineCap(.round)
         context.beginPath()
@@ -1009,7 +1167,7 @@ nonisolated enum TimelineRowPainter {
         let x = offset.x + TimelineMetrics.replyElbowX
 
         context.saveGState()
-        context.setStrokeColor(style.quoteRuleColor.cgColor)
+        context.setStrokeColor(ThemeInk.current.selectionFill)
         context.setLineWidth(TimelineMetrics.replyElbowWidth)
         context.setLineCap(.round)
         context.beginPath()
@@ -1757,7 +1915,7 @@ nonisolated enum TimelineRowPainter {
         if let image = frame ?? images.cached(ImageStore.Key(url: url, maximumPixelSize: pixels)) {
             drawFlipped(image, in: glyphRect, context: context)
         } else {
-            context.setFillColor(style.codeBackground.withAlphaComponent(0.5).cgColor)
+            context.setFillColor(ThemeInk.current.placeholderFill)
             context.fillEllipse(in: glyphRect.insetBy(dx: 2, dy: 2))
         }
     }
@@ -1871,7 +2029,7 @@ nonisolated enum TimelineRowPainter {
             context.addPath(CGPath(
                 roundedRect: frame, cornerWidth: 12, cornerHeight: 12, transform: nil
             ))
-            context.setFillColor(style.codeBackground.withAlphaComponent(0.5).cgColor)
+            context.setFillColor(ThemeInk.current.placeholderFill)
             context.fillPath()
             return
         }
@@ -2260,12 +2418,18 @@ nonisolated enum TimelineRowPainter {
             scale: scale
         )
         if let body = slot.body {
-            drawTextFrame(
+            // The body's own painter, so a forwarded message keeps its quotes,
+            // code and mentions. Its spoilers stay covered, as its attachments
+            // do: the hit test does not descend into a quote.
+            drawTextBlock(
                 body,
                 at: CGPoint(x: offset.x + slot.bodyOrigin.x, y: offset.y + slot.bodyOrigin.y),
                 context: context,
+                style: style,
                 images: images,
-                scale: scale
+                scale: scale,
+                time: clock,
+                state: TextState(revealedSpoilers: [])
             )
         }
         for attachment in slot.attachments {

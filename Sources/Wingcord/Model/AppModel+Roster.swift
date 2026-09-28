@@ -23,6 +23,10 @@ struct RosterMemoKey: Hashable, Sendable {
     /// theme change moves which names need lifting, and nothing else would
     /// tell this memo so.
     var inkCeiling: UInt32
+    /// Who is typing in the channel on screen — the dots a row draws. The set,
+    /// not a revision: somebody typing in another channel moves nothing here,
+    /// and a roster of five hundred is not rebuilt for it.
+    var typers: Set<UserID>
 }
 
 extension AppModel {
@@ -71,7 +75,8 @@ extension AppModel {
             roleRevision: roleRevision,
             structureRevision: channelIndex.structureRevision,
             colorSaturation: userColorSaturation,
-            inkCeiling: ThemeStore.shared.ground.inkCeiling
+            inkCeiling: ThemeStore.shared.ground.inkCeiling,
+            typers: selectedChannelID.map { Set(typers(in: $0).keys) } ?? []
         )
         // Read the observable inputs before the early return, so a cache hit
         // still registers the dependency the reader needs.
@@ -111,10 +116,9 @@ extension AppModel {
         // **Read once, for the channel on screen.** Typing is per-conversation,
         // and the roster is drawn beside one — so a lookup per member would be
         // a dictionary hit per row for a table that cannot move while the list
-        // is being built. Expired entries are left to the composer's own
-        // indicator to sweep; the comparison here is against `now` either way.
-        let typing = selectedChannelID.flatMap { messages(in: $0)?.typing } ?? [:]
-        let now = Date.now
+        // is being built. Lapsed entries are already gone: the session's one
+        // timer prunes the table.
+        let typing = selectedChannelID.map(typers(in:)) ?? [:]
 
         // Grouped by hoist role, plus the two synthetic groups. A dictionary of
         // arrays rather than repeated filtering: filtering per section is a full
@@ -169,7 +173,7 @@ extension AppModel {
                 nameplateURL: cosmetics(of: user)?.nameplate?.artworkURL,
                 nameplateAnimatedURL: cosmetics(of: user)?.nameplate?.animatedArtworkURL,
                 nameplatePalette: cosmetics(of: user)?.nameplate?.palette ?? .none,
-                isTyping: typing[userID].map { $0 > now } ?? false
+                isTyping: typing[userID] != nil
             )
 
             if status == .offline {

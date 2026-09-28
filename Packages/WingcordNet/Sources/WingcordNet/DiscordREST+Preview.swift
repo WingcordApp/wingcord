@@ -58,7 +58,7 @@ extension DiscordREST {
     public func lurkGuild(
         _ guildID: GuildID,
         sessionID: String,
-        location: String,
+        location: String?,
         source: String?,
         recommendationLoadID: String? = nil
     ) async throws -> Guild? {
@@ -71,7 +71,8 @@ extension DiscordREST {
             // Before `location`, which is the capture's own order.
             query.append(URLQueryItem(name: "recommendation_load_id", value: recommendationLoadID))
         }
-        query.append(URLQueryItem(name: "location", value: location))
+        // None at all from a server tag's card, which is the capture.
+        if let location { query.append(URLQueryItem(name: "location", value: location)) }
 
         let dto = try await request(
             method: "PUT",

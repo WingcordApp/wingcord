@@ -45,14 +45,38 @@ extension AppModel {
     /// the reader looking at a channel list that is about to empty; navigating
     /// without ending it leaves a server in the rail nobody can get back to.
     func leavePreview() {
-        let origin = guildPreview?.origin
+        guard let preview = guildPreview else { return }
         sessionController.stopPreviewing()
-        switch origin {
+        // Back to where the reader was — the server and channel they left,
+        // or the conversations when that is where they were.
+        if let guildID = preview.returnGuildID, guilds[guildID] != nil {
+            selectGuild(guildID)
+        } else if preview.returnGuildID == nil {
+            selectGuild(nil)
+        }
+        if let channelID = preview.returnChannelID, channelIndex[channelID] != nil {
+            selectChannel(channelID)
+        }
+        switch preview.origin {
         case .gameProfile(let gameID):
             openGameProfile(gameID)
-        case .discovery, nil:
+        case .discovery:
+            // The grid the reader left, as they left it.
+            discovery = discoveryReturn ?? DiscoveryState()
+            discoveryReturn = nil
+            sessionController.loadDiscovery()
+        case .guildProfile:
             break
         }
+    }
+
+    /// Looks at a discoverable server from its tag card — Discord's
+    /// `LURK_DISCOVERABLE` Join, captured in `join from server tag.har`:
+    /// `PUT /guilds/{id}/members/@me?lurker=true&session_id=…`, body `{}`,
+    /// `x-context-properties` `{}`, and no location.
+    func previewFromGuildProfile(_ guildID: GuildID) {
+        profileRequest = nil
+        sessionController.previewGuild(guildID, origin: .guildProfile, location: nil, source: nil)
     }
 
     /// Joins the server being previewed. The reader stays where they are.
@@ -143,7 +167,8 @@ extension AppModel {
             returnTitle: game?.name,
             returnGameID: preview.originGameID,
             returnIconURL: game.flatMap { gameArtURL($0, kind: .mark, side: Metrics.previewReturnIcon) },
-            isJoining: isJoiningPreviewedGuild
+            isJoining: isJoiningPreviewedGuild,
+            backLabel: preview.origin == .discovery ? "Back to Discovery" : "Back"
         )
     }
 }

@@ -29,6 +29,9 @@ struct TimelineContainer: View {
         // transcript that hosts no bar never reads the switch and never
         // re-evaluates when it moves.
         let showsSummaryBar = !summaries.isEmpty && settings.showsSummaryBar
+        // The main conversation's alone, as the summaries bar is: Discord shows
+        // it over the channel, not over a thread panel or a small window.
+        let banner = hostsSummaries ? model.newMessagesBanner(in: channelID) : nil
         // Everything below the bar starts where it ends: the rows, which is
         // what extends AppKit's scroll edge under the pills, and the minimap.
         let chromeBottom = topInset + (showsSummaryBar ? SummaryBar.reservedHeight : 0)
@@ -45,11 +48,13 @@ struct TimelineContainer: View {
             // re-evaluates.
             activityInviteStatuses: model.activityInviteStatuses(in: channelID),
             topInset: chromeBottom,
-            bottomInset: bottomInset,
+            // The rows stop short of the composer by Discord's own air; the
+            // chrome laid over the transcript still measures from the bar.
+            bottomInset: bottomInset + TimelineMetrics.composerClearance,
             // Read here for the reason the accents are: the transcript is a
             // drawn canvas, and a card that resolved without something SwiftUI
             // owns changing would never be told to draw it.
-            spotifyRevision: model.spotifyRevision,
+            cardRevision: model.cardRevision,
             playingPreview: model.spotifyPreviewURL,
 
             // Read narrowly: a jump for a different channel is not this
@@ -117,10 +122,28 @@ struct TimelineContainer: View {
                     SummaryBar(channelID: channelID, summaries: summaries, scroll: scroll)
                         .transition(.materialize(from: .top, blurring: false))
                 }
+                // **In the middle of the same band**, which the summaries bar
+                // leaves free: its pill leads and its arrows trail.
+                if let banner {
+                    NewMessagesPill(
+                        banner: banner,
+                        jump: {
+                            guard let first = banner.firstUnread else { return }
+                            model.sessionController.jumpToMessage(first, in: channelID, highlights: false)
+                        },
+                        markRead: { model.markRead(channelID) }
+                    )
+                    .onHover(perform: scroll.pointer(overChrome:))
+                    .onDisappear { scroll.pointer(overChrome: false) }
+                    .frame(maxWidth: 420)
+                    .frame(height: SummaryBar.reservedHeight)
+                    .transition(.materialize(from: .top, blurring: false))
+                }
             }
             .padding(.top, topInset)
             .ignoresSafeArea(.container, edges: .top)
             .animation(motion.panel, value: showsSummaryBar)
+            .animation(motion.panel, value: banner == nil)
         }
         // Over everything else on the transcript, the minimap included: it is
         // the one modal layer here.

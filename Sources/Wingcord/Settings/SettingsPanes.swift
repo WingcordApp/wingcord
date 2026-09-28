@@ -733,6 +733,10 @@ private struct AccountPane: View {
         .task { await model.sessionController.loadAuthSessions() }
 
         SettingsGroup("Standing") {
+            // Discord's order: the notice over the category, the age group,
+            // then the standing itself.
+            AgeGroupNotice(group: model.entitlements.ageGroup)
+            SettingsCard { AgeGroupRow(group: model.entitlements.ageGroup) }
             AccountStandingCard(standing: model.accountStanding)
         }
         .task { model.sessionController.loadAccountStanding() }

@@ -145,7 +145,12 @@ extension AppModel {
             effect: decoration?.profileEffectSKU.flatMap { profileEffects[$0] },
             frame: decoration?.profileFrameSKU.flatMap { profileFrames[$0] },
             connections: decoration?.connectedAccounts ?? [],
-            premiumTier: decoration?.premiumTier ?? .none,
+            // **The reader's own tier from the account, never from the row** —
+            // see `AccountEntitlements`. Everybody else's is what their
+            // profile said.
+            premiumTier: user.id == currentUserID
+                ? entitlements.premiumTier
+                : decoration?.premiumTier ?? .none,
             premiumSince: decoration?.premiumSince,
             legacyUsername: decoration?.legacyUsername,
             mutualServers: mutualServers(of: decoration),
@@ -418,9 +423,9 @@ extension AppModel {
     /// premium tier and the guild's permission bits — and because a control
     /// that asked for them itself would ask once per body evaluation.
     func profileEditCapability(for scope: ProfileEditor.Scope) -> ProfileEditCapability {
-        let tier = currentUserID.flatMap { users[$0] }?.decoration?.premiumTier ?? .none
-        return ProfileEditCapability(
-            wearsNitro: tier == .nitro,
+        ProfileEditCapability(
+            customizesProfile: entitlements.has(.profileCustomization),
+            customizesServerProfile: entitlements.has(.serverProfile),
             // **Only meaningful in a server, and false outside one.** There is
             // no nickname on an account profile to permit.
             canChangeNickname: scope.guildID.map {

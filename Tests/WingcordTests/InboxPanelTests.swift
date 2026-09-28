@@ -28,7 +28,13 @@ struct InboxPanelTests {
         let model = AppModel()
         model.currentUserID = readerID
         model.users = [readerID: User(id: readerID, username: "reader")]
-        model.guilds = [guildID: Guild(id: guildID, name: "nice server", ownerID: readerID)]
+        // **The common case, stated**: an account on Discord's newer
+        // notification settings, in a server that defaults to Only @mentions —
+        // where a channel counts as unread only when somebody names the reader.
+        var guild = Guild(id: guildID, name: "nice server", ownerID: readerID)
+        guild.defaultMessageNotifications = .onlyMentions
+        model.guilds = [guildID: guild]
+        model.usesNewNotifications = true
 
         var index = ChannelIndex()
         index.replaceChannels(
@@ -76,6 +82,27 @@ struct InboxPanelTests {
     }
 
     // MARK: What the Unreads tab lists
+
+    /// The rule the last port left open, read out of module `455234`: a quiet
+    /// channel is listed when its unread setting resolves to All Messages —
+    /// its own, its category's, the server's, or, with none set, every channel
+    /// of an account still on the older notification settings.
+    @Test("A quiet channel set to count every message is listed")
+    func quietChannelsFollowTheUnreadSetting() {
+        let model = model()
+        #expect(!model.unreadInboxChannels().map(\.id).contains(secret))
+        model.guildUserSettings[guildID] = GuildUserSettings(
+            guildID: guildID,
+            channelOverrides: [
+                secret: ChannelUserSettings(flags: ChannelSettingsFlags.unreadsAllMessages),
+            ]
+        )
+        #expect(model.unreadInboxChannels().map(\.id).contains(secret))
+        // The older settings count everything, everywhere.
+        let legacy = self.model()
+        legacy.usesNewNotifications = false
+        #expect(legacy.unreadInboxChannels().map(\.id).contains(secret))
+    }
     //
     // Every rule below is a line of Discord's own unread builder, read out of
     // its bundle rather than inferred — see `AppModel.consider`. Four of them
@@ -220,6 +247,54 @@ struct InboxPanelTests {
         #expect(model.canMarkAllInboxRead)
         model.markAllInboxRead()
         #expect(!model.canMarkAllInboxRead)
+    }
+
+    // MARK: A server's new events
+
+    private func event(_ id: UInt64) -> ScheduledEvent {
+        ScheduledEvent(
+            id: id, guildID: guildID, name: "Game night",
+            startsAt: Date(timeIntervalSince1970: 1_800_000_000),
+            location: .init(entityType: 3, channelID: nil, location: "Online")
+        )
+    }
+
+    /// Discord's `guild-events` row: an event past the events cursor.
+    @Test("A new event puts the server's Events group in the list")
+    func newEventsAreListed() throws {
+        let model = model()
+        model.guildEventAcks = [guildID: MessageID(rawValue: 100)]
+        model.scheduledEvents = [guildID: [event(50), event(700)]]
+        model.inbox.tab = .unreads
+        let group = try #require(model.inboxGroups(width: 400).first { $0.eventsGuildID == guildID })
+        #expect(group.name == "Events")
+        // Only what came after the cursor.
+        #expect(group.events.map(\.id) == [700])
+    }
+
+    @Test("Seen events, or a muted server, list nothing")
+    func seenOrMutedEventsAreNot() {
+        let model = model()
+        model.guildEventAcks = [guildID: MessageID(rawValue: 800)]
+        model.scheduledEvents = [guildID: [event(700)]]
+        #expect(!model.unreadInboxEntries(firstOnly: false).contains {
+            if case .events = $0 { true } else { false }
+        })
+        model.guildEventAcks = [:]
+        model.mutedGuildIDs = [guildID]
+        #expect(!model.unreadInboxEntries(firstOnly: false).contains {
+            if case .events = $0 { true } else { false }
+        })
+    }
+
+    @Test("Marking the Events group read moves the events cursor")
+    func markingEventsRead() {
+        let model = model()
+        model.guildEventAcks = [guildID: MessageID(rawValue: 100)]
+        model.scheduledEvents = [guildID: [event(700)]]
+        model.markInboxEventsRead(guildID)
+        #expect(model.guildEventAcks[guildID] == MessageID(rawValue: 700))
+        #expect(model.inbox.acknowledgedEventGuildIDs.contains(guildID))
     }
 
     // MARK: Headers

@@ -20,11 +20,29 @@ struct InlineScanner {
     /// Depth guard. Emphasis can nest, but a message consisting of two hundred
     /// asterisks must not recurse two hundred levels deep.
     private let depth: Int
+    /// Where `bytes` starts in the text the outermost scanner was given, so a
+    /// nested scanner's spans are recorded in the outer text's offsets.
+    private let base: Int
+    /// Whether to record `spans`. Off for a message, which is drawn from the
+    /// nodes and has no use for where the markers were.
+    private let recordsSpans: Bool
+    /// Every piece of markup the scan accepted, by the bytes that open and
+    /// close it — what the editor styles as it is typed. See
+    /// `MarkdownEditorSyntax`.
+    private(set) var spans: [MarkdownSpan] = []
 
-    init(bytes: [UInt8], options: MarkdownParser.Options, depth: Int = 0) {
+    init(
+        bytes: [UInt8],
+        options: MarkdownParser.Options,
+        depth: Int = 0,
+        base: Int = 0,
+        recordsSpans: Bool = false
+    ) {
         self.bytes = bytes
         self.options = options
         self.depth = depth
+        self.base = base
+        self.recordsSpans = recordsSpans
         literal.reserveCapacity(min(bytes.count, 256))
     }
 
@@ -124,6 +142,13 @@ struct InlineScanner {
                     text = String(text.dropFirst().dropLast())
                 }
                 nodes.append(.code(text))
+                if recordsSpans {
+                    spans.append(MarkdownSpan(
+                        kind: .code,
+                        open: base + index ..< base + contentStart,
+                        close: base + closeStart ..< base + cursor
+                    ))
+                }
                 index = cursor
                 return true
             }
@@ -150,25 +175,43 @@ struct InlineScanner {
         let style = Self.style(marker: marker, runLength: runLength)
         guard !style.isEmpty else { return false }
 
-        // `_` needs a word boundary on the outside, which is what keeps
-        // `snake_case_name` intact. `*` has no such rule.
-        if marker == .underscore {
+        // **Each marker keeps Discord's own rule, and they differ** — the
+        // patterns are simple-markdown's `em`, `strong`, `u`, `del` and
+        // Discord's spoiler, read out of its bundle:
+        //
+        //  - `**`, `__` and `||` take anything between them, spaces at the
+        //    edges included (`/^\|\|([\s\S]+?)\|\|/`).
+        //  - `*` and `~~` must hug their content: no space after the opening
+        //    run, none before the closing one — `a * b * c` is arithmetic.
+        //  - a single `_` needs a word boundary outside, which keeps
+        //    `snake_case_name` intact; `__` has none.
+        //
+        // A run of three carries the single marker's emphasis too, so it
+        // follows the single marker's rule.
+        let hugsContent = (marker == .asterisk && runLength != 2) || marker == .tilde
+        let needsWordBoundary = marker == .underscore && runLength != 2
+
+        if needsWordBoundary {
             let before = index > 0 ? bytes[index - 1] : UInt8.space
             if before.isWordByte { return false }
         }
 
         let contentStart = cursor
         guard contentStart < bytes.count else { return false }
-        // An emphasis span never opens on whitespace: `a * b * c` is arithmetic.
-        if bytes[contentStart] == UInt8.space || bytes[contentStart] == UInt8.newline {
+        if hugsContent,
+           bytes[contentStart] == UInt8.space || bytes[contentStart] == UInt8.newline
+        {
             return false
         }
 
-        guard let closeStart = findClosingRun(marker: marker, length: runLength, from: contentStart)
-        else { return false }
+        guard let closeStart = findClosingRun(
+            marker: marker,
+            length: runLength,
+            from: contentStart,
+            hugsContent: hugsContent
+        ) else { return false }
 
-        // `_` also needs a word boundary after the close.
-        if marker == .underscore {
+        if needsWordBoundary {
             let after = closeStart + runLength < bytes.count
                 ? bytes[closeStart + runLength]
                 : UInt8.space
@@ -179,8 +222,19 @@ struct InlineScanner {
         guard !content.isEmpty else { return false }
 
         flushLiteral()
-        var inner = InlineScanner(bytes: content, options: options, depth: depth + 1)
+        var inner = InlineScanner(
+            bytes: content, options: options, depth: depth + 1,
+            base: base + contentStart, recordsSpans: recordsSpans
+        )
         nodes.append(.styled(style, inner.parse()))
+        if recordsSpans {
+            spans.append(MarkdownSpan(
+                kind: .styled(style),
+                open: base + index ..< base + contentStart,
+                close: base + closeStart ..< base + closeStart + runLength
+            ))
+            spans.append(contentsOf: inner.spans)
+        }
         index = closeStart + runLength
         return true
     }
@@ -209,9 +263,15 @@ struct InlineScanner {
     /// Finds the start of a closing run of exactly `length` markers.
     ///
     /// Skips over inline code spans and escapes, so `*a `b*c` d*` closes on the
-    /// last asterisk rather than the one inside the code. Also refuses to close
-    /// on whitespace-preceded markers, so `*a * b*` is one span and not two.
-    private func findClosingRun(marker: UInt8, length: Int, from start: Int) -> Int? {
+    /// last asterisk rather than the one inside the code. Where the marker must
+    /// hug its content it refuses to close on a whitespace-preceded run, so
+    /// `*a * b*` is one span and not two.
+    private func findClosingRun(
+        marker: UInt8,
+        length: Int,
+        from start: Int,
+        hugsContent: Bool
+    ) -> Int? {
         var cursor = start
         while cursor < bytes.count {
             let byte = bytes[cursor]
@@ -252,7 +312,8 @@ struct InlineScanner {
                     cursor += 1
                 }
                 let previous = runStart > start ? bytes[runStart - 1] : UInt8.space
-                if runLength >= length, previous != .space, previous != .newline {
+                let hugged = !hugsContent || (previous != .space && previous != .newline)
+                if runLength >= length, runStart > start, hugged {
                     // Close on the LAST `length` markers of the run, so
                     // `***x***` gives one bold-italic span rather than a bold
                     // span containing a stray asterisk.
@@ -411,8 +472,19 @@ struct InlineScanner {
         guard !labelBytes.isEmpty else { return false }
 
         flushLiteral()
-        var inner = InlineScanner(bytes: labelBytes, options: options, depth: depth + 1)
+        var inner = InlineScanner(
+            bytes: labelBytes, options: options, depth: depth + 1,
+            base: base + index + 1, recordsSpans: recordsSpans
+        )
         nodes.append(.link(label: inner.parse(), url: url))
+        if recordsSpans {
+            spans.append(MarkdownSpan(
+                kind: .link,
+                open: base + index ..< base + index + 1,
+                close: base + labelEnd ..< base + parenEnd + 1
+            ))
+            spans.append(contentsOf: inner.spans)
+        }
         index = parenEnd + 1
         return true
     }

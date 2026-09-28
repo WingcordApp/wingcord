@@ -139,12 +139,11 @@ extension SessionController {
 
     /// Marks many channels read at once.
     ///
-    /// **No revert.** The optimistic write here is a set of channel ids the
-    /// inbox hides; the read states themselves are moved by the socket's
-    /// `MESSAGE_ACK`, which is what every other surface in the app reads. So a
-    /// refusal costs a list that is missing rows until the flyout is reopened,
-    /// and re-showing sixty groups underneath a reader who has scrolled past
-    /// them would be worse than that.
+    /// **Put back on a refusal.** The rows go the moment the reader asks — the
+    /// read states themselves move on the socket's `MESSAGE_ACK`, which is what
+    /// every other surface reads — but a list that says "all read" while
+    /// Discord changed nothing is the one answer worse than a slow one, and it
+    /// is exactly what the reader saw.
     func acknowledgeAll(_ updates: [ReadStateUpdate]) {
         Task { [weak self] in
             guard let self else { return }
@@ -152,6 +151,7 @@ extension SessionController {
                 try await rest.bulkAcknowledge(updates)
             } catch {
                 Self.trace("inbox mark-all-read failed: \(Self.describe(error))")
+                model.revertInboxAcknowledgement(of: updates.map(\.channelID))
                 model.reportActionFailure(Self.describe(error))
             }
         }
@@ -322,12 +322,13 @@ extension SessionController {
                 // position at all. A deliberate deviation from the captured
                 // request, and the reason is that the capture cannot show what
                 // Discord *draws* from what it asked for.
-                let anchor = model.readStates[channelID]?.lastAcknowledgedID
-                let page = try await rest.messages(
-                    in: channelID,
-                    around: anchor,
-                    limit: AppModel.unreadsPerChannel * 2
-                )
+                // Discord's own request: thirty around the cursor the list
+                // itself uses — the read position, or the day the reader
+                // joined — so the group opens on the first unread line.
+                let anchor = model.channelIndex[channelID].flatMap {
+                    model.unreadCursor(of: $0, inGuild: $0.guildID)
+                }
+                let page = try await rest.messages(in: channelID, around: anchor, limit: 30)
                 model.users.merge(page.authors) { existing, new in new.merged(over: existing) }
                 for thread in page.threads { model.channelIndex.upsert(thread) }
                 // **The inbox's own table, never a message box.** A box is the

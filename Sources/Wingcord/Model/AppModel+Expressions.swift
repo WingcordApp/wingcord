@@ -12,13 +12,13 @@ struct ExpressionMemoKey: Hashable, Sendable {
     /// changes, or when a server is added, removed or renamed.
     var expressionRevision: UInt64
     var skinTone: UnicodeEmoji.SkinTone
-    /// Whether the reader carries Nitro.
+    /// What the reader's subscription buys.
     ///
-    /// Part of the key because it decides which sections are locked, and it
-    /// arrives *after* the first catalog is built: `/users/@me` answers a beat
-    /// into the session, and a memo blind to it would serve a catalog computed
-    /// while the answer was still "no" for the rest of the launch.
-    var hasNitro: Bool
+    /// Part of the key because it decides what is locked, and it can move under
+    /// a built catalog: READY merges over the sign-in's answer and
+    /// `USER_UPDATE` over both, and a memo blind to it would serve a catalog
+    /// computed while the answer was still "no" for the rest of the launch.
+    var entitlements: AccountEntitlements
 }
 
 extension AppModel {
@@ -40,7 +40,7 @@ extension AppModel {
             channelID: selectedChannelID,
             expressionRevision: expressionRevision,
             skinTone: AppSettings.shared.skinTone,
-            hasNitro: hasNitro
+            entitlements: entitlements
         )
         // Read every observable input before the early return: a memo that
         // returns its cache without touching them registers no dependency, and
@@ -54,6 +54,8 @@ extension AppModel {
 
         var sections: [ExpressionSection] = []
         let allowsExternal = selectedChannelID.map(canUseExternalEmoji(in:)) ?? true
+        // An animated emoji is the subscription's in its own server too.
+        let allowsAnimated = entitlements.has(.animatedEmoji)
         let home = selectedGuildID
 
         for guildID in orderedGuildIDs where emojiTable[guildID] != nil {
@@ -73,7 +75,8 @@ extension AppModel {
                         animated: emoji.isAnimated
                     ),
                     name: emoji.name.lowercased(),
-                    pick: .insert(emoji.messageToken)
+                    pick: .insert(emoji.messageToken),
+                    isLocked: emoji.isAnimated && !allowsAnimated
                 ))
             }
             sections.append(ExpressionSection(
@@ -107,7 +110,7 @@ extension AppModel {
             channelID: selectedChannelID,
             expressionRevision: expressionRevision,
             skinTone: .default,
-            hasNitro: hasNitro
+            entitlements: entitlements
         )
         let stickerTable = guildStickers
         let guildTable = guilds
@@ -234,36 +237,28 @@ extension AppModel {
 
     // MARK: Gates
 
-    /// Whether the reader carries Nitro.
-    ///
-    /// **This is the gate, and the channel permission is only half of it.**
-    /// `useExternalEmojis` is granted to `@everyone` in most servers, so a gate
-    /// written on that alone unlocks every server's emoji for every account —
-    /// and then the send fails server-side with the shortcode left in the
-    /// message as literal text. The subscription is what actually grants the
-    /// right; the permission decides whether the *channel* allows exercising it.
-    ///
-    /// Read off the reader's own record, which is the one place `premium_type`
-    /// arrives — `/users/@me` carries it and no other user object does.
-    var hasNitro: Bool {
-        guard let currentUserID, let user = users[currentUserID] else { return false }
-        return user.decoration?.premiumTier ?? .none != .none
-    }
+    /// Whether the reader pays for any tier at all — what super reactions and
+    /// the inbox's quotas ask. Everything else asks `entitlements.has(_:)` for
+    /// its own perk, because the tiers do not nest.
+    var hasNitro: Bool { entitlements.isPremium }
 
     /// Whether another server's emoji may be used in this channel.
     ///
-    /// A server's own emoji are always usable in that server, by anyone. Using
-    /// one *anywhere else* is the Nitro perk, and it still needs the channel to
-    /// permit external emoji.
+    /// **Two halves, and the channel permission is only one of them.**
+    /// `useExternalEmojis` is granted to `@everyone` in most servers, so a gate
+    /// on that alone unlocks every server's emoji for every account — and the
+    /// send then arrives as literal text. The subscription grants the right;
+    /// the permission decides whether this *channel* lets it be exercised.
     func canUseExternalEmoji(in channelID: ChannelID) -> Bool {
-        hasNitro && permissionGate.permissions(in: channelID).contains(.useExternalEmojis)
+        entitlements.has(.emojiEverywhere)
+            && permissionGate.permissions(in: channelID).contains(.useExternalEmojis)
     }
 
-    /// Stickers ride the same pair on this client. Discord has a separate
-    /// permission bit for them; it is not modelled here, and treating them alike
-    /// is the answer that is wrong in the safe direction — a locked section is
-    /// dimmed, never hidden, so nothing becomes unreachable either way.
+    /// The same pair for stickers, **with their own perk and their own bit**:
+    /// Nitro Classic has emoji everywhere and not stickers, and a server can
+    /// allow one and refuse the other (`USE_EXTERNAL_STICKERS`, bit 37).
     func canUseExternalStickers(in channelID: ChannelID) -> Bool {
-        canUseExternalEmoji(in: channelID)
+        entitlements.has(.stickersEverywhere)
+            && permissionGate.permissions(in: channelID).contains(.useExternalStickers)
     }
 }

@@ -519,7 +519,12 @@ nonisolated enum MemberRowPainter {
         // rather than stacking them, and it has to: they share the same corner,
         // and a pill drawn over a dot is a dot poking out of its end.
         if let typingPhase {
-            drawTypingPill(on: frame, phase: typingPhase, context: context)
+            drawTypingPill(
+                on: frame,
+                tint: NSColor(entry.status.tint).cgColor,
+                phase: typingPhase,
+                context: context
+            )
         } else {
             drawPresenceDot(entry.status, on: frame, context: context)
         }
@@ -533,8 +538,12 @@ nonisolated enum MemberRowPainter {
     /// resolved by the caller from the shared clock, for the same reason
     /// `plateFrame` and `gradientPhase` are: this painter is `nonisolated` and
     /// may not reach a main-actor singleton from inside a draw.
+    ///
+    /// **In the presence colour it replaces**, as Discord paints it — green for
+    /// somebody online — so the corner still says who is there.
     private static func drawTypingPill(
         on avatarFrame: CGRect,
+        tint: CGColor,
         phase: CGFloat,
         context: CGContext
     ) {
@@ -558,7 +567,7 @@ nonisolated enum MemberRowPainter {
         ))
         context.fillPath()
 
-        context.setFillColor(ThemeInk.current.typingPill)
+        context.setFillColor(tint)
         context.addPath(CGPath(
             roundedRect: pill,
             cornerWidth: pill.height / 2,

@@ -73,6 +73,8 @@ struct InboxState {
     /// and cleared on the same beat. Without it the group stays on screen until
     /// the socket's `MESSAGE_ACK` lands, which reads as the button having missed.
     var acknowledgedChannelIDs: Set<ChannelID> = []
+    /// Servers whose Events group the reader marked read, for the same reason.
+    var acknowledgedEventGuildIDs: Set<GuildID> = []
     /// Saves being written, so a double click sends one request.
     var savesInFlight: Set<MessageID> = []
 
@@ -107,6 +109,7 @@ struct InboxState {
         failures = [:]
         dismissedMentionIDs = []
         acknowledgedChannelIDs = []
+        acknowledgedEventGuildIDs = []
         revision &+= 1
     }
 }
@@ -140,6 +143,11 @@ struct InboxGroup: Identifiable {
     /// False for a channel that has gone — a bookmark outlives its channel.
     var canOpen: Bool
     var rows: [InboxRow]
+    /// The server whose new scheduled events this group lists — Discord's
+    /// `guild-events` row, titled Events. Nil for every channel.
+    var eventsGuildID: GuildID? = nil
+    /// Those events, oldest first.
+    var events: [ScheduledEvent] = []
 }
 
 /// A group's identity: the channel, and which run of it this is.

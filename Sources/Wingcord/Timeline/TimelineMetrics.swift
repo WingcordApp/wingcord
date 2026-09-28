@@ -35,6 +35,13 @@ nonisolated enum TimelineMetrics {
     static let lineSpacing: CGFloat = 2
     /// Below a run's last message.
     static let runBottomPadding: CGFloat = 2
+    /// Air between the newest message and the composer.
+    ///
+    /// **Discord's own figure**: the message list ends in a 40 px spacer
+    /// (`.scrollerSpacer`) and the chat form rides 16 px up over it
+    /// (`.form { margin-top: -16px }`), which leaves 24 of clear space above
+    /// the text box. Without it the last line sat on the composer's glass.
+    static let composerClearance: CGFloat = 24
 
     /// The header line: author name and timestamp.
     static let headerHeight: CGFloat = 20

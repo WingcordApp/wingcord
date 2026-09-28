@@ -67,7 +67,8 @@ final class PermissionGate {
         guard let guildID = channel.guildID else {
             let resolved: Permissions = [
                 .viewChannel, .sendMessages, .readMessageHistory, .addReactions,
-                .attachFiles, .embedLinks, .useExternalEmojis, .sendVoiceMessages,
+                .attachFiles, .embedLinks, .useExternalEmojis, .useExternalStickers,
+                .sendVoiceMessages,
                 // A direct message has no roles to take this away, and the
                 // capture proves it is granted: both interactions in
                 // `Slash commands.har` were posted from one.
@@ -99,7 +100,7 @@ final class PermissionGate {
             guildOwnerID: guild.ownerID,
             roles: model.roles[guildID] ?? [:],
             channel: governing
-        ).intersection(lurkerMask(for: guildID))
+        ).intersection(lurkerMask(for: guildID, channel: governing))
         channels[channelID] = resolved
         return resolved
     }
@@ -117,8 +118,21 @@ final class PermissionGate {
     /// An intersection rather than a subtraction, so a permission Discord adds
     /// next year is denied to a lurker without anybody remembering to add it —
     /// see `Permissions.lurker`.
-    private func lurkerMask(for guildID: GuildID) -> Permissions {
-        model.guildPreview?.guildID == guildID ? .lurker : .all
+    ///
+    /// **Discord's own rule, and it is wider than previews** (module `316031`'s
+    /// `w`): the mask applies to a member who is still *pending* — who has not
+    /// yet agreed to a server's rules — exactly as it does to a lurker, and a
+    /// public stage keeps its listeners' way in (`Permissions.publicStageLurker`).
+    private func lurkerMask(for guildID: GuildID, channel: Channel? = nil) -> Permissions {
+        let isLurking = model.guildPreview?.guildID == guildID
+        let isPending = model.currentUserID.flatMap { model.members[guildID]?[$0]?.isPending } == true
+        guard isLurking || isPending else { return .all }
+        if let channel, channel.kind == .stage,
+           model.stageInstances[channel.id]?.privacyLevel == .publicStage
+        {
+            return .publicStageLurker
+        }
+        return .lurker
     }
 
     /// Guild-level permissions, with no channel in the picture.

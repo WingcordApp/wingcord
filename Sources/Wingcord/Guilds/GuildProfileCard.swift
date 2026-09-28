@@ -24,6 +24,7 @@ struct GuildProfileCard: View {
     var enterGuild: ((GuildID) -> Void)?
 
     @Environment(\.motion) private var motion
+    @Environment(\.colorScheme) private var colorScheme
     /// One press, and the button says so. The card can be reopened while the
     /// request is still out.
     @State private var isEntering = false
@@ -105,16 +106,15 @@ struct GuildProfileCard: View {
     }
 
     /// What stands behind the banner while it loads, and instead of it when
-    /// there is none — the server's own badge colours, which is the only palette
-    /// on this card that belongs to the server rather than to the app.
+    /// there is none — Discord's glow of the server's own colour, the one the
+    /// invite card draws too. See `GuildBannerArt`.
     private var bannerPlate: some View {
-        let primary = profile.badgeColorPrimary.map { Color(hex: $0) } ?? Palette.surfaceRaised
-        let secondary = profile.badgeColorSecondary.map { Color(hex: $0) } ?? primary
-        return LinearGradient(
-            colors: [primary.opacity(0.85), secondary.opacity(0.45)],
-            startPoint: .topLeading,
-            endPoint: .bottomTrailing
-        )
+        let colour = profile.bannerColor ?? GuildBannerArt.defaultColour(isLight: colorScheme == .light)
+        return Canvas { context, size in
+            context.withCGContext { cg in
+                GuildBannerArt.drawGlow(colour, in: CGRect(origin: .zero, size: size), context: cg)
+            }
+        }
     }
 
     private var iconMask: some View {
@@ -157,8 +157,8 @@ struct GuildProfileCard: View {
                 .font(.system(.headline, weight: .bold))
                 .foregroundStyle(InkColor.primary)
                 .lineLimit(1)
-            if let standing = profile.standing {
-                GuildStandingBadge(standing: standing)
+            if let mark = profile.mark {
+                GuildMarkBadge(mark: mark)
             }
             if let tag = profile.tag {
                 // **Deliberately not a destination.** Every other tag chip in

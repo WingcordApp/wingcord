@@ -98,39 +98,73 @@ extension SessionController {
                 return
             }
 
-            // **Wait for the socket, not for the 200.** The response carries the
-            // invite's guild half and none of the server's contents; the rail
-            // tile, the channel list and the roles all come from the
-            // `GUILD_CREATE` that follows. Selecting before it lands would open
-            // a server with no channels.
-            let arrived = await waitForGuild(acceptance.guildID)
             model.joinServerSheet = nil
-            model.selectGuild(acceptance.guildID)
-            // **The invite's own channel, when the reader may read it.** An
-            // invite points somewhere on purpose — the captured one at `#rules`
-            // — and landing on whatever the sidebar would have picked by
-            // position throws that away. A gate, if there is one, takes the
-            // column from underneath this a line later; the channel is still the
-            // right thing to be behind it.
-            if let channelID = acceptance.channelID, model.canOpen(channelID) {
-                model.selectChannel(channelID)
-            }
+            await land(acceptance, code: preview.code)
+        }
+    }
 
-            guard arrived else {
-                // Joined, and the socket said nothing this client could read.
-                // The membership is real and the next launch will have it; there
-                // is nothing useful to put on screen for it now.
-                Self.trace("join \(preview.code): no GUILD_CREATE")
+    /// Joins the server an invite card in a message points at — Discord's
+    /// `acceptInviteAndTransitionToInviteChannel`, with the context its embed
+    /// sends ("Invite Button Embed").
+    ///
+    /// **The join sheet's own accept**, so a captcha, the rules gate and the
+    /// onboarding questions arrive exactly as they do from Add a Server. Once
+    /// per code at a time: a second press while the first is out is not a
+    /// second join.
+    func joinFromInviteCard(_ card: InviteCard) {
+        guard inviteCardJoins.insert(card.code).inserted else { return }
+        Task { [weak self] in
+            guard let self else { return }
+            defer { inviteCardJoins.remove(card.code) }
+            guard let sessionID = await socket?.currentSessionID else {
+                model.reportActionFailure("Not connected. Try again in a moment.")
                 return
             }
-
-            // **`new_member` decides whether to ask.** Re-accepting an invite to
-            // a server you are already in succeeds, and treating that as a fresh
-            // join is how a client asks a three-year member to read the rules
-            // again. `openJoinGate` still checks the server actually gates.
-            guard acceptance.isNewMember || acceptance.requiresVerification else { return }
-            model.openJoinGate(acceptance.guildID, inviteCode: preview.code)
+            do {
+                let acceptance = try await rest.acceptInvite(
+                    card.code, sessionID: sessionID, source: "Invite Button Embed"
+                )
+                await land(acceptance, code: card.code)
+            } catch {
+                Self.trace("join \(card.code) from card failed: \(Self.describe(error))")
+                model.reportActionFailure(Self.joinFailure(error))
+            }
         }
+    }
+
+    /// Takes the reader into a server an accept has just joined.
+    private func land(_ acceptance: InviteAcceptance, code: String) async {
+        // **Wait for the socket, not for the 200.** The response carries the
+        // invite's guild half and none of the server's contents; the rail
+        // tile, the channel list and the roles all come from the
+        // `GUILD_CREATE` that follows. Selecting before it lands would open
+        // a server with no channels.
+        let arrived = await waitForGuild(acceptance.guildID)
+        model.selectGuild(acceptance.guildID)
+        // **The invite's own channel, when the reader may read it.** An
+        // invite points somewhere on purpose — the captured one at `#rules`
+        // — and landing on whatever the sidebar would have picked by
+        // position throws that away. A gate, if there is one, takes the
+        // column from underneath this a line later; the channel is still the
+        // right thing to be behind it.
+        if let channelID = acceptance.channelID, model.canOpen(channelID) {
+            model.selectChannel(channelID)
+        }
+
+        guard arrived else {
+            // Joined, and the socket said nothing this client could read.
+            // The membership is real and the next launch will have it; there
+            // is nothing useful to put on screen for it now.
+            Self.trace("join \(code): no GUILD_CREATE")
+            return
+        }
+
+        // **`new_member` decides whether to ask.** Re-accepting an invite to
+        // a server you are already in succeeds, and treating that as a fresh
+        // join is how a client asks a three-year member to read the rules
+        // again. `openJoinGate` still checks the server actually gates.
+        guard acceptance.isNewMember || acceptance.requiresVerification else { return }
+        model.openJoinGate(acceptance.guildID, inviteCode: code)
     }
 
     // MARK: The gate
@@ -194,6 +228,9 @@ extension SessionController {
                         // click rather than on the round trip.
                         if let userID = model.currentUserID {
                             model.members[guildID]?[userID]?.isPending = false
+                            // A pending member is masked as a lurker is — see
+                            // `PermissionGate.lurkerMask` — so agreeing opens the channels.
+                            model.permissionGate.invalidate()
                             model.memberRevision &+= 1
                         }
                     case .rejected(let reason):

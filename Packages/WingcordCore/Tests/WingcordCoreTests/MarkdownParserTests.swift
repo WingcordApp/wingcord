@@ -44,6 +44,19 @@ struct MarkdownParserTests {
         #expect(inline("snake_case_name") == [.text("snake_case_name")])
     }
 
+    /// simple-markdown's `strong`, `u` and `del`, and Discord's own spoiler,
+    /// read out of its bundle: the pairs take anything between them; `*` and
+    /// `~~` hug; only a single `_` needs a word boundary.
+    @Test("Each marker keeps Discord's own spacing rule")
+    func markerSpacingRules() {
+        #expect(inline("||a ||") == [.styled(.spoiler, [.text("a ")])])
+        #expect(inline("** a **") == [.styled(.bold, [.text(" a ")])])
+        #expect(inline("x__a__y") == [.text("x"), .styled(.underline, [.text("a")]), .text("y")])
+        #expect(inline("~~ a~~") == [.text("~~ a~~")])
+        #expect(inline("~~a ~~") == [.text("~~a ~~")])
+        #expect(inline("* a*") == [.text("* a*")])
+    }
+
     @Test("Asterisks inside a word still emphasise, matching Discord")
     func asteriskInsideWord() {
         let nodes = inline("a*b*c")

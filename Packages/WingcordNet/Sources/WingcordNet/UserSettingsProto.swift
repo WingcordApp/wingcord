@@ -111,6 +111,7 @@ enum UserSettingsProto {
         var guildPositions: [GuildID] = []
         var inboxTab: InboxTab = .fallback
         var serverThemes = ServerThemePreferences()
+        var inboxCollapse = InboxCollapse()
 
         var reader = ProtobufReader(data)
         while let field = reader.next() {
@@ -126,6 +127,7 @@ enum UserSettingsProto {
 
             case Field.guilds:
                 serverThemes.overrides = decodeGuildThemeOverrides(reader.reader(for: field))
+                inboxCollapse = decodeInboxCollapse(reader.reader(for: field))
 
             case Field.inbox:
                 var inner = reader.reader(for: field)
@@ -195,8 +197,172 @@ enum UserSettingsProto {
             activityPrivacy: privacy.privacy,
             privacyRaw: privacy.raw,
             statusRaw: privacy.statusRaw,
-            serverThemes: serverThemes
+            serverThemes: serverThemes,
+            inboxCollapse: inboxCollapse
         )
+    }
+
+    // MARK: - The inbox's folded groups
+
+    /// `AllGuildSettings.guilds[guild].channels[channel].collapsed_in_inbox` —
+    /// read out of Discord's compiled descriptor, like the theme fields:
+    ///
+    /// ```
+    /// AllGuildSettings { map<fixed64, GuildSettings>   guilds   = 1 }
+    /// GuildSettings    { map<fixed64, ChannelSettings> channels = 1 }
+    /// ChannelSettings  { bool collapsed_in_inbox = 1 }
+    /// ```
+    ///
+    /// A direct message is filed under guild `0`, and a server's scheduled
+    /// events under `guildEventsChannel`.
+    private enum CollapseField {
+        static let map = 1
+        static let collapsed = 1
+    }
+
+    /// The stand-in channel id Discord files a server's scheduled-events group
+    /// under (`n3` in its inbox chunk).
+    static let guildEventsChannel: UInt64 = 1_539_033_557_786_173_450
+
+    private static func decodeInboxCollapse(_ source: ProtobufReader) -> InboxCollapse {
+        var collapse = InboxCollapse()
+        var guilds = source
+        while let guildEntry = guilds.next() {
+            guard guildEntry.number == CollapseField.map, guildEntry.wireType == 2 else { continue }
+            var pair = guilds.reader(for: guildEntry)
+            var guildKey: UInt64?
+            var settings: ProtobufReader?
+            while let field = pair.next() {
+                switch field.number {
+                case MapEntryField.key where field.wireType == 1: guildKey = field.value
+                case MapEntryField.value where field.wireType == 2: settings = pair.reader(for: field)
+                default: break
+                }
+            }
+            guard let guildKey, var channels = settings else { continue }
+            while let channelEntry = channels.next() {
+                guard channelEntry.number == CollapseField.map, channelEntry.wireType == 2 else { continue }
+                var channelPair = channels.reader(for: channelEntry)
+                var channelKey: UInt64?
+                var isCollapsed = false
+                while let field = channelPair.next() {
+                    switch field.number {
+                    case MapEntryField.key where field.wireType == 1:
+                        channelKey = field.value
+                    case MapEntryField.value where field.wireType == 2:
+                        var channel = channelPair.reader(for: field)
+                        while let setting = channel.next() {
+                            guard setting.number == CollapseField.collapsed, setting.wireType == 0 else {
+                                continue
+                            }
+                            isCollapsed = setting.value != 0
+                        }
+                    default:
+                        break
+                    }
+                }
+                guard let channelKey, isCollapsed else { continue }
+                if channelKey == guildEventsChannel {
+                    collapse.guildEvents.insert(GuildID(rawValue: guildKey))
+                } else {
+                    collapse.channels.insert(ChannelID(rawValue: channelKey))
+                }
+            }
+        }
+        return collapse
+    }
+
+    /// One group folded or unfolded, as the write carries it.
+    struct InboxCollapseChange: Sendable {
+        /// `0` for a direct message.
+        var guild: UInt64
+        /// The channel, or `guildEventsChannel`.
+        var channel: UInt64
+        var collapsed: Bool
+    }
+
+    /// The body of `PATCH /users/@me/settings-proto/1` folding or unfolding
+    /// inbox groups.
+    ///
+    /// **The whole `guilds` message, with one bit changed per group** — which
+    /// is what Discord's own writer sends: its settings updater
+    /// (`updateAsync` in module `594061`) replaces a top-level field whole.
+    /// Every other byte of every server's settings — notification overrides,
+    /// channel icons, dismissed notices, the theme choice — goes back exactly
+    /// as it came, through the same splice the theme and privacy writes use.
+    ///
+    /// - Parameter blob: the whole settings blob, fetched just before.
+    static func patchInboxCollapsed(_ changes: [InboxCollapseChange], in blob: Data) -> String {
+        var guilds = Data()
+        var reader = ProtobufReader(blob)
+        while let field = reader.next() {
+            guard field.number == Field.guilds, let data = reader.data(for: field) else { continue }
+            guilds = data
+        }
+        for change in changes {
+            guilds = replacingMapEntry(key: change.guild, in: guilds) { guildSettings in
+                replacingMapEntry(key: change.channel, in: guildSettings) { channelSettings in
+                    var flag = ProtobufWriter()
+                    flag.varint(field: CollapseField.collapsed, 1)
+                    return ActivityPrivacyProto.replacing(
+                        field: CollapseField.collapsed,
+                        with: change.collapsed ? flag.data : nil,
+                        in: channelSettings
+                    )
+                }
+            }
+        }
+        var outer = ProtobufWriter()
+        outer.message(field: Field.guilds, guilds)
+        return outer.base64
+    }
+
+    /// Rewrites the value under `key` in a `map<fixed64, message>` at field 1
+    /// of `message`, keeping every other byte; adds the entry where there is
+    /// none. A later duplicate of the key — which a merge would let win — is
+    /// dropped, so the rewritten entry is the one that stands.
+    private static func replacingMapEntry(
+        key: UInt64,
+        in message: Data,
+        _ transform: (Data) -> Data
+    ) -> Data {
+        var out = Data()
+        var replaced = false
+        var reader = ProtobufReader(message)
+        while let field = reader.next() {
+            guard let raw = reader.rawField(field) else { continue }
+            guard field.number == CollapseField.map, field.wireType == 2 else {
+                out.append(raw)
+                continue
+            }
+            var pair = reader.reader(for: field)
+            var entryKey: UInt64?
+            var value = Data()
+            while let part = pair.next() {
+                if part.number == MapEntryField.key, part.wireType == 1 {
+                    entryKey = part.value
+                } else if part.number == MapEntryField.value, part.wireType == 2 {
+                    value = pair.data(for: part) ?? Data()
+                }
+            }
+            guard entryKey == key else {
+                out.append(raw)
+                continue
+            }
+            if !replaced { out.append(mapEntry(key: key, value: transform(value))) }
+            replaced = true
+        }
+        if !replaced { out.append(mapEntry(key: key, value: transform(Data()))) }
+        return out
+    }
+
+    private static func mapEntry(key: UInt64, value: Data) -> Data {
+        var pair = ProtobufWriter()
+        pair.fixed64(field: MapEntryField.key, key)
+        pair.message(field: MapEntryField.value, value)
+        var entry = ProtobufWriter()
+        entry.message(field: CollapseField.map, pair.data)
+        return entry.data
     }
 
     /// Each server's own theme preference, where one is set.

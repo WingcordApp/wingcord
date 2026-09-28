@@ -72,7 +72,7 @@ extension SessionController {
             // **One bump for the batch.** Each one relays out every row in the
             // transcript that carries a Spotify link, so bumping per answer
             // would relayout the channel a dozen times for one page.
-            if landed { model.spotifyRevision &+= 1 }
+            if landed { model.cardRevision &+= 1 }
         }
     }
 }

@@ -1154,6 +1154,13 @@ struct FrameEnvelope: Decodable, Sendable {
 /// is a visible stall at exactly the moment the window is trying to appear.
 public struct ReadySnapshot: Sendable {
     public var currentUser: User
+    /// The reader's tier and age status, off READY's own `user` — the one
+    /// object in the payload that carries them — and **nil where it did not**,
+    /// so they merge into `AccountEntitlements` rather than overwrite it. An
+    /// absent tier and a tier of zero lock the same perks for different reasons,
+    /// and the session trace prints which one READY sent.
+    public var premiumType: Int?
+    public var ageVerificationStatus: Int?
     public var guilds: [Guild]
     public var channelsByGuild: [GuildID: [Channel]]
     /// The threads the account follows, per guild.
@@ -1175,6 +1182,11 @@ public struct ReadySnapshot: Sendable {
     public var users: [UserID: User]
     public var presences: [UserID: Presence]
     public var readStates: [ChannelID: ReadState]
+    /// Each server's scheduled-events cursor — the non-channel read state of
+    /// type 1, keyed by the server.
+    public var guildEventAcks: [GuildID: MessageID]
+    /// The account's `notification_settings.flags`, nil where READY sent none.
+    public var notificationFlags: Int?
     public var settings: ClientSettings
     public var mutedGuildIDs: Set<GuildID>
     public var mutedChannelIDs: Set<ChannelID>
@@ -1232,6 +1244,8 @@ public struct ReadySnapshot: Sendable {
     /// Every stage that was live when this session connected, keyed by its
     /// channel. See `StageInstance` for why the channel is the key.
     public var stages: [ChannelID: StageInstance]
+    /// Each server's scheduled events, as READY carried them.
+    public var scheduledEvents: [GuildID: [ScheduledEvent]]
     /// Each server's soundboard, where READY carried one.
     public var soundboardsByGuild: [GuildID: [SoundboardSound]]
     /// Who is already in a voice channel, keyed by the person. One flat table
@@ -1251,6 +1265,8 @@ public struct ReadySnapshot: Sendable {
 
     init(payload: ReadyPayload) {
         currentUser = payload.user.domain
+        premiumType = payload.user.premium_type
+        ageVerificationStatus = payload.user.age_verification_status
 
         var guilds: [Guild] = []
         var channelsByGuild: [GuildID: [Channel]] = [:]
@@ -1259,14 +1275,13 @@ public struct ReadySnapshot: Sendable {
         var emojisByGuild: [GuildID: [EmojiRef]] = [:]
         var stickersByGuild: [GuildID: [StickerRef]] = [:]
         var stages: [ChannelID: StageInstance] = [:]
+        var scheduledEvents: [GuildID: [ScheduledEvent]] = [:]
         var membersByGuild: [GuildID: [UserID: Member]] = [:]
         var users: [UserID: User] = [:]
         var presences: [UserID: Presence] = [:]
         var voiceStates: [UserID: VoiceState] = [:]
         var voiceChannelInfo: [ChannelID: VoiceChannelInfo] = [:]
         var soundboardsByGuild: [GuildID: [SoundboardSound]] = [:]
-
-        users[currentUser.id] = currentUser
 
         for guildDTO in payload.guilds ?? [] {
             let guild = guildDTO.domain
@@ -1312,6 +1327,10 @@ public struct ReadySnapshot: Sendable {
             for stage in (guildDTO.stage_instances ?? []).compactMap(\.domain) {
                 stages[stage.channelID] = stage
             }
+            let events = (guildDTO.guild_scheduled_events?.elements ?? []).compactMap {
+                $0.domain(fallbackGuildID: guild.id)
+            }
+            if !events.isEmpty { scheduledEvents[guild.id] = events }
             if let members = guildDTO.members {
                 var table: [UserID: Member] = [:]
                 table.reserveCapacity(members.count)
@@ -1382,11 +1401,28 @@ public struct ReadySnapshot: Sendable {
         self.voiceChannelInfo = voiceChannelInfo
         self.soundboardsByGuild = soundboardsByGuild
         self.stages = stages
+        self.scheduledEvents = scheduledEvents
+        // **The reader's own object last, and merged.** Every array above
+        // assigns whole, and any of them may carry the reader again as a thinner
+        // copy — a member entry, a relationship's user. Written first, the full
+        // object READY led with lost to whichever copy came after it.
+        users[currentUser.id] = currentUser.merged(over: users[currentUser.id])
         self.users = users
         self.presences = presences
 
         var readStates: [ChannelID: ReadState] = [:]
+        var guildEventAcks: [GuildID: MessageID] = [:]
         for entry in payload.read_state?.entries ?? [] {
+            switch entry.read_state_type ?? 0 {
+            case 0: break
+            case 1:
+                // A server's scheduled events, keyed by the server.
+                if let acked = entry.last_acked_id ?? entry.last_message_id, acked.rawValue != 0 {
+                    guildEventAcks[GuildID(rawValue: entry.id.rawValue)] = acked
+                }
+                continue
+            default: continue
+            }
             readStates[entry.id] = ReadState(
                 // **A zero snowflake is not a message id; it is "never read".**
                 // Discord sends `"last_message_id": "0"` for a channel the
@@ -1453,6 +1489,8 @@ public struct ReadySnapshot: Sendable {
             }
         }
         self.readStates = readStates
+        self.guildEventAcks = guildEventAcks
+        notificationFlags = payload.notification_settings?.flags
         self.mutedGuildIDs = mutedGuildIDs
         self.mutedChannelIDs = mutedChannelIDs
         self.notificationPreferences = NotificationPreferences(
@@ -1534,8 +1572,13 @@ public enum GatewayUpdate: Sendable {
         stickers: [StickerRef],
         /// The stages that were **already live** when the server arrived. See
         /// `GuildDTO.stage_instances`.
-        stages: [StageInstance]
+        stages: [StageInstance],
+        scheduledEvents: [ScheduledEvent]
     )
+    /// A scheduled event was created or changed.
+    case scheduledEventChanged(ScheduledEvent)
+    /// A scheduled event was deleted.
+    case scheduledEventRemoved(GuildID, eventID: UInt64)
     /// A server changed. `carriesTheme` is false when the payload left `theme`
     /// out, which keeps the theme already held — see `GuildDTO.carriesTheme`.
     case guildUpdated(Guild, carriesTheme: Bool)
@@ -1581,7 +1624,10 @@ public enum GatewayUpdate: Sendable {
     case membersChunk(GuildID, members: [UserID: Member], users: [UserID: User], presences: [UserID: Presence])
     case memberListUpdated(GuildID, members: [UserID: Member], users: [UserID: User], presences: [UserID: Presence])
     case channelAcknowledged(ChannelID, messageID: MessageID?, mentionCount: Int)
-    case currentUserUpdated(User)
+    /// The reader's own account changed. The tier and the age status ride
+    /// beside the user rather than on it — see `AccountEntitlements` — and are
+    /// nil where this update did not carry them.
+    case currentUserUpdated(User, premiumType: Int?, ageVerificationStatus: Int?)
     /// A mention was acknowledged somewhere. The inbox drops the row.
     case recentMentionDeleted(MessageID)
     /// A message was bookmarked or a reminder set — here, or elsewhere.
@@ -1760,7 +1806,10 @@ public enum GatewayUpdate: Sendable {
                 presences: presences,
                 emojis: (dto.emojis ?? []).compactMap(\.catalogEntry),
                 stickers: (dto.stickers ?? []).compactMap(\.catalogEntry),
-                stages: (dto.stage_instances ?? []).compactMap(\.domain)
+                stages: (dto.stage_instances ?? []).compactMap(\.domain),
+                scheduledEvents: (dto.guild_scheduled_events?.elements ?? []).compactMap {
+                    $0.domain(fallbackGuildID: guild.id)
+                }
             )
         case .guildUpdate(let dto):
             self = .guildUpdated(dto.domain, carriesTheme: dto.carriesTheme)
@@ -1770,6 +1819,12 @@ public enum GatewayUpdate: Sendable {
         case .stageInstanceDelete(let dto):
             guard let channelID = dto.channel_id else { return nil }
             self = .stageEnded(channelID)
+        case .scheduledEventUpsert(let dto):
+            guard let guildID = dto.guild_id, let event = dto.domain(fallbackGuildID: guildID) else { return nil }
+            self = .scheduledEventChanged(event)
+        case .scheduledEventDelete(let dto):
+            guard let guildID = dto.guild_id, let id = dto.id?.value else { return nil }
+            self = .scheduledEventRemoved(guildID, eventID: id)
         case .guildEmojisUpdate(let payload):
             self = .guildExpressionsUpdated(payload.guild_id, emojis: payload.catalog, stickers: nil)
         case .guildStickersUpdate(let payload):
@@ -1896,7 +1951,11 @@ public enum GatewayUpdate: Sendable {
                 mentionCount: payload.mention_count ?? 0
             )
         case .userUpdate(let dto):
-            self = .currentUserUpdated(dto.domain)
+            self = .currentUserUpdated(
+                dto.domain,
+                premiumType: dto.premium_type,
+                ageVerificationStatus: dto.age_verification_status
+            )
         case .recentMentionDelete(let dto):
             self = .recentMentionDeleted(dto.message_id)
         case .savedMessageCreate(let dto):

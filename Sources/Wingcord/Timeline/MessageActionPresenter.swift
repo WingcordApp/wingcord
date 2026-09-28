@@ -104,11 +104,26 @@ struct MessageActionPresenter: ViewModifier {
             }
             .sheet(item: $model.forwardRequest) { request in
                 ForwardSheet(
-                    preview: model.forwardPreview(for: request),
                     targets: model.forwardTargets(excluding: request.channelID),
                     send: { targets, comment in model.forward(to: targets, comment: comment) },
                     dismiss: { model.forwardRequest = nil }
-                )
+                ) {
+                    QuotedMessageRow(message: model.forwardPreview(for: request))
+                }
+            }
+            // Discord's forward modal with a person in it (`880867`): its own
+            // title, the profile link beside Send, and nothing quoted.
+            .sheet(item: $model.shareProfileRequest) { request in
+                ForwardSheet(
+                    title: "Share Profile",
+                    subtitle: nil,
+                    targets: model.forwardTargets(excluding: nil),
+                    copyLink: { AppModel.copy(request.link) },
+                    send: { targets, comment in model.shareProfile(to: targets, comment: comment) },
+                    dismiss: { model.shareProfileRequest = nil }
+                ) {
+                    ProfileSharePreview(userID: request.userID)
+                }
             }
             .sheet(item: $model.reportRequest) { request in
                 ReportSheet(request: request)

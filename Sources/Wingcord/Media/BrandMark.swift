@@ -321,8 +321,8 @@ nonisolated enum BrandMark {
 /// saves.
 /// Parsed outlines, held for the process.
 ///
-/// Not private to this file: the guild standing rosette is the same kind of
-/// object — one authored outline asked for again on every size change — and a
+/// Not private to this file: the server mark (`GuildMarkArt`) is the same kind
+/// of object — one authored outline asked for again on every size change — and a
 /// second cache class for it would be a second lock, a second dictionary and a
 /// second place for the "parse once" rule to be forgotten. Keys are namespaced
 /// by their owner (`"guild.rosette"`), so a service and a mark cannot collide.

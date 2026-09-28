@@ -179,7 +179,9 @@ struct SoundboardPresentation: Hashable, Sendable {
     }
 
     var sections: [Section]
-    var hasNitro: Bool
+    /// Whether the account may press another server's sounds — the refusal's
+    /// wording depends on it.
+    var playsEverywhere: Bool
 
-    static let empty = SoundboardPresentation(sections: [], hasNitro: false)
+    static let empty = SoundboardPresentation(sections: [], playsEverywhere: false)
 }

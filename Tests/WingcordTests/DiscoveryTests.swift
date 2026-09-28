@@ -102,7 +102,7 @@ struct DiscoveryTests {
         let card = try #require(model.discoveryCards.first)
         #expect(card.memberCount == 4_453_182)
         #expect(card.onlineCount == 880_686)
-        #expect(card.standing != nil)
+        #expect(card.mark?.kind == .verified)
         #expect(!card.isJoined)
     }
 

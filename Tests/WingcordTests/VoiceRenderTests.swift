@@ -295,7 +295,7 @@ struct VoiceRenderTests {
                     ]
                 ),
             ],
-            hasNitro: false
+            playsEverywhere: false
         )
         let ink = inkFraction("soundboard", width: 460, height: 420) {
             SoundboardPicker(presentation: presentation, press: { _ in }, dismiss: {})

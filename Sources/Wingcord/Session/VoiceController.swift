@@ -1182,7 +1182,11 @@ final class VoiceController {
     func press(_ sound: SoundboardSound) {
         guard let channelID = model.connectedVoiceChannelID else { return }
         let home = model.channelIndex[channelID]?.guildID
-        guard SoundboardGate.canPlay(sound, hasNitro: model.hasNitro, inGuild: home) else {
+        guard SoundboardGate.canPlay(
+            sound,
+            playsEverywhere: model.entitlements.has(.soundboardEverywhere),
+            inGuild: home
+        ) else {
             return
         }
         Task { [rest] in try? await rest.sendSoundboardSound(sound, in: channelID) }

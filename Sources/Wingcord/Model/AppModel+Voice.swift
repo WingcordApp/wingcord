@@ -287,13 +287,14 @@ extension AppModel {
     /// them anywhere but the top makes the free half of the feature the half
     /// nobody finds.
     var soundboardPresentation: SoundboardPresentation {
+        let playsEverywhere = entitlements.has(.soundboardEverywhere)
         let defaults = defaultSoundboardSounds
         let perGuild = guildSoundboardSounds
         let guildTable = guilds
         let key = SoundboardMemoKey(
             revision: soundboardRevision,
             guildID: selectedGuildID,
-            hasNitro: hasNitro
+            playsEverywhere: playsEverywhere
         )
         if let soundboardCache, soundboardCache.key == key { return soundboardCache.value }
 
@@ -315,7 +316,7 @@ extension AppModel {
             guard let sounds = perGuild[guildID], !sounds.isEmpty,
                   let guild = guildTable[guildID] else { continue }
             let isLocked = !SoundboardGate.canPlay(
-                sounds[0], hasNitro: hasNitro, inGuild: home
+                sounds[0], playsEverywhere: playsEverywhere, inGuild: home
             ) && guildID != home
             sections.append(SoundboardPresentation.Section(
                 id: String(guildID.rawValue),
@@ -329,14 +330,14 @@ extension AppModel {
                     entry(
                         for: $0,
                         locked: !SoundboardGate.canPlay(
-                            $0, hasNitro: hasNitro, inGuild: home
+                            $0, playsEverywhere: playsEverywhere, inGuild: home
                         )
                     )
                 }
             ))
         }
 
-        let value = SoundboardPresentation(sections: sections, hasNitro: hasNitro)
+        let value = SoundboardPresentation(sections: sections, playsEverywhere: playsEverywhere)
         soundboardCache = (key, value)
         return value
     }
@@ -371,7 +372,7 @@ extension AppModel {
 struct SoundboardMemoKey: Hashable, Sendable {
     var revision: UInt64
     var guildID: GuildID?
-    var hasNitro: Bool
+    var playsEverywhere: Bool
 }
 
 // MARK: - A picture of somebody's screen share

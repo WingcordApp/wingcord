@@ -382,16 +382,20 @@ struct EditableBioField: View {
     static let limit = 190
 
     @Environment(\.motion) private var motion
-    @FocusState private var isFocused: Bool
+    @State private var isFocused = false
 
     var body: some View {
         VStack(alignment: .trailing, spacing: 2) {
-            TextField("Tell people about yourself", text: $text, axis: .vertical)
-                .textFieldStyle(.plain)
-                .font(.system(.subheadline))
-                .foregroundStyle(InkColor.primary)
-                .lineLimit(3...6)
-                .focused($isFocused)
+            // Discord's box, as in the composer: a bio is markdown and is drawn
+            // as markdown, so it is written as markdown. See `MarkdownEditor`.
+            MarkdownEditor(
+                text: $text,
+                isFocused: $isFocused,
+                placeholder: "Tell people about yourself",
+                font: NSFont.preferredFont(forTextStyle: .subheadline),
+                lines: 3...6,
+                characterLimit: Self.limit
+            )
                 .padding(Spacing.base)
                 .background {
                     RoundedRectangle(cornerRadius: 10, style: .continuous)
@@ -403,11 +407,6 @@ struct EditableBioField: View {
                             isFocused ? Color.accentColor : Palette.railHairline,
                             lineWidth: 1
                         )
-                }
-                .onChange(of: text) { _, edited in
-                    if edited.count > Self.limit {
-                        text = String(edited.prefix(Self.limit))
-                    }
                 }
 
             Text("\(text.count) / \(Self.limit)")

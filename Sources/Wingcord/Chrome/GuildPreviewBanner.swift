@@ -36,7 +36,8 @@ struct GuildPreviewBanner: View {
 
             Spacer(minLength: Spacing.base)
 
-            Text("You are only looking around. Join to start chatting.")
+            // Discord's own sentence (`N/y2WE`).
+            Text("You are currently in preview mode. Join this server to start chatting!")
                 .font(.system(.subheadline, weight: .medium))
                 .foregroundStyle(InkColor.primary)
                 .lineLimit(1)
@@ -114,7 +115,8 @@ struct PreviewReturnBar: View {
                 .truncationMode(.tail)
             Spacer(minLength: Spacing.base)
             Button(action: back) {
-                Label("Back to Profile", systemImage: "arrow.backward")
+                Label(preview.returnGameID != nil ? "Back to Profile" : preview.backLabel,
+                      systemImage: "arrow.backward")
                     .font(.system(.subheadline, weight: .semibold))
                     .labelStyle(.titleAndIcon)
                     .padding(.horizontal, 14)
@@ -133,8 +135,10 @@ struct PreviewReturnBar: View {
         .accessibilityElement(children: .contain)
     }
 
+    /// A game's own return line, or Discord's preview-mode sentence for the
+    /// box (`G42YmG`) everywhere else.
     private var title: String {
-        guard let name = preview.returnTitle else { return "Back to where you came from" }
+        guard let name = preview.returnTitle else { return "You are in preview mode. Join this server to talk." }
         return "Return to the \(name) game profile"
     }
 

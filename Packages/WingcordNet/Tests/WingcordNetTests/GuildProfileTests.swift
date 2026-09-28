@@ -57,13 +57,11 @@ struct GuildProfileTests {
     /// **One mark, never a row of them.** This server is partnered *and*
     /// discoverable *and* a community; drawing every rosette it qualifies for is
     /// three marks saying one thing.
-    @Test("The highest standing wins")
-    func standingIsHighest() throws {
-        #expect(try decode(partnered).standing == .partner)
-        #expect(try decode(verified).standing == .verified)
-        #expect(GuildProfile.Standing(features: ["COMMUNITY", "DISCOVERABLE"]) == .discoverable)
-        #expect(GuildProfile.Standing(features: ["COMMUNITY"]) == .community)
-        #expect(GuildProfile.Standing(features: []) == nil)
+    @Test("The mark is Discord's highest")
+    func markIsHighest() throws {
+        #expect(try decode(partnered).mark?.kind == .partnered)
+        #expect(try decode(verified).mark?.kind == .verified)
+        #expect(try decode(partnered).mark?.isBoosted == true)
     }
 
     /// The one place in this API a colour is a string.
@@ -77,11 +75,9 @@ struct GuildProfileTests {
     /// **The two banner hashes are kept apart, and this pins that they are.**
     ///
     /// They were folded — `banner_hash ?? custom_banner_hash` into one field —
-    /// on the reading that they were one asset seen twice. They are not: no
-    /// path this client can build resolves a custom banner, measured against a
-    /// live CDN in `CDN.guildProfileBanner`, so the fold cost a 404 per tagged
-    /// server and drew the fallback plate anyway. The custom hash is still
-    /// decoded because the Server Profile editor sends it back.
+    /// on the reading that they were one asset seen twice. They are not: the
+    /// custom one is a discovery splash, which the banner path answers 404 for
+    /// (measured; see `GuildBannerArt.artworkURL` in the app).
     @Test("The two banner hashes stay apart")
     func customBanner() throws {
         let profile = try decode(partnered)
@@ -121,7 +117,7 @@ struct GuildProfileTests {
         #expect(profile.name == "Unknown")
         #expect(profile.tag == nil)
         #expect(profile.memberCount == nil)
-        #expect(profile.standing == nil)
+        #expect(profile.mark == nil)
     }
 
     /// A malformed colour must fall back to the standing's own, not to black.

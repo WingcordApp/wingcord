@@ -25,8 +25,17 @@ nonisolated final class TimelineTextBlock: @unchecked Sendable {
     let symbolRects: [(rect: CGRect, name: String)]
     /// Clickable regions, resolved once.
     let linkRects: [(rect: CGRect, target: MessageText.LinkTarget)]
-    /// Concealed regions, painted over until revealed.
-    let spoilerRects: [CGRect]
+    /// Concealed regions, painted over until revealed — one per line a spoiler
+    /// crosses, each carrying **which** spoiler it belongs to, so a spoiler that
+    /// wraps is revealed by one click rather than one per line.
+    let spoilerRects: [(rect: CGRect, spoiler: Int)]
+    /// The plate under each plated run, one per line it crosses, with the
+    /// index of its `MessageText.Plate`.
+    let plateRects: [(rect: CGRect, plate: Int)]
+    /// The rule down each quote's leading edge.
+    let quoteRules: [CGRect]
+    /// The box around each fenced code block.
+    let codeBlockRects: [CGRect]
 
     init(text: MessageText, width: CGFloat, style: MessageTextStyle) {
         self.text = text
@@ -44,10 +53,17 @@ nonisolated final class TimelineTextBlock: @unchecked Sendable {
         // Round up. A fractional height leaves the next row starting on a
         // half-pixel, and a column of rows each half a point short accumulates
         // into a visible drift against the scroll position.
-        size = CGSize(width: width, height: ceil(suggested.height))
+        let frameHeight = ceil(suggested.height)
+        // **A fenced block at either edge reserves its own box.** CoreText
+        // honours a paragraph's space before and after only BETWEEN
+        // paragraphs — never above the frame's first line or below its last —
+        // so a block that opens or closes the message would have its box drawn
+        // over the line above or the row below.
+        let insets = Self.edgeInsets(for: text, style: style)
+        size = CGSize(width: width, height: frameHeight + insets.top + insets.bottom)
 
         let path = CGPath(
-            rect: CGRect(origin: .zero, size: CGSize(width: width, height: size.height)),
+            rect: CGRect(x: 0, y: insets.bottom, width: width, height: frameHeight),
             transform: nil
         )
         frame = CTFramesetterCreateFrame(
@@ -57,26 +73,53 @@ nonisolated final class TimelineTextBlock: @unchecked Sendable {
             nil
         )
 
-        var emojiRects: [(CGRect, EmojiRef)] = []
-        var symbolRects: [(CGRect, String)] = []
-        var linkRects: [(CGRect, MessageText.LinkTarget)] = []
-        var spoilerRects: [CGRect] = []
+        var runs = ResolvedRuns()
         Self.resolveRuns(
             in: frame,
-            blockHeight: size.height,
+            // Line origins are measured from the path's own origin, so the
+            // flip is taken from the top of the path, not of the block.
+            frameTop: insets.top + frameHeight,
+            width: width,
             text: text,
             emojiWidth: style.emojiWidth,
             emojiAscent: style.emojiAscent,
             symbolSide: style.symbolSide,
-            into: &emojiRects,
-            symbols: &symbolRects,
-            links: &linkRects,
-            spoilers: &spoilerRects
+            codeBlockPadding: style.codeBlockPadding,
+            into: &runs
         )
-        self.emojiRects = emojiRects
-        self.symbolRects = symbolRects
-        self.linkRects = linkRects
-        self.spoilerRects = spoilerRects
+        emojiRects = runs.emoji
+        symbolRects = runs.symbols
+        linkRects = runs.links
+        spoilerRects = runs.spoilers
+        plateRects = runs.plates
+        quoteRules = runs.quotes
+        codeBlockRects = runs.codeBlocks
+    }
+
+    /// The room a fenced block at the very start or end of the text needs
+    /// outside the frame: its margin and padding above, its padding below.
+    private static func edgeInsets(
+        for text: MessageText,
+        style: MessageTextStyle
+    ) -> (top: CGFloat, bottom: CGFloat) {
+        guard let first = text.codeBlocks.first, let last = text.codeBlocks.last else {
+            return (0, 0)
+        }
+        return (
+            first.location == 0 ? style.codeBlockLeading : 0,
+            NSMaxRange(last) == text.attributed.length ? style.codeBlockPadding : 0
+        )
+    }
+
+    /// Everything one walk over the lines produces.
+    private struct ResolvedRuns {
+        var emoji: [(CGRect, EmojiRef)] = []
+        var symbols: [(CGRect, String)] = []
+        var links: [(CGRect, MessageText.LinkTarget)] = []
+        var spoilers: [(CGRect, Int)] = []
+        var plates: [(CGRect, Int)] = []
+        var quotes: [CGRect] = []
+        var codeBlocks: [CGRect] = []
     }
 
     /// Walks the laid-out lines once, resolving every rectangle the painter and
@@ -87,19 +130,24 @@ nonisolated final class TimelineTextBlock: @unchecked Sendable {
     /// which space it is in.
     private static func resolveRuns(
         in frame: CTFrame,
-        blockHeight: CGFloat,
+        frameTop: CGFloat,
+        width: CGFloat,
         text: MessageText,
         emojiWidth: CGFloat,
         emojiAscent: CGFloat,
         symbolSide: CGFloat,
-        into emojiRects: inout [(CGRect, EmojiRef)],
-        symbols: inout [(CGRect, String)],
-        links: inout [(CGRect, MessageText.LinkTarget)],
-        spoilers: inout [CGRect]
+        codeBlockPadding: CGFloat,
+        into resolved: inout ResolvedRuns
     ) {
         guard let lines = CTFrameGetLines(frame) as? [CTLine], !lines.isEmpty else { return }
         var origins = [CGPoint](repeating: .zero, count: lines.count)
         CTFrameGetLineOrigins(frame, CFRange(location: 0, length: 0), &origins)
+
+        // The vertical extent of each quote and code block, grown line by line.
+        var quoteSpans = [(top: CGFloat, bottom: CGFloat)?](repeating: nil, count: text.quotes.count)
+        var blockSpans = [(top: CGFloat, bottom: CGFloat)?](
+            repeating: nil, count: text.codeBlocks.count
+        )
 
         for (lineIndex, line) in lines.enumerated() {
             let origin = origins[lineIndex]
@@ -108,8 +156,10 @@ nonisolated final class TimelineTextBlock: @unchecked Sendable {
             var leading: CGFloat = 0
             CTLineGetTypographicBounds(line, &ascent, &descent, &leading)
             // Flip: CoreText's origin is the baseline measured from the bottom.
-            let baselineY = blockHeight - origin.y
+            let baselineY = frameTop - origin.y
             let lineRange = CTLineGetStringRange(line)
+            let lineTop = baselineY - ascent
+            let lineBottom = baselineY + descent
 
             // Inline boxes — emoji and symbols. One walk over the runs for
             // both: a second pass would be a second walk of every glyph run on
@@ -122,7 +172,7 @@ nonisolated final class TimelineTextBlock: @unchecked Sendable {
                     guard runRange.length == 1 else { continue }
                     if let emoji = text.inlineEmoji[runRange.location] {
                         let offset = CTLineGetOffsetForStringIndex(line, runRange.location, nil)
-                        emojiRects.append((
+                        resolved.emoji.append((
                             CGRect(
                                 x: origin.x + offset,
                                 y: baselineY - emojiAscent,
@@ -133,7 +183,7 @@ nonisolated final class TimelineTextBlock: @unchecked Sendable {
                         ))
                     } else if let name = text.inlineSymbols[runRange.location] {
                         let offset = CTLineGetOffsetForStringIndex(line, runRange.location, nil)
-                        symbols.append((
+                        resolved.symbols.append((
                             CGRect(
                                 x: origin.x + offset,
                                 y: baselineY - symbolSide * 0.86,
@@ -150,42 +200,126 @@ nonisolated final class TimelineTextBlock: @unchecked Sendable {
             // wraps is two hit regions rather than one box covering the gap
             // between them.
             for link in text.links {
-                guard let intersection = intersect(lineRange, link.range) else { continue }
-                let startX = CTLineGetOffsetForStringIndex(line, intersection.location, nil)
-                let endX = CTLineGetOffsetForStringIndex(
-                    line,
-                    intersection.location + intersection.length,
-                    nil
-                )
-                guard endX > startX else { continue }
-                links.append((
+                guard let span = span(of: link.range, on: line, lineRange: lineRange) else {
+                    continue
+                }
+                resolved.links.append((
                     CGRect(
-                        x: origin.x + startX,
-                        y: baselineY - ascent,
-                        width: endX - startX,
+                        x: origin.x + span.start,
+                        y: lineTop,
+                        width: span.end - span.start,
                         height: ascent + descent
                     ),
                     link.target
                 ))
             }
 
-            for spoiler in text.spoilers {
-                guard let intersection = intersect(lineRange, spoiler) else { continue }
-                let startX = CTLineGetOffsetForStringIndex(line, intersection.location, nil)
-                let endX = CTLineGetOffsetForStringIndex(
-                    line,
-                    intersection.location + intersection.length,
-                    nil
-                )
-                guard endX > startX else { continue }
-                spoilers.append(CGRect(
-                    x: origin.x + startX - 2,
-                    y: baselineY - ascent,
-                    width: endX - startX + 4,
-                    height: ascent + descent
+            for (index, spoiler) in text.spoilers.enumerated() {
+                guard let span = span(of: spoiler, on: line, lineRange: lineRange) else { continue }
+                resolved.spoilers.append((
+                    CGRect(
+                        x: origin.x + span.start - 2,
+                        y: lineTop,
+                        width: span.end - span.start + 4,
+                        height: ascent + descent
+                    ),
+                    index
                 ))
             }
+
+            // A plate hugs its own face, not the line: inline code is 85% of
+            // the text around it, and a plate the height of the line would
+            // stand a head taller than the letters it holds.
+            for (index, plate) in text.plates.enumerated() {
+                guard let span = span(of: plate.range, on: line, lineRange: lineRange) else {
+                    continue
+                }
+                let (runAscent, runDescent) = runExtent(of: plate.range, on: line)
+                // The trailing air is kerned INTO the run, so only the leading
+                // edge reaches out; a segment that opens mid-plate after a wrap
+                // starts flush with its text.
+                let opens = span.clipped.location == plate.range.location
+                let minX = origin.x + span.start - (opens ? plate.padding : 0)
+                resolved.plates.append((
+                    CGRect(
+                        x: minX,
+                        y: baselineY - runAscent,
+                        width: origin.x + span.end - minX,
+                        height: runAscent + runDescent
+                    ),
+                    index
+                ))
+            }
+
+            for (index, quote) in text.quotes.enumerated()
+            where intersect(lineRange, quote) != nil {
+                let span = quoteSpans[index]
+                quoteSpans[index] = (
+                    min(span?.top ?? lineTop, lineTop),
+                    max(span?.bottom ?? lineBottom, lineBottom)
+                )
+            }
+            for (index, block) in text.codeBlocks.enumerated()
+            where intersect(lineRange, block) != nil {
+                let span = blockSpans[index]
+                blockSpans[index] = (
+                    min(span?.top ?? lineTop, lineTop),
+                    max(span?.bottom ?? lineBottom, lineBottom)
+                )
+            }
         }
+
+        for span in quoteSpans.compactMap({ $0 }) {
+            resolved.quotes.append(CGRect(
+                x: 0,
+                y: span.top,
+                width: MessageTextStyle.quoteRuleWidth,
+                height: span.bottom - span.top
+            ))
+        }
+        // The box spans the block's width and its padding above and below —
+        // the space the first and last line's paragraph margins reserved.
+        for span in blockSpans.compactMap({ $0 }) {
+            resolved.codeBlocks.append(CGRect(
+                x: 0,
+                y: span.top - codeBlockPadding,
+                width: width,
+                height: span.bottom - span.top + codeBlockPadding * 2
+            ))
+        }
+    }
+
+    /// Where `range` falls on one line: its x extent, and the part of the range
+    /// the line holds. Nil when the line holds none of it.
+    private static func span(
+        of range: NSRange,
+        on line: CTLine,
+        lineRange: CFRange
+    ) -> (start: CGFloat, end: CGFloat, clipped: NSRange)? {
+        guard let clipped = intersect(lineRange, range) else { return nil }
+        let start = CTLineGetOffsetForStringIndex(line, clipped.location, nil)
+        let end = CTLineGetOffsetForStringIndex(line, NSMaxRange(clipped), nil)
+        guard end > start else { return nil }
+        return (start, end, clipped)
+    }
+
+    /// The tallest ascent and descent among the runs `range` covers on a line —
+    /// a plate's own face, rather than the line's.
+    private static func runExtent(of range: NSRange, on line: CTLine) -> (CGFloat, CGFloat) {
+        var ascent: CGFloat = 0
+        var descent: CGFloat = 0
+        guard let runs = CTLineGetGlyphRuns(line) as? [CTRun] else { return (0, 0) }
+        for run in runs {
+            let runRange = CTRunGetStringRange(run)
+            guard intersect(runRange, range) != nil else { continue }
+            var runAscent: CGFloat = 0
+            var runDescent: CGFloat = 0
+            var runLeading: CGFloat = 0
+            _ = CTRunGetTypographicBounds(run, CFRange(location: 0, length: 0), &runAscent, &runDescent, &runLeading)
+            ascent = max(ascent, runAscent)
+            descent = max(descent, runDescent)
+        }
+        return (ascent, descent)
     }
 
     private static func intersect(_ line: CFRange, _ range: NSRange) -> NSRange? {

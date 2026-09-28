@@ -74,7 +74,7 @@ struct ExpressionInfo: Equatable, Sendable {
         var onlineCount: Int?
         var memberCount: Int?
         /// The mark Discord grants it.
-        var standing: GuildProfile.Standing?
+        var mark: GuildMark?
         /// A strip of the server's other expressions.
         ///
         /// A picture of what a place is *like* answers "should I care about

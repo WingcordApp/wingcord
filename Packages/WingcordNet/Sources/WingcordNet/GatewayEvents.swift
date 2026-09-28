@@ -109,6 +109,8 @@ struct GatewayFrame: Decodable, Sendable {
         case userGuildSettingsUpdate(GuildSettingsDTO)
         case stageInstanceUpsert(StageInstanceDTO)
         case stageInstanceDelete(StageInstanceDTO)
+        case scheduledEventUpsert(ScheduledEventDTO)
+        case scheduledEventDelete(ScheduledEventDTO)
         /// Somebody joined, left or changed a switch in a voice channel. **A
         /// null `channel_id` is the leave** — Discord sends no departure event.
         case voiceStateUpdate(VoiceStateDTO)
@@ -270,6 +272,12 @@ struct GatewayFrame: Decodable, Sendable {
             payload = .stageInstanceUpsert(try decode(StageInstanceDTO.self))
         case "STAGE_INSTANCE_DELETE":
             payload = .stageInstanceDelete(try decode(StageInstanceDTO.self))
+        // The payload is the whole event either way — the inbox's Events group
+        // only asks which exist and which is newest.
+        case "GUILD_SCHEDULED_EVENT_CREATE", "GUILD_SCHEDULED_EVENT_UPDATE":
+            payload = .scheduledEventUpsert(try decode(ScheduledEventDTO.self))
+        case "GUILD_SCHEDULED_EVENT_DELETE":
+            payload = .scheduledEventDelete(try decode(ScheduledEventDTO.self))
         case "VOICE_STATE_UPDATE": payload = .voiceStateUpdate(try decode(VoiceStateDTO.self))
         case "VOICE_SERVER_UPDATE":
             payload = .voiceServerUpdate(try decode(VoiceServerUpdateDTO.self))
@@ -299,6 +307,10 @@ struct GatewayFrame: Decodable, Sendable {
     }
 }
 
+struct NotificationSettingsDTO: Decodable, Sendable {
+    var flags: Int?
+}
+
 /// The bootstrap payload.
 struct ReadyPayload: Decodable, Sendable {
     var v: Int?
@@ -313,6 +325,10 @@ struct ReadyPayload: Decodable, Sendable {
     /// `user_settings` is absent from a modern READY. See `UserSettingsProto`.
     var user_settings_proto: String?
     var user_guild_settings: GuildSettingsEnvelope?
+    /// The account's own notification settings: `flags` carries
+    /// `USE_NEW_NOTIFICATIONS` (16), which decides how a channel's unread
+    /// setting resolves — see `NotificationPreferences.usesNewNotifications`.
+    var notification_settings: NotificationSettingsDTO?
     var users: [UserDTO]?
     var relationships: [RelationshipDTO]?
     /// `{ "<user id>": "note" }`. Keyed by string because JSON objects are, and

@@ -129,6 +129,8 @@ struct SidebarHeader: Hashable, Sendable {
     var guildID: GuildID?
     var name: String
     var bannerURL: URL?
+    /// The mark Discord draws before the name — see `GuildMark`.
+    var mark: GuildMark? = nil
     /// Whether the guild's own banner exists. Most do not — it is a boost perk —
     /// and a header that draws a placeholder block regardless is a permanent
     /// 168pt of chrome standing in for artwork that will never arrive.
@@ -231,6 +233,9 @@ struct SidebarChannel: Hashable, Sendable, Identifiable {
     var monogram: String?
     /// Drawn on the avatar. Nil for a group DM, which has no single presence.
     var status: PresenceStatus?
+    /// Whether the other person is typing to the reader — the dots that take
+    /// the presence dot's place, in its colour.
+    var isTyping = false
 
     // MARK: What a direct message says about the person in it
     //

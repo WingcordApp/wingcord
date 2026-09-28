@@ -108,23 +108,42 @@ nonisolated struct ThemeInk: @unchecked Sendable {
     /// not have to bridge a `Color` to get them.
     let hoverFill: CGColor
     let selectionFill: CGColor
-    /// The pill behind a member row's typing dots.
-    ///
-    /// **The accent, not a status colour.** Typing is not a presence state —
-    /// somebody idle or on Do Not Disturb can be typing — so borrowing a
-    /// presence tint would say something the pill does not mean. It takes the
-    /// theme's accent, which is what the app already uses for "this is
-    /// happening now".
-    let typingPill: CGColor
     /// Whether the theme is a light room. See `lift(_:)`.
     let isLight: Bool
+
+    // MARK: Text on plates — Discord's markup, in this app's relative fills
+
+    /// The rule down a quote's leading edge (`--spine-default`).
+    let quoteRule: CGColor
+    /// Inline code and a fenced block: the accent at a whisper
+    /// (`--background-code`, blurple at 8%) inside a hairline (`--border-normal`).
+    let codeFill: CGColor
+    let codeBorder: CGColor
+    /// A mention's plate (`--mention-background`) — the accent at a quarter.
+    /// Under the pointer it is the accent itself, with white ink.
+    let mentionFill: CGColor
+    /// An inline timestamp's plate (`--background-mod-normal`).
+    let timestampFill: CGColor
+    /// A concealed spoiler, and the same under the pointer.
+    ///
+    /// **Opaque, and that is the whole job.** The words are drawn in their own
+    /// ink underneath, and a translucent cover lets them through — so it is the
+    /// room's own ground lifted toward its ink, which keeps a themed room's hue.
+    let spoilerHidden: CGColor
+    let spoilerHiddenHover: CGColor
+    /// A revealed spoiler's plate (`--background-mod-subtle`).
+    let spoilerRevealed: CGColor
+    /// Where a picture will be, while it loads: `surfaceRaised` at half.
+    let placeholderFill: CGColor
 
     /// A painter's relative fill: white at `alpha` in a dark room, black at
     /// three quarters of it in a light one — `Color.relative` for a context that
     /// has no appearance to ask, resolved from the theme rather than from the
     /// thread, because a painter runs off the main actor and a thread's current
     /// appearance there is not the window's.
-    func lift(_ alpha: CGFloat) -> CGColor {
+    func lift(_ alpha: CGFloat) -> CGColor { Self.lift(alpha, isLight: isLight) }
+
+    private static func lift(_ alpha: CGFloat, isLight: Bool) -> CGColor {
         isLight
             ? CGColor(srgbRed: 0, green: 0, blue: 0, alpha: alpha * 0.75)
             : CGColor(srgbRed: 1, green: 1, blue: 1, alpha: alpha)
@@ -165,8 +184,27 @@ nonisolated struct ThemeInk: @unchecked Sendable {
             hoverFill = CGColor(srgbRed: 0, green: 0, blue: 0, alpha: 0.05)
             selectionFill = CGColor(srgbRed: 0, green: 0, blue: 0, alpha: 0.09)
         }
-        typingPill = accent
-        isLight = colors.appearance == .light
+        let isLight = colors.appearance == .light
+        self.isLight = isLight
+        quoteRule = Self.lift(0.26, isLight: isLight)
+        codeFill = accent.copy(alpha: isLight ? 0.06 : 0.08) ?? accent
+        codeBorder = Self.lift(0.12, isLight: isLight)
+        mentionFill = accent.copy(alpha: isLight ? 0.15 : 0.24) ?? accent
+        timestampFill = Self.lift(0.10, isLight: isLight)
+        spoilerRevealed = Self.lift(0.08, isLight: isLight)
+        spoilerHidden = Self.blend(colors.canvas, toward: isLight ? 0 : 0xFF_FF_FF, by: isLight ? 0.34 : 0.22)
+        spoilerHiddenHover = Self.blend(colors.canvas, toward: isLight ? 0 : 0xFF_FF_FF, by: isLight ? 0.40 : 0.28)
+        placeholderFill = raised.copy(alpha: 0.5) ?? raised
+    }
+
+    /// `from` moved `fraction` of the way to `to`, opaque.
+    private static func blend(_ from: UInt32, toward to: UInt32, by fraction: CGFloat) -> CGColor {
+        func channel(_ shift: UInt32) -> CGFloat {
+            let a = CGFloat((from >> shift) & 0xFF) / 255
+            let b = CGFloat((to >> shift) & 0xFF) / 255
+            return a + (b - a) * fraction
+        }
+        return CGColor(srgbRed: channel(16), green: channel(8), blue: channel(0), alpha: 1)
     }
 
     private static func color(_ packed: UInt32) -> CGColor {

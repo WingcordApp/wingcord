@@ -89,10 +89,18 @@ struct MiniProfileCard: View {
     /// their bodies: a profile opened from a message is somebody else's, and
     /// there is nothing on it to edit. See `OwnProfilePanel`.
     var ownActions: OwnProfileActions?
+    /// Whether the profile effect plays over the card. Off only where the card
+    /// is measured and never shown — an effect is the largest decode the app
+    /// makes and changes nothing about the card's size.
+    var showsEffect = true
 
     enum Form: Equatable {
         case card
         case column
+        /// Inside a message — Discord's user profile embed (module `273147`):
+        /// who they are, whom the reader shares with them, and the way to
+        /// the full profile. Nothing they wrote about themselves.
+        case embed
     }
 
     @Environment(AppModel.self) private var model
@@ -133,81 +141,86 @@ struct MiniProfileCard: View {
             identity
             if !profile.isLoading { detail }
 
-            if profile.isLoading {
-                ProfileSkeleton(contentWidth: contentWidth)
-            } else if let bio = profile.bio, !bio.isEmpty {
-                section("About Me") {
-                    // **Markdown, not a plain string.** A bio is the one place
-                    // in the app where people write `<:emoji:id>` and `<t:…>` by
-                    // hand, and a `Text` renders both as literal angle brackets.
-                    ProseText(
-                        markdown: bio,
-                        font: .system(.caption),
-                        color: InkColor.secondary,
-                        emojiSide: 16,
-                        onEmoji: openEmoji ?? { inspectedEmoji = $0 },
-                    onLink: openLink
-                    )
+            if form == .embed {
+                if profile.isLoading { ProfileSkeleton(contentWidth: contentWidth) }
+                viewProfileButton
+            } else {
+                if profile.isLoading {
+                    ProfileSkeleton(contentWidth: contentWidth)
+                } else if let bio = profile.bio, !bio.isEmpty {
+                    section("About Me") {
+                        // **Markdown, not a plain string.** A bio is the one place
+                        // in the app where people write `<:emoji:id>` and `<t:…>` by
+                        // hand, and a `Text` renders both as literal angle brackets.
+                        ProseText(
+                            markdown: bio,
+                            font: .system(.caption),
+                            color: InkColor.secondary,
+                            emojiSide: 16,
+                            onEmoji: openEmoji ?? { inspectedEmoji = $0 },
+                        onLink: openLink
+                        )
+                    }
                 }
-            }
-            // **Between the bio and the roles**, which is where Discord puts it
-            // and where it belongs regardless: the bio is what someone says
-            // about themselves and the roles are what a server says about them,
-            // so the games — which they also chose — sit with the first group.
-            if !profile.isLoading, let gameCollection {
-                GameCollectionRow(
-                    collection: gameCollection,
-                    ground: ground,
-                    openBoard: openFullProfile
-                )
-                    .padding(.horizontal, Spacing.margin)
-                    .padding(.bottom, Spacing.snug)
-            }
-            // **Above the roles and below the mutuals**, which is where the
-            // reference puts it: being in a call is a thing happening now, and
-            // it belongs with what somebody is doing rather than with what a
-            // server says about them.
-            if let voice = model.profileVoice(for: profile.userID) {
-                ProfileVoiceCard(
-                    voice: voice,
-                    width: contentWidth,
-                    join: { model.joinVoice($0) }
-                )
-                .padding(.horizontal, Spacing.margin)
-                .padding(.bottom, Spacing.snug)
-            }
-            currentActivity
-            if !profile.isLoading, !profile.roles.isEmpty {
-                section("Roles") {
-                    // **Two rows, then a count.** A card is a summary that opens
-                    // beside a row; somebody holding forty-six roles would
-                    // otherwise open a card taller than the window, and the
-                    // roles are not why anybody clicked. The full profile shows
-                    // all of them.
-                    RoleChipFlow(
-                        roles: profile.roles,
-                        maximumRows: form == .card ? 2 : nil,
-                        width: contentWidth
+                // **Between the bio and the roles**, which is where Discord puts it
+                // and where it belongs regardless: the bio is what someone says
+                // about themselves and the roles are what a server says about them,
+                // so the games — which they also chose — sit with the first group.
+                if !profile.isLoading, let gameCollection {
+                    GameCollectionRow(
+                        collection: gameCollection,
+                        ground: ground,
+                        openBoard: openFullProfile
                     )
+                        .padding(.horizontal, Spacing.margin)
+                        .padding(.bottom, Spacing.snug)
                 }
-            }
-            if !profile.isLoading {
-                connections
-                if !profile.isSelf {
-                    ProfileNoteField(
-                        userID: profile.userID,
-                        note: profile.note,
-                        width: contentWidth
+                // **Above the roles and below the mutuals**, which is where the
+                // reference puts it: being in a call is a thing happening now, and
+                // it belongs with what somebody is doing rather than with what a
+                // server says about them.
+                if let voice = model.profileVoice(for: profile.userID) {
+                    ProfileVoiceCard(
+                        voice: voice,
+                        width: contentWidth,
+                        join: { model.joinVoice($0) }
                     )
                     .padding(.horizontal, Spacing.margin)
                     .padding(.bottom, Spacing.snug)
                 }
-            }
-            // **Last, under everything the card says about the person.** These
-            // act on the profile above them, and a block of commands between the
-            // bio and the roles would read as part of what the profile says.
-            if let ownActions {
-                OwnProfileActionBlock(actions: ownActions, surface: $ownSurface)
+                currentActivity
+                if !profile.isLoading, !profile.roles.isEmpty {
+                    section("Roles") {
+                        // **Two rows, then a count.** A card is a summary that opens
+                        // beside a row; somebody holding forty-six roles would
+                        // otherwise open a card taller than the window, and the
+                        // roles are not why anybody clicked. The full profile shows
+                        // all of them.
+                        RoleChipFlow(
+                            roles: profile.roles,
+                            maximumRows: form == .card ? 2 : nil,
+                            width: contentWidth
+                        )
+                    }
+                }
+                if !profile.isLoading {
+                    connections
+                    if !profile.isSelf {
+                        ProfileNoteField(
+                            userID: profile.userID,
+                            note: profile.note,
+                            width: contentWidth
+                        )
+                        .padding(.horizontal, Spacing.margin)
+                        .padding(.bottom, Spacing.snug)
+                    }
+                }
+                // **Last, under everything the card says about the person.** These
+                // act on the profile above them, and a block of commands between the
+                // bio and the roles would read as part of what the profile says.
+                if let ownActions {
+                    OwnProfileActionBlock(actions: ownActions, surface: $ownSurface)
+                }
             }
         }
         // **Pinned on the VStack itself, not only on whatever hosts the card.**
@@ -224,12 +237,12 @@ struct MiniProfileCard: View {
         .modifier(ProfileGroundFill(
             ground: ground,
             corner: corner,
-            paints: form == .card,
+            paints: form != .column,
             form: .card(topHold: Self.bannerHeight)
         ))
         .clipShape(.rect(cornerRadius: corner, style: .continuous))
         .overlay {
-            if form == .card {
+            if form != .column {
                 RoundedRectangle(cornerRadius: corner, style: .continuous)
                     .strokeBorder(ground.borderStyle, lineWidth: ground.borderWidth)
             }
@@ -239,7 +252,7 @@ struct MiniProfileCard: View {
         // is off at the view level as well as in the host, so a composition
         // covering the whole card cannot swallow a click meant for it.
         .overlay {
-            if let effect = profile.effect {
+            if showsEffect, let effect = profile.effect {
                 ProfileEffectView(effect: effect, width: width)
                     .allowsHitTesting(false)
                     .accessibilityLabel(Text(effect.accessibilityLabel ?? effect.title))
@@ -304,14 +317,32 @@ struct MiniProfileCard: View {
         //
         // After the shadow, deliberately: applied before it, the artwork would
         // be shadowed along with the card.
-        .profileFrame(form == .card ? profile.frame : nil, cardWidth: width)
+        .profileFrame(form != .column ? profile.frame : nil, cardWidth: width)
         // The card for an emoji somebody put in their bio. A nested popover,
         // one per surface — see `ExpressionInfoPopover`.
         .presentsExpressionInfo(for: $inspectedEmoji)
     }
 
     /// A card has corners; a column is a region of the window and has none.
-    private var corner: CGFloat { form == .card ? Radius.card : 0 }
+    private var corner: CGFloat { form == .column ? 0 : Radius.card }
+
+    /// Discord's one button on the embed: the full profile, across the foot.
+    ///
+    /// **Glass, like Open Server on a server's card** — the one control on a
+    /// surface that is otherwise entirely somebody's own colours.
+    private var viewProfileButton: some View {
+        Button(action: openFullProfile) {
+            Text("View Profile")
+                .font(.system(.subheadline, weight: .semibold))
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, Spacing.base)
+                .contentShape(.rect)
+        }
+        .buttonStyle(.glass)
+        .padding(.horizontal, Spacing.margin)
+        .padding(.top, Spacing.tight)
+        .padding(.bottom, Spacing.margin)
+    }
 
     private var banner: some View {
         ZStack(alignment: .bottomLeading) {

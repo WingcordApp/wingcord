@@ -1,8 +1,20 @@
 import Foundation
 import WingcordCore
 
-extension DiscordREST {
+/// The reader's own account, as an account-scoped answer carries it —
+/// `GET /users/@me` or READY's `user`.
+///
+/// **The tier and the age status ride beside the user, not on it**, and are
+/// nil where the answer did not carry them: they merge into
+/// `AccountEntitlements` field by field, so a thinner answer never takes a perk
+/// away. See `AccountEntitlements`.
+public struct CurrentAccount: Sendable {
+    public var user: User
+    public var premiumType: Int?
+    public var ageVerificationStatus: Int?
+}
 
+extension DiscordREST {
 
     // MARK: - The signed-in account
 
@@ -13,10 +25,10 @@ extension DiscordREST {
     /// phone number and the MFA flag in the same body as the avatar and the
     /// name — they were simply not being decoded. Asking again from the account
     /// page would be a second round trip for bytes the first one already had.
-    public func currentAccount() async throws -> (user: User, details: AccountDetails) {
+    public func currentAccount() async throws -> (account: CurrentAccount, details: AccountDetails) {
         let dto = try await get("/users/@me", route: "users/@me", as: UserDTO.self)
         return (
-            dto.domain,
+            dto.currentAccount,
             AccountDetails(
                 email: dto.email,
                 phone: dto.phone,

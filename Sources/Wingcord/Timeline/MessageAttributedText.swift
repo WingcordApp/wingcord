@@ -42,12 +42,62 @@ nonisolated struct MessageText: @unchecked Sendable {
     let links: [LinkRun]
     /// Spoiler ranges, concealed until revealed.
     let spoilers: [NSRange]
+    /// Runs that sit on a painted plate — a mention, a timestamp, inline code —
+    /// in order of appearance. See `Plate`.
+    let plates: [Plate]
+    /// Each quote's whole range, for the rule drawn down its leading edge.
+    let quotes: [NSRange]
+    /// Each fenced block's whole range, for the box drawn around it.
+    let codeBlocks: [NSRange]
     /// The folded plain text, for one accessibility node.
     let plainLabel: String
 
     struct LinkRun: Sendable {
         var range: NSRange
         var target: LinkTarget
+    }
+
+    /// A run drawn on a plate of its own.
+    ///
+    /// **Painted, not attributed.** CoreText's `.backgroundColor` fills a flat
+    /// box per glyph run: no corner, no hairline, no hover, and hard against
+    /// the letters either side. Discord's chips have all four, so the builder
+    /// records the run and its kind, reserves the chip's side padding in the
+    /// line, and the painter draws the plate from the measured rectangles —
+    /// with its colour resolved at paint time, so a theme change is a repaint.
+    /// `@unchecked Sendable`: a role's plate carries `CGColor`s and a
+    /// `CGGradient`, immutable once made — built with the layout, off the main
+    /// actor, so a repaint allocates nothing.
+    struct Plate: @unchecked Sendable {
+        var range: NSRange
+        var kind: Kind
+        /// The air either side, which the first segment's plate reaches out to
+        /// cover.
+        var padding: CGFloat
+
+        enum Kind {
+            /// A person, a channel, `@everyone`, a command, a message link.
+            /// Lights solid under the pointer, as Discord's `.interactive` does.
+            case mention
+            /// A role with a colour of its own: that colour at 10%, 30% under
+            /// the pointer — Discord's inline style on a role mention.
+            case role(fill: CGColor, hoverFill: CGColor)
+            /// A role wearing a gradient: the plate in its first stop, and its
+            /// glyphs painted through the gradient itself.
+            case gradientRole(fill: CGColor, hoverFill: CGColor, gradient: CGGradient)
+            /// `<t:…>` — the text's own ink on a grey plate.
+            case timestamp
+            /// Inline code: the code tint and a hairline.
+            case code
+        }
+
+        /// Whether the pointer changes it — the plates that are links.
+        var isInteractive: Bool {
+            switch kind {
+            case .mention, .role, .gradientRole: true
+            case .timestamp, .code: false
+            }
+        }
     }
 
     enum LinkTarget: Hashable, Sendable {
@@ -82,6 +132,9 @@ nonisolated extension MessageText {
             inlineSymbols: [:],
             links: links,
             spoilers: [],
+            plates: [],
+            quotes: [],
+            codeBlocks: [],
             plainLabel: attributed.string
         )
     }
@@ -91,8 +144,14 @@ nonisolated extension MessageText {
 /// name. A value, so building a message's text never touches the store.
 nonisolated struct MentionContext: Sendable {
     var userNames: [UserID: String] = [:]
-    var roleNames: [RoleID: String] = [:]
-    var roleColors: [RoleID: UInt32] = [:]
+    /// Every role the account can see, **in every server**, by id.
+    ///
+    /// Not the selected server's: Discord resolves a role mention against the
+    /// message's own channel, and a role id is a snowflake no other server
+    /// shares — so one table keyed by id answers for the inbox, search and a
+    /// forwarded message exactly as it does for the transcript, where a table of
+    /// the selected server's roles drew every other server's as "@role".
+    var roles: [RoleID: MentionRole] = [:]
     var channelNames: [ChannelID: String] = [:]
     /// Which of those channels are conversations rather than server channels.
     ///
@@ -112,6 +171,15 @@ nonisolated struct MentionContext: Sendable {
     /// (`@user`, `#channel`) and the transcript then serves that to everyone,
     /// forever. Closures have no identity to hash; a generation does.
     var token: UInt64 = 0
+}
+
+/// What a role mention draws: the name, and the colour or gradient it wears —
+/// each already through the reader's role-colour settings, so nil where the
+/// mention is drawn in the plain mention ink.
+nonisolated struct MentionRole: Sendable {
+    var name: String
+    var color: UInt32?
+    var gradient: [UInt32]?
 }
 
 nonisolated enum MessageTextBuilder {
@@ -138,6 +206,12 @@ nonisolated enum MessageTextBuilder {
         var inlineSymbols: [Int: String] = [:]
         var links: [MessageText.LinkRun] = []
         var spoilers: [NSRange] = []
+        var plates: [MessageText.Plate] = []
+        var quotes: [NSRange] = []
+        var codeBlocks: [NSRange] = []
+        /// Whether the blocks being appended are inside a quote, whose own text
+        /// is drawn in the subtle ink.
+        var inQuote = false
 
         mutating func append(_ blocks: [BlockNode]) {
             for (index, block) in blocks.enumerated() {
@@ -149,23 +223,44 @@ nonisolated enum MessageTextBuilder {
         mutating func append(_ block: BlockNode) {
             switch block {
             case .paragraph(let nodes):
-                append(nodes, attributes: style.body)
+                append(nodes, attributes: inQuote ? style.quoteBody : style.body)
             case .heading(let level, let nodes):
                 append(nodes, attributes: style.heading(level: level))
             case .subtext(let nodes):
                 append(nodes, attributes: style.subtext)
             case .codeBlock(_, let code):
-                appendRaw(code, attributes: style.codeBlock)
-            case .quote(let children):
-                // The quote's leading rule is painted by the row painter from
-                // the paragraph's measured rect; here it is only an indent, so
-                // the text wraps inside the rule rather than under it.
                 let start = output.length
-                append(children)
+                appendRaw(code, attributes: style.codeBlock)
                 let range = NSRange(location: start, length: output.length - start)
-                if range.length > 0 {
-                    output.addAttribute(.paragraphStyle, value: style.quoteParagraph, range: range)
-                }
+                guard range.length > 0 else { return }
+                codeBlocks.append(range)
+                // The box's margin and padding, on the first and last line —
+                // every line of a block is a paragraph to CoreText.
+                setMargins(
+                    of: range,
+                    base: style.codeBlock[.paragraphStyle] as? NSParagraphStyle,
+                    before: style.codeBlockLeading,
+                    after: style.codeBlockPadding + style.paragraphSpacing
+                )
+            case .quote(let children):
+                // The rule is painted from the quote's measured lines; here the
+                // quote is an indent, so the text wraps inside the rule rather
+                // than under it.
+                let start = output.length
+                let wasInQuote = inQuote
+                inQuote = true
+                append(children)
+                inQuote = wasInQuote
+                let range = NSRange(location: start, length: output.length - start)
+                guard range.length > 0 else { return }
+                quotes.append(range)
+                output.addAttribute(.paragraphStyle, value: style.quoteParagraph, range: range)
+                setMargins(
+                    of: range,
+                    base: style.quoteParagraph,
+                    before: MessageTextStyle.quoteMargin,
+                    after: MessageTextStyle.quoteMargin + style.paragraphSpacing
+                )
             case .list(let ordered, let startIndex, let items):
                 for (offset, item) in items.enumerated() {
                     if offset > 0 { appendRaw("\n", attributes: style.body) }
@@ -173,6 +268,34 @@ nonisolated enum MessageTextBuilder {
                     appendRaw(marker, attributes: style.listMarker)
                     for child in item { append(child) }
                 }
+            }
+        }
+
+        /// Gives a block's first line the space above it and its last line the
+        /// space below, keeping `base` for everything else.
+        mutating func setMargins(
+            of range: NSRange,
+            base: NSParagraphStyle?,
+            before: CGFloat,
+            after: CGFloat
+        ) {
+            guard let base else { return }
+            let text = output.mutableString
+            let first = text.paragraphRange(for: NSRange(location: range.location, length: 0))
+            let last = text.paragraphRange(for: NSRange(location: NSMaxRange(range) - 1, length: 0))
+            if first == last {
+                output.addAttribute(
+                    .paragraphStyle,
+                    value: style.paragraph(base, before: before, after: after),
+                    range: first
+                )
+            } else {
+                output.addAttribute(
+                    .paragraphStyle, value: style.paragraph(base, before: before), range: first
+                )
+                output.addAttribute(
+                    .paragraphStyle, value: style.paragraph(base, after: after), range: last
+                )
             }
         }
 
@@ -187,12 +310,14 @@ nonisolated enum MessageTextBuilder {
                     style.apply(inlineStyle, to: &merged)
                     let start = output.length
                     append(children, attributes: merged)
-                    if inlineStyle.contains(.spoiler) {
+                    if inlineStyle.contains(.spoiler), output.length > start {
                         spoilers.append(NSRange(location: start, length: output.length - start))
                     }
 
                 case .code(let value):
+                    let start = beginPlate(padding: style.codePadding)
                     appendRaw(value, attributes: style.inlineCode)
+                    endPlate(from: start, kind: .code, padding: style.codePadding)
 
                 case .link(let label, let url):
                     let start = output.length
@@ -217,21 +342,23 @@ nonisolated enum MessageTextBuilder {
                         // character for character what a mention of that person
                         // looks like, and the two go to completely different
                         // places. The glyph is the whole difference.
-                        let start = output.length
+                        //
+                        // One plate and one link run over the glyph AND the
+                        // name, so the whole chip is one target rather than a
+                        // word beside an unclickable picture.
+                        let start = beginPlate(padding: MessageTextStyle.chipPadding)
                         appendInlineSymbol("text.bubble.fill", base: attributes)
-                        appendMention(
+                        appendRaw(
                             " " + (context.directMessageChannelIDs.contains(link.channelID)
                                 ? "@" : "#") + name,
-                            base: attributes,
-                            isSelf: false
+                            attributes: style.mention(base: attributes)
                         )
-                        // One link run over the glyph AND the name, so the whole
-                        // chip is one target rather than a word beside an
-                        // unclickable picture.
-                        links.append(.init(
-                            range: NSRange(location: start, length: output.length - start),
+                        endPlate(
+                            from: start,
+                            kind: .mention,
+                            padding: MessageTextStyle.chipPadding,
                             target: .message(link)
-                        ))
+                        )
                         continue
                     }
                     let start = output.length
@@ -243,46 +370,45 @@ nonisolated enum MessageTextBuilder {
 
                 case .userMention(let userID):
                     let name = context.userNames[userID].map { "@\($0)" } ?? "@unknown"
-                    appendMention(
-                        name,
-                        base: attributes,
-                        isSelf: context.selfIDs.contains(userID.rawValue),
-                        target: .user(userID)
-                    )
+                    appendMention(name, base: attributes, target: .user(userID))
 
                 case .roleMention(let roleID):
-                    let name = context.roleNames[roleID].map { "@\($0)" } ?? "@role"
+                    // **An unknown role is text, not a chip** — Discord's own
+                    // words, and no plate or link claiming a destination the
+                    // reader cannot open.
+                    guard let role = context.roles[roleID] else {
+                        appendRaw("@unknown-role", attributes: attributes)
+                        continue
+                    }
+                    let kind = Self.plateKind(for: role)
                     appendMention(
-                        name,
+                        "@\(role.name)",
                         base: attributes,
-                        isSelf: context.selfIDs.contains(roleID.rawValue),
-                        tint: context.roleColors[roleID],
+                        tint: role.gradient?.first ?? role.color,
+                        kind: kind,
                         target: .role(roleID)
                     )
 
                 case .channelMention(let channelID):
                     let name = context.channelNames[channelID].map { "#\($0)" } ?? "#channel"
-                    appendMention(name, base: attributes, isSelf: false, target: .channel(channelID))
+                    appendMention(name, base: attributes, target: .channel(channelID))
 
                 case .commandMention(let name, _):
-                    appendMention("/\(name)", base: attributes, isSelf: false, target: nil)
+                    appendMention("/\(name)", base: attributes)
 
                 case .everyoneMention:
-                    appendMention("@everyone", base: attributes, isSelf: true, target: nil)
+                    appendMention("@everyone", base: attributes)
 
                 case .hereMention:
-                    appendMention("@here", base: attributes, isSelf: true, target: nil)
+                    appendMention("@here", base: attributes)
 
                 case .customEmoji(let emoji):
                     appendInlineEmoji(emoji, base: attributes)
 
                 case .timestamp(let date, let timestampStyle):
-                    appendMention(
-                        style.format(date, style: timestampStyle),
-                        base: attributes,
-                        isSelf: false,
-                        target: nil
-                    )
+                    let start = beginPlate(padding: MessageTextStyle.chipPadding)
+                    appendRaw(style.format(date, style: timestampStyle), attributes: attributes)
+                    endPlate(from: start, kind: .timestamp, padding: MessageTextStyle.chipPadding)
 
                 case .lineBreak:
                     appendRaw("\n", attributes: attributes)
@@ -295,21 +421,81 @@ nonisolated enum MessageTextBuilder {
             output.append(NSAttributedString(string: value, attributes: attributes))
         }
 
+        /// A role's plate: its colour, or its gradient, or the plain mention
+        /// plate for a role that wears no colour at all.
+        private static func plateKind(for role: MentionRole) -> MessageText.Plate.Kind {
+            guard let first = role.gradient?.first ?? role.color else { return .mention }
+            let fill = cgColor(first, alpha: 0.1)
+            let hoverFill = cgColor(first, alpha: 0.3)
+            if let stops = role.gradient,
+               let gradient = CGGradient(
+                   colorsSpace: CGColorSpace(name: CGColorSpace.sRGB),
+                   colors: stops.map { cgColor($0, alpha: 1) } as CFArray,
+                   locations: nil
+               )
+            {
+                return .gradientRole(fill: fill, hoverFill: hoverFill, gradient: gradient)
+            }
+            return .role(fill: fill, hoverFill: hoverFill)
+        }
+
+        private static func cgColor(_ packed: UInt32, alpha: CGFloat) -> CGColor {
+            CGColor(
+                srgbRed: CGFloat((packed >> 16) & 0xFF) / 255,
+                green: CGFloat((packed >> 8) & 0xFF) / 255,
+                blue: CGFloat(packed & 0xFF) / 255,
+                alpha: alpha
+            )
+        }
+
         mutating func appendMention(
             _ label: String,
             base: [NSAttributedString.Key: Any],
-            isSelf: Bool,
             tint: UInt32? = nil,
+            kind: MessageText.Plate.Kind = .mention,
             target: MessageText.LinkTarget? = nil
         ) {
+            let start = beginPlate(padding: MessageTextStyle.chipPadding)
+            appendRaw(label, attributes: style.mention(base: base, tint: tint))
+            endPlate(from: start, kind: kind, padding: MessageTextStyle.chipPadding, target: target)
+        }
+
+        /// Opens a plated run: the chip's leading air, kerned onto the character
+        /// before it. Returns where the run starts.
+        ///
+        /// **Kern, not a placeholder character.** A spacer glyph is a break
+        /// opportunity, and a chip whose padding wraps onto the line above
+        /// paints a sliver there. At the start of a line there is nothing to
+        /// kern and the plate overhangs by the padding instead.
+        mutating func beginPlate(padding: CGFloat) -> Int {
             let start = output.length
-            appendRaw(label, attributes: style.mention(base: base, isSelf: isSelf, tint: tint))
-            if let target {
-                links.append(.init(
-                    range: NSRange(location: start, length: output.length - start),
-                    target: target
-                ))
+            guard start > 0, output.mutableString.character(at: start - 1) != 0x0A else {
+                return start
             }
+            addKern(padding, at: start - 1)
+            return start
+        }
+
+        /// Closes a plated run: its trailing air kerned onto its own last
+        /// character, and the plate — and the link, when it is one — recorded.
+        mutating func endPlate(
+            from start: Int,
+            kind: MessageText.Plate.Kind,
+            padding: CGFloat,
+            target: MessageText.LinkTarget? = nil
+        ) {
+            guard output.length > start else { return }
+            addKern(padding, at: output.length - 1)
+            let range = NSRange(location: start, length: output.length - start)
+            plates.append(.init(range: range, kind: kind, padding: padding))
+            if let target { links.append(.init(range: range, target: target)) }
+        }
+
+        private mutating func addKern(_ amount: CGFloat, at index: Int) {
+            let existing = output.attribute(.kern, at: index, effectiveRange: nil) as? CGFloat ?? 0
+            output.addAttribute(
+                .kern, value: existing + amount, range: NSRange(location: index, length: 1)
+            )
         }
 
         /// Inserts a symbol into the run, in the mention's own colour.
@@ -329,7 +515,7 @@ nonisolated enum MessageTextBuilder {
                 descent: side * 0.14,
                 width: side
             )
-            var attributes = style.mention(base: base, isSelf: false)
+            var attributes = style.mention(base: base)
             if let delegate = InlineBoxMetrics.makeRunDelegate(metrics) {
                 attributes[kCTRunDelegateAttributeName as NSAttributedString.Key] = delegate
             }
@@ -372,6 +558,9 @@ nonisolated enum MessageTextBuilder {
                 inlineSymbols: inlineSymbols,
                 links: links,
                 spoilers: spoilers,
+                plates: plates,
+                quotes: quotes,
+                codeBlocks: codeBlocks,
                 plainLabel: plainLabel
             )
         }

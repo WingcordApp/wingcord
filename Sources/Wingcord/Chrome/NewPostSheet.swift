@@ -23,6 +23,7 @@ struct NewPostSheet: View {
     @State private var body_ = ""
     @State private var tags: Set<ForumTagID> = []
     @FocusState private var isTitleFocused: Bool
+    @State private var isBodyFocused = false
 
     var body: some View {
         SheetFrame(
@@ -41,11 +42,16 @@ struct NewPostSheet: View {
                 title: "Message",
                 detail: "The first message in the post."
             ) {
-                TextEditor(text: $body_)
-                    .font(.system(.body))
-                    .scrollContentBackground(.hidden)
+                // Discord's box: the first message of a post is a message, so
+                // it is written the way the composer writes one.
+                MarkdownEditor(
+                    text: $body_,
+                    isFocused: $isBodyFocused,
+                    placeholder: "",
+                    font: NSFont.preferredFont(forTextStyle: .body),
+                    lines: 6...16
+                )
                     .padding(Spacing.base)
-                    .frame(minHeight: 120)
                     .background(Palette.surfaceRaised, in: .rect(cornerRadius: Radius.row))
             }
 

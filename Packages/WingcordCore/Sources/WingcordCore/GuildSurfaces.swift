@@ -383,6 +383,25 @@ public enum ChannelSettingsFlags {
     }
 }
 
+/// Which messages count as unread in a channel — Discord's unread setting,
+/// a separate question from which ones notify.
+public enum UnreadSetting: Hashable, Sendable {
+    case allMessages
+    case onlyMentions
+
+    /// A channel override's own choice, or nil where it made none.
+    public init?(channelFlags: Int?) {
+        guard let flags = channelFlags else { return nil }
+        if flags & ChannelSettingsFlags.unreadsAllMessages != 0 {
+            self = .allMessages
+        } else if flags & ChannelSettingsFlags.unreadsOnlyMentions != 0 {
+            self = .onlyMentions
+        } else {
+            return nil
+        }
+    }
+}
+
 /// What `PUT /guilds/{id}/requests/@me` answers with.
 ///
 /// A rules-only gate approves instantly; a server that also asks questions on
