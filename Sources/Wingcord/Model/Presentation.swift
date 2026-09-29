@@ -77,7 +77,8 @@ enum RailVoiceMark: Int, Hashable, Sendable, Comparable {
         switch self {
         case .voice: "speaker.wave.2.fill"
         case .video: "video.fill"
-        case .screenShare: "rectangle.inset.filled.on.rectangle"
+        // A monitor, as Discord's `ScreenIcon` is.
+        case .screenShare: "display"
         case .stage: "person.wave.2.fill"
         }
     }

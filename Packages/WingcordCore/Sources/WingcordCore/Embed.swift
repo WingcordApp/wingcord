@@ -13,17 +13,48 @@ public struct Embed: Hashable, Sendable, Codable {
         public var proxyURL: String?
         public var width: Int?
         public var height: Int?
+        /// Discord's `IS_ANIMATED` mark on the picture. See
+        /// `CDN.playsAsAnimated`.
+        public var isMarkedAnimated: Bool
+        /// Discord's blurred stand-in — see `MediaPlaceholder`.
+        public var placeholder: String?
+        /// A Components V2 gallery item's own facts: its `content_type` said
+        /// video, it was sent as a spoiler, and what it is of.
+        public var isVideo = false
+        public var isSpoiler = false
+        public var altText: String?
 
-        public init(url: String, proxyURL: String? = nil, width: Int? = nil, height: Int? = nil) {
+        public init(
+            url: String,
+            proxyURL: String? = nil,
+            width: Int? = nil,
+            height: Int? = nil,
+            isMarkedAnimated: Bool = false,
+            placeholder: String? = nil
+        ) {
             self.url = url
             self.proxyURL = proxyURL
             self.width = width
             self.height = height
+            self.isMarkedAnimated = isMarkedAnimated
+            self.placeholder = placeholder
+        }
+
+        /// Whether Discord's client plays it as moving. See
+        /// `CDN.playsAsAnimated`.
+        public var playsAsAnimated: Bool {
+            CDN.playsAsAnimated(url, isMarkedAnimated: isMarkedAnimated)
         }
 
         public var aspectRatio: Double? {
             guard let width, let height, width > 0, height > 0 else { return nil }
             return Double(width) / Double(height)
+        }
+
+        /// Its pixels, where the payload said.
+        public var pixelSize: CGSize? {
+            guard let width, let height, width > 0, height > 0 else { return nil }
+            return CGSize(width: width, height: height)
         }
     }
 
@@ -80,6 +111,9 @@ public struct Embed: Hashable, Sendable, Codable {
     /// which Discord draws in place of a card (`MessageAccessories.renderEmbeds`)
     /// and its unfurler sends for sites that describe themselves that way.
     public var components: [DisplayComponent]
+    /// The pictures of the embeds after this one that share its link, which
+    /// Discord draws as one card's gallery — see `mergingGalleries`.
+    public var galleryImages: [Media] = []
 
     public init(
         title: String? = nil,
@@ -111,6 +145,32 @@ public struct Embed: Hashable, Sendable, Codable {
         self.fields = fields
         self.providerName = providerName
         self.components = components
+    }
+
+    /// Folds the embeds that share a link into the first of them — Discord's
+    /// `y` in module `659674`.
+    ///
+    /// **A post with four pictures unfurls as four embeds with one URL**, and
+    /// Discord draws them as one card with a gallery: the first keeps its text
+    /// and gains the others' pictures, and the rest go. An embed with no URL
+    /// is kept as it is — there is nothing to match it on.
+    public static func mergingGalleries(_ embeds: [Embed]) -> [Embed] {
+        guard embeds.count > 1 else { return embeds }
+        var merged: [Embed] = []
+        var firstByURL: [String: Int] = [:]
+        for embed in embeds {
+            guard let url = embed.url else {
+                merged.append(embed)
+                continue
+            }
+            guard let index = firstByURL[url] else {
+                firstByURL[url] = merged.count
+                merged.append(embed)
+                continue
+            }
+            if let image = embed.image { merged[index].galleryImages.append(image) }
+        }
+        return merged
     }
 
     /// The picture an embed that is *only* a picture is made of, or nil where

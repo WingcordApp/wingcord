@@ -204,19 +204,7 @@ struct SearchPane: View {
         guard !Task.isCancelled else { return }
         await withTaskGroup(of: Void.self) { group in
             for request in requests {
-                group.addTask {
-                    switch request.source {
-                    case .still(let bucket):
-                        _ = await ImageStore.shared.image(for: request.key, bucket: bucket)
-                    case .film:
-                        _ = await AnimatedImageStore.shared.image(
-                            for: AnimatedImageStore.Key(
-                                url: request.key.url,
-                                maximumPixelSize: request.key.maximumPixelSize
-                            )
-                        )
-                    }
-                }
+                group.addTask { _ = await request.load() }
             }
         }
         guard !Task.isCancelled else { return }

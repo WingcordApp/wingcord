@@ -707,7 +707,8 @@ struct MiniProfileCard: View {
                             openGame: openGame(for: first),
                             applicationIconURL: model.applicationIconURL(
                                 first.applicationID, side: Metrics.avatarProfile
-                            )
+                            ),
+                            isOwn: profile.isSelf
                         )
                     } else if let voice {
                         ProfileVoiceCard(
@@ -727,8 +728,8 @@ struct MiniProfileCard: View {
     /// behind them, and a title that looks pressable and opens nothing is the
     /// inert control `INVARIANTS.md` §5.5 forbids.
     private func openGame(for activity: Activity) -> (() -> Void)? {
-        guard activity.kind == .playing, let id = activity.applicationID else { return nil }
-        return { model.openGameProfile(id) }
+        guard activity.kind == .playing else { return nil }
+        return model.gameProfileOpener(for: activity.applicationID)
     }
 
     /// The accounts they have linked.

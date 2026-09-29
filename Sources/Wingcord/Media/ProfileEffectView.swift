@@ -107,8 +107,10 @@ struct ProfileEffectView: NSViewRepresentable {
                 let pixelSize = Int((width * max(aspect, 1)).rounded(.up))
                 loads[index] = Task { [weak self] in
                     guard let data = try? await ImageStore.shared.data(for: layer.url) else { return }
+                    // `stills`: a layer of one frame is shown for its slot like
+                    // any other, since nothing is drawn under an effect's layers.
                     let source = await Task.detached(priority: .userInitiated) {
-                        FilmSource(data: data, maximumPixelSize: pixelSize)
+                        FilmSource(data: data, maximumPixelSize: pixelSize, stills: true)
                     }.value
                     guard let self, !Task.isCancelled, self.effect?.skuID == effect.skuID,
                           !self.retired.contains(index), let source,

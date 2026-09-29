@@ -1047,7 +1047,8 @@ nonisolated enum TimelineRowPainter {
         context.textMatrix = .identity
         context.translateBy(x: x, y: point.y + ascent)
         context.scaleBy(x: 1, y: -1)
-        if let ramp = Self.ramp(gradient, repeating: gradientPhase != nil) {
+        let tiles = Int((width / Self.gradientTile).rounded(.up)) + 1
+        if let ramp = Self.ramp(gradient, tiles: tiles) {
             let phase = gradientPhase ?? 0
             // **The glow is a shadow, not a second blurred copy of the text.**
             // Discord draws the name again at `blur(4px)` and 70 % behind
@@ -1075,17 +1076,21 @@ nonisolated enum TimelineRowPainter {
             context.beginTransparencyLayer(auxiliaryInfo: nil)
             CTLineDraw(drawn, context)
             context.setBlendMode(.sourceIn)
+            // **Discord's tile: a hundred points, repeated, travelling right.**
+            // Its name is `background-size: 100px` and animates
+            // `background-position` from 0 to 100px every second and a half
+            // (`gradientUsernameAnimation`, stylesheet `858942`) — so a long
+            // name shows several cycles, every name moves at one speed, and the
+            // colours flow left to right. This used to lay one cycle across the
+            // name's own width and slide it LEFT, which is every gradient on
+            // the canvas running backwards next to Discord's. The list wraps
+            // back to its first colour, so copies laid end to end are periodic
+            // at the tile, and phase 1 is indistinguishable from phase 0.
+            let start = (phase - 1) * Self.gradientTile
             context.drawLinearGradient(
                 ramp,
-                // **The stop list is laid down TWICE across twice the width and
-                // the window slides over it.** The list already wraps back to
-                // its first colour, so two copies laid end to end are periodic
-                // with the name's own width — which means any phase shows a
-                // seamless cycle and phase 1 is indistinguishable from phase 0.
-                // Sliding a single copy instead would clamp at both ends and
-                // leave the first and last letters flat.
-                start: CGPoint(x: -phase * width, y: 0),
-                end: CGPoint(x: (gradientPhase == nil ? 1 : 2) * width - phase * width, y: 0),
+                start: CGPoint(x: start, y: 0),
+                end: CGPoint(x: start + CGFloat(tiles) * Self.gradientTile, y: 0),
                 // The glyphs run the full width, so both ends have to keep
                 // painting past the last stop or the first and last letters
                 // come out unfilled.
@@ -1107,12 +1112,15 @@ nonisolated enum TimelineRowPainter {
     /// name used to be.
     /// - Parameter repeating: lay the stops down twice, for a ramp that has to
     ///   slide without showing where it started.
-    private static func ramp(_ colors: [NSColor]?, repeating: Bool = false) -> CGGradient? {
+    /// One cycle of a role gradient, in points — Discord's `background-size`.
+    static let gradientTile: CGFloat = 100
+
+    private static func ramp(_ colors: [NSColor]?, tiles: Int) -> CGGradient? {
         guard let colors, colors.count >= 2 else { return nil }
-        // The list ends on the colour it began with, so a second copy joins the
-        // first without a seam — and the duplicate join is dropped rather than
-        // drawn twice, which would put a flat spot in the middle.
-        let laid = repeating ? colors + colors.dropFirst() : colors
+        // The list ends on the colour it began with, so each copy joins the one
+        // before without a seam — and the duplicate join is dropped rather than
+        // drawn twice, which would put a flat spot at every tile's edge.
+        let laid = colors + (1..<max(1, tiles)).flatMap { _ in colors.dropFirst() }
         let resolved = laid.compactMap { $0.usingColorSpace(.sRGB)?.cgColor }
         guard resolved.count == laid.count else { return nil }
         return CGGradient(
@@ -1528,6 +1536,12 @@ nonisolated enum TimelineRowPainter {
         if !drewArtwork {
             context.setFillColor(ThemeInk.current.surfaceRaised)
             context.fill(frame)
+            // Discord's blurred stand-in over the plate until the picture
+            // lands — never for a hidden spoiler, whose cover is the point.
+            if !isHidden, let placeholder = PlaceholderImages.shared.image(slot.placeholder) {
+                context.interpolationQuality = .high
+                drawFlipped(placeholder, in: frame, context: context, fills: slot.cropsToFill)
+            }
         }
         context.restoreGState()
 
@@ -2252,7 +2266,7 @@ nonisolated enum TimelineRowPainter {
         )
     }
 
-    private static func drawChip(
+    static func drawChip(
         _ label: String,
         in frame: CGRect,
         fill: NSColor,

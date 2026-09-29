@@ -19,6 +19,7 @@ struct GIFBoard: View {
     var onPick: (GIF) -> Void
 
     @Environment(AppModel.self) private var model
+    @Environment(\.motion) private var motion
     @State private var store = GIFStore()
 
     /// What the floating chrome takes, so the content can be inset by it and
@@ -102,7 +103,8 @@ struct GIFBoard: View {
                     tile(
                         title: "Favorites",
                         icon: "star.fill",
-                        art: model.favoriteGIFs.first?.previewURL
+                        // A picture: this tile's art is decoded, not played.
+                        art: model.favoriteGIFs.first { !$0.isVideo }?.previewURL
                     ) { store.openFavorites(model.favoriteGIFs) }
                 }
                 tile(
@@ -223,8 +225,16 @@ struct GIFBoard: View {
         Color.clear
             .aspectRatio(gif.aspectRatio, contentMode: .fit)
             .overlay {
-                RemoteImage(url: gif.previewURL, side: Self.tileSide, bucket: .attachment) {
+                if gif.isVideo, let url = gif.previewURL {
+                    // **A video favourite plays, as Discord's picker plays it.**
+                    // Its rendition is Tenor's MP4, which the image path below
+                    // decodes nothing from — the tile stayed a plate for good.
                     Rectangle().fill(Palette.surfaceRaised)
+                        .overlay { LoopingVideo(url: url, isPlaying: !motion.reduceMotion) }
+                } else {
+                    RemoteImage(url: gif.previewURL, side: Self.tileSide, bucket: .attachment) {
+                        Rectangle().fill(Palette.surfaceRaised)
+                    }
                 }
             }
             .overlay {
@@ -238,7 +248,7 @@ struct GIFBoard: View {
                 // rather than the name. Everything on this tab is a GIF; one
                 // that turns out to be a single frame is recorded in
                 // `isKnownStill` and never asked again.
-                if let url = gif.previewURL {
+                if !gif.isVideo, let url = gif.previewURL {
                     AnimatedDecoration(
                         url: url,
                         side: Self.tileSide,

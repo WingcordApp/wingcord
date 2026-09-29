@@ -347,6 +347,20 @@ extension AppModel {
     // MARK: A game's profile
 
     /// Opens a game's own profile, and starts whatever it still needs.
+    /// What opens an activity's game profile — **only a game that has one**,
+    /// Discord's rule (modules `692969` and `921138`): its record came back
+    /// from `/games`, and it does not carry `GAME_DISABLED`.
+    ///
+    /// Nil for anything else, and the card then has nothing to click, as
+    /// Discord's does. An app somebody is "Playing" — an editor, a bot's own
+    /// status — has no record, and opening the page for one anyway was a
+    /// spinner that never ended.
+    func gameProfileOpener(for applicationID: ApplicationID?) -> (() -> Void)? {
+        guard let applicationID, let game = games[applicationID], !game.isProfileDisabled
+        else { return nil }
+        return { [weak self] in self?.openGameProfile(applicationID) }
+    }
+
     func openGameProfile(_ gameID: ApplicationID) {
         gameProfileRequest = GameProfileRequest(gameID: gameID)
         sessionController.loadGameProfile(gameID)

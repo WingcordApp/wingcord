@@ -18,6 +18,15 @@ import Foundation
 public struct Game: Hashable, Sendable, Identifiable {
     public var id: ApplicationID
     public var name: String
+    /// Discord's `GAME_DISABLED` (`game_flags` bit 0): a game whose profile
+    /// Discord will not open, though it answers for it. Module `921138`.
+    public var isProfileDisabled = false
+    /// The game's own application — its `linked_applications` entry of type
+    /// `OFFICIAL` (2; `LINKED` is 1 and `NVIDIA` 3), Discord's
+    /// `getOfficialApplicationId`. It is the application a reader links their
+    /// in-game account through, which is what the profile's Link Account card
+    /// offers for any game that has one.
+    public var officialApplicationID: ApplicationID?
     /// The store blurb. Often several sentences; never a title.
     public var summary: String?
     public var media: GameMedia
@@ -165,18 +174,52 @@ public struct Game: Hashable, Sendable, Identifiable {
     /// `useSteamStoreURL`'s rule, and the same instinct as `INVARIANTS.md` §5.5:
     /// a control that cannot work must not look like one that can.
     public var storeOffers: [GameStoreOffer] {
-        GameStore.allCases.compactMap { store in
-            switch store {
-            case .steam:
-                steamStoreURL.map { GameStoreOffer(store: .steam, url: $0) }
-            case .xboxGamePass:
-                // No second address to fall back on: Discord publishes no
-                // `websites` category for Game Pass, so the SKU is all there is.
-                skuIDs(from: "xbox_game_pass").first
-                    .map { GameStoreOffer(store: .xboxGamePass, url: store.url(sku: $0)) }
-            }
-        }
+        [xboxGamePassOffer, steamStoreURL.map { GameStoreOffer(store: .steam, url: $0) }]
+            .compactMap(\.self)
     }
+
+    /// Game Pass, from its SKU. No second address to fall back on: Discord
+    /// publishes no `websites` category for Game Pass, so the SKU is all there
+    /// is.
+    private var xboxGamePassOffer: GameStoreOffer? {
+        skuIDs(from: "xbox_game_pass").first
+            .flatMap { GameStore.xboxGamePass.url(sku: $0) }
+            .map { GameStoreOffer(store: .xboxGamePass, url: $0) }
+    }
+
+    /// Where the game profile sends somebody to get or play this game, in
+    /// Discord's order — its game profile's `lU`, a richer list than the
+    /// activity card's two.
+    ///
+    /// **The `websites` list is the source**, filtered to the six categories
+    /// Discord offers a button for: Epic Games, Steam, Roblox, Battle.net,
+    /// Riot and Minecraft. Roblox's own "Roblox" and Valorant's "Play on Riot"
+    /// are those rows, and the SKUs never name either store. Then, as Discord:
+    ///
+    /// - Epic only for the two games Discord names, and Steam never for a
+    ///   retired one;
+    /// - Steam from the SKUs where no website names it (`steamStoreURL`);
+    /// - Steam first, the rest in the order the route sent them;
+    /// - Xbox Game Pass ahead of everything, where the game carries its SKU.
+    public var launchOffers: [GameStoreOffer] {
+        var offers: [GameStoreOffer] = websites.compactMap { website in
+            guard let store = GameStore(launchCategory: website.category) else { return nil }
+            if store == .epicGames, !Self.epicLaunchGames.contains(id.rawValue) { return nil }
+            if store == .steam, steamReleaseStatus == .retiredAbandoned { return nil }
+            return GameStoreOffer(store: store, url: website.url)
+        }
+        if !offers.contains(where: { $0.store == .steam }), let steam = steamStoreURL {
+            offers.append(GameStoreOffer(store: .steam, url: steam))
+        }
+        // Stable, as Discord's comparator is: Steam first, the rest untouched.
+        offers = offers.filter { $0.store == .steam } + offers.filter { $0.store != .steam }
+        if let pass = xboxGamePassOffer { offers.insert(pass, at: 0) }
+        return offers
+    }
+
+    /// The only games whose Epic Games link the profile offers — Discord's own
+    /// list (`lL` beside `lU`).
+    static let epicLaunchGames: Set<UInt64> = [1_402_418_703_554_842_694, 356_877_880_938_070_016]
 
     /// Steam's address for this game, resolved the way Discord's own
     /// `useSteamStoreURL` resolves it. See `storeOffers`.
@@ -184,7 +227,7 @@ public struct Game: Hashable, Sendable, Identifiable {
         guard steamReleaseStatus != .retiredAbandoned else { return nil }
         let skus = skuIDs(from: "steam")
         if skus.count > 1, let website = steamURL { return website }
-        return skus.first.map { GameStore.steam.url(sku: $0) } ?? steamURL
+        return skus.first.flatMap { GameStore.steam.url(sku: $0) } ?? steamURL
     }
 
     /// The non-empty ids filed under one distributor, in the order they arrived.
@@ -322,6 +365,26 @@ public enum SteamReleaseStatus: Int, Hashable, Sendable {
 public enum GameStore: String, Hashable, Sendable, CaseIterable {
     case xboxGamePass = "xbox_game_pass"
     case steam = "steam"
+    /// The five below come only from a game's `websites`, for the game
+    /// profile — see `Game.launchOffers`. `storeOffers` never names them.
+    case epicGames = "epicgames"
+    case roblox = "roblox"
+    case battleNet = "battlenet"
+    case riot = "riot"
+    case minecraft = "minecraft"
+
+    /// The store a `websites` row is a launch button for, or nil.
+    init?(launchCategory category: GameLinkCategory) {
+        switch category {
+        case .steam: self = .steam
+        case .epicGames: self = .epicGames
+        case .roblox: self = .roblox
+        case .battleNet: self = .battleNet
+        case .riot: self = .riot
+        case .minecraft: self = .minecraft
+        default: return nil
+        }
+    }
 
     /// What the store is called, which is what a menu row says when there are
     /// two of them.
@@ -329,6 +392,11 @@ public enum GameStore: String, Hashable, Sendable, CaseIterable {
         switch self {
         case .steam: "Steam"
         case .xboxGamePass: "Xbox Game Pass"
+        case .epicGames: "Epic Games"
+        case .roblox: "Roblox"
+        case .battleNet: "Battle.net"
+        case .riot: "Riot Games"
+        case .minecraft: "Minecraft"
         }
     }
 
@@ -349,6 +417,33 @@ public enum GameStore: String, Hashable, Sendable, CaseIterable {
         switch self {
         case .steam: "Get on Steam"
         case .xboxGamePass: "Get on Xbox Game Pass"
+        case .epicGames: "Get on Epic Games"
+        case .roblox: "Get on Roblox"
+        case .battleNet: "Get on Battle.net"
+        // Discord's own words for this one: Riot's page is where a game of
+        // theirs is played from.
+        case .riot: "Play on Riot"
+        case .minecraft: "Get on Minecraft"
+        }
+    }
+
+    /// What the game profile's button says: Discord's own words there (its
+    /// `lw`), which are the store's name — and Riot's, which is "Play".
+    /// Short enough for two to sit side by side, as Discord sets them.
+    public var profileLabel: String {
+        self == .riot ? "Play" : title
+    }
+
+    /// What that button is read out as — Discord's own accessibility labels.
+    public var profileAccessibilityLabel: String {
+        switch self {
+        case .steam: "Get Game on Steam"
+        case .xboxGamePass: "Get Game on Xbox Game Pass"
+        case .epicGames: "Get Game on Epic Games Store"
+        case .roblox: "Get Game on Roblox"
+        case .battleNet: "Get Game on Battle.net"
+        case .riot: "Play on Riot"
+        case .minecraft: "Get Game on Minecraft"
         }
     }
 
@@ -360,6 +455,13 @@ public enum GameStore: String, Hashable, Sendable, CaseIterable {
         switch self {
         case .steam: "steam"
         case .xboxGamePass: "xbox"
+        case .epicGames: "epicgames"
+        case .roblox: "roblox"
+        case .battleNet: "battlenet"
+        case .riot: "riotgames"
+        // No connection carries Minecraft's mark; the row falls back to its
+        // symbol, as a link with no brand does.
+        case .minecraft: "minecraft"
         }
     }
 
@@ -370,11 +472,14 @@ public enum GameStore: String, Hashable, Sendable, CaseIterable {
     /// on whatever it opens; both are Discord's own attribution, and sending
     /// them from here would credit this client's traffic to somebody else.
     /// Measured: both addresses answer 200 without them.
-    public func url(sku: String) -> URL {
+    ///
+    /// Nil for a store addressed only by a game's `websites` row.
+    public func url(sku: String) -> URL? {
         let encoded = sku.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? sku
         return switch self {
-        case .steam: URL(string: "https://store.steampowered.com/app/\(encoded)")!
-        case .xboxGamePass: URL(string: "https://www.xbox.com/games/store/title/\(encoded)")!
+        case .steam: URL(string: "https://store.steampowered.com/app/\(encoded)")
+        case .xboxGamePass: URL(string: "https://www.xbox.com/games/store/title/\(encoded)")
+        case .epicGames, .roblox, .battleNet, .riot, .minecraft: nil
         }
     }
 }

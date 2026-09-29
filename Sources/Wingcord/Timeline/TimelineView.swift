@@ -1165,10 +1165,10 @@ final class TimelineCoordinator: NSObject {
     }
 
     /// Starts a video's player over its thumbnail. See `EmbedPlayerView`.
-    private func playVideo(_ player: URL, of messageID: MessageID, in rect: CGRect) {
+    private func playVideo(_ video: EmbedVideo, of messageID: MessageID, in rect: CGRect) {
         guard let canvas else { return }
         embedPlayer?.stop()
-        let view = EmbedPlayerView(messageID: messageID, player: player)
+        let view = EmbedPlayerView(messageID: messageID, video: video)
         view.frame = rect
         canvas.addSubview(view)
         embedPlayer = view
@@ -1180,7 +1180,7 @@ final class TimelineCoordinator: NSObject {
         guard let view = embedPlayer, let canvas else { return }
         guard let index = canvas.rows.firstIndex(where: { $0.messageID == view.messageID }),
               case .message(let row) = canvas.rows[index].kind,
-              let image = row.embeds.lazy.flatMap(\.images).first(where: { $0.video == .player(view.player) })
+              let image = row.embeds.lazy.flatMap(\.images).first(where: { $0.video == view.video })
         else {
             view.stop()
             embedPlayer = nil
@@ -1383,21 +1383,7 @@ final class TimelineCoordinator: NSObject {
             guard !Task.isCancelled else { return }
             await withTaskGroup(of: Bool.self) { group in
                 for request in urls {
-                    group.addTask {
-                        switch request.source {
-                        case .still(let bucket):
-                            await ImageStore.shared.image(
-                                for: request.key, bucket: bucket
-                            ) != nil
-                        case .film:
-                            await AnimatedImageStore.shared.image(
-                                for: AnimatedImageStore.Key(
-                                    url: request.key.url,
-                                    maximumPixelSize: request.key.maximumPixelSize
-                                )
-                            ) != nil
-                        }
-                    }
+                    group.addTask { await request.load() }
                 }
                 var landed = false
                 for await didLoad in group where didLoad { landed = true }

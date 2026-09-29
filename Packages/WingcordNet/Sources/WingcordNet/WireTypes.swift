@@ -857,6 +857,13 @@ struct AttachmentDTO: Decodable, Sendable {
     var description: String?
     var waveform: String?
     var duration_secs: Double?
+    var flags: Int?
+    var placeholder: String?
+    var placeholder_version: Int?
+
+    /// `IS_ANIMATED` in an attachment's `flags` — web `d4c7976eccf337f1`'s
+    /// attachment flag enum; captured on both GIF attachments in the HARs.
+    static let isAnimatedFlag = 1 << 5
 
     var domain: Attachment {
         Attachment(
@@ -870,7 +877,9 @@ struct AttachmentDTO: Decodable, Sendable {
             height: height,
             description: description,
             waveform: waveform,
-            durationSeconds: duration_secs
+            durationSeconds: duration_secs,
+            isMarkedAnimated: (flags ?? 0) & Self.isAnimatedFlag != 0,
+            placeholder: MediaPlaceholder.accepted(placeholder, version: placeholder_version)
         )
     }
 }
@@ -986,10 +995,25 @@ struct EmbedDTO: Decodable, Sendable {
         var proxy_url: String?
         var width: Int?
         var height: Int?
+        var flags: Int?
+        var placeholder: String?
+        var placeholder_version: Int?
+
+        /// `IS_ANIMATED` in an embed picture's `flags` — the same bit as an
+        /// attachment's, in a flag enum of its own; captured on an animated
+        /// Tenor GIF and an animated sticker's unfurl, and on no still.
+        static let isAnimatedFlag = 1 << 5
 
         var domain: Embed.Media? {
             guard let url else { return nil }
-            return Embed.Media(url: url, proxyURL: proxy_url, width: width, height: height)
+            return Embed.Media(
+                url: url,
+                proxyURL: proxy_url,
+                width: width,
+                height: height,
+                isMarkedAnimated: (flags ?? 0) & Self.isAnimatedFlag != 0,
+                placeholder: MediaPlaceholder.accepted(placeholder, version: placeholder_version)
+            )
         }
     }
 
@@ -1395,6 +1419,7 @@ struct ActivityDTO: Decodable, Sendable {
     /// for most activities; an activity without one has no reachable metadata
     /// at all, so its buttons are not drawn.
     var session_id: String?
+    var sync_id: String?
     /// Milliseconds. The last key of Discord's order — `ActivityOrder`.
     var created_at: Double?
     /// `EMBEDDED` (256) is the one bit anything here reads.
@@ -1468,7 +1493,10 @@ struct ActivityDTO: Decodable, Sendable {
             hasSecrets: secrets != nil,
             platform: platform,
             detailsURL: details_url.flatMap(URL.init(string:)),
-            stateURL: state_url.flatMap(URL.init(string:))
+            stateURL: state_url.flatMap(URL.init(string:)),
+            syncID: sync_id,
+            offersPlay: (flags ?? 0) & Activity.playFlag != 0,
+            offersSync: (flags ?? 0) & Activity.syncFlag != 0
         )
     }
 }
@@ -2332,7 +2360,7 @@ extension ComponentDTO {
         case 10:
             content.map { DisplayComponent.text($0) }
         case 12:
-            .gallery((items ?? []).compactMap { $0.media?.domain })
+            .gallery((items ?? []).compactMap(\.domain))
         case 14:
             // Discord's spacing is 1 (small) or 2 (large); a divider defaults to
             // drawn, which is what an omitted flag means on this node.
@@ -2355,6 +2383,16 @@ extension ComponentDTO {
 struct MediaItemDTO: Decodable, Sendable {
     var media: MediaSourceDTO?
     var description: String?
+    var spoiler: Bool?
+
+    /// The item's picture, carrying the two facts that decide how it is drawn:
+    /// whether it is a spoiler, and whether it is a video.
+    var domain: Embed.Media? {
+        guard var media = media?.domain else { return nil }
+        media.isSpoiler = spoiler ?? false
+        media.altText = description
+        return media
+    }
 }
 
 struct MediaSourceDTO: Decodable, Sendable {
@@ -2362,10 +2400,21 @@ struct MediaSourceDTO: Decodable, Sendable {
     var proxy_url: String?
     var width: Int?
     var height: Int?
+    var placeholder: String?
+    var placeholder_version: Int?
+    var content_type: String?
 
     var domain: Embed.Media? {
         guard let url, !url.isEmpty else { return nil }
-        return Embed.Media(url: url, proxyURL: proxy_url, width: width, height: height)
+        var media = Embed.Media(
+            url: url,
+            proxyURL: proxy_url,
+            width: width,
+            height: height,
+            placeholder: MediaPlaceholder.accepted(placeholder, version: placeholder_version)
+        )
+        media.isVideo = content_type?.hasPrefix("video/") == true
+        return media
     }
 }
 

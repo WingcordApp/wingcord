@@ -17,6 +17,9 @@ import QuartzCore
 /// Either way nothing is thinned: the filmstrip this replaces for the
 /// transcript kept forty-eight frames of any loop and whatever fitted six
 /// megabytes of a large one.
+///
+/// A picture of one frame is shown rather than played, for an owner that asks
+/// — see `init(key:placeholder:drawsStills:)`.
 @MainActor
 final class FilmPlayer {
 
@@ -37,10 +40,27 @@ final class FilmPlayer {
     static let residentLimit = 3 * 1024 * 1024
 
     /// Tells the owner whether frames are up: true once the first one shows,
-    /// false when the asset turns out to be a still or cannot be read — so a
-    /// still drawn under it can be taken away, or kept.
-    var onPlayback: ((Bool) -> Void)?
+    /// false when there is nothing here to show — an asset that cannot be
+    /// read, or a still the owner draws itself — so a still drawn under it
+    /// can be taken away, or kept.
+    ///
+    /// **An answer given before anybody listened is given again to whoever
+    /// starts.** A loop already held is shown from `init`, with no hop, so a
+    /// row scrolled back draws it on its first frame — and an owner can only
+    /// attach this once `init` has returned. Dropped there, `AnimatedDecoration`
+    /// never heard that frames were up and left its still under the film: two
+    /// copies of a decoration on every show after the first.
+    var onPlayback: ((Bool) -> Void)? {
+        didSet {
+            if let playback { onPlayback?(playback) }
+        }
+    }
 
+    /// The last answer `onPlayback` was given, or would have been.
+    private var playback: Bool?
+
+    /// Whether a picture of one frame is drawn here. See `init`.
+    private let drawsStills: Bool
     private var loadTask: Task<Void, Never>?
     private var stream: FilmStream?
     /// Whether the picture is moving now.
@@ -50,9 +70,18 @@ final class FilmPlayer {
     private var isWanted = true
 
     /// - Parameter placeholder: what the box shows until the first frame.
-    init(key: Key, placeholder: CGColor? = nil) {
+    /// - Parameter placeholderImage: a blurred stand-in drawn over it
+    ///   meanwhile — Discord's `placeholder`.
+    /// - Parameter drawsStills: whether a picture that turns out to have one
+    ///   frame is drawn here. True for an owner that leaves the box empty for
+    ///   this layer — the transcript — where the alternative is a plate for
+    ///   good; false for one that draws its own still underneath and only needs
+    ///   telling there is nothing to play.
+    init(key: Key, placeholder: CGColor? = nil, placeholderImage: CGImage? = nil, drawsStills: Bool = false) {
         self.key = key
+        self.drawsStills = drawsStills
         layer.backgroundColor = placeholder
+        layer.contents = placeholderImage
         layer.masksToBounds = true
         layer.contentsGravity = .resize
         // The layer is placed and resized with the rows; none of that is a
@@ -124,27 +153,38 @@ final class FilmPlayer {
 
     private func load() {
         if let film = FilmFrames.shared.cached(key) {
-            play(film)
+            // A still held for an owner that leaves its box empty is, to one
+            // that draws its own, nothing to play.
+            if film.frames.count > 1 || drawsStills { play(film) } else { report(false) }
             return
         }
         let key = key
+        let stills = drawsStills
         loadTask = Task { [weak self] in
             guard let data = try? await ImageStore.shared.data(for: key.url) else {
                 // Nothing to show, and the owner keeps its still.
-                if !Task.isCancelled { self?.onPlayback?(false) }
+                if !Task.isCancelled { self?.report(false) }
                 return
             }
             guard !Task.isCancelled else { return }
             let source = await Task.detached(priority: .userInitiated) {
-                FilmSource(data: data, maximumPixelSize: key.maximumPixelSize)
+                FilmSource(data: data, maximumPixelSize: key.maximumPixelSize, stills: stills)
             }.value
             guard let self, !Task.isCancelled else { return }
             guard let source else {
-                self.onPlayback?(false)
+                self.report(false)
+                return
+            }
+            if source.isStill {
+                // Held as a loop of one, so the layer that replaces this one
+                // when its row scrolls back shows it with no fetch at all.
+                let still = ResidentFilm(frames: [source.firstFrame], ends: source.ends, duration: source.duration)
+                FilmFrames.shared.store(still, for: key)
+                self.play(still)
                 return
             }
             self.show(source.firstFrame)
-            self.onPlayback?(true)
+            self.report(true)
             if source.residentCost <= Self.residentLimit {
                 let frames = await withCheckedContinuation { continuation in
                     source.decodeAll { continuation.resume(returning: $0) }
@@ -159,6 +199,11 @@ final class FilmPlayer {
                 stream.setPlaying(self.isPlaying)
             }
         }
+    }
+
+    private func report(_ playing: Bool) {
+        playback = playing
+        onPlayback?(playing)
     }
 
     private func show(_ image: CGImage) {
@@ -176,7 +221,8 @@ final class FilmPlayer {
     /// does in a browser.
     private func play(_ film: ResidentFilm) {
         show(film.frames[0])
-        onPlayback?(true)
+        report(true)
+        guard film.frames.count > 1 else { return }
         let animation = CAKeyframeAnimation(keyPath: "contents")
         animation.values = film.frames
         // Discrete keyframes take one more time than values: each frame shows
@@ -327,7 +373,7 @@ final class FilmStream {
             let index = (now + step) % count
             guard index != shown, ready[index] == nil, !pending.contains(index) else { continue }
             pending.insert(index)
-            source.decode(index) { image in
+            source.decode(index) { [weak self] image in
                 Task { @MainActor [weak self] in
                     guard let self else { return }
                     self.pending.remove(index)

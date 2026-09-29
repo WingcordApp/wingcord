@@ -148,6 +148,7 @@ enum FrecencyProto {
         var reader = source
         var key: String?
         var src: String?
+        var format: UInt64?
         var width: Int?
         var height: Int?
         var order = Int.max
@@ -160,6 +161,7 @@ enum FrecencyProto {
                 var value = reader.reader(for: field)
                 while let inner = value.next() {
                     switch inner.number {
+                    case GIFField.format where inner.wireType == 0: format = inner.value
                     case GIFField.src where inner.wireType == 2: src = value.string(for: inner)
                     case GIFField.width where inner.wireType == 0: width = Int(inner.value)
                     case GIFField.height where inner.wireType == 0: height = Int(inner.value)
@@ -180,16 +182,19 @@ enum FrecencyProto {
                 url: url,
                 previewURL: src.flatMap(URL.init(string:)),
                 width: width,
-                height: height
+                height: height,
+                isVideo: format == GIFField.video
             ),
             order
         )
     }
 
     private enum GIFField {
-        /// 1 for a still, 2 for a video rendition. Captured in
-        /// `gif favorite unfavorite.har`: a Tenor entry carries `format = 2`.
+        /// 1 for a picture — a GIF, or an animated WebP — and 2 for a video
+        /// rendition. Captured in `gif favorite unfavorite.har`: a Tenor entry
+        /// carries `format = 2` and an MP4 in `src`.
         static let format = 1
+        static let video: UInt64 = 2
         static let src = 2
         static let width = 3
         static let height = 4
@@ -275,11 +280,9 @@ enum FrecencyProto {
     /// which is what puts a new favourite at the front of the grid.
     public static func favoriteEntry(for gif: GIF, order: Int) -> FavoriteEntry {
         var value = ProtobufWriter()
-        // 1 is a still and 2 is a video rendition. Discord serves Tenor results
-        // as `.mp4`, so anything whose preview is one is a video — and getting
-        // this wrong shows the entry as a broken still in every other client.
-        let isVideo = (gif.previewURL ?? gif.url).pathExtension.lowercased() == "mp4"
-        value.varint(field: GIFField.format, isVideo ? 2 : 1)
+        // Getting the kind wrong shows the entry as a broken still in every
+        // other client, so it is written from the same fact it is read into.
+        value.varint(field: GIFField.format, gif.isVideo ? GIFField.video : 1)
         if let src = gif.previewURL?.absoluteString ?? Optional(gif.url.absoluteString) {
             value.string(field: GIFField.src, src)
         }

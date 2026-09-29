@@ -330,7 +330,7 @@ final class TimelineCanvasView: NSView {
     var onOpenLink: ((MessageText.LinkTarget, CGRect) -> Void)?
     /// A video's Play: the message, the player, and the thumbnail's rect in
     /// this canvas, which the player is laid over.
-    var onPlayVideo: ((MessageID, URL, CGRect) -> Void)?
+    var onPlayVideo: ((MessageID, EmbedVideo, CGRect) -> Void)?
     var onVisibleRangeChange: ((Range<Int>) -> Void)?
     var onActivateMessage: ((MessageID) -> Void)?
     /// A face or a name was clicked. The rect is in this view's own space; the
@@ -858,7 +858,8 @@ final class TimelineCanvasView: NSView {
                 frame: slot.rect.offsetBy(dx: origin.x, dy: origin.y),
                 gravity: slot.cropsToFill ? .resizeAspectFill : .resize,
                 cornerRadius: 8,
-                placeholder: ThemeInk.current.surfaceRaised
+                placeholder: ThemeInk.current.surfaceRaised,
+                placeholderImage: PlaceholderImages.shared.image(slot.placeholder)
             ))
         }
         var embedImage = 0
@@ -878,8 +879,10 @@ final class TimelineCanvasView: NSView {
                     slot: FilmSlot(messageID: row.id, kind: .embed, index: embedImage),
                     source: source,
                     frame: image.rect.offsetBy(dx: origin.x, dy: origin.y),
+                    gravity: image.cropsToFill ? .resizeAspectFill : .resize,
                     cornerRadius: image.isCircle ? image.rect.width / 2 : image.corner,
-                    placeholder: ThemeInk.current.placeholderFill
+                    placeholder: ThemeInk.current.placeholderFill,
+                    placeholderImage: PlaceholderImages.shared.image(image.placeholder)
                 ))
             }
         }
@@ -1396,9 +1399,9 @@ final class TimelineCanvasView: NSView {
             films.setBadge(filmBadge(), scale: window?.backingScaleFactor ?? 2)
         case .link(let destination, let rect):
             onOpenLink?(destination, rect)
-        case .playVideo(let player, let rect):
+        case .playVideo(let video, let rect):
             let origin = rowFrame(at: index).origin
-            onPlayVideo?(row.id, player, rect.offsetBy(dx: origin.x, dy: origin.y))
+            onPlayVideo?(row.id, video, rect.offsetBy(dx: origin.x, dy: origin.y))
         case .emoji(let emoji, let rect):
             onOpenEmoji?(emoji, rect)
         case .sticker(let sticker, let rect):
@@ -1668,8 +1671,8 @@ final class TimelineCanvasView: NSView {
         /// The same star, on a GIF that arrived as an unfurled link rather than
         /// as a file. A separate case because the two index different arrays.
         case favoriteEmbedGIF(index: Int)
-        /// A video's Play: its player, and the thumbnail it plays over.
-        case playVideo(URL, CGRect)
+        /// A video's Play: what it starts, and the thumbnail it plays over.
+        case playVideo(EmbedVideo, CGRect)
         /// The Preview chip on a music card.
         case previewClip(URL)
         /// The Open chip, which raises Spotify's own player. Carries the card's
@@ -1868,8 +1871,8 @@ final class TimelineCanvasView: NSView {
         // A video's Play and Open Link.
         for slot in row.embeds {
             for image in slot.images {
-                guard let controls = image.controls, case .player(let player) = image.video else { continue }
-                if controls.play.contains(local) { return .playVideo(player, image.rect) }
+                guard let controls = image.controls, let video = image.video, video.isPlayable else { continue }
+                if controls.play.contains(local) { return .playVideo(video, image.rect) }
                 if controls.open.contains(local) {
                     return .link(.url(controls.page.absoluteString), controls.open)
                 }

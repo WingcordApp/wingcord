@@ -27,11 +27,54 @@ nonisolated enum TimelineImageRequests {
 
         enum Source: Hashable {
             case still(ImageStore.Bucket)
-            case film
+            /// A picture that may move, and the bucket its painter falls back
+            /// to if it turns out to be one frame — nil where there is no still
+            /// to fall back to, as for a Lottie sticker.
+            case film(still: ImageStore.Bucket?)
         }
 
         static func == (lhs: Request, rhs: Request) -> Bool { lhs.key == rhs.key }
         func hash(into hasher: inout Hasher) { hasher.combine(key) }
+
+        /// Fetches what this names into the cache its painter peeks. Every
+        /// surface that draws message rows loads its batch through here.
+        ///
+        /// **A film that turns out to be one frame is fetched as the still at
+        /// once**, rather than on the next viewport change — which, on a list
+        /// nobody is scrolling, never comes.
+        ///
+        /// - Returns: whether anything landed, so a surface repaints once per
+        ///   batch rather than once per picture.
+        func load() async -> Bool {
+            switch source {
+            case .still(let bucket):
+                return await ImageStore.shared.image(for: key, bucket: bucket) != nil
+            case .film(let bucket):
+                let film = AnimatedImageStore.Key(url: key.url, maximumPixelSize: key.maximumPixelSize)
+                if await AnimatedImageStore.shared.image(for: film) != nil { return true }
+                guard let bucket, AnimatedImageStore.shared.isKnownStill(film) else { return false }
+                return await ImageStore.shared.image(for: key, bucket: bucket) != nil
+            }
+        }
+    }
+
+    /// The request for a picture that may move: its film — or, once the film
+    /// store has learned it is a single frame, the still its painter falls
+    /// back to in `bucket`. Nil when whichever it needs is already held.
+    ///
+    /// **A "GIF" of one frame is common** — a caption meme saved as a GIF so it
+    /// can be favourited — and the film store answers nil for one. Every
+    /// painter falls back to the still, and nothing ever asked for it: on every
+    /// surface that plays films on the clock, the picture was a plate for good.
+    private static func moving(_ key: ImageStore.Key, still bucket: ImageStore.Bucket?) -> Request? {
+        let film = AnimatedImageStore.Key(url: key.url, maximumPixelSize: key.maximumPixelSize)
+        if AnimatedImageStore.shared.isKnownStill(film) {
+            guard let bucket, ImageStore.shared.cached(key, bucket: bucket) == nil else { return nil }
+            return Request(key: key, source: .still(bucket))
+        }
+        return AnimatedImageStore.shared.cached(film) == nil
+            ? Request(key: key, source: .film(still: bucket))
+            : nil
     }
 
     /// - Parameter loadsArtwork: The reader's "load images automatically"
@@ -150,13 +193,9 @@ nonisolated enum TimelineImageRequests {
                 // there was nothing for the clock to advance through.
                 if slot.isAnimated {
                     guard !filmsOnLayers else { continue }
-                    let film = AnimatedImageStore.Key(
-                        url: key.url, maximumPixelSize: key.maximumPixelSize
-                    )
-                    if AnimatedImageStore.shared.cached(film) == nil,
-                       !AnimatedImageStore.shared.isKnownStill(film)
-                    {
-                        requests.append(Request(key: key, source: .film))
+                    // Lottie has no bitmap on the CDN — see `stickerFrame`.
+                    if let request = moving(key, still: slot.isVector ? nil : .artwork) {
+                        requests.append(request)
                     }
                 } else if ImageStore.shared.cached(key, bucket: .artwork) == nil {
                     requests.append(Request(key: key, source: .still(.artwork)))
@@ -167,7 +206,8 @@ nonisolated enum TimelineImageRequests {
             // image, a footer icon. The painter only peeks, so anything nobody
             // prefetches never appears.
             for image in row.embeds.lazy.flatMap(\.images) {
-                guard loadsArtwork, let url = image.url else { continue }
+                // A spoiler's picture is never drawn, so it is never fetched.
+                guard loadsArtwork, !image.isSpoiler, let url = image.url else { continue }
                 let bucket: ImageStore.Bucket = image.isArtwork ? .artwork : .thumbnail
                 let key = ImageStore.Key(
                     url: url,
@@ -179,14 +219,7 @@ nonisolated enum TimelineImageRequests {
                 // stickers and attachments ride.
                 if image.isAnimated {
                     guard !filmsOnLayers else { continue }
-                    let film = AnimatedImageStore.Key(
-                        url: key.url, maximumPixelSize: key.maximumPixelSize
-                    )
-                    if AnimatedImageStore.shared.cached(film) == nil,
-                       !AnimatedImageStore.shared.isKnownStill(film)
-                    {
-                        requests.append(Request(key: key, source: .film))
-                    }
+                    if let request = moving(key, still: bucket) { requests.append(request) }
                 } else if ImageStore.shared.cached(key, bucket: bucket) == nil {
                     requests.append(Request(key: key, source: .still(bucket)))
                 }
@@ -274,10 +307,7 @@ nonisolated enum TimelineImageRequests {
                 // reaction moves the way the same emoji in the text above does.
                 if slot.emoji.isAnimated, playsAnimatedEmoji {
                     guard !filmsOnLayers else { continue }
-                    let film = AnimatedImageStore.Key(url: url, maximumPixelSize: key.maximumPixelSize)
-                    if AnimatedImageStore.shared.cached(film) == nil {
-                        requests.append(Request(key: key, source: .film))
-                    }
+                    if let request = moving(key, still: .thumbnail) { requests.append(request) }
                 } else if ImageStore.shared.cached(key) == nil {
                     requests.append(Request(key: key, source: .still(.thumbnail)))
                 }
@@ -320,14 +350,7 @@ nonisolated enum TimelineImageRequests {
                 // is nothing for the clock to advance through.
                 if slot.isAnimated {
                     guard !filmsOnLayers else { continue }
-                    let film = AnimatedImageStore.Key(
-                        url: key.url, maximumPixelSize: key.maximumPixelSize
-                    )
-                    if AnimatedImageStore.shared.cached(film) == nil,
-                       !AnimatedImageStore.shared.isKnownStill(film)
-                    {
-                        requests.append(Request(key: key, source: .film))
-                    }
+                    if let request = moving(key, still: .attachment) { requests.append(request) }
                 } else if ImageStore.shared.cached(key, bucket: .attachment) == nil {
                     requests.append(Request(key: key, source: .still(.attachment)))
                 }
@@ -356,12 +379,7 @@ nonisolated enum TimelineImageRequests {
                     // transcript sits on frame zero.
                     if entry.emoji.isAnimated, playsAnimatedEmoji {
                         guard !filmsOnLayers else { continue }
-                        let film = AnimatedImageStore.Key(
-                            url: url, maximumPixelSize: key.maximumPixelSize
-                        )
-                        if AnimatedImageStore.shared.cached(film) == nil {
-                            requests.append(Request(key: key, source: .film))
-                        }
+                        if let request = moving(key, still: .thumbnail) { requests.append(request) }
                     } else if ImageStore.shared.cached(key) == nil {
                         requests.append(Request(key: key, source: .still(.thumbnail)))
                     }

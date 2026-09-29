@@ -165,4 +165,51 @@ struct DisplayComponentTests {
         #expect(children.count == 2)
         #expect(children.first == .text("## Lumen Club"))
     }
+
+    /// **The capture itself** — `the components capture`, the card as
+    /// Discord's unfurler sent it, every field intact: ids, spoiler flags, the
+    /// picture's placeholder, content type and alt text.
+    @Test("The captured Lumen Club card decodes whole")
+    func capturedLumen Club() throws {
+        let json = #"""
+        {"type": "components", "url": "https://example.com/", "content_scan_version": 4, "components": [{"type": 17, "id": 1, "accent_color": 15702980, "components": [{"type": 10, "id": 2, "content": "# Lumen Club\nYour Discord servers, chats, and calls in an app that feels at home on the Mac—with familiar keyboard shortcuts, native menus, and lower memory use. Currently in alpha for macOS 27 and later."}, {"type": 12, "id": 3, "items": [{"media": {"id": "1551005927971902216", "url": "https://example.com/preview.png", "proxy_url": "https://images-ext-1.discordapp.net/external/example/https/example.com/preview.png", "width": 3200, "height": 1680, "placeholder": "iAcGDIAYRWhwlnl5h3jXj3X5uA==", "placeholder_version": 1, "content_type": "image/png", "loading_state": 1, "flags": 0}, "description": "Lumen Club running on a MacBook beneath the Lumen Club wordmark", "spoiler": false}]}, {"type": 1, "id": 4, "components": [{"type": 2, "id": 5, "style": 5, "label": "Website", "url": "https://example.com"}, {"type": 2, "id": 6, "style": 5, "label": "GitHub", "url": "https://github.com/example/lumen"}, {"type": 2, "id": 7, "style": 5, "label": "Discord", "url": "https://discord.gg/example"}]}], "spoiler": false}]}
+        """#
+        let embed = try JSONDecoder().decode(EmbedDTO.self, from: Data(json.utf8)).domain
+        guard case .container(let accent, let children)? = embed.components.first else {
+            Issue.record("the card should open with its container")
+            return
+        }
+        #expect(accent == 15_702_980)
+        #expect(children.count == 3)
+        guard case .gallery(let items) = children[1] else {
+            Issue.record("the second child should be the gallery")
+            return
+        }
+        #expect(items.first?.width == 3200)
+        #expect(items.first?.placeholder == "iAcGDIAYRWhwlnl5h3jXj3X5uA==")
+        #expect(items.first?.altText == "Lumen Club running on a MacBook beneath the Lumen Club wordmark")
+        #expect(items.first?.isVideo == false)
+        #expect(items.first?.isSpoiler == false)
+        guard case .row(let row) = children[2] else {
+            Issue.record("the third child should be the buttons")
+            return
+        }
+        #expect(row.components.map(\.label) == ["Website", "GitHub", "Discord"])
+    }
+
+    @Test("A gallery item knows it is a video, and a spoiler")
+    func galleryItemFacts() throws {
+        let nodes = try tree("""
+        [{"type":12,"items":[
+          {"media":{"url":"https://cdn.discordapp.com/attachments/1/2/clip.mp4","proxy_url":"https://media.discordapp.net/attachments/1/2/clip.mp4","width":1280,"height":720,"content_type":"video/mp4"}},
+          {"media":{"url":"https://cdn.discordapp.com/attachments/1/3/a.png","width":10,"height":10},"spoiler":true}]}]
+        """)
+        guard case .gallery(let items)? = nodes.first else {
+            Issue.record("expected a gallery")
+            return
+        }
+        #expect(items[0].isVideo)
+        #expect(!items[0].isSpoiler)
+        #expect(items[1].isSpoiler)
+    }
 }

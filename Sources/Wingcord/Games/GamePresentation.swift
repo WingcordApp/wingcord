@@ -33,9 +33,9 @@ struct GamePresentation: Equatable, Sendable {
     var themes: [String]
     var details: [GameDetailRow]
     var links: [GameWebsite]
-    /// Where the game is sold, in Discord's own order. Usually one entry and
-    /// often none — see `Game.storeOffers`.
-    var storeOffers: [GameStoreOffer]
+    /// Where to get or play the game, in Discord's own order — see
+    /// `Game.launchOffers`.
+    var launchOffers: [GameStoreOffer]
     /// The card offering to link an in-game account, when the game's widget
     /// application publishes an address for it.
     var accountLink: GameAccountLink?
@@ -62,7 +62,7 @@ struct GamePresentation: Equatable, Sendable {
             && lhs.themes == rhs.themes
             && lhs.details == rhs.details
             && lhs.links == rhs.links
-            && lhs.storeOffers == rhs.storeOffers
+            && lhs.launchOffers == rhs.launchOffers
             && lhs.accountLink == rhs.accountLink
             && lhs.community == rhs.community
             && lhs.reviews == rhs.reviews
@@ -131,7 +131,9 @@ struct GameCommunityCard: Hashable, Sendable {
     var description: String?
     var memberCount: Int?
     var onlineCount: Int?
-    var isVerified: Bool
+    /// Discord's mark for the server — the partner badge for Valorant's, a
+    /// verified one for others — drawn as Discord draws it (`GuildMarkBadge`).
+    var mark: GuildMark?
     var inviteCode: String
     /// Whether the reader is already in it — the button says Open rather than
     /// Join, because a Join that does nothing is the inert control §5.5 is about.

@@ -59,8 +59,12 @@ nonisolated extension TimelineRowPainter {
             context.clip()
             context.setFillColor(ThemeInk.current.cardFill)
             context.fill(frame)
-            if let accent = slot.accent {
-                context.setFillColor(accent.cgColor)
+            // A link's card always has its rule: the embed's colour, or
+            // Discord's neutral `--border-normal` where it names none
+            // (`embedFull`, stylesheet `198496`). A container draws only a
+            // colour it was given.
+            if let rule = slot.accent?.cgColor ?? (slot.isLinkCard ? ThemeInk.current.quoteRule : nil) {
+                context.setFillColor(rule)
                 context.fill(CGRect(
                     x: frame.minX,
                     y: frame.minY,
@@ -69,6 +73,20 @@ nonisolated extension TimelineRowPainter {
                 ))
             }
             context.restoreGState()
+            // And its edge: one point of `--border-subtle` all the way round.
+            if slot.isLinkCard {
+                context.saveGState()
+                context.addPath(CGPath(
+                    roundedRect: frame.insetBy(dx: 0.5, dy: 0.5),
+                    cornerWidth: corner - 0.5,
+                    cornerHeight: corner - 0.5,
+                    transform: nil
+                ))
+                context.setStrokeColor(ThemeInk.current.codeBorder)
+                context.setLineWidth(1)
+                context.strokePath()
+                context.restoreGState()
+            }
         }
 
         for rule in slot.rules {
@@ -298,29 +316,48 @@ nonisolated extension TimelineRowPainter {
 
         let pixels = Int((slot.decodeWidth * scale).rounded(.up))
         var drew = false
-        if let url = slot.url {
+        // A spoiler is never drawn, only its cover: the plate, the blurred
+        // stand-in and the word, as a spoiler attachment's is.
+        if let url = slot.url, !slot.isSpoiler {
             if slot.isAnimated,
                let film = AnimatedImageStore.shared.cached(
                    AnimatedImageStore.Key(url: url, maximumPixelSize: pixels)
                )
             {
-                drawFlipped(film.frames[film.index(at: clock)], in: frame, context: context)
+                drawFlipped(
+                    film.frames[film.index(at: clock)], in: frame, context: context, fills: slot.cropsToFill
+                )
                 drew = true
             } else if let image = images.cached(
                 ImageStore.Key(url: url, maximumPixelSize: pixels),
                 bucket: slot.isArtwork ? .artwork : .thumbnail
             ) {
-                drawFlipped(image, in: frame, context: context)
+                drawFlipped(image, in: frame, context: context, fills: slot.cropsToFill)
                 drew = true
             }
         }
         if !drew {
             // A quiet plate at the picture's own size, so nothing reflows when
-            // it lands — the box was already reserved.
+            // it lands — the box was already reserved — and Discord's blurred
+            // stand-in over it where the embed carried one.
             context.setFillColor(ThemeInk.current.placeholderFill)
             context.fill(frame)
+            if let placeholder = PlaceholderImages.shared.image(slot.placeholder) {
+                context.interpolationQuality = .high
+                drawFlipped(placeholder, in: frame, context: context, fills: slot.cropsToFill)
+            }
         }
         context.restoreGState()
+        if slot.isSpoiler {
+            drawChip(
+                "SPOILER",
+                in: CGRect(x: frame.midX - 38, y: frame.midY - 10, width: 76, height: 20),
+                fill: NSColor.black.withAlphaComponent(0.7),
+                textColor: .white,
+                font: NSFont.systemFont(ofSize: 10, weight: .bold),
+                context: context
+            )
+        }
     }
 
     /// One of a video's two controls: a dark disc and its glyph.

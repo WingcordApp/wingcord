@@ -214,7 +214,8 @@ nonisolated enum ComponentsLayoutEngine {
                     isCircle: false,
                     corner: EmbedLayoutEngine.corner,
                     decodeWidth: side,
-                    isArtwork: true
+                    isArtwork: true,
+                    placeholder: thumbnail.placeholder
                 ))
                 y = max(y, origin.y + side)
             }
@@ -290,18 +291,30 @@ nonisolated enum ComponentsLayoutEngine {
                 // is a ragged edge, and the reader is scanning rather than
                 // reading them.
                 : columnWidth
+            let rect = CGRect(
+                x: origin.x + CGFloat(column) * (columnWidth + gap),
+                y: y,
+                width: columnWidth,
+                height: height
+            )
+            // **A video item is a poster that plays in place** — its
+            // `content_type` said so, and asked for as a picture it was a box
+            // that never filled. The proxy's still of the file, and the same
+            // inline player a link's video file gets.
+            let video = item.isVideo && !item.isSpoiler ? URL(string: source) : nil
             card.images.append(EmbedImage(
-                rect: CGRect(
-                    x: origin.x + CGFloat(column) * (columnWidth + gap),
-                    y: y,
-                    width: columnWidth,
-                    height: height
-                ),
-                url: CDN.resizedAttachment(proxyURL: source, width: columnWidth),
+                rect: rect,
+                url: item.isVideo
+                    ? CDN.videoPoster(proxyURL: source, width: columnWidth, height: height)
+                    : CDN.resizedAttachment(proxyURL: source, width: columnWidth),
                 isCircle: false,
                 corner: EmbedLayoutEngine.corner,
                 decodeWidth: columnWidth,
-                isArtwork: true
+                isArtwork: true,
+                video: video.map(EmbedVideo.file),
+                controls: video.map { EmbedPlayControls(centeredIn: rect, page: URL(string: item.url) ?? $0) },
+                placeholder: item.placeholder,
+                isSpoiler: item.isSpoiler
             ))
             column += 1
             if column == perRow {

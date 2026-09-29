@@ -380,11 +380,10 @@ private struct AsideSection<Content: View>: View {
 /// cart icon in the header's corner says "some kind of shop" where a labelled
 /// button says "Steam".
 ///
-/// **The same `Game.storeOffers` the profile card's activity reads**, which is
-/// what stops one surface knowing about a store the other does not. It used to
-/// be the `websites` list's STEAM entry alone, and that is a narrower answer
-/// than the route sends: Stardew Valley and Cry of Fear carry a Steam SKU and
-/// **no** STEAM website, so this page drew no store button for either of them.
+/// **Discord's words, with the arrow that says where they go.** The label is
+/// the store's name — Riot's is "Play" — and the trailing arrow is what says
+/// the button opens a page in the browser rather than launching anything,
+/// which this client cannot do. See `GameStore.profileLabel`.
 struct GameStoreButton: View {
     var offer: GameStoreOffer
 
@@ -394,13 +393,9 @@ struct GameStoreButton: View {
         Button { openURL(offer.url) } label: {
             HStack(spacing: Spacing.base) {
                 ConnectionMark(service: offer.store.brandService, side: 18)
-                // **"Get on Steam", not "Launch on Steam".** The design handoff
-                // says Launch and this client cannot launch anything — the
-                // button opens the store page in a browser, and it has to say
-                // the thing it actually does. The wording is one rule shared
-                // with the profile card's button, on `GameStore`.
-                Text(offer.store.callToAction)
+                Text(offer.store.profileLabel)
                     .font(.system(.subheadline, weight: .semibold))
+                    .lineLimit(1)
                 Image(systemName: "arrow.up.forward")
                     .font(.system(size: 9, weight: .bold))
                     .foregroundStyle(InkColor.tertiary)
@@ -412,15 +407,83 @@ struct GameStoreButton: View {
         .buttonStyle(.plain)
         .foregroundStyle(InkColor.primary)
         .interactiveChrome(in: .rect(cornerRadius: Radius.chip, style: .continuous))
+        .accessibilityLabel(Text(offer.store.profileAccessibilityLabel))
         .help("Open the \(offer.store.title) page in your browser")
+    }
+}
+
+/// Where to get or play the game, laid out as Discord lays it out (its `lY`).
+///
+/// **One store is one wide button and two sit side by side; three or more
+/// fold behind Get Now**, which opens the list — with Xbox Game Pass, when it
+/// is one of them, kept beside Get Now. The offers are `Game.launchOffers`:
+/// every store Discord gives a button, which is how Roblox gets its own and
+/// Valorant its Riot Play.
+struct GameLaunchButtons: View {
+    var offers: [GameStoreOffer]
+
+    @State private var isPickerOpen = false
+    @Environment(\.openURL) private var openURL
+
+    var body: some View {
+        switch offers.count {
+        case 0:
+            EmptyView()
+        case 1:
+            GameStoreButton(offer: offers[0])
+        case 2:
+            HStack(spacing: Spacing.base) {
+                GameStoreButton(offer: offers[0])
+                GameStoreButton(offer: offers[1])
+            }
+        default:
+            HStack(spacing: Spacing.base) {
+                if let pass = offers.first(where: { $0.store == .xboxGamePass }) {
+                    GameStoreButton(offer: pass)
+                }
+                getNow
+            }
+        }
+    }
+
+    private var getNow: some View {
+        Button { isPickerOpen = true } label: {
+            Text("Get Now")
+                .font(.system(.subheadline, weight: .semibold))
+                .frame(maxWidth: .infinity)
+                .frame(height: Metrics.control + 14)
+                .contentShape(.rect(cornerRadius: Radius.chip, style: .continuous))
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(InkColor.primary)
+        .interactiveChrome(in: .rect(cornerRadius: Radius.chip, style: .continuous))
+        .accessibilityLabel(Text("Select a platform to get the game"))
+        .popover(isPresented: $isPickerOpen, arrowEdge: .bottom) {
+            VStack(alignment: .leading, spacing: 0) {
+                Text("Select a platform to get the game")
+                    .font(.system(.caption, weight: .semibold))
+                    .foregroundStyle(Ink.tertiary)
+                    .padding(.horizontal, Spacing.base)
+                    .padding(.vertical, Spacing.tight)
+                ForEach(offers) { offer in
+                    FlyoutRow(title: offer.store.profileLabel, brandService: offer.store.brandService) {
+                        isPickerOpen = false
+                        openURL(offer.url)
+                    }
+                    .accessibilityLabel(Text(offer.store.profileAccessibilityLabel))
+                }
+            }
+            .padding(.vertical, Spacing.tight)
+            .frame(width: 260)
+        }
     }
 }
 
 /// The offer to connect an in-game account.
 ///
-/// Drawn only for a game whose widget application publishes an entrypoint —
-/// Arknights and Wuthering Waves do, and it is why their profiles show this
-/// where The Sims shows a store button. The address is the game's, so it opens
+/// Drawn for a game whose own application — or a widget application linked to
+/// it — publishes an entrypoint: Valorant's official application does, and so
+/// do Arknights' and Wuthering Waves' widgets. The address is the game's, so it opens
 /// in the browser: linking is an OAuth dance on the publisher's own site and
 /// there is nothing for this client to do in the middle of it.
 struct GameAccountLinkCard: View {
@@ -439,11 +502,12 @@ struct GameAccountLinkCard: View {
                     .frame(width: 32, height: 32)
                     .clipShape(.rect(cornerRadius: 8, style: .continuous))
 
+                    // Discord's words (`hUbQT2`, `JKqu+4`, `jynBQ5`).
                     VStack(alignment: .leading, spacing: 1) {
-                        Text("Link your account")
+                        Text("Link your account with \(link.applicationName)")
                             .font(.system(.subheadline, weight: .semibold))
                             .foregroundStyle(InkColor.primary)
-                        Text("Show your in-game stats on your profile.")
+                        Text("Show your in-game stats, send game invites easily, and more!")
                             .font(.system(.caption))
                             .foregroundStyle(InkColor.secondary)
                             .fixedSize(horizontal: false, vertical: true)
@@ -454,7 +518,7 @@ struct GameAccountLinkCard: View {
                     HStack(spacing: 6) {
                         Image(systemName: "gamecontroller.fill")
                             .font(.system(size: 11))
-                        Text("Link on \(link.applicationName)")
+                        Text("Link your account!")
                             .font(.system(.subheadline, weight: .medium))
                         Image(systemName: "arrow.up.forward")
                             .font(.system(size: 9, weight: .bold))
@@ -502,10 +566,8 @@ struct GameCommunitySection: View {
 
                     VStack(alignment: .leading, spacing: 3) {
                         HStack(spacing: 4) {
-                            if community.isVerified {
-                                Image(systemName: "checkmark.seal.fill")
-                                    .font(.system(size: 11))
-                                    .foregroundStyle(Palette.affirmative)
+                            if let mark = community.mark {
+                                GuildMarkBadge(mark: mark, side: 14)
                             }
                             Text(community.name)
                                 .font(.system(.subheadline, weight: .semibold))

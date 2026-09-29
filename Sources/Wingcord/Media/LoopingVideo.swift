@@ -17,15 +17,17 @@ import SwiftUI
 /// and both of the surfaces that use this are opened and left constantly.
 struct LoopingVideo: NSViewRepresentable {
     var url: URL
+    /// False holds the frame on screen, for a caller honouring Reduce Motion.
+    var isPlaying = true
 
     func makeNSView(context: Context) -> PlayerView {
         let view = PlayerView()
-        view.play(url)
+        view.play(url, isPlaying: isPlaying)
         return view
     }
 
     func updateNSView(_ view: PlayerView, context: Context) {
-        view.play(url)
+        view.play(url, isPlaying: isPlaying)
     }
 
     static func dismantleNSView(_ view: PlayerView, coordinator: ()) {
@@ -41,23 +43,25 @@ struct LoopingVideo: NSViewRepresentable {
 
         override func makeBackingLayer() -> CALayer { AVPlayerLayer() }
 
-        func play(_ url: URL) {
-            guard current != url else { return }
-            current = url
-            stop()
+        func play(_ url: URL, isPlaying: Bool) {
+            if current != url {
+                current = url
+                stop()
 
-            wantsLayer = true
-            let item = AVPlayerItem(url: url)
-            let player = AVQueuePlayer()
-            player.isMuted = true
-            // Decoration must never duck a call or take the audio session. Muted
-            // is not enough on its own — a player with audio still claims one.
-            player.audiovisualBackgroundPlaybackPolicy = .pauses
-            looper = AVPlayerLooper(player: player, templateItem: item)
-            (layer as? AVPlayerLayer)?.player = player
-            (layer as? AVPlayerLayer)?.videoGravity = .resizeAspectFill
-            player.play()
-            self.player = player
+                wantsLayer = true
+                let item = AVPlayerItem(url: url)
+                let player = AVQueuePlayer()
+                player.isMuted = true
+                // Decoration must never duck a call or take the audio session.
+                // Muted is not enough on its own — a player with audio still
+                // claims one.
+                player.audiovisualBackgroundPlaybackPolicy = .pauses
+                looper = AVPlayerLooper(player: player, templateItem: item)
+                (layer as? AVPlayerLayer)?.player = player
+                (layer as? AVPlayerLayer)?.videoGravity = .resizeAspectFill
+                self.player = player
+            }
+            if isPlaying { player?.play() } else { player?.pause() }
         }
 
         func stop() {

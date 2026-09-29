@@ -392,7 +392,7 @@ struct GameTests {
     @Test("A SKU with characters a path cannot hold is encoded")
     func skuEncoding() {
         #expect(
-            GameStore.xboxGamePass.url(sku: "a b").absoluteString
+            GameStore.xboxGamePass.url(sku: "a b")?.absoluteString
                 == "https://www.xbox.com/games/store/title/a%20b"
         )
     }

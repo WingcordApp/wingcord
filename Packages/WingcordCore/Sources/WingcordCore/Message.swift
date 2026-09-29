@@ -100,8 +100,8 @@ public struct Message: Hashable, Sendable, Identifiable, Codable {
     /// already says — drawn as an ordinary card it is a grey box listing
     /// `victor_answer_id` at somebody.
     public var drawableEmbeds: [Embed] {
-        guard kind == .pollResult else { return embeds }
-        return embeds.filter { $0.kind != "poll_result" }
+        let drawn = kind == .pollResult ? embeds.filter { $0.kind != "poll_result" } : embeds
+        return Embed.mergingGalleries(drawn)
     }
 
     /// The words to draw, which is not always the words that were sent.
@@ -548,6 +548,13 @@ public struct Attachment: Hashable, Sendable, Identifiable, Codable {
     /// Voice message waveform, base64. Present only on voice notes.
     public var waveform: String?
     public var durationSeconds: Double?
+    /// Discord's `IS_ANIMATED` mark — the server's own reading that the file
+    /// moves. It decides a WebP, whose extension says nothing; see
+    /// `CDN.playsAsAnimated`.
+    public var isMarkedAnimated: Bool
+    /// Discord's blurred stand-in, drawn until the picture lands — see
+    /// `MediaPlaceholder`.
+    public var placeholder: String?
 
     public init(
         id: AttachmentID,
@@ -560,7 +567,9 @@ public struct Attachment: Hashable, Sendable, Identifiable, Codable {
         height: Int? = nil,
         description: String? = nil,
         waveform: String? = nil,
-        durationSeconds: Double? = nil
+        durationSeconds: Double? = nil,
+        isMarkedAnimated: Bool = false,
+        placeholder: String? = nil
     ) {
         self.id = id
         self.filename = filename
@@ -573,6 +582,8 @@ public struct Attachment: Hashable, Sendable, Identifiable, Codable {
         self.description = description
         self.waveform = waveform
         self.durationSeconds = durationSeconds
+        self.isMarkedAnimated = isMarkedAnimated
+        self.placeholder = placeholder
     }
 
     public var isImage: Bool {
@@ -581,6 +592,11 @@ public struct Attachment: Hashable, Sendable, Identifiable, Codable {
 
     public var isVideo: Bool {
         contentType?.hasPrefix("video/") ?? false
+    }
+
+    /// Whether Discord's client plays it as moving. See `CDN.playsAsAnimated`.
+    public var playsAsAnimated: Bool {
+        CDN.playsAsAnimated(url, isMarkedAnimated: isMarkedAnimated)
     }
 
     /// The intrinsic aspect ratio, or nil when Discord sent no dimensions.

@@ -29,7 +29,8 @@ final class TranscriptFilms {
     /// One picture the canvas wants on a layer.
     struct Request: Equatable {
         enum Source: Hashable {
-            /// A GIF, an APNG or an animated WebP.
+            /// A GIF, an APNG or an animated WebP — or a picture that says it
+            /// is one and turns out to have a single frame, shown as a still.
             case film(FilmPlayer.Key)
             /// A Lottie sticker, played by Lottie's Core Animation engine.
             case vector(URL)
@@ -47,6 +48,8 @@ final class TranscriptFilms {
         /// painter would have drawn there. Nil for a picture that sits on
         /// nothing, a sticker or an emoji, whose box is simply empty until then.
         var placeholder: CGColor?
+        /// Discord's blurred stand-in, over that plate until the first frame.
+        var placeholderImage: CGImage?
     }
 
     /// The favourite star over a hovered GIF, which the canvas draws on top of
@@ -123,7 +126,14 @@ final class TranscriptFilms {
             let player: any TranscriptFilm
             switch request.source {
             case .film(let key):
-                player = FilmPlayer(key: key, placeholder: request.placeholder)
+                // The painter has left this box to the layer, so a "GIF" of
+                // one frame is drawn here as a still — or nowhere.
+                player = FilmPlayer(
+                    key: key,
+                    placeholder: request.placeholder,
+                    placeholderImage: request.placeholderImage,
+                    drawsStills: true
+                )
             case .vector(let url):
                 player = VectorFilm(url: url, scale: scale)
             case .video(let url):

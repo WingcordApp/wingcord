@@ -96,6 +96,7 @@ struct ContentEntryDTO: Decodable, Sendable {
     var extra: ExtraDTO?
     var started_at: Date?
     var ended_at: Date?
+    var expires_at: Date?
 
     /// A trait is a tagged union whose tag is an integer and whose payload is
     /// one further key. Every field is optional because exactly one of them is
@@ -151,7 +152,8 @@ struct ContentEntryDTO: Decodable, Sendable {
             subject: subject,
             traits: (traits ?? []).compactMap(\.domain),
             startedAt: started_at,
-            endedAt: ended_at
+            endedAt: ended_at,
+            expiresAt: expires_at
         )
     }
 }

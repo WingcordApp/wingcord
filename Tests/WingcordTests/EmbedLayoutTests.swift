@@ -79,16 +79,27 @@ struct EmbedLayoutTests {
         #expect(!parents.contains("meta.tag"))
     }
 
+    /// Enough words to reach any cap: a card is as wide as its content
+    /// (`max-content`), so only a long one shows where the cap is.
+    private let notes = String(repeating: "Everything that changed in this release, and why. ", count: 6)
+
     @Test("A card is capped at the embed width, never the column's")
     func widthIsCapped() {
-        let slot = layout(Embed(title: "Release", description: "Notes"), width: 900)
+        let slot = layout(Embed(title: "Release", description: notes), width: 900)
         #expect(slot.rect.width == Metrics.embedMaxWidth)
     }
 
     @Test("A narrow column shrinks the card rather than overflowing it")
     func narrowColumn() {
-        let slot = layout(Embed(title: "Release", description: "Notes"), width: 200)
+        let slot = layout(Embed(title: "Release", description: notes), width: 200)
         #expect(slot.rect.width == 200)
+    }
+
+    @Test("A card with little in it is as wide as that, and no wider")
+    func fitsItsContent() {
+        let slot = layout(Embed(title: "Release", description: "Notes"), width: 900)
+        #expect(slot.rect.width < 200)
+        #expect(slot.texts.allSatisfy { slot.rect.maxX >= $0.origin.x + EmbedLayoutEngine.usedWidth(of: $0.block) })
     }
 
     @Test("Every part contributes something to draw")

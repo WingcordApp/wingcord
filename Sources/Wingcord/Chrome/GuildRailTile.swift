@@ -399,12 +399,17 @@ struct LiveVoiceMark: View {
 
     var body: some View {
         Image(systemName: mark.symbolName)
-            .font(.system(size: 8, weight: .bold))
-            .foregroundStyle(isConnected ? Color.white : Palette.canvas)
+            .font(.system(size: 9, weight: .bold))
+            .foregroundStyle(.white)
             .frame(width: RailMarkGeometry.side, height: RailMarkGeometry.side)
             .background {
-                RoundedRectangle(cornerRadius: 5, style: .continuous)
-                    .fill(isConnected ? AnyShapeStyle(Palette.presenceOnline) : AnyShapeStyle(Ink.primary))
+                // **Discord's plate: a dark circle, not a light square.** Its
+                // `iconBadge` (module `260727`, stylesheet `42809`) is a round
+                // `--icon-overlay-dark` — black — and `--status-positive` while
+                // the reader is in the call. A white plate over the artwork was
+                // the loudest thing on the rail.
+                Circle()
+                    .fill(isConnected ? AnyShapeStyle(Palette.presenceOnline) : AnyShapeStyle(Color.black))
             }
             // It reports what is happening; the tile under it is the control.
             .allowsHitTesting(false)
@@ -421,13 +426,16 @@ struct LiveVoiceMark: View {
 /// defect a badge drawn in one place and cut in another produces.
 ///
 /// **The mark is not laid on the icon, it is set INTO it** — Discord punches a
-/// hole and this does the same. A white plate dropped straight on somebody's
+/// hole and this does the same. A plate dropped straight on somebody's
 /// artwork reads as a sticker; the same plate with the rail showing through
 /// around it reads as part of the tile.
+///
+/// Discord's numbers, scaled from its 48-point tile to this 44: a 20-point
+/// circle 6 above the tile's top and 4 past its trailing edge.
 nonisolated enum RailMarkGeometry {
-    static let side: CGFloat = 16
+    static let side: CGFloat = 18
     /// How far the mark hangs past the tile's own corner.
-    static let inset = CGPoint(x: 4, y: -4)
+    static let inset = CGPoint(x: 4, y: -5)
     /// The ring of bare rail cleared around it.
     static let gap: CGFloat = 3
     /// What the notch takes out.

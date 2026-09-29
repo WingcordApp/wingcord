@@ -2,7 +2,7 @@ import CoreGraphics
 import Foundation
 import ImageIO
 
-/// One animated picture's frames, decoded on demand at the size it is drawn.
+/// One picture's frames, decoded on demand at the size it is drawn.
 ///
 /// **Every frame, at the asset's own timing and the drawn resolution.** The
 /// filmstrip this sits beside samples a long loop down to forty-eight frames and
@@ -29,14 +29,21 @@ nonisolated final class FilmSource: @unchecked Sendable {
     private let options: CFDictionary
     private let queue = DispatchQueue(label: "dev.wingcord.film", qos: .userInitiated)
 
-    /// Reads an animated asset, or nil when it is a still or unreadable — the
-    /// caller then draws it the ordinary way.
-    init?(data: Data, maximumPixelSize: Int) {
+    /// Reads an asset's frames, or nil when it cannot be read.
+    ///
+    /// - Parameter stills: whether one frame is worth reading. **A "GIF" of one
+    ///   frame is common** — a caption meme saved as a GIF so it can be
+    ///   favourited, a still WebP under a `.gif` name — and what it should
+    ///   become depends on the owner. One that draws its own still underneath
+    ///   wants nil, before anything is decoded (`AnimatedDecoration`); one that
+    ///   leaves its box empty for this picture wants the frame, because nothing
+    ///   else will draw it (the transcript's layers, a profile effect's).
+    init?(data: Data, maximumPixelSize: Int, stills: Bool = false) {
         guard let source = CGImageSourceCreateWithData(
             data as CFData, [kCGImageSourceShouldCache: false] as CFDictionary
         ) else { return nil }
         let count = CGImageSourceGetCount(source)
-        guard count > 1 else { return nil }
+        guard count > 1 || (stills && count == 1) else { return nil }
 
         let options = [
             kCGImageSourceCreateThumbnailFromImageAlways: true,
@@ -72,6 +79,9 @@ nonisolated final class FilmSource: @unchecked Sendable {
 
     /// Every frame's bytes together.
     var residentCost: Int { bytesPerFrame * frameCount }
+
+    /// One frame: a picture to show, and nothing to play.
+    var isStill: Bool { frameCount == 1 }
 
     /// The frame showing `time` seconds into an endless loop.
     func index(at time: Double) -> Int {

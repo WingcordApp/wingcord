@@ -177,7 +177,12 @@ extension AppModel {
     /// and there are twenty of them; joined once, the list is a value the pane
     /// can compare in O(1).
     func activityPresentation(for userID: UserID) -> ProfileActivityPresentation {
-        let entries = recentActivity[userID] ?? []
+        // What is happening now belongs to the current card, not the list —
+        // `RecentActivity.isOngoing`.
+        let now = Date()
+        let all = recentActivity[userID] ?? []
+        let ongoing = all.filter { $0.isOngoing(at: now) }
+        let entries = ongoing.isEmpty ? all : all.filter { !$0.isOngoing(at: now) }
         var covers: [String: URL] = [:]
         covers.reserveCapacity(entries.count)
         for entry in entries {
@@ -189,6 +194,7 @@ extension AppModel {
         }
         return ProfileActivityPresentation(
             recent: entries,
+            ongoing: ongoing,
             covers: covers,
             isLoading: recentActivityLoading.contains(userID)
         )

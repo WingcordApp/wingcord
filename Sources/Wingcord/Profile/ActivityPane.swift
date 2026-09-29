@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 import WingcordCore
 
@@ -41,6 +42,12 @@ struct CurrentActivityCard: View {
     /// this in a `ProfileSlab`, and a plate inside that is a card drawn inside a
     /// card. The mini card has no slab, so it carries the plate itself.
     var platesItself: Bool = true
+    /// The chips of the Recent activity entry this is the live end of — see
+    /// `RecentActivity.records`. Discord draws them after the clock.
+    var traits: [RecentActivity.Trait] = []
+    /// Whether this is the reader's own activity. Discord offers somebody
+    /// else's Spotify session to listen to; the reader's own, nothing.
+    var isOwn = false
 
     @Environment(\.openURL) private var openURL
 
@@ -75,6 +82,7 @@ struct CurrentActivityCard: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
             buttons
+            spotifyControls
             store
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -109,7 +117,19 @@ struct CurrentActivityCard: View {
     /// is the common case and an empty hole is worse than a mark. The plate is
     /// the ground's own panel fill, so it belongs to the person's surface rather
     /// than being a grey box dropped on it.
+    @ViewBuilder
     private func artwork(placeholder: ActivityStatusLine.Glyph) -> some View {
+        // A Spotify session's cover opens what is playing, as Discord's does.
+        if let track = activity.spotifyTrackURL {
+            Button { openInSpotify(track) } label: { artworkStack(placeholder: placeholder) }
+                .buttonStyle(.plain)
+                .help("Open in Spotify")
+        } else {
+            artworkStack(placeholder: placeholder)
+        }
+    }
+
+    private func artworkStack(placeholder: ActivityStatusLine.Glyph) -> some View {
         ZStack(alignment: .bottomTrailing) {
             RemoteImage(
                 // **The application's own icon where the presence has no
@@ -189,7 +209,9 @@ struct CurrentActivityCard: View {
     /// The row under the lines: a game's party, the clock, a show's episode.
     @ViewBuilder
     private func entries(_ content: ActivityCardContent) -> some View {
-        if content.party != nil || content.clockStart != nil || content.episode != nil {
+        if content.party != nil || content.clockStart != nil || content.episode != nil
+            || traits.contains(where: { $0.label != nil })
+        {
             HStack(spacing: Spacing.base) {
                 if let party = content.party {
                     entry(symbol: "person.2.fill", text: party)
@@ -200,6 +222,7 @@ struct CurrentActivityCard: View {
                 if let episode = content.episode {
                     entry(symbol: "scroll.fill", text: episode)
                 }
+                ActivityTraitChips(traits: traits)
             }
         }
     }
@@ -245,6 +268,56 @@ struct CurrentActivityCard: View {
                     .accessibilityHint(Text("Opens \(pair.1.host ?? "a website") in your browser"))
                 }
             }
+        }
+    }
+
+    /// Discord's two Spotify controls (module `402857`'s `H`): Listen Along,
+    /// then Play on Spotify, side by side — on somebody else's session, and
+    /// only where it offers them (`PLAY`, `SYNC`).
+    ///
+    /// **Listen Along is drawn and dimmed, and says why.** Discord's follows
+    /// the listener's own Spotify through their linked account's token and
+    /// Spotify's API; no capture of that exchange exists here, and a control
+    /// that looks live and does nothing is `INVARIANTS.md` §5.5's fault. Play
+    /// on Spotify hands the track to Spotify.
+    @ViewBuilder
+    private var spotifyControls: some View {
+        if !isOwn, let track = activity.spotifyTrackURL, activity.offersPlay || activity.offersSync {
+            HStack(spacing: Spacing.base) {
+                if activity.offersSync {
+                    spotifyControl("Listen Along") {}
+                        .disabled(true)
+                        .help("Listening along needs Discord's Spotify connection, which Wingcord does not use yet")
+                }
+                if activity.offersPlay {
+                    spotifyControl("Play on Spotify") { openInSpotify(track) }
+                }
+            }
+        }
+    }
+
+    private func spotifyControl(_ title: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Text(title)
+                .font(.system(.subheadline, weight: .medium))
+                .foregroundStyle(InkColor.primary)
+                .lineLimit(1)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 7)
+                .contentShape(.capsule)
+        }
+        .buttonStyle(.plain)
+        .interactiveChromeOverMedia()
+    }
+
+    /// The Spotify app, where one is installed to take `spotify:` addresses,
+    /// and Spotify's site otherwise.
+    private func openInSpotify(_ track: URL) {
+        if let uri = URL(string: "spotify:track:\(track.lastPathComponent)"),
+           NSWorkspace.shared.urlForApplication(toOpen: uri) != nil {
+            NSWorkspace.shared.open(uri)
+        } else {
+            openURL(track)
         }
     }
 
@@ -495,19 +568,7 @@ struct RecentActivityRow: View {
                 }
                 .foregroundStyle(entry.isLive ? Palette.presenceOnline : InkColor.tertiary)
             }
-            ForEach(Array(entry.traits.enumerated()), id: \.offset) { _, trait in
-                if let label = trait.label {
-                    HStack(spacing: 4) {
-                        if let symbolName = trait.symbolName {
-                            Image(systemName: symbolName)
-                                .font(.system(size: 9))
-                        }
-                        Text(label)
-                            .font(.system(.caption))
-                    }
-                    .foregroundStyle(InkColor.tertiary)
-                }
-            }
+            ActivityTraitChips(traits: entry.traits)
         }
         .accessibilityElement(children: .combine)
     }
@@ -523,5 +584,28 @@ struct RecentActivityRow: View {
         return when.formatted(
             .relative(presentation: .numeric, unitsStyle: .narrow)
         )
+    }
+}
+
+/// An entry's chips — "21x Streak", "Trending" — in a row, as Discord writes
+/// them after the clock on a live card and after the date on a recent one.
+/// Traits with no words (a duration, the live flag) draw nothing.
+struct ActivityTraitChips: View {
+    var traits: [RecentActivity.Trait]
+
+    var body: some View {
+        ForEach(Array(traits.enumerated()), id: \.offset) { _, trait in
+            if let label = trait.label {
+                HStack(spacing: 4) {
+                    if let symbolName = trait.symbolName {
+                        Image(systemName: symbolName)
+                            .font(.system(size: 9))
+                    }
+                    Text(label)
+                        .font(.system(.caption))
+                }
+                .foregroundStyle(InkColor.tertiary)
+            }
+        }
     }
 }

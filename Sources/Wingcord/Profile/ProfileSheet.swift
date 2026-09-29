@@ -430,7 +430,9 @@ struct ProfileSheet: View {
                             current.applicationID, side: Metrics.avatarProfile
                         ),
                         // The slab around it is already the plate.
-                        platesItself: false
+                        platesItself: false,
+                        traits: activity.ongoing.first { $0.records(current) }?.traits ?? [],
+                        isOwn: profile.isSelf
                     )
                 }
             }
@@ -460,9 +462,7 @@ struct ProfileSheet: View {
                                     // profile opened an empty page for every
                                     // activity that is not a tracked title.
                                     openGame: entry.subject.applicationID.map { id in
-                                        model.games[id] != nil
-                                            ? { model.openGameProfile(id) }
-                                            : { model.activityInfoID = id }
+                                        model.gameProfileOpener(for: id) ?? { model.activityInfoID = id }
                                     }
                                 )
                             }
@@ -491,8 +491,8 @@ struct ProfileSheet: View {
     /// activity nobody has a page for do not, and a title that looks pressable
     /// and opens nothing is what `INVARIANTS.md` §5.5 forbids.
     private func gameOpener(for activity: Activity) -> (() -> Void)? {
-        guard activity.kind == .playing, let id = activity.applicationID else { return nil }
-        return { model.openGameProfile(id) }
+        guard activity.kind == .playing else { return nil }
+        return model.gameProfileOpener(for: activity.applicationID)
     }
 
     @ViewBuilder
@@ -631,6 +631,9 @@ enum ProfileTab: Hashable, CaseIterable, Sendable {
 /// whenever one of them landed.
 struct ProfileActivityPresentation: Equatable, Sendable {
     var recent: [RecentActivity] = []
+    /// The entries happening now, kept out of `recent` — each is the record of
+    /// a current activity, whose card draws its chips.
+    var ongoing: [RecentActivity] = []
     /// Box art for the game rows, by entry id. Joined here rather than in the
     /// row's body, which would redo the lookup on every hover.
     var covers: [String: URL] = [:]

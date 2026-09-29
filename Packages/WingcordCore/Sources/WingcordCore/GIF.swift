@@ -13,13 +13,18 @@ public struct GIF: Hashable, Sendable, Identifiable {
     public var url: URL
     /// The rendition the grid draws.
     ///
-    /// **Never a video rendition.** These routes answer with an MP4 in `src`,
-    /// and every image in this app goes through `CGImageSource`, which decodes
-    /// nothing from one — so an MP4 preview is a placeholder that never
-    /// resolves rather than a cheaper picture.
+    /// **A picture wherever this client chose it** — the search routes answer
+    /// with an MP4 in `src`, and `drawable` passes it over, because an image
+    /// decoder draws nothing from one. A favourite's is Discord's own choice,
+    /// and for Tenor that is the MP4; `isVideo` says so.
     public var previewURL: URL?
     public var width: Int?
     public var height: Int?
+    /// Whether `previewURL` is a video — an MP4 to play, not a picture to
+    /// decode. **Most favourites from Tenor are**: Discord's client stores a
+    /// favourite's rendition with its kind (`format` 2), and handed to the
+    /// image decoders that rendition was a tile that never resolved.
+    public var isVideo: Bool
 
     /// The URL is the identity: these routes carry no id of their own, and two
     /// results with the same URL are the same GIF.
@@ -55,11 +60,12 @@ public struct GIF: Hashable, Sendable, Identifiable {
         return CGFloat(width) / CGFloat(height)
     }
 
-    public init(url: URL, previewURL: URL?, width: Int?, height: Int?) {
+    public init(url: URL, previewURL: URL?, width: Int?, height: Int?, isVideo: Bool = false) {
         self.url = url
         self.previewURL = previewURL
         self.width = width
         self.height = height
+        self.isVideo = isVideo
     }
 }
 

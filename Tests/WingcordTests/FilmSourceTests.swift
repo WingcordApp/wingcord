@@ -73,8 +73,15 @@ struct FilmSourceTests {
         #expect(source.bytesPerFrame == source.firstFrame.height * source.firstFrame.bytesPerRow)
     }
 
-    @Test("A still is not a film")
-    func stillIsNotAFilm() throws {
-        #expect(FilmSource(data: try gif(frames: 1), maximumPixelSize: 64) == nil)
+    /// A "GIF" of one frame is nothing to play for an owner that draws its own
+    /// still, and the only picture there is for one that does not.
+    @Test("A still is read only for an owner that asks for one")
+    func stills() throws {
+        let data = try gif(frames: 1)
+        #expect(FilmSource(data: data, maximumPixelSize: 64) == nil)
+        let still = try #require(FilmSource(data: data, maximumPixelSize: 64, stills: true))
+        #expect(still.isStill)
+        #expect(still.firstFrame.width == 64)
+        #expect(still.index(at: 12.3) == 0)
     }
 }

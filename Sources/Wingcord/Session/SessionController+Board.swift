@@ -174,10 +174,18 @@ extension SessionController {
                     if let game = try await rest.game(gameID) { model.games[gameID] = game }
                 } catch {
                     Self.trace("game \(gameID) failed: \(Self.describe(error))")
+                    closeGameProfile(gameID)
+                    model.reportActionFailure("This game's profile could not be loaded.")
                     return
                 }
             }
-            guard let game = model.games[gameID] else { return }
+            // **No record is an answer**: not a game Discord keeps a profile
+            // for. The entry points do not offer one (`gameProfileOpener`); a
+            // page that got here anyway closes rather than spinning for ever.
+            guard let game = model.games[gameID], !game.isProfileDisabled else {
+                closeGameProfile(gameID)
+                return
+            }
 
             await withTaskGroup(of: Void.self) { group in
                 if model.gameAnnouncements[gameID] == nil {
@@ -189,8 +197,19 @@ extension SessionController {
                 if let code = game.communityInviteCode, model.gameCommunities[gameID] == nil {
                     group.addTask { await self.loadGameCommunity(gameID, code: code) }
                 }
+                // The application the Link Account card links through — any
+                // game's, not only a widget game's.
+                if let official = game.officialApplicationID {
+                    group.addTask { await self.loadWidgetApplications(ids: [official]) }
+                }
             }
         }
+    }
+
+    /// Takes the page away, if it is still this game's.
+    private func closeGameProfile(_ gameID: ApplicationID) {
+        guard model.gameProfileRequest?.gameID == gameID else { return }
+        model.dismissGameProfile()
     }
 
     private func loadGameAnnouncements(_ gameID: ApplicationID) async {

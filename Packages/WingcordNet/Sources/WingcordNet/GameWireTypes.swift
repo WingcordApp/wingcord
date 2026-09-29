@@ -26,7 +26,14 @@ struct GameDTO: Decodable, Sendable {
     var reviews: ReviewsDTO?
     var opencritic_url: String?
     var l30_rank: Int?
+    var game_flags: Int?
+    var linked_applications: [LinkedApplicationDTO]?
     var third_party_skus: [SKUDTO]?
+
+    struct LinkedApplicationDTO: Decodable, Sendable {
+        var id: ApplicationID?
+        var type: Int?
+    }
     /// Discord's `SteamReleaseStatus`. Only this route sends it — the same
     /// field is absent from every `/applications/public` body on disk, which is
     /// why the store offer is resolved from the game record and not from the
@@ -172,7 +179,7 @@ struct GameDTO: Decodable, Sendable {
             cover: media?.cover?.domain,
             artwork: (media?.artwork ?? []).compactMap(\.domain)
         )
-        return Game(
+        var game = Game(
             id: id,
             name: name,
             summary: description,
@@ -196,6 +203,9 @@ struct GameDTO: Decodable, Sendable {
             thirdPartySkus: (third_party_skus ?? []).compactMap(\.domain),
             steamReleaseStatus: steam_release_status.flatMap(SteamReleaseStatus.init(rawValue:))
         )
+        game.isProfileDisabled = (game_flags ?? 0) & 1 != 0
+        game.officialApplicationID = linked_applications?.first { $0.type == 2 }?.id
+        return game
     }
 
     /// A release date arrives as midnight UTC with **no** fractional seconds —

@@ -170,7 +170,10 @@ struct FrecencyProtoTests {
         let favorites = FrecencyProto.favoriteGIFs(base64: gifs)
         #expect(favorites.count == 2)
 
+        // Tenor's rendition is its MP4, and says so.
+        #expect(favorites.first?.isVideo == true)
         let attachment = try #require(favorites.last)
+        #expect(!attachment.isVideo)
         #expect(attachment.url.absoluteString.hasSuffix("attachment-10.gif"))
         #expect(attachment.previewURL?.absoluteString.contains("animated=true") == true)
         #expect(attachment.width == 512)
@@ -272,7 +275,8 @@ struct FavoriteGIFRoundTripTests {
             url: URL(string: "https://tenor.example.invalid/view/three")!,
             previewURL: URL(string: "https://media.example.invalid/three.mp4"),
             width: 400,
-            height: 300
+            height: 300,
+            isVideo: true
         )
         var entries = FrecencyProto.favoriteGIFEntries(base64: blob(withUnknownField: false))
         entries.append(FrecencyProto.favoriteEntry(for: gif, order: 14))
@@ -280,6 +284,7 @@ struct FavoriteGIFRoundTripTests {
         // Highest order first — the newest favourite leads the grid.
         #expect(read.first?.url == gif.url)
         #expect(read.first?.previewURL == gif.previewURL)
+        #expect(read.first?.isVideo == true)
         #expect(read.first?.width == 400)
         #expect(read.first?.height == 300)
     }

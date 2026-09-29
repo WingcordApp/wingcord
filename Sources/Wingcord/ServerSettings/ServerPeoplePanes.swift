@@ -76,7 +76,11 @@ struct RolesPane: View {
                 get: { editing.flatMap { id in roles.first { $0.id == id } } },
                 set: { editing = $0?.id }
             )) { role in
-                RoleSheet(role: role, guildID: store.guildID) { updated in
+                RoleSheet(
+                    role: role,
+                    guildID: store.guildID,
+                    allowsStyles: store.settings.value?.features.contains("ENHANCED_ROLE_COLORS") ?? false
+                ) { updated in
                     Task { await store.saveRole(updated) }
                 }
             }

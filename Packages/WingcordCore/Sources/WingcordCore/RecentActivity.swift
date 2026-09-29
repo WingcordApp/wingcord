@@ -30,6 +30,8 @@ public struct RecentActivity: Hashable, Sendable, Identifiable {
     /// only difference on the wire between a live entry and a finished one
     /// besides the `is_live` trait — a live entry carries `expires_at` instead.
     public var endedAt: Date?
+    /// When a live entry stops counting as live, if nothing ends it first.
+    public var expiresAt: Date?
 
     public init(
         id: String,
@@ -37,7 +39,8 @@ public struct RecentActivity: Hashable, Sendable, Identifiable {
         subject: Subject,
         traits: [Trait] = [],
         startedAt: Date? = nil,
-        endedAt: Date? = nil
+        endedAt: Date? = nil,
+        expiresAt: Date? = nil
     ) {
         self.id = id
         self.authorID = authorID
@@ -45,6 +48,31 @@ public struct RecentActivity: Hashable, Sendable, Identifiable {
         self.traits = traits
         self.startedAt = startedAt
         self.endedAt = endedAt
+        self.expiresAt = expiresAt
+    }
+
+    /// Whether this is happening now — Discord's own test (module `583846`'s
+    /// `Hd`): live, and not past its `expires_at`.
+    ///
+    /// **An entry that is happening now is the current activity, not a recent
+    /// one.** Discord's profile leaves it out of Recent activity (module
+    /// `146655`) and draws its chips on the current card instead; listed in
+    /// both, the game somebody is playing sat under itself.
+    public func isOngoing(at now: Date) -> Bool {
+        isLive && !(expiresAt.map { $0 < now } ?? false)
+    }
+
+    /// Whether this entry is the record of `activity` — Discord's match for a
+    /// game (module `83971`'s `_`): the same application, or failing an id,
+    /// the same name.
+    public func records(_ activity: Activity) -> Bool {
+        switch subject {
+        case .game(let name, let applicationID), .activity(let name, let applicationID):
+            if let applicationID, applicationID == activity.applicationID { return true }
+            return name == activity.name
+        case .listening:
+            return false
+        }
     }
 
     /// What the entry is about.

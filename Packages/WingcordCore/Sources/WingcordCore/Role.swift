@@ -114,6 +114,24 @@ public struct RoleColors: Hashable, Sendable, Codable {
     /// Whether the role uses more than one stop.
     public var isGradient: Bool { secondary != nil || tertiary != nil }
 
+    /// Discord's three role styles, named by which colours are set — its role
+    /// editor's rule (module `bc09a629`): a tertiary colour is Holographic, a
+    /// secondary one Gradient, neither Solid.
+    public enum Style: Hashable, Sendable, CaseIterable {
+        case solid, gradient, holographic
+    }
+
+    public var style: Style {
+        if tertiary != nil { return .holographic }
+        return secondary != nil ? .gradient : .solid
+    }
+
+    /// The Holographic style's colours, which are fixed — "the ‘Holographic’
+    /// role style doesn't require you to select any colours" (module `178758`).
+    public static let holographic = RoleColors(primary: 0xA9_C9_FF, secondary: 0xFF_BB_EC, tertiary: 0xFF_C3_A0)
+    /// What a role that was not a gradient starts from when it becomes one.
+    public static let defaultGradient = RoleColors(primary: 0x9E_6B_FF, secondary: 0x9F_C1_FF)
+
     /// The stops as Discord writes them, **wrapped back to the first colour**,
     /// or nil for a flat role.
     ///

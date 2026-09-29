@@ -51,6 +51,10 @@ struct FlyoutRow: View {
     /// Nil draws no glyph **and reserves no room for one**, so a list with no
     /// icons at all sits flush rather than indented past an empty gutter.
     var symbolName: String?
+    /// A brand's mark in the glyph's place — a store, a connection — drawn by
+    /// `ConnectionMark`, which falls back to a symbol for a brand it has none
+    /// for. Wins over `symbolName`.
+    var brandService: String?
     var accessory: FlyoutAccessory = .none
     var isDestructive = false
     var isEnabled = true
@@ -65,7 +69,9 @@ struct FlyoutRow: View {
     var body: some View {
         Button(action: act) {
             HStack(spacing: Spacing.snug) {
-                if let symbolName {
+                if let brandService {
+                    ConnectionMark(service: brandService, side: 16)
+                } else if let symbolName {
                     Image(systemName: symbolName)
                         .font(.system(size: 12, weight: .medium))
                         .frame(width: 16)

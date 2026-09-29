@@ -170,7 +170,7 @@ struct ReactionRowTests {
         // One request for the emoji's two chips — the key is the same.
         #expect(still.count == 1)
         #expect(still.first?.source == .still(.thumbnail))
-        #expect(film.first?.source == .film)
+        #expect(film.first?.source == .film(still: .thumbnail))
         // Keyed exactly as the painter peeks.
         #expect(still.first?.key.maximumPixelSize == Int((TimelineMetrics.reactionGlyphSide * 2).rounded(.up)))
         // A Unicode emoji is a glyph, and asks for nothing.

@@ -50,20 +50,45 @@ struct AttachmentSlotTests {
         height: Int? = nil,
         size: Int = 1024,
         duration: Double? = nil,
-        waveform: String? = nil
+        waveform: String? = nil,
+        marked: Bool = false
     ) -> WingcordCore.Attachment {
         WingcordCore.Attachment(
             id: AttachmentID(rawValue: 1),
             filename: name,
-            url: "https://cdn.discordapp.com/attachments/1/2/\(name)",
-            proxyURL: "https://media.discordapp.net/attachments/1/2/\(name)",
+            url: "https://cdn.discordapp.com/attachments/1/2/\(name)?ex=6abcc102&is=6abb6f82&hm=2ba6",
+            proxyURL: "https://media.discordapp.net/attachments/1/2/\(name)?ex=6abcc102&is=6abb6f82&hm=2ba6",
             contentType: type,
             size: size,
             width: width,
             height: height,
             waveform: waveform,
-            durationSeconds: duration
+            durationSeconds: duration,
+            isMarkedAnimated: marked
         )
+    }
+
+    /// Discord's rule, from its `LazyImage.isAnimated`: a `.gif` always, a
+    /// WebP only when Discord marked it `IS_ANIMATED`, and nothing else. And a
+    /// picture that moves asks the proxy for every frame, which a WebP needs —
+    /// measured, it is flattened to one frame otherwise.
+    @Test("A picture moves by Discord's rule, and asks the proxy for every frame", arguments: [
+        ("loop.gif", "image/gif", false, true),
+        ("HappyDays.gif", "image/gif", false, true),
+        ("party.webp", "image/webp", true, true),
+        ("photo.webp", "image/webp", false, false),
+        ("frames.png", "image/png", true, false),
+        ("photo.jpg", "image/jpeg", false, false),
+    ])
+    func movesByDiscordsRule(name: String, type: String, marked: Bool, moves: Bool) throws {
+        let slot = try #require(slot(attachment(name: name, type: type, width: 400, height: 300, marked: marked)))
+        #expect(slot.isAnimated == moves)
+        let items = try #require(
+            slot.url.flatMap { URLComponents(url: $0, resolvingAgainstBaseURL: false) }?.queryItems
+        )
+        #expect(items.contains { $0.name == "animated" && $0.value == "true" } == moves)
+        // The signature survives the rewrite, or the proxy refuses the request.
+        #expect(items.contains { $0.name == "hm" })
     }
 
     @Test("A clip is a poster, not the video's own bytes")

@@ -215,6 +215,26 @@ public struct Activity: Hashable, Sendable {
     /// Where the details line and the state line link to, when the app said.
     public var detailsURL: URL?
     public var stateURL: URL?
+    /// What a listener would play along with — for a Spotify session, the
+    /// track's id.
+    public var syncID: String?
+    /// Discord's `PLAY` and `SYNC` activity flags: whether the session offers
+    /// "Play on Spotify" and "Listen Along" (module `402857`).
+    public var offersPlay: Bool
+    public var offersSync: Bool
+
+    public static let syncFlag = 1 << 4
+    public static let playFlag = 1 << 5
+
+    /// The track a Spotify session is on, as the page Spotify opens — or nil
+    /// for anything that is not one. A Spotify presence's party is
+    /// `spotify:<user>`, which is how Discord tells it from any other music.
+    public var spotifyTrackURL: URL? {
+        guard partyID?.hasPrefix("spotify:") == true, let syncID, !syncID.isEmpty,
+              let encoded = syncID.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed)
+        else { return nil }
+        return URL(string: "https://open.spotify.com/track/\(encoded)")
+    }
 
     /// `status_display_type`.
     public enum StatusDisplay: Int, Hashable, Sendable {
@@ -248,8 +268,14 @@ public struct Activity: Hashable, Sendable {
         hasSecrets: Bool = false,
         platform: String? = nil,
         detailsURL: URL? = nil,
-        stateURL: URL? = nil
+        stateURL: URL? = nil,
+        syncID: String? = nil,
+        offersPlay: Bool = false,
+        offersSync: Bool = false
     ) {
+        self.syncID = syncID
+        self.offersPlay = offersPlay
+        self.offersSync = offersSync
         self.platform = platform
         self.detailsURL = detailsURL
         self.stateURL = stateURL

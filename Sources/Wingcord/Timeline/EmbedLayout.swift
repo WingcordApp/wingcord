@@ -19,9 +19,9 @@ import WingcordCore
 /// a layout test can call.
 nonisolated struct EmbedSlot: Sendable {
     var rect: CGRect
-    /// The leading rule's colour. Nil for a card with no accent, which draws the
-    /// ground and no rule — a grey bar on a grey card is a border nobody asked
-    /// for.
+    /// The leading rule's colour. Nil for a card with no accent — which draws
+    /// Discord's neutral rule if it is a link's card (`isLinkCard`), and no rule
+    /// if it is a Components V2 container, which has none.
     var accent: NSColor?
     /// Whether there is a card at all.
     ///
@@ -30,6 +30,10 @@ nonisolated struct EmbedSlot: Sendable {
     /// behind it, and inferring that from the parts present is a rule that
     /// silently changes the day something gains a caption.
     var drawsCard: Bool = true
+    /// Discord's `embedFull`: a link's card, which draws a neutral rule where
+    /// the embed names no colour and a hairline round its edge. A Components
+    /// V2 container has neither.
+    var isLinkCard = false
     var texts: [EmbedText]
     var images: [EmbedImage]
     /// Rules drawn inside the card — a Components V2 separator.
@@ -100,11 +104,18 @@ nonisolated struct EmbedImage: Sendable {
     /// and drawing its first frame for ever is the whole of "GIFs do not
     /// animate in the chat" on the embed half of the transcript.
     var isAnimated: Bool = false
+    /// Whether the picture covers its box, cropping, rather than filling it —
+    /// a gallery's cells, which are the mosaic's shapes and not the pictures'.
+    var cropsToFill = false
     /// The clip this picture is the poster of.
     var video: EmbedVideo?
     /// Play and Open Link over a site's player, in the row's space. Nil for
     /// everything that is not one.
     var controls: EmbedPlayControls?
+    /// Discord's blurred stand-in, drawn until the picture lands.
+    var placeholder: String?
+    /// A gallery item sent as a spoiler: drawn covered, and never fetched.
+    var isSpoiler = false
 }
 
 /// A clip an embed's picture stands in for.
@@ -119,6 +130,17 @@ nonisolated enum EmbedVideo: Sendable, Hashable {
     /// A site's own player — YouTube, Twitch, TikTok — which the Play control
     /// starts in place of the thumbnail, as Discord's iframe does.
     case player(URL)
+    /// A video file the card plays itself — Blip's MP4 — which the Play
+    /// control starts in place, as Discord's `<video>` does.
+    case file(URL)
+
+    /// What the Play control starts, for the two that have one.
+    var isPlayable: Bool {
+        switch self {
+        case .player, .file: true
+        case .loop: false
+        }
+    }
 
     var isLoop: Bool {
         if case .loop = self { return true }
@@ -200,13 +222,22 @@ nonisolated enum EmbedLayoutEngine {
             return bareImage(media, in: embed, origin: origin, availableWidth: availableWidth)
         }
 
-        let cardWidth = min(Metrics.embedMaxWidth, availableWidth)
+        var cardWidth = min(Metrics.embedMaxWidth, availableWidth)
+        // **Discord's normaliser decides which picture is which** (module
+        // `659674`'s `L`): an article's thumbnail is its picture, drawn large
+        // under the text — Qwertykeys' logo — where any other kind keeps it in
+        // the corner, as VIA's chip. An explicit `image` wins over either.
+        let isArticle = embed.kind == "article"
+        let picture = embed.image ?? (isArticle ? embed.thumbnail : nil)
         // **A video is its media, not a corner thumbnail**: Discord draws the
         // thumbnail only when an embed has no media (module `175671`'s
-        // `renderAll`), and a site's player is media.
+        // `renderAll`). A site's player — YouTube — is media, and so is a video
+        // file the card plays itself — Blip's MP4.
         let player = Self.playerURL(for: embed)
+        let file = player == nil ? Self.videoFile(of: embed, isArticle: isArticle) : nil
         let videoPoster = player != nil ? (embed.thumbnail ?? embed.image) : nil
-        let hasThumbnail = embed.thumbnail != nil && videoPoster == nil
+        let hasMedia = videoPoster != nil || file != nil
+        let hasThumbnail = !isArticle && embed.thumbnail != nil && !hasMedia
         let contentX = origin.x + ruleWidth + padding
         let fullContentWidth = max(40, cardWidth - ruleWidth - padding * 2)
         let contentWidth = hasThumbnail
@@ -216,6 +247,21 @@ nonisolated enum EmbedLayoutEngine {
         var texts: [EmbedText] = []
         var images: [EmbedImage] = []
         var y = origin.y + padding
+
+        // The site, over everything — Discord's `embedProvider`: "Blip",
+        // "Qwertykeys", "YouTube".
+        if let provider = embed.providerName, !provider.isEmpty {
+            let block = plainBlock(
+                provider,
+                font: NSFont.systemFont(ofSize: style.metadataFont.pointSize, weight: .medium),
+                color: style.secondaryColor,
+                width: contentWidth,
+                link: nil,
+                style: style
+            )
+            texts.append(EmbedText(block: block, origin: CGPoint(x: contentX, y: y)))
+            y += block.size.height + gap
+        }
 
         // The author row: a circular mark and a name, on one line.
         if let author = embed.author {
@@ -266,7 +312,7 @@ nonisolated enum EmbedLayoutEngine {
         // Discord's `Mg`: an image, a video or a GIF says nothing below its
         // title — the picture is the content.
         if !["image", "video", "gifv"].contains(embed.kind),
-           let description = embed.description, !description.isEmpty {
+           let description = embed.description.map(Self.preLine), !description.isEmpty {
             let block = markdownBlock(
                 description,
                 width: contentWidth,
@@ -281,7 +327,12 @@ nonisolated enum EmbedLayoutEngine {
         // The thumbnail sits in the top-trailing corner beside everything above,
         // which is why the content above was narrowed rather than the picture
         // placed after it.
-        if hasThumbnail, let source = embed.thumbnail?.proxyURL ?? embed.thumbnail?.url {
+        var thumbnailIndex: Int?
+        if hasThumbnail, let thumbnail = embed.thumbnail {
+            // A bot's GIF moves where Discord's does, in the corner as in the
+            // card's body.
+            let moves = thumbnail.playsAsAnimated
+            thumbnailIndex = images.count
             images.append(EmbedImage(
                 rect: CGRect(
                     x: origin.x + cardWidth - padding - thumbnailSide,
@@ -289,11 +340,15 @@ nonisolated enum EmbedLayoutEngine {
                     width: thumbnailSide,
                     height: thumbnailSide
                 ),
-                url: CDN.resizedAttachment(proxyURL: source, width: thumbnailSide),
+                url: CDN.resizedAttachment(
+                    proxyURL: thumbnail.proxyURL ?? thumbnail.url, width: thumbnailSide, animated: moves
+                ),
                 isCircle: false,
                 corner: corner,
                 decodeWidth: thumbnailSide,
-                isArtwork: true
+                isArtwork: true,
+                isAnimated: moves,
+                placeholder: thumbnail.placeholder
             ))
         }
 
@@ -327,27 +382,77 @@ nonisolated enum EmbedLayoutEngine {
                 controls: EmbedPlayControls(centeredIn: rect, page: page)
             ))
             y += height + gap
-        } else if let image = embed.image {
-            let source = image.proxyURL ?? image.url
-            let width = fullContentWidth
-            // A missing ratio is a real state, not a square to substitute:
-            // reserving one for a panorama makes the transcript jump when the
-            // picture lands.
-            let height = image.aspectRatio.map { min(imageMaxHeight, width / $0) }
-                ?? min(imageMaxHeight, width * 0.5625)
+        } else if let file {
+            // **A video file plays in the card**, Discord's `<video>` — here the
+            // site's player's own path, Play starting it in place.
+            let box = Self.mediaBox(for: file.poster, in: fullContentWidth)
+            let rect = CGRect(x: contentX, y: y, width: box.width, height: box.height)
             images.append(EmbedImage(
-                rect: CGRect(x: contentX, y: y, width: width, height: height),
-                // Its own height at this width, not the clamped box's: a tall
-                // picture fitted to the box would come back too narrow.
+                rect: rect,
+                url: file.posterURL(box.width, box.height),
+                isCircle: false,
+                corner: corner,
+                decodeWidth: box.width,
+                isArtwork: true,
+                video: .file(file.url),
+                controls: EmbedPlayControls(
+                    centeredIn: rect,
+                    page: embed.url.flatMap(URL.init(string:)) ?? file.url
+                ),
+                placeholder: file.poster.placeholder
+            ))
+            y += box.height + gap
+        } else if let image = picture, !embed.galleryImages.isEmpty {
+            // **A gallery**: the pictures of the embeds that share this link
+            // (`Embed.mergingGalleries`), in the mosaic a message's own
+            // pictures use, inside the same 400-point media box.
+            let pictures = [image] + embed.galleryImages
+            let frames = AttachmentMosaic.frames(
+                sizes: pictures.map { $0.pixelSize },
+                width: min(400, fullContentWidth)
+            )
+            for (media, frame) in zip(pictures, frames) {
+                let rect = frame.offsetBy(dx: contentX, dy: y)
+                let decode = AttachmentMosaic.coverWidth(media.pixelSize, in: rect.size)
+                let moves = media.playsAsAnimated
+                images.append(EmbedImage(
+                    rect: rect,
+                    url: CDN.resizedAttachment(
+                        proxyURL: media.proxyURL ?? media.url,
+                        width: decode,
+                        height: media.aspectRatio.map { decode / $0 },
+                        animated: moves
+                    ),
+                    isCircle: false,
+                    corner: corner,
+                    decodeWidth: decode,
+                    isArtwork: true,
+                    isAnimated: moves,
+                    cropsToFill: true,
+                    placeholder: media.placeholder
+                ))
+            }
+            y += (frames.map(\.maxY).max() ?? 0) + gap
+        } else if let image = picture {
+            let source = image.proxyURL ?? image.url
+            // Discord's media box, 400 by 300 (module `659674`'s `G`), which a
+            // picture is fitted inside rather than stretched across: a tall one
+            // comes back narrower, never squeezed.
+            let box = Self.mediaBox(for: image, in: fullContentWidth)
+            let moves = image.playsAsAnimated
+            images.append(EmbedImage(
+                rect: CGRect(x: contentX, y: y, width: box.width, height: box.height),
                 url: CDN.resizedAttachment(
-                    proxyURL: source, width: width, height: image.aspectRatio.map { width / $0 }
+                    proxyURL: source, width: box.width, height: box.height, animated: moves
                 ),
                 isCircle: false,
                 corner: corner,
-                decodeWidth: width,
-                isArtwork: true
+                decodeWidth: box.width,
+                isArtwork: true,
+                isAnimated: moves,
+                placeholder: image.placeholder
             ))
-            y += height + gap
+            y += box.height + gap
         }
 
         if let footer = footerLine(embed) {
@@ -393,12 +498,143 @@ nonisolated enum EmbedLayoutEngine {
         // it because its fixture had twenty lines of description — a fixture
         // unlike the caller's input guards the bug rather than catching it.
         if hasThumbnail { height = max(height, padding * 2 + thumbnailSide) }
+        // **As wide as what is in it** — Discord's card is `max-width:
+        // max-content`, so VIA's is its two lines and its chip rather than the
+        // column. A field grid is laid across the whole width, so a card with
+        // fields keeps it.
+        if embed.fields.isEmpty {
+            let fitted = Self.fittedWidth(
+                texts: texts, images: images, thumbnailIndex: thumbnailIndex, contentX: contentX, cap: cardWidth
+            )
+            if fitted < cardWidth {
+                if let thumbnailIndex { images[thumbnailIndex].rect.origin.x -= cardWidth - fitted }
+                cardWidth = fitted
+            }
+        }
         return EmbedSlot(
             rect: CGRect(x: origin.x, y: origin.y, width: cardWidth, height: height),
             accent: embed.colorValue.flatMap { $0 == 0 ? nil : NSColor(Color(hex: $0)) },
+            isLinkCard: true,
             texts: texts,
             images: images
         )
+    }
+
+    /// The width a card's content reaches, rule and padding included — what
+    /// `max-content` resolves to — capped at `cap`.
+    private static func fittedWidth(
+        texts: [EmbedText], images: [EmbedImage], thumbnailIndex: Int?, contentX: CGFloat, cap: CGFloat
+    ) -> CGFloat {
+        var extent: CGFloat = 0
+        for text in texts {
+            extent = max(extent, text.origin.x - contentX + usedWidth(of: text.block))
+        }
+        for (index, image) in images.enumerated() where index != thumbnailIndex {
+            extent = max(extent, image.rect.maxX - contentX)
+        }
+        if thumbnailIndex != nil { extent += gap + thumbnailSide }
+        return min(cap, ceil(ruleWidth + padding * 2 + extent))
+    }
+
+    /// A block's `max-content` width: how far its lines reach where none was
+    /// broken for want of room, against `size.width`, which is the width it
+    /// was *given* (`INVARIANTS.md` §4.85). A line the width broke means the
+    /// content is wider than it was given, and the answer is all of it — as a
+    /// wrapped card in Discord is as wide as the column allows. Trailing
+    /// whitespace is not ink (§2.8), and a quote or a code block is drawn to
+    /// the edge whatever its lines say.
+    static func usedWidth(of block: TimelineTextBlock) -> CGFloat {
+        guard block.quoteRules.isEmpty, block.codeBlockRects.isEmpty,
+              let lines = CTFrameGetLines(block.frame) as? [CTLine], !lines.isEmpty
+        else { return block.size.width }
+        let hardBreaks = block.text.attributed.string.reduce(0) { $0 + ($1 == "\n" ? 1 : 0) }
+        guard lines.count <= hardBreaks + 1 else { return block.size.width }
+        var origins = [CGPoint](repeating: .zero, count: lines.count)
+        CTFrameGetLineOrigins(block.frame, CFRange(location: 0, length: 0), &origins)
+        var widest: CGFloat = 0
+        for (line, origin) in zip(lines, origins) {
+            let width = CGFloat(CTLineGetTypographicBounds(line, nil, nil, nil))
+                - CGFloat(CTLineGetTrailingWhitespaceWidth(line))
+            widest = max(widest, origin.x + width)
+        }
+        return min(block.size.width, ceil(widest))
+    }
+
+    /// Discord's media box — 400 by 300, module `659674`'s `G` — and never
+    /// wider than the card leaves, with the picture fitted inside it.
+    private static func mediaBox(for media: Embed.Media, in available: CGFloat) -> CGSize {
+        TimelineLayoutEngine.mediaBox(
+            width: media.width,
+            height: media.height,
+            availableWidth: min(400, available),
+            maximumHeight: imageMaxHeight
+        )
+    }
+
+    /// A video the card plays itself, and the poster it waits behind —
+    /// Discord's rule for an embed's `video` (module `659674`'s `L`).
+    ///
+    /// **One with dimensions, carried by Discord's media proxy, and not
+    /// Sketchfab's**, whose "video" is a page. Discord also plays an `https`
+    /// address with no proxy copy; this client does not, because every such
+    /// `video` in the captures is a site's player page — YouTube's embed, and
+    /// any look-alike of it — and only the proxy's copy is known to be a file.
+    /// Its poster is the embed's corner thumbnail where it keeps one; an
+    /// article's thumbnail has become its picture, so its poster is the
+    /// proxy's own still of the file, which is what Discord shows for Blip.
+    struct VideoFile {
+        var url: URL
+        var poster: Embed.Media
+        /// A still of the file, from the proxy — `format=jpg` on a video path.
+        var usesFrameOfFile: Bool
+
+        func posterURL(_ width: CGFloat, _ height: CGFloat) -> URL? {
+            let source = poster.proxyURL ?? poster.url
+            return usesFrameOfFile
+                ? CDN.videoPoster(proxyURL: source, width: width, height: height)
+                : CDN.resizedAttachment(proxyURL: source, width: width, height: height)
+        }
+    }
+
+    static func videoFile(of embed: Embed, isArticle: Bool) -> VideoFile? {
+        guard let video = embed.video, (video.width ?? 0) > 0, (video.height ?? 0) > 0 else { return nil }
+        let isSketchfab = embed.providerName?.range(of: "sketchfab", options: .caseInsensitive) != nil
+            || video.url.lowercased().hasPrefix("https://sketchfab.com")
+        guard !isSketchfab, let proxy = video.proxyURL, let url = URL(string: proxy) else { return nil }
+        if !isArticle, let thumbnail = embed.thumbnail {
+            return VideoFile(url: url, poster: thumbnail, usesFrameOfFile: false)
+        }
+        return VideoFile(url: url, poster: video, usesFrameOfFile: true)
+    }
+
+    /// An embed description as Discord sets it: `white-space: pre-line`.
+    ///
+    /// **Runs of spaces and tabs are one space, and a line starts at its first
+    /// word** — the line breaks themselves stay. Blip's description carries a
+    /// newline and eight tabs mid-sentence, and laid out as written the tab
+    /// stops pushed "directly to" to the far edge of the card. A code fence
+    /// keeps its own spacing, as `<pre>` does inside Discord's.
+    static func preLine(_ text: String) -> String {
+        guard text.contains(where: { $0 == "\t" || $0 == " " }) else { return text }
+        var inFence = false
+        var lines: [Substring] = []
+        for line in text.split(separator: "\n", omittingEmptySubsequences: false) {
+            if line.trimmingCharacters(in: .whitespaces).hasPrefix("```") { inFence.toggle(); lines.append(line); continue }
+            if inFence { lines.append(line); continue }
+            var collapsed = ""
+            var pendingSpace = false
+            for character in line {
+                if character == " " || character == "\t" {
+                    pendingSpace = !collapsed.isEmpty
+                } else {
+                    if pendingSpace { collapsed.append(" ") }
+                    pendingSpace = false
+                    collapsed.append(character)
+                }
+            }
+            lines.append(Substring(collapsed))
+        }
+        return lines.joined(separator: "\n")
     }
 
     // MARK: A music card
@@ -615,10 +851,8 @@ nonisolated enum EmbedLayoutEngine {
         let width = box.width
         let height = box.height
         let rect = CGRect(x: origin.x, y: origin.y, width: width, height: height)
-        // GIF only: an animated WebP is labelled exactly as a still one, so
-        // there is no fact here to act on. Same rule as `CDN.canAnimate`.
-        let isAnimated = URL(string: media.proxyURL ?? media.url)
-            .map(CDN.canAnimate) ?? false
+        // Discord's own rule: a `.gif` always, a WebP when Discord marked it.
+        let isAnimated = media.playsAsAnimated
         return EmbedSlot(
             rect: rect,
             // No accent: there is no rule to draw it on.
@@ -628,9 +862,10 @@ nonisolated enum EmbedLayoutEngine {
             images: [EmbedImage(
                 rect: rect,
                 // Resized whether or not it moves: the proxy keeps every frame
-                // of a GIF it resizes. See `CDN.resizedAttachment`.
+                // of a GIF it resizes, and of a WebP when asked. See
+                // `CDN.resizedAttachment`.
                 url: CDN.resizedAttachment(
-                    proxyURL: media.proxyURL ?? media.url, width: width, height: height
+                    proxyURL: media.proxyURL ?? media.url, width: width, height: height, animated: isAnimated
                 ),
                 isCircle: false,
                 corner: corner,
@@ -639,7 +874,8 @@ nonisolated enum EmbedLayoutEngine {
                 isAnimated: isAnimated,
                 video: embed.kind == "gifv"
                     ? embed.video.flatMap { URL(string: $0.proxyURL ?? $0.url) }.map(EmbedVideo.loop)
-                    : nil
+                    : nil,
+                placeholder: media.placeholder
             )],
             favorite: favorite(for: embed, media: media, animates: isAnimated),
             favoriteRect: TimelineLayoutEngine.favoriteBadgeRect(in: rect)
@@ -695,10 +931,10 @@ nonisolated enum EmbedLayoutEngine {
     ///
     /// **`gifv` is a declaration, not an observation, and gating on whether the
     /// picture animates was wrong.** A captured Klipy unfurl —
-    /// `search messages1.har` — is `type: "gifv"` with a **`.webp`** thumbnail
-    /// and an `.mp4` beside it, and `CDN.canAnimate` answers on the extension
-    /// alone, so that GIF would have had no star while Tenor's `.gif` did. What
-    /// makes something starrable is that Discord called it a GIF.
+    /// `search messages1.har` — is `type: "gifv"` with an unmarked **`.webp`**
+    /// thumbnail and an `.mp4` beside it, which `playsAsAnimated` calls still,
+    /// so that GIF would have had no star while Tenor's `.gif` did. What makes
+    /// something starrable is that Discord called it a GIF.
     ///
     /// **The embed's own URL is the key**, not the picture's: that is the link
     /// in the message, it is what `setFavorite` files the entry under, and it is

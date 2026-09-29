@@ -28,7 +28,7 @@ extension AppModel {
             themes: game.themes,
             details: detailRows(of: game),
             links: game.socialLinks,
-            storeOffers: game.storeOffers,
+            launchOffers: game.launchOffers,
             accountLink: accountLink(for: gameID),
             community: communityCard(for: gameID, game: game),
             reviews: game.reviews,
@@ -133,10 +133,21 @@ extension AppModel {
     /// So this scans the applications already resident — every one of which was
     /// fetched because somebody's board named it — rather than asking a route
     /// that does not exist.
+    /// The Link Account card's application: **the game's own official one
+    /// first** — Discord's `getOfficialApplicationId`, which is how Valorant
+    /// offers it — then any widget application linked to the game, which is
+    /// how Arknights did before this. Either way only one that publishes where
+    /// to link from (`connection_entrypoint_url`), since that page is what the
+    /// button opens.
     private func accountLink(for gameID: ApplicationID) -> GameAccountLink? {
-        guard let application = widgetApplications.values.first(where: {
-            $0.linkedGameIDs.contains(gameID) && $0.connectionEntrypointURL != nil
-        }), let url = application.connectionEntrypointURL else { return nil }
+        let official = games[gameID]?.officialApplicationID.flatMap { widgetApplications[$0] }
+        guard let application = official?.connectionEntrypointURL != nil
+            ? official
+            : widgetApplications.values.first(where: {
+                $0.linkedGameIDs.contains(gameID) && $0.connectionEntrypointURL != nil
+            }),
+            let url = application.connectionEntrypointURL
+        else { return nil }
         return GameAccountLink(
             applicationName: application.name,
             iconURL: application.iconHash.flatMap {
@@ -160,7 +171,7 @@ extension AppModel {
             description: profile.description,
             memberCount: profile.memberCount,
             onlineCount: profile.onlineCount,
-            isVerified: profile.mark.map { $0.isVerified || $0.kind == .partnered } ?? false,
+            mark: profile.mark,
             inviteCode: code,
             // The reader is in it or they are not, and the button says which.
             isJoined: guilds[profile.id] != nil

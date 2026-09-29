@@ -29,6 +29,8 @@ nonisolated enum CrashReporter {
 
     /// The open descriptor the handler writes to. Opened while healthy.
     nonisolated(unsafe) private static var reportDescriptor: Int32 = -1
+    /// This run's report, which a clean exit removes.
+    nonisolated(unsafe) private static var reportPath: String?
     nonisolated(unsafe) private static var isInstalled = false
 
     /// Where reports go.
@@ -47,10 +49,12 @@ nonisolated enum CrashReporter {
             at: reportDirectory,
             withIntermediateDirectories: true
         )
+        sweepEmptyReports()
 
         let path = reportDirectory
             .appending(path: "crash-\(Int(Date.now.timeIntervalSince1970)).txt")
             .path(percentEncoded: false)
+        reportPath = path
         reportDescriptor = path.withCString {
             open($0, O_WRONLY | O_CREAT | O_TRUNC, 0o600)
         }
@@ -96,18 +100,30 @@ nonisolated enum CrashReporter {
     /// Removes this run's empty report.
     ///
     /// The file is created at launch so the handler has somewhere to write
-    /// *without allocating*; a clean exit means it holds only the header and
-    /// would otherwise look like a crash on the next launch.
+    /// *without allocating*; a clean exit leaves it empty, and an empty file
+    /// would otherwise look like a crash on the next launch. It removes **its
+    /// own** path: the newest report in the folder is not necessarily this
+    /// run's.
     static func finishCleanly() {
         guard reportDescriptor >= 0 else { return }
         let size = lseek(reportDescriptor, 0, SEEK_CUR)
         close(reportDescriptor)
         reportDescriptor = -1
-        guard size <= 0 else { return }
         // Nothing was ever written: no crash happened.
-        let stale = pendingReports().first
-        if let stale, (try? Data(contentsOf: stale))?.isEmpty ?? true {
-            try? FileManager.default.removeItem(at: stale)
+        guard size <= 0, let reportPath else { return }
+        try? FileManager.default.removeItem(atPath: reportPath)
+    }
+
+    /// Removes the empty reports earlier runs left.
+    ///
+    /// **A run that is killed never exits cleanly**, so the file it opened in
+    /// case it crashed stays behind with nothing in it — one per rebuild, per
+    /// force quit, per stop from a debugger. Nothing was ever written to one,
+    /// so nothing happened in it; a hundred and fifty had piled up.
+    private static func sweepEmptyReports() {
+        for report in pendingReports()
+        where (try? report.resourceValues(forKeys: [.fileSizeKey]))?.fileSize == 0 {
+            try? FileManager.default.removeItem(at: report)
         }
     }
 

@@ -277,6 +277,8 @@ nonisolated struct AttachmentSlot: Sendable {
     var favorite: GIF?
     /// Where the star sits inside the picture. Only meaningful with `favorite`.
     var favoriteRect: CGRect = .zero
+    /// Discord's blurred stand-in, drawn until the picture lands.
+    var placeholder: String?
 
     enum Kind: Sendable, Equatable {
         /// A still or animated picture, drawn at its own size.
@@ -2164,17 +2166,12 @@ nonisolated struct TimelineLayoutEngine: Sendable {
             ? AttachmentMosaic.coverWidth(pixels, in: box)
             : box.width
         let isVideo = attachment.isVideo
-        // **A GIF moves in the transcript, exactly as a sticker does**, and it
-        // comes through the resizing proxy like any picture: a resized GIF
-        // keeps every frame — see `CDN.resizedAttachment` for the measurement
-        // that overturned the belief that it did not.
-        //
-        // GIF only. Discord labels an animated WebP `image/webp` exactly as it
-        // labels a still one, so there is no fact here to act on — the same
-        // reason `CDN.canAnimate` answers on the extension alone.
-        let isAnimated = !isVideo
-            && !attachment.isSpoiler
-            && attachment.contentType == "image/gif"
+        // **A picture moves in the transcript by Discord's own rule** — a
+        // `.gif` always, a WebP when Discord marked it animated; see
+        // `CDN.playsAsAnimated` — and it comes through the resizing proxy like
+        // any picture: a resized GIF keeps every frame, and a WebP does when
+        // asked. See `CDN.resizedAttachment` for both measurements.
+        let isAnimated = !isVideo && !attachment.isSpoiler && attachment.playsAsAnimated
         // The height the picture is drawn at, from its own shape: a cover crop
         // is wider than its box, and fitting it to the box's height would
         // fetch it too small.
@@ -2182,7 +2179,9 @@ nonisolated struct TimelineLayoutEngine: Sendable {
         let url: URL? = if isVideo {
             CDN.videoPoster(proxyURL: attachment.proxyURL, width: decodeWidth, height: decodeHeight)
         } else {
-            CDN.resizedAttachment(proxyURL: attachment.proxyURL, width: decodeWidth, height: decodeHeight)
+            CDN.resizedAttachment(
+                proxyURL: attachment.proxyURL, width: decodeWidth, height: decodeHeight, animated: isAnimated
+            )
         }
         return AttachmentSlot(
             rect: rect,
@@ -2196,7 +2195,8 @@ nonisolated struct TimelineLayoutEngine: Sendable {
             durationLabel: isVideo ? Self.durationLabel(attachment.durationSeconds) : "",
             isAnimated: isAnimated,
             favorite: isAnimated ? Self.favorite(for: attachment) : nil,
-            favoriteRect: favoriteBadgeRect(in: rect)
+            favoriteRect: favoriteBadgeRect(in: rect),
+            placeholder: attachment.placeholder
         )
     }
 

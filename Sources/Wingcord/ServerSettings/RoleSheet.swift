@@ -19,6 +19,9 @@ import WingcordCore
 struct RoleSheet: View {
     var role: Role
     var guildID: GuildID
+    /// Whether the server has `ENHANCED_ROLE_COLORS`, which is what offers
+    /// the Gradient and Holographic styles at all.
+    var allowsStyles = false
     var commit: (Role) -> Void
 
     @State private var draft: Role
@@ -32,9 +35,10 @@ struct RoleSheet: View {
         var id: Self { self }
     }
 
-    init(role: Role, guildID: GuildID, commit: @escaping (Role) -> Void) {
+    init(role: Role, guildID: GuildID, allowsStyles: Bool = false, commit: @escaping (Role) -> Void) {
         self.role = role
         self.guildID = guildID
+        self.allowsStyles = allowsStyles
         self.commit = commit
         _draft = State(initialValue: role)
     }
@@ -137,28 +141,47 @@ struct RoleSheet: View {
                         .controlSize(.small)
                         .disabled(draft.colorValue == 0)
 
-                        if draft.colors?.isGradient == true {
-                            Button("Remove gradient") {
-                                draft.colors = RoleColors(primary: draft.colorValue)
-                            }
-                            .buttonStyle(.plain)
-                            .font(.system(.caption))
-                            .foregroundStyle(Ink.tertiary)
-                        }
                         Spacer()
                     }
+                    .disabled(style == .holographic)
                 }
 
-                if draft.colors?.isGradient == true {
-                    // Read-only. Building a gradient needs the server's
-                    // `ENHANCED_ROLE_COLORS` feature and a two-or-three stop
-                    // editor; what matters here is that an existing gradient is
-                    // shown and **survives a save** rather than being flattened.
-                    SheetField(
-                        title: "Gradient",
-                        detail: "This role uses a gradient set elsewhere. It is kept as it is."
-                    ) {
-                        RoleSwatch(role: draft)
+                // **Discord's three styles**, offered where the server has
+                // bought them. A role styled elsewhere still shows its style
+                // here, and keeps it through a save rather than being
+                // flattened, even where the picker cannot be used.
+                if allowsStyles || style != .solid {
+                    SheetField(title: "Style", detail: styleDetail) {
+                        VStack(alignment: .leading, spacing: Spacing.snug) {
+                            SegmentedPicker(
+                                options: [
+                                    .init(RoleColors.Style.solid, "Solid"),
+                                    .init(.gradient, "Gradient"),
+                                    .init(.holographic, "Holographic"),
+                                ],
+                                selection: Binding(get: { style }, set: setStyle)
+                            )
+                            .disabled(!allowsStyles)
+                            HStack(spacing: Spacing.snug) {
+                                if style == .gradient {
+                                    ColorPicker(
+                                        "",
+                                        selection: Binding(
+                                            get: { Color(hex: draft.colors?.secondary ?? draft.colorValue) },
+                                            set: { colour in
+                                                draft.colors = RoleColors(
+                                                    primary: draft.colorValue, secondary: colour.rgbValue
+                                                )
+                                            }
+                                        ),
+                                        supportsOpacity: false
+                                    )
+                                    .labelsHidden()
+                                    .disabled(!allowsStyles)
+                                }
+                                RoleSwatch(role: draft)
+                            }
+                        }
                     }
                 }
 
@@ -179,6 +202,33 @@ struct RoleSheet: View {
         }
         .padding(.horizontal, Spacing.margin)
         .padding(.bottom, Spacing.margin)
+    }
+
+    // MARK: Style
+
+    private var style: RoleColors.Style { draft.colors?.style ?? .solid }
+
+    private var styleDetail: String {
+        switch style {
+        case .solid: "One colour."
+        case .gradient: "Two colours, the first above and the second here."
+        case .holographic: "The ‘Holographic’ role style doesn’t require you to select any colours."
+        }
+    }
+
+    /// Discord's editor: Holographic's colours are fixed, a role becoming a
+    /// gradient starts from Discord's own pair unless it already was one, and
+    /// Solid keeps the first colour. The legacy `color` follows the first, as
+    /// every captured save sends both.
+    private func setStyle(_ next: RoleColors.Style) {
+        guard next != style else { return }
+        let colors: RoleColors = switch next {
+        case .solid: RoleColors(primary: draft.colorValue)
+        case .gradient: RoleColors.defaultGradient
+        case .holographic: RoleColors.holographic
+        }
+        draft.colors = colors
+        draft.colorValue = colors.primary
     }
 
     // MARK: Permissions

@@ -536,10 +536,18 @@ public enum CDN {
     /// came back a 32-frame GIF at 150x150. What flattens one to a single frame
     /// is `format=webp`, which Discord's client sends only for stills — module
     /// `776231` adds no format for an animated source.
+    ///
+    /// - Parameter animated: asks for every frame. **An animated WebP is
+    ///   flattened to its first frame unless asked**, resized or not — measured
+    ///   2026-09-29: one frame bare and at `width=200&height=194`, all 133 with
+    ///   `animated=true` — while a GIF comes back byte-identical either way.
+    ///   Discord's client sends it for the pictures it plays as moving; pass
+    ///   `playsAsAnimated`.
     public static func resizedAttachment(
         proxyURL: String,
         width: CGFloat,
         height: CGFloat? = nil,
+        animated: Bool = false,
         scale: CGFloat = 2
     ) -> URL? {
         guard var components = URLComponents(string: proxyURL) else {
@@ -555,11 +563,34 @@ public enum CDN {
         let pixels = Int((width * scale).rounded(.up))
         let bound = height.map { Int(($0 * scale).rounded(.up)) } ?? pixels * 4
         var items = components.queryItems ?? []
-        items.removeAll { $0.name == "width" || $0.name == "height" || $0.name == "format" }
+        items.removeAll {
+            $0.name == "width" || $0.name == "height" || $0.name == "format" || $0.name == "animated"
+        }
         items.append(URLQueryItem(name: "width", value: String(pixels)))
         items.append(URLQueryItem(name: "height", value: String(bound)))
+        if animated { items.append(URLQueryItem(name: "animated", value: "true")) }
         components.queryItems = items
         return components.url
+    }
+
+    /// Whether Discord's client plays a picture as moving — its
+    /// `LazyImage.isAnimated`, read from the bundle (web `d4c7976eccf337f1`).
+    ///
+    /// **A `.gif` always, and a `.webp` or `.avif` only when Discord marked it
+    /// `IS_ANIMATED`.** A WebP's extension says nothing, since one is either,
+    /// and the mark is the server's own reading of the file: captured on both
+    /// GIF attachments in the HARs and on animated embed media, and on no still.
+    /// Nothing else moves — a PNG included, which Discord's client asks the
+    /// proxy to turn into a WebP. A `.gif` of one frame still counts, as it
+    /// does there: a browser shows one as a still, and so must whatever plays
+    /// it here (`FilmPlayer`'s `drawsStills`).
+    ///
+    /// - Parameter url: the picture's own URL — the attachment's or the
+    ///   media's `url` — which is the one Discord tests first.
+    public static func playsAsAnimated(_ url: String, isMarkedAnimated: Bool) -> Bool {
+        let path = url.prefix { $0 != "?" && $0 != "#" }.lowercased()
+        if path.hasSuffix(".gif") { return true }
+        return isMarkedAnimated && (path.hasSuffix(".webp") || path.hasSuffix(".avif"))
     }
 
     /// A still frame from a video attachment.

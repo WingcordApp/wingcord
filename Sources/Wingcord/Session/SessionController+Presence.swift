@@ -17,9 +17,9 @@ extension SessionController {
     /// for, and asking anyway is one round trip per profile opened for a 204.
     func loadActivityDetail(of userID: UserID) {
         loadRecentActivity(of: userID)
-        guard let activity = model.presences[userID]?.primaryActivity else { return }
+        guard let presence = model.presences[userID], let activity = presence.primaryActivity else { return }
         loadActivityButtons(of: userID, activity: activity)
-        loadActivityGame(activity)
+        loadActivityGames(presence.activities?.list ?? [activity])
     }
 
     /// The game record behind what somebody is playing right now.
@@ -36,9 +36,14 @@ extension SessionController {
     /// about an editor, a bot or Spotify. `loadGames` remembers what it asked
     /// for, so each of those costs one request for the life of the session
     /// rather than one per profile opened.
-    private func loadActivityGame(_ activity: Activity) {
-        guard let applicationID = activity.applicationID else { return }
-        Task { [weak self] in await self?.loadGames(ids: [applicationID]) }
+    ///
+    /// **Every game being played, not only the first**: the record is also what
+    /// decides whether an activity's card opens a game profile at all — see
+    /// `AppModel.gameProfileOpener` — and the full profile draws every one.
+    private func loadActivityGames(_ activities: [Activity]) {
+        let ids = activities.compactMap { $0.kind == .playing ? $0.applicationID : nil }
+        guard !ids.isEmpty else { return }
+        Task { [weak self] in await self?.loadGames(ids: ids) }
     }
 
     /// Resolves the marks for the games people in voice channels are playing.
