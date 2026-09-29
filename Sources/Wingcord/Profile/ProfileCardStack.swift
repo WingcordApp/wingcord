@@ -49,6 +49,12 @@ struct ProfileCardStack<Front: View>: View {
 
     /// The edge under the card. Taller than what shows — its top is behind the
     /// front card — so only its foot and its two lower corners are ever seen.
+    ///
+    /// **Cut to what shows, not left behind the front card.** A card on a
+    /// themed profile is translucent, and the peek's top showed through it as a
+    /// second card's outline across the front one's foot. The mask keeps the
+    /// foot at rest and the lift's extra two points on hover, which is exactly
+    /// the part below the front card.
     private var peekCard: some View {
         Button(action: expand) {
             ProfilePanelPlate(ground: ground, isHovering: isHoveringPeek)
@@ -56,6 +62,9 @@ struct ProfileCardStack<Front: View>: View {
                 .contentShape(.rect)
         }
         .buttonStyle(.plain)
+        .mask(alignment: .bottom) {
+            Rectangle().frame(height: StackGeometry.peek + (isRaised ? StackGeometry.lift * 2 : 0))
+        }
         .padding(.horizontal, StackGeometry.peekInset)
         .offset(y: StackGeometry.peek + (isRaised ? StackGeometry.lift : 0))
         .onHover { hovering in

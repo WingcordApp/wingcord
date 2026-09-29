@@ -47,11 +47,16 @@ nonisolated enum TimelineImageRequests {
     ///   this type is `nonisolated` and the answer is two main-actor reads —
     ///   see `AnimationClock.playsAnimatedEmoji`. A still emoji is unaffected:
     ///   the tag says which kind it is.
+    /// - Parameter filmsOnLayers: whether the surface plays its moving
+    ///   pictures on layers — the transcript's `TranscriptFilms` — which load
+    ///   their own frames. A filmstrip decoded here as well would be the same
+    ///   picture decoded twice, once into a cache nothing reads.
     static func requests(
         for rows: [MessageRow],
         scale: CGFloat,
         loadsArtwork: Bool,
         playsAnimatedEmoji: Bool = true,
+        filmsOnLayers: Bool = false,
         onActivityIcon: ((ActivityInvite) -> Void)? = nil
     ) -> [Request] {
         var requests: [Request] = []
@@ -144,6 +149,7 @@ nonisolated enum TimelineImageRequests {
                 // APNG and GIF sticker was decoded once, at frame zero, and
                 // there was nothing for the clock to advance through.
                 if slot.isAnimated {
+                    guard !filmsOnLayers else { continue }
                     let film = AnimatedImageStore.Key(
                         url: key.url, maximumPixelSize: key.maximumPixelSize
                     )
@@ -172,6 +178,7 @@ nonisolated enum TimelineImageRequests {
                 // it needs the filmstrip rather than frame zero — the same rung
                 // stickers and attachments ride.
                 if image.isAnimated {
+                    guard !filmsOnLayers else { continue }
                     let film = AnimatedImageStore.Key(
                         url: key.url, maximumPixelSize: key.maximumPixelSize
                     )
@@ -266,6 +273,7 @@ nonisolated enum TimelineImageRequests {
                 // The strip for an animated one, as for an inline emoji, so a
                 // reaction moves the way the same emoji in the text above does.
                 if slot.emoji.isAnimated, playsAnimatedEmoji {
+                    guard !filmsOnLayers else { continue }
                     let film = AnimatedImageStore.Key(url: url, maximumPixelSize: key.maximumPixelSize)
                     if AnimatedImageStore.shared.cached(film) == nil {
                         requests.append(Request(key: key, source: .film))
@@ -311,6 +319,7 @@ nonisolated enum TimelineImageRequests {
                 // missed: the picture is decoded once, at frame zero, and there
                 // is nothing for the clock to advance through.
                 if slot.isAnimated {
+                    guard !filmsOnLayers else { continue }
                     let film = AnimatedImageStore.Key(
                         url: key.url, maximumPixelSize: key.maximumPixelSize
                     )
@@ -346,6 +355,7 @@ nonisolated enum TimelineImageRequests {
                     // nothing ever asked for and every custom emoji in the
                     // transcript sits on frame zero.
                     if entry.emoji.isAnimated, playsAnimatedEmoji {
+                        guard !filmsOnLayers else { continue }
                         let film = AnimatedImageStore.Key(
                             url: url, maximumPixelSize: key.maximumPixelSize
                         )

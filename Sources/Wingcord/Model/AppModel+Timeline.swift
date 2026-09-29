@@ -216,6 +216,44 @@ extension AppModel {
         }
     }
 
+    /// Every channel the account knows, named for a chip, and every server's
+    /// name.
+    ///
+    /// **The whole account, and still cheap.** Discord names a link into any
+    /// server the reader is in, so a table of the selected server's channels
+    /// could not draw its chips. What made the whole account expensive was
+    /// rebuilding it with every roster change, and it is not rebuilt then: this
+    /// memo keys on the channel tree, the roles and the servers only, and a
+    /// mention context rebuilt for anything else hands on the same buffer.
+    func linkChannelTable() -> LinkChannelTable {
+        let key = LinkTableKey(
+            structureRevision: channelIndex.structureRevision,
+            roleRevision: roleRevision,
+            expressionRevision: expressionRevision
+        )
+        if let linkTableCache, linkTableCache.key == key { return linkTableCache.value }
+
+        var table = LinkChannelTable()
+        table.channels.reserveCapacity(channelIndex.count)
+        for channel in channelIndex.allChannels {
+            let isConversation = channel.kind == .directMessage
+                || channel.kind == .groupDirectMessage
+            let parentKind = channel.parentID.flatMap { channelIndex[$0]?.kind }
+            table.channels[channel.id] = LinkChannel(
+                name: isConversation ? displayName(of: channel) : channel.name,
+                guildID: channel.guildID,
+                kind: channel.kind,
+                canView: isConversation || permissionGate.canView(channel.id),
+                isPost: channel.kind.isThread && (parentKind == .forum || parentKind == .media),
+                parentID: channel.parentID
+            )
+        }
+        table.guildNames.reserveCapacity(guilds.count)
+        for (guildID, guild) in guilds { table.guildNames[guildID] = guild.name }
+        linkTableCache = (key, table)
+        return table
+    }
+
     /// What the text builder needs to turn a mention into a name.
     ///
     /// **The token has to move with every input.** A memo keyed on the message
@@ -232,6 +270,7 @@ extension AppModel {
             memberRevision: memberRevision,
             structureRevision: channelIndex.structureRevision,
             roleRevision: roleRevision,
+            expressionRevision: expressionRevision,
             // A role's colour goes through the reader's role-colour settings
             // and the room's ink, both of which move this.
             presentationRevision: PresentationRevision.shared.value
@@ -240,7 +279,21 @@ extension AppModel {
 
         var context = MentionContext()
         context.selfIDs = mentionableIDs
-        context.token = identityRevision
+        // **Every input a laid-out row can name, in the one number the row
+        // cache compares.** A row that names a channel or a server has to be
+        // rebuilt when either is renamed or its access moves — keyed on the
+        // people alone, a renamed channel kept its old chip for the life of the
+        // cached row. All four only ever grow, so the weighted sum moves
+        // whenever any of them does.
+        context.token = identityRevision &* 1_000_003
+            &+ channelIndex.structureRevision &* 8_191
+            &+ roleRevision &* 131
+            &+ expressionRevision
+        context.currentGuildID = guildID
+        // Shared, not copied: the table is memoized on the channel tree alone.
+        let table = linkChannelTable()
+        context.channels = table.channels
+        context.guildNames = table.guildNames
 
         // **Every server's roles, keyed by id** — Discord resolves a role
         // mention against the message's own server, and a role id belongs to
@@ -260,34 +313,6 @@ extension AppModel {
                     }
                 )
             }
-        }
-        // Only what this guild needs. Copying every channel in the account into
-        // this value would make it proportional to the account rather than to
-        // the page.
-        if let guildID {
-            for channelID in channelIndex.channelIDs(inGuild: guildID) {
-                guard let channel = channelIndex[channelID], channel.kind != .category else {
-                    continue
-                }
-                context.channelNames[channelID] = channel.name
-            }
-        }
-
-        // The DMs as well, so a message link into a conversation can be named.
-        //
-        // **This table stays the selected guild's plus the DMs, deliberately.**
-        // A message link can point anywhere the account can reach, and naming
-        // every one of them would mean copying five thousand channel names into
-        // a value rebuilt whenever the channel tree, the roster or a role moves
-        // — proportional to the account rather than to the page, which is the
-        // exact shape this memo exists to avoid. A link into a third server
-        // therefore stays a URL rather than becoming a chip, and still navigates
-        // in-app when it is clicked: the opener has the whole index in hand and
-        // the renderer does not.
-        for channelID in channelIndex.privateChannelIDs() {
-            guard let channel = channelIndex[channelID] else { continue }
-            context.channelNames[channelID] = displayName(of: channel)
-            context.directMessageChannelIDs.insert(channelID)
         }
         // **Every user in the session, and this is why it is memoized.**
         //
@@ -403,7 +428,23 @@ struct MentionMemoKey: Hashable, Sendable {
     var memberRevision: UInt64
     var structureRevision: UInt64
     var roleRevision: UInt64
+    /// Moves when a server is added, removed or renamed — the chips name them.
+    var expressionRevision: UInt64
     var presentationRevision: UInt64
+}
+
+/// What the channel chips' table is built from.
+struct LinkTableKey: Hashable, Sendable {
+    var structureRevision: UInt64
+    /// Whether the reader may open a channel is part of its chip.
+    var roleRevision: UInt64
+    var expressionRevision: UInt64
+}
+
+/// Every channel the account knows, named for a chip, and every server's name.
+struct LinkChannelTable: Sendable {
+    var channels: [ChannelID: LinkChannel] = [:]
+    var guildNames: [GuildID: String] = [:]
 }
 
 struct TimelineMemoKey: Hashable, Sendable {

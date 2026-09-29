@@ -32,6 +32,9 @@ nonisolated extension TimelineRowPainter {
         images: ImageStore,
         scale: CGFloat,
         clock: Double,
+        /// The pictures that play on layers over the canvas, by index into the
+        /// slot's `images`; their boxes are left to the layers.
+        layeredImages: Set<Int> = [],
         /// The star, when the pointer is on this embed. Nil is every embed the
         /// pointer is not on, which is all of them nearly all of the time.
         favorite: FavoriteBadge? = nil,
@@ -100,7 +103,7 @@ nonisolated extension TimelineRowPainter {
             )
         }
 
-        for image in slot.images {
+        for (index, image) in slot.images.enumerated() where !layeredImages.contains(index) {
             drawEmbedImage(
                 image,
                 in: image.rect.offsetBy(dx: offset.x, dy: offset.y),
@@ -110,6 +113,15 @@ nonisolated extension TimelineRowPainter {
                 scale: scale,
                 clock: clock
             )
+        }
+
+        // A video's Play and Open Link, over its thumbnail — Discord's two
+        // controls (module `821209`), as fixed dark discs rather than glass for
+        // the reason the attachment's play badge gives.
+        for image in slot.images {
+            guard let controls = image.controls else { continue }
+            drawPlayControl("play.fill", in: controls.play.offsetBy(dx: offset.x, dy: offset.y), context: context)
+            drawPlayControl("arrow.up.right", in: controls.open.offsetBy(dx: offset.x, dy: offset.y), context: context)
         }
 
         // Over the picture, last, and only while the pointer is on it. The same
@@ -309,6 +321,19 @@ nonisolated extension TimelineRowPainter {
             context.fill(frame)
         }
         context.restoreGState()
+    }
+
+    /// One of a video's two controls: a dark disc and its glyph.
+    private static func drawPlayControl(_ symbol: String, in frame: CGRect, context: CGContext) {
+        context.setFillColor(NSColor.black.withAlphaComponent(0.6).cgColor)
+        context.fillEllipse(in: frame)
+        let side = frame.width * 0.42
+        drawSymbol(
+            symbol,
+            tint: .white,
+            in: CGRect(x: frame.midX - side / 2, y: frame.midY - side / 2, width: side, height: side),
+            context: context
+        )
     }
 
     // MARK: Components

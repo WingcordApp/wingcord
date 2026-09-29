@@ -48,6 +48,13 @@ final class HoverAvatarFilm {
     /// subscribing to.
     var isPlaying: Bool { avatar.film != nil || decoration.film != nil }
 
+    /// How many looks a second the playing film needs — its fastest frame,
+    /// so a decoration authored at thirty frames a second gets thirty.
+    var rate: Double {
+        let fastest = [avatar.film, decoration.film].compactMap { $0?.shortestFrame }.min()
+        return fastest.map { 1 / $0 } ?? AnimationClock.defaultRate
+    }
+
     /// The row the frames below belong to.
     var rowID: UInt64? { subject?.rowID }
 

@@ -3,20 +3,40 @@ import CoreGraphics
 import Foundation
 import WingcordCore
 
-/// One grouping in the member list: a hoisted role, or Online / Offline.
-struct MemberSection: Hashable, Sendable, Identifiable {
-    /// Nil for the two synthetic groups.
-    var roleID: RoleID?
-    var title: String
-    var count: Int
+/// The member list beside the conversation on screen, as the column draws it.
+///
+/// **A server's list is Discord's, not a regrouping of whoever this client
+/// holds** — see `MemberList`. Its headings come from the list's groups and
+/// set the column's whole height, and only the members the server has sent are
+/// built: the few hundred rows around the viewport, however long the list is.
+/// Every other row is a placeholder until its page arrives.
+struct Roster: Equatable, Sendable {
+    /// Which list this is. A different one starts at the top, as Discord's
+    /// does: its list view is keyed on the list's id.
+    var identity: String
+    var sections: [RosterSection]
+    /// The members the server has sent, by row.
+    var members: [Int: MemberEntry]
+    /// Every row, sent or not.
+    var rowCount: Int
+
+    static let empty = Roster(identity: "", sections: [], members: [:], rowCount: 0)
+}
+
+/// One group's heading, and where its rows are.
+struct RosterSection: Hashable, Sendable {
+    /// The words and the count, built once — "Moderators — 1,204". Nil for the
+    /// group a list holds before the server has named any, which draws as a
+    /// placeholder.
+    var label: String?
     /// The hoisted role's colour, which the heading is drawn in.
     var colorValue: UInt32?
-    /// The hoisted role's own mark, drawn before its name. Nil for the two
-    /// synthetic groups and for every role that has not set one.
+    /// The hoisted role's own mark, drawn before its name. Nil for Online,
+    /// Offline, and every role that has not set one.
     var iconURL: URL?
-    var members: [MemberEntry]
-
-    var id: UInt64 { roleID?.rawValue ?? (title == "Online" ? 1 : 2) }
+    /// The heading's row. Its members are the `count` rows after it.
+    var index: Int
+    var count: Int
 }
 
 /// One person in the member list.
@@ -122,8 +142,6 @@ nonisolated enum MemberRowGeometry {
     /// different ways in one list. The name centres itself when there is no
     /// second line; see `MemberRowPainter.drawMember`.
     static let rowHeight: CGFloat = 46
-
-    static func height(for entry: MemberEntry) -> CGFloat { rowHeight }
 
     /// The rounded rect the row's own surface occupies — the hover fill, the
     /// selection pill, and the nameplate artwork all use exactly this.
@@ -240,21 +258,12 @@ nonisolated enum MemberRowGeometry {
         .rounded()
 }
 
-/// One flattened row of the member list.
-///
-/// Flat, like the timeline, and for the same reason: the row at a scroll offset
-/// is found by binary search over one array, and a nested sections-containing-
-/// members shape would need that search to descend.
+/// What sits at one row of the member list.
 nonisolated enum MemberRow: Sendable {
-    case header(title: String, count: Int, colorValue: UInt32?, iconURL: URL?)
+    case header(RosterSection)
     case member(MemberEntry)
-
-    var height: CGFloat {
-        switch self {
-        case .header: MemberRowGeometry.sectionHeaderHeight + MemberRowGeometry.sectionSpacing
-        case .member(let entry): MemberRowGeometry.height(for: entry)
-        }
-    }
+    /// A member the server has not sent yet.
+    case placeholder
 
     var userID: UserID? {
         if case .member(let entry) = self { return entry.userID }
@@ -262,21 +271,85 @@ nonisolated enum MemberRow: Sendable {
     }
 }
 
-nonisolated extension Array where Element == MemberSection {
-    /// Flattens sections into rows.
-    func flattened() -> [MemberRow] {
-        var rows: [MemberRow] = []
-        rows.reserveCapacity(reduce(0) { $0 + $1.members.count + 1 })
-        for section in self {
-            guard !section.members.isEmpty else { continue }
-            rows.append(.header(
-                title: section.title,
-                count: section.count,
-                colorValue: section.colorValue,
-                iconURL: section.iconURL
-            ))
-            for member in section.members { rows.append(.member(member)) }
+/// Where every row of a roster sits.
+///
+/// **Arithmetic, not a table.** A row is a heading or a member and both have a
+/// fixed height, so a row's position is a count over the sections before it —
+/// nothing here walks the rows, and a list of a million people costs one entry
+/// per group. The table this replaces held an offset per row and was rebuilt
+/// whenever anybody's presence moved.
+nonisolated struct RosterLayout: Sendable {
+    private(set) var sections: [RosterSection] = []
+    /// The top of each section's heading.
+    private var tops: [CGFloat] = []
+    private(set) var rowCount = 0
+    private(set) var contentHeight: CGFloat = 0
+
+    static let headerHeight = MemberRowGeometry.sectionHeaderHeight + MemberRowGeometry.sectionSpacing
+    static let memberHeight = MemberRowGeometry.rowHeight
+
+    init() {}
+
+    init(_ roster: Roster) {
+        sections = roster.sections
+        tops.reserveCapacity(sections.count)
+        var top: CGFloat = 0
+        for section in sections {
+            tops.append(top)
+            top += Self.headerHeight + CGFloat(section.count) * Self.memberHeight
         }
-        return rows
+        contentHeight = top
+        rowCount = sections.last.map { $0.index + $0.count + 1 } ?? 0
+    }
+
+    /// The row at `y`, clamped to the list: above the top is the first row and
+    /// below the end is the last.
+    func index(at y: CGFloat) -> Int? {
+        guard rowCount > 0 else { return nil }
+        guard y > 0 else { return 0 }
+        guard y < contentHeight else { return rowCount - 1 }
+        var low = 0
+        var high = tops.count - 1
+        while low < high {
+            let mid = (low + high + 1) / 2
+            if tops[mid] <= y { low = mid } else { high = mid - 1 }
+        }
+        let section = sections[low]
+        let intoMembers = y - tops[low] - Self.headerHeight
+        guard intoMembers >= 0, section.count > 0 else { return section.index }
+        return section.index + 1 + min(Int(intoMembers / Self.memberHeight), section.count - 1)
+    }
+
+    /// The section a row belongs to: its heading's, or the one it is a member of.
+    func sectionIndex(containing index: Int) -> Int {
+        var low = 0
+        var high = sections.count - 1
+        while low < high {
+            let mid = (low + high + 1) / 2
+            if sections[mid].index <= index { low = mid } else { high = mid - 1 }
+        }
+        return low
+    }
+
+    /// The row's band, full width.
+    func frame(at index: Int, width: CGFloat) -> CGRect {
+        let position = sectionIndex(containing: index)
+        let heading = sections[position].index
+        guard index > heading else {
+            return CGRect(x: 0, y: tops[position], width: width, height: Self.headerHeight)
+        }
+        return CGRect(
+            x: 0,
+            y: tops[position] + Self.headerHeight + CGFloat(index - heading - 1) * Self.memberHeight,
+            width: width,
+            height: Self.memberHeight
+        )
+    }
+
+    /// What sits at a row, from the roster this layout was made from.
+    func row(at index: Int, in roster: Roster) -> MemberRow {
+        let section = sections[sectionIndex(containing: index)]
+        if index == section.index { return .header(section) }
+        return roster.members[index].map { .member($0) } ?? .placeholder
     }
 }

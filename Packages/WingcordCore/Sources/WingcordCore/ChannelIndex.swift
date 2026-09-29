@@ -87,6 +87,10 @@ public struct ChannelIndex: Sendable {
 
     public var count: Int { channels.count }
 
+    /// Every channel the account knows, in no order — the stored values
+    /// themselves, not a copy of them.
+    public var allChannels: Dictionary<ChannelID, Channel>.Values { channels.values }
+
     // MARK: Writing
 
     /// Replaces every channel of one guild. Structural.

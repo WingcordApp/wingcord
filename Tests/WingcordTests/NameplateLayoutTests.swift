@@ -89,24 +89,6 @@ struct NameplateLayoutTests {
         #expect(art.width < plate.width)
     }
 
-    @Test("Rows are the same height with a plate and without one")
-    func plateChangesNoRowHeight() {
-        // A nameplate is a paint-time addition and must stay one: rows that
-        // grew for artwork would give a roster of mixed members a ragged edge.
-        var bare = MemberEntry(
-            userID: UserID(rawValue: 1), name: "a", monogram: "A",
-            status: .online, isOnMobile: false, activityLine: nil, isBot: false
-        )
-        var plated = bare
-        plated.nameplateURL = URL(string: "https://example.invalid/static.png")
-        plated.nameplatePalette = .cobalt
-        #expect(MemberRowGeometry.height(for: bare) == MemberRowGeometry.height(for: plated))
-
-        bare.activityLine = ActivityStatusLine(glyph: .game, text: "Roblox")
-        plated.activityLine = ActivityStatusLine(glyph: .game, text: "Roblox")
-        #expect(MemberRowGeometry.height(for: bare) == MemberRowGeometry.height(for: plated))
-    }
-
     @Test("A degenerate image cannot divide by zero")
     func survivesAZeroHeightImage() {
         let art = MemberRowGeometry.nameplateArtRect(

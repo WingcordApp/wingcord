@@ -164,6 +164,17 @@ final class SessionController {
         var userID: UserID
     }
 
+    /// The member list subscription in force, so the same request is never
+    /// sent twice. See `subscribeMemberListPages`.
+    private var memberListSubscription: MemberListSubscription?
+
+    struct MemberListSubscription: Equatable {
+        var key: MemberListKey
+        /// The channel subscribed for its list — a thread's parent, for a thread.
+        var channelID: ChannelID
+        var pages: [ClosedRange<Int>]
+    }
+
     /// Recent-activity fetches in flight, by person. Read from
     /// `SessionController+Presence`.
     var recentActivityFetches: Set<UserID> = []
@@ -214,6 +225,9 @@ final class SessionController {
     /// The last ballot the server confirmed, per guild. What an optimistic write
     /// is rolled back to when the route refuses it.
     var lastConfirmedOnboarding: [GuildID: Set<UInt64>] = [:]
+    /// Discord's own sticker packs, while they are being fetched — one request
+    /// however many things ask, the picker and a sticker's card among them.
+    var stickerPacksTask: Task<Void, Never>?
     /// Channels whose transcript is being re-anchored around a linked message.
     private var jumpFetches: Set<ChannelID> = []
     /// Invite codes asked about this session — see `resolveInvites`.
@@ -432,6 +446,8 @@ final class SessionController {
         model.channelIndex = ChannelIndex()
         model.users = [:]
         model.members = [:]
+        model.memberLists = [:]
+        memberListSubscription = nil
         model.roles = [:]
         model.presences = [:]
         model.readStates = [:]
@@ -725,6 +741,17 @@ final class SessionController {
         // to apply again. See `JoinRequestGuild`.
         loadJoinRequestGuilds()
         voice.gatewayDidReconnect()
+
+        // A new gateway session starts with no lists and no subscriptions —
+        // Discord's store resets on CONNECTION_OPEN — so the list on screen is
+        // asked for again. On a first launch nothing is selected yet, and
+        // opening the restored channel asks.
+        model.memberLists = [:]
+        model.memberListRevision &+= 1
+        memberListSubscription = nil
+        if let channelID = model.selectedChannelID {
+            subscribeMemberListPages(nil, for: channelID)
+        }
 
         restoreNavigation()
     }
@@ -1132,6 +1159,8 @@ final class SessionController {
             model.guilds[guildID] = nil
             model.roles[guildID] = nil
             model.members[guildID] = nil
+            model.memberLists = model.memberLists.filter { $0.key.guildID != guildID }
+            model.memberListRevision &+= 1
             model.folders = model.folders.compactMap { folder in
                 let remaining = folder.guildIDs.filter { $0 != guildID }
                 return remaining.isEmpty
@@ -1195,19 +1224,18 @@ final class SessionController {
             model.noteTyping(userID, in: channelID, until: expiry)
             armTypingExpiry(at: expiry)
 
-        case .membersChunk(let guildID, let members, let users, let presences),
-             .memberListUpdated(let guildID, let members, let users, let presences):
-            guard !members.isEmpty else { return }
-            model.members[guildID, default: [:]].merge(members) { _, new in new }
-            // **Merged, never replaced.** A roster user carries no bio, no
-            // banner and no badges, so writing one straight over a
-            // profile-fetched record wipes the card the reader is looking at.
-            model.users.merge(users) { existing, new in new.merged(over: existing) }
-            model.presences.merge(presences) { _, new in new }
-            model.permissionGate.invalidate()
-            model.memberRevision &+= 1
-            model.presenceRevision &+= 1
-            model.roleRevision &+= 1
+        case .membersChunk(let guildID, let members, let users, let presences):
+            ingestMembers(members, users: users, presences: presences, inGuild: guildID)
+
+        case .memberListUpdated(let update):
+            ingestMembers(
+                update.members, users: update.users, presences: update.presences,
+                inGuild: update.guildID
+            )
+            guard let listID = update.listID else { return }
+            let key = MemberListKey(guildID: update.guildID, listID: listID)
+            model.memberLists[key, default: MemberList()].apply(update.operations, groups: update.groups)
+            model.memberListRevision &+= 1
 
         case .channelAcknowledged(let channelID, let messageID, let mentionCount):
             model.readStates[channelID, default: ReadState()].lastAcknowledgedID = messageID
@@ -1450,22 +1478,29 @@ final class SessionController {
                 case .present: try await rest.messages(in: channelID)
                 }
                 Self.trace(
-                    "history \(channelID) \(request): \(page.messages.count) messages, "
-                    + "\(page.authors.count) authors"
+                    "history \(channelID) \(request): \(page.messages.count) messages"
+                    + (page.wireCount == page.messages.count
+                        ? "" : " (\(page.wireCount - page.messages.count) unreadable)")
+                    + ", \(page.authors.count) authors"
                 )
                 absorb(page)
                 var landed = true
                 model.mutateBox(channelID) { box in
                     switch request {
                     case .older(let before):
-                        landed = box.receiveOlder(page.messages, before: before)
+                        landed = box.receiveOlder(
+                            page.messages, wireCount: page.wireCount, before: before
+                        )
                         box.isLoadingHistory = false
                         box.historyFailure = nil
                     case .newer(let after):
-                        landed = box.receiveNewer(page.messages, after: after)
+                        landed = box.receiveNewer(
+                            page.messages, wireCount: page.wireCount, after: after
+                        )
                         box.isLoadingNewer = false
+                        box.newerPageFailures = 0
                     case .present:
-                        box.receivePresent(page.messages)
+                        box.receivePresent(page.messages, wireCount: page.wireCount)
                         box.isLoadingNewer = false
                         box.isLoadingHistory = false
                         box.historyFailure = nil
@@ -1521,16 +1556,43 @@ final class SessionController {
                         // never land.
                         if !Self.isWorthRetrying(error) { box.hasMoreHistory = false }
                     case .newer, .present:
-                        // The runway below stays, and the jump control is the
-                        // way out: returning to the present clears this and
-                        // asks again. Scrolling does not, or it would ask on
-                        // every tick.
+                        // The runway below stays. Scrolling does not ask again,
+                        // or it would ask on every tick: a failure on the way is
+                        // retried on a pause instead, and the jump control is the
+                        // way out of a refusal.
                         box.isLoadingNewer = false
                         box.newerPageFailed = true
+                        if Self.isWorthRetrying(error) { box.newerPageFailures += 1 }
                     }
                 }
                 model.messageContentRevision &+= 1
+                if case .newer = request, Self.isWorthRetrying(error) {
+                    scheduleNewerRetry(in: channelID)
+                }
             }
+        }
+    }
+
+    /// Asks again for a page below the window that failed on the way.
+    ///
+    /// **A dropped page used to be the end of the transcript.** The runway
+    /// stayed under the last message, the viewport stopped asking so it would
+    /// not ask on every tick, and the only way on was Jump to Present — which
+    /// is a transcript that "cuts off" below a jump. A failure worth retrying
+    /// now comes back by itself after a pause that doubles each time: 4, 8,
+    /// 16, 32, then every minute.
+    private func scheduleNewerRetry(in channelID: ChannelID) {
+        let failures = max(1, model.messages(in: channelID)?.newerPageFailures ?? 1)
+        let delay = min(60, 4 << min(failures - 1, 4))
+        Task { [weak self] in
+            try? await Task.sleep(for: .seconds(delay))
+            guard let self, !Task.isCancelled,
+                  let box = model.messages(in: channelID),
+                  box.hasMoreNewer, box.newerPageFailed, !box.isLoadingNewer
+            else { return }
+            Self.trace("history \(channelID) newer: retrying after \(delay)s")
+            model.mutateBox(channelID) { $0.newerPageFailed = false }
+            model.loadLaterHistory(in: channelID)
         }
     }
 
@@ -1598,6 +1660,7 @@ final class SessionController {
         let box = model.messages(in: channelID)
         guard box?.messages.isEmpty ?? true, box?.isLoadingHistory != true else {
             Self.trace("open \(channelID) already loaded")
+            subscribeMemberListPages(nil, for: channelID)
             return
         }
         Self.trace("open \(channelID), fetching newest page")
@@ -1653,14 +1716,71 @@ final class SessionController {
     }
 
     private func subscribeToMemberList(for channelID: ChannelID) {
-        guard let guildID = model.channelIndex.guildID(of: channelID), let socket else {
-            return
-        }
-        Task { await socket.subscribeToMemberList(guildID: guildID, channelID: channelID) }
+        guard let guildID = model.channelIndex.guildID(of: channelID) else { return }
+        subscribeMemberListPages(nil, for: channelID)
         requestVoiceChannelInfo(inGuild: guildID)
         // The server on screen just changed, and with it the set of people whose
         // games the sidebar has to draw a mark for.
         refreshVoiceActivityIcons()
+    }
+
+    /// The rows of the member list on screen moved.
+    ///
+    /// Subscribes the pages around them — Discord's `updateSubscription`, which
+    /// its list calls fifty milliseconds after the scroll stops moving.
+    func showMemberListRows(_ rows: ClosedRange<Int>, margin: Int) {
+        guard let channelID = model.selectedChannelID else { return }
+        subscribeMemberListPages(MemberList.pages(visible: rows, margin: margin), for: channelID)
+    }
+
+    /// Asks for `pages` of the list a channel shows, unless that is already the
+    /// subscription in force — Discord's client compares the same way before it
+    /// sends. The server answers new pages with `SYNC` and pages dropped from
+    /// the request with `INVALIDATE`.
+    ///
+    /// **Nil keeps the pages of the list already subscribed**, when the channel
+    /// shows that same list — most channels in a server share one — and starts
+    /// at the first page otherwise. Discord keeps its last five channels
+    /// subscribed to the same effect: a column scrolled to row five hundred
+    /// does not blink back to placeholders because the reader changed channel.
+    private func subscribeMemberListPages(_ pages: [ClosedRange<Int>]?, for channelID: ChannelID) {
+        guard let target = model.memberListTarget(for: channelID), let socket else { return }
+        let kept = memberListSubscription.flatMap { $0.key == target.key ? $0.pages : nil }
+        let subscription = MemberListSubscription(
+            key: target.key,
+            channelID: target.channelID,
+            pages: pages ?? kept ?? [0...MemberList.pageSize - 1]
+        )
+        guard subscription != memberListSubscription else { return }
+        memberListSubscription = subscription
+        Task {
+            await socket.subscribeToMemberList(
+                guildID: subscription.key.guildID,
+                channelID: subscription.channelID,
+                ranges: subscription.pages.map { [$0.lowerBound, $0.upperBound] }
+            )
+        }
+    }
+
+    /// Writes the people a roster answer names into the stores.
+    ///
+    /// **Merged, never replaced.** A roster user carries no bio, no banner and
+    /// no badges, so writing one straight over a profile-fetched record wipes
+    /// the card the reader is looking at.
+    private func ingestMembers(
+        _ members: [UserID: Member],
+        users: [UserID: User],
+        presences: [UserID: Presence],
+        inGuild guildID: GuildID
+    ) {
+        guard !members.isEmpty else { return }
+        model.members[guildID, default: [:]].merge(members) { _, new in new }
+        model.users.merge(users) { existing, new in new.merged(over: existing) }
+        model.presences.merge(presences) { _, new in new }
+        model.permissionGate.invalidate()
+        model.memberRevision &+= 1
+        model.presenceRevision &+= 1
+        model.roleRevision &+= 1
     }
 
     /// Asks a server for the labels and session clocks on its voice channels.
@@ -1879,6 +1999,7 @@ final class SessionController {
                 // where the target landed in the page.
                 let edges = TranscriptWindow.edges(
                     ofAround: page.messages.map(\.id),
+                    wireCount: page.wireCount,
                     target: messageID,
                     limit: DiscordREST.historyPageSize,
                     newestInChannel: model.channelIndex[channelID]?.lastMessageID
@@ -2265,38 +2386,73 @@ extension SessionController {
     /// cannot have changed.
     func loadDefaultStickerPacks() async {
         guard model.defaultStickerPacks.isEmpty else { return }
-        guard let packs = try? await rest.stickerPacks(), !packs.isEmpty else { return }
-        // Eight of Discord's fourteen standard packs are entirely Lottie, which
-        // is why `LottieFilmstrip` exists — without it these sections were
-        // headings with nothing under them.
-        model.defaultStickerPacks = packs.compactMap { pack in
-            guard !pack.stickers.isEmpty else { return nil }
-            let cover = pack.stickers.first { $0.id == pack.coverStickerID }
-                ?? pack.stickers[0]
-            return ExpressionSection(
-                id: "pack.\(pack.id)",
-                title: pack.name,
-                badge: .image(
-                    CDN.sticker(id: cover.id, format: cover.format),
-                    monogram: String(pack.name.prefix(1)).uppercased()
-                ),
-                items: pack.stickers.map { sticker in
-                    ExpressionItem(
-                        id: String(sticker.id),
-                        art: .image(
-                            CDN.sticker(id: sticker.id, format: sticker.format),
-                            animated: sticker.format.isAnimated
-                        ),
-                        name: sticker.name.lowercased(),
-                        pick: .sticker(sticker.id)
-                    )
-                }
-            )
+        // **One request for every caller.** The picker and a sticker's card
+        // both ask, and each used to fetch the whole set for itself.
+        if let stickerPacksTask {
+            await stickerPacksTask.value
+            return
         }
-        // The catalog is memoized on this counter, and the packs are one of its
-        // inputs — without the bump a picker already open never sees them.
-        model.expressionRevision &+= 1
-        model.stickerCatalogCache = nil
+        let task = Task { [weak self] in
+            guard let self, let packs = try? await rest.stickerPacks(), !packs.isEmpty
+            else { return }
+            model.installStandardStickerPacks(packs)
+        }
+        stickerPacksTask = task
+        await task.value
+        // Cleared once it is done either way: a refusal must stay retryable, and
+        // a success is answered by the guard above from then on.
+        stickerPacksTask = nil
+    }
+
+    /// Works out what a clicked sticker is, when no server of the reader's owns
+    /// it — Discord's own card, `Zq` and `Sr` in module `256449`, in order:
+    ///
+    /// 1. **The packs Discord still offers.** Fetched once per launch; once
+    ///    they are in, a stock sticker needs no request of its own.
+    /// 2. **`GET /stickers/{id}`**, which says whose sticker it is — the one
+    ///    fact a message leaves out. A standard one names its pack, and a pack
+    ///    that is not among the offered ones is fetched by id: Discord's card
+    ///    names it and says it is no longer available.
+    /// 3. **A server's sticker** goes to the source route, which names the
+    ///    server. So does one nothing could answer for, because that route
+    ///    can still say something true.
+    func resolveSticker(_ id: UInt64) async {
+        guard model.standardPackIDByStickerID[id] == nil else { return }
+        switch model.stickerLookups[id] {
+        case .resolving, .standard, .standardUnnamed, .guildSticker: return
+        case .failed, nil: break
+        }
+        model.stickerLookups[id] = .resolving
+
+        await loadDefaultStickerPacks()
+        if let packID = model.standardPackIDByStickerID[id],
+           let pack = model.standardStickerPacks[packID]
+        {
+            model.stickerLookups[id] = .standard(pack, isOffered: true)
+            return
+        }
+
+        do {
+            let detail = try await rest.sticker(id)
+            guard detail.isStandard, let packID = detail.packID else {
+                model.stickerLookups[id] = .guildSticker
+                loadExpressionSource(id, isSticker: true)
+                return
+            }
+            if let pack = model.standardStickerPacks[packID] {
+                model.stickerLookups[id] = .standard(pack, isOffered: true)
+            } else if let pack = try? await rest.stickerPack(id: packID) {
+                model.stickerLookups[id] = .standard(pack, isOffered: false)
+            } else {
+                // Known to be Discord's, with a pack nothing would name. Still
+                // not a server's, which is the one thing the card must not say.
+                model.stickerLookups[id] = .standardUnnamed
+            }
+        } catch {
+            Self.trace("sticker \(id) lookup failed: \(Self.describe(error))")
+            model.stickerLookups[id] = .failed
+            loadExpressionSource(id, isSticker: true)
+        }
     }
 
     func gifLanding() async throws -> GIFLanding { try await rest.gifLanding() }

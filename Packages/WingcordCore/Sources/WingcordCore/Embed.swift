@@ -76,6 +76,10 @@ public struct Embed: Hashable, Sendable, Codable {
     public var fields: [Field]
     /// The site name, for a link unfurl.
     public var providerName: String?
+    /// The body of an embed of type `components` — a Components V2 tree,
+    /// which Discord draws in place of a card (`MessageAccessories.renderEmbeds`)
+    /// and its unfurler sends for sites that describe themselves that way.
+    public var components: [DisplayComponent]
 
     public init(
         title: String? = nil,
@@ -90,7 +94,8 @@ public struct Embed: Hashable, Sendable, Codable {
         thumbnail: Media? = nil,
         video: Media? = nil,
         fields: [Field] = [],
-        providerName: String? = nil
+        providerName: String? = nil,
+        components: [DisplayComponent] = []
     ) {
         self.title = title
         self.kind = kind
@@ -105,6 +110,7 @@ public struct Embed: Hashable, Sendable, Codable {
         self.video = video
         self.fields = fields
         self.providerName = providerName
+        self.components = components
     }
 
     /// The picture an embed that is *only* a picture is made of, or nil where
@@ -132,12 +138,13 @@ public struct Embed: Hashable, Sendable, Codable {
     /// the picture. So the type decides here, not the emptiness test: an embed
     /// that *is* a GIF is not a link preview that happens to have one.
     public var bareMedia: Media? {
-        if kind == "gifv" || kind == "video" {
-            // **The thumbnail, not the video.** `video` on one of these is an
-            // MP4 that this client has no inline player for; the thumbnail is
-            // the picture, at the source's own dimensions.
+        if kind == "gifv" {
+            // **The thumbnail, not the video**, as the poster: the clip itself
+            // plays over it — see `EmbedVideo.loop`.
             return thumbnail ?? image
         }
+        // A video with a title, an author or a provider is a card — YouTube's
+        // is — and one with none of them is a pasted clip, bare, below.
         guard title == nil, description == nil, author == nil, footer == nil, fields.isEmpty
         else { return nil }
         return image ?? thumbnail

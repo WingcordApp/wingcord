@@ -562,10 +562,14 @@ public actor GatewaySocket {
     /// members **and their presences**. The documented op-8 request answers with
     /// members and no presence for them, so a roster built on it shows everyone
     /// offline.
+    ///
+    /// `ranges` are the pages of the channel's list to keep current, each a
+    /// `[first, last]` pair — see `MemberList.pages(visible:margin:)`. Every
+    /// page wanted, every time: Discord's own client never sends a difference.
     public func subscribeToMemberList(
         guildID: GuildID,
         channelID: ChannelID,
-        ranges: [[Int]] = [[0, 99]]
+        ranges: [[Int]]
     ) {
         struct Subscribe: Encodable {
             var op = 14
@@ -1622,7 +1626,7 @@ public enum GatewayUpdate: Sendable {
     case presenceUpdated(Presence)
     case typingStarted(ChannelID, userID: UserID, at: Date)
     case membersChunk(GuildID, members: [UserID: Member], users: [UserID: User], presences: [UserID: Presence])
-    case memberListUpdated(GuildID, members: [UserID: Member], users: [UserID: User], presences: [UserID: Presence])
+    case memberListUpdated(MemberListUpdate)
     case channelAcknowledged(ChannelID, messageID: MessageID?, mentionCount: Int)
     /// The reader's own account changed. The tier and the age status ride
     /// beside the user rather than on it — see `AccountEntitlements` — and are
@@ -1909,41 +1913,7 @@ public enum GatewayUpdate: Sendable {
                 presences: presences
             )
         case .guildMemberListUpdate(let payload):
-            var members: [UserID: Member] = [:]
-            var users: [UserID: User] = [:]
-            var presences: [UserID: Presence] = [:]
-            for operation in payload.ops ?? [] {
-                let entries = (operation.items ?? []) + (operation.item.map { [$0] } ?? [])
-                for entry in entries {
-                    guard let memberEntry = entry.member, let userDTO = memberEntry.user else {
-                        continue
-                    }
-                    users[userDTO.id] = userDTO.domain
-                    members[userDTO.id] = Member(
-                        userID: userDTO.id,
-                        nickname: memberEntry.nick,
-                        avatarHash: memberEntry.avatar,
-                        roleIDs: memberEntry.roles ?? [],
-                        joinedAt: memberEntry.joined_at,
-                        premiumSince: memberEntry.premium_since
-                    )
-                    if let presence = memberEntry.presence?.domain {
-                        presences[userDTO.id] = presence
-                    } else {
-                        // The subscription answers with a presence for everyone
-                        // it lists; an entry without one is genuinely offline
-                        // rather than unknown, and defaulting it to unknown
-                        // leaves the roster's offline group empty.
-                        presences[userDTO.id] = Presence(userID: userDTO.id, status: .offline)
-                    }
-                }
-            }
-            self = .memberListUpdated(
-                payload.guild_id,
-                members: members,
-                users: users,
-                presences: presences
-            )
+            self = .memberListUpdated(MemberListUpdate(payload))
         case .messageAck(let payload):
             self = .channelAcknowledged(
                 payload.channel_id,

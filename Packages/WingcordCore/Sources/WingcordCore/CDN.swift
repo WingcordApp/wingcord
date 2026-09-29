@@ -521,9 +521,25 @@ public enum CDN {
     /// image; the raw `cdn.discordapp.com` URL does not. Downloading a 12-megapixel
     /// phone photo to draw it 400pt wide is the single largest avoidable cost on
     /// an image-heavy channel, and this is where it is avoided.
+    ///
+    /// **Both sides, always** — measured on the live proxy, 2026-09-29. Given
+    /// only a width it answers with the original, untouched: a 512x239 PNG
+    /// asked for at `width=200` came back 512x239, and this used to ask for
+    /// nothing else, so every picture in the transcript was downloaded whole.
+    /// Given both, it fits the picture inside them and never crops or enlarges
+    /// it (`width=200&height=2000` gave 200x93; `1024x1024` gave the 512x239
+    /// back). So `height` is a bound: the height the picture is drawn at when
+    /// the caller knows it, and otherwise four widths, which only a picture
+    /// four times taller than it is wide reaches.
+    ///
+    /// **A GIF keeps every frame**: a 32-frame Tenor GIF at `width=200&height=150`
+    /// came back a 32-frame GIF at 150x150. What flattens one to a single frame
+    /// is `format=webp`, which Discord's client sends only for stills — module
+    /// `776231` adds no format for an animated source.
     public static func resizedAttachment(
         proxyURL: String,
         width: CGFloat,
+        height: CGFloat? = nil,
         scale: CGFloat = 2
     ) -> URL? {
         guard var components = URLComponents(string: proxyURL) else {
@@ -537,11 +553,11 @@ public enum CDN {
             return components.url
         }
         let pixels = Int((width * scale).rounded(.up))
+        let bound = height.map { Int(($0 * scale).rounded(.up)) } ?? pixels * 4
         var items = components.queryItems ?? []
         items.removeAll { $0.name == "width" || $0.name == "height" || $0.name == "format" }
         items.append(URLQueryItem(name: "width", value: String(pixels)))
-        // Height is deliberately left to the proxy so the aspect ratio is
-        // preserved; asking for both forces a crop.
+        items.append(URLQueryItem(name: "height", value: String(bound)))
         components.queryItems = items
         return components.url
     }
@@ -562,16 +578,21 @@ public enum CDN {
     /// local fixture or somebody else's host, and appending a query there is a
     /// URL that 404s rather than a smaller picture. The caller draws its
     /// placeholder, which is the honest answer.
-    public static func videoPoster(proxyURL: String, width: CGFloat, scale: CGFloat = 2) -> URL? {
+    /// Both sides, for the reason `resizedAttachment` gives.
+    public static func videoPoster(
+        proxyURL: String, width: CGFloat, height: CGFloat? = nil, scale: CGFloat = 2
+    ) -> URL? {
         guard var components = URLComponents(string: proxyURL),
               let scheme = components.scheme,
               scheme == "http" || scheme == "https"
         else { return nil }
         let pixels = Int((width * scale).rounded(.up))
+        let bound = height.map { Int(($0 * scale).rounded(.up)) } ?? pixels * 4
         var items = components.queryItems ?? []
         items.removeAll { $0.name == "width" || $0.name == "height" || $0.name == "format" }
         items.append(URLQueryItem(name: "format", value: "jpg"))
         items.append(URLQueryItem(name: "width", value: String(pixels)))
+        items.append(URLQueryItem(name: "height", value: String(bound)))
         components.queryItems = items
         return components.url
     }

@@ -18,6 +18,9 @@ struct ServerOptionsRequest: Identifiable, Hashable, Sendable {
     /// edge, so its menu goes right; the name pill is already inside the
     /// sidebar and its menu hangs below.
     var edge: Edge
+    /// Which page the menu opens on — the root, or linked roles when a chip
+    /// in a message asked for them.
+    var page: ServerOptionsMenu.Surface = .root
 
     /// **Keyed on the server, not on the anchor.** Re-opening the same menu
     /// from the other surface should move it, not stack a second one; and a
@@ -30,8 +33,39 @@ extension AppModel {
 
     // MARK: Opening and closing
 
-    func openServerOptions(_ guildID: GuildID, anchor: CGRect, edge: Edge = .trailing) {
-        serverOptionsMenu = ServerOptionsRequest(guildID: guildID, anchor: anchor, edge: edge)
+    func openServerOptions(
+        _ guildID: GuildID,
+        anchor: CGRect,
+        edge: Edge = .trailing,
+        page: ServerOptionsMenu.Surface = .root
+    ) {
+        serverOptionsMenu = ServerOptionsRequest(guildID: guildID, anchor: anchor, edge: edge, page: page)
+    }
+
+    /// Goes where an `<id:…>` chip points — Discord's module `392605`.
+    ///
+    /// **The guide, the channel browser and Channels & Roles only in a
+    /// Community server**, where Discord goes too; anywhere else the chip is a
+    /// name and a click on it does nothing. Linked roles open the server
+    /// menu's own list, or the one role a chip names.
+    func openStaticRoute(_ route: StaticRoute, itemID: UInt64?, anchor: CGRect) {
+        guard let guildID = selectedGuildID, let guild = guilds[guildID] else { return }
+        switch route {
+        case .linkedRoles:
+            openServerOptions(
+                guildID,
+                anchor: anchor,
+                page: itemID.map { .linkedRole(RoleID(rawValue: $0)) } ?? .linkedRoles
+            )
+        case .home, .guide, .browse, .customize:
+            guard guild.features.contains("COMMUNITY") else { return }
+            let surface: GuildSurface = switch route {
+            case .browse: .browseChannels
+            case .customize: .channelsAndRoles
+            default: .serverGuide
+            }
+            openSurface(surface)
+        }
     }
 
     func dismissServerOptions() { serverOptionsMenu = nil }

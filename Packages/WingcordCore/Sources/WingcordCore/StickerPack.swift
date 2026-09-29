@@ -22,3 +22,28 @@ public struct StickerPack: Hashable, Sendable, Identifiable {
         self.stickers = stickers
     }
 }
+
+/// One sticker as `GET /stickers/{id}` describes it — what a message does not.
+///
+/// **A message's `sticker_items` carry an id, a name and a format, and nothing
+/// that says whose sticker it is.** One of Discord's own and a server's look
+/// identical there, which is how a stock sticker came to be described as "a
+/// custom sticker from a server you are not in". This route answers `type`
+/// (1 is Discord's, 2 a server's) and, for Discord's, the pack. Captured,
+/// `stock stickers.har`.
+public struct StickerDetail: Hashable, Sendable {
+    public var sticker: StickerRef
+    /// The pack a standard sticker belongs to. Nil for a server's sticker.
+    public var packID: String?
+    /// The server that owns it, when the route names one.
+    public var guildID: GuildID?
+    /// Whether it is one of Discord's own — `type` 1.
+    public var isStandard: Bool
+
+    public init(sticker: StickerRef, packID: String?, guildID: GuildID?, isStandard: Bool) {
+        self.sticker = sticker
+        self.packID = packID
+        self.guildID = guildID
+        self.isStandard = isStandard
+    }
+}

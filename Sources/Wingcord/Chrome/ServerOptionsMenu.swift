@@ -28,12 +28,18 @@ struct ServerOptionsMenu: View {
 
     @Environment(AppModel.self) private var model
     @Environment(\.motion) private var motion
-    @State private var surface: Surface = .root
+    @State private var surface: Surface
+
+    init(guildID: GuildID, startsOn: Surface = .root, close: @escaping () -> Void) {
+        self.guildID = guildID
+        self.close = close
+        _surface = State(initialValue: startsOn)
+    }
 
     /// Which list is showing. A case rather than six booleans: they are
     /// mutually exclusive, and two of them true at once is a menu with no
     /// defined content.
-    private enum Surface: Hashable {
+    enum Surface: Hashable, Sendable {
         case root
         case mute
         case notifications
@@ -936,6 +942,7 @@ struct ServerOptionsPresenter: ViewModifier {
             ) { request in
                 ServerOptionsMenu(
                     guildID: request.guildID,
+                    startsOn: request.page,
                     close: { model.dismissServerOptions() }
                 )
                 .environment(model)

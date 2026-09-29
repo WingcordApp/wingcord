@@ -49,6 +49,9 @@ final class AppModel {
     /// by construction: one entry per profile the reader has actually opened.
     var memberProfiles: [GuildID: [UserID: User]] = [:]
     var members: [GuildID: [UserID: Member]] = [:]
+    /// Every server member list this gateway session has been sent — see
+    /// `MemberList`. Read through `memberListRevision`, which is what moves.
+    @ObservationIgnored var memberLists: [MemberListKey: MemberList] = [:]
     var roles: [GuildID: [RoleID: Role]] = [:]
     /// A server's own emoji and stickers, for the expression picker.
     ///
@@ -455,6 +458,15 @@ final class AppModel {
     /// the reader's own is nameable with no round trip at all.
     var expressionSources: [UInt64: ExpressionSource] = [:]
     var expressionSourcesLoading: Set<UInt64> = []
+    /// What a clicked sticker turned out to be, when the packs in hand could
+    /// not say — see `SessionController.resolveSticker`. Observed, because the
+    /// card is already open while it resolves.
+    var stickerLookups: [UInt64: StickerLookup] = [:]
+    /// The composer's sticker picker, asked for at one pack — "View More
+    /// Stickers" on a stock sticker's card. Taken by the composer of the
+    /// channel it names.
+    var stickerPickerRequest: StickerPickerRequest?
+    @ObservationIgnored var stickerPickerToken = 0
     /// The message the transcript is being sent to, if any. Consumed by the
     /// timeline coordinator, which clears it once it has scrolled.
     var pendingJump: MessageJump?
@@ -955,6 +967,8 @@ final class AppModel {
     /// Moves when a guild's member records change — someone joined, left, was
     /// renamed, or had roles changed.
     var memberRevision: UInt64 = 0
+    /// Moves when a server member list changes — see `memberLists`.
+    var memberListRevision: UInt64 = 0
     /// Moves on a presence flush. **The most frequent event in the app**: on a
     /// large server it arrives several times a second and moves nobody across
     /// the online line the overwhelming majority of the time, which is exactly
@@ -1172,7 +1186,7 @@ final class AppModel {
     @ObservationIgnored var railCache: (key: RailMemoKey, value: [RailItem])?
     @ObservationIgnored var sidebarCache: (key: SidebarMemoKey, value: SidebarPresentation)?
     @ObservationIgnored var timelineCache: (key: TimelineMemoKey, value: [TimelineItem])?
-    @ObservationIgnored var rosterCache: (key: RosterMemoKey, value: [MemberSection])?
+    @ObservationIgnored var rosterCache: (key: RosterMemoKey, value: Roster)?
     @ObservationIgnored var forumCache: (key: ForumMemoKey, value: ForumPresentation)?
     @ObservationIgnored var emojiCatalogCache: (key: ExpressionMemoKey, value: ExpressionCatalog)?
     @ObservationIgnored var stickerCatalogCache: (key: ExpressionMemoKey, value: ExpressionCatalog)?
@@ -1183,11 +1197,18 @@ final class AppModel {
     /// Discord's own sticker packs, fetched once per launch. Not per guild and
     /// not per channel: the set is the same for every account.
     @ObservationIgnored var defaultStickerPacks: [ExpressionSection] = []
+    /// The same packs whole, by id — what a stock sticker's card is built from.
+    @ObservationIgnored var standardStickerPacks: [String: StickerPack] = [:]
+    /// Which of those packs each sticker is in, so a click answers with a
+    /// lookup rather than a walk.
+    @ObservationIgnored var standardPackIDByStickerID: [UInt64: String] = [:]
     /// The mention table. The most expensive memo in the app to miss — it is
     /// proportional to the whole account rather than to a page — and the one
     /// most often asked for, because the timeline rebuilds its layout input on
     /// every inbound message.
     @ObservationIgnored var mentionCache: (key: MentionMemoKey, value: MentionContext)?
+    /// The channel chips' table. See `linkChannelTable()`.
+    @ObservationIgnored var linkTableCache: (key: LinkTableKey, value: LinkChannelTable)?
     @ObservationIgnored
     /// Every stage that is live right now, keyed by its channel.
     ///
@@ -1535,12 +1556,17 @@ final class AppModel {
         if members.count > 1 {
             members = keptGuild.flatMap { id in members[id].map { [id: $0] } } ?? [:]
         }
+        // A list is a row of user ids, and the records they name went with the
+        // guild's member table. The lists come back with their subscriptions.
+        memberLists = memberLists.filter { $0.key.guildID == keptGuild }
         presences = survivingPresences(inGuild: keptGuild)
 
         ImageStore.shared.purge()
         // Filmstrips are the most expensive and least essential pixels the app
         // holds — up to forty-eight bitmaps for one ring around one avatar.
         AnimatedImageStore.shared.purge()
+        FilmFrames.shared.purge()
+        LottieDocuments.shared.purge()
         // Every memo now describes tables that no longer exist.
         railCache = nil
         sidebarCache = nil
@@ -1550,12 +1576,14 @@ final class AppModel {
         emojiCatalogCache = nil
         stickerCatalogCache = nil
         mentionCache = nil
+        linkTableCache = nil
         // Every channel in the account, walked through the permission gate. Both
         // are rebuilt the next time their surface opens, which costs a pass
         // nobody is waiting through.
         forwardTargetCache = nil
         quickSwitchCache = nil
         memberRevision &+= 1
+        memberListRevision &+= 1
         presenceRevision &+= 1
     }
 
@@ -1641,6 +1669,10 @@ struct MessageBox: Sendable {
     /// again by scrolling — a refusal, or a second failure. Returning to the
     /// present clears it; without it the viewport would ask on every tick.
     var newerPageFailed = false
+    /// Pages below the window that failed in a row on the way — a dropped
+    /// connection rather than a refusal — which sets how long the next retry
+    /// waits. See `SessionController.scheduleNewerRetry`.
+    var newerPageFailures = 0
     /// Live messages that arrived while cut off, held so that reconnecting to
     /// the present cannot leave a gap. See `TranscriptWindow.heldLimit`.
     var heldLive: [Message] = []
@@ -1686,6 +1718,7 @@ struct MessageBox: Sendable {
         hasMoreNewer = false
         isLoadingNewer = false
         newerPageFailed = false
+        newerPageFailures = 0
     }
 
     /// Inserts or replaces one message, keeping the array sorted.

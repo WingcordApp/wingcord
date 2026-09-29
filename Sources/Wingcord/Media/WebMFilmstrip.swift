@@ -107,10 +107,7 @@ nonisolated enum WebMFilmstrip {
         // way — evenly, first frame always kept, each survivor inheriting the
         // time of the ones dropped after it.
         let affordable = max(2, byteBudget / max(1, rowBytes * height))
-        let keep = AnimatedImage.sampleIndices(
-            count: movie.samples.count,
-            budget: min(AnimatedImage.frameBudget, affordable)
-        )
+        let keep = AnimatedImage.sampleIndices(count: movie.samples.count, budget: affordable)
 
         var composite = Composite(width: header.width, height: header.height)
         defer { composite.release() }

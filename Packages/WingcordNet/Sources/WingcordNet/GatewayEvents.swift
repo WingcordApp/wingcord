@@ -562,12 +562,11 @@ struct MembersChunkPayload: Decodable, Sendable {
 /// send members for a large guild up front, and the documented
 /// `REQUEST_GUILD_MEMBERS` route answers with members but **no presences** for
 /// them. The undocumented op-14 subscription answers with both, in the exact
-/// ranges the client asked for.
+/// ranges the client asked for — see `MemberListUpdate` for what is kept.
 struct MemberListUpdatePayload: Decodable, Sendable {
     var guild_id: GuildID
     var id: String?
-    var member_count: Int?
-    var online_count: Int?
+    var groups: [Item.Group]?
     var ops: [Operation]?
 
     struct Operation: Decodable, Sendable {

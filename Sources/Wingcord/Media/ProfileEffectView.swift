@@ -11,17 +11,18 @@ import WingcordCore
 /// followed by a loop that runs forever, each 36 frames at 12 fps, each authored
 /// at 450x880 with alpha, stacked by `zIndex` above the card.
 ///
-/// Two properties make it affordable, and both come straight out of that
-/// timeline:
+/// **Every frame, at the resolution the card draws it** — each layer streams
+/// from its own `FilmSource` a few frames ahead (`FilmStream`), which is what
+/// makes full fidelity affordable: a 450x880 layer is 1.6 MB a frame, and
+/// holding a whole loop of them is what used to force a 512-pixel decode and a
+/// frame budget onto effects authored above both.
 ///
-///  1. **A finished layer is released.** The intro is ~19 MB of decoded frames
-///     and can never be needed again once its three seconds are up, so it is
-///     evicted the moment it ends rather than held for as long as the card is
-///     open. Peak is both layers; steady state is one.
-///  2. **One host view, one clock subscription, N sublayers.** Each layer is a
-///     `CALayer` whose `contents` is swapped — no SwiftUI invalidation, no
-///     layout, no redraw — and all of them advance from the same timestamp, so
-///     the intro and the loop cannot drift apart mid-handover.
+///  1. **A finished layer is released.** An intro can never be needed again
+///     once its slot is over, so its stream and its source go the moment it
+///     ends. Peak is both layers; steady state is one.
+///  2. **One host view, N sublayers, one timeline.** Each layer's frames are
+///     picked from the same start, so the intro and the loop cannot drift
+///     apart mid-handover.
 ///
 /// The whole thing is inert when Reduce Motion is on: a single still frame from
 /// `reducedMotionSrc`, which is what Discord ships that asset for.
@@ -32,16 +33,6 @@ struct ProfileEffectView: NSViewRepresentable {
 
     @Environment(\.displayScale) private var displayScale
     @Environment(\.motion) private var motion
-
-    /// What one layer is decoded to.
-    ///
-    /// Deliberately below the card's retina size. The source is 450x880, so a
-    /// 2x card would ask for an upscale it cannot benefit from, and each frame
-    /// at that size is 837 KB — 30 MB for one 36-frame layer. At this cap a
-    /// layer keeps every frame and its full 12 fps inside ~19 MB, which for
-    /// drifting clouds and sparkles is the right side of the trade.
-    private var pixelSize: Int { 512 }
-    private var layerBudget: Int { 20 * 1024 * 1024 }
 
     /// A layer's authored height over its authored width.
     ///
@@ -65,8 +56,7 @@ struct ProfileEffectView: NSViewRepresentable {
     func updateNSView(_ view: EffectHostView, context: Context) {
         context.coordinator.configure(
             effect: effect,
-            pixelSize: pixelSize,
-            budget: layerBudget,
+            width: width * max(displayScale, 1),
             isAnimated: !motion.reduceMotion
         )
     }
@@ -79,24 +69,16 @@ struct ProfileEffectView: NSViewRepresentable {
     final class Coordinator {
         weak var view: EffectHostView?
         private var effect: ProfileEffect?
-        private var strips: [Int: AnimatedImage] = [:]
-        private var keys: [Int: AnimatedImageStore.Key] = [:]
-        /// Layers already released. A finished intro must not be re-fetched by
-        /// the next tick.
-        private var retired: Set<Int> = []
+        private var streams: [Int: FilmStream] = [:]
         private var loads: [Int: Task<Void, Never>] = [:]
+        /// Layers whose slot is over. A finished intro must not be fetched again.
+        private var retired: Set<Int> = []
         private var startTime: Double?
-        private var isSubscribed = false
         private var isAnimated = true
 
-        private var token: ObjectIdentifier { ObjectIdentifier(self) }
-
-        func configure(
-            effect: ProfileEffect,
-            pixelSize: Int,
-            budget: Int,
-            isAnimated: Bool
-        ) {
+        /// - Parameter width: the card's width in pixels, which with each
+        ///   layer's own shape decides what it is decoded at.
+        func configure(effect: ProfileEffect, width: CGFloat, isAnimated: Bool) {
             guard self.effect?.skuID != effect.skuID || self.isAnimated != isAnimated else {
                 return
             }
@@ -108,9 +90,9 @@ struct ProfileEffectView: NSViewRepresentable {
                 // Reduce Motion: one still, no clock, no strips. It is the same
                 // composition flattened, so it takes the composition's aspect.
                 if let url = effect.reducedMotionURL {
-                    let aspect = effect.layers.first.map(ProfileEffectView.aspect(of:))
-                    view?.prepare(aspects: [aspect ?? 1])
-                    loadStill(url, pixelSize: pixelSize)
+                    let aspect = effect.layers.first.map(ProfileEffectView.aspect(of:)) ?? 1
+                    view?.prepare(aspects: [aspect])
+                    loadStill(url, pixelSize: Int((width * max(aspect, 1)).rounded(.up)))
                 }
                 return
             }
@@ -118,25 +100,58 @@ struct ProfileEffectView: NSViewRepresentable {
 
             startTime = AnimationClock.shared.time
             for (index, layer) in effect.layers.enumerated() {
-                let key = AnimatedImageStore.Key(
-                    url: layer.url,
-                    maximumPixelSize: pixelSize,
-                    byteBudget: budget
-                )
-                keys[index] = key
-                if let hit = AnimatedImageStore.shared.cached(key) {
-                    strips[index] = hit
-                    continue
-                }
+                // The longest side as the card draws it. A decode never
+                // enlarges, so a card wider than the art costs the art's own
+                // pixels and no more.
+                let aspect = ProfileEffectView.aspect(of: layer)
+                let pixelSize = Int((width * max(aspect, 1)).rounded(.up))
                 loads[index] = Task { [weak self] in
-                    let image = await AnimatedImageStore.shared.image(for: key)
-                    guard let self, !Task.isCancelled, self.effect?.skuID == effect.skuID
+                    guard let data = try? await ImageStore.shared.data(for: layer.url) else { return }
+                    let source = await Task.detached(priority: .userInitiated) {
+                        FilmSource(data: data, maximumPixelSize: pixelSize)
+                    }.value
+                    guard let self, !Task.isCancelled, self.effect?.skuID == effect.skuID,
+                          !self.retired.contains(index), let source,
+                          let sublayer = self.view?.sublayer(at: index)
                     else { return }
-                    if let image { self.strips[index] = image }
+                    let stream = FilmStream(
+                        source: source,
+                        layer: sublayer,
+                        showsFirstFrame: false,
+                        // **The catalogue's duration is the SLOT; the asset's
+                        // own is the playback.** A layer that does not loop
+                        // holds its last frame for the rest of its slot —
+                        // SpongeBob's 4125 ms APNG in a 6000 ms slot used to
+                        // wrap and perform twice.
+                        loops: layer.loops
+                    ) { [weak self] in self?.phase(of: index) }
+                    self.streams[index] = stream
                     self.loads[index] = nil
+                    stream.setPlaying(true)
                 }
             }
-            subscribe()
+        }
+
+        /// Where one layer is in its own playback, or nil while it shows
+        /// nothing — before its start, between passes, and once its slot is
+        /// over, when it is released.
+        private func phase(of index: Int) -> Double? {
+            guard let effect, let startTime, effect.layers.indices.contains(index) else { return nil }
+            let layer = effect.layers[index]
+            let elapsed = AnimationClock.shared.time - startTime
+            guard !layer.isFinished(at: elapsed) else {
+                retire(index)
+                return nil
+            }
+            return layer.phase(at: elapsed)
+        }
+
+        /// Gives a finished layer's stream and source back at once.
+        private func retire(_ index: Int) {
+            guard retired.insert(index).inserted else { return }
+            streams.removeValue(forKey: index)?.stop()
+            loads.removeValue(forKey: index)?.cancel()
+            view?.hide(index)
         }
 
         private func loadStill(_ url: URL, pixelSize: Int) {
@@ -152,72 +167,16 @@ struct ProfileEffectView: NSViewRepresentable {
             }
         }
 
-        private func tick() {
-            guard let effect, let startTime, let view else { return }
-            let elapsed = AnimationClock.shared.time - startTime
-
-            for (index, layer) in effect.layers.enumerated() {
-                guard !retired.contains(index) else { continue }
-
-                // A non-looping layer that has run its course is released here
-                // and never asked for again. This is where the intro's ~19 MB
-                // goes back.
-                if layer.isFinished(at: elapsed) {
-                    retired.insert(index)
-                    strips[index] = nil
-                    loads[index]?.cancel()
-                    loads[index] = nil
-                    if let key = keys[index] { AnimatedImageStore.shared.evict(key) }
-                    view.hide(index)
-                    continue
-                }
-
-                guard let phase = layer.phase(at: elapsed), let strip = strips[index] else {
-                    view.hide(index)
-                    continue
-                }
-                // **The catalogue's duration is the SLOT; the asset's own is the
-                // playback.** They are not the same number and treating them as
-                // one is what made SpongeBob perform twice: his entry is a
-                // 6000 ms slot holding a 4125 ms APNG, so the looping lookup
-                // wrapped at 4.125 s and replayed the opening 1.875 s before the
-                // slot expired. A layer that does not loop holds its last frame
-                // for the rest of its slot instead, which is what `num_plays: 1`
-                // means and what a browser does with the same file.
-                view.show(strip.frame(at: phase, looping: layer.loops), at: index)
-            }
-
-            // Nothing left that can ever draw again: stop the clock work.
-            if retired.count == effect.layers.count { unsubscribe() }
-        }
-
-        private func subscribe() {
-            guard !isSubscribed else { return }
-            isSubscribed = true
-            AnimationClock.shared.subscribe(token) { [weak self] in self?.tick() }
-        }
-
-        private func unsubscribe() {
-            guard isSubscribed else { return }
-            isSubscribed = false
-            AnimationClock.shared.unsubscribe(token)
-        }
-
         private func reset() {
             for task in loads.values { task.cancel() }
             loads.removeAll()
-            strips.removeAll()
-            keys.removeAll()
+            for stream in streams.values { stream.stop() }
+            streams.removeAll()
             retired.removeAll()
             startTime = nil
-            unsubscribe()
         }
 
         func tearDown() {
-            // The strips are the largest allocation the app makes. A card that
-            // closes must give them back immediately rather than waiting for the
-            // cache to feel pressure.
-            for key in keys.values { AnimatedImageStore.shared.evict(key) }
             reset()
             view = nil
         }
@@ -294,6 +253,11 @@ final class EffectHostView: NSView {
     func hide(_ index: Int) {
         guard layers.indices.contains(index), !layers[index].isHidden else { return }
         layers[index].isHidden = true
+    }
+
+    /// One layer's `CALayer`, for a stream to play into.
+    func sublayer(at index: Int) -> CALayer? {
+        layers.indices.contains(index) ? layers[index] : nil
     }
 
     override func layout() {

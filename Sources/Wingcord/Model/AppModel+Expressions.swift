@@ -23,6 +23,50 @@ struct ExpressionMemoKey: Hashable, Sendable {
 
 extension AppModel {
 
+    /// Files Discord's own sticker packs: the picker's sections, and the two
+    /// tables a stock sticker's card is answered from.
+    func installStandardStickerPacks(_ packs: [StickerPack]) {
+        var byID: [String: StickerPack] = [:]
+        var packOfSticker: [UInt64: String] = [:]
+        for pack in packs {
+            byID[pack.id] = pack
+            for sticker in pack.stickers { packOfSticker[sticker.id] = pack.id }
+        }
+        standardStickerPacks = byID
+        standardPackIDByStickerID = packOfSticker
+        // Eight of Discord's fourteen standard packs are entirely Lottie, which
+        // the picker's grid rasterises and a sticker's card plays as vectors —
+        // see `LottieStickerLayer`.
+        defaultStickerPacks = packs.compactMap { pack in
+            guard !pack.stickers.isEmpty else { return nil }
+            let cover = pack.stickers.first { $0.id == pack.coverStickerID }
+                ?? pack.stickers[0]
+            return ExpressionSection(
+                id: ExpressionSection.stickerPackID(pack.id),
+                title: pack.name,
+                badge: .image(
+                    CDN.sticker(id: cover.id, format: cover.format),
+                    monogram: String(pack.name.prefix(1)).uppercased()
+                ),
+                items: pack.stickers.map { sticker in
+                    ExpressionItem(
+                        id: String(sticker.id),
+                        art: .image(
+                            CDN.sticker(id: sticker.id, format: sticker.format),
+                            animated: sticker.format.isAnimated
+                        ),
+                        name: sticker.name.lowercased(),
+                        pick: .sticker(sticker.id)
+                    )
+                }
+            )
+        }
+        // The catalog is memoized on this counter, and the packs are one of its
+        // inputs — without the bump a picker already open never sees them.
+        expressionRevision &+= 1
+        stickerCatalogCache = nil
+    }
+
     /// Everything the emoji tab shows: the account's custom emoji, one section
     /// per server, then Unicode's nine categories.
     ///

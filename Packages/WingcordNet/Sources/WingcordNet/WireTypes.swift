@@ -318,6 +318,7 @@ struct ChannelDTO: Decodable, Sendable {
     var last_message_id: MessageID?
     var rate_limit_per_user: Int?
     var permission_overwrites: [OverwriteDTO]?
+    var member_list_id: String?
     var recipients: [UserDTO]?
     var recipient_ids: [UserID]?
     var icon: String?
@@ -385,7 +386,8 @@ struct ChannelDTO: Decodable, Sendable {
             flags: ChannelFlags(rawValue: flags ?? 0),
             memberCount: member_count,
             memberIDsPreview: member_ids_preview ?? [],
-            totalMessageSent: total_message_sent
+            totalMessageSent: total_message_sent,
+            memberListID: member_list_id
         )
     }
 }
@@ -966,6 +968,7 @@ struct EmbedDTO: Decodable, Sendable {
     var video: MediaDTO?
     var fields: [FieldDTO]?
     var provider: ProviderDTO?
+    var components: [ComponentDTO]?
 
     struct AuthorDTO: Decodable, Sendable {
         var name: String?
@@ -1019,7 +1022,8 @@ struct EmbedDTO: Decodable, Sendable {
                 guard let name = field.name, let value = field.value else { return nil }
                 return Embed.Field(name: name, value: value, isInline: field.inline ?? false)
             } ?? [],
-            providerName: provider?.name
+            providerName: provider?.name,
+            components: ComponentDTO.display(components)
         )
     }
 }
@@ -1030,8 +1034,16 @@ struct StickerDTO: Decodable, Sendable {
     var format_type: Int?
     /// As on `EmojiDTO`: a sticker the server can no longer offer.
     var available: Bool?
+    /// 1 for one of Discord's own, 2 for a server's. Only `GET /stickers/{id}`
+    /// and the pack routes send it; a message's `sticker_items` do not.
+    var type: Int?
+    /// Strings on the wire, like every id — see `INVARIANTS.md` §5.58.5.
+    var pack_id: String?
+    var guild_id: String?
 
-    private enum CodingKeys: String, CodingKey { case id, name, format_type, available }
+    private enum CodingKeys: String, CodingKey {
+        case id, name, format_type, available, type, pack_id, guild_id
+    }
 
     init(from decoder: any Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
@@ -1039,6 +1051,9 @@ struct StickerDTO: Decodable, Sendable {
         name = try container.decodeIfPresent(String.self, forKey: .name)
         format_type = try container.decodeIfPresent(Int.self, forKey: .format_type)
         available = try container.decodeIfPresent(Bool.self, forKey: .available)
+        type = try container.decodeIfPresent(Int.self, forKey: .type)
+        pack_id = try container.decodeIfPresent(String.self, forKey: .pack_id)
+        guild_id = try container.decodeIfPresent(String.self, forKey: .guild_id)
     }
 
     var catalogEntry: StickerRef? {
@@ -1051,6 +1066,15 @@ struct StickerDTO: Decodable, Sendable {
             id: id,
             name: name ?? "",
             format: StickerRef.Format(rawValue: format_type ?? 1)
+        )
+    }
+
+    var detail: StickerDetail {
+        StickerDetail(
+            sticker: domain,
+            packID: pack_id.flatMap { $0.isEmpty ? nil : $0 },
+            guildID: guild_id.flatMap(UInt64.init).map(GuildID.init(rawValue:)),
+            isStandard: type == 1
         )
     }
 }
@@ -2517,6 +2541,11 @@ struct StickerSourceDTO: Decodable, Sendable {
 /// dropped rather than failing the payload it rides in.
 struct LossyList<Element: Decodable & Sendable>: Decodable, Sendable {
     var elements: [Element]
+    /// How many elements could not be read and were left out.
+    var dropped = 0
+
+    /// How many elements the payload carried, read or not.
+    var wireCount: Int { elements.count + dropped }
 
     init(from decoder: any Decoder) throws {
         var container = try decoder.unkeyedContainer()
@@ -2528,6 +2557,7 @@ struct LossyList<Element: Decodable & Sendable>: Decodable, Sendable {
                 // A failed element leaves the cursor where it was; stepping
                 // over it with a type that reads anything moves it on.
                 _ = try? container.decode(Skipped.self)
+                dropped += 1
             }
         }
         self.elements = elements

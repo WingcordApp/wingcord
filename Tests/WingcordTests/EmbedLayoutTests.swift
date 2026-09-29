@@ -25,6 +25,60 @@ struct EmbedLayoutTests {
         )
     }
 
+    // MARK: Videos
+
+    /// A YouTube unfurl, the shape Discord sends: a `video` with the site as
+    /// provider, the channel as author, and the watch page as the URL.
+    private func youtube(video: String = "https://www.youtube.com/embed/dQw4w9WgXcQ") -> Embed {
+        Embed(
+            title: "A video",
+            kind: "video",
+            description: "What the uploader wrote under it.",
+            url: "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+            author: Embed.Author(name: "A channel", url: "https://www.youtube.com/@channel"),
+            thumbnail: Embed.Media(url: "https://i.ytimg.com/vi/dQw4w9WgXcQ/hqdefault.jpg", width: 480, height: 360),
+            video: Embed.Media(url: video, width: 1280, height: 720),
+            providerName: "YouTube"
+        )
+    }
+
+    @Test("A YouTube video is a card with its thumbnail as the media, Play and Open Link on it")
+    func youtubeCard() throws {
+        let slot = layout(youtube())
+        #expect(slot.drawsCard)
+        let media = try #require(slot.images.first { $0.controls != nil })
+        guard case .player(let player) = media.video else {
+            Issue.record("the thumbnail should start a player")
+            return
+        }
+        let items = URLComponents(url: player, resolvingAgainstBaseURL: false)?.queryItems ?? []
+        #expect(items.contains(URLQueryItem(name: "autoplay", value: "1")))
+        #expect(player.host() == "www.youtube.com")
+        #expect(media.controls?.page.absoluteString == "https://www.youtube.com/watch?v=dQw4w9WgXcQ")
+        // The video's own shape, and no corner thumbnail beside it.
+        #expect(abs(media.rect.width / media.rect.height - 16.0 / 9.0) < 0.02)
+        #expect(slot.images.filter { $0.rect.width == EmbedLayoutEngine.thumbnailSide }.isEmpty)
+        // Discord's `Mg`: a video says nothing below its title.
+        #expect(!slot.texts.contains { $0.block.text.attributed.string.contains("uploader") })
+    }
+
+    @Test("A player on somebody else's host is not started")
+    func lookAlikePlayer() {
+        let slot = layout(youtube(video: "https://www.youtube.com.evil.test/embed/x"))
+        #expect(slot.images.allSatisfy { $0.controls == nil })
+    }
+
+    @Test("Twitch is told the hosts it is framed by")
+    func twitchParents() throws {
+        var embed = youtube(video: "https://player.twitch.tv/?channel=somebody&parent=meta.tag")
+        embed.providerName = "Twitch"
+        let player = try #require(EmbedLayoutEngine.playerURL(for: embed))
+        let parents = URLComponents(url: player, resolvingAgainstBaseURL: false)?.queryItems?
+            .filter { $0.name == "parent" }.compactMap(\.value) ?? []
+        #expect(parents.contains("discord.com"))
+        #expect(!parents.contains("meta.tag"))
+    }
+
     @Test("A card is capped at the embed width, never the column's")
     func widthIsCapped() {
         let slot = layout(Embed(title: "Release", description: "Notes"), width: 900)

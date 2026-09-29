@@ -100,6 +100,51 @@ nonisolated struct EmbedImage: Sendable {
     /// and drawing its first frame for ever is the whole of "GIFs do not
     /// animate in the chat" on the embed half of the transcript.
     var isAnimated: Bool = false
+    /// The clip this picture is the poster of.
+    var video: EmbedVideo?
+    /// Play and Open Link over a site's player, in the row's space. Nil for
+    /// everything that is not one.
+    var controls: EmbedPlayControls?
+}
+
+/// A clip an embed's picture stands in for.
+nonisolated enum EmbedVideo: Sendable, Hashable {
+    /// A GIF that is an MP4 — Tenor's and Giphy's are. Their unfurl is a
+    /// `gifv` whose thumbnail is a still, and drawing that still for ever is
+    /// "GIFs do not animate" for most GIFs people send. Discord plays the clip
+    /// muted, looping, on its own, with the thumbnail as its poster (module
+    /// `175671`'s `ei`, the video's proxy URL first); so does the transcript,
+    /// on a layer.
+    case loop(URL)
+    /// A site's own player — YouTube, Twitch, TikTok — which the Play control
+    /// starts in place of the thumbnail, as Discord's iframe does.
+    case player(URL)
+
+    var isLoop: Bool {
+        if case .loop = self { return true }
+        return false
+    }
+}
+
+/// Discord's two controls over a video's thumbnail (module `821209`): Play,
+/// and Open Link, side by side in the middle.
+nonisolated struct EmbedPlayControls: Sendable, Hashable {
+    var play: CGRect
+    var open: CGRect
+    /// Where Open Link goes: the page, not the player.
+    var page: URL
+
+    static let side: CGFloat = 40
+    static let gap: CGFloat = 12
+
+    init(centeredIn box: CGRect, page: URL) {
+        let side = Self.side
+        let y = box.midY - side / 2
+        let left = box.midX - side - Self.gap / 2
+        play = CGRect(x: left, y: y, width: side, height: side)
+        open = CGRect(x: left + side + Self.gap, y: y, width: side, height: side)
+        self.page = page
+    }
 }
 
 /// Turns an embed into rectangles.
@@ -156,7 +201,12 @@ nonisolated enum EmbedLayoutEngine {
         }
 
         let cardWidth = min(Metrics.embedMaxWidth, availableWidth)
-        let hasThumbnail = embed.thumbnail != nil
+        // **A video is its media, not a corner thumbnail**: Discord draws the
+        // thumbnail only when an embed has no media (module `175671`'s
+        // `renderAll`), and a site's player is media.
+        let player = Self.playerURL(for: embed)
+        let videoPoster = player != nil ? (embed.thumbnail ?? embed.image) : nil
+        let hasThumbnail = embed.thumbnail != nil && videoPoster == nil
         let contentX = origin.x + ruleWidth + padding
         let fullContentWidth = max(40, cardWidth - ruleWidth - padding * 2)
         let contentWidth = hasThumbnail
@@ -213,7 +263,10 @@ nonisolated enum EmbedLayoutEngine {
             y += block.size.height + gap
         }
 
-        if let description = embed.description, !description.isEmpty {
+        // Discord's `Mg`: an image, a video or a GIF says nothing below its
+        // title — the picture is the content.
+        if !["image", "video", "gifv"].contains(embed.kind),
+           let description = embed.description, !description.isEmpty {
             let block = markdownBlock(
                 description,
                 width: contentWidth,
@@ -255,7 +308,26 @@ nonisolated enum EmbedLayoutEngine {
             texts: &texts
         )
 
-        if let image = embed.image {
+        if let poster = videoPoster, let player, let page = embed.url.flatMap(URL.init(string:)) {
+            let source = poster.proxyURL ?? poster.url
+            let width = fullContentWidth
+            // The clip's own shape where the unfurl gives it, the poster's
+            // otherwise.
+            let aspect = embed.video?.aspectRatio ?? poster.aspectRatio ?? 16.0 / 9.0
+            let height = min(imageMaxHeight, width / aspect)
+            let rect = CGRect(x: contentX, y: y, width: width, height: height)
+            images.append(EmbedImage(
+                rect: rect,
+                url: CDN.resizedAttachment(proxyURL: source, width: width, height: width / aspect),
+                isCircle: false,
+                corner: corner,
+                decodeWidth: width,
+                isArtwork: true,
+                video: .player(player),
+                controls: EmbedPlayControls(centeredIn: rect, page: page)
+            ))
+            y += height + gap
+        } else if let image = embed.image {
             let source = image.proxyURL ?? image.url
             let width = fullContentWidth
             // A missing ratio is a real state, not a square to substitute:
@@ -265,7 +337,11 @@ nonisolated enum EmbedLayoutEngine {
                 ?? min(imageMaxHeight, width * 0.5625)
             images.append(EmbedImage(
                 rect: CGRect(x: contentX, y: y, width: width, height: height),
-                url: CDN.resizedAttachment(proxyURL: source, width: width),
+                // Its own height at this width, not the clamped box's: a tall
+                // picture fitted to the box would come back too narrow.
+                url: CDN.resizedAttachment(
+                    proxyURL: source, width: width, height: image.aspectRatio.map { width / $0 }
+                ),
                 isCircle: false,
                 corner: corner,
                 decodeWidth: width,
@@ -551,24 +627,68 @@ nonisolated enum EmbedLayoutEngine {
             texts: [],
             images: [EmbedImage(
                 rect: rect,
-                // **Whole, not resized, when it moves.** `width=` on a GIF path
-                // answers with a single frame, so a resized rendition is an
-                // animation with nothing to play; `AnimatedImageStore`
-                // downsamples at decode instead.
-                url: isAnimated
-                    ? URL(string: media.proxyURL ?? media.url)
-                    : CDN.resizedAttachment(
-                        proxyURL: media.proxyURL ?? media.url, width: width
-                    ),
+                // Resized whether or not it moves: the proxy keeps every frame
+                // of a GIF it resizes. See `CDN.resizedAttachment`.
+                url: CDN.resizedAttachment(
+                    proxyURL: media.proxyURL ?? media.url, width: width, height: height
+                ),
                 isCircle: false,
                 corner: corner,
                 decodeWidth: width,
                 isArtwork: true,
-                isAnimated: isAnimated
+                isAnimated: isAnimated,
+                video: embed.kind == "gifv"
+                    ? embed.video.flatMap { URL(string: $0.proxyURL ?? $0.url) }.map(EmbedVideo.loop)
+                    : nil
             )],
             favorite: favorite(for: embed, media: media, animates: isAnimated),
             favoriteRect: TimelineLayoutEngine.favoriteBadgeRect(in: rect)
         )
+    }
+
+    /// The player a video embed's Play control starts, or nil when there is
+    /// none — Discord's module `259407`, which plays exactly these three
+    /// sites in place and adds each one's own parameters.
+    ///
+    /// **Twitch will not play without `parent`**, the page it is framed in;
+    /// Discord names its own hosts and so does this, because the player is
+    /// loaded as if framed by discord.com — see `EmbedPlayerView`.
+    static func playerURL(for embed: Embed) -> URL? {
+        guard embed.kind == "video", let source = embed.video?.url,
+              var components = URLComponents(string: source), components.scheme == "https",
+              let host = components.host?.lowercased()
+        else { return nil }
+        // Each site's player from that site's own host and nowhere else: the
+        // page it is framed in is discord.com's, and a player is somebody
+        // else's message.
+        func hosted(_ domains: String...) -> Bool {
+            domains.contains { host == $0 || host.hasSuffix("." + $0) }
+        }
+        var items = components.queryItems ?? []
+        func set(_ name: String, _ value: String) {
+            items.removeAll { $0.name == name }
+            items.append(URLQueryItem(name: name, value: value))
+        }
+        switch embed.providerName {
+        case "YouTube":
+            guard hosted("youtube.com", "youtube-nocookie.com") else { return nil }
+            set("autoplay", "1")
+            set("auto_play", "1")
+        case "Twitch":
+            guard hosted("twitch.tv") else { return nil }
+            items.removeAll { $0.name == "parent" }
+            for parent in ["discord.co", "discord.com", "discordapp.com", "ptb.discord.com", "canary.discord.com", "localhost"] {
+                items.append(URLQueryItem(name: "parent", value: parent))
+            }
+            set("autoplay", "true")
+        case "TikTok":
+            guard hosted("tiktok.com") else { return nil }
+            set("utm_source", "discord.gg")
+        default:
+            return nil
+        }
+        components.queryItems = items
+        return components.url
     }
 
     /// The GIF an unfurled embed would be starred as.
@@ -710,7 +830,7 @@ nonisolated enum EmbedLayoutEngine {
         if let link, InlineScannerSchemeCheck.isSafe(link) {
             links.append(.init(
                 range: NSRange(location: 0, length: attributed.length),
-                target: MessageLink.parse(link).map { .message($0) } ?? .url(link)
+                target: ChannelLink.parse(link).map { .channelLink($0, url: link) } ?? .url(link)
             ))
         }
         return TimelineTextBlock(

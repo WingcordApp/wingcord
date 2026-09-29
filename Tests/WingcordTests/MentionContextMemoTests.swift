@@ -130,7 +130,7 @@ struct MemoryPressureTests {
         let model = AppModel()
         model.selectedGuildID = GuildID(rawValue: 1)
         _ = model.mentionContext()
-        _ = model.rosterSections
+        _ = model.roster
         #expect(model.mentionCache != nil)
 
         model.relieveMemoryPressure()

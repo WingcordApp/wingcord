@@ -65,19 +65,55 @@ extension AppModel {
         let owner = guildStickers.first { _, stickers in
             stickers.contains { $0.id == sticker.id }
         }?.key
-        // Discord's own packs are not a server, so they answer the "where from"
-        // question with a pack name rather than with a rail icon.
-        let pack = owner == nil ? standardStickerPack(containing: sticker.id) : nil
-
-        return ExpressionInfo(
+        var info = ExpressionInfo(
             artURL: CDN.sticker(id: sticker.id, format: sticker.format),
             isVector: sticker.format == .lottie,
             glyph: nil,
             title: sticker.name.isEmpty ? "Sticker" : sticker.name,
-            detail: pack.map { "From the \($0) sticker pack." }
-                ?? detail(owner: owner, id: sticker.id, noun: "sticker"),
-            source: pack == nil ? resolvedSource(owner: owner, id: sticker.id) : nil
+            detail: "",
+            source: nil,
+            sticker: sticker
         )
+        guard owner == nil else {
+            info.detail = detail(owner: owner, id: sticker.id, noun: "sticker")
+            info.source = resolvedSource(owner: owner, id: sticker.id)
+            return info
+        }
+
+        // **Discord's own packs answer before any server is asked.** A server
+        // is only the answer for a sticker that is not one of them, and asking
+        // the source route about a stock sticker is what produced "a custom
+        // sticker from a server you are not in" for Wumpus.
+        switch standardStickerLookup(for: sticker.id) {
+        case .standard(let pack, let isOffered):
+            info.pack = ExpressionInfo.Pack(
+                sectionID: ExpressionSection.stickerPackID(pack.id),
+                name: pack.name,
+                isOffered: isOffered,
+                samples: Array(pack.stickers.prefix(4).filter { $0.id != sticker.id }.prefix(3))
+            )
+        case .resolving:
+            info.detail = "Finding out where this came from…"
+        case .standardUnnamed:
+            info.detail = "One of Discord's own stickers."
+        case .guildSticker, .failed, nil:
+            info.detail = detail(owner: nil, id: sticker.id, noun: "sticker")
+            info.source = resolvedSource(owner: nil, id: sticker.id)
+        }
+        return info
+    }
+
+    /// What is known about a sticker no resident server owns: from the packs
+    /// in hand when they have it, and otherwise from a lookup already made.
+    ///
+    /// **The packs first, and synchronously.** They are fetched once per
+    /// launch; once they are in, a stock sticker's card is complete on the
+    /// frame it opens, with no request behind it.
+    private func standardStickerLookup(for id: UInt64) -> StickerLookup? {
+        if let packID = standardPackIDByStickerID[id], let pack = standardStickerPacks[packID] {
+            return .standard(pack, isOffered: true)
+        }
+        return stickerLookups[id]
     }
 
     /// The sentence under the title.
@@ -175,7 +211,7 @@ extension AppModel {
     ///
     /// Called by the presenter rather than by the resolver: a resolver that
     /// fires a request is a resolver that fires one every time a view body runs.
-    func loadExpressionSourceIfNeeded(for request: ExpressionInfoRequest) {
+    func loadExpressionSourceIfNeeded(for request: ExpressionInfoRequest) async {
         switch request.subject {
         case .emoji(let emoji):
             guard let id = emoji.id else { return }
@@ -186,23 +222,33 @@ extension AppModel {
             guard !guildStickers.contains(where: { _, list in
                 list.contains { $0.id == sticker.id }
             }) else { return }
-            // One of Discord's own packs has a pack name and no server behind it.
-            guard standardStickerPack(containing: sticker.id) == nil else { return }
-            sessionController.loadExpressionSource(sticker.id, isSticker: true)
+            await sessionController.resolveSticker(sticker.id)
         }
     }
 
-    /// The pack one of Discord's own stickers belongs to.
+    // MARK: The sticker picker, from a card
+
+    /// Whether "View More Stickers" can do what it says: the reader is in a
+    /// conversation they can write in, so its composer has a picker to open.
+    var canOpenStickerPicker: Bool {
+        guard let channelID = selectedChannelID, !isPreviewingSelectedGuild else { return false }
+        return permissionGate.canSend(in: channelID)
+    }
+
+    /// Opens the selected conversation's sticker picker at one pack, and closes
+    /// the card that asked.
     ///
-    /// A scan over the standard packs, which is a few hundred entries fetched
-    /// once per launch — small enough that an index keyed by sticker id would be
-    /// a second structure to keep correct for a lookup made on a click.
-    private func standardStickerPack(containing id: UInt64) -> String? {
-        for section in defaultStickerPacks
-        where section.items.contains(where: { $0.id == String(id) }) {
-            return section.title
-        }
-        return nil
+    /// **The request first, then the dismissal** — `INVARIANTS.md` §5: a
+    /// presentation deferred behind another's dismissal is a race.
+    func openStickerPicker(at sectionID: String) {
+        guard let channelID = selectedChannelID else { return }
+        stickerPickerToken &+= 1
+        stickerPickerRequest = StickerPickerRequest(
+            channelID: channelID,
+            sectionID: sectionID,
+            token: stickerPickerToken
+        )
+        expressionInfoRequest = nil
     }
 
     private func expressionSource(for guildID: GuildID) -> ExpressionInfo.Source? {
@@ -350,20 +396,44 @@ extension AppModel {
         )
     }
 
-    /// Follows a message link.
-    func openMessageLink(_ link: MessageLink) {
+    /// Follows a link into this account: a channel, or one message in it.
+    ///
+    /// **A channel this account cannot name opens in the browser**, from the
+    /// URL it was written as — Discord's own chip for one still goes somewhere,
+    /// and a chip that did nothing would be the inert control §5.5 forbids. A
+    /// forum post this client has not been told about opens its forum, which
+    /// is what Discord's chip names in that case.
+    func openChannelLink(_ link: ChannelLink, fallbackURL: String?) {
+        let destination: ChannelID? = if channelIndex[link.destinationID] != nil {
+            link.destinationID
+        } else if link.threadID != nil, channelIndex[link.channelID] != nil {
+            link.channelID
+        } else {
+            nil
+        }
+        guard let destination else {
+            if let fallbackURL, InlineScannerSchemeCheck.isSafe(fallbackURL),
+               let url = URL(string: fallbackURL)
+            {
+                NSWorkspace.shared.open(url)
+            }
+            return
+        }
         // The permission gate answers for every channel in the account, so a
         // link into a private channel the reader cannot see stops here rather
         // than opening an empty transcript.
-        guard canOpen(link.channelID) else { return }
+        guard canOpen(destination) else { return }
         profileRequest = nil
         expressionInfoRequest = nil
-        if let guildID = link.guildID, selectedGuildID != guildID {
-            selectGuild(guildID)
-        } else if link.guildID == nil, selectedGuildID != nil {
-            selectGuild(nil)
+        let guildID = channelIndex.guildID(of: destination)
+        if selectedGuildID != guildID { selectGuild(guildID) }
+        // A message in a post whose post is unknown cannot be jumped to from
+        // its forum; the forum is where the link goes then.
+        if let messageID = link.messageID, destination == link.destinationID {
+            sessionController.jumpToMessage(messageID, in: destination)
+        } else {
+            selectChannel(destination)
         }
-        sessionController.jumpToMessage(link.messageID, in: link.channelID)
     }
 
     /// Follows a link somebody wrote — in a message, in a bio, in a status.
@@ -375,11 +445,10 @@ extension AppModel {
     /// string came from. `INVARIANTS.md` §5.5: a client that navigates on an
     /// unchecked host is a client anybody who can write to it can steer.
     func openLink(_ string: String) {
-        // A Discord message link the renderer could not name is still a place in
-        // this account. The store has the whole index, so it can answer what a
-        // single surface could not.
-        if let link = MessageLink.parse(string), channelIndex[link.channelID] != nil {
-            openMessageLink(link)
+        // A link into this account is a place in it, whichever surface it was
+        // written on.
+        if let link = ChannelLink.parse(string) {
+            openChannelLink(link, fallbackURL: string)
             return
         }
         guard InlineScannerSchemeCheck.isSafe(string), let url = URL(string: string) else {

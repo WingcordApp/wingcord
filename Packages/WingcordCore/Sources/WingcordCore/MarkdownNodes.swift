@@ -21,7 +21,33 @@ public indirect enum InlineNode: Hashable, Sendable {
     /// `<t:1234567890:F>` — a moment rendered in the reader's own time zone and
     /// locale, which is why it is a node and not text.
     case timestamp(Date, TimestampStyle)
+    /// `<id:guide>` and its kin — a place in the server rather than a channel.
+    /// `itemID` is the role in `<id:linked-roles:123>`.
+    case staticRoute(StaticRoute, itemID: UInt64?)
     case lineBreak
+}
+
+/// A place in a server that a message can point at by name — Discord's
+/// `staticRouteLink`, `<id:guide>`.
+///
+/// **Exactly Discord's five** (`/^<id:(home|browse|customize|guide|linked-roles)
+/// (?::(\d+))?>/`); anything else in that shape stays text, as it does there.
+public enum StaticRoute: String, Hashable, Sendable, CaseIterable {
+    case home
+    case browse
+    case customize
+    case guide
+    case linkedRoles = "linked-roles"
+
+    /// What the chip says — Discord's strings, `home` and `guide` sharing one.
+    public var title: String {
+        switch self {
+        case .home, .guide: "Server Guide"
+        case .browse: "Browse Channels"
+        case .customize: "Channels & Roles"
+        case .linkedRoles: "Linked Roles"
+        }
+    }
 }
 
 public struct InlineStyle: OptionSet, Hashable, Sendable {
@@ -116,6 +142,7 @@ public struct MarkdownDocument: Hashable, Sendable {
             case .userMention: out += "@user"
             case .roleMention: out += "@role"
             case .channelMention: out += "#channel"
+            case .staticRoute(let route, _): out += route.title
             case .commandMention(let name, _): out += "/\(name)"
             case .customEmoji(let emoji): out += ":\(emoji.name):"
             case .everyoneMention: out += "@everyone"

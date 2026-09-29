@@ -419,7 +419,11 @@ extension DiscordREST {
     ///   oldest-first, so `messages(in:)` flips it here and no surface has to
     ///   remember which way round a page came. **Mentions do not flip**: the
     ///   inbox reads newest-first, which is the order the route already sends.
-    static func page(from dtos: [MessageDTO], reversed: Bool) -> MessagePage {
+    static func page(
+        from dtos: [MessageDTO],
+        reversed: Bool,
+        wireCount: Int? = nil
+    ) -> MessagePage {
         var authors: [UserID: User] = [:]
         for dto in dtos {
             if let author = dto.author { authors[author.id] = author.domain }
@@ -432,7 +436,8 @@ extension DiscordREST {
         return MessagePage(
             messages: (reversed ? dtos.reversed().map(\.domain) : dtos.map(\.domain)),
             authors: authors,
-            threads: dtos.compactMap { $0.thread?.domain() }
+            threads: dtos.compactMap { $0.thread?.domain() },
+            wireCount: wireCount ?? dtos.count
         )
     }
 }

@@ -864,11 +864,6 @@ struct ActivityHero: View {
     /// actor, and a guide runs wherever layout does.
     nonisolated static let overhang = Metrics.activityHeaderIcon / 3
 
-    /// What the hero's filmstrip may hold. One banner, on screen for as long as
-    /// the page is, against a 64 MB store — the sidebar banner's own trade at a
-    /// wider column.
-    private static let filmBudget = 20 * 1024 * 1024
-
     @Environment(\.motion) private var motion
 
     private var videoURL: URL? {
@@ -949,8 +944,7 @@ struct ActivityHero: View {
                         AnimatedDecoration(
                             url: stillURL,
                             side: width,
-                            gravity: .resizeAspectFill,
-                            byteBudget: Self.filmBudget
+                            gravity: .resizeAspectFill
                         )
                     }
                 } else if let gradient {

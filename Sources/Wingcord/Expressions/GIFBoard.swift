@@ -152,9 +152,7 @@ struct GIFBoard: View {
                         AnimatedDecoration(
                             url: art,
                             side: Self.tileSide,
-                            gravity: .resizeAspectFill,
-                            byteBudget: Self.tileFilmBudget,
-                            animatesThroughScroll: true
+                            gravity: .resizeAspectFill
                         )
                     }
                 }
@@ -244,9 +242,7 @@ struct GIFBoard: View {
                     AnimatedDecoration(
                         url: url,
                         side: Self.tileSide,
-                        gravity: .resizeAspectFill,
-                        byteBudget: Self.tileFilmBudget,
-                        animatesThroughScroll: true
+                        gravity: .resizeAspectFill
                     )
                 }
             }
@@ -254,18 +250,11 @@ struct GIFBoard: View {
             .contentShape(.rect)
     }
 
-    /// What a tile is drawn at, and what its film may hold.
+    /// What a tile is drawn at.
     ///
-    /// **The budget is a frame count in disguise and the caller owns it.** How
-    /// many frames it buys depends on the provider's preview rendition, which
-    /// this client does not choose: a 220px preview is about 145 KB a frame and
-    /// four megabytes buys twenty-eight of them, while a 400px one is 480 KB and
-    /// buys eight. That is the difference between a loop and a slideshow, and it
-    /// is why the size is held down here rather than left at the drawn width —
-    /// the decode never upscales past the source, so asking for less costs
-    /// nothing when the source is already small.
+    /// The decode never upscales past the source, so a small preview costs no
+    /// more than its own pixels, and a large one is decoded to the tile.
     private static let tileSide: CGFloat = 160
-    private static let tileFilmBudget = 4 * 1024 * 1024
 
     static func split(_ gifs: [GIF], into count: Int) -> [[GIF]] {
         var columns = [[GIF]](repeating: [], count: count)

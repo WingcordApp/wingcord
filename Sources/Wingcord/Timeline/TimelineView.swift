@@ -231,6 +231,10 @@ final class TimelineCoordinator: NSObject {
     /// resumes after the view is gone writes nothing.
     private var isTornDown = false
 
+    /// The video playing over an embed's thumbnail. One at a time, as a
+    /// second Play ends the first.
+    private var embedPlayer: EmbedPlayerView?
+
     /// What the viewport was anchored to before a prepend, so history landing
     /// above does not move what the reader is looking at.
     private struct Anchor {
@@ -264,6 +268,9 @@ final class TimelineCoordinator: NSObject {
                 .emoji(emoji),
                 anchor: canvas.anchorInHostingRoot(rect)
             )
+        }
+        canvas.onPlayVideo = { [weak self] messageID, player, rect in
+            self?.playVideo(player, of: messageID, in: rect)
         }
         canvas.onToggleFavoriteGIF = { [weak self] gif in
             self?.model.sessionController.toggleFavorite(gif)
@@ -544,6 +551,9 @@ final class TimelineCoordinator: NSObject {
         canvas?.onOpenSticker = nil
         canvas?.onOpenAttachment = nil
         canvas?.onToggleFavoriteGIF = nil
+        canvas?.onPlayVideo = nil
+        embedPlayer?.stop()
+        embedPlayer = nil
         canvas?.onTogglePreview = nil
         canvas?.onOpenMusicPlayer = nil
         canvas?.isFavoriteGIF = nil
@@ -691,6 +701,9 @@ final class TimelineCoordinator: NSObject {
             // of a channel nobody is looking at.
             rowCache.removeAll(keepingCapacity: true)
             userCardHosts.removeAll()
+            // A clip does not play on in a channel the reader has left.
+            embedPlayer?.stop()
+            embedPlayer = nil
             layoutTask?.cancel()
             // **A clip does not follow the reader out of the channel.** The chip
             // that started it is about to stop existing, so the only way to stop
@@ -918,6 +931,7 @@ final class TimelineCoordinator: NSObject {
 
         positionCanvas()
         reconcileUserCards()
+        placeEmbedPlayer()
         schedulePrefetch()
         // A page landing is the moment a channel's newest message becomes
         // known, so it is the moment the channel can be acknowledged at all.
@@ -1150,17 +1164,54 @@ final class TimelineCoordinator: NSObject {
         }
     }
 
+    /// Starts a video's player over its thumbnail. See `EmbedPlayerView`.
+    private func playVideo(_ player: URL, of messageID: MessageID, in rect: CGRect) {
+        guard let canvas else { return }
+        embedPlayer?.stop()
+        let view = EmbedPlayerView(messageID: messageID, player: player)
+        view.frame = rect
+        canvas.addSubview(view)
+        embedPlayer = view
+    }
+
+    /// Keeps the player on its thumbnail as the rows are laid out again, and
+    /// ends it when its message is gone.
+    private func placeEmbedPlayer() {
+        guard let view = embedPlayer, let canvas else { return }
+        guard let index = canvas.rows.firstIndex(where: { $0.messageID == view.messageID }),
+              case .message(let row) = canvas.rows[index].kind,
+              let image = row.embeds.lazy.flatMap(\.images).first(where: { $0.video == .player(view.player) })
+        else {
+            view.stop()
+            embedPlayer = nil
+            return
+        }
+        let origin = canvas.rowFrame(at: index).origin
+        let frame = image.rect.offsetBy(dx: origin.x, dy: origin.y)
+        if view.frame != frame { view.frame = frame }
+    }
+
     /// What the viewport is looking at, so a prepend can put it back.
+    ///
+    /// **The first message at or below the viewport's top, not whatever row
+    /// sits there.** That row is as often a day heading, a divider or a
+    /// placeholder in the history runway, and a runway row keeps its place at
+    /// the top of the document while a page lands beneath it. Anchoring on
+    /// nothing left the viewport where it was as the page went in underneath:
+    /// a reader who had scrolled into the runway went on looking at
+    /// placeholders, each page landing out of sight below and the runway, still
+    /// on screen, asking for the next. Anchored on the message under the
+    /// placeholders, the page lands where they were.
     private func currentAnchor() -> Anchor? {
-        guard let scrollView, let canvas else { return nil }
-        let viewportTop = scrollView.contentView.bounds.minY
-        guard let index = canvas.rowIndex(at: viewportTop),
-              canvas.rows.indices.contains(index),
+        guard let scrollView, let canvas,
+              let first = canvas.rowIndex(at: scrollView.contentView.bounds.minY),
+              let index = canvas.rows[first...].firstIndex(where: { $0.messageID != nil }),
               let messageID = canvas.rows[index].messageID
         else { return nil }
         return Anchor(
             messageID: messageID,
-            offsetFromViewportTop: canvas.rowFrame(at: index).minY - viewportTop
+            offsetFromViewportTop: canvas.rowFrame(at: index).minY
+                - scrollView.contentView.bounds.minY
         )
     }
 
@@ -1381,6 +1432,7 @@ final class TimelineCoordinator: NSObject {
             scale: canvas.window?.backingScaleFactor ?? 2,
             loadsArtwork: AppSettings.shared.loadsImagesAutomatically,
             playsAnimatedEmoji: AnimationClock.playsAnimatedEmoji,
+            filmsOnLayers: true,
             onActivityIcon: { [weak model] in model?.sessionController.deriveActivityAccent($0) }
         )
     }
@@ -1390,20 +1442,19 @@ final class TimelineCoordinator: NSObject {
     private func open(_ target: MessageText.LinkTarget, from rect: CGRect) {
         switch target {
         case .url(let string):
-            // **The store's opener, not a copy of it here.** It resolves a
-            // message link against the whole account — the renderer only has the
-            // selected guild's channels plus the DMs, so a link into a third
-            // server arrives here as an ordinary URL — and it re-checks the
-            // scheme at the boundary rather than trusting the parser upstream.
-            // Every surface that follows a link somebody wrote goes through it.
+            // **The store's opener, not a copy of it here.** It re-checks the
+            // scheme at the boundary rather than trusting the parser upstream,
+            // and every surface that follows a link somebody wrote goes
+            // through it.
             model.openLink(string)
-        case .channel(let channelID):
-            model.selectChannel(channelID)
-        case .message(let link):
-            model.openMessageLink(link)
+        case .channelLink(let link, let url):
+            model.openChannelLink(link, fallbackURL: url)
         case .user(let userID):
             guard let canvas else { return }
             model.openProfile(userID, anchor: canvas.anchorInHostingRoot(rect))
+        case .staticRoute(let route, let itemID):
+            guard let canvas else { return }
+            model.openStaticRoute(route, itemID: itemID, anchor: canvas.anchorInHostingRoot(rect))
         case .role:
             break
         }

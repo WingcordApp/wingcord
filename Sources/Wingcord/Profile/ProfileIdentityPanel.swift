@@ -339,20 +339,15 @@ struct ProfileIdentityPanel: View {
                 // Only where the hash says it can move, so a still banner never
                 // pays for a second fetch and a multi-frame decode.
                 //
-                // **The budget is the whole loop at the size it is drawn**, not
-                // a number chosen by hand: a banner is around half a megabyte a
-                // frame here, so the 12 MB this used to ask for bought twenty
-                // frames of a sixty-frame asset — every third one, which is
-                // what made it stutter. `AnimatedImage.budget(forDrawn:)` is
-                // that arithmetic in one place.
+                // **Every frame, at the source's resolution**: it plays on a
+                // `FilmPlayer`, which streams a loop this size rather than
+                // sampling it down to fit a budget — the banner that used to
+                // stutter on every third frame of a sixty.
                 if CDN.canAnimate(url) {
                     AnimatedDecoration(
                         url: url,
                         side: Self.width,
                         gravity: .resizeAspectFill,
-                        byteBudget: AnimatedImage.budget(
-                            forDrawn: CGSize(width: Self.width, height: Self.bannerHeight)
-                        ),
                         onPlayback: { playing in
                             guard bannerIsPlaying != playing else { return }
                             bannerIsPlaying = playing

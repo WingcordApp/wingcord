@@ -152,6 +152,34 @@ struct TranscriptWindowTests {
         #expect(box.messages.last?.id.rawValue == 530)
     }
 
+    /// **The cut-off below a jump.** A page Discord sent in full, one message
+    /// of which this client could not read, is short by what was read and not
+    /// by what was sent. Read as short, it reconnected the window to a
+    /// present it had not reached and the transcript stopped there for good.
+    @Test("A page is short by what Discord sent, not by what could be read")
+    func unreadableMessageIsNotTheEnd() {
+        var box = MessageBox()
+        box.receiveAround(messages(101...200), edges: (older: true, newer: true))
+
+        // Ninety-nine read, one hundred sent.
+        box.receiveNewer(messages(201...299), wireCount: 100, after: MessageID(rawValue: 200))
+        #expect(box.hasMoreNewer)
+
+        box.receiveOlder(messages(2...100), wireCount: 100, before: MessageID(rawValue: 101))
+        #expect(box.hasMoreHistory)
+    }
+
+    @Test("Discord's around arithmetic counts the page it was sent")
+    func aroundCountsTheWire() {
+        // Fifty after the target were sent and one of them could not be read.
+        let read = (1...99).map { MessageID(rawValue: $0) }
+        let edges = TranscriptWindow.edges(
+            ofAround: read, wireCount: 100, target: MessageID(rawValue: 51), limit: 100,
+            newestInChannel: MessageID(rawValue: 5000)
+        )
+        #expect(edges.newer)
+    }
+
     @Test("Live messages wait beside a window cut off from the present")
     func liveMessagesAreHeld() {
         var box = MessageBox()

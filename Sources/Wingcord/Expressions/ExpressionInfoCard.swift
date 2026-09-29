@@ -15,6 +15,9 @@ import WingcordCore
 struct ExpressionInfoCard: View {
     var info: ExpressionInfo
     var openGuild: (GuildID) -> Void
+    /// Opens the composer's sticker picker at a pack. Nil where there is no
+    /// composer to open — the button is then absent rather than inert.
+    var openStickerPack: ((String) -> Void)? = nil
 
     private static let width: CGFloat = 300
     private static let artSide: CGFloat = 48
@@ -47,7 +50,7 @@ struct ExpressionInfoCard: View {
                         .foregroundStyle(InkColor.primary)
                         .lineLimit(1)
                         .truncationMode(.middle)
-                    Text(info.detail)
+                    detail
                         .font(.system(.caption))
                         .foregroundStyle(InkColor.secondary)
                         .fixedSize(horizontal: false, vertical: true)
@@ -55,6 +58,10 @@ struct ExpressionInfoCard: View {
                 Spacer(minLength: 0)
             }
             .padding(Spacing.margin)
+
+            if let pack = info.pack {
+                PackSection(pack: pack, openStickerPack: openStickerPack)
+            }
 
             if let source = info.source {
                 Divider().opacity(0.35)
@@ -66,14 +73,33 @@ struct ExpressionInfoCard: View {
         // and it casts its own shadow — §4.9.
     }
 
-    /// The picture, at four times the size it was drawn in the message.
+    /// The sentence under the title.
     ///
-    /// A Unicode emoji is text and needs no fetch at all; a Lottie sticker has
-    /// no bitmap on the CDN and takes its poster from the filmstrip cache, which
-    /// `RemoteImage` already routes by extension.
+    /// **Discord's own words for one of its stickers** — `auckXz` and
+    /// `OzB6e3` in the en-US strings — with the pack's name set in weight.
+    @ViewBuilder
+    private var detail: some View {
+        if let pack = info.pack {
+            let name = Text(pack.name).fontWeight(.semibold)
+            if pack.isOffered {
+                Text("This is a \(name) sticker.")
+            } else {
+                Text("This is a \(name) sticker. They’re no longer available.")
+            }
+        } else {
+            Text(info.detail)
+        }
+    }
+
+    /// The picture, at the size the card draws art at.
+    ///
+    /// A Unicode emoji is text and needs no fetch at all. A sticker plays in
+    /// whatever format it is in — see `StickerArt`.
     @ViewBuilder
     private var art: some View {
-        if let glyph = info.glyph {
+        if let sticker = info.sticker {
+            StickerArt(sticker: sticker, side: Self.artSide)
+        } else if let glyph = info.glyph {
             Text(glyph)
                 .font(.system(size: Self.artSide * 0.86))
                 .frame(width: Self.artSide, height: Self.artSide)
@@ -113,6 +139,48 @@ struct ExpressionInfoCard: View {
             // resolves, or the card is empty in between.
             .onChange(of: info.artURL) { isPlaying = false }
         }
+    }
+}
+
+/// The rest of one of Discord's own sticker packs, and the way into it.
+///
+/// **Discord's card, in this app's materials** (`s4` in module `30020925`):
+/// three more stickers from the pack, playing, and "View More Stickers", which
+/// opens the picker at that pack. The button is there only for a pack Discord
+/// still offers and only where a composer can open — a retired pack has nothing
+/// to browse to, and a button with nowhere to go is the inert control §5.5
+/// forbids.
+private struct PackSection: View {
+    var pack: ExpressionInfo.Pack
+    var openStickerPack: ((String) -> Void)?
+
+    /// Discord's size for the pack's samples.
+    private static let sampleSide: CGFloat = 80
+
+    var body: some View {
+        VStack(spacing: Spacing.snug) {
+            if !pack.samples.isEmpty {
+                HStack(spacing: 0) {
+                    ForEach(pack.samples, id: \.id) { sticker in
+                        StickerArt(sticker: sticker, side: Self.sampleSide)
+                            .frame(maxWidth: .infinity)
+                    }
+                }
+            }
+            if pack.isOffered, let openStickerPack {
+                Button { openStickerPack(pack.sectionID) } label: {
+                    Text("View More Stickers")
+                        .font(.system(.subheadline, weight: .semibold))
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, Spacing.base)
+                        .contentShape(.rect)
+                }
+                .buttonStyle(.glass)
+                .accessibilityHint("Opens the sticker picker at \(pack.name)")
+            }
+        }
+        .padding(.horizontal, Spacing.margin)
+        .padding(.bottom, Spacing.margin)
     }
 }
 

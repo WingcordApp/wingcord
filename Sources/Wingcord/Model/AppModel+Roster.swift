@@ -1,9 +1,18 @@
 import Foundation
 import WingcordCore
 
+/// One of a server's member lists — see `MemberList`.
+struct MemberListKey: Hashable, Sendable {
+    var guildID: GuildID
+    var listID: String
+}
+
 struct RosterMemoKey: Hashable, Sendable {
     var guildID: GuildID?
     var channelID: ChannelID?
+    /// Any list changed. Coarse on purpose: a list update is a handful of rows,
+    /// and the build it costs is the few hundred members around the viewport.
+    var memberListRevision: UInt64
     var memberRevision: UInt64
     var presenceRevision: UInt64
     var roleRevision: UInt64
@@ -55,9 +64,8 @@ extension AppModel {
     /// comparisons — measured at roughly a third of a second of main thread on
     /// the app this replaces, on every roster rebuild. Decorate, sort, undecorate.
     ///
-    /// Shared by the guild roster and the group one: two copies of a sort is two
-    /// places for a tie-break to differ, and a list that orders differently in
-    /// two surfaces is a list nobody can scan.
+    /// A server sorts its own lists; this orders the one roster the client
+    /// builds itself, a group conversation's.
     static func sortedByName(_ entries: [MemberEntry]) -> [MemberEntry] {
         struct SortKey {
             var key: String
@@ -75,18 +83,33 @@ extension AppModel {
         return decorated.map(\.entry)
     }
 
+    /// The list a channel shows, and the channel whose subscription feeds it.
+    ///
+    /// **A thread shows its parent's list**, the way Discord's client treats an
+    /// announcement thread; its own member list is a different feature this
+    /// column does not draw. Nil outside a server.
+    func memberListTarget(for channelID: ChannelID) -> (key: MemberListKey, channelID: ChannelID)? {
+        guard var channel = channelIndex[channelID], let guildID = channel.guildID else { return nil }
+        if channel.kind.isThread, let parent = channel.parentID.flatMap({ channelIndex[$0] }) {
+            channel = parent
+        }
+        let everyone = roles[guildID]?[RoleID(rawValue: guildID.rawValue)]?.permissions ?? []
+        let listID = MemberList.id(for: channel, everyonePermissions: everyone)
+        return (MemberListKey(guildID: guildID, listID: listID), channel.id)
+    }
+
     /// The member list for the selected channel.
     ///
     /// Memoized because a presence flush is the app's most frequent event: on a
     /// large server it arrives several times a second, and it moves nobody
-    /// across the online line the overwhelming majority of the time. A memo whose
-    /// key does not change means the roster's whole array is handed back by
-    /// pointer, and `Array ==` short-circuits on buffer identity — so the canvas
-    /// compares one pointer instead of rebuilding forty rows.
-    var rosterSections: [MemberSection] {
+    /// across the online line the overwhelming majority of the time. A memo
+    /// whose key does not change hands the same roster back, and the canvas
+    /// compares it and stops.
+    var roster: Roster {
         let key = RosterMemoKey(
             guildID: selectedGuildID,
             channelID: selectedChannelID,
+            memberListRevision: memberListRevision,
             memberRevision: memberRevision,
             presenceRevision: presenceRevision,
             roleRevision: roleRevision,
@@ -108,148 +131,133 @@ extension AppModel {
         return value
     }
 
-    /// **Read once per build, never per row.** `userColorSaturation` is an
-    /// observable property, so a read inside the loop is a tracked access per
-    /// member — five hundred of them on a large roster, for a value that cannot
-    /// change while the array is being built.
     private func buildRoster(
         members memberTable: [GuildID: [UserID: Member]],
         presences presenceTable: [UserID: Presence],
         voice: RosterVoiceFacts
-    ) -> [MemberSection] {
-        let saturation = userColorSaturation
+    ) -> Roster {
         // A group conversation has a roster of its own — its recipients — and
-        // no guild behind it, so it never reaches the table lookup below.
+        // no guild behind it, so it never reaches the list below.
         if let channelID = selectedChannelID,
            let channel = channelIndex[channelID],
            channel.kind == .groupDirectMessage
         {
             return buildGroupRoster(channel, presences: presenceTable, voice: voice)
         }
-        guard let guildID = selectedGuildID,
-              let guildMembers = memberTable[guildID]
-        else { return [] }
+        guard let channelID = selectedChannelID,
+              let target = memberListTarget(for: channelID)
+        else { return .empty }
 
+        let guildID = target.key.guildID
         let guildRoles = roles[guildID] ?? [:]
-        let channel = selectedChannelID.flatMap { channelIndex[$0] }
-        // **Read once, for the channel on screen.** Typing is per-conversation,
-        // and the roster is drawn beside one — so a lookup per member would be
-        // a dictionary hit per row for a table that cannot move while the list
-        // is being built. Lapsed entries are already gone: the session's one
-        // timer prunes the table.
-        let typing = selectedChannelID.map(typers(in:)) ?? [:]
+        let list = memberLists[target.key] ?? MemberList()
+        let guildMembers = memberTable[guildID] ?? [:]
+        let people = RosterPeople(
+            saturation: userColorSaturation,
+            // **Read once, for the channel on screen.** Typing is per
+            // conversation, and the roster is drawn beside one.
+            typing: typers(in: channelID),
+            voice: voice
+        )
 
-        // Grouped by hoist role, plus the two synthetic groups. A dictionary of
-        // arrays rather than repeated filtering: filtering per section is a full
-        // pass over the roster per section, and a guild with twenty hoisted
-        // roles is twenty passes.
-        var hoisted: [RoleID: [MemberEntry]] = [:]
-        var online: [MemberEntry] = []
-        var offline: [MemberEntry] = []
-
-        for (userID, member) in guildMembers {
-            guard let user = users[userID] else { continue }
-
-            // A member who cannot see the channel does not appear in its member
-            // list. This is the same gate the channel list uses, applied from
-            // the other side — and leaving it out is how a private channel's
-            // roster lists the whole server.
-            if let channel, !canSee(channel: channel, member: member, userID: userID, guildID: guildID) {
-                continue
+        let sections = zip(list.groups, list.headingIndexes).map { group, index in
+            let title: String?
+            var colorValue: UInt32?
+            var iconURL: URL?
+            switch group.id {
+            case .role(let roleID):
+                // A role nobody here knows is a heading with no name, which is
+                // how Discord draws it too.
+                let role = guildRoles[roleID]
+                title = role?.name ?? ""
+                colorValue = roleColor(role?.displayColorValue)
+                iconURL = role?.iconHash.flatMap {
+                    CDN.roleIcon(roleID: roleID, hash: $0, side: MemberRowGeometry.sectionIconSide)
+                }
+            case .online: title = "Online"
+            case .offline: title = "Offline"
+            case .unknown: title = nil
             }
-
-            let presence = presenceTable[userID]
-            let status = presence?.status ?? .offline
-            // One role answers for both, so a gradient can never be drawn over
-            // a different role's colour — see `RoleResolver.nameColorRole`.
-            let coloured = RoleResolver.nameColorRole(of: member.roleIDs, in: guildRoles)
-            let entry = MemberEntry(
-                userID: userID,
-                name: member.resolvedName(user: user),
-                colorValue: roleColor(coloured?.displayColorValue),
-                gradient: AppSettings.shared.roleColorPlacement.tintsNames
-                    ? coloured?.colors
-                        .flatMap { RoleColors.wrappedStops($0) }?
-                        .map { UserColor.desaturated($0, by: saturation) }
-                    : nil,
-                avatarURL: avatarURL(forUserID: userID, inGuild: guildID, side: Metrics.avatarRow),
-                monogram: user.monogram,
-                decorationURL: cosmetics(of: user)?.avatarDecorationHash
-                    .flatMap { CDN.avatarDecoration(hash: $0) },
-                displayNameFont: cosmetics(of: user)?.displayNameStyle?.font,
-                status: status,
-                isOnMobile: presence?.isOnMobile ?? false,
-                activityLine: Self.activityLine(
-                    presence: presence,
-                    isBot: user.isBot,
-                    voice: voice.places[userID],
-                    isStreaming: voice.sharing.contains(userID)
-                ),
-                isBot: user.isBot,
-                tag: cosmetics(of: user)?.primaryGuildTag,
-                tagBadgeURL: cosmetics(of: user).flatMap { decoration in
-                    guard let guildID = decoration.primaryGuildID,
-                          let hash = decoration.primaryGuildBadgeHash
-                    else { return nil }
-                    return CDN.guildTagBadge(guildID: guildID, hash: hash)
-                },
-                nameplateURL: cosmetics(of: user)?.nameplate?.artworkURL,
-                nameplateAnimatedURL: cosmetics(of: user)?.nameplate?.animatedArtworkURL,
-                nameplatePalette: cosmetics(of: user)?.nameplate?.palette ?? .none,
-                isTyping: typing[userID] != nil
+            return RosterSection(
+                label: title.map { "\($0) — \(group.count.formatted())" },
+                colorValue: colorValue,
+                iconURL: iconURL,
+                index: index,
+                count: group.count
             )
-
-            if status == .offline {
-                offline.append(entry)
-            } else if let role = RoleResolver.hoistRole(of: member.roleIDs, in: guildRoles) {
-                hoisted[role.id, default: []].append(entry)
-            } else {
-                online.append(entry)
-            }
         }
 
-        let sorted = Self.sortedByName
-
-        var sections: [MemberSection] = []
-        for role in guildRoles.values.filter({ hoisted[$0.id] != nil })
-            .sorted(by: Role.seniorityOrder)
-        {
-            let entries = sorted(hoisted[role.id] ?? [])
-            sections.append(MemberSection(
-                roleID: role.id,
-                title: role.name,
-                count: entries.count,
-                colorValue: roleColor(role.displayColorValue),
-                iconURL: role.iconHash.flatMap {
-                    CDN.roleIcon(roleID: role.id, hash: $0, side: MemberRowGeometry.sectionIconSide)
-                },
-                members: entries
-            ))
+        // Only the rows the server has sent — a few hundred, whatever the
+        // list's length. Somebody whose records are missing stays a placeholder.
+        var entries: [Int: MemberEntry] = [:]
+        entries.reserveCapacity(list.rows.count)
+        for (index, row) in list.rows {
+            guard case .member(let userID) = row,
+                  let member = guildMembers[userID],
+                  let user = users[userID]
+            else { continue }
+            entries[index] = memberEntry(
+                user, member: member, guildID: guildID, roles: guildRoles,
+                presence: presenceTable[userID], people: people
+            )
         }
 
-        let onlineEntries = sorted(online)
-        if !onlineEntries.isEmpty {
-            sections.append(MemberSection(
-                roleID: nil,
-                title: "Online",
-                count: onlineEntries.count,
-                colorValue: nil,
-                members: onlineEntries
-            ))
-        }
+        return Roster(
+            identity: "\(guildID):\(target.key.listID)",
+            sections: sections,
+            members: entries,
+            rowCount: list.rowCount
+        )
+    }
 
-        let offlineEntries = sorted(offline)
-        if !offlineEntries.isEmpty {
-            sections.append(MemberSection(
-                roleID: nil,
-                title: "Offline",
-                count: offlineEntries.count,
-                colorValue: nil,
-                members: offlineEntries
-            ))
-        }
-
-        return sections
+    /// One server member's row.
+    private func memberEntry(
+        _ user: User,
+        member: Member,
+        guildID: GuildID,
+        roles guildRoles: [RoleID: Role],
+        presence: Presence?,
+        people: RosterPeople
+    ) -> MemberEntry {
+        let userID = user.id
+        // One role answers for both, so a gradient can never be drawn over a
+        // different role's colour — see `RoleResolver.nameColorRole`.
+        let coloured = RoleResolver.nameColorRole(of: member.roleIDs, in: guildRoles)
+        let cosmetics = cosmetics(of: user)
+        return MemberEntry(
+            userID: userID,
+            name: member.resolvedName(user: user),
+            colorValue: roleColor(coloured?.displayColorValue),
+            gradient: AppSettings.shared.roleColorPlacement.tintsNames
+                ? coloured?.colors
+                    .flatMap { RoleColors.wrappedStops($0) }?
+                    .map { UserColor.desaturated($0, by: people.saturation) }
+                : nil,
+            avatarURL: avatarURL(forUserID: userID, inGuild: guildID, side: Metrics.avatarRow),
+            monogram: user.monogram,
+            decorationURL: cosmetics?.avatarDecorationHash.flatMap { CDN.avatarDecoration(hash: $0) },
+            displayNameFont: cosmetics?.displayNameStyle?.font,
+            status: presence?.status ?? .offline,
+            isOnMobile: presence?.isOnMobile ?? false,
+            activityLine: Self.activityLine(
+                presence: presence,
+                isBot: user.isBot,
+                voice: people.voice.places[userID],
+                isStreaming: people.voice.sharing.contains(userID)
+            ),
+            isBot: user.isBot,
+            tag: cosmetics?.primaryGuildTag,
+            tagBadgeURL: cosmetics.flatMap { decoration in
+                guard let guildID = decoration.primaryGuildID,
+                      let hash = decoration.primaryGuildBadgeHash
+                else { return nil }
+                return CDN.guildTagBadge(guildID: guildID, hash: hash)
+            },
+            nameplateURL: cosmetics?.nameplate?.artworkURL,
+            nameplateAnimatedURL: cosmetics?.nameplate?.animatedArtworkURL,
+            nameplatePalette: cosmetics?.nameplate?.palette ?? .none,
+            isTyping: people.typing[userID] != nil
+        )
     }
 
     /// The roster of a group conversation.
@@ -266,7 +274,7 @@ extension AppModel {
         _ channel: Channel,
         presences presenceTable: [UserID: Presence],
         voice: RosterVoiceFacts
-    ) -> [MemberSection] {
+    ) -> Roster {
         var online: [MemberEntry] = []
         var offline: [MemberEntry] = []
 
@@ -317,55 +325,33 @@ extension AppModel {
             if status == .offline { offline.append(entry) } else { online.append(entry) }
         }
 
-        var sections: [MemberSection] = []
-        if !online.isEmpty {
-            let entries = Self.sortedByName(online)
-            sections.append(MemberSection(
-                roleID: nil,
-                title: "Online",
-                count: entries.count,
-                colorValue: nil,
-                members: entries
+        var roster = Roster(identity: "group:\(channel.id)", sections: [], members: [:], rowCount: 0)
+        for (title, people) in [("Online", online), ("Offline", offline)] where !people.isEmpty {
+            let heading = roster.rowCount
+            roster.sections.append(RosterSection(
+                label: "\(title) — \(people.count.formatted())",
+                index: heading,
+                count: people.count
             ))
+            for (offset, entry) in Self.sortedByName(people).enumerated() {
+                roster.members[heading + 1 + offset] = entry
+            }
+            roster.rowCount = heading + 1 + people.count
         }
-        if !offline.isEmpty {
-            let entries = Self.sortedByName(offline)
-            sections.append(MemberSection(
-                roleID: nil,
-                title: "Offline",
-                count: entries.count,
-                colorValue: nil,
-                members: entries
-            ))
-        }
-        return sections
+        return roster
     }
+}
 
-    /// Whether one member may see a channel.
-    ///
-    /// Resolved through the same `PermissionResolver` the reader's own gate uses,
-    /// so the two can never disagree about what an overwrite means. It is not
-    /// routed through `PermissionGate`, which caches answers for *the reader*
-    /// specifically.
-    private func canSee(
-        channel: Channel,
-        member: Member,
-        userID: UserID,
-        guildID: GuildID
-    ) -> Bool {
-        guard let guild = guilds[guildID] else { return false }
-        // A DM has no roster to filter.
-        guard channel.guildID != nil else { return true }
-        return PermissionResolver.permissions(
-            forMember: member.roleIDs,
-            userID: userID,
-            guildID: guildID,
-            guildOwnerID: guild.ownerID,
-            roles: roles[guildID] ?? [:],
-            channel: channel
-        )
-        .contains(.viewChannel)
-    }
+/// What one roster build reads once and hands to every row.
+///
+/// **Read once per build, never per row.** `userColorSaturation` is an
+/// observable property, so a read inside the loop is a tracked access per
+/// member, for a value that cannot change while the roster is being built.
+private struct RosterPeople {
+    var saturation: Double
+    /// Who is typing in the channel on screen.
+    var typing: [UserID: Date]
+    var voice: RosterVoiceFacts
 }
 
 extension AppModel {

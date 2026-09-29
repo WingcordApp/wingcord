@@ -53,8 +53,12 @@ nonisolated enum TranscriptWindow {
     /// so does a page whose newest message is the channel's newest.
     ///
     /// - Parameter ids: the page, oldest first.
+    /// - Parameter wireCount: how many messages Discord sent, including any
+    ///   that could not be read — Discord's own arithmetic counts the page it
+    ///   received. Defaults to the page itself.
     static func edges(
         ofAround ids: [MessageID],
+        wireCount: Int? = nil,
         target: MessageID,
         limit: Int,
         newestInChannel: MessageID?
@@ -63,7 +67,7 @@ nonisolated enum TranscriptWindow {
         let upper = half + limit % 2
         let index = ids.firstIndex { $0.rawValue >= target.rawValue } ?? ids.count
         let older = index >= upper - 1
-        var newer = ids.count - index >= half
+        var newer = max(wireCount ?? ids.count, ids.count) - index >= half
         if newer, let newest = ids.last, newest == newestInChannel { newer = false }
         return (older, newer)
     }
@@ -77,8 +81,15 @@ extension MessageBox {
     ///   while it was in flight — a jump, or a return to the present, replaced
     ///   it. Landing it anyway would splice a stranger's history onto the new
     ///   window with a silent gap between them.
+    /// - Parameter wireCount: how many messages Discord sent — see
+    ///   `MessagePage.wireCount`. A page is short by what Discord sent, never
+    ///   by what could be read.
     @discardableResult
-    mutating func receiveOlder(_ page: [Message], before anchor: MessageID?) -> Bool {
+    mutating func receiveOlder(
+        _ page: [Message],
+        wireCount: Int? = nil,
+        before anchor: MessageID?
+    ) -> Bool {
         // No anchor is a channel's first page — the newest — which lands in
         // whatever the gateway has put there since, newer than all of it. **Not
         // into a window a jump has cut off from the present**, though: a link
@@ -87,7 +98,7 @@ extension MessageBox {
         let fits = if let anchor { anchor == messages.first?.id } else { !hasMoreNewer }
         guard fits else { return false }
         for message in page { upsert(message) }
-        hasMoreHistory = page.count >= DiscordREST.historyPageSize
+        hasMoreHistory = (wireCount ?? page.count) >= DiscordREST.historyPageSize
         if messages.count > TranscriptWindow.limit {
             // The reader is at the top — that is what asked for this page — so
             // the newest go, and with them the present.
@@ -101,12 +112,16 @@ extension MessageBox {
     ///
     /// - Returns: false when it was dropped, for `receiveOlder`'s reason.
     @discardableResult
-    mutating func receiveNewer(_ page: [Message], after anchor: MessageID) -> Bool {
+    mutating func receiveNewer(
+        _ page: [Message],
+        wireCount: Int? = nil,
+        after anchor: MessageID
+    ) -> Bool {
         guard hasMoreNewer, anchor == messages.last?.id else { return false }
         for message in page { upsert(message) }
         // A short page is the only signal the present has been reached — the
         // rule `hasMoreHistory` already follows in the other direction.
-        if page.count < DiscordREST.historyPageSize { reachPresent() }
+        if (wireCount ?? page.count) < DiscordREST.historyPageSize { reachPresent() }
         if messages.count > TranscriptWindow.limit {
             messages.removeFirst(messages.count - TranscriptWindow.keep)
             hasMoreHistory = true
@@ -115,9 +130,9 @@ extension MessageBox {
     }
 
     /// The newest page, in place of whatever window was loaded.
-    mutating func receivePresent(_ page: [Message]) {
+    mutating func receivePresent(_ page: [Message], wireCount: Int? = nil) {
         messages = page
-        hasMoreHistory = page.count >= DiscordREST.historyPageSize
+        hasMoreHistory = (wireCount ?? page.count) >= DiscordREST.historyPageSize
         reachPresent()
     }
 
@@ -169,6 +184,7 @@ extension MessageBox {
     private mutating func reachPresent() {
         hasMoreNewer = false
         newerPageFailed = false
+        newerPageFailures = 0
         for message in heldLive where !contains(message.id) { upsert(message) }
         heldLive.removeAll()
     }

@@ -28,7 +28,10 @@ struct ExpressionInfoPresenter: ViewModifier {
         ) { request in
             ExpressionInfoCard(
                 info: model.expressionInfo(for: request),
-                openGuild: { model.openGuild($0) }
+                openGuild: { model.openGuild($0) },
+                openStickerPack: model.canOpenStickerPicker
+                    ? { model.openStickerPicker(at: $0) }
+                    : nil
             )
             // The card supplies its own material, so the popover must supply
             // none — two in series read as frost rather than as glass.
@@ -37,7 +40,7 @@ struct ExpressionInfoPresenter: ViewModifier {
             // request fires one every time a view body runs; a `.task` keyed on
             // the request fires once per card and is cancelled with it.
             .task(id: request.id) {
-                model.loadExpressionSourceIfNeeded(for: request)
+                await model.loadExpressionSourceIfNeeded(for: request)
             }
         }
     }
@@ -84,7 +87,7 @@ struct ExpressionInfoPopover: ViewModifier {
                 // Started here rather than in the resolver: a resolver that
                 // fires a request fires one every time a view body runs.
                 .task(id: request.id) {
-                    model.loadExpressionSourceIfNeeded(for: request)
+                    await model.loadExpressionSourceIfNeeded(for: request)
                 }
             }
         }

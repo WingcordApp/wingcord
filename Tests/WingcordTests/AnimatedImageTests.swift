@@ -95,15 +95,28 @@ struct AnimatedImageTests {
         #expect(widest <= 16)
     }
 
-    // MARK: The frame budget
+    // MARK: The byte budget
 
-    @Test("A long asset is sampled down, never truncated")
-    func longAssetIsSampled() throws {
-        let count = AnimatedImage.frameBudget * 3
-        let data = Self.animatedGIF(count: count, delay: 0.02)
+    @Test("A long loop that fits keeps every frame")
+    func longLoopKeepsEveryFrame() throws {
+        // A hundred and forty-four frames at 16 pixels is 150 KB — the
+        // forty-eight-frame cap this used to have would have kept a third.
+        let data = Self.animatedGIF(count: 144, delay: 0.02)
         let image = try #require(AnimatedImage.decode(data, maximumPixelSize: 16))
+        #expect(image.frameCount == 144)
+        #expect(abs(image.shortestFrame - 0.02) < 0.001)
+    }
 
-        #expect(image.frameCount <= AnimatedImage.frameBudget)
+    @Test("A loop past the byte budget is sampled down, never truncated")
+    func longAssetIsSampled() throws {
+        let count = 144
+        let data = Self.animatedGIF(count: count, delay: 0.02)
+        // Room for forty-eight frames of 16x16 and no more.
+        let image = try #require(AnimatedImage.decode(
+            data, maximumPixelSize: 16, byteBudget: 48 * 16 * 16 * 4
+        ))
+
+        #expect(image.frameCount <= 48)
         // **The cycle still takes as long as it should.** Truncating would end
         // the loop early and jump; sampling keeps the duration and lets the kept
         // frames absorb the time of the dropped ones.

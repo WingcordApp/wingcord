@@ -1078,6 +1078,9 @@ nonisolated struct TimelineLayoutEngine: Sendable {
         // question, the winner, the counts — that the row's own sentence already
         // says, and drawn as an ordinary card it is a grey box listing
         // `victor_answer_id` at somebody. See `Message.pollResult`.
+        // Filled by a Components V2 tree — the message's own, below, or an
+        // embed's — and by rows of buttons.
+        var components: [ComponentSlot] = []
         for embed in input.settings.showsEmbeds ? message.drawableEmbeds : [] {
             // A profile link's unfurl, where its profile card is drawn instead —
             // Discord shows the card and not both.
@@ -1087,6 +1090,25 @@ nonisolated struct TimelineLayoutEngine: Sendable {
                 continue
             }
             y += TimelineMetrics.attachmentGap
+            // **An embed of type `components` is its components**: Discord
+            // draws the tree in place of a card, and it is laid out exactly as
+            // a message's own is, cards and controls both.
+            if embed.kind == "components", !embed.components.isEmpty {
+                let tree = ComponentsLayoutEngine.layout(
+                    embed.components,
+                    origin: CGPoint(x: contentX, y: y),
+                    width: min(Metrics.embedMaxWidth, contentWidth),
+                    context: ComponentsLayoutEngine.Context(
+                        style: input.style,
+                        mentions: input.mentions,
+                        parser: parser
+                    )
+                )
+                embeds.append(contentsOf: tree.cards)
+                components.append(contentsOf: tree.controls)
+                y = tree.bottom
+                continue
+            }
             let slot = EmbedLayoutEngine.layout(
                 embed,
                 origin: CGPoint(x: contentX, y: y),
@@ -1138,7 +1160,6 @@ nonisolated struct TimelineLayoutEngine: Sendable {
         // A Components V2 tree, which is the whole body of the message it
         // arrives on. It produces the same two things an embed does — cards and
         // controls — so nothing downstream needs a case for it.
-        var components: [ComponentSlot] = []
         if !message.displayComponents.isEmpty {
             y += TimelineMetrics.attachmentGap
             let tree = ComponentsLayoutEngine.layout(
@@ -1863,12 +1884,12 @@ nonisolated struct TimelineLayoutEngine: Sendable {
         var footer: TimelineTextBlock?
         var footerOrigin = CGPoint.zero
         if let channelID = snapshot.channelID,
-           let name = input.mentions.channelNames[channelID]
+           let channel = input.mentions.channels[channelID]
         {
             y += TimelineMetrics.forwardLineGap
             footer = TimelineTextBlock(
                 text: .plain(NSAttributedString(
-                    string: "#\(name)",
+                    string: (channel.isConversation ? "@" : "#") + channel.name,
                     attributes: [
                         .font: style.metadataFont,
                         .foregroundColor: style.tertiaryColor,
@@ -2144,11 +2165,9 @@ nonisolated struct TimelineLayoutEngine: Sendable {
             : box.width
         let isVideo = attachment.isVideo
         // **A GIF moves in the transcript, exactly as a sticker does**, and it
-        // is fetched WHOLE rather than through the resizing proxy: `width=` on a
-        // GIF path answers with a single frame, so a resized rendition is an
-        // animation with nothing to play. `AnimatedImageStore` downsamples at
-        // decode, so asking for the original costs bytes on the wire and not
-        // pixels in memory.
+        // comes through the resizing proxy like any picture: a resized GIF
+        // keeps every frame — see `CDN.resizedAttachment` for the measurement
+        // that overturned the belief that it did not.
         //
         // GIF only. Discord labels an animated WebP `image/webp` exactly as it
         // labels a still one, so there is no fact here to act on — the same
@@ -2156,12 +2175,14 @@ nonisolated struct TimelineLayoutEngine: Sendable {
         let isAnimated = !isVideo
             && !attachment.isSpoiler
             && attachment.contentType == "image/gif"
+        // The height the picture is drawn at, from its own shape: a cover crop
+        // is wider than its box, and fitting it to the box's height would
+        // fetch it too small.
+        let decodeHeight = pixels.flatMap { $0.width > 0 ? decodeWidth * $0.height / $0.width : nil }
         let url: URL? = if isVideo {
-            CDN.videoPoster(proxyURL: attachment.proxyURL, width: decodeWidth)
-        } else if isAnimated {
-            URL(string: attachment.proxyURL)
+            CDN.videoPoster(proxyURL: attachment.proxyURL, width: decodeWidth, height: decodeHeight)
         } else {
-            CDN.resizedAttachment(proxyURL: attachment.proxyURL, width: decodeWidth)
+            CDN.resizedAttachment(proxyURL: attachment.proxyURL, width: decodeWidth, height: decodeHeight)
         }
         return AttachmentSlot(
             rect: rect,

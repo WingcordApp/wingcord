@@ -241,11 +241,6 @@ private struct ProseEmoji: View {
                 AnimatedDecoration(
                     url: url,
                     side: side,
-                    // The budget an emoji's filmstrip is given anywhere in the
-                    // app. Shared rather than restated, because the store keys
-                    // on it: two surfaces asking for the same picture with two
-                    // budgets hold two decodes of it. §4.6.
-                    byteBudget: ExpressionGridPainter.filmBudget,
                     onPlayback: { playing in
                         guard isPlaying != playing else { return }
                         isPlaying = playing
@@ -351,10 +346,16 @@ struct ProseSegment: Identifiable {
                         word("@unknown-role", style)
                     }
                 case .channelMention(let id):
-                    let name = mentions?.channelNames[id].map { "#\($0)" } ?? "#channel"
+                    // Discord's word for a channel nobody here can name.
+                    let name = mentions?.channels[id].map { "#\($0.name)" } ?? "#unknown"
                     word(name, style.asMention)
                 case .commandMention(let name, _):
                     word("/\(name)", style.asMention)
+                case .staticRoute(let route, _):
+                    // A place in a server, named as its chip names it.
+                    for run in route.title.split(separator: " ") {
+                        word(String(run), style.asMention)
+                    }
                 case .everyoneMention:
                     word("@everyone", style.asMention)
                 case .hereMention:

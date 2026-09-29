@@ -205,13 +205,6 @@ struct AvatarView: View {
                     url: url,
                     side: side,
                     gravity: .resizeAspectFill,
-                    // The whole loop at the size it is drawn — a profile draws a
-                    // face at nearly twice a row's, where the default allowance
-                    // buys a fraction of the frames and the motion visibly
-                    // steps.
-                    byteBudget: AnimatedImage.budget(
-                        forDrawn: CGSize(width: side, height: side)
-                    ),
                     onPlayback: { playing in
                         guard faceIsPlaying != playing else { return }
                         faceIsPlaying = playing
@@ -259,18 +252,6 @@ struct AvatarView: View {
                     AnimatedDecoration(
                         url: decorationURL,
                         side: side * Metrics.decorationScale,
-                        // **The whole loop at the size it is drawn.** The
-                        // default is sized for a 92-point decoration; a profile
-                        // card draws one at nearly twice that, where the same
-                        // allowance buys two thirds of the frames and the ears
-                        // visibly step. Never below the default, so a row
-                        // avatar is unaffected.
-                        byteBudget: AnimatedImage.budget(
-                            forDrawn: CGSize(
-                                width: side * Metrics.decorationScale,
-                                height: side * Metrics.decorationScale
-                            )
-                        ),
                         onPlayback: { playing in
                             guard decorationIsPlaying != playing else { return }
                             decorationIsPlaying = playing

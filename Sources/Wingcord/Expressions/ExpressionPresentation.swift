@@ -102,6 +102,11 @@ struct ExpressionSection: Hashable, Sendable, Identifiable {
     /// server, and an account with twenty thousand emoji should not carry twenty
     /// thousand copies of it.
     var isLocked: Bool = false
+
+    /// The id one of Discord's own sticker packs is filed under. One spelling,
+    /// because a card that opens the picker at a pack has to name the section
+    /// the picker built.
+    static func stickerPackID(_ packID: String) -> String { "pack.\(packID)" }
 }
 
 /// Everything one tab needs, built together so the rail and the grid cannot

@@ -174,6 +174,10 @@ public struct Channel: Hashable, Sendable, Identifiable, Codable {
     /// capture's thread reports 728 here against a `messageCount` of 720, and
     /// Discord's own chip reads "720 Messages". See `threadMessageCount`.
     public var totalMessageSent: Int?
+    /// The member list this channel shows, when the server names it — which
+    /// outranks the list Discord's rule would otherwise pick. See
+    /// `MemberList.id(for:everyonePermissions:)`.
+    public var memberListID: String?
 
     public init(
         id: ChannelID,
@@ -204,7 +208,8 @@ public struct Channel: Hashable, Sendable, Identifiable, Codable {
         flags: ChannelFlags = [],
         memberCount: Int? = nil,
         memberIDsPreview: [UserID] = [],
-        totalMessageSent: Int? = nil
+        totalMessageSent: Int? = nil,
+        memberListID: String? = nil
     ) {
         self.id = id
         self.kind = kind
@@ -235,6 +240,7 @@ public struct Channel: Hashable, Sendable, Identifiable, Codable {
         self.memberCount = memberCount
         self.memberIDsPreview = memberIDsPreview
         self.totalMessageSent = totalMessageSent
+        self.memberListID = memberListID
     }
 
     /// Whether this channel holds posts rather than a transcript.

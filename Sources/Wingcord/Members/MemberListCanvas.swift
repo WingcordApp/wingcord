@@ -11,12 +11,12 @@ import WingcordCore
 /// them as views is several thousand view nodes for the forty a column shows.
 ///
 /// It is simpler than the transcript in exactly one way that matters: **row
-/// heights are fixed**, so there is no text layout in the height calculation and
-/// the offset table is arithmetic rather than measurement. That is what lets a
-/// presence flush re-run the whole list in microseconds.
+/// heights are fixed**, so a row's position is arithmetic over the sections
+/// rather than a measurement — see `RosterLayout`. That is what lets a list of
+/// a hundred thousand rows cost nothing but its groups.
 final class MemberListCanvas: NSView {
-    private(set) var rows: [MemberRow] = []
-    private(set) var offsets: [CGFloat] = [0]
+    private(set) var roster = Roster.empty
+    private var layout = RosterLayout()
     var style: MessageTextStyle
 
     private var hoveredRow: Int?
@@ -58,7 +58,7 @@ final class MemberListCanvas: NSView {
     var onOpenMenu: ((UserID, CGRect) -> Void)?
     var onWidthChange: ((CGFloat) -> Void)?
 
-    var contentHeight: CGFloat { offsets[offsets.count - 1] }
+    var contentHeight: CGFloat { layout.contentHeight }
 
     init(style: MessageTextStyle) {
         self.style = style
@@ -103,17 +103,10 @@ final class MemberListCanvas: NSView {
     override var isOpaque: Bool { false }
 
     @discardableResult
-    func apply(rows: [MemberRow]) -> CGFloat {
-        self.rows = rows
-        offsets.removeAll(keepingCapacity: true)
-        offsets.reserveCapacity(rows.count + 1)
-        var running: CGFloat = 0
-        offsets.append(0)
-        for row in rows {
-            running += row.height
-            offsets.append(running)
-        }
-        if let hoveredRow, hoveredRow >= rows.count { self.hoveredRow = nil }
+    func apply(roster: Roster) -> CGFloat {
+        self.roster = roster
+        layout = RosterLayout(roster)
+        if let hoveredRow, row(at: hoveredRow)?.userID == nil { self.hoveredRow = nil }
         // Somebody may have started or stopped typing in this rebuild, which is
         // the only thing here that moves without the pointer.
         defer { refreshClock() }
@@ -122,32 +115,28 @@ final class MemberListCanvas: NSView {
         // than left playing on whoever moved into that slot.
         updatePlatePlayback()
         needsDisplay = true
-        return running
+        return layout.contentHeight
+    }
+
+    /// What sits at a row, or nil past the end of the list.
+    func row(at index: Int) -> MemberRow? {
+        guard index >= 0, index < layout.rowCount else { return nil }
+        return layout.row(at: index, in: roster)
     }
 
     func rowIndex(at y: CGFloat) -> Int? {
-        guard !rows.isEmpty, y >= 0, y < contentHeight else {
-            return rows.isEmpty ? nil : (y < 0 ? 0 : rows.count - 1)
-        }
-        var low = 0
-        var high = rows.count - 1
-        while low < high {
-            let mid = (low + high + 1) / 2
-            if offsets[mid] <= y { low = mid } else { high = mid - 1 }
-        }
-        return low
+        layout.index(at: y)
     }
 
     func rowFrame(at index: Int) -> CGRect {
-        CGRect(x: 0, y: offsets[index], width: bounds.width, height: rows[index].height)
+        layout.frame(at: index, width: bounds.width)
     }
 
     func visibleRowRange() -> Range<Int> {
-        guard !rows.isEmpty else { return 0..<0 }
-        let first = rowIndex(at: bounds.minY) ?? 0
-        var last = first
-        while last < rows.count, offsets[last] < bounds.maxY { last += 1 }
-        return first..<max(first, last)
+        guard let first = layout.index(at: bounds.minY),
+              let last = layout.index(at: bounds.maxY - 0.5)
+        else { return 0..<0 }
+        return first..<last + 1
     }
 
     /// Moves the canvas, keeping its coordinate system at 1:1.
@@ -187,7 +176,7 @@ final class MemberListCanvas: NSView {
     }
 
     private func invalidateRow(_ index: Int?) {
-        guard let index, rows.indices.contains(index) else { return }
+        guard let index, index >= 0, index < layout.rowCount else { return }
         setNeedsDisplay(rowFrame(at: index))
     }
 
@@ -196,28 +185,28 @@ final class MemberListCanvas: NSView {
     override func draw(_ dirtyRect: NSRect) {
         guard let context = NSGraphicsContext.current?.cgContext else { return }
         context.clear(dirtyRect)
-        guard !rows.isEmpty, var index = rowIndex(at: max(0, dirtyRect.minY)) else { return }
+        guard var index = rowIndex(at: max(0, dirtyRect.minY)) else { return }
         let scale = window?.backingScaleFactor ?? 2
         // Read once per draw rather than per row: it is a clock read, and every
         // row would otherwise ask the same question and get the same answer.
         let phase = gradientPhase
 
-        while index < rows.count, offsets[index] < dirtyRect.maxY {
+        while let row = row(at: index) {
             let frame = rowFrame(at: index)
+            guard frame.minY < dirtyRect.maxY else { break }
             if frame.intersects(dirtyRect) {
-                switch rows[index] {
-                case .header(let title, let count, let colorValue, let iconURL):
+                switch row {
+                case .header(let section):
                     MemberRowPainter.drawHeader(
-                        title: title,
-                        count: count,
-                        colorValue: colorValue,
-                        iconURL: iconURL,
+                        section,
                         in: frame,
                         context: context,
                         style: style,
                         images: ImageStore.shared,
                         scale: scale
                     )
+                case .placeholder:
+                    MemberRowPainter.drawPlaceholder(index: index, in: frame, context: context)
                 case .member(let entry):
                     MemberRowPainter.drawMember(
                         entry,
@@ -316,10 +305,7 @@ final class MemberListCanvas: NSView {
     /// there is a card, and whatever the pointer is on otherwise.
     private var platedRow: Int? {
         if let profiledUserID {
-            return rows.firstIndex { row in
-                if case .member(let entry) = row { return entry.userID == profiledUserID }
-                return false
-            }
+            return roster.members.first { $0.value.userID == profiledUserID }?.key
         }
         return hoveredRow
     }
@@ -347,8 +333,7 @@ final class MemberListCanvas: NSView {
         platedRowCache = platedRow
         let wanted: AnimatedImageStore.Key? = {
             guard animatesPlate, !isScrolling, let index = platedRowCache,
-                  rows.indices.contains(index),
-                  case .member(let entry) = rows[index],
+                  let entry = roster.members[index],
                   let url = entry.nameplateAnimatedURL
             else { return nil }
             return NameplateFilm.key(
@@ -416,8 +401,7 @@ final class MemberListCanvas: NSView {
     private func updateAvatarPlayback() {
         let wanted: HoverAvatarFilm.Subject? = {
             guard animatesPlate, !isScrolling, let index = platedRowCache,
-                  rows.indices.contains(index),
-                  case .member(let entry) = rows[index]
+                  let entry = roster.members[index]
             else { return nil }
             return HoverAvatarFilm.Subject(
                 rowID: entry.userID.rawValue,
@@ -443,10 +427,7 @@ final class MemberListCanvas: NSView {
     /// being pointed at — and it is bounded by its own nature: it expires after
     /// ten seconds and a channel rarely has more than two people mid-sentence.
     private var hasTypingRow: Bool {
-        rows.contains { row in
-            if case .member(let entry) = row { return entry.isTyping }
-            return false
-        }
+        roster.members.values.contains { $0.isTyping }
     }
 
     /// Where in that cycle the dots are, shared by every typing row so they
@@ -458,8 +439,7 @@ final class MemberListCanvas: NSView {
 
     /// Repaints the rows whose dots moved. Only those rows, never the column.
     private func invalidateTypingRows() {
-        for (index, row) in rows.enumerated() {
-            guard case .member(let entry) = row, entry.isTyping else { continue }
+        for (index, entry) in roster.members where entry.isTyping {
             invalidateRow(index)
         }
     }
@@ -481,8 +461,8 @@ final class MemberListCanvas: NSView {
     /// list of people should be, and every one of them is a row-sized
     /// invalidation per frame.
     private var gradientPhase: CGFloat? {
-        guard !isScrolling, let hoveredRow, hoveredRow < rows.count,
-              case .member(let entry) = rows[hoveredRow], entry.gradient != nil
+        guard !isScrolling, let hoveredRow,
+              roster.members[hoveredRow]?.gradient != nil
         else { return nil }
         let cycle = AnimationClock.shared.time / Self.gradientCycle
         return CGFloat(cycle - cycle.rounded(.down))
@@ -500,13 +480,15 @@ final class MemberListCanvas: NSView {
     private func refreshClock() {
         let wanted = plateFilm != nil || gradientPhase != nil
             || avatarFilm.isPlaying || hasTypingRow
-        guard wanted != isPlateSubscribed else { return }
+        let rate = wanted ? clockRate : 0
+        guard wanted != isPlateSubscribed || rate != subscribedRate else { return }
         isPlateSubscribed = wanted
+        subscribedRate = rate
         guard wanted else {
             AnimationClock.shared.unsubscribe(playToken)
             return
         }
-        AnimationClock.shared.subscribe(playToken) { [weak self] in
+        AnimationClock.shared.subscribe(playToken, rate: rate) { [weak self] in
             guard let self else { return }
             let time = AnimationClock.shared.time
             if let plateFilm = self.plateFilm {
@@ -527,6 +509,19 @@ final class MemberListCanvas: NSView {
             }
             self.invalidateTypingRows()
         }
+    }
+
+    /// The rate the clock was last asked for.
+    private var subscribedRate: Double = 0
+
+    /// How often what moves here needs a look: the hovered row's films at
+    /// their own fastest frame, and sixty for a travelling gradient.
+    private var clockRate: Double {
+        if gradientPhase != nil { return 60 }
+        var rate = AnimationClock.defaultRate
+        if avatarFilm.isPlaying { rate = max(rate, avatarFilm.rate) }
+        if let plateFilm { rate = max(rate, 1 / plateFilm.shortestFrame) }
+        return rate
     }
 
     private func unsubscribeFromClock() {
@@ -565,7 +560,7 @@ final class MemberListCanvas: NSView {
         guard !isScrolling, !isCovered else { return }
         let point = convert(event.locationInWindow, from: nil)
         let index = bounds.contains(point) ? rowIndex(at: point.y) : nil
-        let hoverable = index.flatMap { rows.indices.contains($0) && rows[$0].userID != nil ? $0 : nil }
+        let hoverable = index.flatMap { row(at: $0)?.userID != nil ? $0 : nil }
         guard hoverable != hoveredRow else { return }
         let previous = hoveredRow
         hoveredRow = hoverable
@@ -596,8 +591,7 @@ final class MemberListCanvas: NSView {
     override func mouseDown(with event: NSEvent) {
         let point = convert(event.locationInWindow, from: nil)
         guard let index = rowIndex(at: point.y),
-              rows.indices.contains(index),
-              let userID = rows[index].userID
+              let userID = row(at: index)?.userID
         else { return }
         // The profile card is anchored to the ROW that opened it, so it appears
         // beside that person rather than at the pointer — a card that follows
@@ -617,8 +611,7 @@ final class MemberListCanvas: NSView {
     override func rightMouseDown(with event: NSEvent) {
         let point = convert(event.locationInWindow, from: nil)
         guard let index = rowIndex(at: point.y),
-              rows.indices.contains(index),
-              let userID = rows[index].userID
+              let userID = row(at: index)?.userID
         else {
             super.rightMouseDown(with: event)
             return
@@ -628,7 +621,7 @@ final class MemberListCanvas: NSView {
 
     override func accessibilityChildren() -> [Any]? {
         visibleRowRange().compactMap { index -> NSAccessibilityElement? in
-            guard case .member(let entry) = rows[index] else { return nil }
+            guard let entry = roster.members[index] else { return nil }
             let element = NSAccessibilityElement()
             element.setAccessibilityRole(.button)
             var label = entry.name

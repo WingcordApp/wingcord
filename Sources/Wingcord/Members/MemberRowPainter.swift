@@ -15,33 +15,39 @@ import WingcordCore
 nonisolated enum MemberRowPainter {
 
     static func drawHeader(
-        title: String,
-        count: Int,
-        colorValue: UInt32?,
-        iconURL: URL?,
+        _ section: RosterSection,
         in rowFrame: CGRect,
         context: CGContext,
         style: MessageTextStyle,
         images: ImageStore,
         scale: CGFloat
     ) {
-        // **The role's own capitalisation, not an upper-cased copy of it.** A
-        // server names a role "Admin" or "EU Champion" and shouting it back is
-        // this client deciding it knows better — and it loses information the
-        // moment a role is deliberately lower case. Discord draws the name it
-        // was given.
-        let label = "\(title) — \(count)"
         var textX = rowFrame.minX + MemberRowGeometry.horizontalMargin
             + MemberRowGeometry.contentInset
         let side = MemberRowGeometry.sectionIconSide
         let baseline = rowFrame.minY + MemberRowGeometry.sectionSpacing + 8
         let font = NSFont.systemFont(ofSize: style.metadataFont.pointSize, weight: .semibold)
 
+        // **The role's own capitalisation, not an upper-cased copy of it.** A
+        // server names a role "Admin" or "EU Champion" and shouting it back is
+        // this client deciding it knows better — and it loses information the
+        // moment a role is deliberately lower case. Discord draws the name it
+        // was given.
+        guard let label = section.label else {
+            // A group the server has not named yet: a bar where the words go,
+            // as Discord's list draws its unknown group.
+            let bar = CGRect(x: textX, y: baseline + 2, width: 72, height: 8)
+            context.addPath(CGPath(roundedRect: bar, cornerWidth: 4, cornerHeight: 4, transform: nil))
+            context.setFillColor(ThemeInk.current.lift(0.05))
+            context.fillPath()
+            return
+        }
+
         // **Only when it is already decoded.** A painter may not start a fetch —
         // it runs inside a draw, and a heading is redrawn on every scroll — so
         // an icon that has not arrived yet simply leaves the label where it
         // would have been anyway. The row's own avatars warm the same store.
-        if let iconURL,
+        if let iconURL = section.iconURL,
            let icon = images.cached(
                ImageStore.Key(url: iconURL, maximumPixelSize: Int((side * scale).rounded(.up))),
                bucket: .thumbnail
@@ -63,11 +69,36 @@ nonisolated enum MemberRowPainter {
             // A hoisted role's heading takes the role's colour, which is how the
             // list says *why* these people are grouped. The synthetic Online and
             // Offline groups have no colour and take the quiet default.
-            color: colorValue.map { NSColor(Color(hex: $0)) } ?? style.tertiaryColor,
+            color: section.colorValue.map { NSColor(Color(hex: $0)) } ?? style.tertiaryColor,
             at: CGPoint(x: textX, y: baseline),
             maxWidth: rowFrame.maxX - MemberRowGeometry.horizontalMargin - textX,
             context: context
         )
+    }
+
+    /// A member the server has not sent yet: a face and a name, in the
+    /// transcript's placeholder ink.
+    ///
+    /// No text, no images, no model reads — a fast scroll through a list of
+    /// thousands draws a column of these until the pages land, and a costly
+    /// placeholder would trade one stall for another.
+    static func drawPlaceholder(index: Int, in rowFrame: CGRect, context: CGContext) {
+        let tint = ThemeInk.current.lift(0.05)
+        context.setFillColor(tint)
+        context.fillEllipse(in: MemberRowGeometry.avatarRect(in: rowFrame))
+        // Widths from the row rather than a random number: a column that
+        // reshuffles on every repaint reads as flickering.
+        let widths: [CGFloat] = [0.52, 0.71, 0.44, 0.63]
+        let textX = MemberRowGeometry.textOriginX(in: rowFrame)
+        let room = MemberRowGeometry.plateRect(in: rowFrame).maxX - MemberRowGeometry.contentInset - textX
+        let bar = CGRect(
+            x: textX,
+            y: rowFrame.midY - 5,
+            width: max(40, room * widths[index % widths.count]),
+            height: 10
+        )
+        context.addPath(CGPath(roundedRect: bar, cornerWidth: 5, cornerHeight: 5, transform: nil))
+        context.fillPath()
     }
 
     /// - Parameter nameFace: the styled face this person's name is set in,

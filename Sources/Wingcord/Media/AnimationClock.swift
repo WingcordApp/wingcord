@@ -14,15 +14,17 @@ import QuartzCore
 /// Four things keep it cheap, and each is a measurable saving rather than a
 /// tidiness:
 ///
-///  1. **Capped at 24 fps.** Discord's decorations are authored around 10-20 fps
-///     and every frame is a downsampled bitmap swap. Running the link at a
-///     120 Hz display's native cadence would ask for five times the wakeups to
-///     show the same pictures. `CAFrameRateRange` lets the system pick a
-///     divisor rather than being told a hard interval.
-///  2. **Silent while scrolling.** `ScrollWorkGate` is the app's one signal that
-///     no spare frames exist. The clock keeps *time* through a scroll — so
-///     playback resumes in phase rather than jumping — but calls nobody, which
-///     is the whole cost.
+///  1. **At the rate the fastest subscriber needs, never above sixty.** A
+///     picture streamed by `FilmStream` asks for its own frame rate, so a GIF
+///     authored at fifty frames a second gets them and a quiet screen of
+///     decorations does not run the display's 120 Hz. Everything else asks for
+///     `defaultRate`. `CAFrameRateRange` lets the system pick a divisor rather
+///     than being told a hard interval.
+///  2. **Silent while scrolling**, for subscribers that redraw a canvas.
+///     `ScrollWorkGate` is the app's one signal that no spare frames exist. The
+///     clock keeps *time* through a scroll — so playback resumes in phase
+///     rather than jumping — but calls nobody, which is the whole cost. A
+///     layer that moves with the rows on its own asks to keep going.
 ///  3. **Silent while the app is not active.** An animation nobody is looking at
 ///     is pure heat. Subscribers stay registered; the link is torn down and
 ///     rebuilt around the active state.
@@ -64,7 +66,16 @@ final class AnimationClock {
         var tick: () -> Void
         /// Whether this one keeps running through a scroll.
         var throughScroll: Bool
+        /// How many looks a second this one needs.
+        var rate: Double
     }
+
+    /// The rate a subscriber that does not say gets: a canvas repainting
+    /// filmstrips of assets authored around ten to twenty frames a second.
+    static let defaultRate: Double = 24
+
+    /// The fastest the clock runs, whatever is asked.
+    private static let maximumRate: Double = 60
     private var lastTimestamp: CFTimeInterval?
     private var isAppActive = true
     private var activeObservers: [NSObjectProtocol] = []
@@ -100,18 +111,33 @@ final class AnimationClock {
     ///   pictures ARE the content being chosen and freezing them mid-scroll
     ///   reads as the picker having stalled; the cost there is bounded by a
     ///   popover's worth of small cells.
+    /// - Parameter rate: How many ticks a second this subscriber needs. The
+    ///   link runs at the largest asked for, up to sixty.
     func subscribe(
         _ token: ObjectIdentifier,
         throughScroll: Bool = false,
+        rate: Double = AnimationClock.defaultRate,
         tick: @escaping () -> Void
     ) {
-        subscribers[token] = Subscriber(tick: tick, throughScroll: throughScroll)
+        subscribers[token] = Subscriber(tick: tick, throughScroll: throughScroll, rate: rate)
         startIfNeeded()
+        applyRate()
     }
 
     func unsubscribe(_ token: ObjectIdentifier) {
         guard subscribers.removeValue(forKey: token) != nil else { return }
         stopIfIdle()
+        applyRate()
+    }
+
+    /// Points the link at the fastest rate any subscriber needs.
+    private func applyRate() {
+        guard let link else { return }
+        let fastest = subscribers.values.map(\.rate).max() ?? Self.defaultRate
+        let rate = Float(min(Self.maximumRate, max(1, fastest)))
+        let range = CAFrameRateRange(minimum: min(8, rate), maximum: rate, preferred: rate)
+        guard link.preferredFrameRateRange != range else { return }
+        link.preferredFrameRateRange = range
     }
 
     // MARK: The link
@@ -126,12 +152,12 @@ final class AnimationClock {
         guard link == nil, isAppActive, !subscribers.isEmpty else { return }
         guard let screen = NSScreen.main else { return }
         let link = screen.displayLink(target: self, selector: #selector(step(_:)))
-        // A range rather than a fixed rate: the system picks a cadence it can
-        // hold, and on a 120 Hz display that is a divisor rather than a fight.
-        link.preferredFrameRateRange = CAFrameRateRange(minimum: 8, maximum: 30, preferred: 24)
         link.add(to: .main, forMode: .common)
         lastTimestamp = nil
         self.link = link
+        // A range rather than a fixed rate: the system picks a cadence it can
+        // hold, and on a 120 Hz display that is a divisor rather than a fight.
+        applyRate()
     }
 
     private func stopIfIdle() {

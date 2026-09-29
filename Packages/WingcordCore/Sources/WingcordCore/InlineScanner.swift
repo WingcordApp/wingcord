@@ -329,7 +329,7 @@ struct InlineScanner {
     // MARK: Angle-bracket tokens
 
     /// `<@123>`, `<@!123>`, `<@&123>`, `<#123>`, `<:n:1>`, `<a:n:1>`,
-    /// `<t:1:F>`, `</cmd:1>`, and `<https://…>`.
+    /// `<t:1:F>`, `</cmd:1>`, `<id:guide>`, and `<https://…>`.
     private mutating func consumeAngleToken() -> Bool {
         guard let close = firstIndex(of: .greaterThan, from: index + 1, limit: 128) else {
             return false
@@ -367,6 +367,17 @@ struct InlineScanner {
         case .hash:
             guard let value = digits(body.dropFirst()) else { return nil }
             return .channelMention(ChannelID(rawValue: value))
+
+        case 0x69:  // 'i' — `<id:guide>`, or `<id:linked-roles:123>`
+            let text = String(decoding: body, as: UTF8.self)
+            guard text.hasPrefix("id:") else { return nil }
+            let parts = text.dropFirst(3).split(separator: ":", omittingEmptySubsequences: false)
+            guard let route = parts.first.flatMap({ StaticRoute(rawValue: String($0)) }),
+                  parts.count <= 2
+            else { return nil }
+            guard parts.count == 2 else { return .staticRoute(route, itemID: nil) }
+            guard let item = digits(Array(parts[1].utf8)[...]) else { return nil }
+            return .staticRoute(route, itemID: item)
 
         case 0x2F:  // '/' — a slash-command mention
             let rest = body.dropFirst()

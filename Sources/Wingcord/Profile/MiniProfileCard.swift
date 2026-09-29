@@ -52,6 +52,8 @@ struct MiniProfileCard: View {
     @State private var inspectedEmoji: EmojiRef?
     /// Whether the person menu is open.
     @State private var isMenuOpen = false
+    /// The pointer on the name or the handle, which underline together.
+    @State private var isHoveringName = false
     /// Which list the reader's own action block is showing.
     ///
     /// **Held here rather than in the block**, because the status bubble at the
@@ -409,22 +411,14 @@ struct MiniProfileCard: View {
                             // multi-frame decode and a coordinator to learn it
                             // has one frame — and only while `animates`.
                             //
-                            // **The budget is the whole loop at the drawn
-                            // size.** A hand-picked 12 MB bought twenty frames
-                            // of a sixty-frame banner here, which is every third
-                            // one — see `AnimatedImage.budget(forDrawn:)`, which
-                            // is the arithmetic this comment used to describe.
+                            // **Every frame, at the source's resolution** — see
+                            // `AnimatedDecoration`, which streams a loop this
+                            // size rather than sampling it to fit a budget.
                             if let film = bannerFilm {
                                 AnimatedDecoration(
                                     url: film,
                                     side: width,
                                     gravity: .resizeAspectFill,
-                                    byteBudget: AnimatedImage.budget(
-                                        forDrawn: CGSize(
-                                            width: width,
-                                            height: Self.bannerHeight
-                                        )
-                                    ),
                                     onPlayback: { playing in
                                         guard bannerIsPlaying != playing else { return }
                                         bannerIsPlaying = playing
@@ -569,21 +563,32 @@ struct MiniProfileCard: View {
             // a tag is a thing somebody wears, and the badges are the row of
             // things somebody wears.
             HStack(spacing: Spacing.tight) {
-                StyledDisplayName(
-                    text: profile.displayName,
-                    style: profile.displayNameStyle,
-                    textStyle: .title2,
-                    weight: .bold,
-                    // `heading-lg/bold`, read out of Discord's own stylesheet.
-                    // `.title2` is 17 on macOS, which is what this was and which
-                    // is visibly small beside the real thing.
-                    pointSize: 20,
-                    // **The card's own width, stated.** A styled name is a drawn
-                    // view, so a `.lineLimit` at the call site reaches nothing —
-                    // the ceiling is what makes it wrap at all.
-                    maximumWidth: nameWidth,
-                    maximumLines: 2
-                )
+                // **The name and the handle open the full profile**, and
+                // underline together under the pointer — Discord's
+                // `.clickable:hover .displayName.noStyles` and
+                // `.userTagUsername`.
+                Button { openFullProfile(nil) } label: {
+                    StyledDisplayName(
+                        text: profile.displayName,
+                        style: profile.displayNameStyle,
+                        textStyle: .title2,
+                        weight: .bold,
+                        // `heading-lg/bold`, read out of Discord's own
+                        // stylesheet. `.title2` is 17 on macOS, which is what
+                        // this was and which is visibly small beside the real
+                        // thing.
+                        pointSize: 20,
+                        // **The card's own width, stated.** A styled name is a
+                        // drawn view, so a `.lineLimit` at the call site reaches
+                        // nothing — the ceiling is what makes it wrap at all.
+                        maximumWidth: nameWidth,
+                        maximumLines: 2,
+                        underlined: isHoveringName
+                    )
+                }
+                .buttonStyle(.plain)
+                .pointerStyle(.link)
+                .onHover { isHoveringName = $0 }
                 if profile.isBot {
                     TagChip(text: "APP")
                 }
@@ -591,9 +596,15 @@ struct MiniProfileCard: View {
             }
 
             HStack(spacing: Spacing.tight) {
-                Text(profile.handle)
-                    .font(.system(.caption))
-                    .foregroundStyle(InkColor.secondary)
+                Button { openFullProfile(nil) } label: {
+                    Text(profile.handle)
+                        .font(.system(.caption))
+                        .foregroundStyle(InkColor.secondary)
+                        .underline(isHoveringName)
+                }
+                .buttonStyle(.plain)
+                .pointerStyle(.link)
+                .onHover { isHoveringName = $0 }
                 if let pronouns = profile.pronouns, !pronouns.isEmpty {
                     // Separated by a bullet rather than put on its own line:
                     // it is part of how someone is addressed, not a fact about

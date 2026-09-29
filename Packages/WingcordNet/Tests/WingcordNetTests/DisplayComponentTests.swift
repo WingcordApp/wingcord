@@ -141,4 +141,28 @@ struct DisplayComponentTests {
         """)
         #expect(nodes[0].plainText == "Roadmap\nOpen")
     }
+
+    /// An embed of type `components`, which Discord's unfurler sends for a site
+    /// that describes itself as a Components V2 card. `MessageAccessories`
+    /// draws the tree in place of the embed's card; the normalizer keeps it by
+    /// the same parse a message's own tree goes through (module `659674`).
+    @Test("An embed carries its components as a tree")
+    func embedComponents() throws {
+        let json = """
+        {"type":"components","url":"https://sakura.example","components":[
+          {"type":17,"components":[
+            {"type":10,"content":"## Lumen Club"},
+            {"type":1,"components":[{"type":2,"style":5,"label":"Website","url":"https://sakura.example"}]}
+          ]}
+        ]}
+        """
+        let embed = try JSONDecoder().decode(EmbedDTO.self, from: Data(json.utf8)).domain
+        #expect(embed.kind == "components")
+        guard case .container(_, let children)? = embed.components.first else {
+            Issue.record("the embed's tree should open with its container")
+            return
+        }
+        #expect(children.count == 2)
+        #expect(children.first == .text("## Lumen Club"))
+    }
 }

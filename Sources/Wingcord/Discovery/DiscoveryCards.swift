@@ -254,20 +254,10 @@ struct DiscoveryAppTile: View {
             AnimatedDecoration(
                 url: url,
                 side: Metrics.discoveryCardWidth,
-                gravity: .resizeAspectFill,
-                byteBudget: Self.filmBudget
+                gravity: .resizeAspectFill
             )
         }
     }
-
-    /// What one tile's filmstrip may hold.
-    ///
-    /// **A banner frame is two orders of magnitude larger than a decoration's**,
-    /// which the default budget is sized for — 300 points wide at 16:9 is around
-    /// 400 KB a frame, so the default would buy a fifteen-frame loop about
-    /// three of them. One tile animates at a time and it is evicted when the
-    /// pointer leaves, so the trade is the sidebar banner's.
-    private static let filmBudget = 12 * 1024 * 1024
 
     var body: some View {
         Button(action: open) {

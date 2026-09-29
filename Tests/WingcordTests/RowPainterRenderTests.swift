@@ -119,12 +119,15 @@ struct RowPainterRenderTests {
     func headerDrawsInk() {
         let ink = inkFraction(height: 34) { context, frame in
             MemberRowPainter.drawHeader(
-                title: "Main Dev",
-                count: 3,
-                colorValue: 0xE67E22,
-                // No mark on this role, which is the common case — a heading
-                // that has one shifts its label right rather than growing.
-                iconURL: nil,
+                RosterSection(
+                    label: "Main Dev — 3",
+                    colorValue: 0xE67E22,
+                    // No mark on this role, which is the common case — a heading
+                    // that has one shifts its label right rather than growing.
+                    iconURL: nil,
+                    index: 0,
+                    count: 3
+                ),
                 in: frame,
                 context: context,
                 style: self.style,
@@ -133,6 +136,48 @@ struct RowPainterRenderTests {
             )
         }
         #expect(ink > 0.005)
+    }
+
+    /// Discord's `a:hover`: the link under the pointer is underlined, and
+    /// nothing else about it changes.
+    @Test("A hovered link is underlined")
+    func hoveredLinkUnderlines() {
+        let text = MessageTextBuilder.build(
+            document: MarkdownParser().parse("https://example.com"),
+            context: MentionContext(),
+            style: style
+        )
+        let block = TimelineTextBlock(text: text, width: 220, style: style)
+        let target = text.links.first?.target
+        func ink(hovered: MessageText.LinkTarget?) -> Double {
+            inkFraction(height: 32) { context, _ in
+                TimelineRowPainter.drawTextBlock(
+                    block, at: .zero, context: context, style: self.style,
+                    images: ImageStore.shared, scale: 2, time: 0,
+                    state: TimelineRowPainter.TextState(revealedSpoilers: [], hoveredLink: hovered)
+                )
+            }
+        }
+        #expect(target != nil)
+        #expect(ink(hovered: target) > ink(hovered: nil))
+    }
+
+    /// The two things a list draws before its rows arrive. A placeholder that
+    /// paints nothing is a blank column, which reads as an empty server.
+    @Test("An unnamed heading and a placeholder row paint something")
+    func placeholdersDrawInk() {
+        let heading = inkFraction(height: 34) { context, frame in
+            MemberRowPainter.drawHeader(
+                RosterSection(label: nil, index: 0, count: 0),
+                in: frame, context: context, style: self.style,
+                images: ImageStore.shared, scale: 2
+            )
+        }
+        let row = inkFraction(height: 46) { context, frame in
+            MemberRowPainter.drawPlaceholder(index: 3, in: frame, context: context)
+        }
+        #expect(heading > 0.001)
+        #expect(row > 0.005)
     }
 
     // MARK: Timeline rows

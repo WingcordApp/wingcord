@@ -5,7 +5,7 @@ import WingcordCore
 
 /// The member list, hosted in SwiftUI.
 struct MemberListView: NSViewRepresentable {
-    var sections: [MemberSection]
+    var roster: Roster
     /// See `TimelineView.presentationRevision`.
     var presentationRevision: UInt64 = 0
     /// The window's chrome, measured by the pane above and paid for as a content
@@ -15,6 +15,9 @@ struct MemberListView: NSViewRepresentable {
     var topInset: CGFloat = 0
     var openProfile: (UserID, CGRect) -> Void = { _, _ in }
     var openMenu: (UserID, CGRect) -> Void = { _, _ in }
+    /// The rows on screen and half a viewport of rows, once the scroll settles
+    /// — what the list's subscription follows.
+    var showRows: (ClosedRange<Int>, Int) -> Void = { _, _ in }
     /// Whose card is open over this roster. See
     /// `MemberListCanvas.profiledUserID`.
     var profiledUserID: UserID?
@@ -35,13 +38,14 @@ struct MemberListView: NSViewRepresentable {
     func updateNSView(_ scrollView: NSScrollView, context: Context) {
         context.coordinator.openProfile = openProfile
         context.coordinator.openMenu = openMenu
+        context.coordinator.showRows = showRows
         // The one environment value a drawn canvas cannot read for itself. See
         // `MemberListCanvas.animatesPlate`.
         context.coordinator.setAnimatesPlate(!motion.reduceMotion)
         context.coordinator.setProfiledUser(profiledUserID)
         context.coordinator.setCovered(isCovered)
         context.coordinator.update(
-            sections: sections,
+            roster: roster,
             presentationRevision: presentationRevision,
             topInset: topInset
         )
@@ -59,7 +63,7 @@ final class MemberListCoordinator: NSObject {
     private var documentView: TimelineDocumentView?
     private var canvas: MemberListCanvas?
 
-    private var sections: [MemberSection] = []
+    private var roster = Roster.empty
     private var boundsObserver: NSObjectProtocol?
     private var frameObserver: NSObjectProtocol?
     /// The width the rows were last laid out against.
@@ -68,10 +72,12 @@ final class MemberListCoordinator: NSObject {
     private var scrollEndedObserver: NSObjectProtocol?
     private var prefetchTask: Task<Void, Never>?
     private var liveScrollTimeout: Task<Void, Never>?
+    private var rowReport: Task<Void, Never>?
     private var isTornDown = false
 
     var openProfile: (UserID, CGRect) -> Void = { _, _ in }
     var openMenu: (UserID, CGRect) -> Void = { _, _ in }
+    var showRows: (ClosedRange<Int>, Int) -> Void = { _, _ in }
 
     func makeScrollView() -> NSScrollView {
         let canvas = MemberListCanvas(style: MessageTextStyle.current())
@@ -180,6 +186,8 @@ final class MemberListCoordinator: NSObject {
         prefetchTask = nil
         liveScrollTimeout?.cancel()
         liveScrollTimeout = nil
+        rowReport?.cancel()
+        rowReport = nil
         let center = NotificationCenter.default
         for observer in [boundsObserver, frameObserver, scrollBeganObserver, scrollEndedObserver] {
             if let observer { center.removeObserver(observer) }
@@ -211,33 +219,83 @@ final class MemberListCoordinator: NSObject {
         canvas?.apply(isCovered: isCovered)
     }
 
-    func update(sections: [MemberSection], presentationRevision: UInt64, topInset: CGFloat) {
+    func update(roster: Roster, presentationRevision: UInt64, topInset: CGFloat) {
         guard !isTornDown else { return }
         if let scrollView, abs(scrollView.contentInsets.top - topInset) > 0.5 {
             let insets = NSEdgeInsets(top: max(0, topInset), left: 0, bottom: 0, right: 0)
             scrollView.contentInsets = insets
             scrollView.scrollerInsets = insets
         }
+        // **A different list starts at the top**, as Discord's does — its list
+        // view is keyed on the list's id. The same list seen from another
+        // channel keeps its place.
+        let isNewList = roster.identity != self.roster.identity
         if presentationRevision != self.presentationRevision {
             self.presentationRevision = presentationRevision
             canvas?.style = PresentationRevision.shared.style
-            self.sections = sections
-            applyRows()
+            self.roster = roster
+            applyRows(scrollingToTop: isNewList)
             return
         }
-        // `Array ==` short-circuits on buffer identity, so a presence flush that
-        // moved nobody settles here in a pointer comparison — which is the whole
-        // reason the roster comes from a memo.
-        guard sections != self.sections else { return }
-        self.sections = sections
-        applyRows()
+        // A presence flush that moved nobody settles here, because the roster
+        // comes from a memo and hands back the same value.
+        guard roster != self.roster else { return }
+        let before = isNewList ? [:] : visibleMemberTops()
+        self.roster = roster
+        applyRows(scrollingToTop: isNewList)
+        holdPlace(from: before)
     }
 
-    private func applyRows() {
+    /// Where each member on screen sits, by person.
+    private func visibleMemberTops() -> [UserID: CGFloat] {
+        guard let canvas else { return [:] }
+        var tops: [UserID: CGFloat] = [:]
+        for index in canvas.visibleRowRange() {
+            guard let entry = canvas.roster.members[index] else { continue }
+            tops[entry.userID] = canvas.rowFrame(at: index).minY
+        }
+        return tops
+    }
+
+    /// Keeps the people on screen where they were when the list changes above
+    /// them — a browser's scroll anchoring, for the same reason browsers do it.
+    ///
+    /// **A busy server moves its list all the time.** Every member who comes
+    /// online or goes offline above the viewport moves every row below them by
+    /// one, so in a server of a hundred thousand the names under a still
+    /// pointer slid up and down a row at a time, several times a second. Here
+    /// the scroll moves by however far the people on screen were carried, and
+    /// the names stay put.
+    ///
+    /// **The median displacement, not the first person's**, because one of
+    /// them may be the member who moved: somebody going offline jumps to
+    /// another group, and following them would throw the reader across the
+    /// list. Nothing is held at the very top, where new rows arriving above
+    /// are rows the reader should see.
+    private func holdPlace(from before: [UserID: CGFloat]) {
+        guard !before.isEmpty, let canvas, let scrollView, let documentView else { return }
+        let clip = scrollView.contentView
+        let top = -scrollView.contentInsets.top
+        guard clip.bounds.minY > top + 0.5 else { return }
+        var moved: [CGFloat] = []
+        for (index, entry) in canvas.roster.members {
+            guard let old = before[entry.userID] else { continue }
+            moved.append(canvas.rowFrame(at: index).minY - old)
+        }
+        guard !moved.isEmpty else { return }
+        moved.sort()
+        let shift = moved[moved.count / 2]
+        guard abs(shift) >= 0.5 else { return }
+        let bottom = max(top, documentView.frame.height + scrollView.contentInsets.bottom - clip.bounds.height)
+        clip.scroll(to: NSPoint(x: 0, y: min(bottom, max(top, clip.bounds.minY + shift))))
+        scrollView.reflectScrolledClipView(clip)
+    }
+
+    private func applyRows(scrollingToTop: Bool = false) {
         guard let canvas, let scrollView, !isTornDown else { return }
         let viewport = scrollView.contentView.bounds
         if viewport.width > 0 { layoutWidth = viewport.width }
-        let height = canvas.apply(rows: sections.flattened())
+        let height = canvas.apply(roster: roster)
         let size = NSSize(
             width: max(1, viewport.width),
             // The readable band rather than the clip view: see
@@ -251,8 +309,13 @@ final class MemberListCoordinator: NSObject {
             )))
         )
         if documentView?.frame.size != size { documentView?.setFrameSize(size) }
+        if scrollingToTop {
+            scrollView.contentView.scroll(to: NSPoint(x: 0, y: -scrollView.contentInsets.top))
+            scrollView.reflectScrolledClipView(scrollView.contentView)
+        }
         positionCanvas()
         schedulePrefetch()
+        scheduleRowReport()
     }
 
     private func viewportDidChange() {
@@ -265,12 +328,34 @@ final class MemberListCoordinator: NSObject {
             applyRows()
             return
         }
-        if canvas.rows.isEmpty, !sections.isEmpty, width > 0 {
+        if canvas.roster.rowCount == 0, roster.rowCount > 0, width > 0 {
             applyRows()
             return
         }
         positionCanvas()
         schedulePrefetch()
+        scheduleRowReport()
+    }
+
+    /// Reports the rows on screen fifty milliseconds after the viewport stops
+    /// moving — Discord's own debounce on the same call — so a scroll through
+    /// thousands of rows asks for the pages it stops at, not every page it
+    /// passes.
+    private func scheduleRowReport() {
+        rowReport?.cancel()
+        rowReport = Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(50))
+            guard !Task.isCancelled, let self, !self.isTornDown,
+                  let canvas = self.canvas, let scrollView = self.scrollView
+            else { return }
+            let visible = canvas.visibleRowRange()
+            guard let last = visible.last else { return }
+            // Half a viewport of rows either side, as Discord pads it.
+            let margin = Int(
+                (scrollView.contentView.bounds.height / 2 / MemberRowGeometry.rowHeight).rounded(.up)
+            )
+            self.showRows(visible.lowerBound...last, margin)
+        }
     }
 
     private func positionCanvas() {
@@ -311,7 +396,7 @@ final class MemberListCoordinator: NSObject {
         var requests: [(ImageStore.Key, ImageStore.Bucket)] = []
         var seen = Set<ImageStore.Key>()
         for index in canvas.visibleRowRange() {
-            guard case .member(let entry) = canvas.rows[index] else { continue }
+            guard let entry = canvas.roster.members[index] else { continue }
             if let url = entry.avatarURL {
                 let key = ImageStore.Key(
                     url: url,

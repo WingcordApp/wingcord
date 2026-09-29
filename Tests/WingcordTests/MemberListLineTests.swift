@@ -43,6 +43,13 @@ struct MemberListLineTests {
             player: Member(userID: player, roleIDs: []),
         ]
         model.members[elsewhere] = [reader: Member(userID: reader, roleIDs: [])]
+        // The list the server sends for `#general`: both of them, online.
+        var list = MemberList()
+        list.apply(
+            [.sync(start: 0, rows: [.group(.online), .member(reader), .member(player)])],
+            groups: [MemberList.Group(id: .online, count: 2)]
+        )
+        model.memberLists[MemberListKey(guildID: here, listID: "everyone")] = list
         var index = ChannelIndex()
         index.replaceChannels(
             [
@@ -63,11 +70,7 @@ struct MemberListLineTests {
     }
 
     private func line(_ model: AppModel) -> ActivityStatusLine? {
-        model.rosterSections
-            .lazy
-            .compactMap { $0.members.first { $0.userID == self.player } }
-            .first?
-            .activityLine
+        model.roster.members.values.first { $0.userID == self.player }?.activityLine
     }
 
     /// **Alex's request, through the real roster**: a game and a custom status
@@ -115,15 +118,15 @@ struct MemberListLineTests {
     @Test("A call in another server does not rebuild the list")
     func otherServersCallsKeepTheMemo() {
         let model = model()
-        let before = model.rosterSections
+        _ = model.roster
+        let before = model.rosterCache?.key
         model.voiceStates[UserID(rawValue: 50)] = VoiceState(
             userID: UserID(rawValue: 50), channelID: otherLounge, guildID: elsewhere
         )
         model.voiceRevision &+= 1
-        let after = model.rosterSections
-        // The same buffer: the memo answered and nothing was rebuilt.
-        #expect(before.withUnsafeBufferPointer(\.baseAddress)
-            == after.withUnsafeBufferPointer(\.baseAddress))
+        _ = model.roster
+        // The same key: the memo answered and nothing was rebuilt.
+        #expect(model.rosterCache?.key == before)
 
         model.voiceStates[player] = VoiceState(userID: player, channelID: lounge, guildID: here)
         #expect(line(model)?.text == "In voice")

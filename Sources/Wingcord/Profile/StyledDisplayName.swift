@@ -50,6 +50,10 @@ struct StyledDisplayName: View {
     /// a long name is to show it. Discord wraps to two in both of its profiles
     /// and truncates past that, which is what this reproduces.
     var maximumLines: Int = 1
+    /// Underlined, as a name that opens something is under the pointer.
+    /// **A plain name only** — Discord's `.displayName.noStyles`: a styled name
+    /// is a paint of its own and is left as it is.
+    var underlined = false
 
     @Environment(\.motion) private var motion
 
@@ -76,6 +80,7 @@ struct StyledDisplayName: View {
                         ?? .system(textStyle, weight: weight)
                 )
                 .foregroundStyle(InkColor.primary)
+                .underline(underlined)
                 // **The two branches must agree**, or turning an effect on
                 // would change how many lines somebody's name takes.
                 .lineLimit(maximumLines)

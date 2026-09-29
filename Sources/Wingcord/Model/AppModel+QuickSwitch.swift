@@ -73,7 +73,7 @@ extension AppModel {
     /// **And so does everything it was opened over.** ⌘K is reached from
     /// anywhere, including from on top of a profile card or a game page, and a
     /// card about somebody still floating over the channel it just sent you to
-    /// is chrome describing somewhere you no longer are. `openMessageLink` has
+    /// is chrome describing somewhere you no longer are. `openChannelLink` has
     /// always done the same for the same reason.
     func openQuickSwitchRow(_ row: QuickSwitchRow) {
         closeQuickSwitch()

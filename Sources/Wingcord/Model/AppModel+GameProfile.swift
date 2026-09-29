@@ -290,7 +290,7 @@ extension AppModel {
             case .lineBreak:
                 out += "\n"
             case .userMention, .roleMention, .channelMention, .commandMention,
-                 .everyoneMention, .hereMention, .timestamp:
+                 .everyoneMention, .hereMention, .timestamp, .staticRoute:
                 continue
             }
         }

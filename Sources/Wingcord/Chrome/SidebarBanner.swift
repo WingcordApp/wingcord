@@ -23,9 +23,8 @@ struct SidebarBanner: View {
     //
     // Separate numbers, because the two are bounded by different things. The
     // still is one bitmap and can afford the sharpest rendition the CDN serves.
-    // The filmstrip is that bitmap N times over in RAM, so every pixel of
-    // over-decode costs N times, and asking for more than the column can show is
-    // paid for entirely in dropped frames.
+    // The moving one is decoded frame after frame, so every pixel of
+    // over-decode is paid for on every frame.
 
     /// The still layer. One frame, so it takes the sharp rendition.
     private static let stillSide: CGFloat = 512
@@ -37,17 +36,8 @@ struct SidebarBanner: View {
     /// 200 tall; the binding edge is the height, so covering it needs
     /// `200 * 16/9` of width and nothing more. Asking for 512 left every frame
     /// at the source's own 960x540 — 2 MB each, five times what the column can
-    /// draw — and the frame budget then bought three of them.
+    /// draw.
     private static let filmSide: CGFloat = 360
-
-    /// What that filmstrip may hold.
-    ///
-    /// The default budget is sized for a 33 KB decoration frame. A banner frame
-    /// at the size above is around a megabyte, so it needs a budget in the same
-    /// units it will be spent in. This is one asset, on screen for as long as
-    /// the server is open and evicted when it is not, against a 64 MB store —
-    /// the same trade the profile effect's layers already make.
-    private static let filmBudget = 20 * 1024 * 1024
 
     var body: some View {
         artwork
@@ -112,8 +102,7 @@ struct SidebarBanner: View {
                         AnimatedDecoration(
                             url: url,
                             side: Self.filmSide,
-                            gravity: .resizeAspectFill,
-                            byteBudget: Self.filmBudget
+                            gravity: .resizeAspectFill
                         )
                     }
                 }

@@ -11,6 +11,7 @@ struct UserColorSettingTests {
         RosterMemoKey(
             guildID: GuildID(rawValue: 1),
             channelID: ChannelID(rawValue: 2),
+            memberListRevision: 7,
             memberRevision: 3,
             presenceRevision: 4,
             roleRevision: 5,

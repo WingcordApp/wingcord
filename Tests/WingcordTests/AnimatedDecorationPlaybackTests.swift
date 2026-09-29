@@ -60,6 +60,7 @@ struct AnimatedDecorationPlaybackTests {
             url: uncachedURL,
             pixelSize: 88,
             byteBudget: 1 << 20,
+            gravity: .resizeAspectFill,
             isAnimated: true
         )
 
@@ -82,8 +83,14 @@ struct AnimatedDecorationPlaybackTests {
         var reports: [Bool] = []
         coordinator.onPlayback = { reports.append($0) }
 
-        coordinator.configure(url: uncachedURL, pixelSize: 88, byteBudget: 1 << 20, isAnimated: true)
-        coordinator.configure(url: uncachedURL, pixelSize: 88, byteBudget: 1 << 20, isAnimated: true)
+        coordinator.configure(
+            url: uncachedURL, pixelSize: 88, byteBudget: 1 << 20,
+            gravity: .resizeAspectFill, isAnimated: true
+        )
+        coordinator.configure(
+            url: uncachedURL, pixelSize: 88, byteBudget: 1 << 20,
+            gravity: .resizeAspectFill, isAnimated: true
+        )
         await settle()
 
         // Two configures, and only the live one is entitled to speak.
@@ -99,7 +106,10 @@ struct AnimatedDecorationPlaybackTests {
         var reports: [Bool] = []
         coordinator.onPlayback = { reports.append($0) }
 
-        coordinator.configure(url: uncachedURL, pixelSize: 88, byteBudget: 1 << 20, isAnimated: true)
+        coordinator.configure(
+            url: uncachedURL, pixelSize: 88, byteBudget: 1 << 20,
+            gravity: .resizeAspectFill, isAnimated: true
+        )
         coordinator.tearDown()
         await settle()
 

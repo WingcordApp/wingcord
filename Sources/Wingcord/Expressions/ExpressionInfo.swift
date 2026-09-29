@@ -31,6 +31,37 @@ struct ExpressionInfoRequest: Equatable, Identifiable {
     }
 }
 
+/// What a sticker nobody's server owns turned out to be.
+///
+/// **A message cannot say.** Its `sticker_items` carry an id, a name and a
+/// format; one of Discord's own and a server's look the same there. The packs
+/// Discord still offers answer most clicks with no request at all, and
+/// `GET /stickers/{id}` answers the rest — see `SessionController.resolveSticker`.
+enum StickerLookup: Equatable, Sendable {
+    /// Still being asked.
+    case resolving
+    /// One of Discord's own. `isOffered` is false for a pack Discord no longer
+    /// lists, which its card names and says is no longer available.
+    case standard(StickerPack, isOffered: Bool)
+    /// One of Discord's own, whose pack could not be fetched.
+    case standardUnnamed
+    /// A server's sticker; the source route says which server.
+    case guildSticker
+    /// Nothing answered. The card falls back to what it can honestly say.
+    case failed
+}
+
+/// The composer's sticker picker, asked for at one pack.
+///
+/// A token beside the pack, for `ExpressionJump`'s reason: asking for the same
+/// pack twice is two requests, not one state.
+struct StickerPickerRequest: Equatable, Sendable {
+    var channelID: ChannelID
+    /// The picker section to open at — `ExpressionSection.id`.
+    var sectionID: String
+    var token: Int
+}
+
 /// Everything the card draws, resolved once against the store.
 struct ExpressionInfo: Equatable, Sendable {
     /// The picture, at card size.
@@ -49,6 +80,23 @@ struct ExpressionInfo: Equatable, Sendable {
     var detail: String
     /// Where it came from, when that is a server this account can name.
     var source: Source?
+    /// The sticker itself, when the card is about one — so the art can play
+    /// whatever format it is in rather than only a `.gif`.
+    var sticker: StickerRef? = nil
+    /// The pack, when the sticker is one of Discord's own.
+    var pack: Pack? = nil
+
+    /// One of Discord's own sticker packs, as its card shows it.
+    struct Pack: Equatable, Sendable {
+        /// The picker section the pack is filed under, for View More Stickers.
+        var sectionID: String
+        var name: String
+        /// False for a pack Discord no longer offers.
+        var isOffered: Bool
+        /// Up to three more from the pack — Discord's own pick: the pack's
+        /// first four, without the one that was clicked.
+        var samples: [StickerRef]
+    }
 
     /// One picture in the source strip.
     ///

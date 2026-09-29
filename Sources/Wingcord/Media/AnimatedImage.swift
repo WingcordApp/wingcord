@@ -32,22 +32,15 @@ nonisolated struct AnimatedImage: Sendable {
     /// The frame showing at `time` seconds into an endlessly looping playback.
     func frame(at time: Double) -> CGImage { frames[index(at: time)] }
 
-    /// The frame showing at `time`, for an asset that plays **once**.
-    ///
-    /// **Past the end it holds the last frame rather than wrapping**, which is
-    /// what APNG's `acTL num_plays: 1` means and what an `<img>` does with one.
-    ///
-    /// The distinction exists because a caller's idea of how long a thing lasts
-    /// and the asset's own are not the same number. A profile effect's
-    /// catalogue entry gives SpongeBob a 6000 ms slot; the APNG is 4125 ms. Fed
-    /// through the looping lookup, the last 1875 ms of that slot replayed the
-    /// first 1875 ms of the animation — he walked on, flew away, and walked on
-    /// again before being cut off mid-stride.
-    func frame(at time: Double, looping: Bool) -> CGImage {
-        guard !looping else { return frame(at: time) }
-        guard frames.count > 1 else { return frames[0] }
-        guard time < duration else { return frames[frames.count - 1] }
-        return frames[index(at: max(0, time))]
+    /// The shortest frame, which sets how often a player has to look.
+    var shortestFrame: Double {
+        var previous = 0.0
+        var shortest = duration
+        for end in ends {
+            shortest = min(shortest, end - previous)
+            previous = end
+        }
+        return max(shortest, 0.001)
     }
 
     /// Which frame `time` lands on.
@@ -72,15 +65,6 @@ nonisolated struct AnimatedImage: Sendable {
 
     // MARK: Decoding
 
-    /// The most frames one asset may hold.
-    ///
-    /// Assets longer than this are **sampled down rather than truncated**: a
-    /// truncated loop stops halfway and jumps, which is worse than a slightly
-    /// coarser one. The kept frames absorb the delay of the ones dropped, so the
-    /// cycle still takes exactly as long as it should and stays in step with
-    /// itself.
-    static let frameBudget = 48
-
     /// The most bytes one filmstrip may occupy.
     ///
     /// **A frame cap alone is not a memory bound, because frames are not one
@@ -94,30 +78,6 @@ nonisolated struct AnimatedImage: Sendable {
     /// deliberate trade: a banner that drifts at eleven frames is worth far more
     /// than one that evicts every avatar on screen to play smoothly.
     static let byteBudget = 6 * 1024 * 1024
-
-    /// What a full loop costs at a given drawn size, so a caller can ask for
-    /// one instead of guessing at megabytes.
-    ///
-    /// **The budget is a FRAME COUNT wearing a memory unit** — §"A per-asset
-    /// byte budget is a FRAME COUNT, and the caller owns it" — and a number
-    /// picked by hand is right for one asset at one size. A profile banner
-    /// drawn 360 points wide decodes around 576 KB a frame, so the 12 MB it
-    /// used to ask for bought twenty of a sixty-frame loop: every third frame,
-    /// which is what "the banner renders at very low fps" is. This is the
-    /// arithmetic that was being done in a comment.
-    ///
-    /// Never below the default, so a small asset does not end up with a
-    /// *smaller* allowance than it has always had.
-    static func budget(forDrawn size: CGSize, scale: CGFloat = 2) -> Int {
-        let pixels = max(1, size.width * scale) * max(1, size.height * scale)
-        return max(byteBudget, Int(pixels * 4) * frameBudget)
-    }
-
-    /// A delay below this is what an authoring tool writes when it means "as
-    /// fast as possible", and every renderer substitutes a real interval rather
-    /// than spinning. This is the same substitution browsers make.
-    private static let minimumDelay: Double = 0.011
-    private static let substituteDelay: Double = 0.1
 
     /// Decodes an animated asset, or returns nil when it is not one.
     ///
@@ -139,7 +99,7 @@ nonisolated struct AnimatedImage: Sendable {
 
         var delays: [Double] = []
         delays.reserveCapacity(count)
-        for index in 0..<count { delays.append(delay(of: source, at: index)) }
+        for index in 0..<count { delays.append(FilmSource.frameDelay(of: source, at: index)) }
 
         // How many frames the budget actually affords at this size. One frame
         // is decoded first to find out — guessing from the source's dimensions
@@ -155,7 +115,13 @@ nonisolated struct AnimatedImage: Sendable {
         let affordable = max(2, byteBudget / bytesPerFrame)
 
         // Which frames to keep. Evenly spaced, always including the first.
-        let keep = sampleIndices(count: count, budget: min(frameBudget, affordable))
+        // **Only the bytes bound it — never a frame count.** A cap of
+        // forty-eight thinned every long loop whatever its size; a decoration
+        // at row size is fifty kilobytes a frame, and its whole loop fits.
+        // Past the budget, frames are **sampled down rather than truncated**:
+        // a truncated loop stops halfway and jumps, and the kept frames absorb
+        // the delay of the ones dropped, so the cycle keeps its length.
+        let keep = sampleIndices(count: count, budget: affordable)
 
         let options: [CFString: Any] = [
             kCGImageSourceCreateThumbnailFromImageAlways: true,
@@ -205,31 +171,5 @@ nonisolated struct AnimatedImage: Sendable {
             if result.last != index { result.append(index) }
         }
         return result
-    }
-
-    /// One frame's delay, from whichever container dictionary applies.
-    ///
-    /// APNG, GIF and animated WebP each report this under their own key, and
-    /// each has a clamped and an unclamped form. The unclamped one is the
-    /// author's actual number; the clamped one has already had a floor applied
-    /// by the framework, so preferring it would quietly slow every fast asset.
-    private static func delay(of source: CGImageSource, at index: Int) -> Double {
-        guard let properties = CGImageSourceCopyPropertiesAtIndex(source, index, nil)
-            as? [CFString: Any]
-        else { return substituteDelay }
-
-        let png = properties[kCGImagePropertyPNGDictionary] as? [CFString: Any]
-        let gif = properties[kCGImagePropertyGIFDictionary] as? [CFString: Any]
-        let webp = properties[kCGImagePropertyWebPDictionary] as? [CFString: Any]
-
-        let raw = (png?[kCGImagePropertyAPNGUnclampedDelayTime] as? Double)
-            ?? (png?[kCGImagePropertyAPNGDelayTime] as? Double)
-            ?? (gif?[kCGImagePropertyGIFUnclampedDelayTime] as? Double)
-            ?? (gif?[kCGImagePropertyGIFDelayTime] as? Double)
-            ?? (webp?[kCGImagePropertyWebPUnclampedDelayTime] as? Double)
-            ?? (webp?[kCGImagePropertyWebPDelayTime] as? Double)
-
-        guard let raw, raw > minimumDelay else { return substituteDelay }
-        return raw
     }
 }

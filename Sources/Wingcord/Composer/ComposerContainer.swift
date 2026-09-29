@@ -103,7 +103,13 @@ struct ComposerContainer: View {
             backspaceCommand: backspaceCommand,
             cancelCommand: { model.mutateBox(channelID) { $0.command = nil } },
             submitCommand: submitCommand,
-            pendingInteractions: pendingInteractions
+            pendingInteractions: pendingInteractions,
+            // Only the request aimed at this conversation: a thread panel's
+            // composer beside the main one must not open a picker too.
+            stickerPickerRequest: model.stickerPickerRequest?.channelID == channelID
+                ? model.stickerPickerRequest
+                : nil,
+            takeStickerPickerRequest: { model.stickerPickerRequest = nil }
         )
         // A shortcode the reader finished typing becomes its emoji — see
         // `applyClosedShortcode`. Keyed on the text so it runs once per change

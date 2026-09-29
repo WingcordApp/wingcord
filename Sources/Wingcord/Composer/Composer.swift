@@ -144,6 +144,11 @@ struct Composer: View {
     var submitCommand: () -> Void = {}
     /// Interactions posted from this channel and not yet answered.
     var pendingInteractions: [PendingInteraction] = []
+    /// The sticker picker, asked for at one pack — "View More Stickers" on a
+    /// stock sticker's card. Handed in, for `shape`'s reason.
+    var stickerPickerRequest: StickerPickerRequest?
+    /// Tells the store the request was taken, so it opens the picker once.
+    var takeStickerPickerRequest: () -> Void = {}
 
     @Environment(\.motion) private var motion
     @State private var isFocused = false
@@ -156,6 +161,10 @@ struct Composer: View {
     /// true. `ComposerControl` is already the identity the reader's own order is
     /// written in terms of.
     @State private var openControl: ComposerControl?
+    /// The pack the sticker picker opens at, when a card asked for one. Cleared
+    /// the moment the picker is not the one showing, so opening it by hand
+    /// later starts where the picker always starts.
+    @State private var stickerSection: String?
     @State private var completionSelection = 0
     @State private var mentionSelection = 0
     /// The mention query the reader dismissed with Escape. Held so the list
@@ -295,6 +304,15 @@ struct Composer: View {
         // …and the same for the option list, which changes on every keystroke
         // while a choice is being filtered.
         .onChange(of: commandPrompt?.rows) { _, _ in optionSelection = 0 }
+        .onChange(of: stickerPickerRequest?.token, initial: true) { _, _ in
+            guard let request = stickerPickerRequest else { return }
+            stickerSection = request.sectionID
+            openControl = .sticker
+            takeStickerPickerRequest()
+        }
+        .onChange(of: openControl) { _, control in
+            if control != .sticker { stickerSection = nil }
+        }
     }
 
     private var composerRow: some View {
@@ -650,6 +668,7 @@ struct Composer: View {
         if let mode = control.expressionMode {
             ExpressionPicker(
                 mode: mode,
+                initialSectionID: control == .sticker ? stickerSection : nil,
                 onPick: { item in
                     onPick(item)
                     // A sticker sends and the picker's work is done; an emoji is

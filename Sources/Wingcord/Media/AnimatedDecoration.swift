@@ -55,6 +55,25 @@ final class AnimatedLayerView: NSView {
         if image == nil { layer?.contents = nil }
     }
 
+    /// Puts a player's layer in this view, filling it.
+    func host(_ film: CALayer) {
+        hosted?.removeFromSuperlayer()
+        hosted = film
+        film.frame = bounds
+        layer?.addSublayer(film)
+    }
+
+    private var hosted: CALayer?
+
+    override func layout() {
+        super.layout()
+        guard let hosted, hosted.frame != bounds else { return }
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        hosted.frame = bounds
+        CATransaction.commit()
+    }
+
     /// Shows the frame for `time`. Called from the shared clock.
     ///
     /// **Nothing happens when the frame has not changed**, which is the common
@@ -70,12 +89,22 @@ final class AnimatedLayerView: NSView {
     }
 }
 
-/// The SwiftUI face of `AnimatedLayerView`.
+/// A moving picture in a SwiftUI surface — a decoration, a banner, a face, a
+/// picker's cell.
 ///
-/// Owns the clock subscription and the fetch. Falls back to drawing nothing when
-/// the asset turns out to be a still — the caller stacks this over an ordinary
-/// `RemoteImage`, so a still decoration is simply the static one showing
-/// through.
+/// **On a `FilmPlayer`**: every frame, at the asset's own rate and the size it
+/// is drawn, played by the render server or streamed a few frames ahead. It
+/// used to run a filmstrip sampled to forty-eight frames and a byte budget on a
+/// clock capped at twenty-four ticks a second, which is the whole of "the
+/// decoration and the banner run at a low frame rate".
+///
+/// **A WebM is the exception** — a nameplate's moving form. ImageIO cannot read
+/// one, so it still plays from the filmstrip `WebMFilmstrip` decodes, on the
+/// shared clock, within `byteBudget`.
+///
+/// Falls back to drawing nothing when the asset turns out to be a still — the
+/// caller stacks this over an ordinary `RemoteImage`, so a still decoration is
+/// simply the static one showing through.
 struct AnimatedDecoration: NSViewRepresentable {
     var url: URL
     /// The side this is drawn at, in points. Decides the decode size.
@@ -84,25 +113,9 @@ struct AnimatedDecoration: NSViewRepresentable {
     /// avatar and must not be cropped; a banner is a strip that must fill its
     /// block and be cropped.
     var gravity: CALayerContentsGravity = .resizeAspect
-    /// How much decoded film this asset is allowed to hold.
-    ///
-    /// **The default is sized for a decoration, and a banner is two orders of
-    /// magnitude larger per frame.** A 92pt decoration frame is 33 KB, so the
-    /// 6 MB default buys every frame the asset has. A guild banner decoded to
-    /// cover its column is around a megabyte a frame, so the same budget buys
-    /// *three* — and a sixty-frame loop sampled down to three frames is the
-    /// whole of "the animated banner runs at almost no frame rate". The number
-    /// is not a preference; it is frames, and the caller is the only one that
-    /// knows how many pixels a frame will be.
+    /// How much decoded film a WebM may hold. Nothing else has a budget: a
+    /// picture ImageIO reads plays whole or streams.
     var byteBudget: Int = AnimatedImage.byteBudget
-    /// Whether playback continues through a scroll.
-    ///
-    /// **Off everywhere it is chrome, on where it is the content.** A decoration
-    /// beside a name or a banner behind a list is scenery, and parking it is
-    /// what buys the scroll its frames. A GIF in a picker is the thing being
-    /// chosen — one that freezes the moment you flick the list reads as the
-    /// picker having stalled. See `AnimationClock.subscribe`.
-    var animatesThroughScroll = false
 
     /// Reports whether there are frames on screen.
     ///
@@ -126,14 +139,14 @@ struct AnimatedDecoration: NSViewRepresentable {
 
     func updateNSView(_ view: AnimatedLayerView, context: Context) {
         context.coordinator.onPlayback = onPlayback
-        context.coordinator.animatesThroughScroll = animatesThroughScroll
         context.coordinator.configure(
             url: url,
             pixelSize: Int((side * max(displayScale, 1)).rounded(.up)),
             byteBudget: byteBudget,
-            // Reduce Motion parks the asset on its first frame rather than
-            // hiding it: the decoration is part of someone's identity, and the
-            // preference is about movement, not about artwork.
+            gravity: gravity,
+            // Reduce Motion leaves the still the caller draws underneath: the
+            // decoration is part of someone's identity, and the preference is
+            // about movement, not about artwork.
             isAnimated: !motion.reduceMotion
         )
     }
@@ -146,7 +159,7 @@ struct AnimatedDecoration: NSViewRepresentable {
     final class Coordinator {
         weak var view: AnimatedLayerView?
         var onPlayback: ((Bool) -> Void)?
-        var animatesThroughScroll = false
+        private var player: FilmPlayer?
         private var key: AnimatedImageStore.Key?
         private var isSubscribed = false
         private var loadTask: Task<Void, Never>?
@@ -155,10 +168,15 @@ struct AnimatedDecoration: NSViewRepresentable {
         /// report belonging to a previous configuration is dropped. See
         /// `report(_:)`.
         private var generation = 0
+        /// The last answer this configuration gave, so it is given once.
+        private var reported: Bool?
 
         private var token: ObjectIdentifier { ObjectIdentifier(self) }
 
-        func configure(url: URL, pixelSize: Int, byteBudget: Int, isAnimated: Bool) {
+        func configure(
+            url: URL, pixelSize: Int, byteBudget: Int,
+            gravity: CALayerContentsGravity, isAnimated: Bool
+        ) {
             let newKey = AnimatedImageStore.Key(
                 url: url,
                 maximumPixelSize: pixelSize,
@@ -168,12 +186,29 @@ struct AnimatedDecoration: NSViewRepresentable {
             key = newKey
             self.isAnimated = isAnimated
             generation &+= 1
+            reported = nil
 
             loadTask?.cancel()
             loadTask = nil
+            player?.tearDown()
+            player = nil
+            view?.setImage(nil)
+            unsubscribe()
+
+            guard isAnimated else {
+                report(false)
+                return
+            }
+            guard WebMFilmstrip.handles(url) else {
+                // Nothing on screen until the player says so: a caller that
+                // swapped assets shows its still again meanwhile.
+                report(false)
+                play(url: url, pixelSize: pixelSize, gravity: gravity)
+                return
+            }
 
             // A cached filmstrip is installed with no hop at all, so a row
-            // scrolled back into view draws its decoration on the first frame
+            // scrolled back into view draws its nameplate on the first frame
             // rather than after a placeholder.
             if let hit = AnimatedImageStore.shared.cached(newKey) {
                 install(hit)
@@ -183,10 +218,7 @@ struct AnimatedDecoration: NSViewRepresentable {
                 install(nil)
                 return
             }
-            view?.setImage(nil)
-            unsubscribe()
             report(false)
-
             loadTask = Task { [weak self] in
                 let image = await AnimatedImageStore.shared.image(for: newKey)
                 guard let self, !Task.isCancelled, self.key == newKey else { return }
@@ -194,10 +226,24 @@ struct AnimatedDecoration: NSViewRepresentable {
             }
         }
 
+        /// A picture ImageIO reads, on its own player.
+        private func play(url: URL, pixelSize: Int, gravity: CALayerContentsGravity) {
+            guard let view else { return }
+            let player = FilmPlayer(key: FilmPlayer.Key(url: url, maximumPixelSize: pixelSize))
+            player.layer.contentsGravity = gravity
+            let generation = generation
+            player.onPlayback = { [weak self] playing in
+                guard let self, self.generation == generation else { return }
+                self.report(playing)
+            }
+            view.host(player.layer)
+            self.player = player
+        }
+
+        /// A WebM's filmstrip, on the shared clock.
         private func install(_ image: AnimatedImage?) {
             view?.setImage(image)
-            guard let image, isAnimated, image.frameCount > 1 else {
-                // A still, or Reduce Motion: show one frame and never subscribe.
+            guard let image, image.frameCount > 1 else {
                 if image != nil { view?.show(at: 0) }
                 unsubscribe()
                 report(image != nil)
@@ -211,19 +257,11 @@ struct AnimatedDecoration: NSViewRepresentable {
         /// Tells the caller whether there are frames on screen — **always out of
         /// the current update pass.**
         ///
-        /// `configure` runs from `updateNSView`, and two of its three paths —
-        /// a cached filmstrip and a known still — call `install` *synchronously*
-        /// from there. A callback made on that stack is a `@State` write during
-        /// a SwiftUI view update: undefined, and in practice it does not stick.
-        ///
-        /// **That is the whole of the "second hover draws the still behind the
-        /// film" bug.** The first hover misses the cache, so the report comes
-        /// from the load's continuation and lands; every hover after it hits the
-        /// cache, reports from inside the update, and the write is dropped — so
-        /// the still underneath is never taken away and an icon with a soft or
-        /// transparent rim shows as two offset copies. The doc comment on
-        /// `onPlayback` has always said this fires "never from `updateNSView`";
-        /// this is what makes that true.
+        /// `configure` runs from `updateNSView`, and a cached filmstrip calls
+        /// `install` *synchronously* from there. A callback made on that stack
+        /// is a `@State` write during a SwiftUI view update: undefined, and in
+        /// practice it does not stick — which was the whole of the "second
+        /// hover draws the still behind the film" bug.
         ///
         /// **Guarded on the generation, not fired blind.** A report that arrived
         /// after a reconfigure or a teardown would hide the still for a film
@@ -231,7 +269,10 @@ struct AnimatedDecoration: NSViewRepresentable {
         private func report(_ playing: Bool) {
             let generation = generation
             Task { @MainActor [weak self] in
-                guard let self, self.generation == generation, self.view != nil else { return }
+                guard let self, self.generation == generation, self.view != nil,
+                      self.reported != playing
+                else { return }
+                self.reported = playing
                 self.onPlayback?(playing)
             }
         }
@@ -239,10 +280,8 @@ struct AnimatedDecoration: NSViewRepresentable {
         private func subscribe() {
             guard !isSubscribed else { return }
             isSubscribed = true
-            AnimationClock.shared.subscribe(token, throughScroll: animatesThroughScroll) { [weak self] in
+            AnimationClock.shared.subscribe(token) { [weak self] in
                 guard let self, let view = self.view else { return }
-                // Every subscriber reads the SAME timestamp, so decorations stay
-                // in step instead of each drifting on its own accumulated error.
                 view.show(at: AnimationClock.shared.time)
             }
         }
@@ -256,6 +295,8 @@ struct AnimatedDecoration: NSViewRepresentable {
         func tearDown() {
             loadTask?.cancel()
             loadTask = nil
+            player?.tearDown()
+            player = nil
             unsubscribe()
             view = nil
             // Any report still in flight belongs to a view that has gone.

@@ -30,6 +30,9 @@ import WingcordCore
 /// composer that opened this is sitting over. See `AppModel.emojiCatalog`.
 struct ExpressionPicker: View {
     var mode: ExpressionMode
+    /// The section to open at — a stock sticker's pack, from its card's "View
+    /// More Stickers". Nil opens where the picker always opens.
+    var initialSectionID: String? = nil
     var onPick: (ExpressionItem) -> Void
     var onPickGIF: (GIF) -> Void
     /// Where a pick goes while the super reaction switch is on.
@@ -98,7 +101,18 @@ struct ExpressionPicker: View {
         .task(id: mode) {
             guard mode == .stickers else { return }
             await model.sessionController.loadDefaultStickerPacks()
+            openInitialSection()
         }
+    }
+
+    /// Jumps to `initialSectionID`, once the packs it names are in the catalog.
+    private func openInitialSection() {
+        guard let initialSectionID, query.isEmpty,
+              let index = catalog.sections.firstIndex(where: { $0.id == initialSectionID })
+        else { return }
+        jumpToken += 1
+        jump = ExpressionJump(section: index, token: jumpToken)
+        topSection = index
     }
 
     private var gridTab: some View {
@@ -185,8 +199,7 @@ struct ExpressionPicker: View {
                     if animated, let url {
                         AnimatedDecoration(
                             url: url,
-                            side: Metrics.control,
-                            byteBudget: ExpressionGridPainter.filmBudget
+                            side: Metrics.control
                         )
                     }
                 }

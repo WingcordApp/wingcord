@@ -85,6 +85,20 @@ nonisolated enum TimelineRowPainter {
         /// render test can drive it, and reaching for a main-actor singleton
         /// from inside a draw loop is exactly what that buys.
         var animationTime: Double = 0
+        /// Which of this row's moving pictures play on layers over the canvas
+        /// — see `TranscriptFilms` — so the painter leaves their boxes empty.
+        ///
+        /// **Empty, not the still.** Whatever is drawn under a picture shows
+        /// through wherever it is clear: a plate behind a sticker, a ghost of an
+        /// emoji's first frame behind the rest of it.
+        var layered = Layered()
+        /// The link under the pointer, underlined — Discord's `a:hover`.
+        var hoveredLink: MessageText.LinkTarget?
+        /// The part of the body the reader has selected.
+        var selectedRange: NSRange?
+        /// The author's name under the pointer, underlined — Discord's
+        /// `.username.clickable:hover`.
+        var isAuthorNameHovered = false
         /// Whether a styled name's effect may move.
         ///
         /// **Its own flag rather than a nil `animationTime`**, because zero is a
@@ -370,6 +384,17 @@ nonisolated enum TimelineRowPainter {
                 )
             }
 
+            // Discord's `.username.clickable:hover`: the name underlines under
+            // the pointer, in its own ink.
+            if state.isAuthorNameHovered {
+                let font = row.authorFace ?? style.authorFont
+                context.setFillColor((row.authorColor ?? style.primaryColor).cgColor)
+                context.fill(CGRect(
+                    x: namePoint.x, y: namePoint.y + font.ascender + 1.5,
+                    width: row.authorRect.width, height: max(1, font.underlineThickness)
+                ))
+            }
+
             if row.isBot {
                 let badgeRect = CGRect(
                     x: rowFrame.minX + row.authorRect.maxX + 6,
@@ -474,12 +499,15 @@ nonisolated enum TimelineRowPainter {
                 state: TextState(
                     revealedSpoilers: state.revealedSpoilers,
                     hoveredPlate: state.hoveredPlate,
-                    hoveredSpoiler: state.hoveredSpoiler
+                    hoveredSpoiler: state.hoveredSpoiler,
+                    layeredEmoji: state.layered.emoji,
+                    hoveredLink: state.hoveredLink,
+                    selectedRange: state.selectedRange
                 )
             )
         }
 
-        for slot in row.stickers {
+        for (index, slot) in row.stickers.enumerated() where !state.layered.stickers.contains(index) {
             let frame = slot.rect.offsetBy(dx: rowFrame.minX, dy: rowFrame.minY)
             drawSticker(
                 slot,
@@ -502,6 +530,7 @@ nonisolated enum TimelineRowPainter {
                 images: images,
                 scale: scale,
                 isRevealed: state.revealedAttachments.contains(index),
+                isLayered: state.layered.attachments.contains(index),
                 clock: state.animationTime,
                 // The star is a hover control: it exists on the picture the
                 // pointer is on and nowhere else, exactly as the action pill
@@ -551,7 +580,12 @@ nonisolated enum TimelineRowPainter {
             )
         }
 
+        var embedImageBase = 0
         for (index, slot) in row.embeds.enumerated() {
+            // `layered` counts pictures across every embed in the row; this
+            // embed's own start at `embedImageBase`.
+            let base = embedImageBase
+            embedImageBase += slot.images.count
             drawEmbed(
                 slot,
                 offset: CGPoint(x: rowFrame.minX, y: rowFrame.minY),
@@ -560,6 +594,9 @@ nonisolated enum TimelineRowPainter {
                 images: images,
                 scale: scale,
                 clock: state.animationTime,
+                layeredImages: Set(state.layered.embedImages.compactMap {
+                    $0 >= base && $0 < base + slot.images.count ? $0 - base : nil
+                }),
                 // A hover control, exactly as the attachment's is: it exists on
                 // the picture the pointer is on and nowhere else.
                 favorite: state.hoveredEmbed == index
@@ -592,7 +629,7 @@ nonisolated enum TimelineRowPainter {
                 isBookmarked: state.isBookmarked
             )
         }
-        for slot in row.reactions {
+        for (index, slot) in row.reactions.enumerated() {
             let frame = slot.rect.offsetBy(dx: rowFrame.minX, dy: rowFrame.minY)
             drawReaction(
                 slot,
@@ -603,6 +640,7 @@ nonisolated enum TimelineRowPainter {
                 images: images,
                 scale: scale,
                 clock: state.animationTime,
+                isLayered: state.layered.reactions.contains(index),
                 effectStart: slot.kind == .burst ? state.burstEffects[slot.emoji.reactionKey] : nil
             )
         }
@@ -677,6 +715,17 @@ nonisolated enum TimelineRowPainter {
     // MARK: Text
 
     /// What the reader and the pointer have done to one block of text.
+    /// One message's pictures that play on layers, by their place in the row.
+    struct Layered: Sendable, Equatable {
+        var stickers: Set<Int> = []
+        var attachments: Set<Int> = []
+        /// Counted across every embed in the row, in order.
+        var embedImages: Set<Int> = []
+        /// Indexes into the body's `emojiRects`.
+        var emoji: Set<Int> = []
+        var reactions: Set<Int> = []
+    }
+
     struct TextState {
         /// Which spoilers have been uncovered. **Nil uncovers every one** — a
         /// block whose spoilers have no click of their own, an embed's, where
@@ -686,6 +735,12 @@ nonisolated enum TimelineRowPainter {
         var hoveredPlate: Int?
         /// The concealed spoiler under the pointer.
         var hoveredSpoiler: Int?
+        /// The emoji that play on layers, by index into `emojiRects`.
+        var layeredEmoji: Set<Int> = []
+        /// The link under the pointer. See `State.hoveredLink`.
+        var hoveredLink: MessageText.LinkTarget?
+        /// The selected characters, highlighted under the words.
+        var selectedRange: NSRange?
     }
 
     /// Draws a laid-out block: the plates and rules under the words, the words,
@@ -710,6 +765,14 @@ nonisolated enum TimelineRowPainter {
         state: TextState
     ) {
         let ink = ThemeInk.current
+
+        // The selection, under everything else, in the system's own colour.
+        if let selected = state.selectedRange, selected.length > 0 {
+            context.setFillColor(NSColor.selectedTextBackgroundColor.cgColor)
+            for rect in block.selectionRects(for: selected) {
+                context.fill(rect.offsetBy(dx: origin.x, dy: origin.y))
+            }
+        }
 
         // Under the words: a quote's rule, a fenced block's box, a revealed
         // spoiler's plate, and every chip's.
@@ -777,7 +840,7 @@ nonisolated enum TimelineRowPainter {
         }
 
         // Inline emoji, drawn into the boxes the run delegates reserved.
-        for entry in block.emojiRects {
+        for (index, entry) in block.emojiRects.enumerated() where !state.layeredEmoji.contains(index) {
             let frame = entry.rect.offsetBy(dx: origin.x, dy: origin.y)
             guard let url = entry.emoji.id.flatMap({
                 CDN.emoji(id: $0, animated: entry.emoji.isAnimated, side: frame.width)
@@ -821,6 +884,22 @@ nonisolated enum TimelineRowPainter {
                 in: frame,
                 context: context
             )
+        }
+
+        // The hovered link's underline — Discord's `a:hover` — on every line it
+        // crosses. Only a URL: a mention or a channel chip answers the pointer
+        // with its plate instead.
+        if let hovered = state.hoveredLink, case .url = hovered {
+            let font = style.bodyFont
+            context.setFillColor(style.linkColor.cgColor)
+            for entry in block.linkRects where entry.target == hovered {
+                let rect = entry.rect.offsetBy(dx: origin.x, dy: origin.y)
+                let baseline = rect.maxY + font.descender
+                context.fill(CGRect(
+                    x: rect.minX, y: baseline + 1.5,
+                    width: rect.width, height: max(1, font.underlineThickness)
+                ))
+            }
         }
 
         // Over everything: a concealed spoiler is an opaque plate on top of the
@@ -1309,6 +1388,9 @@ nonisolated enum TimelineRowPainter {
         images: ImageStore,
         scale: CGFloat,
         isRevealed: Bool,
+        /// Whether the picture plays on a layer over the canvas, which leaves
+        /// its box to that layer.
+        isLayered: Bool = false,
         clock: Double,
         favorite: FavoriteBadge?
     ) {
@@ -1319,6 +1401,8 @@ nonisolated enum TimelineRowPainter {
         let isHidden = slot.isSpoiler && !isRevealed
         switch slot.kind {
         case .image, .video:
+            // A picture on a layer leaves its box empty for the layer.
+            guard !isLayered else { break }
             drawAttachmentArtwork(
                 slot,
                 in: frame,
@@ -1762,6 +1846,9 @@ nonisolated enum TimelineRowPainter {
         images: ImageStore,
         scale: CGFloat,
         clock: Double,
+        /// Whether the emoji plays on a layer over the canvas, which leaves its
+        /// glyph box to that layer.
+        isLayered: Bool = false,
         effectStart: Double?
     ) {
         // A super reaction's effect shakes the chip it starts from, for half a
@@ -1838,7 +1925,7 @@ nonisolated enum TimelineRowPainter {
             dx: frame.minX - slot.rect.minX, dy: frame.minY - slot.rect.minY
         )
         // While an effect plays, the effect is the emoji.
-        if effectStart == nil {
+        if effectStart == nil, !isLayered {
             drawReactionGlyph(slot, in: glyphRect, context: context, style: style,
                               images: images, scale: scale, clock: clock)
         }

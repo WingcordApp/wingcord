@@ -11,7 +11,7 @@ struct MemberListContainer: View {
 
     var body: some View {
         MemberListView(
-            sections: model.rosterSections,
+            roster: model.roster,
             presentationRevision: presentation.value,
             topInset: topInset,
             openProfile: { userID, frame in
@@ -19,6 +19,9 @@ struct MemberListContainer: View {
             },
             openMenu: { userID, frame in
                 model.openUserMenu(for: userID, anchor: frame)
+            },
+            showRows: { rows, margin in
+                model.sessionController.showMemberListRows(rows, margin: margin)
             },
             // A card open over the roster keeps its own subject's plate
             // moving, whether or not the pointer is still on the row — the

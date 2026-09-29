@@ -541,6 +541,12 @@ enum DemoFixtures {
         )
         model.members[firstGuild] = guildMembers
         model.presences = presences
+        model.memberLists[MemberListKey(guildID: firstGuild, listID: "everyone")] = memberList(
+            members: guildMembers,
+            users: model.users,
+            presences: presences,
+            roles: model.roles[firstGuild] ?? [:]
+        )
 
         // **A server nobody joined, so `--demo` reaches preview mode.**
         //
@@ -1624,6 +1630,52 @@ enum DemoFixtures {
     /// A prefix rather than a table: the names are written in one place above
     /// and read here, and a second list to keep in step is a second list to
     /// forget.
+    /// The list Discord's server would send for a demo server: online people
+    /// under their hoisted role, everyone else online under Online, then
+    /// Offline, each by name. The demo has no server, so it stands in for one.
+    private static func memberList(
+        members: [UserID: Member],
+        users: [UserID: User],
+        presences: [UserID: Presence],
+        roles: [RoleID: Role]
+    ) -> MemberList {
+        var hoisted: [RoleID: [UserID]] = [:]
+        var online: [UserID] = []
+        var offline: [UserID] = []
+        for (userID, member) in members {
+            if (presences[userID]?.status ?? .offline) == .offline {
+                offline.append(userID)
+            } else if let role = RoleResolver.hoistRole(of: member.roleIDs, in: roles) {
+                hoisted[role.id, default: []].append(userID)
+            } else {
+                online.append(userID)
+            }
+        }
+        func byName(_ ids: [UserID]) -> [UserID] {
+            ids.map { id in
+                (id, users[id].flatMap { user in members[id]?.resolvedName(user: user) } ?? "")
+            }
+            .sorted { $0.1.localizedLowercase < $1.1.localizedLowercase }
+            .map(\.0)
+        }
+        var groups: [MemberList.Group] = []
+        var rows: [MemberList.Row?] = []
+        func add(_ id: MemberList.GroupID, _ people: [UserID]) {
+            guard !people.isEmpty else { return }
+            groups.append(MemberList.Group(id: id, count: people.count))
+            rows.append(.group(id))
+            rows += byName(people).map { .member($0) }
+        }
+        for role in roles.values.filter({ hoisted[$0.id] != nil }).sorted(by: Role.seniorityOrder) {
+            add(.role(role.id), hoisted[role.id] ?? [])
+        }
+        add(.online, online)
+        add(.offline, offline)
+        var list = MemberList()
+        list.apply([.sync(start: 0, rows: rows)], groups: groups)
+        return list
+    }
+
     private static func demoKind(of name: String) -> ChannelKind {
         if name.hasPrefix("stage-") { return .stage }
         if name.contains("vc") || name == "lobby" { return .voice }

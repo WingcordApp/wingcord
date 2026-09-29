@@ -1342,6 +1342,8 @@ private struct StoragePane: View {
                 ) {
                     ImageStore.shared.purge()
                     AnimatedImageStore.shared.purge()
+                    FilmFrames.shared.purge()
+                    LottieDocuments.shared.purge()
                     measure(settling: false)
                 }
             }

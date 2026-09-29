@@ -104,12 +104,15 @@ nonisolated struct MessageText: @unchecked Sendable {
         case url(String)
         case user(UserID)
         case role(RoleID)
-        case channel(ChannelID)
-        /// A link to one message, which is a **destination inside the app**
-        /// rather than a URL. Rendered as a chip and followed by scrolling
-        /// there, not by handing it to a browser that would ask the reader to
-        /// sign in again.
-        case message(MessageLink)
+        /// A channel, or one message in it — a `<#id>` mention or a link
+        /// somebody pasted. A **destination inside the app** rather than a URL:
+        /// followed by going there, not by handing it to a browser that would
+        /// ask the reader to sign in again. The URL, when there is one, is
+        /// where a channel this account cannot name is opened instead.
+        case channelLink(ChannelLink, url: String?)
+        /// A place in the server — `<id:guide>` — and the role, for
+        /// `<id:linked-roles:123>`.
+        case staticRoute(StaticRoute, itemID: UInt64?)
     }
 }
 
@@ -152,14 +155,16 @@ nonisolated struct MentionContext: Sendable {
     /// forwarded message exactly as it does for the transcript, where a table of
     /// the selected server's roles drew every other server's as "@role".
     var roles: [RoleID: MentionRole] = [:]
-    var channelNames: [ChannelID: String] = [:]
-    /// Which of those channels are conversations rather than server channels.
-    ///
-    /// A message link into a DM is addressed to a **person**, so it reads `@ada`
-    /// where a server channel reads `#general`. The prefix is the only
-    /// difference and it is the one that decides whether the chip is a place or
-    /// a person.
-    var directMessageChannelIDs: Set<ChannelID> = []
+    /// Every channel the account knows, for the chips `<#id>` mentions and
+    /// channel links draw — see `LinkChannel`. **Shared, not copied**: it is
+    /// memoized on the channel tree alone (`AppModel.linkChannelTable`), so a
+    /// context rebuilt for a roster change hands on the same buffer.
+    var channels: [ChannelID: LinkChannel] = [:]
+    /// Server names, for a chip pointing into another server.
+    var guildNames: [GuildID: String] = [:]
+    /// The server the text is drawn in. A chip into any other names its
+    /// server first — Discord's rule.
+    var currentGuildID: GuildID?
     /// The reader's own ids, so a mention of them is drawn differently.
     var selfIDs: Set<UInt64> = []
 
@@ -171,6 +176,24 @@ nonisolated struct MentionContext: Sendable {
     /// (`@user`, `#channel`) and the transcript then serves that to everyone,
     /// forever. Closures have no identity to hash; a generation does.
     var token: UInt64 = 0
+}
+
+/// What a channel chip needs to know about one channel.
+nonisolated struct LinkChannel: Sendable {
+    var name: String
+    /// Nil for a conversation.
+    var guildID: GuildID?
+    var kind: ChannelKind
+    /// Whether the reader may open it. A chip for one they may not reads
+    /// "No Access", as Discord's does.
+    var canView: Bool
+    /// A forum or media post, which Discord names beside its forum.
+    var isPost: Bool
+    var parentID: ChannelID?
+
+    /// Discord's `isMentionable`: everything but a category.
+    var isMentionable: Bool { kind != .category && kind != .unknown }
+    var isConversation: Bool { kind == .directMessage || kind == .groupDirectMessage }
 }
 
 /// What a role mention draws: the name, and the colour or gradient it wears —
@@ -328,37 +351,11 @@ nonisolated enum MessageTextBuilder {
                     ))
 
                 case .autoLink(let url):
-                    // A message link is a place in this account, not a page on
-                    // the web. Drawn as a chip naming the channel it points at,
-                    // and only when that channel can be named — an unresolvable
-                    // one stays a URL, because a chip reading "#channel" is a
-                    // destination the reader is told about and cannot reach.
-                    if let link = MessageLink.parse(url),
-                       let name = context.channelNames[link.channelID]
+                    // A link into this account is a place, not a page on the
+                    // web, and Discord draws it as a chip naming the place.
+                    if let link = ChannelLink.parse(url),
+                       appendChannelChip(link, url: url, base: attributes)
                     {
-                        // **A message link is not a mention, and must not read
-                        // as one.** Both are blue chips carrying a name, so a
-                        // link into a DM came out as `@robinresting` —
-                        // character for character what a mention of that person
-                        // looks like, and the two go to completely different
-                        // places. The glyph is the whole difference.
-                        //
-                        // One plate and one link run over the glyph AND the
-                        // name, so the whole chip is one target rather than a
-                        // word beside an unclickable picture.
-                        let start = beginPlate(padding: MessageTextStyle.chipPadding)
-                        appendInlineSymbol("text.bubble.fill", base: attributes)
-                        appendRaw(
-                            " " + (context.directMessageChannelIDs.contains(link.channelID)
-                                ? "@" : "#") + name,
-                            attributes: style.mention(base: attributes)
-                        )
-                        endPlate(
-                            from: start,
-                            kind: .mention,
-                            padding: MessageTextStyle.chipPadding,
-                            target: .message(link)
-                        )
                         continue
                     }
                     let start = output.length
@@ -390,8 +387,15 @@ nonisolated enum MessageTextBuilder {
                     )
 
                 case .channelMention(let channelID):
-                    let name = context.channelNames[channelID].map { "#\($0)" } ?? "#channel"
-                    appendMention(name, base: attributes, target: .channel(channelID))
+                    // The same chip a link draws: Discord's `<#id>` rule runs
+                    // the channel through the identical builder.
+                    let link = ChannelLink(
+                        guildID: context.channels[channelID]?.guildID, channelID: channelID
+                    )
+                    appendChannelChip(link, url: nil, base: attributes)
+
+                case .staticRoute(let route, let itemID):
+                    appendStaticRoute(route, itemID: itemID, base: attributes)
 
                 case .commandMention(let name, _):
                     appendMention("/\(name)", base: attributes)
@@ -458,6 +462,188 @@ nonisolated enum MessageTextBuilder {
             let start = beginPlate(padding: MessageTextStyle.chipPadding)
             appendRaw(label, attributes: style.mention(base: base, tint: tint))
             endPlate(from: start, kind: kind, padding: MessageTextStyle.chipPadding, target: target)
+        }
+
+        /// One piece of a channel chip.
+        private enum ChipPart {
+            case guild(String)
+            case channel(LinkChannel)
+            /// A channel this account cannot name — Discord's italic "unknown".
+            case unknownChannel
+            /// One message, or one post, in the channel named before it.
+            case message(isPost: Bool)
+            /// A place in the server: its glyph and its name.
+            case place(symbol: String, title: String)
+            /// A name and nothing else — the role a linked-roles chip names.
+            case name(String)
+        }
+
+        /// Discord's `staticRouteLink` — `<id:guide>` — as the chip a channel
+        /// mention is, led by the place's glyph: "Server Guide", "Browse
+        /// Channels", "Channels & Roles", or "Linked Roles › Role" when it
+        /// names a role (modules `78390` and `999915`).
+        ///
+        /// **The sidebar's glyphs for the same places**, so the chip and the
+        /// row it leads to read as one destination; Discord does the same with
+        /// its own icons.
+        mutating func appendStaticRoute(
+            _ route: StaticRoute, itemID: UInt64?, base: [NSAttributedString.Key: Any]
+        ) {
+            let symbol = switch route {
+            case .home, .guide: "signpost.right.fill"
+            case .browse, .customize: "square.grid.2x2"
+            case .linkedRoles: "link"
+            }
+            let place = ChipPart.place(symbol: symbol, title: route.title)
+            let target = MessageText.LinkTarget.staticRoute(route, itemID: itemID)
+            // Discord names the role only on a linked-roles chip, and only one
+            // it can find.
+            if route == .linkedRoles,
+               let name = itemID.flatMap({ context.roles[RoleID(rawValue: $0)]?.name })
+            {
+                appendChip(place, .name(name), base: base, target: target)
+            } else {
+                appendChip(nil, place, base: base, target: target)
+            }
+        }
+
+        /// Discord's channel chip, `F` and `k` beside `channelOrMessageUrl` in
+        /// its markdown rules (module `999915`), in its order:
+        ///
+        /// - a channel the reader cannot see reads "No Access", behind a lock;
+        /// - a category is not a destination, and is written as plain `#name`;
+        /// - a conversation reads `@name › 💬`;
+        /// - in this server: `#channel`, or `#channel › 💬` for one message in
+        ///   it, or `#forum › post` for one message in a post;
+        /// - in another server: `Server › #channel`, or `Server › 💬`;
+        /// - a channel nobody here can name reads *unknown*, after its server
+        ///   when that is one the account is in.
+        ///
+        /// **A message chip and a mention differ by the chevron and the mark
+        /// after it** — `INVARIANTS.md` §5.5: two things that go to different
+        /// places must not look the same.
+        ///
+        /// - Returns: false where Discord leaves the link a plain URL.
+        @discardableResult
+        mutating func appendChannelChip(
+            _ link: ChannelLink,
+            url: String?,
+            base: [NSAttributedString.Key: Any]
+        ) -> Bool {
+            let target = MessageText.LinkTarget.channelLink(link, url: url)
+            // The post first, then its forum — Discord's `mediaPostLink`.
+            guard let channel = link.threadID.flatMap({ context.channels[$0] })
+                ?? context.channels[link.channelID]
+            else {
+                let server = link.guildID.flatMap { id in
+                    id == context.currentGuildID ? nil : context.guildNames[id]
+                }
+                // A link still opens its URL; a bare mention of a channel
+                // nobody can name has nowhere to go, so it is no control.
+                appendChip(
+                    server.map(ChipPart.guild),
+                    .unknownChannel,
+                    base: base,
+                    target: url == nil ? nil : target
+                )
+                return true
+            }
+            guard channel.canView else {
+                let start = beginPlate(padding: MessageTextStyle.chipPadding)
+                appendInlineSymbol("lock.fill", base: base)
+                appendRaw(" No Access", attributes: style.mention(base: base))
+                endPlate(from: start, kind: .mention, padding: MessageTextStyle.chipPadding)
+                return true
+            }
+            guard channel.isMentionable else {
+                appendRaw("#" + Self.chipName(channel.name), attributes: base)
+                return true
+            }
+            guard let guildID = channel.guildID else {
+                guard channel.isConversation else { return false }
+                appendChip(.channel(channel), .message(isPost: false), base: base, target: target)
+                return true
+            }
+            guard let server = context.guildNames[guildID] else {
+                guard url == nil else { return false }
+                appendRaw("#unknown-channel", attributes: base)
+                return true
+            }
+
+            let hasMessage = link.messageID != nil
+            if guildID == context.currentGuildID {
+                if !hasMessage {
+                    appendChip(nil, .channel(channel), base: base, target: target)
+                } else if channel.isPost,
+                          let forum = channel.parentID.flatMap({ context.channels[$0] })
+                {
+                    appendChip(.channel(forum), .channel(channel), base: base, target: target)
+                } else {
+                    appendChip(
+                        .channel(channel), .message(isPost: channel.isPost),
+                        base: base, target: target
+                    )
+                }
+            } else {
+                let part: ChipPart = hasMessage && !channel.isPost
+                    ? .message(isPost: false)
+                    : .channel(channel)
+                appendChip(.guild(server), part, base: base, target: target)
+            }
+            return true
+        }
+
+        /// A plated chip: `lead › part`, or `part` alone, as one target.
+        private mutating func appendChip(
+            _ lead: ChipPart?,
+            _ part: ChipPart,
+            base: [NSAttributedString.Key: Any],
+            target: MessageText.LinkTarget?
+        ) {
+            let start = beginPlate(padding: MessageTextStyle.chipPadding)
+            if let lead {
+                appendChipPart(lead, base: base)
+                appendRaw(" ", attributes: style.mention(base: base))
+                appendInlineSymbol("chevron.compact.right", base: base)
+                appendRaw(" ", attributes: style.mention(base: base))
+            }
+            appendChipPart(part, base: base)
+            endPlate(from: start, kind: .mention, padding: MessageTextStyle.chipPadding, target: target)
+        }
+
+        private mutating func appendChipPart(_ part: ChipPart, base: [NSAttributedString.Key: Any]) {
+            let ink = style.mention(base: base)
+            switch part {
+            case .guild(let name):
+                appendRaw(Self.chipName(name), attributes: ink)
+            case .channel(let channel):
+                switch channel.kind {
+                case .text:
+                    appendRaw("#" + Self.chipName(channel.name), attributes: ink)
+                case .directMessage:
+                    appendRaw("@" + Self.chipName(channel.name), attributes: ink)
+                default:
+                    appendInlineSymbol(channel.kind.symbolName, base: base)
+                    appendRaw(" " + Self.chipName(channel.name), attributes: ink)
+                }
+            case .unknownChannel:
+                var italic = ink
+                style.apply(.italic, to: &italic)
+                appendRaw("#", attributes: ink)
+                appendRaw("unknown", attributes: italic)
+            case .message(let isPost):
+                appendInlineSymbol(isPost ? "doc.text.fill" : "text.bubble.fill", base: base)
+            case .place(let symbol, let title):
+                appendInlineSymbol(symbol, base: base)
+                appendRaw(" " + title, attributes: ink)
+            case .name(let name):
+                appendRaw(Self.chipName(name), attributes: ink)
+            }
+        }
+
+        /// A name in a chip, cut at Discord's thirty-two characters.
+        private static func chipName(_ name: String) -> String {
+            name.count > 32 ? String(name.prefix(32)) + "…" : name
         }
 
         /// Opens a plated run: the chip's leading air, kerned onto the character

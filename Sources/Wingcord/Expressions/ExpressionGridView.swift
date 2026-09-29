@@ -459,6 +459,10 @@ final class ExpressionGridCoordinator: NSObject {
     private var layoutWidth: CGFloat = 0
     private var topInset: CGFloat = 0
     private var lastJumpToken = Int.min
+    /// A jump the grid could not honour yet, because it had no layout to find
+    /// the section in. Held rather than dropped: a picker opened AT a section
+    /// asks before its first layout has run.
+    private var pendingJumpSection: Int?
     private var reportedSection = -1
 
     private var observers: [NSObjectProtocol] = []
@@ -605,8 +609,14 @@ final class ExpressionGridCoordinator: NSObject {
         }
         if let jump, jump.token != lastJumpToken {
             lastJumpToken = jump.token
-            scroll(toSection: jump.section)
+            pendingJumpSection = jump.section
         }
+        applyPendingJump()
+    }
+
+    private func applyPendingJump() {
+        guard let section = pendingJumpSection, scroll(toSection: section) else { return }
+        pendingJumpSection = nil
     }
 
     private func applyLayout() {
@@ -624,6 +634,7 @@ final class ExpressionGridCoordinator: NSObject {
         positionPinnedHeader()
         canvas.refreshAnimationState()
         schedulePrefetch()
+        applyPendingJump()
     }
 
     private func viewportDidChange() {
@@ -705,10 +716,12 @@ final class ExpressionGridCoordinator: NSObject {
         onTopSectionChange(section)
     }
 
-    private func scroll(toSection section: Int) {
+    /// - Returns: false when there is no layout yet to find the section in.
+    @discardableResult
+    private func scroll(toSection section: Int) -> Bool {
         guard let canvas, let scrollView,
               let offset = canvas.layout.offset(ofSection: section)
-        else { return }
+        else { return false }
         reportedSection = section
         // Past the chrome, so the section's own heading is not left underneath
         // the search field it was jumped to from.
@@ -717,6 +730,7 @@ final class ExpressionGridCoordinator: NSObject {
         positionCanvas()
         positionPinnedHeader()
         schedulePrefetch()
+        return true
     }
 
     private func scrollToTop() {

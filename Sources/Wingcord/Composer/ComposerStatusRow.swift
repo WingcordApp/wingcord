@@ -16,5 +16,10 @@ struct ComposerStatusRow: View {
             TypingIndicatorContainer(channelID: channelID)
             SlowmodeIndicatorContainer(channelID: channelID)
         }
+        // **The row holds the width, not the typing pill.** The pill's own
+        // full-width frame goes with it when nobody is typing — a frame on an
+        // empty group is nothing — and the row then hugged the slowmode notice
+        // alone and was centred under the transcript.
+        .frame(maxWidth: .infinity, alignment: .trailing)
     }
 }

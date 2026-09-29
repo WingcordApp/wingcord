@@ -19,6 +19,28 @@ struct MarkdownParserTests {
         parser.parse(source).blocks
     }
 
+    // MARK: Places in a server
+
+    /// Discord's `staticRouteLink`, whose rule is
+    /// `/^<id:(home|browse|customize|guide|linked-roles)(?::(\d+))?>/`.
+    @Test("A place in a server is a node, by Discord's five names")
+    func staticRoutes() {
+        #expect(inline("<id:guide>") == [.staticRoute(.guide, itemID: nil)])
+        #expect(inline("<id:home>") == [.staticRoute(.home, itemID: nil)])
+        #expect(inline("<id:browse>") == [.staticRoute(.browse, itemID: nil)])
+        #expect(inline("<id:customize>") == [.staticRoute(.customize, itemID: nil)])
+        #expect(inline("<id:linked-roles>") == [.staticRoute(.linkedRoles, itemID: nil)])
+        #expect(inline("<id:linked-roles:1234567890>")
+            == [.staticRoute(.linkedRoles, itemID: 1_234_567_890)])
+    }
+
+    @Test("Anything else in that shape stays text")
+    func staticRouteLookAlikes() {
+        #expect(inline("<id:shop>") == [.text("<id:shop>")])
+        #expect(inline("<id:linked-roles:abc>") == [.text("<id:linked-roles:abc>")])
+        #expect(inline("<id:guide:1:2>") == [.text("<id:guide:1:2>")])
+    }
+
     // MARK: Emphasis
 
     @Test("Plain text is one node and one allocation")

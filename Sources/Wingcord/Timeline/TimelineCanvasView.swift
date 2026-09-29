@@ -87,6 +87,8 @@ final class TimelineCanvasView: NSView {
             guard let self else { return }
             self.invalidateBurstChip(key)
             self.refreshStickerAnimation()
+            // A chip lends its emoji to the effect and takes it back after.
+            self.reconcileFilms()
         }
     }
 
@@ -95,6 +97,8 @@ final class TimelineCanvasView: NSView {
     func apply(channelID: ChannelID) {
         guard self.channelID != channelID else { return }
         self.channelID = channelID
+        selection = nil
+        isSelecting = false
         burstEffects.stopAll()
         ambientPlayed.removeAll()
         pendingArrivals.removeAll()
@@ -263,6 +267,9 @@ final class TimelineCanvasView: NSView {
     /// Which attachment the pointer is over. Its own field for the reason
     /// `TimelineRowPainter.State.hoveredAttachment` gives.
     private var hoveredAttachment: Int?
+    /// The link or the name under the pointer, for their underline.
+    private var hoveredLink: MessageText.LinkTarget?
+    private var isAuthorNameHovered = false
     /// Which unfurled embed the pointer is over. Its own field beside the
     /// attachment's, because a message can carry both a pasted `.gif` file and a
     /// Tenor link and one field would put the star on the wrong one.
@@ -300,6 +307,8 @@ final class TimelineCanvasView: NSView {
                 hoveredComponent = nil
                 hoveredPlate = nil
                 hoveredSpoiler = nil
+                hoveredLink = nil
+                isAuthorNameHovered = false
                 styledName = nil
                 invalidateRow(previous)
                 publishHover()
@@ -319,6 +328,9 @@ final class TimelineCanvasView: NSView {
     var onWidthChange: ((CGFloat) -> Void)?
     var onDocumentHeightChange: ((CGFloat) -> Void)?
     var onOpenLink: ((MessageText.LinkTarget, CGRect) -> Void)?
+    /// A video's Play: the message, the player, and the thumbnail's rect in
+    /// this canvas, which the player is laid over.
+    var onPlayVideo: ((MessageID, URL, CGRect) -> Void)?
     var onVisibleRangeChange: ((Range<Int>) -> Void)?
     var onActivateMessage: ((MessageID) -> Void)?
     /// A face or a name was clicked. The rect is in this view's own space; the
@@ -457,19 +469,12 @@ final class TimelineCanvasView: NSView {
     /// moment, and plays it when the rows land.
     private var pendingArrivals: [(messageID: MessageID, emoji: EmojiRef, until: CFTimeInterval)] = []
 
-    // MARK: Animated stickers
+    // MARK: Moving pictures
     //
-    // **The canvas subscribes to the shared clock, not one timer per sticker.**
-    // A drawn transcript has no per-sticker view to hang a display link off, and
-    // a link each would be the one-timer-per-animation problem `AnimationClock`
-    // exists to prevent. One subscriber invalidates only the rects whose FRAME
-    // has actually changed — the clock runs at up to 24 fps and stickers are
-    // authored at 10-20, so most ticks resolve to the picture already on screen
-    // and cost a dictionary lookup.
-    //
-    // It does not run through a scroll: `AnimationClock`'s default parks
-    // playback while a gesture is in flight, which is what buys the scroll its
-    // frames.
+    // **Stickers, GIFs and animated emoji play on layers over this canvas** —
+    // see `TranscriptFilms`, which says why the canvas stopped drawing their
+    // frames. What is left on the clock here is what only the painter can draw:
+    // the hovered row's moving face, a styled name, a shaking chip.
 
     /// Names one moving picture in the transcript.
     ///
@@ -484,9 +489,11 @@ final class TimelineCanvasView: NSView {
         var index: Int
     }
 
-    /// The frame index each visible filmstrip is currently showing.
-    private var shownFilmFrames: [FilmSlot: Int] = [:]
+    /// The layers the moving pictures play on.
+    let films = TranscriptFilms()
     private var isAnimatingStickers = false
+    /// The rate the clock was last asked for. See `clockRate`.
+    private var subscribedRate: Double = 0
     private var animationToken: ObjectIdentifier { ObjectIdentifier(self) }
 
     init(style: MessageTextStyle) {
@@ -496,6 +503,8 @@ final class TimelineCanvasView: NSView {
         layerContentsRedrawPolicy = .onSetNeedsDisplay
         layerContentsPlacement = .topLeft
         layer?.drawsAsynchronously = false
+        // Under any subview's layer, over this view's own drawing.
+        layer?.insertSublayer(films.container, at: 0)
         postsFrameChangedNotifications = true
         setAccessibilityElement(true)
         setAccessibilityRole(.list)
@@ -581,6 +590,17 @@ final class TimelineCanvasView: NSView {
         }
         // Clear any hover that referred to a row index that no longer exists.
         if let hoveredRow, hoveredRow >= rows.count { self.hoveredRow = nil }
+        messageRows.removeAll(keepingCapacity: true)
+        for (index, row) in rows.enumerated() {
+            if let id = row.messageID { messageRows[id] = index }
+        }
+        // A selection whose message is gone has nothing left to point at.
+        if let selection, messageRows[selection.anchor.messageID] == nil
+            || messageRows[selection.focus.messageID] == nil
+        {
+            self.selection = nil
+            isSelecting = false
+        }
         // An index survives a rows change; the message at it may not. Republish
         // so the pill cannot end up offering another message's actions.
         if hoveredRow != nil { publishHover() }
@@ -596,49 +616,49 @@ final class TimelineCanvasView: NSView {
         refreshAmbient()
         needsDisplay = true
         refreshStickerAnimation()
+        reconcileFilms()
         return running
     }
 
-    /// Subscribes to the clock while something on screen is moving, and stops
-    /// the moment nothing is.
+    /// Subscribes to the clock while something the painter draws is moving,
+    /// and stops the moment nothing is.
     ///
-    /// **Four kinds of moving picture, one subscription.** A sticker, a GIF
-    /// attachment, a GIF a link unfurled into and the hovered row's own face
-    /// are all filmstrips drawn by the same painter on the same clock, and
-    /// giving each its own subscription would be four display-link callbacks
-    /// for one repaint.
-    ///
-    /// Called from every place the answer can change: a rows change, a viewport
-    /// move, and the pass that installs newly-decoded film. Idempotent, so those
-    /// three can call it freely.
+    /// Called from every place the answer can change. Idempotent, so they can
+    /// call it freely.
     func refreshStickerAnimation() {
         let wanted = window != nil && hasVisibleFilm
-        guard wanted != isAnimatingStickers else { return }
+        let rate = wanted ? clockRate : 0
+        guard wanted != isAnimatingStickers || rate != subscribedRate else { return }
         isAnimatingStickers = wanted
+        subscribedRate = rate
         if wanted {
-            AnimationClock.shared.subscribe(animationToken) { [weak self] in
+            AnimationClock.shared.subscribe(animationToken, rate: rate) { [weak self] in
                 self?.advanceFilm()
             }
         } else {
             AnimationClock.shared.unsubscribe(animationToken)
-            shownFilmFrames.removeAll(keepingCapacity: true)
         }
     }
 
-    /// Releases the clock subscription. Idempotent.
+    /// How often the painter's moving things need a look: the hovered face's
+    /// own frame rate, and sixty for a name or a chip that moves continuously —
+    /// Discord animates both as CSS, at the display's rate.
+    private var clockRate: Double {
+        let continuous = hoveredNameEffectAnimates || nameGradientPhase != nil
+            || burstEffects.isShaking(at: AnimationClock.shared.time) || !shakingChips.isEmpty
+        return continuous ? 60 : (avatarFilm.isPlaying ? avatarFilm.rate : AnimationClock.defaultRate)
+    }
+
+    /// Releases the clock subscription and every picture's layer. Idempotent.
     func stopStickerAnimation() {
         avatarFilm.cancel()
+        films.removeAll()
         guard isAnimatingStickers else { return }
         isAnimatingStickers = false
         AnimationClock.shared.unsubscribe(animationToken)
-        shownFilmFrames.removeAll(keepingCapacity: false)
     }
 
     private var hasVisibleFilm: Bool {
-        // The hovered row's face and decoration ride this same subscription —
-        // "three kinds of moving picture, one subscription" is four now, and
-        // giving the fourth its own display-link callback for one repaint is
-        // exactly what that sentence is about.
         if avatarFilm.isPlaying { return true }
         // Five and six. Neither is a filmstrip — nothing swaps a bitmap for
         // them — but both are the same question: something on screen is moving,
@@ -649,37 +669,7 @@ final class TimelineCanvasView: NSView {
         if nameGradientPhase != nil { return true }
         // A super reaction chip shaking. Not a filmstrip either, and for half
         // a second at a time.
-        if burstEffects.isShaking(at: AnimationClock.shared.time) || !shakingChips.isEmpty {
-            return true
-        }
-        let playsEmoji = AnimationClock.playsAnimatedEmoji
-        for index in visibleRowRange() {
-            guard case .message(let row) = rows[index].kind else { continue }
-            if row.stickers.contains(where: \.isAnimated) { return true }
-            if row.attachments.contains(where: \.isAnimated) { return true }
-            for embed in row.embeds where embed.images.contains(where: \.isAnimated) {
-                return true
-            }
-            // **Custom emoji in the message body, which used not to count.**
-            // They were the one moving picture the transcript drew as a still —
-            // documented as out of scope at the time and asked for since. The
-            // tag carries `isAnimated`, so a message of ordinary Unicode emoji
-            // costs nothing here.
-            if playsEmoji,
-               row.textBlock?.emojiRects.contains(where: { $0.emoji.isAnimated }) == true
-            {
-                return true
-            }
-            // **And the emoji on reaction chips**, which drew as a plate — or,
-            // animated, as frame zero — because nothing had ever asked for
-            // their pictures.
-            if playsEmoji,
-               row.reactions.contains(where: { $0.emoji.isAnimated && $0.imageURL != nil })
-            {
-                return true
-            }
-        }
-        return false
+        return burstEffects.isShaking(at: AnimationClock.shared.time) || !shakingChips.isEmpty
     }
 
     /// Repaints just the hovered name, effect bleed included.
@@ -772,15 +762,9 @@ final class TimelineCanvasView: NSView {
         return DisplayNameEffectPainter.animates(style)
     }
 
-    /// One clock tick: repaint only the boxes whose frame actually moved.
-    ///
-    /// **Per box, not per row and never the whole canvas.** A ten-frame GIF
-    /// authored at 10 fps changes on one clock tick in three, and a repaint of
-    /// the viewport for a picture that did not move is the cost this whole
-    /// arrangement exists to avoid.
+    /// One clock tick: repaint only what the painter draws that moved.
     private func advanceFilm() {
         let time = AnimationClock.shared.time
-        let scale = window?.backingScaleFactor ?? 2
 
         // Nothing happens on the ticks that resolve to the frame already on
         // screen, which at 24 ticks over a 12-frame-a-second asset is half.
@@ -798,92 +782,6 @@ final class TimelineCanvasView: NSView {
         // avoid.
         invalidateHoveredName()
 
-        // Local, so the three loops below share one lookup and one comparison
-        // rather than three copies of them.
-        func advance(
-            url: URL?,
-            box: CGRect,
-            decodeWidth: CGFloat,
-            key: FilmSlot,
-            rowOrigin: CGPoint
-        ) {
-            guard let url else { return }
-            let filmKey = AnimatedImageStore.Key(
-                url: url, maximumPixelSize: Int((decodeWidth * scale).rounded(.up))
-            )
-            guard let film = AnimatedImageStore.shared.cached(filmKey) else { return }
-            let next = film.index(at: time)
-            guard shownFilmFrames[key] != next else { return }
-            shownFilmFrames[key] = next
-            setNeedsDisplay(box.offsetBy(dx: rowOrigin.x, dy: rowOrigin.y))
-        }
-
-        for index in visibleRowRange() {
-            guard case .message(let row) = rows[index].kind else { continue }
-            let frame = rowFrame(at: index)
-            let origin = CGPoint(x: frame.minX, y: frame.minY)
-            for (slot, offset) in zip(row.stickers, row.stickers.indices)
-            where slot.isAnimated {
-                advance(
-                    url: slot.url,
-                    box: slot.rect,
-                    decodeWidth: slot.rect.width,
-                    key: FilmSlot(messageID: row.id, kind: .sticker, index: offset),
-                    rowOrigin: origin
-                )
-            }
-            for (offset, slot) in row.attachments.enumerated() where slot.isAnimated {
-                advance(
-                    url: slot.url,
-                    box: slot.rect,
-                    decodeWidth: slot.decodeWidth,
-                    key: FilmSlot(messageID: row.id, kind: .attachment, index: offset),
-                    rowOrigin: origin
-                )
-            }
-            if let block = row.textBlock {
-                let textOrigin = CGPoint(
-                    x: origin.x + row.textOrigin.x,
-                    y: origin.y + row.textOrigin.y
-                )
-                for (offset, entry) in block.emojiRects.enumerated()
-                where entry.emoji.isAnimated {
-                    advance(
-                        url: entry.emoji.id.flatMap {
-                            CDN.emoji(id: $0, animated: true, side: entry.rect.width)
-                        },
-                        box: entry.rect,
-                        decodeWidth: entry.rect.width,
-                        key: FilmSlot(messageID: row.id, kind: .emoji, index: offset),
-                        rowOrigin: textOrigin
-                    )
-                }
-            }
-            var embedImage = 0
-            for embed in row.embeds {
-                for slot in embed.images {
-                    defer { embedImage += 1 }
-                    guard slot.isAnimated else { continue }
-                    advance(
-                        url: slot.url,
-                        box: slot.rect,
-                        decodeWidth: slot.decodeWidth,
-                        key: FilmSlot(messageID: row.id, kind: .embed, index: embedImage),
-                        rowOrigin: origin
-                    )
-                }
-            }
-            for (offset, slot) in row.reactions.enumerated() where slot.emoji.isAnimated {
-                advance(
-                    url: slot.imageURL,
-                    box: slot.glyphRect,
-                    decodeWidth: TimelineMetrics.reactionGlyphSide,
-                    key: FilmSlot(messageID: row.id, kind: .reaction, index: offset),
-                    rowOrigin: origin
-                )
-            }
-        }
-
         // Shaking chips, and the ones that stopped shaking since the last
         // tick — a shake that ends between ticks would otherwise leave its chip
         // drawn a point off and a degree askew until something else repainted
@@ -896,12 +794,160 @@ final class TimelineCanvasView: NSView {
         }
     }
 
+    /// Brings the layers over the canvas in line with the moving pictures near
+    /// the viewport — the rows on screen and half a screen either side, so a
+    /// picture is playing before it scrolls in. See `TranscriptFilms`.
+    func reconcileFilms() {
+        let scale = window?.backingScaleFactor ?? 2
+        guard window != nil else {
+            films.removeAll()
+            return
+        }
+        let reach = bounds.insetBy(dx: 0, dy: -bounds.height / 2)
+        var requests: [TranscriptFilms.Request] = []
+        if var index = rowIndex(at: max(0, reach.minY)) {
+            let playsEmoji = AnimationClock.playsAnimatedEmoji
+            while index < rows.count, offsets[index] < reach.maxY {
+                if case .message(let row) = rows[index].kind {
+                    appendFilms(
+                        of: row, at: rowFrame(at: index).origin, scale: scale,
+                        playsEmoji: playsEmoji, into: &requests
+                    )
+                }
+                index += 1
+            }
+        }
+        films.reconcile(requests, scale: scale)
+        films.setBadge(filmBadge(), scale: scale)
+    }
+
+    /// The moving pictures in one message, by the painter's own rules for
+    /// what it would have shown moving.
+    ///
+    /// **What a spoiler covers gets no layer**: a layer sits over the canvas's
+    /// drawing, and one over a concealed picture would show it through its
+    /// plate. Nor does the emoji a super reaction has borrowed for its effect,
+    /// or a chip that is shaking — the painter moves those.
+    private func appendFilms(
+        of row: MessageRow,
+        at origin: CGPoint,
+        scale: CGFloat,
+        playsEmoji: Bool,
+        into requests: inout [TranscriptFilms.Request]
+    ) {
+        func key(_ url: URL, side: CGFloat) -> FilmPlayer.Key {
+            FilmPlayer.Key(url: url, maximumPixelSize: Int((side * scale).rounded(.up)))
+        }
+        for (offset, slot) in row.stickers.enumerated() where slot.isAnimated {
+            guard let url = slot.url else { continue }
+            requests.append(.init(
+                slot: FilmSlot(messageID: row.id, kind: .sticker, index: offset),
+                source: slot.isVector
+                    ? .vector(url)
+                    : .film(key(url, side: max(slot.rect.width, slot.rect.height))),
+                frame: slot.rect.offsetBy(dx: origin.x, dy: origin.y)
+            ))
+        }
+        let loadsArtwork = AppSettings.shared.loadsImagesAutomatically
+        let revealed = revealedAttachments[row.id] ?? []
+        for (offset, slot) in row.attachments.enumerated() where slot.isAnimated && loadsArtwork {
+            guard let url = slot.url, !slot.isSpoiler || revealed.contains(offset) else { continue }
+            requests.append(.init(
+                slot: FilmSlot(messageID: row.id, kind: .attachment, index: offset),
+                source: .film(key(url, side: max(slot.decodeWidth, slot.rect.width, slot.rect.height))),
+                frame: slot.rect.offsetBy(dx: origin.x, dy: origin.y),
+                gravity: slot.cropsToFill ? .resizeAspectFill : .resize,
+                cornerRadius: 8,
+                placeholder: ThemeInk.current.surfaceRaised
+            ))
+        }
+        var embedImage = 0
+        for embed in row.embeds {
+            for image in embed.images {
+                defer { embedImage += 1 }
+                guard loadsArtwork else { continue }
+                let source: TranscriptFilms.Request.Source
+                if case .loop(let video) = image.video {
+                    source = .video(video)
+                } else if image.isAnimated, let url = image.url {
+                    source = .film(key(url, side: max(image.decodeWidth, image.rect.width, image.rect.height)))
+                } else {
+                    continue
+                }
+                requests.append(.init(
+                    slot: FilmSlot(messageID: row.id, kind: .embed, index: embedImage),
+                    source: source,
+                    frame: image.rect.offsetBy(dx: origin.x, dy: origin.y),
+                    cornerRadius: image.isCircle ? image.rect.width / 2 : image.corner,
+                    placeholder: ThemeInk.current.placeholderFill
+                ))
+            }
+        }
+        guard playsEmoji else { return }
+        if let block = row.textBlock {
+            let textOrigin = CGPoint(x: origin.x + row.textOrigin.x, y: origin.y + row.textOrigin.y)
+            let shown = revealedSpoilers[row.id] ?? []
+            let concealed = block.spoilerRects.filter { !shown.contains($0.spoiler) }.map(\.rect)
+            for (offset, entry) in block.emojiRects.enumerated() where entry.emoji.isAnimated {
+                guard let id = entry.emoji.id,
+                      !concealed.contains(where: { $0.intersects(entry.rect) }),
+                      let url = CDN.emoji(id: id, animated: true, side: entry.rect.width)
+                else { continue }
+                requests.append(.init(
+                    slot: FilmSlot(messageID: row.id, kind: .emoji, index: offset),
+                    source: .film(key(url, side: entry.rect.width)),
+                    frame: entry.rect.offsetBy(dx: textOrigin.x, dy: textOrigin.y)
+                ))
+            }
+        }
+        let bursting = burstEffects.isEmpty ? [:] : burstEffects.showing(on: row.id)
+        for (offset, slot) in row.reactions.enumerated() where slot.emoji.isAnimated {
+            guard let url = slot.imageURL, bursting[slot.emoji.reactionKey] == nil else { continue }
+            requests.append(.init(
+                slot: FilmSlot(messageID: row.id, kind: .reaction, index: offset),
+                source: .film(key(url, side: TimelineMetrics.reactionGlyphSide)),
+                frame: slot.glyphRect.offsetBy(dx: origin.x, dy: origin.y)
+            ))
+        }
+    }
+
+    /// The favourite star over the hovered GIF, when that GIF is on a layer.
+    private func filmBadge() -> TranscriptFilms.Badge? {
+        guard let index = hoveredRow, !isScrolling, rows.indices.contains(index),
+              case .message(let row) = rows[index].kind
+        else { return nil }
+        let origin = rowFrame(at: index).origin
+        if let attachment = hoveredAttachment, row.attachments.indices.contains(attachment),
+           let gif = row.attachments[attachment].favorite
+        {
+            let slot = row.attachments[attachment]
+            return TranscriptFilms.Badge(
+                state: isFavoriteGIF?(gif) == true ? .starred : .unstarred,
+                frame: slot.favoriteRect.offsetBy(dx: origin.x, dy: origin.y),
+                slot: FilmSlot(messageID: row.id, kind: .attachment, index: attachment)
+            )
+        }
+        if let embed = hoveredEmbed, row.embeds.indices.contains(embed),
+           let gif = row.embeds[embed].favorite,
+           let image = row.embeds[embed].images.firstIndex(where: { $0.isAnimated || $0.video?.isLoop == true })
+        {
+            let first = row.embeds[..<embed].reduce(0) { $0 + $1.images.count }
+            return TranscriptFilms.Badge(
+                state: isFavoriteGIF?(gif) == true ? .starred : .unstarred,
+                frame: row.embeds[embed].favoriteRect.offsetBy(dx: origin.x, dy: origin.y),
+                slot: FilmSlot(messageID: row.id, kind: .embed, index: first + image)
+            )
+        }
+        return nil
+    }
+
     /// The clock holds a closure over this view, so leaving the window has to
     /// release it — a canvas that outlives its window as a clock subscriber is a
     /// display link running for a transcript nobody can see.
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
         refreshStickerAnimation()
+        reconcileFilms()
         // A transcript hears about super reactions arriving while it is in a
         // window, and plays nothing once it has left one.
         let token = ObjectIdentifier(self)
@@ -1009,6 +1055,7 @@ final class TimelineCanvasView: NSView {
         if bounds.size != newFrame.size {
             setBoundsSize(newFrame.size)
             needsDisplay = true
+            reconcileFilms()
         }
         if bounds.origin != newBounds.origin {
             setBoundsOrigin(newBounds.origin)
@@ -1016,6 +1063,7 @@ final class TimelineCanvasView: NSView {
             // screen moves — or might, on its own.
             refreshStickerAnimation()
             refreshAmbient()
+            reconcileFilms()
             // A fast gesture can replace the whole overscanned window in one
             // event. Ask for the new contents explicitly so Core Animation never
             // presents an empty slice while waiting for an unrelated
@@ -1076,6 +1124,12 @@ final class TimelineCanvasView: NSView {
                 }
                 state.animationTime = AnimationClock.shared.time
                 if case .message(let message) = row.kind {
+                    state.layered = films.layered[message.id] ?? .init()
+                    if selection != nil, let block = message.textBlock {
+                        state.selectedRange = selectedRange(
+                            of: message.id, length: block.text.attributed.length
+                        )
+                    }
                     state.avatarFrame = avatarFilm.avatarFrame(forRow: message.id.rawValue)
                     state.decorationFrame = avatarFilm.decorationFrame(
                         forRow: message.id.rawValue
@@ -1101,6 +1155,8 @@ final class TimelineCanvasView: NSView {
                         state.hoveredComponent = hoveredComponent
                         state.hoveredPlate = hoveredPlate
                         state.hoveredSpoiler = hoveredSpoiler
+                        state.hoveredLink = hoveredLink
+                        state.isAuthorNameHovered = isAuthorNameHovered
                         state.hoveredAttachment = hoveredAttachment
                         if let hoveredAttachment,
                            case .message(let message) = row.kind,
@@ -1268,6 +1324,8 @@ final class TimelineCanvasView: NSView {
         hoveredComponent = nil
         hoveredPlate = nil
         hoveredSpoiler = nil
+        hoveredLink = nil
+        isAuthorNameHovered = false
         hoveredBurst = nil
         clearTooltips()
         guard hoveredRow != nil else { return }
@@ -1289,6 +1347,7 @@ final class TimelineCanvasView: NSView {
 
     override func mouseDown(with event: NSEvent) {
         let point = convert(event.locationInWindow, from: nil)
+        clearSelection()
         guard let index = rowIndex(at: point.y), rows.indices.contains(index) else { return }
         // A topic's whole marker is its control: it is one band with one
         // meaning. A summary's mark is a label and takes no click.
@@ -1302,6 +1361,8 @@ final class TimelineCanvasView: NSView {
         case .spoiler(let spoilerIndex):
             revealedSpoilers[row.id, default: []].insert(spoilerIndex)
             invalidateRow(index)
+            // An emoji the spoiler covered can move now.
+            reconcileFilms()
         case .attachment(let attachmentIndex, let isHidden):
             // The first click on a spoiler uncovers it and stops there. Opening
             // it full-screen in the same press would show the picture to the
@@ -1309,6 +1370,7 @@ final class TimelineCanvasView: NSView {
             guard !isHidden else {
                 revealedAttachments[row.id, default: []].insert(attachmentIndex)
                 invalidateRow(index)
+                reconcileFilms()
                 return
             }
             onOpenAttachment?(row.id, attachmentIndex, row.attachments.map(\.decodeWidth))
@@ -1316,6 +1378,8 @@ final class TimelineCanvasView: NSView {
             guard let gif = row.attachments[attachmentIndex].favorite else { return }
             onToggleFavoriteGIF?(gif)
             invalidateRow(index)
+            // The star over a GIF on a layer is the layer host's to redraw.
+            films.setBadge(filmBadge(), scale: window?.backingScaleFactor ?? 2)
         case .previewClip(let url):
             onTogglePreview?(url)
         case .openMusicPlayer(let card, let rect):
@@ -1329,8 +1393,12 @@ final class TimelineCanvasView: NSView {
             else { return }
             onToggleFavoriteGIF?(gif)
             invalidateRow(index)
+            films.setBadge(filmBadge(), scale: window?.backingScaleFactor ?? 2)
         case .link(let destination, let rect):
             onOpenLink?(destination, rect)
+        case .playVideo(let player, let rect):
+            let origin = rowFrame(at: index).origin
+            onPlayVideo?(row.id, player, rect.offsetBy(dx: origin.x, dy: origin.y))
         case .emoji(let emoji, let rect):
             onOpenEmoji?(emoji, rect)
         case .sticker(let sticker, let rect):
@@ -1382,8 +1450,181 @@ final class TimelineCanvasView: NSView {
             // through would open the profile of whoever is underneath.
             if let target { onOpenReplyTarget?(target) }
         case nil:
+            if beginSelection(in: row, rowIndex: index, at: point, clicks: event.clickCount) { return }
             if event.clickCount == 2 { onActivateMessage?(row.id) }
         }
+    }
+
+    // MARK: Text selection
+    //
+    // **Keyed by message and character, not by row.** Rows are rebuilt when a
+    // message arrives above, and a selection stored as row indexes would slide
+    // onto somebody else's words. Ordered by the rows only when it is drawn or
+    // copied.
+
+    /// A character boundary in one message's body.
+    struct TextPoint: Equatable {
+        var messageID: MessageID
+        var index: Int
+    }
+
+    /// Where the press began and where the pointer is.
+    private var selection: (anchor: TextPoint, focus: TextPoint)?
+    private var isSelecting = false
+    /// Each message's row, rebuilt with the rows.
+    private var messageRows: [MessageID: Int] = [:]
+
+    /// Starts a selection when a press lands on body text: one click places
+    /// it, two take the word, three the whole message.
+    private func beginSelection(in row: MessageRow, rowIndex: Int, at point: CGPoint, clicks: Int) -> Bool {
+        guard let block = row.textBlock,
+              let start = textPoint(in: row, rowIndex: rowIndex, at: point, clamped: false)
+        else { return false }
+        window?.makeFirstResponder(self)
+        switch clicks {
+        case 2:
+            let word = block.wordRange(at: start.index)
+            selection = (TextPoint(messageID: row.id, index: word.location),
+                         TextPoint(messageID: row.id, index: NSMaxRange(word)))
+        case 3...:
+            selection = (TextPoint(messageID: row.id, index: 0),
+                         TextPoint(messageID: row.id, index: block.text.attributed.length))
+        default:
+            selection = (start, start)
+            isSelecting = true
+        }
+        invalidateRow(rowIndex)
+        return true
+    }
+
+    /// A place in a row's body text: nil off the text unless `clamped`, which
+    /// pins a point above the text to its start and below it to its end.
+    private func textPoint(in row: MessageRow, rowIndex: Int, at point: CGPoint, clamped: Bool) -> TextPoint? {
+        guard let block = row.textBlock else { return nil }
+        let frame = rowFrame(at: rowIndex)
+        let local = CGPoint(
+            x: point.x - frame.minX - row.textOrigin.x,
+            y: point.y - frame.minY - row.textOrigin.y
+        )
+        guard clamped || CGRect(origin: .zero, size: block.size).contains(local) else { return nil }
+        return TextPoint(messageID: row.id, index: block.characterIndex(at: local))
+    }
+
+    override func mouseDragged(with event: NSEvent) {
+        guard isSelecting, let current = selection else {
+            super.mouseDragged(with: event)
+            return
+        }
+        autoscroll(with: event)
+        let point = convert(event.locationInWindow, from: nil)
+        guard let focus = focusPoint(at: point), focus != current.focus else { return }
+        let before = selectedRows()
+        selection = (current.anchor, focus)
+        for index in before.union(selectedRows()) { invalidateRow(index) }
+    }
+
+    override func mouseUp(with event: NSEvent) {
+        guard isSelecting else {
+            super.mouseUp(with: event)
+            return
+        }
+        isSelecting = false
+        if let selection, selection.anchor == selection.focus { clearSelection() }
+    }
+
+    /// Where a drag puts the selection's moving end: the body in the row under
+    /// the pointer, or — over a row with none — the end of the nearest body
+    /// above it, or the start of the nearest below.
+    private func focusPoint(at point: CGPoint) -> TextPoint? {
+        guard let index = rowIndex(at: point.y) else { return nil }
+        if case .message(let row) = rows[index].kind,
+           let hit = textPoint(in: row, rowIndex: index, at: point, clamped: true)
+        {
+            return hit
+        }
+        for above in stride(from: index - 1, through: 0, by: -1) {
+            if case .message(let row) = rows[above].kind, let block = row.textBlock {
+                return TextPoint(messageID: row.id, index: block.text.attributed.length)
+            }
+        }
+        for below in (index + 1)..<rows.count {
+            if case .message(let row) = rows[below].kind, row.textBlock != nil {
+                return TextPoint(messageID: row.id, index: 0)
+            }
+        }
+        return nil
+    }
+
+    /// The selection's two ends, in reading order.
+    private var orderedSelection: (start: TextPoint, end: TextPoint, startRow: Int, endRow: Int)? {
+        guard let selection,
+              let anchorRow = messageRows[selection.anchor.messageID],
+              let focusRow = messageRows[selection.focus.messageID]
+        else { return nil }
+        let forward = (anchorRow, selection.anchor.index) <= (focusRow, selection.focus.index)
+        return forward
+            ? (selection.anchor, selection.focus, anchorRow, focusRow)
+            : (selection.focus, selection.anchor, focusRow, anchorRow)
+    }
+
+    private func selectedRows() -> Set<Int> {
+        guard let ordered = orderedSelection else { return [] }
+        return Set(ordered.startRow...ordered.endRow)
+    }
+
+    /// The part of one message's body inside the selection.
+    private func selectedRange(of messageID: MessageID, length: Int) -> NSRange? {
+        guard let ordered = orderedSelection, let row = messageRows[messageID],
+              row >= ordered.startRow, row <= ordered.endRow
+        else { return nil }
+        let from = row == ordered.startRow ? ordered.start.index : 0
+        let to = row == ordered.endRow ? ordered.end.index : length
+        return to > from ? NSRange(location: from, length: to - from) : nil
+    }
+
+    private func clearSelection() {
+        guard selection != nil else { return }
+        let rows = selectedRows()
+        selection = nil
+        isSelecting = false
+        for index in rows { invalidateRow(index) }
+    }
+
+    /// ⌘C: the selected words, one message to a line, with each custom emoji
+    /// as its `:name:` — what Discord puts on the pasteboard.
+    @objc func copy(_ sender: Any?) {
+        guard let text = selectedText(), !text.isEmpty else { return }
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(text, forType: .string)
+    }
+
+    func selectedText() -> String? {
+        guard let ordered = orderedSelection else { return nil }
+        var parts: [String] = []
+        for index in ordered.startRow...ordered.endRow {
+            guard case .message(let row) = rows[index].kind, let block = row.textBlock,
+                  let range = selectedRange(of: row.id, length: block.text.attributed.length)
+            else { continue }
+            parts.append(Self.plainText(of: block.text, in: range))
+        }
+        return parts.joined(separator: "\n")
+    }
+
+    /// A range of a body as text. An inline emoji's placeholder becomes its
+    /// name; a chip's glyph, which is decoration, is dropped.
+    static func plainText(of text: MessageText, in range: NSRange) -> String {
+        let string = text.attributed.string as NSString
+        var result = ""
+        var run = range.location
+        for location in range.location..<NSMaxRange(range) where string.character(at: location) == 0xFFFC {
+            result += string.substring(with: NSRange(location: run, length: location - run))
+            if let emoji = text.inlineEmoji[location] {
+                result += emoji.id == nil ? emoji.name : ":\(emoji.name):"
+            }
+            run = location + 1
+        }
+        result += string.substring(with: NSRange(location: run, length: NSMaxRange(range) - run))
+        return result
     }
 
     /// The full menu, at the pointer.
@@ -1427,6 +1668,8 @@ final class TimelineCanvasView: NSView {
         /// The same star, on a GIF that arrived as an unfurled link rather than
         /// as a file. A separate case because the two index different arrays.
         case favoriteEmbedGIF(index: Int)
+        /// A video's Play: its player, and the thumbnail it plays over.
+        case playVideo(URL, CGRect)
         /// The Preview chip on a music card.
         case previewClip(URL)
         /// The Open chip, which raises Spotify's own player. Carries the card's
@@ -1622,6 +1865,17 @@ final class TimelineCanvasView: NSView {
             return .favoriteEmbedGIF(index: embedIndex)
         }
 
+        // A video's Play and Open Link.
+        for slot in row.embeds {
+            for image in slot.images {
+                guard let controls = image.controls, case .player(let player) = image.video else { continue }
+                if controls.play.contains(local) { return .playVideo(player, image.rect) }
+                if controls.open.contains(local) {
+                    return .link(.url(controls.page.absoluteString), controls.open)
+                }
+            }
+        }
+
         let revealedHere = revealedAttachments[row.id] ?? []
         for (attachmentIndex, slot) in row.attachments.enumerated()
         where slot.rect.contains(local) {
@@ -1715,6 +1969,8 @@ final class TimelineCanvasView: NSView {
         var cursor: NSCursor?
         var component: CGPoint?
         var plate: Int?
+        var link: MessageText.LinkTarget?
+        var authorName = false
         var spoiler: Int?
         var attachment: Int?
         var embed: Int?
@@ -1739,6 +1995,10 @@ final class TimelineCanvasView: NSView {
                 $0.favorite != nil && $0.rect.contains(local)
             }
             switch target(in: row, at: point, rowIndex: index) {
+            case .person:
+                // The name, not the face: only the words underline.
+                authorName = row.isRunHead && row.authorRect.contains(local)
+                cursor = .pointingHand
             case .component(let url, let customID, let origin):
                 component = origin
                 cursor = url == nil && customID == nil ? nil : .pointingHand
@@ -1804,12 +2064,13 @@ final class TimelineCanvasView: NSView {
                 cursor = target == nil ? nil : .pointingHand
             case .favoriteGIF:
                 cursor = .pointingHand
-            case .favoriteEmbedGIF, .previewClip, .openMusicPlayer:
+            case .favoriteEmbedGIF, .previewClip, .openMusicPlayer, .playVideo:
                 cursor = .pointingHand
             case .spoiler(let index):
                 spoiler = index
                 cursor = .pointingHand
-            case .link:
+            case .link(let target, _):
+                link = target
                 plate = row.textBlock.flatMap { block in
                     let inBlock = CGPoint(x: local.x - row.textOrigin.x, y: local.y - row.textOrigin.y)
                     return block.plateRects.first {
@@ -1820,7 +2081,10 @@ final class TimelineCanvasView: NSView {
             case .some:
                 cursor = .pointingHand
             case nil:
-                break
+                // Body text reads as text: the I-beam says it can be selected.
+                if textPoint(in: row, rowIndex: index, at: point, clamped: false) != nil {
+                    cursor = .iBeam
+                }
             }
         } else if let index, rows.indices.contains(index), case .marker(.topic, _) = rows[index].kind {
             cursor = .pointingHand
@@ -1842,6 +2106,7 @@ final class TimelineCanvasView: NSView {
         let rowChanged = index != hoveredRow
         let componentChanged = component != hoveredComponent
         let textChanged = plate != hoveredPlate || spoiler != hoveredSpoiler
+            || link != hoveredLink || authorName != isAuthorNameHovered
         let attachmentChanged = attachment != hoveredAttachment
         let embedChanged = embed != hoveredEmbed
         guard rowChanged || componentChanged || textChanged || attachmentChanged || embedChanged
@@ -1853,8 +2118,13 @@ final class TimelineCanvasView: NSView {
         hoveredSpoiler = spoiler
         hoveredAttachment = attachment
         hoveredEmbed = embed
+        hoveredLink = link
+        isAuthorNameHovered = authorName
         if rowChanged { invalidateRow(previous) }
         invalidateRow(index)
+        if attachmentChanged || embedChanged || rowChanged {
+            films.setBadge(filmBadge(), scale: window?.backingScaleFactor ?? 2)
+        }
         if rowChanged {
             publishHover()
             updateAvatarPlayback()

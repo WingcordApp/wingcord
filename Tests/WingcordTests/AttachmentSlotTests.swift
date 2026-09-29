@@ -76,6 +76,25 @@ struct AttachmentSlotTests {
         #expect(slot?.url?.query()?.contains("format=jpg") == true)
     }
 
+    /// **The measurement this pins**, taken on the live proxy: given only a
+    /// width it sends the original back, and a 32-frame GIF resized with both
+    /// sides comes back with all 32. See `CDN.resizedAttachment`.
+    @Test("A picture and a GIF both ask the proxy for both sides")
+    func resizeAsksForBothSides() throws {
+        for (name, type) in [("photo.png", "image/png"), ("loop.gif", "image/gif")] {
+            let slot = try #require(slot(attachment(name: name, type: type, width: 1200, height: 800)))
+            let items = try #require(
+                slot.url.flatMap { URLComponents(url: $0, resolvingAgainstBaseURL: false) }?.queryItems
+            )
+            let width = try #require(items.first { $0.name == "width" }?.value.flatMap(Int.init))
+            let height = try #require(items.first { $0.name == "height" }?.value.flatMap(Int.init))
+            // The picture's own shape, so the proxy's fit changes nothing.
+            #expect(abs(Double(width) / Double(height) - 1.5) < 0.01, "\(name)")
+            #expect(!items.contains { $0.name == "format" }, "a format flattens a GIF: \(name)")
+            #expect(slot.url?.host() == "media.discordapp.net")
+        }
+    }
+
     @Test("A document is a card, never a picture-shaped hole")
     func documentIsACard() {
         let slot = slot(attachment(name: "notes.zip", type: "application/zip", size: 4_096_000))

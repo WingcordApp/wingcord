@@ -51,12 +51,8 @@ struct ChannelSidebar: View, Equatable {
     /// Shared namespace so the selection pill *flows* from row to row rather
     /// than fading in at the new position.
     @Namespace private var selectionNamespace
-    /// How far the list has been scrolled: zero at rest, positive downward.
-    ///
-    /// Read once from the scroll view's own geometry rather than inferred from a
-    /// reader inside the content — a reader in there measures the *content's*
-    /// frame, which the stretchy banner is already deforming.
-    @State private var scrollOffset: CGFloat = 0
+    /// How far the list has been scrolled — see `SidebarScroll`.
+    @State private var scroll = SidebarScroll()
     /// How much room the window's chrome takes above this column.
     ///
     /// **Read from a view that RESPECTS the safe area.** The opposite is the
@@ -76,27 +72,22 @@ struct ChannelSidebar: View, Equatable {
 
     private var hasBanner: Bool { presentation.header?.hasBanner ?? false }
 
-    /// Everything positioned against the banner, from the four numbers that
-    /// decide it. See `SidebarBannerLayout` for the arithmetic and for the one
-    /// measurement it rests on.
+    /// Everything positioned against the banner, at rest. See
+    /// `SidebarBannerLayout` for the arithmetic and for the one measurement it
+    /// rests on; the views that move with the list add the travel themselves.
     ///
     /// Recomputed rather than stored: it is four `CGFloat`s over values already
     /// in hand, and a stored copy is a copy that can be stale — which is exactly
     /// how an earlier version parked the pill at the *previous* server's banner
     /// height on a server that had none.
     private var layout: SidebarBannerLayout {
-        SidebarBannerLayout(
-            hasBanner: hasBanner,
-            chromeInset: topInset,
-            travel: max(0, scrollOffset),
-            columnWidth: columnWidth
-        )
+        SidebarBannerLayout(hasBanner: hasBanner, chromeInset: topInset, columnWidth: columnWidth)
     }
 
     var body: some View {
         ZStack(alignment: .top) {
             if hasBanner, let header = presentation.header {
-                SidebarBanner(header: header, layout: layout)
+                TravellingBanner(header: header, layout: layout, scroll: scroll)
                     // Up to the window's top edge, under the toolbar, so the
                     // sidebar toggle sits on the artwork instead of on a bare
                     // strip above it. It is also what makes the banner's frame
@@ -118,14 +109,7 @@ struct ChannelSidebar: View, Equatable {
         // row is a menu button and a spacer, and a spacer has no hit region.
         .overlay(alignment: .topLeading) {
             if hasBanner, let header = presentation.header {
-                ServerNamePill(name: header.name, guildID: header.guildID, mark: header.mark)
-                    .padding(.leading, SidebarBannerLayout.pillLeading)
-                    .padding(.trailing, Spacing.snug)
-                    .offset(y: layout.pillTop)
-                    .opacity(layout.pillOpacity)
-                    // A pill faded to nothing must not still be taking clicks
-                    // out of the strip it has slid into.
-                    .allowsHitTesting(layout.pillOpacity > 0)
+                TravellingPill(header: header, layout: layout, scroll: scroll)
             }
         }
         // The other half of the name, and the half that is REACHABLE — see
@@ -139,23 +123,13 @@ struct ChannelSidebar: View, Equatable {
         // at y=830..866, which is the toggle's own row to the point.
         //
         // Declared here rather than beside the rest of the chrome because the
-        // scroll position that decides it is this view's own `@State`. Routing
-        // it through the store instead would publish a write on every scroll
-        // tick to every surface observing it.
+        // scroll position that decides it is this view's own. Routing it
+        // through the store instead would publish a write on every scroll tick
+        // to every surface observing it.
         .toolbar {
             ToolbarItem(placement: .automatic) {
-                if layout.showsToolbarTitle, let header = presentation.header {
-                    ServerTitleItem(
-                        name: header.name,
-                        maxWidth: layout.toolbarTitleWidth,
-                        // Nil for the direct-message home, which is a
-                        // destination rather than a server: there is nothing to
-                        // invite anyone to, nothing to configure, and nothing
-                        // to leave.
-                        guildID: header.guildID,
-                        mark: header.mark
-                    )
-                    .equatable()
+                if let header = presentation.header {
+                    TravellingToolbarTitle(header: header, layout: layout, scroll: scroll)
                 }
             }
             // Pushes the title to the LEADING edge of the sidebar's span.
@@ -375,9 +349,9 @@ struct ChannelSidebar: View, Equatable {
         .onScrollGeometryChange(for: CGFloat.self) { geometry in
             geometry.contentOffset.y + geometry.contentInsets.top
         } action: { _, offset in
-            // A `@State` write of an equal value still invalidates, and this one
-            // fires on every scroll tick.
-            if abs(scrollOffset - offset) > 0.5 { scrollOffset = offset }
+            // An equal write still invalidates its readers, and this one fires
+            // on every scroll tick.
+            if abs(scroll.travel - offset) > 0.5 { scroll.travel = offset }
         }
         // **Top only.** The now bar is glass, and a scroll edge effect under it
         // blurs the rows before the capsule can refract them — see
@@ -385,6 +359,84 @@ struct ChannelSidebar: View, Equatable {
         // registers through `safeAreaBar`; only the blur it was drawing is
         // gone.
         .softScrollEdgeTopOnly()
+    }
+}
+
+/// How far the channel list has been scrolled: zero at rest, positive downward.
+///
+/// **An object the moving parts read, not state on the sidebar.** Held as the
+/// sidebar's `@State`, every scroll tick re-ran the sidebar's whole body — the
+/// grouping walk, the list, and every visible row, whose closures cannot be
+/// compared — to move three things: the banner, the pill on it, and the name in
+/// the toolbar. Measured on the demo server, forty ticks of scroll ran the
+/// sidebar forty times and its rows three hundred and twenty. Read here, only
+/// the three views that move are invalidated.
+///
+/// Read once from the scroll view's own geometry rather than inferred from a
+/// reader inside the content, which would measure the content's frame.
+@Observable
+private final class SidebarScroll {
+    var travel: CGFloat = 0
+}
+
+extension SidebarBannerLayout {
+    /// The same layout, carried up by the list's scroll.
+    fileprivate func travelled(_ scroll: SidebarScroll) -> SidebarBannerLayout {
+        var layout = self
+        layout.travel = max(0, scroll.travel)
+        return layout
+    }
+}
+
+/// The banner, riding the scroll. See `SidebarScroll`.
+private struct TravellingBanner: View {
+    var header: SidebarHeader
+    var layout: SidebarBannerLayout
+    var scroll: SidebarScroll
+
+    var body: some View {
+        SidebarBanner(header: header, layout: layout.travelled(scroll))
+    }
+}
+
+/// The name on the banner's lower lip, riding the scroll with it.
+private struct TravellingPill: View {
+    var header: SidebarHeader
+    var layout: SidebarBannerLayout
+    var scroll: SidebarScroll
+
+    var body: some View {
+        let layout = layout.travelled(scroll)
+        ServerNamePill(name: header.name, guildID: header.guildID, mark: header.mark)
+            .padding(.leading, SidebarBannerLayout.pillLeading)
+            .padding(.trailing, Spacing.snug)
+            .offset(y: layout.pillTop)
+            .opacity(layout.pillOpacity)
+            // A pill faded to nothing must not still be taking clicks out of
+            // the strip it has slid into.
+            .allowsHitTesting(layout.pillOpacity > 0)
+    }
+}
+
+/// The name in the toolbar, once the pill has ridden off the banner.
+private struct TravellingToolbarTitle: View {
+    var header: SidebarHeader
+    var layout: SidebarBannerLayout
+    var scroll: SidebarScroll
+
+    var body: some View {
+        if layout.travelled(scroll).showsToolbarTitle {
+            ServerTitleItem(
+                name: header.name,
+                maxWidth: layout.toolbarTitleWidth,
+                // Nil for the direct-message home, which is a destination
+                // rather than a server: there is nothing to invite anyone to,
+                // nothing to configure, and nothing to leave.
+                guildID: header.guildID,
+                mark: header.mark
+            )
+            .equatable()
+        }
     }
 }
 

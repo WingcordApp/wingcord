@@ -19,6 +19,15 @@ public struct MessagePage: Sendable {
     /// the chip open something. Without this the chip resolves to nothing and
     /// the click is silently dropped.
     public var threads: [Channel] = []
+    /// How many messages Discord sent, including any this client could not
+    /// read and left out.
+    ///
+    /// **This, not `messages.count`, is what says a page was short.** A short
+    /// page is the only signal that a window has reached either end of a
+    /// channel, and a page one message short because that message could not
+    /// be read would otherwise stop the paging there — which is the transcript
+    /// "cutting off" below a jump and never loading the rest.
+    public var wireCount: Int = 0
 }
 
 public actor DiscordREST {
@@ -294,12 +303,21 @@ public actor DiscordREST {
         if let after { items.append(URLQueryItem(name: "after", value: after.description)) }
         if let around { items.append(URLQueryItem(name: "around", value: around.description)) }
 
-        let page = try await get(
+        // **One message this client cannot read must not take the page with
+        // it.** Decoded strictly, a single unfamiliar shape failed all hundred,
+        // and a failed page below a jump is a transcript that stops there.
+        let list = try await get(
             "/channels/\(channelID.rawValue)/messages",
             route: "channels/\(channelID.rawValue)/messages",
             query: items,
-            as: [MessageDTO].self
+            as: LossyList<MessageDTO>.self
         )
+        if list.dropped > 0 {
+            Self.log.error(
+                "history page \(channelID.rawValue, privacy: .public): \(list.dropped) unreadable of \(list.wireCount)"
+            )
+        }
+        let page = list.elements
         // **The authors come back with the page, and they have to.** A history
         // response is the only place this client ever learns who wrote an old
         // message: READY carries the reader's own member record and their
@@ -310,7 +328,7 @@ public actor DiscordREST {
         // Discord returns newest first; the store keeps oldest first, and
         // reversing there means no surface ever has to remember which way round
         // a page arrived.
-        return Self.page(from: page, reversed: true)
+        return Self.page(from: page, reversed: true, wireCount: list.wireCount)
     }
 
     /// - Parameter stickerIDs: Stickers to send. Discord accepts a message with
@@ -1201,6 +1219,33 @@ extension DiscordREST {
             route: "sticker-packs",
             as: StickerPacksDTO.self
         ).sticker_packs?.compactMap(\.domain) ?? []
+    }
+
+    /// One sticker, by id: whose it is, and for one of Discord's own, its pack.
+    ///
+    /// The route Discord's own sticker card asks when the sticker is not one it
+    /// already knows. Captured, `stock stickers.har`.
+    public func sticker(_ stickerID: UInt64) async throws -> StickerDetail {
+        try await get(
+            "/stickers/\(stickerID)",
+            route: "stickers/{id}",
+            as: StickerDTO.self
+        ).detail
+    }
+
+    /// One pack, by id.
+    ///
+    /// **Only for a pack `stickerPacks()` no longer lists.** That route answers
+    /// the packs Discord still offers; a sticker from a retired one still turns
+    /// up in old messages, and Discord's card names its pack and says it is no
+    /// longer available. The object is the one the list is made of — documented
+    /// in `sticker.mdx`, and not yet captured.
+    public func stickerPack(id packID: String) async throws -> StickerPack? {
+        try await get(
+            "/sticker-packs/\(packID)",
+            route: "sticker-packs/{id}",
+            as: StickerPackDTO.self
+        ).domain
     }
 }
 

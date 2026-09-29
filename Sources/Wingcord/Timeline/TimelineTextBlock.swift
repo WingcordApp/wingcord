@@ -36,6 +36,17 @@ nonisolated final class TimelineTextBlock: @unchecked Sendable {
     let quoteRules: [CGRect]
     /// The box around each fenced code block.
     let codeBlockRects: [CGRect]
+    /// Each line's place, for selection: which characters it holds and the
+    /// band it occupies, in the block's own coordinates.
+    private let lineBoxes: [LineBox]
+
+    private struct LineBox {
+        let line: CTLine
+        let range: CFRange
+        let originX: CGFloat
+        let top: CGFloat
+        let bottom: CGFloat
+    }
 
     init(text: MessageText, width: CGFloat, style: MessageTextStyle) {
         self.text = text
@@ -94,6 +105,59 @@ nonisolated final class TimelineTextBlock: @unchecked Sendable {
         plateRects = runs.plates
         quoteRules = runs.quotes
         codeBlockRects = runs.codeBlocks
+        lineBoxes = Self.lineBoxes(in: frame, frameTop: insets.top + frameHeight)
+    }
+
+    private static func lineBoxes(in frame: CTFrame, frameTop: CGFloat) -> [LineBox] {
+        guard let lines = CTFrameGetLines(frame) as? [CTLine], !lines.isEmpty else { return [] }
+        var origins = [CGPoint](repeating: .zero, count: lines.count)
+        CTFrameGetLineOrigins(frame, CFRange(location: 0, length: 0), &origins)
+        return zip(lines, origins).map { line, origin in
+            var ascent: CGFloat = 0
+            var descent: CGFloat = 0
+            CTLineGetTypographicBounds(line, &ascent, &descent, nil)
+            let baseline = frameTop - origin.y
+            return LineBox(
+                line: line, range: CTLineGetStringRange(line), originX: origin.x,
+                top: baseline - ascent, bottom: baseline + descent
+            )
+        }
+    }
+
+    // MARK: Selection
+
+    /// The character boundary nearest a point in the block's own coordinates:
+    /// above the text is its start, below it its end.
+    func characterIndex(at point: CGPoint) -> Int {
+        let length = text.attributed.length
+        guard let first = lineBoxes.first, point.y >= first.top else { return 0 }
+        guard let box = lineBoxes.first(where: { point.y < $0.bottom }) else { return length }
+        let index = CTLineGetStringIndexForPosition(box.line, CGPoint(x: point.x - box.originX, y: 0))
+        return index == kCFNotFound ? box.range.location : min(max(0, index), length)
+    }
+
+    /// The highlight for `range`: one band per line it crosses.
+    func selectionRects(for range: NSRange) -> [CGRect] {
+        var rects: [CGRect] = []
+        for box in lineBoxes {
+            let start = max(range.location, box.range.location)
+            let end = min(NSMaxRange(range), box.range.location + box.range.length)
+            guard start < end else { continue }
+            let from = CTLineGetOffsetForStringIndex(box.line, start, nil)
+            let to = CTLineGetOffsetForStringIndex(box.line, end, nil)
+            rects.append(CGRect(
+                x: box.originX + min(from, to), y: box.top,
+                width: abs(to - from), height: box.bottom - box.top
+            ))
+        }
+        return rects
+    }
+
+    /// The word around a character — a double-click's selection.
+    func wordRange(at index: Int) -> NSRange {
+        let length = text.attributed.length
+        guard length > 0 else { return NSRange(location: 0, length: 0) }
+        return text.attributed.doubleClick(at: min(max(0, index), length - 1))
     }
 
     /// The room a fenced block at the very start or end of the text needs
