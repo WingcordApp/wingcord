@@ -113,6 +113,8 @@ nonisolated struct MessageText: @unchecked Sendable {
         /// A place in the server — `<id:guide>` — and the role, for
         /// `<id:linked-roles:123>`.
         case staticRoute(StaticRoute, itemID: UInt64?)
+        /// A game — `<@$id>` — whose page the chip opens.
+        case game(ApplicationID)
     }
 }
 
@@ -167,6 +169,9 @@ nonisolated struct MentionContext: Sendable {
     var currentGuildID: GuildID?
     /// The reader's own ids, so a mention of them is drawn differently.
     var selfIDs: Set<UInt64> = []
+    /// The games `<@$id>` mentions name — only those, so a board loading its
+    /// fifty games does not relay every row in the transcript.
+    var gameNames: [ApplicationID: String] = [:]
 
     /// A token that changes whenever any of the above could change.
     ///
@@ -400,6 +405,20 @@ nonisolated enum MessageTextBuilder {
                 case .commandMention(let name, _):
                     appendMention("/\(name)", base: attributes)
 
+                case .gameMention(let gameID):
+                    // Discord's chip (`266645`): the game's mark and its name,
+                    // "unknown-game" until the game is known.
+                    let start = beginPlate(padding: MessageTextStyle.chipPadding)
+                    appendInlineSymbol("gamecontroller.fill", base: attributes)
+                    appendRaw(
+                        " " + (context.gameNames[gameID] ?? "unknown-game"),
+                        attributes: style.mention(base: attributes)
+                    )
+                    endPlate(
+                        from: start, kind: .mention, padding: MessageTextStyle.chipPadding,
+                        target: .game(gameID)
+                    )
+
                 case .everyoneMention:
                     appendMention("@everyone", base: attributes)
 
@@ -411,7 +430,7 @@ nonisolated enum MessageTextBuilder {
 
                 case .timestamp(let date, let timestampStyle):
                     let start = beginPlate(padding: MessageTextStyle.chipPadding)
-                    appendRaw(style.format(date, style: timestampStyle), attributes: attributes)
+                    appendRaw(timestampStyle.format(date), attributes: attributes)
                     endPlate(from: start, kind: .timestamp, padding: MessageTextStyle.chipPadding)
 
                 case .lineBreak:

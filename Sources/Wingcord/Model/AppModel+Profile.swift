@@ -82,7 +82,7 @@ extension AppModel {
             },
             accentColorValue: decoration?.accentColor,
             themeColorValues: themeColorValues(of: user, decoration),
-            status: presence?.status ?? .offline,
+            status: PresenceStatus.resolved(presence?.status, flags: user.flags),
             customStatus: presence?.customStatus?.state,
             customStatusEmoji: presence?.customStatus?.emoji,
             activities: presence?.liveActivities ?? [],
@@ -92,6 +92,7 @@ extension AppModel {
                 .flatMap { games[$0]?.storeOffers } ?? [],
             bio: decoration?.bio,
             isBot: user.isBot,
+            isVerifiedBot: user.flags.contains(.verifiedBot),
             badges: AccountBadges.resolve(flags: user.flags, decoration: decoration),
             guildTag: decoration?.primaryGuildTag.map { tag in
                 GuildTag(
@@ -156,6 +157,9 @@ extension AppModel {
             mutualServers: mutualServers(of: decoration),
             mutualFriends: decoration?.mutualFriends ?? [],
             isProfilePrivate: decoration?.isProfilePrivate ?? false,
+            isPartlyUnavailable: user.id != currentUserID
+                && profileFetchFailures.contains(user.id)
+                && ![.friend, .incomingRequest].contains(relationship(with: user.id)),
             note: notes[user.id] ?? "",
             relationship: relationship(with: user.id),
             isRelationshipBusy: relationshipsInFlight.contains(user.id),
@@ -364,6 +368,13 @@ extension AppModel {
             return
         }
         sessionController.openConversation(with: userID)
+    }
+
+    /// Leaves the profile for a server the two share — Discord's mutual
+    /// server row, which goes there and closes the profile.
+    func openMutualServer(_ guildID: GuildID) {
+        profileRequest = nil
+        selectGuild(guildID)
     }
 
     /// Leaves the profile and opens the conversation.

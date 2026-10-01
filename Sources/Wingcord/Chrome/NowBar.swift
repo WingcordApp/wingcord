@@ -345,12 +345,16 @@ struct PresenceDot: View {
                     .strokeBorder(status.tint, lineWidth: side * 0.28)
             case .online:
                 Circle().fill(status.tint)
+            case .unknown:
+                // Discord's UNKNOWN — an app that never connects — has no
+                // status to draw, and no plate under the nothing.
+                EmptyView()
             }
         }
         .frame(width: side, height: side)
         .padding(hasPlate ? side * 0.16 : 0)
         .background {
-            if hasPlate {
+            if hasPlate, status != .unknown {
                 Circle().fill(Color(nsColor: .windowBackgroundColor))
             }
         }

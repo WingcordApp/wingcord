@@ -27,6 +27,14 @@ public struct ScheduledEvent: Hashable, Sendable, Identifiable {
     public var status: Status
     public var location: Location
     public var recurrence: Recurrence?
+    /// The rule itself, which the series' dates are computed from — see
+    /// `RecurrenceRule`. `recurrence` is the editor's preset reading of it.
+    public var rule: RecurrenceRule?
+    /// The dates an organiser moved or cancelled, by occurrence.
+    public var exceptions: [Exception]
+    /// Who made it. A record the event carries, so the people list need not
+    /// have met them.
+    public var creator: User?
     /// How many people said they were interested. From
     /// `GET .../users/counts`, which is a separate request — the event object
     /// itself carries `user_count` only when it was asked for.
@@ -46,6 +54,9 @@ public struct ScheduledEvent: Hashable, Sendable, Identifiable {
         status: Status = .scheduled,
         location: Location,
         recurrence: Recurrence? = nil,
+        rule: RecurrenceRule? = nil,
+        exceptions: [Exception] = [],
+        creator: User? = nil,
         interestedCount: Int? = nil,
         isInterested: Bool = false
     ) {
@@ -60,12 +71,98 @@ public struct ScheduledEvent: Hashable, Sendable, Identifiable {
         self.status = status
         self.location = location
         self.recurrence = recurrence
+        self.rule = rule
+        self.exceptions = exceptions
+        self.creator = creator
         self.interestedCount = interestedCount
         self.isInterested = isInterested
     }
 
     public var coverURL: URL? {
         imageHash.flatMap { CDN.scheduledEventCover(eventID: id, hash: $0) }
+    }
+
+    /// One date of a series that an organiser moved or cancelled —
+    /// `guild_scheduled_event_exceptions` on the event.
+    public struct Exception: Hashable, Sendable {
+        /// The occurrence it changes — see `occurrenceID(startingAt:)`.
+        public var id: UInt64
+        public var startsAt: Date?
+        public var endsAt: Date?
+        public var isCanceled: Bool
+
+        public init(id: UInt64, startsAt: Date? = nil, endsAt: Date? = nil, isCanceled: Bool = false) {
+            self.id = id
+            self.startsAt = startsAt
+            self.endsAt = endsAt
+            self.isCanceled = isCanceled
+        }
+    }
+
+    // MARK: Occurrences
+    //
+    // Discord names one date of a series by a snowflake whose timestamp is
+    // that date's ORIGINAL start, floored to the second, with nothing else in
+    // it — `fromTimestamp(floor(t / 1000) * 1000)`. Every per-date answer is
+    // keyed on it: the interested counts, a single date's RSVP, its exception.
+
+    private static let discordEpoch: UInt64 = 1_420_070_400_000
+
+    /// The occurrence id for a date of a series starting at `date`.
+    public static func occurrenceID(startingAt date: Date) -> UInt64 {
+        let milliseconds = UInt64(max(0, floor(date.timeIntervalSince1970))) * 1000
+        return (milliseconds - min(milliseconds, discordEpoch)) << 22
+    }
+
+    /// The original start an occurrence id stands for.
+    public static func originalStart(ofOccurrence id: UInt64) -> Date {
+        Date(timeIntervalSince1970: Double((id >> 22) + discordEpoch) / 1000)
+    }
+
+    /// The date of the series that is current — Discord's `G3`: the event's
+    /// own start, which the server moves on to the next date as each one
+    /// ends. Nil for an event that does not repeat.
+    public var currentOccurrenceID: UInt64? {
+        rule == nil ? nil : Self.occurrenceID(startingAt: startsAt)
+    }
+
+    public func exception(for occurrence: UInt64?) -> Exception? {
+        guard let occurrence else { return nil }
+        return exceptions.first { $0.id == occurrence }
+    }
+
+    /// When one date of the series starts and ends: its original start, the
+    /// event's own length after it, and whatever an exception moved.
+    /// Discord's `YR`. For an event that does not repeat, the event's own.
+    public func span(of occurrence: UInt64?) -> (start: Date, end: Date?) {
+        guard rule != nil, let occurrence else { return (startsAt, endsAt) }
+        let start = Self.originalStart(ofOccurrence: occurrence)
+        let end = endsAt.map { start.addingTimeInterval($0.timeIntervalSince(startsAt)) }
+        guard let moved = exception(for: occurrence) else { return (start, end) }
+        return (moved.startsAt ?? start, moved.endsAt ?? end)
+    }
+
+    /// One date's own status where it has one — Discord's `j`: cancelled by
+    /// its exception, over when it started before the series' current date,
+    /// scheduled when an exception names it, and otherwise the event's.
+    public func status(of occurrence: UInt64?) -> Status {
+        guard rule != nil, let occurrence else { return status }
+        let moved = exception(for: occurrence)
+        if moved?.isCanceled == true { return .canceled }
+        if span(of: occurrence).start < startsAt { return .completed }
+        if moved != nil { return .scheduled }
+        return occurrence == currentOccurrenceID ? status : .scheduled
+    }
+
+    /// The next dates of the series from now, as "Events in series" lists
+    /// them: from the later of the event's start and now, no more than four
+    /// years out — Discord's `er`.
+    public func upcomingOccurrences(limit: Int, after: Date? = nil, now: Date = .now) -> [UInt64] {
+        guard let rule else { return [] }
+        let from = after.map { $0.addingTimeInterval(1) } ?? max(startsAt, now)
+        let until = Calendar(identifier: .gregorian).date(byAdding: .year, value: 4, to: now) ?? now
+        return rule.occurrences(from: from, until: until, limit: limit)
+            .map(Self.occurrenceID(startingAt:))
     }
 
     /// Where it happens.
@@ -206,12 +303,17 @@ public enum Recurrence: Hashable, Sendable {
     case unrecognised
 
     /// Discord's frequency enum: 0 yearly, 1 monthly, 2 weekly, 3 daily.
+    ///
+    /// **Weekdays is a daily rule** limited to five days — Discord's own preset
+    /// (`DAILY` with `byweekday`), which its "Repeats every weekday" line is
+    /// read from. Written as a five-day weekly rule it listed the same dates
+    /// but read in Discord's client as "Repeats every Monday".
     public var frequency: Int {
         switch self {
-        case .weekly, .biweekly, .weekdays: 2
+        case .weekly, .biweekly: 2
         case .monthly: 1
         case .annually: 0
-        case .daily: 3
+        case .daily, .weekdays: 3
         case .unrecognised: 2
         }
     }
@@ -258,10 +360,11 @@ public enum Recurrence: Hashable, Sendable {
         byMonthDay: [Int]?
     ) {
         switch (frequency, interval, byWeekday, byNWeekday, byMonth, byMonthDay) {
-        case (3, 1, _, _, _, _):
-            self = .daily
-        case (2, 1, let days?, _, _, _) where days == [0, 1, 2, 3, 4]:
+        // A five-day weekly rule is how this client used to write weekdays.
+        case (3, 1, [0, 1, 2, 3, 4]?, _, _, _), (2, 1, [0, 1, 2, 3, 4]?, _, _, _):
             self = .weekdays
+        case (3, 1, nil, _, _, _), (3, 1, []?, _, _, _):
+            self = .daily
         case (2, 1, let days?, _, _, _) where days.count == 1:
             self = .weekly(weekday: days[0])
         case (2, 2, let days?, _, _, _) where days.count == 1:
@@ -270,6 +373,9 @@ public enum Recurrence: Hashable, Sendable {
             self = .monthly(week: entries[0].n, weekday: entries[0].day)
         case (0, 1, _, _, let months?, let days?) where months.count == 1 && days.count == 1:
             self = .annually(month: months[0], day: days[0])
+        // Any other daily rule names its days — Discord's weekends, or a week
+        // shifted into UTC — and reading it as every day would rewrite it on
+        // the next save.
         default:
             self = .unrecognised
         }
@@ -336,5 +442,60 @@ public enum Recurrence: Hashable, Sendable {
         case 4: "fourth"
         default: "last"
         }
+    }
+}
+
+// MARK: - Interest
+
+/// One person's answer to an event — to the whole series, or to one date of it.
+///
+/// **Two levels, and the second can say no.** `scheduled event.har`'s list of
+/// interested people carries both: series answers with no exception id, and
+/// date answers with one — including a `response: 0`, somebody interested in
+/// the series who said they would miss that one date.
+public struct ScheduledEventRSVP: Hashable, Sendable {
+    public enum Response: Int, Hashable, Sendable {
+        case uninterested = 0
+        case interested = 1
+    }
+
+    public var eventID: UInt64
+    /// The date it is about, or nil for the whole series.
+    public var occurrence: UInt64?
+    public var userID: UserID
+    public var response: Response
+
+    public init(eventID: UInt64, occurrence: UInt64? = nil, userID: UserID, response: Response) {
+        self.eventID = eventID
+        self.occurrence = occurrence
+        self.userID = userID
+        self.response = response
+    }
+}
+
+/// The interested counts the event route answers: the series', and each date
+/// it was asked about — `GET …/users/counts`.
+public struct ScheduledEventCounts: Hashable, Sendable {
+    public var series: Int
+    /// By occurrence id. A date's own count already includes the series'
+    /// interested people and leaves out those who said they would miss it.
+    public var occurrences: [UInt64: Int]
+
+    public init(series: Int, occurrences: [UInt64: Int] = [:]) {
+        self.series = series
+        self.occurrences = occurrences
+    }
+}
+
+/// One row of an event's interested people: the answer, and who gave it.
+public struct ScheduledEventInterest: Hashable, Sendable {
+    public var rsvp: ScheduledEventRSVP
+    public var user: User
+    public var member: Member?
+
+    public init(rsvp: ScheduledEventRSVP, user: User, member: Member?) {
+        self.rsvp = rsvp
+        self.user = user
+        self.member = member
     }
 }

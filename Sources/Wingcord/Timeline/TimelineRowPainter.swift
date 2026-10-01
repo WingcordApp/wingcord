@@ -30,6 +30,13 @@ nonisolated enum TimelineRowPainter {
         /// and a bookmark toggled afterwards would never reach the canvas. The
         /// geometry does not depend on it.
         var isBookmarked = false
+        /// Whether a new reaction may be started in this channel — the add
+        /// control at the end of the reaction row. A channel's answer, so it is
+        /// paint state rather than layout: a permission change is a repaint.
+        var canAddReaction = false
+        /// Whether the pointer is on this row's reactions, which is what shows
+        /// a bookmark control the message does not already wear.
+        var isPointerOnReactions = false
         var showsGutterTimestamp = false
         var isHighlighted = false
         var revealedSpoilers: Set<Int> = []
@@ -180,6 +187,7 @@ nonisolated enum TimelineRowPainter {
                 in: rowFrame,
                 context: context,
                 style: style,
+                isButtonHovered: slot.editButton.map { state.hoveredComponent == $0.rect.origin } ?? false,
                 images: images,
                 scale: scale
             )
@@ -399,15 +407,15 @@ nonisolated enum TimelineRowPainter {
                 let badgeRect = CGRect(
                     x: rowFrame.minX + row.authorRect.maxX + 6,
                     y: rowFrame.minY + row.authorRect.minY + 3,
-                    width: 30,
+                    width: AppBadge.width(isVerified: row.isVerifiedBot),
                     height: 14
                 )
                 drawChip(
-                    "APP",
+                    AppBadge.label(isVerified: row.isVerifiedBot),
                     in: badgeRect,
                     fill: NSColor.controlAccentColor,
                     textColor: .white,
-                    font: NSFont.systemFont(ofSize: 9, weight: .bold),
+                    font: AppBadge.font,
                     context: context
                 )
             }
@@ -620,10 +628,18 @@ nonisolated enum TimelineRowPainter {
             )
         }
 
-        for slot in row.reactionControls {
+        // **In the row's own space, offset like every chip beside it.** These
+        // were drawn at their row-space rect as though it were the canvas's,
+        // which put them near the top of the transcript — over a channel's
+        // welcome header, whenever that strip repainted in the same pass.
+        let controls = row.visibleReactionControls(
+            canAddReaction: state.canAddReaction,
+            showsBookmark: state.isBookmarked || state.isPointerOnReactions
+        )
+        for slot in controls {
             drawReactionControl(
                 slot,
-                in: slot.rect,
+                in: slot.rect.offsetBy(dx: rowFrame.minX, dy: rowFrame.minY),
                 context: context,
                 isHovered: state.hoveredComponent == slot.rect.origin,
                 isBookmarked: state.isBookmarked
@@ -2584,6 +2600,7 @@ nonisolated enum TimelineRowPainter {
         in frame: CGRect,
         context: CGContext,
         style: MessageTextStyle,
+        isButtonHovered: Bool,
         images: ImageStore,
         scale: CGFloat
     ) {
@@ -2625,6 +2642,29 @@ nonisolated enum TimelineRowPainter {
             drawTextFrame(
                 topic,
                 at: CGPoint(x: offset.x + slot.topicOrigin.x, y: offset.y + slot.topicOrigin.y),
+                context: context,
+                images: images,
+                scale: scale
+            )
+        }
+        if let button = slot.editButton {
+            // The quiet plate every drawn secondary button wears, lifted a step
+            // under the pointer.
+            let rect = button.rect.offsetBy(dx: offset.x, dy: offset.y)
+            context.addPath(CGPath(
+                roundedRect: rect, cornerWidth: Radius.row, cornerHeight: Radius.row, transform: nil
+            ))
+            context.setFillColor(ThemeInk.current.lift(isButtonHovered ? 0.18 : 0.12))
+            context.fillPath()
+            drawSymbol(
+                "pencil",
+                tint: style.primaryColor,
+                in: button.glyphRect.offsetBy(dx: offset.x, dy: offset.y),
+                context: context
+            )
+            drawTextFrame(
+                button.label,
+                at: CGPoint(x: offset.x + button.labelOrigin.x, y: offset.y + button.labelOrigin.y),
                 context: context,
                 images: images,
                 scale: scale

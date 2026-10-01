@@ -217,6 +217,9 @@ struct BadgeFlyout: View {
 /// an account sharing ninety from producing a panel taller than the display.
 struct MutualServersList: View {
     var servers: [MutualServer]
+    /// A server pressed: go to it — Discord's row takes the reader there and
+    /// closes the profile.
+    var open: (GuildID) -> Void
 
     private static let rowHeight: CGFloat = 34
     private static let visibleRows = 8
@@ -229,15 +232,37 @@ struct MutualServersList: View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 0) {
                 ForEach(servers) { server in
+                    MutualServerRow(server: server, height: Self.rowHeight) { open(server.id) }
+                }
+            }
+            .padding(.vertical, Spacing.base)
+        }
+        .scrollIndicators(.never)
+        .scrollDisabled(servers.count <= Self.visibleRows)
+        .frame(width: 240, height: height + Spacing.base * 2)
+    }
+}
+
+/// One server in the list, which takes the reader there.
+private struct MutualServerRow: View {
+    var server: MutualServer
+    var height: CGFloat
+    var open: () -> Void
+
+    @Environment(\.motion) private var motion
+    @State private var isHovering = false
+
+    var body: some View {
+        Button(action: open) {
                     HStack(spacing: Spacing.base) {
-                        RemoteImage(url: server.iconURL, side: Metrics.avatarRow) {
+                        // An animated icon plays here too, as Discord's does.
+                        AnimatedPicture(url: server.iconURL, side: Metrics.avatarRow, contentMode: .fill) {
                             Text(server.monogram)
                                 .font(.system(size: 9, weight: .bold))
                                 .foregroundStyle(Ink.secondary)
                                 .frame(width: Metrics.avatarRow, height: Metrics.avatarRow)
                                 .background(Palette.surfaceRaised)
                         }
-                        .frame(width: Metrics.avatarRow, height: Metrics.avatarRow)
                         .clipShape(.circle)
 
                         VStack(alignment: .leading, spacing: 0) {
@@ -256,15 +281,26 @@ struct MutualServersList: View {
                         }
                         Spacer(minLength: 0)
                     }
-                    .frame(height: Self.rowHeight)
+                    .frame(height: height)
                     .padding(.horizontal, Spacing.snug)
-                }
-            }
-            .padding(.vertical, Spacing.base)
+                    .background {
+                        if isHovering {
+                            RoundedRectangle(cornerRadius: Radius.row, style: .continuous)
+                                .fill(Palette.hoverFill)
+                                .padding(.horizontal, Spacing.tight)
+                        }
+                    }
+                    .contentShape(.rect)
         }
-        .scrollIndicators(.never)
-        .scrollDisabled(servers.count <= Self.visibleRows)
-        .frame(width: 240, height: height + Spacing.base * 2)
+        .buttonStyle(.plain)
+        .onHover { hovering in
+            guard isHovering != hovering else { return }
+            isHovering = hovering
+        }
+        .animation(motion.hover, value: isHovering)
+        .help("Go to \(server.name)")
+        .accessibilityLabel(Text(server.name))
+        .accessibilityHint(Text("Opens the server"))
     }
 }
 
@@ -425,6 +461,8 @@ struct ConnectionChip: View {
 struct MutualsRow: View {
     var servers: [MutualServer]
     var friends: [MutualFriend]
+    /// A shared server pressed in the list.
+    var openServer: (GuildID) -> Void
 
     /// How many pictures the cluster shows before it stops.
     ///
@@ -459,7 +497,7 @@ struct MutualsRow: View {
                         ? "1 Mutual Server"
                         : "\(servers.count) Mutual Servers",
                     hint: "Show the servers you share"
-                ) { MutualServersList(servers: servers) }
+                ) { MutualServersList(servers: servers, open: openServer) }
             }
             Spacer(minLength: 0)
         }
@@ -1001,6 +1039,39 @@ struct PrivateProfileBanner: View {
     }
 }
 
+/// Discord's warning when the profile route refused (`559506`): "Unable to
+/// load parts of profile" — and, on the full profile, its Retry.
+struct PartialProfileNotice: View {
+    /// Asks again. Nil on the card, which offers none.
+    var retry: (() -> Void)?
+
+    var body: some View {
+        HStack(spacing: Spacing.base) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(Palette.presenceIdle)
+                .accessibilityHidden(true)
+            Text("Unable to load parts of profile")
+                .font(.system(.subheadline, weight: .medium))
+                .foregroundStyle(InkColor.primary)
+            Spacer(minLength: Spacing.base)
+            if let retry {
+                Button("Retry", action: retry)
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+            }
+        }
+        .padding(.horizontal, Spacing.snug)
+        .padding(.vertical, Spacing.base)
+        .background(Palette.presenceIdle.opacity(0.12), in: .rect(cornerRadius: Radius.row, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: Radius.row, style: .continuous)
+                .strokeBorder(Palette.presenceIdle.opacity(0.35), lineWidth: 1)
+        }
+        .accessibilityElement(children: .combine)
+    }
+}
+
 /// The chip that stands for the roles a capped flow could not show.
 struct RoleOverflowChip: View {
     var count: Int
@@ -1352,7 +1423,11 @@ struct ProfileAvatar: View {
                 // The dot's own hole, taken out of the avatar. It lands below
                 // the banner's lower edge, so what shows through it is the card
                 // ground with no artwork in the way.
-                .mask { dotMask }
+                .mask {
+                    // No hole where there is no dot: an app that never
+                    // connects shows its whole face.
+                    if profile.status == .unknown { Rectangle() } else { dotMask }
+                }
                 .padding(.leading, leading)
                 .offset(y: drop)
 

@@ -24,6 +24,12 @@ final class MarkdownTextView: NSTextView {
     /// they were taken; a paste they were not is an ordinary one.
     var onPasteFiles: (([URL]) -> Bool)?
 
+    /// The chips painted over their tokens — see `EditorMention`. Set by the
+    /// field after each restyle.
+    var chips: [EditorChipPlacement] = [] {
+        didSet { if chips != oldValue { needsDisplay = true } }
+    }
+
     override var readablePasteboardTypes: [NSPasteboard.PasteboardType] { [.string] }
 
     /// **Files first, as Discord's box takes them**: a paste carrying files is
@@ -105,10 +111,52 @@ final class MarkdownTextView: NSTextView {
 
     override func draw(_ dirtyRect: NSRect) {
         super.draw(dirtyRect)
+        drawChips(in: dirtyRect)
         guard string.isEmpty, let placeholder else { return }
         let origin = textContainerOrigin
         let padding = textContainer?.lineFragmentPadding ?? 0
         placeholder.draw(at: CGPoint(x: origin.x + padding, y: origin.y))
+    }
+
+    // MARK: The chips
+
+    /// Each chip on its plate, in the place its token's clear characters
+    /// reserve — the transcript's mention plate, its corner and its fill. A
+    /// chip inside the selection takes the selection's tint, so selecting
+    /// across one shows it is taken.
+    private func drawChips(in dirtyRect: NSRect) {
+        guard !chips.isEmpty, let font else { return }
+        let origin = textContainerOrigin
+        let selection = selectedRange()
+        for placement in chips {
+            guard let frame = frame(of: placement.range) else { continue }
+            let plate = frame.offsetBy(dx: origin.x, dy: origin.y).insetBy(dx: 0, dy: 1)
+            guard plate.intersects(dirtyRect) else { continue }
+            let isSelected = NSIntersectionRange(selection, placement.range).length > 0
+            (isSelected ? NSColor.selectedTextBackgroundColor : placement.chip.fill).setFill()
+            NSBezierPath(roundedRect: plate, xRadius: 3, yRadius: 3).fill()
+            let label = NSAttributedString(string: placement.chip.label, attributes: [
+                .font: font,
+                .foregroundColor: placement.chip.ink,
+            ])
+            let size = label.size()
+            label.draw(at: CGPoint(x: plate.midX - size.width / 2, y: plate.midY - size.height / 2))
+        }
+    }
+
+    /// Where a run of the text is laid out, in the container's space.
+    private func frame(of range: NSRange) -> CGRect? {
+        guard let layout = textLayoutManager, let content = layout.textContentManager,
+              let start = content.location(layout.documentRange.location, offsetBy: range.location),
+              let end = content.location(start, offsetBy: range.length),
+              let textRange = NSTextRange(location: start, end: end)
+        else { return nil }
+        var frame = CGRect.null
+        layout.enumerateTextSegments(in: textRange, type: .standard, options: []) { _, segment, _, _ in
+            frame = frame.union(segment)
+            return true
+        }
+        return frame.isNull ? nil : frame
     }
 }
 

@@ -57,6 +57,115 @@ extension DiscordREST {
             as: ContentOutboxDTO.self
         ).entries?.compactMap(\.domain) ?? []
     }
+
+    /// The reader's feed — what people they talk to did, ranked for them.
+    ///
+    /// **Captured** (`first profile + the sims.har`): `GET /content-inventory/
+    /// users/@me?refresh_token=…&for_game_profile=false&feature=…`, answered
+    /// with `{entries: [{content, rank}], refresh_token,
+    /// wait_ms_until_next_fetch, refresh_stale_inbox_after_ms, …}`. The member
+    /// list's fetch names itself `inbox` (`306264`); the capture's said
+    /// `game_profile` because a game's page asked.
+    public func activityInbox(refreshToken: String?) async throws -> ActivityInbox {
+        var query = [
+            URLQueryItem(name: "for_game_profile", value: "false"),
+            URLQueryItem(name: "feature", value: "inbox"),
+        ]
+        if let refreshToken { query.insert(URLQueryItem(name: "refresh_token", value: refreshToken), at: 0) }
+        let inbox = try await get(
+            "/content-inventory/users/@me",
+            route: "content-inventory/users/@me",
+            query: query,
+            as: ContentInboxDTO.self
+        )
+        return ActivityInbox(
+            entries: (inbox.entries ?? []).compactMap(\.domain),
+            refreshToken: inbox.refresh_token,
+            expiresAt: inbox.wait_ms_until_next_fetch.map { Date(timeIntervalSinceNow: $0 / 1000) },
+            announcesStaleness: inbox.refresh_stale_inbox_after_ms != nil
+        )
+    }
+}
+
+/// `GET /content-inventory/users/@me`.
+struct ContentInboxDTO: Decodable, Sendable {
+    var entries: [InboxEntryDTO]?
+    var refresh_token: String?
+    var wait_ms_until_next_fetch: Double?
+    var refresh_stale_inbox_after_ms: Double?
+
+    /// One ranked entry. The content is read twice: once into the fields this
+    /// client draws, once whole, so a reply can carry it back as it came.
+    struct InboxEntryDTO: Decodable, Sendable {
+        var content: ContentEntryDTO?
+        var raw: JSONTree?
+        var rank: Int?
+
+        private enum Keys: String, CodingKey { case content, rank }
+
+        init(from decoder: any Decoder) throws {
+            let container = try decoder.container(keyedBy: Keys.self)
+            content = try? container.decode(ContentEntryDTO.self, forKey: .content)
+            raw = try? container.decode(JSONTree.self, forKey: .content)
+            rank = try? container.decode(Int.self, forKey: .rank)
+        }
+
+        var domain: ActivityFeedEntry? {
+            guard let activity = content?.domain, let raw, let data = try? JSONEncoder().encode(raw)
+            else { return nil }
+            return ActivityFeedEntry(
+                activity: activity,
+                rank: rank ?? .max,
+                participants: content?.participants ?? [activity.authorID],
+                raw: data
+            )
+        }
+    }
+}
+
+/// Any JSON, kept as it came — what lets an entry be sent back whole.
+indirect enum JSONTree: Codable, Hashable, Sendable {
+    case null
+    case bool(Bool)
+    case number(Double)
+    case string(String)
+    case array([JSONTree])
+    case object([String: JSONTree])
+
+    init(from decoder: any Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        if container.decodeNil() {
+            self = .null
+        } else if let value = try? container.decode(Bool.self) {
+            self = .bool(value)
+        } else if let value = try? container.decode(Double.self) {
+            self = .number(value)
+        } else if let value = try? container.decode(String.self) {
+            self = .string(value)
+        } else if let value = try? container.decode([JSONTree].self) {
+            self = .array(value)
+        } else {
+            self = .object(try container.decode([String: JSONTree].self))
+        }
+    }
+
+    func encode(to encoder: any Encoder) throws {
+        var container = encoder.singleValueContainer()
+        switch self {
+        case .null: try container.encodeNil()
+        case .bool(let value): try container.encode(value)
+        case .number(let value):
+            // Whole numbers go back as integers — `"type": 2`, not `2.0`.
+            if value.rounded() == value, abs(value) < 9_007_199_254_740_992 {
+                try container.encode(Int64(value))
+            } else {
+                try container.encode(value)
+            }
+        case .string(let value): try container.encode(value)
+        case .array(let value): try container.encode(value)
+        case .object(let value): try container.encode(value)
+        }
+    }
 }
 
 /// What an activity published beyond its presence.
@@ -92,6 +201,7 @@ struct ContentOutboxDTO: Decodable, Sendable {
 struct ContentEntryDTO: Decodable, Sendable {
     var id: String?
     var author_id: UserID?
+    var participants: [UserID]?
     var traits: [TraitDTO]?
     var extra: ExtraDTO?
     var started_at: Date?
@@ -109,6 +219,11 @@ struct ContentEntryDTO: Decodable, Sendable {
         var marathon: Bool?
         var streak_count_days: Int?
         var trending: Int?
+        /// Not captured — Discord reads it with `new Date(…)` (`583846`), so
+        /// a timestamp in either form is taken, and anything else is no chip
+        /// rather than a lost entry.
+        var resurrected_last_played: LenientDate?
+        var count: Int?
 
         /// Nil for a type this client has never seen. Ten of the twelve appear
         /// in the capture and four of those are counts on a music entry that
@@ -119,8 +234,10 @@ struct ContentEntryDTO: Decodable, Sendable {
             case 2: duration_seconds.map { RecentActivity.Trait.duration($0) }
             case 3: is_live == true ? .live : nil
             case 6: marathon == true ? .marathon : nil
+            case 5: resurrected_last_played?.value.map { RecentActivity.Trait.returning(lastPlayed: $0) }
             case 8: streak_count_days.map { RecentActivity.Trait.streak(days: $0) }
             case 9: (trending ?? 0) > 0 ? .trending : nil
+            case 12: count.map { RecentActivity.Trait.weeklyCount($0) }
             default: nil
             }
         }
@@ -179,6 +296,22 @@ extension ContentEntryDTO.ExtraDTO {
             )
         default:
             return nil
+        }
+    }
+}
+
+/// A date as a string or as milliseconds, or nothing at all.
+struct LenientDate: Decodable, Sendable {
+    var value: Date?
+
+    init(from decoder: any Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        if let date = try? container.decode(Date.self) {
+            value = date
+        } else if let milliseconds = try? container.decode(Double.self) {
+            value = Date(timeIntervalSince1970: milliseconds / 1000)
+        } else {
+            value = nil
         }
     }
 }

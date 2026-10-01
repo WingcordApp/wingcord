@@ -343,7 +343,8 @@ public actor DiscordREST {
         nonce: String,
         replyingTo: MessageID? = nil,
         stickerIDs: [UInt64] = [],
-        attachments: [UploadedAttachment] = []
+        attachments: [UploadedAttachment] = [],
+        inventoryEntry: Data? = nil
     ) async throws -> Message {
         struct Body: Encodable {
             var content: String
@@ -356,6 +357,13 @@ public actor DiscordREST {
             var sticker_ids: [String]?
             /// Omitted when empty, for the same reason as `sticker_ids`.
             var attachments: [Attached]?
+            /// A reply to somebody's activity carries the entry it answers —
+            /// Discord's `{unverified_content: entry}` (`428249`).
+            var content_inventory_entry: InventoryEntry?
+
+            struct InventoryEntry: Encodable {
+                var unverified_content: JSONTree
+            }
 
             struct Reference: Encodable {
                 var message_id: String
@@ -387,7 +395,10 @@ public actor DiscordREST {
                     uploaded_filename: $0.uploadedFilename,
                     description: $0.altText
                 )
-            }
+            },
+            content_inventory_entry: inventoryEntry
+                .flatMap { try? JSONDecoder().decode(JSONTree.self, from: $0) }
+                .map { Body.InventoryEntry(unverified_content: $0) }
         )
         return try await post(
             "/channels/\(channelID.rawValue)/messages",

@@ -797,7 +797,7 @@ nonisolated extension PresenceStatus {
         case .online: Palette.presenceOnline
         case .idle: Palette.presenceIdle
         case .doNotDisturb: Palette.presenceDoNotDisturb
-        case .offline, .invisible: Palette.presenceOffline
+        case .offline, .invisible, .unknown: Palette.presenceOffline
         }
     }
 }

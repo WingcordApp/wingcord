@@ -83,6 +83,10 @@ struct TimelineContainer: View {
             // reaction chip is a control is decided by the account, and a drawn
             // canvas is only told what SwiftUI re-evaluates.
             canSuperReact: model.hasNitro,
+            // The channel's answer, read here for the same reason: the add
+            // control at the end of a reaction row is drawn, and a drawn
+            // canvas only hears what SwiftUI re-evaluates.
+            canAddReactions: model.permissionGate.canAddReaction(in: channelID),
             model: model
         )
         // **Over the transcript's own corner, lifted clear of the composer** —

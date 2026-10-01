@@ -351,6 +351,7 @@ private struct ChannelSidebarContainer: View {
             presentation: model.sidebarPresentation,
             target: model.sidebarTarget,
             connectedVoiceChannelID: model.connectedVoiceChannelID,
+            liveEvent: model.selectedGuildID.flatMap(model.liveEventNotice(for:)),
             selectChannel: { model.selectChannel($0) },
             openThread: { model.openThread($0) },
             joinVoice: { channelID in
@@ -370,6 +371,8 @@ private struct ChannelSidebarContainer: View {
             },
             toggleCategory: { model.toggleCategory($0) },
             openSurface: { model.openSurface($0) },
+            openEvents: { model.openEvents(inGuild: $0, event: $1) },
+            dismissLiveEvent: { model.dismissedEventNotices.insert($0) },
             openMenu: { model.openDirectMessageMenu(for: $0, anchor: $1) },
         )
         .equatable()

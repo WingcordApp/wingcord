@@ -183,6 +183,15 @@ struct MarkdownParserTests {
     func timestamps() {
         #expect(inline("<t:0:R>") == [.timestamp(Date(timeIntervalSince1970: 0), .relative)])
         #expect(inline("<t:0>") == [.timestamp(Date(timeIntervalSince1970: 0), .shortDateTime)])
+        // Discord's two newer styles, the numeric date with the time.
+        #expect(inline("<t:0:s>") == [.timestamp(Date(timeIntervalSince1970: 0), .numericDateTime)])
+        #expect(inline("<t:0:S>") == [.timestamp(Date(timeIntervalSince1970: 0), .numericDateLongTime)])
+    }
+
+    @Test("A game mention is `<@$id>`")
+    func gameMention() {
+        #expect(inline("<@$1421192030440173600>") == [.gameMention(ApplicationID(rawValue: 1_421_192_030_440_173_600))])
+        #expect(inline("<@$gta>") == [.text("<@$gta>")])
     }
 
     @Test("Malformed angle tokens stay literal")

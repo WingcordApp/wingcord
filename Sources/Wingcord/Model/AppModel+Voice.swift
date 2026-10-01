@@ -523,10 +523,19 @@ extension AppModel {
             else { continue }
             raise(guildID, to: .stage)
         }
+        // **An event happening now outranks every room** — Discord's
+        // `activeEvent`, checked first in `oi`.
+        for guildID in scheduledEvents.keys where !mutedGuildIDs.contains(guildID) {
+            if activeEvent(inGuild: guildID) != nil { raise(guildID, to: .event) }
+        }
         if let ownChannelID = connectedVoiceChannelID,
            let own = channelIndex[ownChannelID], let guildID = own.guildID
         {
-            found[guildID] = ownRoomMark(own)
+            // The reader's own room describes the server they are in a call
+            // in — unless the event happening now is in that very room.
+            found[guildID] = activeEvent(inGuild: guildID)?.location.channelID == ownChannelID
+                ? .event
+                : ownRoomMark(own)
         }
         return found
     }

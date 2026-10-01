@@ -448,12 +448,27 @@ struct ScheduledEventTests {
         #expect(biweekly.frequency == 2 && biweekly.interval == 2 && biweekly.byWeekday == [2])
     }
 
-    @Test("Weekdays is a five-day weekly rule")
+    @Test("Weekdays is a daily rule limited to five days, as Discord writes it")
     func weekdaysRule() {
         let rule = Recurrence.weekdays
-        #expect(rule.frequency == 2)
+        #expect(rule.frequency == 3)
         #expect(rule.interval == 1)
         #expect(rule.byWeekday == [0, 1, 2, 3, 4])
+        // What this client wrote before still reads back as weekdays.
+        let older = Recurrence(
+            frequency: 2, interval: 1, byWeekday: [0, 1, 2, 3, 4],
+            byNWeekday: nil, byMonth: nil, byMonthDay: nil
+        )
+        #expect(older == .weekdays)
+    }
+
+    @Test("A daily rule that names other days is not flattened to every day")
+    func weekendsAreNotDaily() {
+        let weekends = Recurrence(
+            frequency: 3, interval: 1, byWeekday: [5, 6],
+            byNWeekday: nil, byMonth: nil, byMonthDay: nil
+        )
+        #expect(weekends == .unrecognised)
     }
 
     @Test("Monthly carries the nth weekday and nothing else")

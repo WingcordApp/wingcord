@@ -53,7 +53,8 @@ struct HistoryRunwayTests {
             playingPreview: nil,
             isCovered: false,
             bookmarks: [],
-            canSuperReact: false
+            canSuperReact: false,
+            canAddReactions: true
         )
     }
 

@@ -1583,6 +1583,15 @@ public enum GatewayUpdate: Sendable {
     case scheduledEventChanged(ScheduledEvent)
     /// A scheduled event was deleted.
     case scheduledEventRemoved(GuildID, eventID: UInt64)
+    /// Somebody's answer to an event arrived, or was taken back.
+    case scheduledEventRSVPAdded(ScheduledEventRSVP)
+    case scheduledEventRSVPRemoved(ScheduledEventRSVP)
+    /// A date of a series changed; nil exception is that date's change gone,
+    /// and a nil date as well is every date's.
+    case scheduledEventExceptionChanged(eventID: UInt64, ScheduledEvent.Exception)
+    case scheduledEventExceptionRemoved(eventID: UInt64, occurrence: UInt64?)
+    /// The reader's activity feed is stale; ask again after this long.
+    case activityInboxStale(refreshAfter: TimeInterval?)
     /// A server changed. `carriesTheme` is false when the payload left `theme`
     /// out, which keeps the theme already held — see `GuildDTO.carriesTheme`.
     case guildUpdated(Guild, carriesTheme: Bool)
@@ -1835,6 +1844,23 @@ public enum GatewayUpdate: Sendable {
         case .scheduledEventDelete(let dto):
             guard let guildID = dto.guild_id, let id = dto.id?.value else { return nil }
             self = .scheduledEventRemoved(guildID, eventID: id)
+        case .scheduledEventUserAdd(let dto):
+            guard let rsvp = dto.domain else { return nil }
+            self = .scheduledEventRSVPAdded(rsvp)
+        case .scheduledEventUserRemove(let dto):
+            guard let rsvp = dto.domain else { return nil }
+            self = .scheduledEventRSVPRemoved(rsvp)
+        case .scheduledEventExceptionUpsert(let dto):
+            guard let eventID = dto.event_id?.value, let exception = dto.domain else { return nil }
+            self = .scheduledEventExceptionChanged(eventID: eventID, exception)
+        case .scheduledEventExceptionDelete(let dto):
+            guard let eventID = dto.event_id?.value, let id = dto.event_exception_id?.value else { return nil }
+            self = .scheduledEventExceptionRemoved(eventID: eventID, occurrence: id)
+        case .scheduledEventExceptionsDelete(let dto):
+            guard let eventID = dto.event_id?.value else { return nil }
+            self = .scheduledEventExceptionRemoved(eventID: eventID, occurrence: nil)
+        case .activityInboxStale(let dto):
+            self = .activityInboxStale(refreshAfter: dto.refresh_after_ms.map { $0 / 1000 })
         case .guildEmojisUpdate(let payload):
             self = .guildExpressionsUpdated(payload.guild_id, emojis: payload.catalog, stickers: nil)
         case .guildStickersUpdate(let payload):

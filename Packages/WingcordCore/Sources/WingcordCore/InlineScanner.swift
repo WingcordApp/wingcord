@@ -357,6 +357,12 @@ struct InlineScanner {
                 guard let value = digits(body[cursor...]) else { return nil }
                 return .roleMention(RoleID(rawValue: value))
             }
+            // `<@$123>` — a game, Discord's `@game` mention (`827669`).
+            if body[cursor] == 0x24 {
+                cursor = body.index(after: cursor)
+                guard let value = digits(body[cursor...]) else { return nil }
+                return .gameMention(ApplicationID(rawValue: value))
+            }
             // `<@!123>` is the legacy nickname-mention form and means the same
             // thing. Accepting only `<@123>` leaves old messages showing raw
             // markup.

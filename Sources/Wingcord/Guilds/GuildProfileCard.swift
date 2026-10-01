@@ -139,14 +139,14 @@ struct GuildProfileCard: View {
     /// The chip above the card already wears it; the plate says, honestly, that
     /// there is no picture to show.
     private var icon: some View {
-        RemoteImage(url: profile.iconURL, side: Self.iconSide) {
+        // An animated icon plays, as it does on the rail.
+        AnimatedPicture(url: profile.iconURL, side: Self.iconSide, contentMode: .fill) {
             Text(profile.monogram)
                 .font(.system(size: Self.iconSide * 0.3, weight: .bold))
                 .foregroundStyle(Ink.secondary)
                 .frame(width: Self.iconSide, height: Self.iconSide)
                 .background(Palette.surfaceRaised)
         }
-        .frame(width: Self.iconSide, height: Self.iconSide)
     }
 
     // MARK: Identity
@@ -232,20 +232,25 @@ struct GuildProfileCard: View {
         .padding(.bottom, Spacing.margin)
     }
 
+    /// The foot of a card with no way in to offer.
+    ///
+    /// **Discord's one sentence, and only where it has one.** A server that
+    /// has *limited who can see its profile* gets its words for that
+    /// (`8mfCqY`); a server the reader is simply not in gets nothing — its
+    /// name and icon already say whose it is, and "You are not in this
+    /// server" was this client's sentence, never Discord's.
+    @ViewBuilder
     private var notInThisServer: some View {
-        // **Two different facts, and they used to be one sentence.** A server
-        // the reader is simply not in still has a name, an icon and a date; a
-        // server that has *limited who can see its profile* has none of those,
-        // and telling that reader they are "not in this server" answers a
-        // question they did not ask while leaving the empty card unexplained.
-        Text(profile.isUnnamed
-            ? "The server has limited who can see this profile."
-            : "You are not in this server.")
-            .font(Typeface.rowSubtitle)
-            .foregroundStyle(InkColor.tertiary)
-            .padding(.horizontal, Spacing.margin)
-            .padding(.top, Spacing.snug)
-            .padding(.bottom, Spacing.margin)
+        if profile.isUnnamed {
+            Text("The server has limited who can see this profile.")
+                .font(Typeface.rowSubtitle)
+                .foregroundStyle(InkColor.tertiary)
+                .padding(.horizontal, Spacing.margin)
+                .padding(.top, Spacing.snug)
+                .padding(.bottom, Spacing.margin)
+        } else {
+            Color.clear.frame(height: Spacing.margin)
+        }
     }
 
     private func enter() {
@@ -278,15 +283,15 @@ struct GuildProfileCard: View {
             .padding(.horizontal, Spacing.margin)
             .padding(.vertical, Spacing.snug)
         } else {
-            // **The way in, and it was there all along.** This used to say
-            // "You are not in this server." and stop, on the reading that the
-            // client had no route for it — it has had one since discovery
-            // shipped. Which of the two acts is offered is the server's own
-            // answer; see `AppModel.guildEntry`.
+            // **The way in, and it was there all along.** This used to stop
+            // at a sentence, on the reading that the client had no route for
+            // it — it has had one since discovery shipped. Which of the two
+            // acts is offered is the server's own answer; see
+            // `AppModel.guildEntry`.
             switch profile.entry {
             case .join, .apply:
-                // **A surface with no opener draws the sentence instead.** An
-                // inert Join is exactly the control §5.5 forbids.
+                // **A surface with no opener offers nothing.** An inert Join
+                // is exactly the control §5.5 forbids.
                 if enterGuild == nil { notInThisServer } else { entryButton }
             case .none:
                 notInThisServer

@@ -33,6 +33,12 @@ struct MarkdownEditor: View {
     /// clipboard — answered with whether they were taken. Nil where the field
     /// takes text only. See `PastedFiles`.
     var onPasteFiles: (([URL]) -> Bool)?
+    /// How each mention token is drawn — nil leaves tokens as text, which is
+    /// right for a field whose text is not a message.
+    var chips: ((EditorMention) -> EditorChip?)?
+    /// Moves when anything a chip names may have changed — a name arriving, a
+    /// role renamed — so the chips are drawn again without a keystroke.
+    var chipRevision: UInt64 = 0
 
     @State private var height: CGFloat?
 
@@ -49,6 +55,8 @@ struct MarkdownEditor: View {
             onKey: onKey,
             onSubmit: onSubmit,
             onPasteFiles: onPasteFiles,
+            chips: chips,
+            chipRevision: chipRevision,
             onHeightChange: { measured in
                 if height != measured { height = measured }
             }
@@ -71,6 +79,8 @@ private struct MarkdownEditorRepresentable: NSViewRepresentable {
     var onKey: ((EditorKey) -> Bool)?
     var onSubmit: (() -> Void)?
     var onPasteFiles: (([URL]) -> Bool)?
+    var chips: ((EditorMention) -> EditorChip?)?
+    var chipRevision: UInt64
     var onHeightChange: (CGFloat) -> Void
 
     func makeCoordinator() -> Coordinator { Coordinator(owner: self) }
@@ -106,6 +116,10 @@ private struct MarkdownEditorRepresentable: NSViewRepresentable {
             textView.setSelectedRange(NSRange(location: (text as NSString).length, length: 0))
             needsStyle = true
         }
+        if coordinator.chipRevision != chipRevision {
+            coordinator.chipRevision = chipRevision
+            needsStyle = true
+        }
         if needsStyle { coordinator.restyle() }
         coordinator.updatePlaceholder()
 
@@ -138,6 +152,10 @@ private struct MarkdownEditorRepresentable: NSViewRepresentable {
         /// A toolbar button is rewriting the text; the rewrite must not take the
         /// toolbar down the way typing does.
         private var isApplyingFormat = false
+        /// The chips' tokens, which the caret and a delete treat as one
+        /// character each — see `EditorMentionAtoms`.
+        private var atoms: [NSRange] = []
+        var chipRevision: UInt64 = 0
 
         init(owner: MarkdownEditorRepresentable) {
             self.owner = owner
@@ -172,8 +190,10 @@ private struct MarkdownEditorRepresentable: NSViewRepresentable {
         func restyle() {
             guard let textView = container?.textView, let storage = textView.textStorage else { return }
             let styler = MarkdownStyler.current(font: owner.font, ink: owner.ink)
-            styler.apply(to: storage)
+            let placements = styler.apply(to: storage, chips: owner.chips)
             textView.typingAttributes = styler.baseAttributes
+            textView.chips = placements
+            atoms = placements.map(\.range)
         }
 
         func updatePlaceholder() {
@@ -198,6 +218,28 @@ private struct MarkdownEditorRepresentable: NSViewRepresentable {
             if owner.text != textView.string { owner.text = textView.string }
             container?.remeasure()
             if !isApplyingFormat { hideToolbar() }
+        }
+
+        /// A caret never rests inside a chip, and a selection takes all of one.
+        func textView(
+            _ textView: NSTextView,
+            willChangeSelectionFromCharacterRange oldRange: NSRange,
+            toCharacterRange newRange: NSRange
+        ) -> NSRange {
+            EditorMentionAtoms.snap(newRange, from: oldRange, around: atoms)
+        }
+
+        /// An edit that reaches into a chip takes the whole of it — a delete
+        /// after a mention removes the mention, as Discord's box does.
+        func textView(
+            _ textView: NSTextView,
+            shouldChangeTextIn range: NSRange,
+            replacementString: String?
+        ) -> Bool {
+            let whole = EditorMentionAtoms.expand(range, around: atoms)
+            guard whole != range else { return true }
+            textView.insertText(replacementString ?? "", replacementRange: whole)
+            return false
         }
 
         func textView(_ textView: NSTextView, doCommandBy selector: Selector) -> Bool {

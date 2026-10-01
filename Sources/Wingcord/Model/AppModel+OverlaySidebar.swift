@@ -118,7 +118,7 @@ extension AppModel {
             guard userID != currentUserID, !blockedUserIDs.contains(userID) else { continue }
             guard let user = users[userID] else { continue }
             let presence = presences[userID]
-            let status = presence?.status ?? .offline
+            let status = PresenceStatus.resolved(presence?.status, flags: user.flags)
             let activity = presence?.primaryActivity
             let person = OverlayPerson(
                 id: userID,
@@ -264,7 +264,7 @@ extension AppModel {
                 title: name,
                 avatarURL: avatarURL,
                 monogram: partner?.monogram ?? Self.monogram(of: name),
-                status: partnerID.map { presences[$0]?.status ?? .offline },
+                status: partnerID.map { presenceStatus(of: $0) },
                 preview: overlayPreview(of: channelID) ?? partner.map { "@\($0.handle)" },
                 isUnread: state.unread,
                 mentionCount: state.mentions,

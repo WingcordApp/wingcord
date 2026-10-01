@@ -57,8 +57,28 @@ final class MemberListCanvas: NSView {
     /// A right-click on a person. Raises the actions rather than the card.
     var onOpenMenu: ((UserID, CGRect) -> Void)?
     var onWidthChange: ((CGFloat) -> Void)?
+    /// An Activity card clicked: its popout, beside it.
+    var onOpenActivity: ((String, CGRect) -> Void)?
+    /// The Activity heading clicked: fold, unfold, or bring back.
+    var onToggleActivity: (() -> Void)?
+    /// The Activity heading's gear, or a right-click on the heading.
+    var onActivityMenu: ((CGRect) -> Void)?
 
-    var contentHeight: CGFloat { layout.contentHeight }
+    /// The Activity section at the head of the list, drawn before the first
+    /// group — see `MemberActivityBlock`. **Above the roster, not inside it**:
+    /// the roster's arithmetic is a fixed height per row, and the section's
+    /// cards are a different height again, so the whole roster is simply
+    /// pushed down by the section's height.
+    private(set) var activity: MemberActivityBlock?
+    private var hoveredCard: Int?
+    /// Redraws the live cards' clocks once a second, and only while one is
+    /// drawn — `INVARIANTS.md`'s rule about clocks: subscribed while needed,
+    /// never left running.
+    private var liveClock: Timer?
+
+    private var activityHeight: CGFloat { activity?.height ?? 0 }
+
+    var contentHeight: CGFloat { layout.contentHeight + activityHeight }
 
     init(style: MessageTextStyle) {
         self.style = style
@@ -89,6 +109,8 @@ final class MemberListCanvas: NSView {
     /// Releases the clock and anything in flight. Called by the coordinator that
     /// owns this view; `deinit` covers the case where nobody does.
     func tearDown() {
+        liveClock?.invalidate()
+        liveClock = nil
         onHoveredRowChange = nil
         plateTask?.cancel()
         plateTask = nil
@@ -125,16 +147,87 @@ final class MemberListCanvas: NSView {
     }
 
     func rowIndex(at y: CGFloat) -> Int? {
-        layout.index(at: y)
+        layout.index(at: y - activityHeight)
     }
 
     func rowFrame(at index: Int) -> CGRect {
-        layout.frame(at: index, width: bounds.width)
+        layout.frame(at: index, width: bounds.width).offsetBy(dx: 0, dy: activityHeight)
+    }
+
+    // MARK: The Activity section
+
+    /// Takes a new section, answering the list's whole height.
+    @discardableResult
+    func apply(activity: MemberActivityBlock?) -> CGFloat {
+        guard activity != self.activity else { return contentHeight }
+        let previousHeight = activityHeight
+        self.activity = activity
+        if let hoveredCard, activity?.cards.indices.contains(hoveredCard) != true { self.hoveredCard = nil }
+        if previousHeight != activityHeight {
+            needsDisplay = true
+        } else {
+            setNeedsDisplay(CGRect(x: 0, y: 0, width: bounds.width, height: activityHeight))
+        }
+        updateLiveClock()
+        return contentHeight
+    }
+
+    private func activityCardFrame(at index: Int) -> CGRect {
+        activity?.cardFrame(at: index, width: bounds.width) ?? .zero
+    }
+
+    private var activityHeaderFrame: CGRect {
+        CGRect(x: 0, y: 0, width: bounds.width, height: MemberActivityGeometry.headerHeight)
+    }
+
+    private func updateLiveClock() {
+        let hasLive = activity?.cards.contains(where: \.isLive) == true
+        if hasLive, liveClock == nil {
+            let timer = Timer(timeInterval: 1, repeats: true) { [weak self] _ in
+                MainActor.assumeIsolated { self?.tickLiveCards() }
+            }
+            RunLoop.main.add(timer, forMode: .common)
+            liveClock = timer
+        } else if !hasLive {
+            liveClock?.invalidate()
+            liveClock = nil
+        }
+    }
+
+    private func tickLiveCards() {
+        guard let activity, window != nil else { return }
+        for (index, card) in activity.cards.enumerated() where card.isLive {
+            let frame = activityCardFrame(at: index)
+            if frame.intersects(visibleRect) { setNeedsDisplay(frame) }
+        }
+    }
+
+    private func drawActivity(_ activity: MemberActivityBlock, in dirtyRect: CGRect, context: CGContext, scale: CGFloat) {
+        if activityHeaderFrame.intersects(dirtyRect) {
+            MemberActivityPainter.drawHeader(activity, in: activityHeaderFrame, context: context, style: style)
+        }
+        let now = Date()
+        for (index, card) in activity.cards.enumerated() {
+            let frame = activityCardFrame(at: index)
+            guard frame.intersects(dirtyRect) else { continue }
+            MemberActivityPainter.drawCard(
+                card,
+                in: frame,
+                context: context,
+                style: style,
+                isHovered: hoveredCard == index && !isScrolling,
+                images: ImageStore.shared,
+                scale: scale,
+                now: now
+            )
+        }
     }
 
     func visibleRowRange() -> Range<Int> {
-        guard let first = layout.index(at: bounds.minY),
-              let last = layout.index(at: bounds.maxY - 0.5)
+        // Through `rowIndex`, which knows the Activity section sits above.
+        guard bounds.maxY > activityHeight,
+              let first = rowIndex(at: bounds.minY),
+              let last = rowIndex(at: bounds.maxY - 0.5)
         else { return 0..<0 }
         return first..<last + 1
     }
@@ -185,8 +278,11 @@ final class MemberListCanvas: NSView {
     override func draw(_ dirtyRect: NSRect) {
         guard let context = NSGraphicsContext.current?.cgContext else { return }
         context.clear(dirtyRect)
-        guard var index = rowIndex(at: max(0, dirtyRect.minY)) else { return }
         let scale = window?.backingScaleFactor ?? 2
+        if let activity, dirtyRect.minY < activityHeight {
+            drawActivity(activity, in: dirtyRect, context: context, scale: scale)
+        }
+        guard var index = rowIndex(at: max(activityHeight, dirtyRect.minY)) else { return }
         // Read once per draw rather than per row: it is a clock read, and every
         // row would otherwise ask the same question and get the same answer.
         let phase = gradientPhase
@@ -559,7 +655,17 @@ final class MemberListCanvas: NSView {
     override func mouseMoved(with event: NSEvent) {
         guard !isScrolling, !isCovered else { return }
         let point = convert(event.locationInWindow, from: nil)
-        let index = bounds.contains(point) ? rowIndex(at: point.y) : nil
+        // The Activity section first: it sits above the roster's rows.
+        let card = bounds.contains(point) && point.y < activityHeight
+            ? activity?.cardIndex(at: point.y)
+            : nil
+        if card != hoveredCard {
+            let previous = hoveredCard
+            hoveredCard = card
+            if let previous { setNeedsDisplay(activityCardFrame(at: previous)) }
+            if let card { setNeedsDisplay(activityCardFrame(at: card)) }
+        }
+        let index = bounds.contains(point) && point.y >= activityHeight ? rowIndex(at: point.y) : nil
         let hoverable = index.flatMap { row(at: $0)?.userID != nil ? $0 : nil }
         guard hoverable != hoveredRow else { return }
         let previous = hoveredRow
@@ -577,6 +683,10 @@ final class MemberListCanvas: NSView {
     /// Lets go of the pointer: the same work whether it left the column or a
     /// card was drawn over it.
     private func clearHover() {
+        if let previous = hoveredCard {
+            hoveredCard = nil
+            setNeedsDisplay(activityCardFrame(at: previous))
+        }
         guard hoveredRow != nil else { return }
         let previous = hoveredRow
         hoveredRow = nil
@@ -590,6 +700,18 @@ final class MemberListCanvas: NSView {
 
     override func mouseDown(with event: NSEvent) {
         let point = convert(event.locationInWindow, from: nil)
+        if let activity, point.y < activityHeight {
+            if let card = activity.cardIndex(at: point.y) {
+                onOpenActivity?(activity.cards[card].id, anchorInHostingRoot(MemberActivityGeometry.plate(in: activityCardFrame(at: card))))
+            } else if MemberActivityGeometry.gearRect(in: activityHeaderFrame, canToggle: activity.canToggle)
+                .insetBy(dx: -6, dy: -6).contains(point)
+            {
+                onActivityMenu?(anchorInHostingRoot(MemberActivityGeometry.gearRect(in: activityHeaderFrame, canToggle: activity.canToggle)))
+            } else if activity.canToggle {
+                onToggleActivity?()
+            }
+            return
+        }
         guard let index = rowIndex(at: point.y),
               let userID = row(at: index)?.userID
         else { return }
@@ -610,6 +732,15 @@ final class MemberListCanvas: NSView {
     /// a presentation at all.
     override func rightMouseDown(with event: NSEvent) {
         let point = convert(event.locationInWindow, from: nil)
+        // The heading's menu, on the heading — Discord's context menu there.
+        if let activity, point.y < MemberActivityGeometry.headerHeight, activityHeight > 0 {
+            onActivityMenu?(anchorInHostingRoot(MemberActivityGeometry.gearRect(in: activityHeaderFrame, canToggle: activity.canToggle)))
+            return
+        }
+        if point.y < activityHeight {
+            super.rightMouseDown(with: event)
+            return
+        }
         guard let index = rowIndex(at: point.y),
               let userID = row(at: index)?.userID
         else {
@@ -620,7 +751,7 @@ final class MemberListCanvas: NSView {
     }
 
     override func accessibilityChildren() -> [Any]? {
-        visibleRowRange().compactMap { index -> NSAccessibilityElement? in
+        activityAccessibilityChildren() + visibleRowRange().compactMap { index -> NSAccessibilityElement? in
             guard let entry = roster.members[index] else { return nil }
             let element = NSAccessibilityElement()
             element.setAccessibilityRole(.button)
@@ -633,5 +764,32 @@ final class MemberListCanvas: NSView {
             element.setAccessibilityFrameInParentSpace(rowFrame(at: index))
             return element
         }
+    }
+}
+
+extension MemberListCanvas {
+    /// The section's heading and its cards, as buttons.
+    fileprivate func activityAccessibilityChildren() -> [NSAccessibilityElement] {
+        guard let activity else { return [] }
+        let heading = NSAccessibilityElement()
+        heading.setAccessibilityRole(.button)
+        heading.setAccessibilityLabel(
+            "\(activity.title)" + (activity.canToggle ? (activity.isHidden ? ", hidden" : activity.isExpanded ? ", expanded" : ", collapsed") : "")
+        )
+        heading.setAccessibilityParent(self)
+        heading.setAccessibilityFrameInParentSpace(
+            CGRect(x: 0, y: 0, width: bounds.width, height: MemberActivityGeometry.headerHeight)
+        )
+        let now = Date()
+        let cards = activity.cards.enumerated().map { index, card -> NSAccessibilityElement in
+            let element = NSAccessibilityElement()
+            element.setAccessibilityRole(.button)
+            let chips = card.badges.map { MemberActivityPainter.resolve($0, card: card, now: now).text }
+            element.setAccessibilityLabel(([card.name, card.title] + chips).joined(separator: ", "))
+            element.setAccessibilityParent(self)
+            element.setAccessibilityFrameInParentSpace(activity.cardFrame(at: index, width: bounds.width))
+            return element
+        }
+        return [heading] + cards
     }
 }

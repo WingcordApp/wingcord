@@ -210,6 +210,53 @@ extension AppModel {
         )
     }
 
+    /// The holders of one role, as a one-section roster the member list's own
+    /// view can draw — Discord's role popout (`593284`): its heading is the
+    /// list's section header, its rows are member-list rows, sorted by the
+    /// name each person shows.
+    ///
+    /// **The members this session knows hold it**, which is what Discord's
+    /// popout lists too: the ids route asks for up to a hundred of them, and
+    /// they land here as their records arrive.
+    func roleRoster(for request: RoleMembersRequest) -> Roster {
+        let guildID = request.guildID
+        let guildRoles = roles[guildID] ?? [:]
+        guard let role = guildRoles[request.roleID] else { return .empty }
+        let people = RosterPeople(
+            saturation: userColorSaturation,
+            typing: [:],
+            voice: rosterVoiceFacts()
+        )
+        var entries: [MemberEntry] = []
+        for (userID, member) in members[guildID] ?? [:]
+        where member.roleIDs.contains(role.id) {
+            guard let user = users[userID] else { continue }
+            entries.append(memberEntry(
+                user, member: member, guildID: guildID, roles: guildRoles,
+                presence: presences[userID], people: people
+            ))
+        }
+        let sorted = Self.sortedByName(entries)
+        let count = roleMemberCounts[guildID]?[role.id]
+        let section = RosterSection(
+            label: "\(role.name) — \((count ?? sorted.count).formatted())",
+            colorValue: roleColor(role.displayColorValue),
+            iconURL: role.iconHash.flatMap {
+                CDN.roleIcon(roleID: role.id, hash: $0, side: MemberRowGeometry.sectionIconSide)
+            },
+            index: 0,
+            count: sorted.count
+        )
+        var rows: [Int: MemberEntry] = [:]
+        for (offset, entry) in sorted.enumerated() { rows[offset + 1] = entry }
+        return Roster(
+            identity: "role:\(guildID):\(role.id)",
+            sections: [section],
+            members: rows,
+            rowCount: sorted.count + 1
+        )
+    }
+
     /// One server member's row.
     private func memberEntry(
         _ user: User,
@@ -237,7 +284,7 @@ extension AppModel {
             monogram: user.monogram,
             decorationURL: cosmetics?.avatarDecorationHash.flatMap { CDN.avatarDecoration(hash: $0) },
             displayNameFont: cosmetics?.displayNameStyle?.font,
-            status: presence?.status ?? .offline,
+            status: PresenceStatus.resolved(presence?.status, flags: user.flags),
             isOnMobile: presence?.isOnMobile ?? false,
             activityLine: Self.activityLine(
                 presence: presence,
@@ -246,6 +293,7 @@ extension AppModel {
                 isStreaming: people.voice.sharing.contains(userID)
             ),
             isBot: user.isBot,
+            isVerifiedBot: user.flags.contains(.verifiedBot),
             tag: cosmetics?.primaryGuildTag,
             tagBadgeURL: cosmetics.flatMap { decoration in
                 guard let guildID = decoration.primaryGuildID,
@@ -289,7 +337,7 @@ extension AppModel {
         for userID in participants {
             guard let user = users[userID] else { continue }
             let presence = presenceTable[userID]
-            let status = presence?.status ?? .offline
+            let status = PresenceStatus.resolved(presence?.status, flags: user.flags)
             let entry = MemberEntry(
                 userID: userID,
                 name: user.preferredName,
@@ -310,6 +358,7 @@ extension AppModel {
                     isStreaming: voice.sharing.contains(userID)
                 ),
                 isBot: user.isBot,
+                isVerifiedBot: user.flags.contains(.verifiedBot),
                 tag: cosmetics(of: user)?.primaryGuildTag,
                 tagBadgeURL: cosmetics(of: user).flatMap { decoration in
                     guard let guildID = decoration.primaryGuildID,

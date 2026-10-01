@@ -81,6 +81,9 @@ struct TimelineView: NSViewRepresentable {
     /// chip is a control only when this is true; see
     /// `TimelineCanvasView.apply(canSuperReact:)`.
     var canSuperReact: Bool
+    /// Whether a new reaction may be started in this channel; see
+    /// `TimelineCanvasView.apply(canAddReactions:)`.
+    var canAddReactions: Bool
     var model: AppModel
 
     func makeCoordinator() -> TimelineCoordinator {
@@ -111,7 +114,8 @@ struct TimelineView: NSViewRepresentable {
             playingPreview: playingPreview,
             isCovered: isCovered,
             bookmarks: bookmarks,
-            canSuperReact: canSuperReact
+            canSuperReact: canSuperReact,
+            canAddReactions: canAddReactions
         )
     }
 
@@ -356,6 +360,14 @@ final class TimelineCoordinator: NSObject {
             // thread's parent — see `AppModel.openThread`.
             self?.model.openThread(threadID)
         }
+        canvas.onEditChannel = { [weak self] in
+            // The channel's own settings live in the server's: the Channels
+            // page, where this channel is one row.
+            guard let self, let channelID = self.channelID,
+                  let guildID = self.model.channelIndex.guildID(of: channelID)
+            else { return }
+            ServerSettingsWindow.open(guildID, section: .channels)
+        }
         canvas.onOpenTopicMarker = { [weak self] in
             self?.model.reopenTopicPanel()
         }
@@ -575,6 +587,7 @@ final class TimelineCoordinator: NSObject {
         canvas?.onToggleInviteFold = nil
         canvas?.isInviteSettled = nil
         canvas?.onOpenTopicMarker = nil
+        canvas?.onEditChannel = nil
         (scrollView as? TimelineScrollView)?.acceptsScrollInput = { true }
         // The clock holds a closure over the canvas; a subscriber that outlives
         // its transcript is a display link running for a channel nobody is
@@ -623,7 +636,8 @@ final class TimelineCoordinator: NSObject {
         playingPreview: URL?,
         isCovered: Bool,
         bookmarks: Set<MessageID>,
-        canSuperReact: Bool
+        canSuperReact: Bool,
+        canAddReactions: Bool
     ) {
         self.scroll = scroll
         self.topics = topics
@@ -631,6 +645,7 @@ final class TimelineCoordinator: NSObject {
         canvas?.apply(isCovered: isCovered)
         canvas?.apply(bookmarks: bookmarks)
         canvas?.apply(canSuperReact: canSuperReact)
+        canvas?.apply(canAddReactions: canAddReactions)
         canvas?.apply(activityAccents: activityAccents)
         canvas?.apply(playingPreview: playingPreview)
         canvas?.apply(activityInviteStatuses: activityInviteStatuses)
@@ -662,6 +677,9 @@ final class TimelineCoordinator: NSObject {
             // The scrollable range just changed by the delta. A reader sitting
             // at the bottom has to stay there, or growing the composer by a line
             // silently scrolls the newest message out from under them.
+            // A short channel's rows sit on the composer, so the band they
+            // sit in just moved under them.
+            refreshLeadingSpace()
             if isNearBottom, self.reachesPresent, !isTornDown { scrollToBottom() }
         }
         guard !isTornDown else { return }
@@ -903,12 +921,19 @@ final class TimelineCoordinator: NSObject {
             expandedInvites: model.expandedInviteCards,
             palettes: model.derivedPalettes,
             userCardSizes: model.userCardSizes,
-            guildID: channelID.flatMap { model.channelIndex.guildID(of: $0) }
+            guildID: channelID.flatMap { model.channelIndex.guildID(of: $0) },
+            canEditChannel: channelID.map {
+                model.channelIndex.guildID(of: $0) != nil
+                    && model.permissionGate.permissions(in: $0).contains(.manageChannels)
+            } ?? false
         )
 
         isApplyingUpdate = true
         let rows = engine.layout(input, cache: &rowCache)
-        let height = canvas.apply(rows: rows)
+        let height = canvas.apply(
+            rows: rows,
+            leadingSpace: leadingSpace(forRowsHeight: rows.reduce(0) { $0 + $1.height })
+        )
         resizeDocument(to: height)
 
         // **The foot is only somewhere to stick when it is the present.** The
@@ -943,6 +968,31 @@ final class TimelineCoordinator: NSObject {
         // A page landing is the moment a channel's newest message becomes
         // known, so it is the moment the channel can be acknowledged at all.
         acknowledgeIfRead()
+    }
+
+    /// The space that puts a short channel on the composer, for the window as
+    /// it is now — see `TimelineViewportPolicy.leadingSpace`.
+    private func leadingSpace(forRowsHeight rowsHeight: CGFloat) -> CGFloat {
+        guard let scrollView else { return 0 }
+        return TimelineViewportPolicy.leadingSpace(
+            rowsHeight: rowsHeight,
+            viewport: scrollView.contentView.bounds.height,
+            topInset: scrollView.contentInsets.top,
+            bottomInset: scrollView.contentInsets.bottom
+        )
+    }
+
+    /// Moves a short channel's rows when the band they sit in changes height —
+    /// the window resizing, the composer growing a line. **A shift, not a
+    /// layout**: the rows are reinstalled as they are, over a new first offset.
+    private func refreshLeadingSpace() {
+        guard let canvas, !isTornDown else { return }
+        let wanted = leadingSpace(forRowsHeight: canvas.contentHeight - canvas.leadingSpace)
+        guard abs(wanted - canvas.leadingSpace) > 0.5 else { return }
+        resizeDocument(to: canvas.apply(rows: canvas.rows, leadingSpace: wanted))
+        positionCanvas()
+        reconcileUserCards()
+        placeEmbedPlayer()
     }
 
     private func resizeDocument(to height: CGFloat) {
@@ -996,6 +1046,7 @@ final class TimelineCoordinator: NSObject {
         if abs(viewport.height - lastViewportHeight) > 0.5 {
             let grew = viewport.height > lastViewportHeight
             lastViewportHeight = viewport.height
+            refreshLeadingSpace()
             if grew, isNearBottom, reachesPresent, !canvas.isScrolling { scrollToBottom() }
         }
         positionCanvas()
@@ -1448,8 +1499,16 @@ final class TimelineCoordinator: NSObject {
         case .staticRoute(let route, let itemID):
             guard let canvas else { return }
             model.openStaticRoute(route, itemID: itemID, anchor: canvas.anchorInHostingRoot(rect))
-        case .role:
-            break
+        case .role(let roleID):
+            // Discord's role popout: who holds it, beside the mention.
+            guard let canvas,
+                  let channelID,
+                  let guildID = model.channelIndex.guildID(of: channelID)
+            else { return }
+            model.openRoleMembers(roleID, inGuild: guildID, anchor: canvas.anchorInHostingRoot(rect))
+        case .game(let gameID):
+            // Discord's chip opens the game's page (`266645`).
+            model.openGameProfile(gameID)
         }
     }
 }

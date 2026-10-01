@@ -8,6 +8,23 @@ public enum PresenceStatus: String, Hashable, Sendable, Codable, CaseIterable {
     case doNotDisturb = "dnd"
     case invisible
     case offline
+    /// An account that never reports a status — Discord's UNKNOWN. Drawn with
+    /// no status at all: no dot, and no dimming. See `resolved(_:flags:)`.
+    case unknown
+
+    /// A status with Discord's rule for an account that never reports one.
+    ///
+    /// An app that answers only through HTTP interactions
+    /// (`UserFlags.botHTTPInteractions`) never connects to the gateway, so it
+    /// has no presence to send — and Discord's `PresenceStore.getStatus`
+    /// answers UNKNOWN for it rather than OFFLINE. Every other account with
+    /// nothing on record is offline.
+    public static func resolved(_ reported: PresenceStatus?, flags: UserFlags) -> PresenceStatus {
+        if flags.contains(.botHTTPInteractions), reported == nil || reported == .offline {
+            return .unknown
+        }
+        return reported ?? .offline
+    }
 
     /// What the roster sorts and groups by. Invisible is only ever *your own*
     /// status — everyone else's invisible arrives as offline — and it groups
@@ -23,6 +40,7 @@ public enum PresenceStatus: String, Hashable, Sendable, Codable, CaseIterable {
         case .doNotDisturb: "Do Not Disturb"
         case .invisible: "Invisible"
         case .offline: "Offline"
+        case .unknown: "Unknown"
         }
     }
 

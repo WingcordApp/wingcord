@@ -277,6 +277,19 @@ final class PermissionGate {
     /// them. `MessageActionPolicy` is the rules, this is the lookup that feeds
     /// them — and the split is what makes the policy checkable against a table
     /// of cases with no store in the picture.
+    /// Whether a new reaction may be started anywhere in this channel — the
+    /// add control at the end of every reaction row. Nothing in the rule is
+    /// about the message, so the canvas asks once per channel rather than per
+    /// row.
+    func canAddReaction(in channelID: ChannelID) -> Bool {
+        let guildID = model.channelIndex[channelID]?.guildID
+        return MessageActionPolicy.canAddReaction(
+            permissions: permissions(in: channelID),
+            isTimedOut: isTimedOut(in: guildID),
+            isPreviewing: guildID != nil && guildID == model.guildPreview?.guildID
+        )
+    }
+
     func actions(for message: Message) -> MessageActions {
         let channel = model.channelIndex[message.channelID]
         let guildID = channel?.guildID

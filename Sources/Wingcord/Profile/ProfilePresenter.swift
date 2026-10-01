@@ -466,9 +466,20 @@ extension AppModel {
         /// viewer and before the profiles — so a profile opened from a row in
         /// it comes up on top.
         case reactions
+        /// A server's events — drawn by the message actions' presenter after
+        /// the reactors list, so a profile opened from somebody interested
+        /// comes up above it.
+        case events
         /// A form an application raised — drawn by the same presenter, after
         /// the reactors list.
         case interactionModal
+        /// The holders of a role, beside its mention — drawn by the message
+        /// actions' presenter, under the profiles, so a card a row opens is
+        /// above it.
+        case roleMembers
+        /// An Activity card's popout, beside the member list — under the
+        /// profiles, so a face clicked in it opens above it.
+        case activityCard
         case profile
         case gameProfile
         case tenureBadge
@@ -481,7 +492,10 @@ extension AppModel {
         if tenureBadgeRequest != nil { return .tenureBadge }
         if gameProfileRequest != nil { return .gameProfile }
         if profileRequest != nil { return .profile }
+        if activityCardRequest != nil { return .activityCard }
+        if roleMembersRequest != nil { return .roleMembers }
         if interactionModal != nil { return .interactionModal }
+        if eventsPanel != nil { return .events }
         if reactionsList != nil { return .reactions }
         if mediaViewer != nil { return .mediaViewer }
         return nil

@@ -27,11 +27,14 @@ struct ChannelSidebar: View, Equatable {
     /// it changes a row's glyph — a row that could not see it would keep
     /// offering "join" to a channel you are already in.
     var connectedVoiceChannelID: ChannelID?
+    /// The card for an event happening now, at the head of the list.
+    var liveEvent: LiveEventNotice?
 
     static func == (lhs: ChannelSidebar, rhs: ChannelSidebar) -> Bool {
         lhs.presentation == rhs.presentation
             && lhs.target == rhs.target
             && lhs.connectedVoiceChannelID == rhs.connectedVoiceChannelID
+            && lhs.liveEvent == rhs.liveEvent
     }
 
     var selectChannel: (ChannelID) -> Void = { _ in }
@@ -43,6 +46,9 @@ struct ChannelSidebar: View, Equatable {
     var openVoiceChat: (ChannelID) -> Void = { _ in }
     var toggleCategory: (ChannelID) -> Void = { _ in }
     var openSurface: (GuildSurface) -> Void = { _ in }
+    /// The events panel — on its list, or on one event.
+    var openEvents: (GuildID, UInt64?) -> Void = { _, _ in }
+    var dismissLiveEvent: (UInt64) -> Void = { _ in }
     /// A secondary click on a conversation, with the row's own rect. Only the
     /// direct-message list passes one — see `SidebarChannelRow.openMenu`.
     var openMenu: (ChannelID, CGRect) -> Void = { _, _ in }
@@ -152,6 +158,8 @@ struct ChannelSidebar: View, Equatable {
                 namespace: selectionNamespace,
                 action: { openSurface(surface) }
             )
+        case .events(let events):
+            SidebarEventsRowView(row: events) { openEvents(events.guildID, nil) }
         case .category(let category):
             // A category only reaches here if it has no section of its own,
             // which the grouping above does not produce. Rendered anyway rather
@@ -307,6 +315,19 @@ struct ChannelSidebar: View, Equatable {
                     Color.clear
                         .frame(height: layout.listReserve)
                         .accessibilityHidden(true)
+                }
+
+                if let liveEvent {
+                    LiveEventCard(
+                        notice: liveEvent,
+                        open: { openEvents(liveEvent.guildID, liveEvent.eventID) },
+                        join: liveEvent.joinChannelID.map { channelID in
+                            { liveEvent.isJoined ? selectChannel(channelID) : joinVoice(channelID) }
+                        },
+                        dismiss: { dismissLiveEvent(liveEvent.eventID) }
+                    )
+                    .padding(.bottom, Spacing.base)
+                    .transition(.materialize)
                 }
 
                 ForEach(groups) { group in

@@ -159,6 +159,7 @@ extension AppModel {
                 decorationURL: cosmetics(of: user)?.avatarDecorationHash
                     .flatMap { CDN.avatarDecoration(hash: $0) },
                 isBot: user.isBot,
+                isVerifiedBot: user.flags.contains(.verifiedBot),
                 // **The tag the roster has always drawn, in the transcript at
                 // last.** `primaryGuildTag` and its badge were on the wire and
                 // read by two surfaces out of three: the member list and the
@@ -271,6 +272,7 @@ extension AppModel {
             structureRevision: channelIndex.structureRevision,
             roleRevision: roleRevision,
             expressionRevision: expressionRevision,
+            gameMentionRevision: gameMentionRevision,
             // A role's colour goes through the reader's role-colour settings
             // and the room's ink, both of which move this.
             presentationRevision: PresentationRevision.shared.value
@@ -283,12 +285,14 @@ extension AppModel {
         // cache compares.** A row that names a channel or a server has to be
         // rebuilt when either is renamed or its access moves — keyed on the
         // people alone, a renamed channel kept its old chip for the life of the
-        // cached row. All four only ever grow, so the weighted sum moves
+        // cached row. All five only ever grow, so the weighted sum moves
         // whenever any of them does.
         context.token = identityRevision &* 1_000_003
             &+ channelIndex.structureRevision &* 8_191
             &+ roleRevision &* 131
             &+ expressionRevision
+            &+ gameMentionRevision &* 524_287
+        context.gameNames = gameMentionNames
         context.currentGuildID = guildID
         // Shared, not copied: the table is memoized on the channel tree alone.
         let table = linkChannelTable()
@@ -430,6 +434,7 @@ struct MentionMemoKey: Hashable, Sendable {
     var roleRevision: UInt64
     /// Moves when a server is added, removed or renamed — the chips name them.
     var expressionRevision: UInt64
+    var gameMentionRevision: UInt64
     var presentationRevision: UInt64
 }
 

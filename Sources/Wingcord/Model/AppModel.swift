@@ -85,7 +85,23 @@ final class AppModel {
     /// Each server's scheduled events, from READY, `GUILD_CREATE` and the
     /// `GUILD_SCHEDULED_EVENT_*` dispatches — what the inbox's Events group is
     /// drawn from.
-    var scheduledEvents: [GuildID: [ScheduledEvent]] = [:]
+    var scheduledEvents: [GuildID: [ScheduledEvent]] = [:] {
+        // **Bumped by the table itself**, so no writer can forget to — the
+        // rail's memo keys on it for the event mark (§2).
+        didSet { scheduledEventsRevision &+= 1 }
+    }
+    /// Moves with every change to `scheduledEvents`.
+    private(set) var scheduledEventsRevision: UInt64 = 0
+    /// The reader's answers to events, by event: the series' and each date's.
+    var eventAnswers: [UInt64: EventAnswers] = [:]
+    /// How many people are interested, by event — the series' count and each
+    /// date's that has been asked about.
+    var eventCounts: [UInt64: ScheduledEventCounts] = [:]
+    /// The events panel, when it is open — see `EventsLayer`.
+    var eventsPanel: EventsPanelRequest?
+    /// The live-event notices the reader closed, for this session — Discord's
+    /// `LIVE_CHANNEL_NOTICE_HIDE`, which is not persisted either.
+    var dismissedEventNotices: Set<UInt64> = []
     /// Whether the account is on Discord's newer notification settings
     /// (`notification_settings.flags & 16`). It decides how a channel's unread
     /// setting resolves — see `AppModel.resolvedUnreadSetting(of:)`.
@@ -431,6 +447,24 @@ final class AppModel {
         case ready
         case reconnecting
         case failed(String)
+
+        /// The state once the socket reports it has started opening.
+        ///
+        /// **A reconnect is not a sign-in, and it must not become one.** The
+        /// socket announces `connecting` on every open — the first one and
+        /// every retry after a drop — and this used to turn `reconnecting`
+        /// into `connecting`. That one step took `showsWorkspace` false for
+        /// the length of every reconnect: the workspace went to opacity zero,
+        /// the sign-in screen came up over it, and the window's toolbar was
+        /// hidden and shown again inside an animated transaction, typically
+        /// while the Mac was waking and the window not on screen. A toolbar
+        /// that did not come back from that is the defect it was found by.
+        func onSocketOpening() -> ConnectionState {
+            switch self {
+            case .ready, .reconnecting: self
+            case .signedOut, .connecting, .failed: .connecting
+            }
+        }
     }
 
     var connectionState: ConnectionState = .signedOut
@@ -446,8 +480,15 @@ final class AppModel {
     /// Whose detail fetch is still in flight. Observed, so a card can show a
     /// skeleton while it waits and swap to the real thing when it lands.
     var profilesLoading: Set<UserID> = []
+    /// Whose profile route refused the last time it was asked — what Discord
+    /// keeps as the profile's `fetchError`, and what puts "Unable to load
+    /// parts of profile" on their card.
+    var profileFetchFailures: Set<UserID> = []
     /// The emoji or sticker whose card is open.
     var expressionInfoRequest: ExpressionInfoRequest?
+    /// The role whose holders are listed over the window — a role mention
+    /// that was clicked. See `RoleMembersLayer`.
+    var roleMembersRequest: RoleMembersRequest?
     /// The media the lightbox is showing, and the rest of its message's.
     ///
     /// **A snapshot, not a pointer back into the store.** The channel it came
@@ -750,6 +791,26 @@ final class AppModel {
     /// Games, by application id. Shared across every board and every game
     /// profile in the session.
     var games: [ApplicationID: Game] = [:]
+    /// The names `<@$id>` mentions draw, kept apart from `games` so a board
+    /// loading its fifty does not discard every laid-out row: only a game a
+    /// message names moves the mention table's key.
+    var gameMentionNames: [ApplicationID: String] = [:] {
+        didSet { gameMentionRevision &+= 1 }
+    }
+    private(set) var gameMentionRevision: UInt64 = 0
+    /// `@game`'s search, by query — see `GameMentionSearch`.
+    var gameSearch = GameMentionSearch()
+    /// The reader's activity feed — the member list's Activity section.
+    var activityFeed = ActivityFeedState()
+    /// The section unfolded past its three cards. Discord keeps it for the
+    /// list's life; here, for the session's.
+    var activityExpanded = false
+    /// A card's popout, open beside it.
+    var activityCardRequest: ActivityCardRequest?
+    /// The Activity heading's menu, open at its gear.
+    var activityMenuAnchor: CGRect?
+    var isActivityAboutShown = false
+    @ObservationIgnored var activityBlockCache: (key: ActivityBlockKey, value: MemberActivityBlock?)?
     /// Widget templates, by the application they belong to. Seeded in bulk from
     /// `/widget-configs/featured` and topped up per application for the ones
     /// Discord has not featured.

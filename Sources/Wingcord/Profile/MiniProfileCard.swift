@@ -155,6 +155,11 @@ struct MiniProfileCard: View {
             if profile.isProfilePrivate { PrivateProfileBanner() }
             banner
             identity
+            if profile.isPartlyUnavailable, !profile.isLoading {
+                PartialProfileNotice(retry: nil)
+                    .padding(.horizontal, Spacing.margin)
+                    .padding(.bottom, Spacing.snug)
+            }
             if !profile.isLoading { detail }
 
             if form == .embed {
@@ -590,7 +595,7 @@ struct MiniProfileCard: View {
                 .pointerStyle(.link)
                 .onHover { isHoveringName = $0 }
                 if profile.isBot {
-                    TagChip(text: "APP")
+                    TagChip(text: AppBadge.label(isVerified: profile.isVerifiedBot))
                 }
                 Spacer(minLength: 0)
             }
@@ -671,7 +676,11 @@ struct MiniProfileCard: View {
     @ViewBuilder
     private var detail: some View {
         if !profile.mutualServers.isEmpty || !profile.mutualFriends.isEmpty {
-            MutualsRow(servers: profile.mutualServers, friends: profile.mutualFriends)
+            MutualsRow(
+                servers: profile.mutualServers,
+                friends: profile.mutualFriends,
+                openServer: { model.openMutualServer($0) }
+            )
                 .padding(.horizontal, Spacing.margin)
                 .padding(.bottom, Spacing.snug)
         }

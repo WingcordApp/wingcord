@@ -265,4 +265,17 @@ struct TimelineScrollDecisionTests {
             viewport: 40, topInset: 52, bottomInset: 68
         ) == 0)
     }
+
+    /// Discord's `justify-content: flex-end`: what a short channel leaves over
+    /// goes above its rows, so they sit on the composer.
+    @Test("A short channel's leftover goes above its rows; a long one has none")
+    func leadingSpaceSitsShortChannelsOnTheComposer() {
+        // 800 of window, 52 of toolbar, 92 of composer: a 656 band.
+        #expect(TimelineViewportPolicy.leadingSpace(
+            rowsHeight: 200, viewport: 800, topInset: 52, bottomInset: 92
+        ) == 456)
+        #expect(TimelineViewportPolicy.leadingSpace(
+            rowsHeight: 2_000, viewport: 800, topInset: 52, bottomInset: 92
+        ) == 0)
+    }
 }

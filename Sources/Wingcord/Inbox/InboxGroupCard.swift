@@ -73,7 +73,8 @@ struct InboxGroupCard: View {
                 // An Events group opens the server's events, which is where
                 // Discord's own goes.
                 if let guildID = group.eventsGuildID {
-                    ServerSettingsWindow.open(guildID, section: .events)
+                    model.closeInbox()
+                    model.openEvents(inGuild: guildID)
                 } else {
                     model.openInboxChannel(group.channelID)
                 }
@@ -188,29 +189,18 @@ struct InboxGroupCard: View {
 
     // MARK: The events
 
-    /// A server's new events, each on a line of its own: what, and when.
+    /// A server's new events, each on a line of its own: what, and when. A
+    /// line opens its event.
     private var events: some View {
         VStack(alignment: .leading, spacing: 0) {
             ForEach(group.events, id: \.id) { event in
-                HStack(alignment: .firstTextBaseline, spacing: Spacing.base) {
-                    Image(systemName: "calendar")
-                        .font(.system(size: 11, weight: .semibold))
-                        .foregroundStyle(Ink.tertiary)
-                        .accessibilityHidden(true)
-                    VStack(alignment: .leading, spacing: 1) {
-                        Text(event.name)
-                            .font(.system(.subheadline, weight: .semibold))
-                            .foregroundStyle(Ink.primary)
-                            .lineLimit(1)
-                        Text(event.startsAt.formatted(date: .abbreviated, time: .shortened))
-                            .font(.system(.caption))
-                            .foregroundStyle(Ink.secondary)
-                    }
-                    Spacer(minLength: 0)
+                Button {
+                    model.closeInbox()
+                    model.openEvents(inGuild: event.guildID, event: event.id)
+                } label: {
+                    InboxEventLine(event: event)
                 }
-                .padding(.horizontal, Spacing.snug)
-                .padding(.vertical, Spacing.tight + 2)
-                .accessibilityElement(children: .combine)
+                .buttonStyle(.plain)
             }
         }
         .padding(.vertical, Spacing.tight)
@@ -585,4 +575,46 @@ struct InboxMessageRow: View {
 private struct InboxGroupLoad: Hashable {
     var channelID: ChannelID
     var isCollapsed: Bool
+}
+
+/// One new event in an Events group: what, and when, lit under the pointer.
+private struct InboxEventLine: View {
+    var event: ScheduledEvent
+
+    @Environment(\.motion) private var motion
+    @State private var isHovering = false
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline, spacing: Spacing.base) {
+            Image(systemName: "calendar")
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(Ink.tertiary)
+                .accessibilityHidden(true)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(event.name)
+                    .font(.system(.subheadline, weight: .semibold))
+                    .foregroundStyle(Ink.primary)
+                    .lineLimit(1)
+                Text(event.startsAt.formatted(date: .abbreviated, time: .shortened))
+                    .font(.system(.caption))
+                    .foregroundStyle(Ink.secondary)
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, Spacing.snug)
+        .padding(.vertical, Spacing.tight + 2)
+        .background {
+            if isHovering {
+                Rectangle().fill(Palette.hoverFill)
+            }
+        }
+        .contentShape(.rect)
+        .onHover { hovering in
+            guard isHovering != hovering else { return }
+            isHovering = hovering
+        }
+        .animation(motion.fadeQuick, value: isHovering)
+        .accessibilityElement(children: .combine)
+        .accessibilityAddTraits(.isButton)
+    }
 }

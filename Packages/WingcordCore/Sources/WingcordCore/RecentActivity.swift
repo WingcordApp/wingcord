@@ -133,13 +133,13 @@ public struct RecentActivity: Hashable, Sendable, Identifiable {
 
     /// One chip on a row.
     ///
-    /// **Only the trait types a capture named.** Eight of them appear across
-    /// twenty-six entries — `1, 2, 3, 4, 6, 8, 9, 10, 11, 12` — and the ones
-    /// left over are decoded as nothing rather than guessed at, because a chip
-    /// with the wrong words in it is worse than a chip that is missing. Types
-    /// `5` and `7` have never been captured; one of them is the "Returning
-    /// after a month" chip Discord draws, and it stays undrawn until a capture
-    /// says which.
+    /// **The trait types a capture named, and the two Discord's bundle
+    /// names.** Ten appear across the captures — `1, 2, 3, 4, 6, 8, 9, 10,
+    /// 11, 12`. Types `5` and `7` have not been captured, but Discord's own
+    /// enum (`974690`) names them — `RESURRECTED` and `NEW_RELEASE` — and its
+    /// card reads `5`'s `resurrected_last_played` as "Returning after a
+    /// month" (`583846`). Anything else decodes as nothing, because a chip
+    /// with the wrong words in it is worse than a chip that is missing.
     public enum Trait: Hashable, Sendable {
         /// `{"type": 1, "first_time": true}`.
         case newPlayer
@@ -154,6 +154,12 @@ public struct RecentActivity: Hashable, Sendable, Identifiable {
         case streak(days: Int)
         /// `{"type": 9, "trending": 1}`.
         case trending
+        /// `{"type": 5, "resurrected_last_played": …}` — back after a while
+        /// away, and when they last played before that.
+        case returning(lastPlayed: Date)
+        /// `{"type": 12, "count": 130}` — how many tracks this week, on a top
+        /// artist.
+        case weeklyCount(Int)
 
         /// The chip's words, or nil for a trait that is a *state* rather than a
         /// label — `live` colours the row's timestamp and prints nothing of its
@@ -164,8 +170,22 @@ public struct RecentActivity: Hashable, Sendable, Identifiable {
             case .marathon: "Marathon"
             case .streak(let days): "\(days)x Streak"
             case .trending: "Trending"
-            case .duration, .live: nil
+            case .returning(let lastPlayed): Self.returningLabel(since: lastPlayed, now: .now)
+            case .duration, .live, .weeklyCount: nil
             }
+        }
+
+        /// Discord's "Returning after 2 months" (`583846`'s `L`): months, or
+        /// weeks under a month, or days under a week.
+        public static func returningLabel(since lastPlayed: Date, now: Date) -> String {
+            let calendar = Calendar(identifier: .gregorian)
+            let parts = calendar.dateComponents([.month, .day], from: lastPlayed, to: now)
+            let months = max(parts.month ?? 0, 0)
+            let days = max(parts.day ?? 0, 0)
+            func count(_ value: Int, _ unit: String) -> String { "\(value) \(unit)\(value == 1 ? "" : "s")" }
+            if months > 0 { return "Returning after \(count(months, "month"))" }
+            if days >= 7 { return "Returning after \(count(days / 7, "week"))" }
+            return "Returning after \(count(days, "day"))"
         }
 
         /// The mark in front of those words.
@@ -175,7 +195,8 @@ public struct RecentActivity: Hashable, Sendable, Identifiable {
             case .marathon: "flame.fill"
             case .streak: "bolt.fill"
             case .trending: "chart.line.uptrend.xyaxis"
-            case .duration, .live: nil
+            case .returning: "arrow.clockwise"
+            case .duration, .live, .weeklyCount: nil
             }
         }
     }

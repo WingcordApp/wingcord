@@ -40,6 +40,25 @@ nonisolated enum TimelineViewportPolicy {
         max(0, viewport - max(0, topInset) - max(0, bottomInset))
     }
 
+    /// The empty space above the first row.
+    ///
+    /// **A channel too short to fill its window sits on the composer**, the
+    /// way Discord's does (`.scrollerContent { justify-content: flex-end;
+    /// min-height: 100% }`): the leftover goes above the content, not below it.
+    /// The transcript used to start at the top and leave the leftover between
+    /// the last message and the composer — the "space between the composer and
+    /// the messages", and the channel header stranded at the top of an empty
+    /// channel. Zero once the rows fill the band, so nothing changes for a
+    /// channel long enough to scroll.
+    static func leadingSpace(
+        rowsHeight: CGFloat,
+        viewport: CGFloat,
+        topInset: CGFloat,
+        bottomInset: CGFloat
+    ) -> CGFloat {
+        max(0, readableHeight(viewport: viewport, topInset: topInset, bottomInset: bottomInset) - rowsHeight)
+    }
+
     static func geometry(
         viewport rawViewport: CGRect,
         documentHeight: CGFloat,

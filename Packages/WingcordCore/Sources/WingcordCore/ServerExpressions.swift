@@ -205,15 +205,20 @@ public struct GameSummary: Hashable, Sendable, Identifiable {
     public var id: ApplicationID
     public var name: String
     public var iconHash: String?
+    /// A picture named by a whole address rather than a hash — the
+    /// autocomplete's `{"type":"url"}`, which is how a mobile game's store art
+    /// arrives.
+    public var externalIconURL: URL?
 
-    public init(id: ApplicationID, name: String, iconHash: String? = nil) {
+    public init(id: ApplicationID, name: String, iconHash: String? = nil, externalIconURL: URL? = nil) {
         self.id = id
         self.name = name
         self.iconHash = iconHash
+        self.externalIconURL = externalIconURL
     }
 
     /// The cover, at the size the grid draws it.
     public var iconURL: URL? {
-        iconHash.flatMap { CDN.applicationIcon(id: id, hash: $0, side: 72) }
+        iconHash.flatMap { CDN.applicationIcon(id: id, hash: $0, side: 72) } ?? externalIconURL
     }
 }

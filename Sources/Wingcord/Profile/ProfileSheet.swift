@@ -504,7 +504,7 @@ struct ProfileSheet: View {
                         .font(.system(.subheadline, weight: .semibold))
                         .foregroundStyle(InkColor.primary)
                     ProfileSlab(ground: ground) {
-                        MutualServersList(servers: profile.mutualServers)
+                        MutualServersList(servers: profile.mutualServers) { model.openMutualServer($0) }
                     }
                 }
             }

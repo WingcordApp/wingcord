@@ -24,6 +24,13 @@ struct MemberListView: NSViewRepresentable {
     /// Whether a floating layer is drawn over the roster. See
     /// `MemberListCanvas.apply(isCovered:)`.
     var isCovered: Bool = false
+    /// The Activity section at the head of the list, or nil for none.
+    var activity: MemberActivityBlock?
+    var openActivity: (String, CGRect) -> Void = { _, _ in }
+    var toggleActivity: () -> Void = {}
+    var activityMenu: (CGRect) -> Void = { _ in }
+    /// Cards that stayed on screen long enough to count as seen.
+    var noteActivityShown: ([String]) -> Void = { _ in }
 
     @Environment(\.motion) private var motion
 
@@ -39,6 +46,11 @@ struct MemberListView: NSViewRepresentable {
         context.coordinator.openProfile = openProfile
         context.coordinator.openMenu = openMenu
         context.coordinator.showRows = showRows
+        context.coordinator.openActivity = openActivity
+        context.coordinator.toggleActivity = toggleActivity
+        context.coordinator.activityMenu = activityMenu
+        context.coordinator.noteActivityShown = noteActivityShown
+        context.coordinator.update(activity: activity)
         // The one environment value a drawn canvas cannot read for itself. See
         // `MemberListCanvas.animatesPlate`.
         context.coordinator.setAnimatesPlate(!motion.reduceMotion)
@@ -78,11 +90,29 @@ final class MemberListCoordinator: NSObject {
     var openProfile: (UserID, CGRect) -> Void = { _, _ in }
     var openMenu: (UserID, CGRect) -> Void = { _, _ in }
     var showRows: (ClosedRange<Int>, Int) -> Void = { _, _ in }
+    var openActivity: (String, CGRect) -> Void = { _, _ in }
+    var toggleActivity: () -> Void = {}
+    var activityMenu: (CGRect) -> Void = { _ in }
+    var noteActivityShown: ([String]) -> Void = { _ in }
+
+    private var activity: MemberActivityBlock?
+    /// Waits three seconds of a section on screen before counting its cards
+    /// as seen — Discord's `eg` (`946228`).
+    private var impressionTask: Task<Void, Never>?
 
     func makeScrollView() -> NSScrollView {
         let canvas = MemberListCanvas(style: MessageTextStyle.current())
         canvas.onOpenProfile = { [weak self] userID, frame in
             self?.openProfile(userID, frame)
+        }
+        canvas.onOpenActivity = { [weak self] id, frame in
+            self?.openActivity(id, frame)
+        }
+        canvas.onToggleActivity = { [weak self] in
+            self?.toggleActivity()
+        }
+        canvas.onActivityMenu = { [weak self] frame in
+            self?.activityMenu(frame)
         }
         canvas.onOpenMenu = { [weak self] userID, frame in
             self?.openMenu(userID, frame)
@@ -184,6 +214,8 @@ final class MemberListCoordinator: NSObject {
         isTornDown = true
         prefetchTask?.cancel()
         prefetchTask = nil
+        impressionTask?.cancel()
+        impressionTask = nil
         liveScrollTimeout?.cancel()
         liveScrollTimeout = nil
         rowReport?.cancel()
@@ -199,6 +231,9 @@ final class MemberListCoordinator: NSObject {
         canvas?.tearDown()
         canvas?.onOpenProfile = nil
         canvas?.onOpenMenu = nil
+        canvas?.onOpenActivity = nil
+        canvas?.onToggleActivity = nil
+        canvas?.onActivityMenu = nil
         canvas?.onWidthChange = nil
         canvas?.onHoveredRowChange = nil
         canvas = nil
@@ -217,6 +252,31 @@ final class MemberListCoordinator: NSObject {
 
     func setCovered(_ isCovered: Bool) {
         canvas?.apply(isCovered: isCovered)
+    }
+
+    /// Takes a new Activity section. Its height moves every row below it, so
+    /// a change of height lays the list out again.
+    func update(activity: MemberActivityBlock?) {
+        guard !isTornDown, activity != self.activity else { return }
+        let heightChanged = (activity?.height ?? 0) != (self.activity?.height ?? 0)
+        let shownBefore = Set(self.activity?.cards.map(\.id) ?? [])
+        self.activity = activity
+        canvas?.apply(activity: activity)
+        if heightChanged { applyRows() } else { schedulePrefetch() }
+        let shown = activity?.cards.map(\.id) ?? []
+        if Set(shown) != shownBefore { countImpressions(of: shown) }
+    }
+
+    private func countImpressions(of ids: [String]) {
+        impressionTask?.cancel()
+        guard !ids.isEmpty else { return }
+        impressionTask = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(3))
+            guard !Task.isCancelled, let self, !self.isTornDown,
+                  self.canvas?.window?.isKeyWindow == true
+            else { return }
+            self.noteActivityShown(ids)
+        }
     }
 
     func update(roster: Roster, presentationRevision: UInt64, topInset: CGFloat) {
@@ -465,6 +525,21 @@ final class MemberListCoordinator: NSObject {
                     if seen.insert(key).inserted, ImageStore.shared.cached(key) == nil {
                         requests.append((key, .thumbnail))
                     }
+                }
+            }
+        }
+        // The Activity cards' faces and pictures, at the painter's sizes.
+        for card in canvas.activity?.cards ?? [] {
+            let faceKeys = card.faces.compactMap(\.url).map {
+                ImageStore.Key(url: $0, maximumPixelSize: Int((MemberActivityGeometry.face * scale).rounded(.up)))
+            }
+            for key in faceKeys where seen.insert(key).inserted && ImageStore.shared.cached(key) == nil {
+                requests.append((key, .thumbnail))
+            }
+            if let url = card.artURL {
+                let key = ImageStore.Key(url: url, maximumPixelSize: Int((MemberActivityGeometry.art * scale).rounded(.up)))
+                if seen.insert(key).inserted, ImageStore.shared.cached(key, bucket: .thumbnail) == nil {
+                    requests.append((key, .thumbnail))
                 }
             }
         }

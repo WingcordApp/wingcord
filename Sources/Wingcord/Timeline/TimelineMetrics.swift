@@ -105,6 +105,8 @@ nonisolated enum TimelineMetrics {
     static let conversationStartGap: CGFloat = 16
     static let conversationStartLineGap: CGFloat = 6
     static let conversationStartBottomPadding: CGFloat = 20
+    /// Above the Edit Channel button, where the reader may manage the channel.
+    static let conversationStartButtonGap: CGFloat = 16
     /// One placeholder group in the history runway.
     static let skeletonHeight: CGFloat = 56
     /// The quiet "still loading" line shown before the first page lands.

@@ -18,6 +18,8 @@ struct ExpressionInfoCard: View {
     /// Opens the composer's sticker picker at a pack. Nil where there is no
     /// composer to open — the button is then absent rather than inert.
     var openStickerPack: ((String) -> Void)? = nil
+    /// Previews a discoverable source server — see `ExpressionSourceRow`.
+    var previewGuild: ((GuildID) -> Void)? = nil
 
     private static let width: CGFloat = 300
     private static let artSide: CGFloat = 48
@@ -65,7 +67,7 @@ struct ExpressionInfoCard: View {
 
             if let source = info.source {
                 Divider().opacity(0.35)
-                ExpressionSourceRow(source: source, openGuild: openGuild)
+                ExpressionSourceRow(source: source, openGuild: openGuild, previewGuild: previewGuild)
             }
         }
         .frame(width: Self.width)
@@ -202,6 +204,10 @@ private struct PackSection: View {
 struct ExpressionSourceRow: View {
     var source: ExpressionInfo.Source
     var openGuild: (GuildID) -> Void
+    /// Looks inside a discoverable server the reader is not in — Discord's
+    /// preview, captured in `pressing on emoji join server preview mode.har`
+    /// as the tag card's Join. Nil where the surface cannot open one.
+    var previewGuild: ((GuildID) -> Void)? = nil
 
     @Environment(\.motion) private var motion
     @State private var isHovering = false
@@ -229,6 +235,17 @@ struct ExpressionSourceRow: View {
                     }
                     .animation(motion.hover, value: isHovering)
                     .accessibilityHint("Open this server")
+            } else if let guildID = joinableGuildID, let previewGuild {
+                // A discoverable server is a way in too: its row previews it,
+                // as Discord's does (`639245`).
+                Button { previewGuild(guildID) } label: { row }
+                    .buttonStyle(.plain)
+                    .onHover { hovering in
+                        guard isHovering != hovering else { return }
+                        isHovering = hovering
+                    }
+                    .animation(motion.hover, value: isHovering)
+                    .accessibilityHint("Preview this server")
             } else {
                 row
             }
@@ -244,10 +261,32 @@ struct ExpressionSourceRow: View {
             if !source.sample.isEmpty {
                 sampleStrip
             }
+
+            // Discord's Join Server (`450707`'s `JOIN_GUILD`): a discoverable
+            // server the reader is not in. It opens the server to look at, the
+            // tag card's Join.
+            if let guildID = joinableGuildID, let previewGuild {
+                Button { previewGuild(guildID) } label: {
+                    Label("Join Server", systemImage: "plus")
+                        .font(.system(.subheadline, weight: .semibold))
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, Spacing.base)
+                        .contentShape(.rect)
+                }
+                .buttonStyle(.glass)
+                .padding(.top, Spacing.tight)
+            }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.horizontal, Spacing.margin)
         .padding(.vertical, Spacing.snug)
+    }
+
+    /// The server a Join can open: one the reader is not in, that is open to
+    /// be looked at.
+    private var joinableGuildID: GuildID? {
+        guard !source.isJoined, source.isDiscoverable else { return nil }
+        return source.guildID
     }
 
     private var heading: String {
@@ -257,14 +296,13 @@ struct ExpressionSourceRow: View {
 
     private var row: some View {
         HStack(spacing: Spacing.base) {
-            RemoteImage(url: source.iconURL, side: Metrics.avatarMessage) {
+            AnimatedPicture(url: source.iconURL, side: Metrics.avatarMessage, contentMode: .fill) {
                 Text(source.monogram)
                     .font(.system(size: 11, weight: .bold))
                     .foregroundStyle(Ink.secondary)
                     .frame(width: Metrics.avatarMessage, height: Metrics.avatarMessage)
                     .background(Palette.surfaceRaised)
             }
-            .frame(width: Metrics.avatarMessage, height: Metrics.avatarMessage)
             .clipShape(.rect(cornerRadius: Metrics.avatarMessage * 0.3, style: .continuous))
 
             VStack(alignment: .leading, spacing: 1) {
@@ -327,12 +365,11 @@ struct ExpressionSourceRow: View {
             ForEach(source.sample) { item in
                 // A Lottie sticker has no bitmap on the CDN, so its poster is
                 // the first frame of a rasterised strip — which `RemoteImage`
-                // already routes by extension.
-                RemoteImage(url: item.url, side: Self.sampleSide, bucket: .thumbnail) {
+                // already routes by extension. An animated emoji plays, as it
+                // does in the message it came from.
+                AnimatedPicture(url: item.url, side: Self.sampleSide) {
                     Color.clear
                 }
-                .aspectRatio(contentMode: .fit)
-                .frame(width: Self.sampleSide, height: Self.sampleSide)
             }
             Spacer(minLength: 0)
         }

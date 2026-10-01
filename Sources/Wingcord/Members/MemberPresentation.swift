@@ -80,6 +80,8 @@ struct MemberEntry: Hashable, Sendable, Identifiable {
     /// status, as Discord draws it. Nil collapses the row to one line.
     var activityLine: ActivityStatusLine?
     var isBot: Bool
+    /// A verified app's badge carries a check — `AppBadge`.
+    var isVerifiedBot = false
     /// The clan / guild tag chip beside the name.
     var tag: String?
     /// The tag's guild badge, drawn inside the chip. A tag without it is only

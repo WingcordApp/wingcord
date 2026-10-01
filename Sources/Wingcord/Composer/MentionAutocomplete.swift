@@ -24,10 +24,16 @@ nonisolated enum MentionAutocomplete {
     enum Kind: Hashable, Sendable {
         case member
         case channel
+        /// After `@time ` — a moment, read from what follows. Discord's
+        /// `timestampMentionInput`.
+        case time
+        /// After `@game ` — a game, searched for by what follows. Discord's
+        /// `gameMentionInput`.
+        case game
 
         var sigil: Character {
             switch self {
-            case .member: "@"
+            case .member, .time, .game: "@"
             case .channel: "#"
             }
         }
@@ -60,8 +66,17 @@ nonisolated enum MentionAutocomplete {
     /// rather than reading, and typing one more letter is faster.
     static let limit = 10
 
+    /// The two words that open an input of their own, and what each opens.
+    ///
+    /// **Picking `@time` or `@game` writes the word and a space**, and typing
+    /// them does the same — Discord's `autoInsertOnSpace` — so from there on
+    /// everything up to the end of the line is what is being looked for, spaces
+    /// and all: "tomorrow at 5pm", "grand theft auto".
+    static let inputWords: [(word: String, kind: Kind)] = [("time", .time), ("game", .game)]
+
     /// What is being completed right now, or nil.
     static func trigger(in text: String) -> Trigger? {
+        if let input = inputTrigger(in: text) { return input }
         // The later of the two sigils wins, because the caret is at the end of
         // the text and whichever was typed last is the one being answered.
         let candidates = [
@@ -88,6 +103,43 @@ nonisolated enum MentionAutocomplete {
         )
     }
 
+    /// `@time …` or `@game …` being filled in. The query is kept as typed —
+    /// the time is read by a detector, and the list repeats it back.
+    private static func inputTrigger(in text: String) -> Trigger? {
+        guard let sigil = text.lastIndex(of: "@") else { return nil }
+        if sigil > text.startIndex {
+            let before = text[text.index(before: sigil)]
+            guard before.isWhitespace || before.isNewline else { return nil }
+        }
+        let rest = text[text.index(after: sigil)...]
+        for (word, kind) in inputWords {
+            guard rest.count > word.count,
+                  rest.prefix(word.count).lowercased() == word,
+                  rest.dropFirst(word.count).first == " "
+            else { continue }
+            let query = rest.dropFirst(word.count + 1)
+            guard !query.contains(where: \.isNewline) else { return nil }
+            return Trigger(
+                kind: kind,
+                query: String(query.drop(while: { $0 == " " })),
+                sigilOffset: text.distance(from: text.startIndex, to: sigil)
+            )
+        }
+        return nil
+    }
+
+    /// Whether every character of `query` appears in `name`, in order —
+    /// Discord's loose match for roles and the words `everyone` and `here`, so
+    /// `nr` finds "new role". Both sides are expected lowercased.
+    static func looselyMatches(_ query: String, _ name: String) -> Bool {
+        var remaining = name[...]
+        for wanted in query {
+            guard let index = remaining.firstIndex(of: wanted) else { return false }
+            remaining = remaining[remaining.index(after: index)...]
+        }
+        return true
+    }
+
     /// The text with the trailing sigil and its token replaced.
     ///
     /// A trailing space follows, because a mention is the end of a word — the
@@ -111,6 +163,8 @@ struct MentionCandidate: Hashable, Sendable, Identifiable {
         case avatar(URL?, monogram: String)
         /// A channel's own glyph — `#`, a speaker, a megaphone.
         case symbol(String)
+        /// A game's icon, or a controller where it has none.
+        case picture(URL?)
     }
 
     var id: String
@@ -124,4 +178,20 @@ struct MentionCandidate: Hashable, Sendable, Identifiable {
     var token: String
     /// Their name's colour, where a role gave them one.
     var nameColor: UInt32?
+    /// Which of Discord's three groups the row is in — people, then the
+    /// mentions that are not a person (`@everyone`, `@here`, `@game`, `@time`),
+    /// then roles. The list draws a rule where the group changes, as Discord's
+    /// does.
+    var group: Group = .person
+    /// Whether picking the row finishes the mention, or opens the input it
+    /// names — `@time` and `@game` write their word and wait.
+    var opensInput = false
+
+    enum Group: Hashable, Sendable {
+        case person
+        case global
+        case role
+        /// One reading in `@time`'s list, or `@game`'s results.
+        case section(Int)
+    }
 }

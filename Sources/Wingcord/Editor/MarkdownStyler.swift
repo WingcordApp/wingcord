@@ -46,20 +46,86 @@ struct MarkdownStyler {
         [.font: font, .foregroundColor: color]
     }
 
-    func apply(to storage: NSTextStorage) {
+    /// Styles the text, and — given a way to name them — turns its mention
+    /// tokens into chips: each token's own characters go clear and take
+    /// exactly the chip's width, and the placements come back for the text
+    /// view to paint over. See `EditorMention`.
+    @discardableResult
+    func apply(
+        to storage: NSTextStorage,
+        chips resolve: ((EditorMention) -> EditorChip?)? = nil
+    ) -> [EditorChipPlacement] {
         let full = NSRange(location: 0, length: storage.length)
         storage.beginEditing()
         defer { storage.endEditing() }
         storage.setAttributes(baseAttributes, range: full)
-        guard storage.length > 0 else { return }
+        guard storage.length > 0 else { return [] }
         let text = storage.string
         let spans = MarkdownEditorSyntax.spans(in: text)
-        guard !spans.isEmpty else { return }
         let offsets = Self.utf16Offsets(of: text)
         func range(_ bytes: Range<Int>) -> NSRange {
             let lower = offsets[bytes.lowerBound], upper = offsets[bytes.upperBound]
             return NSRange(location: lower, length: upper - lower)
         }
+        style(spans, in: storage, range: range)
+
+        guard let resolve else { return [] }
+        // Code writes a token as itself, in Discord's box as in a message.
+        let code = spans.compactMap { span -> NSRange? in
+            switch span.kind {
+            case .code, .codeBlock: range(span.open.lowerBound ..< span.close.upperBound)
+            default: nil
+            }
+        }
+        var placements: [EditorChipPlacement] = []
+        for (tokenRange, mention) in EditorMention.scan(text, excluding: code) {
+            guard let chip = resolve(mention) else { continue }
+            let placement = EditorChipPlacement(range: tokenRange, chip: chip)
+            reserve(placement, in: storage)
+            placements.append(placement)
+        }
+        return placements
+    }
+
+    /// The air either side of a chip's words — the transcript's.
+    static let chipPadding = MessageTextStyle.chipPadding
+
+    /// How wide a chip with these words is.
+    func chipWidth(_ label: String) -> CGFloat {
+        ceil((label as NSString).size(withAttributes: [.font: font]).width) + 2 * Self.chipPadding
+    }
+
+    /// The token's characters, clear, taking exactly the chip's width: the
+    /// first keeps the line's font, so a line that is nothing but a chip is
+    /// still a line tall, the rest take next to no room, and the last carries
+    /// the difference as kerning.
+    private func reserve(_ placement: EditorChipPlacement, in storage: NSTextStorage) {
+        let range = placement.range
+        guard range.length >= 2 else { return }
+        storage.setAttributes(
+            [.font: font, .foregroundColor: NSColor.clear],
+            range: NSRange(location: range.location, length: 1)
+        )
+        storage.setAttributes(
+            [.font: Self.hidden, .foregroundColor: NSColor.clear],
+            range: NSRange(location: range.location + 1, length: range.length - 1)
+        )
+        let used = storage.attributedSubstring(from: range).size().width
+        storage.addAttribute(
+            .kern,
+            value: chipWidth(placement.chip.label) - used,
+            range: NSRange(location: NSMaxRange(range) - 1, length: 1)
+        )
+    }
+
+    private static let hidden = NSFont.systemFont(ofSize: 0.01)
+
+    private func style(
+        _ spans: [MarkdownSpan],
+        in storage: NSTextStorage,
+        range: (Range<Int>) -> NSRange
+    ) {
+        guard !spans.isEmpty else { return }
 
         // What the markers enclose first, so nested styles add up; the markers
         // over it after.

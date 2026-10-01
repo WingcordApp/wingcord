@@ -79,6 +79,16 @@ extension AppModel {
         sessionController.previewGuild(guildID, origin: .guildProfile, location: nil, source: nil)
     }
 
+    /// Looks at a discoverable server from an emoji's card — the same preview
+    /// as the tag card's Join, captured again in `pressing on emoji join
+    /// server preview mode.har`: `PUT …/members/@me?lurker=true`, body `{}`,
+    /// `x-context-properties` `{}`.
+    func previewFromExpression(_ guildID: GuildID) {
+        expressionInfoRequest = nil
+        profileRequest = nil
+        sessionController.previewGuild(guildID, origin: .guildProfile, location: nil, source: nil)
+    }
+
     /// Joins the server being previewed. The reader stays where they are.
     func joinPreviewedGuild() {
         sessionController.joinPreviewedGuild()

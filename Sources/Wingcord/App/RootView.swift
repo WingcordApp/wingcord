@@ -11,6 +11,12 @@ import WingcordCore
 struct RootView: View {
     @Environment(AppModel.self) private var model
 
+    /// Whether the window's toolbar is up. The comment on the modifier that
+    /// reads it gives the three reasons it is not.
+    private var showsToolbar: Bool {
+        model.showsWorkspace && !model.isColumnTakenOver && !model.isFullProfileShown
+    }
+
     var body: some View {
         MainWindow()
             .opacity(model.showsWorkspace ? 1 : 0)
@@ -48,11 +54,19 @@ struct RootView: View {
             // See `AppModel.isFullProfileShown`: that surface dims the window
             // and the toolbar is the one strip a layer in the content view
             // cannot dim.
-            .toolbarVisibility(
-                model.showsWorkspace && !model.isColumnTakenOver && !model.isFullProfileShown
-                    ? .automatic : .hidden,
-                for: .windowToolbar
-            )
+            .toolbarVisibility(showsToolbar ? .automatic : .hidden, for: .windowToolbar)
+            // **Every change is traced.** A toolbar that went missing in a long
+            // session is what this came from; the line names which of the
+            // three inputs moved, so the next report is a log read rather than
+            // a guess.
+            .onChange(of: showsToolbar) { _, shown in
+                DiagnosticLog.trace(
+                    "window",
+                    "toolbar \(shown ? "shown" : "hidden"): workspace=\(model.showsWorkspace) "
+                        + "takeover=\(model.isColumnTakenOver) fullProfile=\(model.isFullProfileShown) "
+                        + "connection=\(model.connectionState)"
+                )
+            }
             .animation(.easeOut(duration: 0.2), value: model.showsWorkspace)
             .animation(.easeOut(duration: 0.2), value: model.isColumnTakenOver)
             .animation(.easeOut(duration: 0.2), value: model.isFullProfileShown)

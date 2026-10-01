@@ -84,6 +84,8 @@ struct ComposerContainer: View {
             mentionQuery: mentionTrigger?.query ?? "",
             mentionCandidates: mentionCandidates,
             commitMention: commitMention,
+            mentionChip: { [channelID] in model.composerChip(for: $0, in: channelID) },
+            mentionChipRevision: model.composerChipRevision,
             onPick: { model.apply($0.pick, in: channelID) },
             onPickGIF: { gif in
                 // A GIF is sent as its URL, which every other client unfurls
@@ -127,6 +129,14 @@ struct ComposerContainer: View {
         ) { result in
             guard case .success(let urls) = result else { return }
             model.stageAttachments(urls, in: channelID)
+        }
+        // `@game`'s search, a beat after the typing stops — Discord's 200
+        // milliseconds — and once per query for the session.
+        .task(id: gameSearchKey) {
+            guard let gameSearchKey else { return }
+            try? await Task.sleep(for: .milliseconds(200))
+            guard !Task.isCancelled else { return }
+            await model.sessionController.searchGames(gameSearchKey)
         }
         .task(id: commandQuery == nil) {
             // Fetched the first time a `/` is typed in this channel, and never
@@ -322,8 +332,19 @@ struct ComposerContainer: View {
         return model.mentionCandidates(for: mentionTrigger, in: channelID)
     }
 
+    /// What `@game` is searching for, normalised as Discord keys its answers.
+    private var gameSearchKey: String? {
+        guard let mentionTrigger, mentionTrigger.kind == .game else { return nil }
+        return GameMentionSearch.normalized(mentionTrigger.query)
+    }
+
     private func commitMention(_ candidate: MentionCandidate) {
         guard let kind = mentionTrigger?.kind else { return }
+        // A picked game's name, so its chip — and the message once sent —
+        // read it at once rather than "unknown-game".
+        if kind == .game, let id = SessionController.gameMentionIDs(in: candidate.token).first {
+            model.gameMentionNames[id] = candidate.title
+        }
         model.mutateBox(channelID) { box in
             if let existing = box.editing?.text {
                 box.editing?.text = MentionAutocomplete.applying(

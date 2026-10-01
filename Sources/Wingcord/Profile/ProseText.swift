@@ -222,8 +222,22 @@ private struct ProseEmoji: View {
     /// nothing.
     private var playsFilm: Bool { plays && emoji.isAnimated }
 
-    var body: some View {
-        let art = ZStack {
+    /// The emoji itself: a standard one's glyph, or a custom one's picture.
+    ///
+    /// **A standard emoji is a segment too**, so a click on it opens its card
+    /// the way a custom one's does — Discord's flyout for a default emoji.
+    @ViewBuilder private var art: some View {
+        if emoji.id == nil {
+            Text(emoji.name)
+                .font(.system(size: side * 0.86))
+                .frame(width: side, height: side)
+        } else {
+            picture
+        }
+    }
+
+    private var picture: some View {
+        ZStack {
             RemoteImage(url: url, side: side) {
                 // The box is reserved either way, so a line does not reflow when
                 // the picture lands.
@@ -258,7 +272,9 @@ private struct ProseEmoji: View {
         .onChange(of: playsFilm) { _, plays in
             if !plays { isPlaying = false }
         }
+    }
 
+    var body: some View {
         if let onTap {
             Button { onTap(emoji) } label: { art.contentShape(.rect) }
                 .buttonStyle(.plain)
@@ -318,7 +334,23 @@ struct ProseSegment: Identifiable {
                 switch node {
                 case .text(let value):
                     for run in value.split(separator: " ", omittingEmptySubsequences: true) {
-                        word(String(run), style, destination)
+                        // A standard emoji leaves the word as a segment of its
+                        // own, so it can be clicked — but not out of a link,
+                        // where the whole run is the link.
+                        guard destination == nil, run.contains(where: \.isEmojiCluster) else {
+                            word(String(run), style, destination)
+                            continue
+                        }
+                        var letters = ""
+                        for character in run {
+                            if character.isEmojiCluster {
+                                if !letters.isEmpty { word(letters, style); letters = "" }
+                                emit(.emoji(EmojiRef(name: String(character))))
+                            } else {
+                                letters.append(character)
+                            }
+                        }
+                        if !letters.isEmpty { word(letters, style) }
                     }
                 case .styled(let inline, let children):
                     append(children, style: style.adding(inline), destination: destination)
@@ -351,6 +383,8 @@ struct ProseSegment: Identifiable {
                     word(name, style.asMention)
                 case .commandMention(let name, _):
                     word("/\(name)", style.asMention)
+                case .gameMention(let id):
+                    word(mentions?.gameNames[id] ?? "unknown-game", style.asMention)
                 case .staticRoute(let route, _):
                     // A place in a server, named as its chip names it.
                     for run in route.title.split(separator: " ") {
@@ -363,7 +397,7 @@ struct ProseSegment: Identifiable {
                 case .timestamp(let date, let timestampStyle):
                     // A moment in the reader's own zone and locale, which is why
                     // it is a node and not text.
-                    word(Self.format(date, style: timestampStyle), style.asMention)
+                    word(timestampStyle.format(date), style.asMention)
                 case .lineBreak:
                     breakLine()
                 }
@@ -401,25 +435,6 @@ struct ProseSegment: Identifiable {
         // The trailing break always leaves one empty line behind it.
         if lines.last?.isEmpty == true { lines.removeLast() }
         return lines
-    }
-
-    /// The same formatter vocabulary the transcript uses. Minute takes
-    /// `.twoDigits` — the default-digits form renders minute zero as a bare `0`,
-    /// so every time on the hour comes out as `22:0`.
-    private static func format(_ date: Date, style: TimestampStyle) -> String {
-        switch style {
-        case .shortTime: date.formatted(.dateTime.hour().minute(.twoDigits))
-        case .longTime: date.formatted(.dateTime.hour().minute(.twoDigits).second())
-        case .shortDate: date.formatted(.dateTime.day().month().year())
-        case .longDate: date.formatted(.dateTime.day().month(.wide).year())
-        case .shortDateTime:
-            date.formatted(.dateTime.day().month().year().hour().minute(.twoDigits))
-        case .longDateTime:
-            date.formatted(
-                .dateTime.weekday(.wide).day().month(.wide).year().hour().minute(.twoDigits)
-            )
-        case .relative: date.formatted(.relative(presentation: .named))
-        }
     }
 }
 

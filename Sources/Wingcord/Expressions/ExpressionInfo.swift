@@ -132,6 +132,9 @@ struct ExpressionInfo: Equatable, Sendable {
         /// Whether the reader is already in it, which decides whether the row
         /// is a destination or a statement.
         var isJoined: Bool
+        /// Open to be looked at from outside — `DISCOVERABLE` — which is what
+        /// offers Join Server for one the reader is not in.
+        var isDiscoverable = false
         /// Whether the source is still being fetched, so the card can say it is
         /// working rather than saying nothing.
         var isLoading: Bool = false

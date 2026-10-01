@@ -71,6 +71,10 @@ nonisolated struct InviteCardSlot: Sendable {
         var iconRect: CGRect
         /// A server's icon is a rounded square; a person's and a group's a circle.
         var iconIsCircle: Bool
+        /// An invite that is gone: Discord's red tile with an envelope in it in
+        /// place of an icon, and the title in the same red (`guildIconExpired`,
+        /// `inviteDestinationExpired`).
+        var isExpired: Bool
         var monogram: TimelineTextBlock
         var monogramOrigin: CGPoint
         var title: TimelineTextBlock
@@ -262,7 +266,7 @@ nonisolated enum InviteCardLayoutEngine {
         let iconURL = (profile.iconHash ?? card.iconHash).flatMap {
             CDN.guildIcon(guildID: guildID, hash: $0, side: iconSide)
         }
-        let monogram = block(
+        let monogram = centred(
             Guild.monogram(of: profile.name.isEmpty ? card.name : profile.name),
             font: NSFont.systemFont(ofSize: 22, weight: .medium),
             color: style.secondaryColor, width: iconSide, style: style
@@ -567,14 +571,19 @@ nonisolated enum InviteCardLayoutEngine {
         let textX = iconRect.maxX + gutter
         let textWidth = max(40, (card == nil ? contentRight : buttonRect.minX - gutter) - textX)
 
-        let titleFont = NSFont.systemFont(ofSize: style.bodyFont.pointSize * 1.1, weight: .semibold)
+        // Discord drops a gone invite's title to medium (`heading-md/medium`)
+        // and gives it four points under it rather than two.
+        let titleFont = NSFont.systemFont(
+            ofSize: style.bodyFont.pointSize * 1.1, weight: card == nil ? .medium : .semibold
+        )
+        let titleGap: CGFloat = card == nil ? 4 : 2
         let titleText: String = switch card?.kind {
         case .friend: card?.inviterUsername ?? card?.name ?? ""
         case .server, .groupDirectMessage: card?.name ?? ""
         case nil: "Invalid Invite"
         }
         let title = block(titleText, font: titleFont,
-                          color: card == nil ? style.secondaryColor : style.primaryColor,
+                          color: card == nil ? .systemRed : style.primaryColor,
                           width: textWidth, style: style)
 
         // The line under the name: live counts for a server big enough to have
@@ -609,9 +618,9 @@ nonisolated enum InviteCardLayoutEngine {
             block($0, font: detailFont, color: style.secondaryColor, width: textWidth, style: style)
         }
         let dotInset: CGFloat = hasCounts ? 11 : 0
-        let textHeight = title.size.height + (detail.map { 2 + $0.size.height } ?? 0)
+        let textHeight = title.size.height + (detail.map { titleGap + $0.size.height } ?? 0)
         let titleOrigin = CGPoint(x: textX, y: iconRect.midY - textHeight / 2)
-        let detailOrigin = CGPoint(x: textX + dotInset, y: titleOrigin.y + title.size.height + 2)
+        let detailOrigin = CGPoint(x: textX + dotInset, y: titleOrigin.y + title.size.height + titleGap)
         var onlineDot: CGRect?
         var membersDot: CGRect?
         if hasCounts, let detail, let card {
@@ -624,8 +633,11 @@ nonisolated enum InviteCardLayoutEngine {
             membersDot = CGRect(x: detailOrigin.x + offset, y: midY - dotSide / 2, width: dotSide, height: dotSide)
         }
 
-        let monogram = block(
-            String((card?.name ?? "?").prefix(1)).uppercased(),
+        // **Centred by paragraph style, not by origin.** A block's width is the
+        // width it was given — `INVARIANTS.md` §4.85 — so placing this one at
+        // `midX - width / 2` put the letter against the tile's leading edge.
+        let monogram = centred(
+            String((card?.name ?? "").prefix(1)).uppercased(),
             font: NSFont.systemFont(ofSize: classicIconSide * 0.4, weight: .semibold),
             color: style.secondaryColor, width: classicIconSide, style: style
         )
@@ -666,7 +678,8 @@ nonisolated enum InviteCardLayoutEngine {
                 splashRect: splashRect,
                 iconURL: card.flatMap(classicIconURL(for:)),
                 iconRect: iconRect,
-                iconIsCircle: card?.kind != .server,
+                iconIsCircle: card != nil && card?.kind != .server,
+                isExpired: card == nil,
                 monogram: monogram,
                 monogramOrigin: CGPoint(
                     x: iconRect.midX - monogram.size.width / 2, y: iconRect.midY - monogram.size.height / 2

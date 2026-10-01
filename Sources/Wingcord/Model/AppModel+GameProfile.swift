@@ -300,7 +300,7 @@ extension AppModel {
                 out += ":\(emoji.name):"
             case .lineBreak:
                 out += "\n"
-            case .userMention, .roleMention, .channelMention, .commandMention,
+            case .userMention, .roleMention, .channelMention, .commandMention, .gameMention,
                  .everyoneMention, .hereMention, .timestamp, .staticRoute:
                 continue
             }

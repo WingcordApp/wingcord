@@ -5,6 +5,8 @@ import WingcordCore
 
 struct RailMemoKey: Hashable, Sendable {
     var revision: UInt64
+    /// A server with an event happening now wears the calendar mark.
+    var eventsRevision: UInt64 = 0
     /// The rail's badges count only channels the reader can see, so a role
     /// change moves the answer.
     var roleRevision: UInt64
@@ -34,6 +36,8 @@ struct RailMemoKey: Hashable, Sendable {
 }
 
 struct SidebarMemoKey: Hashable, Sendable {
+    /// The events row: whether there is one, its count and its light.
+    var eventsRow: SidebarEventsRow?
     var structureRevision: UInt64
     /// The DM list's order IS recency, so it has to key on the revision that
     /// moves when a `lastMessageID` does — the one the guild tree deliberately
@@ -111,6 +115,7 @@ extension AppModel {
     var railItems: [RailItem] {
         let key = RailMemoKey(
             revision: railRevision,
+            eventsRevision: scheduledEventsRevision,
             roleRevision: roleRevision,
             selectedGuildID: selectedGuildID,
             expandedFolders: expandedFolderIDs,
@@ -146,6 +151,7 @@ extension AppModel {
     /// The channel column for the selected guild.
     var sidebarPresentation: SidebarPresentation {
         let key = SidebarMemoKey(
+            eventsRow: selectedGuildID.flatMap(sidebarEventsRow(for:)),
             structureRevision: channelIndex.structureRevision,
             valueRevision: channelIndex.valueRevision,
             sidebarRevision: sidebarRevision,
@@ -172,7 +178,7 @@ extension AppModel {
         if let guildID = selectedGuildID {
             // A guild that is selected but has not arrived yet is a real state
             // during bootstrap. It gets an empty list, not the DM list.
-            value = guildTable[guildID].map { buildGuildSidebar(guild: $0) } ?? .empty
+            value = guildTable[guildID].map { buildGuildSidebar(guild: $0, eventsRow: key.eventsRow) } ?? .empty
         } else {
             value = buildDirectMessageSidebar(users: userTable)
         }
@@ -542,7 +548,7 @@ extension AppModel {
                 // A group has several people and no single presence; a dot on
                 // one of them would be a fact about somebody the row does not
                 // name.
-                status: partnerID.map { presences[$0]?.status ?? .offline },
+                status: partnerID.map { presenceStatus(of: $0) },
                 isTyping: partnerID.map { isTypingInDirectMessage(channelID, partner: $0) } ?? false,
                 activityLine: partnerID.flatMap { partnerID in
                     let voice = voicePlace(of: partnerID)
@@ -575,13 +581,19 @@ extension AppModel {
         )
     }
 
-    private func buildGuildSidebar(guild: Guild) -> SidebarPresentation {
+    private func buildGuildSidebar(guild: Guild, eventsRow: SidebarEventsRow?) -> SidebarPresentation {
         let channelIDs = channelIndex.channelIDs(inGuild: guild.id)
         let filtersByFollow = hidesUnfollowedChannels(inGuild: guild.id)
         var rows: [SidebarRow] = []
         rows.reserveCapacity(channelIDs.count + 2)
 
-        for surface in guildSurfaceRows(for: guild.id) {
+        // Discord's order: the guide, then the events, then the pages after.
+        let surfaces = guildSurfaceRows(for: guild.id)
+        for surface in surfaces where surface == .serverGuide {
+            rows.append(.guildAction(surface))
+        }
+        if let eventsRow { rows.append(.events(eventsRow)) }
+        for surface in surfaces where surface != .serverGuide {
             rows.append(.guildAction(surface))
         }
 
@@ -834,6 +846,13 @@ extension AppModel {
 
     /// The avatar to draw for a person in a guild, honouring a per-guild
     /// override.
+    /// Somebody's status, with Discord's rule for an absent presence — see
+    /// `PresenceStatus.resolved(_:flags:)`. Every surface that draws a status
+    /// for a person it holds no presence for goes through this or that.
+    func presenceStatus(of userID: UserID) -> PresenceStatus {
+        PresenceStatus.resolved(presences[userID]?.status, flags: users[userID]?.flags ?? [])
+    }
+
     func avatarURL(forUserID userID: UserID, inGuild guildID: GuildID?, side: CGFloat) -> URL? {
         if let guildID, let member = members[guildID]?[userID], let hash = member.avatarHash {
             return CDN.guildMemberAvatar(

@@ -244,6 +244,68 @@ nonisolated extension TimelineRowPainter {
         }
 
         let iconRect = classic.iconRect.offsetBy(dx: offset.x, dy: offset.y)
+        if classic.isExpired {
+            drawExpiredIcon(in: iconRect, context: context)
+        } else {
+            drawClassicIcon(classic, in: iconRect, offset: offset, context: context, ink: ink,
+                            images: images, scale: scale)
+        }
+
+        drawTextFrame(classic.title, at: shifted(classic.titleOrigin, offset), context: context,
+                      images: images, scale: scale)
+        if let detail = classic.detail {
+            drawTextFrame(detail, at: shifted(classic.detailOrigin, offset), context: context,
+                          images: images, scale: scale)
+        }
+        if let dot = classic.onlineDot {
+            context.setFillColor(onlineDot)
+            context.fillEllipse(in: dot.offsetBy(dx: offset.x, dy: offset.y))
+        }
+        if let dot = classic.membersDot {
+            context.setFillColor(ink.lift(0.4))
+            context.fillEllipse(in: dot.offsetBy(dx: offset.x, dy: offset.y))
+        }
+        if let inviter = classic.inviter {
+            drawInviter(inviter, offset: offset, context: context, images: images, scale: scale)
+        }
+    }
+
+    /// An invite that is gone: Discord's `guildIconExpired` — a tile of its
+    /// critical red at twelve per cent with a hairline of the same, radius 12,
+    /// and its envelope in the red at 26 points.
+    private static func drawExpiredIcon(in rect: CGRect, context: CGContext) {
+        let red = NSColor.systemRed
+        let tile = CGPath(roundedRect: rect, cornerWidth: 12, cornerHeight: 12, transform: nil)
+        context.addPath(tile)
+        context.setFillColor(red.withAlphaComponent(0.12).cgColor)
+        context.fillPath()
+        context.addPath(CGPath(
+            roundedRect: rect.insetBy(dx: 0.5, dy: 0.5), cornerWidth: 11.5, cornerHeight: 11.5, transform: nil
+        ))
+        context.setStrokeColor(red.withAlphaComponent(0.12).cgColor)
+        context.setLineWidth(1)
+        context.strokePath()
+        let side: CGFloat = 26
+        drawSymbol(
+            "envelope.fill",
+            tint: red,
+            in: CGRect(x: (rect.midX - side / 2).rounded(), y: (rect.midY - side / 2).rounded(),
+                       width: side, height: side),
+            context: context
+        )
+    }
+
+    /// A live invite's icon: the server's, the group's or the person's
+    /// picture, or its monogram on a raised tile while there is none.
+    private static func drawClassicIcon(
+        _ classic: InviteCardSlot.Classic,
+        in iconRect: CGRect,
+        offset: CGPoint,
+        context: CGContext,
+        ink: ThemeInk,
+        images: ImageStore,
+        scale: CGFloat
+    ) {
         let iconShape = classic.iconIsCircle
             ? CGPath(ellipseIn: iconRect, transform: nil)
             : CGPath(
@@ -267,24 +329,6 @@ nonisolated extension TimelineRowPainter {
                           images: images, scale: scale)
         }
         context.restoreGState()
-
-        drawTextFrame(classic.title, at: shifted(classic.titleOrigin, offset), context: context,
-                      images: images, scale: scale)
-        if let detail = classic.detail {
-            drawTextFrame(detail, at: shifted(classic.detailOrigin, offset), context: context,
-                          images: images, scale: scale)
-        }
-        if let dot = classic.onlineDot {
-            context.setFillColor(onlineDot)
-            context.fillEllipse(in: dot.offsetBy(dx: offset.x, dy: offset.y))
-        }
-        if let dot = classic.membersDot {
-            context.setFillColor(ink.lift(0.4))
-            context.fillEllipse(in: dot.offsetBy(dx: offset.x, dy: offset.y))
-        }
-        if let inviter = classic.inviter {
-            drawInviter(inviter, offset: offset, context: context, images: images, scale: scale)
-        }
     }
 
     // MARK: Shared parts

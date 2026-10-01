@@ -41,6 +41,11 @@ final class TimelineCanvasView: NSView {
     /// at. Set beside `style` from the same revision, for the same reason.
     var alwaysShowsTimestamps = false
     var contentHeight: CGFloat { offsets[offsets.count - 1] }
+    /// The empty space above the first row — `TimelineViewportPolicy
+    /// .leadingSpace`. It is the first offset, so every rectangle, every hit
+    /// test and every layer placed from a row's frame follows it with nothing
+    /// to remember.
+    var leadingSpace: CGFloat { offsets[0] }
 
     // MARK: Interaction state
 
@@ -104,6 +109,16 @@ final class TimelineCanvasView: NSView {
         pendingArrivals.removeAll()
         hoveredBurst = nil
         clearTooltips()
+    }
+
+    /// Whether a new reaction may be started in this channel — the add
+    /// control at the end of every reaction row. See `canAddReactions`.
+    func apply(canAddReactions: Bool) {
+        guard self.canAddReactions != canAddReactions else { return }
+        self.canAddReactions = canAddReactions
+        // Every reaction row's controls move up a slot or back.
+        setNeedsDisplay(visibleRect)
+        updateHover(at: currentPointerLocation())
     }
 
     /// Whether the reader may send super reactions. See `canSuperReact`.
@@ -408,6 +423,8 @@ final class TimelineCanvasView: NSView {
     var onOpenReplyTarget: ((MessageID) -> Void)?
     /// The open topic's marker was clicked: bring its panel back.
     var onOpenTopicMarker: (() -> Void)?
+    /// The welcome header's Edit Channel button.
+    var onEditChannel: (() -> Void)?
     /// The thread chip under a message was clicked: open that thread.
     var onOpenThread: ((ChannelID) -> Void)?
     /// The pointer moved onto, or off, a message row. The rect is in the CLIP
@@ -449,6 +466,11 @@ final class TimelineCanvasView: NSView {
     /// because a chip that looks pressable and cannot be pressed is the inert
     /// control `INVARIANTS.md` §5.5 forbids.
     private var canSuperReact = false
+    /// Whether a new reaction may be started here — `apply(canAddReactions:)`.
+    private var canAddReactions = false
+    /// Whether the pointer is on the hovered row's reactions, which shows its
+    /// bookmark control. Part of the hover, so it is cleared with it.
+    private var isPointerOnReactions = false
     /// The effects playing over this transcript's super reactions.
     private lazy var burstEffects = SuperReactionEffects(host: self)
     /// The super reaction chip under the pointer, so entering one plays its
@@ -581,12 +603,12 @@ final class TimelineCanvasView: NSView {
     /// the same pass, rather than through a callback that would land a frame
     /// later and leave the scroller briefly wrong.
     @discardableResult
-    func apply(rows: [TimelineRow]) -> CGFloat {
+    func apply(rows: [TimelineRow], leadingSpace: CGFloat = 0) -> CGFloat {
         self.rows = rows
         offsets.removeAll(keepingCapacity: true)
         offsets.reserveCapacity(rows.count + 1)
-        var running: CGFloat = 0
-        offsets.append(0)
+        var running: CGFloat = leadingSpace
+        offsets.append(leadingSpace)
         for row in rows {
             running += row.height
             offsets.append(running)
@@ -1145,11 +1167,16 @@ final class TimelineCanvasView: NSView {
                     }
                 }
                 state.playingPreviewURL = playingPreview
+                // The welcome header carries no message, and one control.
+                if hoveredRow == index, case .conversationStart = row.kind {
+                    state.hoveredComponent = hoveredComponent
+                }
                 if let messageID = row.messageID {
                     state.isHighlighted = messageID == highlightedMessageID
                     // A set lookup per visible row, and only for a row that
                     // carries a message at all.
                     state.isBookmarked = bookmarkedMessageIDs.contains(messageID)
+                    state.canAddReaction = canAddReactions
                     state.revealedSpoilers = revealedSpoilers[messageID] ?? []
                     state.revealedAttachments = revealedAttachments[messageID] ?? []
                     if case .message(let message) = row.kind, !message.inviteCards.isEmpty {
@@ -1158,6 +1185,7 @@ final class TimelineCanvasView: NSView {
                         })
                     }
                     if hoveredRow == index {
+                        state.isPointerOnReactions = isPointerOnReactions
                         state.hoveredComponent = hoveredComponent
                         state.hoveredPlate = hoveredPlate
                         state.hoveredSpoiler = hoveredSpoiler
@@ -1359,6 +1387,15 @@ final class TimelineCanvasView: NSView {
         // meaning. A summary's mark is a label and takes no click.
         if case .marker(.topic, _) = rows[index].kind {
             onOpenTopicMarker?()
+            return
+        }
+        if case .conversationStart(let slot) = rows[index].kind {
+            let frame = rowFrame(at: index)
+            if let button = slot.editButton,
+               button.rect.offsetBy(dx: frame.minX, dy: frame.minY).contains(point)
+            {
+                onEditChannel?()
+            }
             return
         }
         guard case .message(let row) = rows[index].kind else { return }
@@ -1768,6 +1805,16 @@ final class TimelineCanvasView: NSView {
                         .offsetBy(dx: frame.minX, dy: frame.minY)
                 )
             }
+            // A standard emoji opens its card too — Discord's flyout for a
+            // default emoji. Ahead of links for the reason the custom ones are.
+            for entry in block.unicodeEmojiRects where entry.rect.contains(inBlock) {
+                return .emoji(
+                    entry.emoji,
+                    entry.rect
+                        .offsetBy(dx: row.textOrigin.x, dy: row.textOrigin.y)
+                        .offsetBy(dx: frame.minX, dy: frame.minY)
+                )
+            }
             if let hit = block.link(at: inBlock) {
                 return .link(
                     hit.target,
@@ -1908,7 +1955,12 @@ final class TimelineCanvasView: NSView {
             return .reaction(slot.emoji, kind: slot.kind, origin: slot.rect.origin)
         }
 
-        for slot in row.reactionControls where slot.rect.contains(local) {
+        let controls = row.visibleReactionControls(
+            canAddReaction: canAddReactions,
+            showsBookmark: bookmarkedMessageIDs.contains(row.id)
+                || row.reactionStripContains(local, rowWidth: frame.width)
+        )
+        for slot in controls where slot.rect.contains(local) {
             switch slot.kind {
             case .addReaction:
                 return .addReaction(rect: slot.rect)
@@ -1961,7 +2013,8 @@ final class TimelineCanvasView: NSView {
     /// under the cursor on its way to being clicked. Applying the region to the
     /// current row alone means a *fresh* hover can never be mis-assigned.
     private func hoveredIndex(at point: CGPoint) -> Int? {
-        guard bounds.contains(point) else { return nil }
+        // The empty space above a short channel is nobody's row.
+        guard bounds.contains(point), point.y >= leadingSpace else { return nil }
         let index = rowIndex(at: point.y)
         if let current = hoveredRow, current != index, rows.indices.contains(current),
            rows[current].isSelectable,
@@ -1989,6 +2042,7 @@ final class TimelineCanvasView: NSView {
         var burst: (key: SuperReactionEffects.Key, slot: ReactionSlot, row: MessageRow)?
         var reaction: ReactionHover?
         var markHover: GuildMarkHover?
+        var onReactions = false
         if let index, rows.indices.contains(index), case .message(let row) = rows[index].kind {
             // **Resolved from the geometry, not from the click target.** The
             // star is drawn on whichever picture the pointer is over, and the
@@ -1999,6 +2053,7 @@ final class TimelineCanvasView: NSView {
                 x: point.x - rowFrame(at: index).minX,
                 y: point.y - rowFrame(at: index).minY
             )
+            onReactions = row.reactionStripContains(local, rowWidth: rowFrame(at: index).width)
             attachment = row.attachments.firstIndex { $0.rect.contains(local) }
             // The same rule for an unfurled GIF, and only for the embeds that
             // have a star at all — a card the pointer crosses has nothing to
@@ -2100,6 +2155,13 @@ final class TimelineCanvasView: NSView {
             }
         } else if let index, rows.indices.contains(index), case .marker(.topic, _) = rows[index].kind {
             cursor = .pointingHand
+        } else if let index, rows.indices.contains(index), case .conversationStart(let slot) = rows[index].kind,
+                  let button = slot.editButton,
+                  button.rect.contains(CGPoint(x: point.x - rowFrame(at: index).minX,
+                                               y: point.y - rowFrame(at: index).minY))
+        {
+            component = button.rect.origin
+            cursor = .pointingHand
         }
         applyCursor(cursor)
 
@@ -2121,7 +2183,9 @@ final class TimelineCanvasView: NSView {
             || link != hoveredLink || authorName != isAuthorNameHovered
         let attachmentChanged = attachment != hoveredAttachment
         let embedChanged = embed != hoveredEmbed
+        let reactionsChanged = onReactions != isPointerOnReactions
         guard rowChanged || componentChanged || textChanged || attachmentChanged || embedChanged
+            || reactionsChanged
         else { return }
         let previous = hoveredRow
         hoveredRow = index
@@ -2132,6 +2196,7 @@ final class TimelineCanvasView: NSView {
         hoveredEmbed = embed
         hoveredLink = link
         isAuthorNameHovered = authorName
+        isPointerOnReactions = onReactions
         if rowChanged { invalidateRow(previous) }
         invalidateRow(index)
         if attachmentChanged || embedChanged || rowChanged {

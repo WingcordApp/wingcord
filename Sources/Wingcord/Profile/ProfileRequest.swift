@@ -133,6 +133,8 @@ struct ProfilePresentation: Equatable, Sendable {
     var activityStoreOffers: [GameStoreOffer] = []
     var bio: String?
     var isBot: Bool
+    /// A verified app's badge carries a check — `AppBadge`.
+    var isVerifiedBot = false
     var badges: [ProfileBadge]
     /// The clan tag they wear: the letters, and the guild badge that goes with
     /// them. Half a tag is not a tag — the badge is the half people recognise.
@@ -167,6 +169,11 @@ struct ProfilePresentation: Equatable, Sendable {
     /// Whether they have turned their profile private. A label, never a filter
     /// — see `UserDecoration.isProfilePrivate`.
     var isProfilePrivate: Bool
+    /// The profile route refused, so what only it answers — the bio, the
+    /// banner, the mutuals — could not be loaded. Discord's notice
+    /// (`559506`), which it never shows for a friend or for somebody who has
+    /// asked to be one.
+    var isPartlyUnavailable = false
     /// The reader's own private note about them.
     var note: String
     /// What the account is to them — which is the whole of what the foot bar's

@@ -75,6 +75,14 @@ struct ProfileIdentityPanel: View {
                 if profile.isProfilePrivate { PrivateProfileBanner() }
                 banner
                 identity
+                // Discord's notice under the header, with its Retry.
+                if profile.isPartlyUnavailable {
+                    PartialProfileNotice(retry: {
+                        model.sessionController.loadProfile(of: profile.userID, inGuild: model.profileRequest?.guildID)
+                    })
+                    .padding(.horizontal, Self.gutter)
+                    .padding(.bottom, Spacing.snug)
+                }
                 bioSection
                 memberSince
                 roles
@@ -440,7 +448,7 @@ struct ProfileIdentityPanel: View {
                         maximumLines: 2
                     )
                 }
-                if profile.isBot { TagChip(text: "APP") }
+                if profile.isBot { TagChip(text: AppBadge.label(isVerified: profile.isVerifiedBot)) }
                 Spacer(minLength: 0)
             }
 

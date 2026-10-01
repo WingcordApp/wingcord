@@ -145,6 +145,9 @@ final class SessionController {
     /// Widget-template fetches in flight, by application. Read from
     /// `SessionController+Board`.
     var widgetConfigFetches: Set<ApplicationID> = []
+    /// The next ask for the reader's activity feed, scheduled — see
+    /// `SessionController+ActivityFeed`.
+    var activityFeedTask: Task<Void, Never>?
     /// Game-profile fetches in flight. A game profile can be reached from four
     /// tiles on one board and every one of them must share a request.
     var gameProfileFetches: Set<ApplicationID> = []
@@ -158,6 +161,13 @@ final class SessionController {
     /// channel of two hundred messages from six people asks six times and not
     /// six hundred. See `resolveMessageMembers`.
     private var memberRequests: Set<MemberRequest> = []
+    /// When each role's holders were last asked for — see `loadRoleMembers`.
+    private var roleMemberFetches: [RoleMembersKey: Date] = [:]
+
+    struct RoleMembersKey: Hashable {
+        var guildID: GuildID
+        var roleID: RoleID
+    }
 
     struct MemberRequest: Hashable {
         var guildID: GuildID
@@ -568,7 +578,8 @@ final class SessionController {
     private func apply(_ event: GatewaySocket.Event) {
         switch event {
         case .connecting:
-            if model.connectionState != .ready { model.connectionState = .connecting }
+            let next = model.connectionState.onSocketOpening()
+            if next != model.connectionState { model.connectionState = next }
         case .ready(let snapshot):
             Self.trace("applying READY")
             // **Before the snapshot lands, not after.** A READY is a NEW gateway
@@ -580,6 +591,8 @@ final class SessionController {
             applyReady(snapshot)
         case .readySupplemental(let snapshot):
             applyReadySupplemental(snapshot)
+            // Discord asks for the activity feed as the connection opens.
+            loadActivityFeed()
         case .resumed:
             model.connectionState = .ready
             // A call that was up when the socket blipped has to ask again —
@@ -907,6 +920,7 @@ final class SessionController {
             // oldest trimmed once it is full — see `MessageBox.receiveLive`.
             let trims = model.mayTrimOldest(in: message.channelID)
             model.mutateBox(message.channelID) { $0.receiveLive(message, trimming: trims) }
+            noteGameMentions(in: [message])
             model.clearTyping(author.id, in: message.channelID)
             model.channelIndex.patchLastMessage(message.id, in: message.channelID)
             model.messageContentRevision &+= 1
@@ -927,6 +941,7 @@ final class SessionController {
             resolveMessageMembers(in: [message], channelID: message.channelID)
 
         case .messageUpdated(let message):
+            noteGameMentions(in: [message])
             // An edit arrives as a PARTIAL message: only the fields that changed
             // are present, so replacing wholesale drops the attachments and
             // reactions the edit did not mention. Merge onto what is held.
@@ -1090,16 +1105,23 @@ final class SessionController {
             model.applyStage(stage)
 
         case .scheduledEventChanged(let event):
-            var events = model.scheduledEvents[event.guildID] ?? []
-            events.removeAll { $0.id == event.id }
-            events.append(event)
-            model.scheduledEvents[event.guildID] = events
-            // The inbox's Events group is drawn from these.
-            model.inbox.revision &+= 1
+            storeScheduledEvent(event)
 
         case .scheduledEventRemoved(let guildID, let eventID):
             model.scheduledEvents[guildID]?.removeAll { $0.id == eventID }
             model.inbox.revision &+= 1
+
+        case .scheduledEventRSVPAdded(let rsvp):
+            applyEventAnswer(rsvp, added: true)
+        case .scheduledEventRSVPRemoved(let rsvp):
+            applyEventAnswer(rsvp, added: false)
+        case .scheduledEventExceptionChanged(let eventID, let exception):
+            applyEventException(eventID: eventID, exception, occurrence: exception.id)
+        case .scheduledEventExceptionRemoved(let eventID, let occurrence):
+            applyEventException(eventID: eventID, nil, occurrence: occurrence)
+
+        case .activityInboxStale(let refreshAfter):
+            activityFeedWentStale(after: refreshAfter)
 
         case .stageEnded(let channelID):
             model.applyStageEnded(channelID)
@@ -1583,6 +1605,7 @@ final class SessionController {
         }
         if namesChanged { model.identityRevision &+= 1 }
         model.applyThreadsFromMessages(page.threads)
+        noteGameMentions(in: page.messages)
     }
 
     /// Whether asking again could plausibly answer differently.
@@ -1680,6 +1703,40 @@ final class SessionController {
         }
         guard !wanted.isEmpty else { return }
         Task { await socket.requestGuildMembers(guildID: guildID, userIDs: wanted) }
+    }
+
+    /// What a role mention's flyout needs: the role's holders by id, asked of
+    /// the gateway for anybody this session has no record of, and every
+    /// role's head count — Discord's preload for its role popout (`545868`).
+    ///
+    /// **The ids are reused for ten seconds per role**, Discord's own window,
+    /// so clicking a run of mentions of one role asks once. The counts are the
+    /// table the Channels & Roles page already keeps, asked once per server.
+    func loadRoleMembers(_ roleID: RoleID, in guildID: GuildID) {
+        let key = RoleMembersKey(guildID: guildID, roleID: roleID)
+        let now = Date()
+        if roleMemberFetches[key].map({ now.timeIntervalSince($0) >= 10 }) ?? true {
+            roleMemberFetches[key] = now
+            Task { [weak self] in
+                guard let self else { return }
+                do {
+                    let ids = try await self.rest.roleMemberIDs(of: roleID, in: guildID)
+                    let known = self.model.members[guildID]
+                    let wanted = ids.filter { userID in
+                        known?[userID] == nil
+                            && self.memberRequests.insert(MemberRequest(guildID: guildID, userID: userID)).inserted
+                    }
+                    if !wanted.isEmpty, let socket = self.socket {
+                        await socket.requestGuildMembers(guildID: guildID, userIDs: wanted)
+                    }
+                } catch {
+                    // Asked again on the next click rather than never.
+                    self.roleMemberFetches[key] = nil
+                    Self.trace("role \(roleID) members failed: \(Self.describe(error))")
+                }
+            }
+        }
+        loadRoleMemberCounts(guildID)
     }
 
     private func subscribeToMemberList(for channelID: ChannelID) {
@@ -1800,6 +1857,7 @@ final class SessionController {
         }
         do {
             let fetched = try await rest.profile(of: userID, inGuild: guildID)
+            model.profileFetchFailures.remove(userID)
             let user = fetched.user
             // **What the card will actually draw from, by value.** The
             // shape dump beside this one names the response's KEYS, which
@@ -1855,6 +1913,8 @@ final class SessionController {
             deriveTheme(of: user)
         } catch {
             Self.trace("profile \(userID) failed: \(Self.describe(error))")
+            // A cancelled ask says nothing about the profile.
+            if !(error is CancellationError) { model.profileFetchFailures.insert(userID) }
         }
     }
 

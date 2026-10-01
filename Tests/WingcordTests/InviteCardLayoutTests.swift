@@ -1,3 +1,4 @@
+import AppKit
 import CoreGraphics
 import Foundation
 import Testing
@@ -112,5 +113,24 @@ struct InviteCardLayoutTests {
             return
         }
         #expect(classic.title.text.attributed.string == "Invalid Invite")
+        // Discord's red tile in place of an icon, and nothing to fetch for it.
+        #expect(classic.isExpired)
+        #expect(classic.iconURL == nil)
+    }
+
+    @Test("A monogram is centred in its tile, not set against its leading edge")
+    func monogramCentred() {
+        let card = InviteCard(code: "abc", kind: .server, name: "Wingcord")
+        guard case .classic(let classic) = layout(card).body,
+              let paragraph = classic.monogram.text.attributed.attribute(
+                  .paragraphStyle, at: 0, effectiveRange: nil
+              ) as? NSParagraphStyle
+        else {
+            Issue.record("expected a classic card with a styled monogram")
+            return
+        }
+        #expect(paragraph.alignment == .center)
+        #expect(classic.monogram.size.width == classic.iconRect.width)
+        #expect(!classic.isExpired)
     }
 }

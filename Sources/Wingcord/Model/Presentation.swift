@@ -70,6 +70,9 @@ enum RailVoiceMark: Int, Hashable, Sendable, Comparable {
     case screenShare
     /// A stage is live.
     case stage
+    /// An event is happening now — Discord's `CalendarIcon`, which outranks
+    /// every room's mark (`771640`'s `oi`).
+    case event
 
     static func < (lhs: Self, rhs: Self) -> Bool { lhs.rawValue < rhs.rawValue }
 
@@ -80,6 +83,7 @@ enum RailVoiceMark: Int, Hashable, Sendable, Comparable {
         // A monitor, as Discord's `ScreenIcon` is.
         case .screenShare: "display"
         case .stage: "person.wave.2.fill"
+        case .event: "calendar"
         }
     }
 }
@@ -220,6 +224,8 @@ enum SidebarRow: Hashable, Sendable, Identifiable {
     /// Server Guide, Channels & Roles and Game Servers — the rows above the
     /// first category that go somewhere other than a transcript.
     case guildAction(GuildSurface)
+    /// "3 Events" — Discord's events row, which opens the events panel.
+    case events(SidebarEventsRow)
 
     var id: UInt64 {
         switch self {
@@ -229,7 +235,52 @@ enum SidebarRow: Hashable, Sendable, Identifiable {
         // A surface's raw value is a small integer and a channel id is a
         // snowflake, so the two spaces cannot collide inside one list.
         case .guildAction(let surface): surface.rawValue
+        // Beside the surfaces' small integers, and as far from a snowflake.
+        case .events: 99
         }
+    }
+}
+
+/// The card at the top of a server's channels while one of its events is on —
+/// Discord's live channel notice (`263294`'s `nM`).
+struct LiveEventNotice: Hashable, Sendable {
+    var eventID: UInt64
+    var guildID: GuildID
+    var name: String
+    /// "Happening Now" for an event somewhere else, "Live Now" for one in a
+    /// room — Discord's two headings.
+    var heading: String
+    /// Where: an external event's location, or its room's name.
+    var place: String
+    var placeSymbol: String
+    /// The room to join, for an event in one the reader may connect to.
+    var joinChannelID: ChannelID?
+    /// The reader is in that room already, so the button goes to it rather
+    /// than joining — the sidebar's join toggles, and would leave.
+    var isJoined = false
+    var isStage = false
+
+    /// Discord's words for the way in (`428978`).
+    var joinTitle: String {
+        if isJoined { return "Go To Channel" }
+        return isStage ? "Listen In" : "Join"
+    }
+}
+
+/// The sidebar's events row: how many are coming, and whether any is new.
+///
+/// **Offered on Discord's terms** (`useGuildActionRows`): when something is
+/// coming, or when the reader may make something. Clicking it opens the events
+/// panel rather than a page, as Discord's opens its modal.
+struct SidebarEventsRow: Hashable, Sendable {
+    var guildID: GuildID
+    var count: Int
+    /// An event the reader has not seen, which lights the row as an unread
+    /// channel is lit.
+    var hasUnread: Bool
+
+    var title: String {
+        count == 0 ? "Events" : "\(count.formatted()) \(count == 1 ? "Event" : "Events")"
     }
 }
 

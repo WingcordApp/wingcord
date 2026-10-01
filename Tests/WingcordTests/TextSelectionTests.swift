@@ -37,7 +37,8 @@ struct TextSelectionTests {
             topInset: 0, bottomInset: 0, jump: nil, reachesPresent: true, present: nil,
             scroll: TranscriptScrollState(), topics: [], summaries: [], selectedSummary: nil,
             cardRevision: 0, playingPreview: nil, isCovered: false, bookmarks: [],
-            canSuperReact: false
+            canSuperReact: false,
+            canAddReactions: true
         )
         RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.05))
         let canvas = try #require(

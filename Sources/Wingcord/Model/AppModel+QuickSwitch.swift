@@ -540,7 +540,7 @@ extension AppModel {
             subtitle: user.handle,
             iconURL: avatarURL(for: user, side: Metrics.avatarRow),
             monogram: user.monogram,
-            status: presences[userID]?.status ?? .offline,
+            status: presenceStatus(of: userID),
             isPerson: true
         )
     }

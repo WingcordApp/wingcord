@@ -247,3 +247,88 @@ extension SessionController {
         }
     }
 }
+
+// MARK: - Games named in messages
+
+extension SessionController {
+
+    /// Names the games `<@$id>` mentions point at, fetching the ones this
+    /// session does not know — Discord's chip asks for its game as it mounts
+    /// (`266645`), and a mention whose game nobody fetched draws
+    /// "unknown-game" for ever.
+    ///
+    /// A cheap test first, as Discord's own extractor makes it (`827669`):
+    /// almost no message carries one.
+    func noteGameMentions(in messages: [Message]) {
+        var named: [ApplicationID] = []
+        for message in messages where message.content.contains("<@$") {
+            named += Self.gameMentionIDs(in: message.content)
+        }
+        let wanted = named.filter { model.gameMentionNames[$0] == nil }
+        guard !wanted.isEmpty else { return }
+        var known: [ApplicationID: String] = [:]
+        for id in wanted {
+            // The catalogue's record, or the name `@game`'s search found.
+            if let name = model.games[id]?.name ?? model.gameSearch.byID[id]?.name { known[id] = name }
+        }
+        if !known.isEmpty { model.gameMentionNames.merge(known) { _, new in new } }
+        let missing = wanted.filter { known[$0] == nil }
+        guard !missing.isEmpty else { return }
+        Task { [weak self] in
+            guard let self else { return }
+            await loadGames(ids: missing)
+            var found: [ApplicationID: String] = [:]
+            for id in missing { if let game = model.games[id] { found[id] = game.name } }
+            if !found.isEmpty { model.gameMentionNames.merge(found) { _, new in new } }
+        }
+    }
+
+    /// Every `<@$id>` in a message, in order — Discord's `EZ`.
+    nonisolated static func gameMentionIDs(in content: String) -> [ApplicationID] {
+        var ids: [ApplicationID] = []
+        var rest = content[...]
+        while let open = rest.range(of: "<@$") {
+            let digits = rest[open.upperBound...].prefix { $0.isASCII && $0.isNumber }
+            let after = rest[open.upperBound...].dropFirst(digits.count)
+            if !digits.isEmpty, after.first == ">", let value = UInt64(digits) {
+                ids.append(ApplicationID(rawValue: value))
+            }
+            rest = rest[open.upperBound...]
+        }
+        return ids
+    }
+}
+
+// MARK: - `@game`'s search
+
+extension SessionController {
+
+    /// Asks for the games matching a query — Discord's game autocomplete
+    /// (`471677`), whose answers stay for the session. Games with no icon of
+    /// their own are looked up in the catalogue, which is where Discord's row
+    /// goes next (`106191`).
+    func searchGames(_ key: String) async {
+        let search = model.gameSearch
+        guard search.results[key] == nil, !search.inFlight.contains(key) else { return }
+        if search.isPointless(key) {
+            model.gameSearch.results[key] = []
+            return
+        }
+        model.gameSearch.inFlight.insert(key)
+        defer { model.gameSearch.inFlight.remove(key) }
+        do {
+            let games = try await rest.searchGames(key)
+            model.gameSearch.results[key] = games
+            for game in games where model.gameSearch.byID[game.id] == nil {
+                model.gameSearch.byID[game.id] = game
+            }
+            let bare = games.filter { $0.iconURL == nil }.map(\.id)
+            guard !bare.isEmpty else { return }
+            for entry in try await rest.gameSummaries(ids: bare) where entry.iconHash != nil {
+                model.gameSearch.byID[entry.id]?.iconHash = entry.iconHash
+            }
+        } catch {
+            Self.trace("game search failed: \(Self.describe(error))")
+        }
+    }
+}

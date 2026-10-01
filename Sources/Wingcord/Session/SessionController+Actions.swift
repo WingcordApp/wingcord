@@ -501,7 +501,7 @@ extension SessionController {
         return "<\(emoji.isAnimated ? "a" : ""):\(emoji.name):\(id.rawValue)>"
     }
 
-    private func resolveDirectMessage(with userID: UserID) async throws -> ChannelID {
+    func resolveDirectMessage(with userID: UserID) async throws -> ChannelID {
         if let existing = model.directMessageChannel(with: userID) { return existing }
         let channel = try await rest.openDirectMessage(with: userID)
         model.channelIndex.upsert(channel)

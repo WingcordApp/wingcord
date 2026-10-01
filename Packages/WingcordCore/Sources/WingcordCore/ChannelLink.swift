@@ -50,7 +50,7 @@ public struct ChannelLink: Hashable, Sendable {
     /// client that navigates on a hostname it did not check is a client that
     /// can be steered by a message. (`www.` is not in Discord's pattern; it is
     /// accepted here because it is the same site, and has always been.)
-    private static let hosts: Set<String> = [
+    static let hosts: Set<String> = [
         "discord.com",
         "www.discord.com",
         "canary.discord.com",

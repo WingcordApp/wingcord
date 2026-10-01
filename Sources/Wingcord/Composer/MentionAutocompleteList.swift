@@ -39,6 +39,16 @@ struct MentionAutocompleteList: View {
             // in here to contain anyway; the pill is a tinted region.
             VStack(alignment: .leading, spacing: 0) {
                 ForEach(Array(items.enumerated()), id: \.element.id) { index, item in
+                    // A rule where one group ends and the next begins — people,
+                    // then `@everyone` and `@here`, then roles — as Discord
+                    // draws it. Not a row: the keyboard walks the items only.
+                    if index > 0, items[index - 1].group != item.group {
+                        Rectangle()
+                            .fill(Palette.selectionFill)
+                            .frame(height: 1)
+                            .padding(.horizontal, Spacing.base)
+                            .padding(.vertical, Spacing.tight)
+                    }
                     row(item, isSelected: index == selection)
                         .onHover { if $0 { onHover(index) } }
                         .onTapGesture { onPick(item) }
@@ -65,17 +75,35 @@ struct MentionAutocompleteList: View {
     }
 
     private var title: String {
-        let subject = kind == .member ? "MEMBERS" : "TEXT CHANNELS"
+        // Discord names the list for its first group: people when there are
+        // any, the plain mentions when there are none, roles when only roles
+        // are left.
+        let subject = switch kind {
+        case .channel: "TEXT CHANNELS"
+        // Discord's "Time formats for …" and "Games matching @…".
+        case .time: "TIME FORMATS"
+        case .game: "GAMES"
+        case .member:
+            switch items.first?.group {
+            case .global: "OPTIONS"
+            case .role: "ROLES"
+            case .person, .section, nil: "MEMBERS"
+            }
+        }
         // The token is repeated back because the list is derived from it, and
         // a reader who typed `#gen` after a URL needs to see which token was
-        // taken.
-        return query.isEmpty ? subject : "\(subject)  \(kind.sigil)\(query)"
+        // taken. A time is repeated as typed — it is not a name.
+        guard !query.isEmpty else { return subject }
+        return kind == .time ? "\(subject)  \(query)" : "\(subject)  \(kind.sigil)\(query)"
     }
 
     private var accessibilityLabel: String {
-        kind == .member
-            ? "Members matching \(query)"
-            : "Channels matching \(query)"
+        switch kind {
+        case .member: "Members matching \(query)"
+        case .channel: "Channels matching \(query)"
+        case .time: "Time formats for \(query)"
+        case .game: "Games matching \(query)"
+        }
     }
 
     private func row(_ item: MentionCandidate, isSelected: Bool) -> some View {
@@ -126,6 +154,17 @@ struct MentionAutocompleteList: View {
                 .font(.system(size: 13, weight: .medium))
                 .foregroundStyle(Ink.tertiary)
                 .frame(width: Self.artSide, height: Self.artSide)
+        case .picture(let url):
+            // A controller where the game has no icon — Discord's own
+            // placeholder for one.
+            RemoteImage(url: url, side: Self.artSide, bucket: .artwork) {
+                Image(systemName: "gamecontroller.fill")
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(Ink.tertiary)
+                    .frame(width: Self.artSide, height: Self.artSide)
+            }
+            .frame(width: Self.artSide, height: Self.artSide)
+            .clipShape(.rect(cornerRadius: 4, style: .continuous))
         }
     }
 }

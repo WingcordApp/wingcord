@@ -15,6 +15,8 @@ public indirect enum InlineNode: Hashable, Sendable {
     case roleMention(RoleID)
     case channelMention(ChannelID)
     case commandMention(name: String, id: UInt64)
+    /// `<@$123>` — a game, which opens its page.
+    case gameMention(ApplicationID)
     case customEmoji(EmojiRef)
     case everyoneMention
     case hereMention
@@ -61,14 +63,51 @@ public struct InlineStyle: OptionSet, Hashable, Sendable {
     public static let spoiler = InlineStyle(rawValue: 1 << 4)
 }
 
-public enum TimestampStyle: Character, Hashable, Sendable {
+public enum TimestampStyle: Character, Hashable, Sendable, CaseIterable {
     case shortTime = "t"
     case longTime = "T"
     case shortDate = "d"
     case longDate = "D"
     case shortDateTime = "f"
     case longDateTime = "F"
+    /// The short date and the short time — Discord's `L LT`.
+    case numericDateTime = "s"
+    /// The short date and the time with seconds — Discord's `L LTS`.
+    case numericDateLongTime = "S"
     case relative = "R"
+
+    /// The moment as this style writes it, in the reader's locale and time
+    /// zone — Discord's formats (`379418`): `LT`, `LTS`, `L`, `LL`, `LLL`,
+    /// `LLLL`, `L LT`, `L LTS`, and `fromNow`.
+    ///
+    /// **One formatter for every surface that draws a `<t:…>`**: the
+    /// transcript, prose and the composer's chips used to keep a copy each,
+    /// and the copies had already agreed on a numeric `f` that Discord writes
+    /// with the month's name.
+    ///
+    /// Minute takes `.twoDigits` — the default-digits form renders minute zero
+    /// as a bare `0`, so every time on the hour came out as `22:0`.
+    public func format(_ date: Date) -> String {
+        let time = Date.FormatStyle.dateTime.hour().minute(.twoDigits)
+        let numeric = Date.FormatStyle.dateTime.day().month().year()
+        return switch self {
+        case .shortTime: date.formatted(time)
+        case .longTime: date.formatted(time.second(.twoDigits))
+        case .shortDate: date.formatted(numeric)
+        case .longDate: date.formatted(.dateTime.day().month(.wide).year())
+        case .shortDateTime: date.formatted(.dateTime.day().month(.wide).year().hour().minute(.twoDigits))
+        case .longDateTime:
+            date.formatted(.dateTime.weekday(.wide).day().month(.wide).year().hour().minute(.twoDigits))
+        case .numericDateTime: "\(date.formatted(numeric)) \(date.formatted(time))"
+        case .numericDateLongTime: "\(date.formatted(numeric)) \(date.formatted(time.second(.twoDigits)))"
+        case .relative: date.formatted(.relative(presentation: .named))
+        }
+    }
+
+    /// The token that writes this moment in this style — Discord's `tf`.
+    public static func token(for date: Date, style: TimestampStyle) -> String {
+        "<t:\(Int(date.timeIntervalSince1970.rounded(.down))):\(style.rawValue)>"
+    }
 }
 
 /// A block-level element.
@@ -144,6 +183,7 @@ public struct MarkdownDocument: Hashable, Sendable {
             case .channelMention: out += "#channel"
             case .staticRoute(let route, _): out += route.title
             case .commandMention(let name, _): out += "/\(name)"
+            case .gameMention: out += "@game"
             case .customEmoji(let emoji): out += ":\(emoji.name):"
             case .everyoneMention: out += "@everyone"
             case .hereMention: out += "@here"

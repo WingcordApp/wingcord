@@ -1107,11 +1107,13 @@ struct GameAutocompleteDTO: Decodable, Sendable {
 
     var domain: GameSummary? {
         guard let id, let name, !name.isEmpty else { return nil }
-        // Only a `hash` icon resolves to a CDN path. Any other tag is a shape
-        // this client has not seen, and drawing a placeholder cover is better
-        // than building a URL out of a value that is not a hash.
+        // A `hash` resolves to a CDN path; a `url` is the picture's own
+        // address (captured, `game autocomplete.har`: a mobile game's store
+        // art through the media proxy). Any other tag is a shape this client
+        // has not seen, and a placeholder beats a URL built from a guess.
         let hash = icon?.type == "hash" ? icon?.value : nil
-        return GameSummary(id: id, name: name, iconHash: hash)
+        let address = icon?.type == "url" ? icon?.value.flatMap(URL.init(string:)) : nil
+        return GameSummary(id: id, name: name, iconHash: hash, externalIconURL: address)
     }
 }
 

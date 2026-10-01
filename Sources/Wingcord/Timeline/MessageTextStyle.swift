@@ -334,28 +334,4 @@ nonisolated struct MessageTextStyle: @unchecked Sendable {
         if let after { style.paragraphSpacing = after }
         return style
     }
-
-    /// Formats a `<t:…>` timestamp in the reader's own locale and time zone.
-    ///
-    /// Minute uses `.twoDigits`: the default-digits form renders minute zero as
-    /// a bare `0`, so every time on the hour comes out as `22:0`.
-    func format(_ date: Date, style: TimestampStyle) -> String {
-        switch style {
-        case .shortTime:
-            date.formatted(.dateTime.hour().minute(.twoDigits))
-        case .longTime:
-            date.formatted(.dateTime.hour().minute(.twoDigits).second())
-        case .shortDate:
-            date.formatted(.dateTime.day().month().year())
-        case .longDate:
-            date.formatted(.dateTime.day().month(.wide).year())
-        case .shortDateTime:
-            date.formatted(.dateTime.day().month().year().hour().minute(.twoDigits))
-        case .longDateTime:
-            date.formatted(.dateTime.weekday(.wide).day().month(.wide).year()
-                .hour().minute(.twoDigits))
-        case .relative:
-            date.formatted(.relative(presentation: .named))
-        }
-    }
 }

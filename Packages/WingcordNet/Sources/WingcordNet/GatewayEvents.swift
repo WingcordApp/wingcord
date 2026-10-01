@@ -115,6 +115,16 @@ struct GatewayFrame: Decodable, Sendable {
         case stageInstanceDelete(StageInstanceDTO)
         case scheduledEventUpsert(ScheduledEventDTO)
         case scheduledEventDelete(ScheduledEventDTO)
+        /// Somebody answered an event, or took the answer back — the reader's
+        /// own included, from another client.
+        case scheduledEventUserAdd(ScheduledEventRSVPDTO)
+        case scheduledEventUserRemove(ScheduledEventRSVPDTO)
+        /// A date of a series was moved, cancelled or restored.
+        case scheduledEventExceptionUpsert(ScheduledEventExceptionDTO)
+        case scheduledEventExceptionDelete(ScheduledEventExceptionDTO)
+        /// Every date's change was dropped — the series was edited whole.
+        case scheduledEventExceptionsDelete(ScheduledEventExceptionDTO)
+        case activityInboxStale(ActivityInboxStaleDTO)
         /// Somebody joined, left or changed a switch in a voice channel. **A
         /// null `channel_id` is the leave** — Discord sends no departure event.
         case voiceStateUpdate(VoiceStateDTO)
@@ -289,6 +299,21 @@ struct GatewayFrame: Decodable, Sendable {
             payload = .scheduledEventUpsert(try decode(ScheduledEventDTO.self))
         case "GUILD_SCHEDULED_EVENT_DELETE":
             payload = .scheduledEventDelete(try decode(ScheduledEventDTO.self))
+        // Discord's store reads these five (`698441`); their payloads are not
+        // captured here, so each is decoded leniently and a missing id drops
+        // the event rather than the socket.
+        case "GUILD_SCHEDULED_EVENT_USER_ADD":
+            payload = .scheduledEventUserAdd(try decode(ScheduledEventRSVPDTO.self))
+        case "GUILD_SCHEDULED_EVENT_USER_REMOVE":
+            payload = .scheduledEventUserRemove(try decode(ScheduledEventRSVPDTO.self))
+        case "GUILD_SCHEDULED_EVENT_EXCEPTION_CREATE", "GUILD_SCHEDULED_EVENT_EXCEPTION_UPDATE":
+            payload = .scheduledEventExceptionUpsert(try decode(ScheduledEventExceptionDTO.self))
+        case "GUILD_SCHEDULED_EVENT_EXCEPTION_DELETE":
+            payload = .scheduledEventExceptionDelete(try decode(ScheduledEventExceptionDTO.self))
+        case "GUILD_SCHEDULED_EVENT_EXCEPTIONS_DELETE":
+            payload = .scheduledEventExceptionsDelete(try decode(ScheduledEventExceptionDTO.self))
+        case "CONTENT_INVENTORY_INBOX_STALE":
+            payload = .activityInboxStale(try decode(ActivityInboxStaleDTO.self))
         case "VOICE_STATE_UPDATE": payload = .voiceStateUpdate(try decode(VoiceStateDTO.self))
         case "VOICE_SERVER_UPDATE":
             payload = .voiceServerUpdate(try decode(VoiceServerUpdateDTO.self))
@@ -663,4 +688,11 @@ public struct GuildSoundboardPayload: Decodable, Sendable {
 public struct InteractionAckPayload: Decodable, Sendable {
     public var id: String?
     public var nonce: String?
+}
+
+/// `CONTENT_INVENTORY_INBOX_STALE` — the reader's activity feed has moved on.
+/// Discord's own reading (`eV(["CONTENT_INVENTORY_INBOX_STALE"], …)`):
+/// `refresh_after_ms` and nothing else.
+struct ActivityInboxStaleDTO: Decodable, Sendable {
+    var refresh_after_ms: Double?
 }

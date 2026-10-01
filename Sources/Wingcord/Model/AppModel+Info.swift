@@ -44,8 +44,8 @@ extension AppModel {
                 isVector: false,
                 glyph: emoji.name,
                 title: ":\(name):",
-                detail: "A standard emoji. It works in every conversation, "
-                    + "in every server, for everyone.",
+                // Discord's own sentence for a default emoji.
+                detail: "A default emoji. You can use this emoji everywhere on Discord.",
                 source: nil
             )
         }
@@ -202,7 +202,8 @@ extension AppModel {
                 memberCount: isPublic ? guild.memberCount : nil,
                 mark: isPublic ? guild.mark : nil,
                 sample: sample,
-                isJoined: false
+                isJoined: false,
+                isDiscoverable: guild.features.contains("DISCOVERABLE")
             )
         }
     }
@@ -324,8 +325,9 @@ extension AppModel {
         // **"Private Server", not "Server".** A server whose tag somebody wears
         // but whose profile the reader may not fetch has no name here, and
         // "Server" reads as a placeholder that failed to load rather than as
-        // the answer — which it is: the card below it already says "You are not
-        // in this server", and this is the same fact said in the title.
+        // the answer — which it is: the card below it says the server has
+        // limited who can see its profile, and this is the same fact said in
+        // the title.
         let name = profile?.name ?? resident?.name ?? "Private Server"
 
         return GuildProfilePresentation(
@@ -451,6 +453,8 @@ extension AppModel {
             openChannelLink(link, fallbackURL: string)
             return
         }
+        // An event in a server the reader is in opens its page here.
+        if let link = EventLink.parse(string), openEventLink(link) { return }
         guard InlineScannerSchemeCheck.isSafe(string), let url = URL(string: string) else {
             return
         }
@@ -468,7 +472,7 @@ extension AppModel {
     /// join capture answered with, beside `MEMBER_VERIFICATION_MANUAL_APPROVAL`
     /// — and the features were being decoded and read by nothing here.
     ///
-    /// The card used to say "You are not in this server." and stop, on the
+    /// The card used to stop at a sentence of this client's own, on the
     /// reading that this client had no route for it. It has had one all along:
     /// `PUT /guilds/{id}/members/@me` is what discovery's own join button
     /// sends, and the application form is the gate the invite flow already

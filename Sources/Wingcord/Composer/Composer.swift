@@ -101,6 +101,9 @@ struct Composer: View {
     var mentionQuery: String = ""
     var mentionCandidates: [MentionCandidate] = []
     var commitMention: (MentionCandidate) -> Void = { _ in }
+    /// How a mention token in the field is drawn — see `EditorMention`.
+    var mentionChip: ((EditorMention) -> EditorChip?)?
+    var mentionChipRevision: UInt64 = 0
     /// The picker, opened from the controls at the composer's trailing end.
     var onPick: (ExpressionItem) -> Void = { _ in }
     var onPickGIF: (GIF) -> Void = { _ in }
@@ -174,6 +177,9 @@ struct Composer: View {
     /// stays down for *that* token and comes back for the next one — the same
     /// latch the shortcode and command lists have.
     @State private var dismissedMentionQuery: String?
+    /// Return was pressed in `@time` before a time was picked — Discord's
+    /// "Pick a time to continue." Cleared by the next keystroke.
+    @State private var isTimeUnpicked = false
     /// The query Escape was pressed on. The list is derived from the draft, so
     /// dismissing it cannot mean clearing a list — it means remembering the one
     /// the reader said no to, until they type something else.
@@ -229,6 +235,10 @@ struct Composer: View {
                     onHover: { mentionSelection = $0 }
                 )
                 .transition(.materialize(from: .bottom))
+            } else if isTimeInputShown {
+                // `@time` with nothing to pick yet — Discord's bar over the box.
+                TimeMentionHint(isUnpicked: isTimeUnpicked)
+                    .transition(.materialize(from: .bottom))
             } else if !visibleCompletions.isEmpty {
                 EmojiAutocompleteList(
                     query: completionQuery,
@@ -303,6 +313,7 @@ struct Composer: View {
         // new set of matches, and keeping row four selected would move the
         // choice under the reader.
         .onChange(of: mentionCandidates) { _, _ in mentionSelection = 0 }
+        .onChange(of: mentionQuery) { _, _ in isTimeUnpicked = false }
         .onChange(of: commandSections) { _, _ in commandSelection = 0 }
         // …and the same for the option list, which changes on every keystroke
         // while a choice is being filtered.
@@ -368,7 +379,11 @@ struct Composer: View {
                     onPasteFiles: canAttach ? { urls in
                         pasteFiles(urls)
                         return true
-                    } : nil
+                    } : nil,
+                    // A picked mention shows as Discord's box shows it, while
+                    // the token stays what is typed and sent.
+                    chips: mentionChip,
+                    chipRevision: mentionChipRevision
                 )
                 .frame(minHeight: Metrics.composerFieldMinHeight)
             }
@@ -435,6 +450,12 @@ struct Composer: View {
     /// dismissed.
     private var visibleMentions: [MentionCandidate] {
         mentionQuery == dismissedMentionQuery ? [] : mentionCandidates
+    }
+
+    /// `@time` open with nothing to pick: its hint shows instead of a list,
+    /// until Escape sets it aside.
+    private var isTimeInputShown: Bool {
+        mentionKind == .time && visibleMentions.isEmpty && mentionQuery != dismissedMentionQuery
     }
 
     /// The `/` query, unless this exact one was dismissed — and never while a
@@ -537,6 +558,12 @@ struct Composer: View {
             return .handled
 
         case .none:
+            // Discord will not send an `@time` nobody finished: it asks for a
+            // time instead.
+            if isTimeInputShown {
+                isTimeUnpicked = true
+                return .handled
+            }
             guard pendingCommand != nil else { return .ignored }
             pressedReturn()
             return .handled
@@ -595,7 +622,7 @@ struct Composer: View {
             dismissedCommandQuery = commandQuery
             return .handled
         }
-        if !visibleMentions.isEmpty {
+        if !visibleMentions.isEmpty || isTimeInputShown {
             dismissedMentionQuery = mentionQuery
             return .handled
         }
@@ -811,5 +838,29 @@ private struct PermissionNotice: View {
         .frame(minHeight: Metrics.composerControlHeight)
         .frame(maxWidth: .infinity, alignment: .leading)
         .glassEffect(.regular, in: .rect(cornerRadius: Radius.glass))
+    }
+}
+
+/// `@time` before a time is picked — Discord's bar over the box: the word,
+/// and what it does, or that a time is still wanted.
+private struct TimeMentionHint: View {
+    var isUnpicked: Bool
+
+    var body: some View {
+        HStack(spacing: Spacing.base) {
+            Text("@time")
+                .font(.system(.caption, weight: .bold))
+                .foregroundStyle(Ink.primary)
+            Text(isUnpicked ? "Pick a time to continue." : "Refer to a time dynamically in the viewer's time zone")
+                .font(.system(.caption, weight: .medium))
+                .foregroundStyle(isUnpicked ? AnyShapeStyle(Palette.destructive) : AnyShapeStyle(Ink.secondary))
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, Spacing.snug)
+        .padding(.vertical, Spacing.base)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        // Clear, untinted: what passes under it is the transcript's content.
+        .glassEffect(.clear, in: .rect(cornerRadius: Radius.glass, style: .continuous))
+        .accessibilityElement(children: .combine)
     }
 }

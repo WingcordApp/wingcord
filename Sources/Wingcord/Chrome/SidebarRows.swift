@@ -657,6 +657,54 @@ struct SidebarActionRow: View {
     }
 }
 
+/// "3 Events": the sidebar's way into the server's events.
+///
+/// The server-page row's own shape — a glyph in the channel gutter and the
+/// words — because it sits among those rows; it lights the way an unread
+/// channel lights when an event is new, and opens the events panel rather than
+/// selecting anything.
+struct SidebarEventsRowView: View {
+    var row: SidebarEventsRow
+    var action: () -> Void
+
+    @Environment(\.motion) private var motion
+    @State private var isHovering = false
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: Spacing.base) {
+                Image(systemName: "calendar")
+                    .font(.system(.caption))
+                    .foregroundStyle(row.hasUnread ? AnyShapeStyle(Ink.secondary) : AnyShapeStyle(Ink.tertiary))
+                    .frame(width: 16)
+                Text(row.title)
+                    .font(row.hasUnread ? Typeface.rowTitleUnread : Typeface.rowTitle)
+                    .foregroundStyle(row.hasUnread ? AnyShapeStyle(Ink.primary) : AnyShapeStyle(Ink.secondary))
+                    .lineLimit(1)
+                Spacer(minLength: Spacing.tight)
+            }
+            .padding(.horizontal, Spacing.base)
+            .padding(.vertical, Spacing.tight)
+            .frame(minHeight: Metrics.rowMinHeight, alignment: .leading)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .contentShape(.rect(cornerRadius: Radius.row))
+        }
+        .buttonStyle(.plain)
+        .background {
+            RoundedRectangle(cornerRadius: Radius.row, style: .continuous)
+                .fill(Palette.hoverFill)
+                .opacity(isHovering ? 1 : 0)
+        }
+        .onHover { hovering in
+            guard isHovering != hovering else { return }
+            isHovering = hovering
+        }
+        .animation(motion.fadeQuick, value: isHovering)
+        .accessibilityLabel(Text(row.hasUnread ? "\(row.title), new" : row.title))
+        .accessibilityAddTraits(.isButton)
+    }
+}
+
 /// A small glyph button revealed on a row's hover.
 ///
 /// A region rather than a glass body: it lives inside the row's own selection

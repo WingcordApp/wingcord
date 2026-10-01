@@ -31,7 +31,8 @@ struct ExpressionInfoPresenter: ViewModifier {
                 openGuild: { model.openGuild($0) },
                 openStickerPack: model.canOpenStickerPicker
                     ? { model.openStickerPicker(at: $0) }
-                    : nil
+                    : nil,
+                previewGuild: { model.previewFromExpression($0) }
             )
             // The card supplies its own material, so the popover must supply
             // none — two in series read as frost rather than as glass.
@@ -81,7 +82,8 @@ struct ExpressionInfoPopover: ViewModifier {
                 let request = ExpressionInfoRequest(subject: .emoji(emoji), anchor: .zero)
                 ExpressionInfoCard(
                     info: model.expressionInfo(for: request),
-                    openGuild: { model.openGuild($0) }
+                    openGuild: { model.openGuild($0) },
+                    previewGuild: { model.previewFromExpression($0) }
                 )
                 .presentationBackground(.clear)
                 // Started here rather than in the resolver: a resolver that

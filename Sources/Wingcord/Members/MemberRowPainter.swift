@@ -183,7 +183,7 @@ nonisolated enum MemberRowPainter {
             chipLabel = tag
             chipBadge = entry.tagBadgeURL
         } else if entry.isBot {
-            chipLabel = "APP"
+            chipLabel = AppBadge.label(isVerified: entry.isVerifiedBot)
             chipFill = NSColor.controlAccentColor
         }
 
@@ -662,7 +662,11 @@ nonisolated enum MemberRowPainter {
                 phase: typingPhase,
                 context: context
             )
-        } else {
+        } else if entry.status != .offline, entry.status != .unknown {
+            // **No dot for offline or unknown, as Discord's member list has
+            // none** (`eo` passes no status for OFFLINE, and the avatar draws
+            // none for UNKNOWN): an offline row says so by being dimmed, and an
+            // app that never connects says nothing at all.
             drawPresenceDot(entry.status, on: frame, context: context)
         }
     }
@@ -767,6 +771,7 @@ nonisolated enum MemberRowPainter {
         on avatarFrame: CGRect,
         context: CGContext
     ) {
+        guard status != .unknown else { return }
         let side: CGFloat = 11
         let dot = CGRect(
             x: avatarFrame.maxX - side + 2,
@@ -800,6 +805,8 @@ nonisolated enum MemberRowPainter {
             context.setStrokeColor(tint.cgColor)
             context.setLineWidth(2.6)
             context.strokeEllipse(in: dot.insetBy(dx: 1.3, dy: 1.3))
+        case .unknown:
+            break
         }
     }
 

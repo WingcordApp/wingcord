@@ -41,8 +41,17 @@ struct MessageActionPresenter: ViewModifier {
             // so the profile and the person menu it opens stack above it — see
             // `ReactionsListLayer`.
             .overlay { ReactionsListLayer() }
+            // A server's events, opened from the sidebar, the inbox, the live
+            // card or a link — over the reactors list, under the profiles.
+            .overlay { EventsLayer() }
             // A form an application raised, over everything a message raises.
             .overlay { InteractionModalLayer() }
+            // Who holds a role, beside the mention that was clicked — under
+            // the profiles, so a card opened from a row comes up above it.
+            .overlay { RoleMembersLayer() }
+            // The member list's Activity section: a card's popout, the
+            // heading's menu and its About.
+            .modifier(ActivitySectionPresenter())
             // A select menu's options, off the menu — Discord's dropdown.
             .popover(
                 item: Binding(

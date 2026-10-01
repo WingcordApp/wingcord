@@ -844,6 +844,25 @@ final class AppSettings {
         didSet { defaults.set(developerMode, forKey: Key.developerMode) }
     }
 
+    // MARK: Activity
+
+    /// The member list's Activity cards folded away — Discord's Hide Activity
+    /// Cards, which its client keeps on the device (`435738`'s `hidden`).
+    var hidesActivityCards = false {
+        didSet { defaults.set(hidesActivityCards, forKey: Key.hidesActivityCards) }
+    }
+
+    /// Which Activity cards the reader has been shown, and when first — what
+    /// retires a card after three days. Kept on the device, as Discord keeps it.
+    var activityImpressions = ActivityImpressions() {
+        didSet {
+            guard activityImpressions != oldValue,
+                  let data = try? JSONEncoder().encode(activityImpressions)
+            else { return }
+            defaults.set(data, forKey: Key.activityImpressions)
+        }
+    }
+
     // MARK: Diagnostics
 
     /// Shows the performance inspector overlay.
@@ -954,6 +973,9 @@ final class AppSettings {
             ?? false
         showsPerformanceInspector = defaults.object(forKey: Key.showsInspector) as? Bool ?? false
         developerMode = defaults.object(forKey: Key.developerMode) as? Bool ?? false
+        hidesActivityCards = defaults.object(forKey: Key.hidesActivityCards) as? Bool ?? false
+        activityImpressions = (defaults.data(forKey: Key.activityImpressions))
+            .flatMap { try? JSONDecoder().decode(ActivityImpressions.self, from: $0) } ?? ActivityImpressions()
         storedMediaVolume = defaults.object(forKey: Key.mediaVolume) as? Double ?? 1
         voiceInputDeviceID = defaults.object(forKey: Key.voiceInput) as? String
         voiceOutputDeviceID = defaults.object(forKey: Key.voiceOutput) as? String
@@ -1115,6 +1137,8 @@ final class AppSettings {
         static let alwaysShowsTimestamps = "chat.alwaysShowsTimestamps"
         static let showsInspector = "diagnostics.showsPerformanceInspector"
         static let developerMode = "advanced.developerMode"
+        static let hidesActivityCards = "memberList.hidesActivityCards"
+        static let activityImpressions = "memberList.activityImpressions"
         static let launchDestination = "startup.launchDestination"
         static let lastGuild = "startup.lastGuildID"
         static let lastChannel = "startup.lastChannelID"

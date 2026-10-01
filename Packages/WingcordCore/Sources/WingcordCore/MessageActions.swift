@@ -168,6 +168,21 @@ public enum MessageActionPolicy {
         }
     }
 
+    /// Whether a NEW reaction may be started — the one reaction rule that is
+    /// about the channel rather than the message.
+    ///
+    /// **Public so the reaction row can ask it without a message in hand**,
+    /// and shared with `resolve` so the add control at the end of a reaction
+    /// row and the hover pill's react button cannot disagree.
+    public static func canAddReaction(
+        permissions: Permissions,
+        isTimedOut: Bool,
+        isPreviewing: Bool
+    ) -> Bool {
+        permissions.contains(.viewChannel) && permissions.contains(.addReactions)
+            && !isTimedOut && !isPreviewing
+    }
+
     public static func resolve(_ input: Input) -> MessageActions {
         // Not being able to see the channel settles every case at once. It is
         // also the state a permission answer resolves to when *anything* is
@@ -186,7 +201,13 @@ public enum MessageActionPolicy {
         // note on `joinReaction`.
         if canAct {
             actions.insert(.joinReaction)
-            if input.permissions.contains(.addReactions) { actions.insert(.addReaction) }
+            if canAddReaction(
+                permissions: input.permissions,
+                isTimedOut: input.isTimedOut,
+                isPreviewing: input.isPreviewing
+            ) {
+                actions.insert(.addReaction)
+            }
         }
 
         // Writing. A reply is a message, so whatever decides the composer

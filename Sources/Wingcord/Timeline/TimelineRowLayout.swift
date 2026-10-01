@@ -87,6 +87,9 @@ nonisolated struct MessageRow: @unchecked Sendable {
     var gutterTimestampText: String
 
     var isBot: Bool
+    /// Whether the app is one Discord verified, which puts a check in its
+    /// badge — see `AppBadge`.
+    var isVerifiedBot = false
 
     /// The server tag worn beside the name, and where it sits.
     ///
@@ -230,6 +233,15 @@ nonisolated struct ConversationStartSlot: Sendable {
     /// `**bold**` as literal characters.
     var topic: TimelineTextBlock?
     var topicOrigin: CGPoint
+    /// Discord's Edit Channel button, for somebody who may manage the channel.
+    var editButton: EditButton?
+
+    struct EditButton: Sendable {
+        var rect: CGRect
+        var glyphRect: CGRect
+        var label: TimelineTextBlock
+        var labelOrigin: CGPoint
+    }
 }
 
 nonisolated struct AttachmentSlot: Sendable {
@@ -508,6 +520,39 @@ nonisolated struct ReactionControlSlot: Sendable {
     var kind: Kind
 }
 
+nonisolated extension MessageRow {
+    /// The reaction row's controls that are showing, each in the slot it takes.
+    ///
+    /// Discord's rule (`17256`'s reaction row): the add control is always
+    /// shown where a new reaction may be started, and is not rendered at all
+    /// where it may not; the bookmark is shown when the message is kept, and
+    /// otherwise only while the pointer is on the reactions. **Showing controls
+    /// fill the slots in order**, so a missing add control leaves no hole in
+    /// front of the bookmark. The painter and the hit test both read this, so
+    /// what is drawn and what answers a click cannot disagree.
+    func visibleReactionControls(canAddReaction: Bool, showsBookmark: Bool) -> [ReactionControlSlot] {
+        var kinds: [ReactionControlSlot.Kind] = []
+        if canAddReaction { kinds.append(.addReaction) }
+        if showsBookmark, reactionControls.contains(where: { $0.kind == .bookmark }) {
+            kinds.append(.bookmark)
+        }
+        return zip(kinds, reactionControls).map { ReactionControlSlot(rect: $1.rect, kind: $0) }
+    }
+
+    /// Whether a row-space point is on the reactions — Discord's `.reactions`
+    /// box, whose hover is what shows the bookmark: every line the chips
+    /// wrapped onto, from the first chip to the column's trailing edge.
+    func reactionStripContains(_ point: CGPoint, rowWidth: CGFloat) -> Bool {
+        guard let first = reactions.first?.rect else { return false }
+        let bottom = max(
+            reactions.map(\.rect.maxY).max() ?? first.maxY,
+            reactionControls.map(\.rect.maxY).max() ?? first.maxY
+        )
+        return CGRect(x: first.minX, y: first.minY, width: rowWidth - first.minX, height: bottom - first.minY)
+            .contains(point)
+    }
+}
+
 // MARK: - The layout engine
 
 /// Turns timeline items into laid-out rows.
@@ -564,6 +609,9 @@ nonisolated struct TimelineLayoutEngine: Sendable {
         /// The server this transcript is in, which the profile cards in it
         /// wear. Nil in a direct message.
         var guildID: GuildID?
+        /// Whether the reader may manage this channel, which puts Discord's
+        /// Edit Channel button under its welcome header.
+        var canEditChannel = false
     }
 
     /// `@unchecked` for the same reason `MessageTextStyle` is: it carries a
@@ -579,6 +627,8 @@ nonisolated struct TimelineLayoutEngine: Sendable {
         var monogram: String
         var decorationURL: URL?
         var isBot: Bool
+        /// A verified app's badge carries a check — `AppBadge`.
+        var isVerifiedBot = false
         /// The server tag they wear, beside their name.
         ///
         /// **The same fact the roster and the direct-message list already
@@ -931,7 +981,8 @@ nonisolated struct TimelineLayoutEngine: Sendable {
             // The server tag, in the same chip the roster draws — see
             // `MemberRowGeometry.tagChipWidth`, which both the reservation and
             // the draw call so the padding cannot end up pooled on one side.
-            var afterName = authorRect.maxX + (author?.isBot == true ? 34 : 0)
+            var afterName = authorRect.maxX
+                + (author?.isBot == true ? AppBadge.width(isVerified: author?.isVerifiedBot == true) + 4 : 0)
             if let tag = author?.tag {
                 let width = MemberRowGeometry.tagChipWidth(
                     textWidth: Self.measure(tag, font: MemberRowGeometry.tagChipFont),
@@ -1202,6 +1253,8 @@ nonisolated struct TimelineLayoutEngine: Sendable {
             y: y,
             width: contentWidth,
             style: input.style,
+            // Discord never offers a bookmark on the reader's own message.
+            offersBookmark: !input.mentions.selfIDs.contains(message.authorID.rawValue),
             into: &reactions,
             controls: &reactionControls
         )
@@ -1277,6 +1330,7 @@ nonisolated struct TimelineLayoutEngine: Sendable {
             timestampRect: timestampRect,
             gutterTimestampText: input.settings.time(message.sentAt),
             isBot: author?.isBot ?? false,
+            isVerifiedBot: author?.isVerifiedBot ?? false,
             tag: item.isRunHead ? author?.tag : nil,
             tagBadgeURL: item.isRunHead ? author?.tagBadgeURL : nil,
             tagRect: tagRect,
@@ -1355,6 +1409,8 @@ nonisolated struct TimelineLayoutEngine: Sendable {
             y: y + block.size.height,
             width: contentWidth,
             style: input.style,
+            // Discord never offers a bookmark on the reader's own message.
+            offersBookmark: !input.mentions.selfIDs.contains(message.authorID.rawValue),
             into: &reactions,
             controls: &reactionControls
         )
@@ -1620,6 +1676,7 @@ nonisolated struct TimelineLayoutEngine: Sendable {
         y startY: CGFloat,
         width: CGFloat,
         style: MessageTextStyle,
+        offersBookmark: Bool,
         into slots: inout [ReactionSlot],
         controls: inout [ReactionControlSlot]
     ) -> CGFloat {
@@ -1684,7 +1741,8 @@ nonisolated struct TimelineLayoutEngine: Sendable {
         // row's end: a message with eight reactions on a narrow column ends its
         // last line wherever it ends, and a control pinned to the right of the
         // measure would sit alone under a gap.
-        for kind in [ReactionControlSlot.Kind.addReaction, .bookmark] {
+        let kinds: [ReactionControlSlot.Kind] = offersBookmark ? [.addReaction, .bookmark] : [.addReaction]
+        for kind in kinds {
             let side = TimelineMetrics.reactionControlSide
             if x + side > contentX + width, x > contentX {
                 x = contentX
@@ -1965,7 +2023,8 @@ nonisolated struct TimelineLayoutEngine: Sendable {
         // angle brackets.
         let title = TimelineTextBlock(
             text: .plain(NSAttributedString(
-                string: "Welcome to #\(input.channelName)",
+                // Discord's own words, exclamation and all.
+                string: "Welcome to #\(input.channelName)!",
                 attributes: [
                     .font: NSFont.systemFont(
                         ofSize: style.bodyFont.pointSize * 1.65, weight: .bold
@@ -2019,6 +2078,41 @@ nonisolated struct TimelineLayoutEngine: Sendable {
             y += block.size.height
         }
 
+        // Discord's Edit Channel, under the welcome, for a reader who may
+        // manage the channel: a pencil and the words on the row's quiet plate.
+        var editButton: ConversationStartSlot.EditButton?
+        if input.canEditChannel {
+            y += TimelineMetrics.conversationStartButtonGap
+            let font = NSFont.systemFont(ofSize: style.bodyFont.pointSize, weight: .medium)
+            let label = TimelineTextBlock(
+                text: .plain(NSAttributedString(
+                    string: "Edit Channel",
+                    attributes: [.font: font, .foregroundColor: style.primaryColor]
+                )),
+                width: Self.measure("Edit Channel", font: font) + 2,
+                style: style
+            )
+            let glyphSide = TimelineMetrics.componentGlyphSide
+            let padding = TimelineMetrics.componentPadding
+            let height = TimelineMetrics.componentHeight + 4
+            let rect = CGRect(
+                x: margin, y: y,
+                width: padding + glyphSide + TimelineMetrics.componentGlyphGap + label.size.width + padding,
+                height: height
+            )
+            editButton = .init(
+                rect: rect,
+                glyphRect: CGRect(x: rect.minX + padding, y: rect.midY - glyphSide / 2,
+                                  width: glyphSide, height: glyphSide),
+                label: label,
+                labelOrigin: CGPoint(
+                    x: rect.minX + padding + glyphSide + TimelineMetrics.componentGlyphGap,
+                    y: rect.midY - label.size.height / 2
+                )
+            )
+            y = rect.maxY
+        }
+
         return (
             ConversationStartSlot(
                 iconRect: iconRect,
@@ -2029,7 +2123,8 @@ nonisolated struct TimelineLayoutEngine: Sendable {
                 subtitle: subtitle,
                 subtitleOrigin: subtitleOrigin,
                 topic: topic,
-                topicOrigin: topicOrigin
+                topicOrigin: topicOrigin,
+                editButton: editButton
             ),
             y + TimelineMetrics.conversationStartBottomPadding
         )

@@ -170,13 +170,71 @@ struct MentionCandidateTests {
         #expect(candidates(.member, "robinre").contains { $0.title == "robinresting" })
     }
 
-    @Test("A bare `@` offers everybody, and the two specials above them")
+    @Test("A bare `@` is people, then the plain mentions, in Discord's order")
     func bareSigilOffersEveryone() {
         let rows = candidates(.member, "")
-        // Three members, plus `@everyone` and `@here` — which the reader holds
-        // the permission for here, being the owner.
-        #expect(rows.count == 5)
-        #expect(rows.prefix(2).map(\.title) == ["@everyone", "@here"])
+        // Three members, then `@everyone` and `@here` — which the reader holds
+        // the permission for here, being the owner — then `@game` and `@time`.
+        // People come first.
+        #expect(rows.count == 7)
+        #expect(rows.map(\.group) == [.person, .person, .person, .global, .global, .global, .global])
+        #expect(rows.suffix(4).map(\.title) == ["@everyone", "@here", "@game", "@time"])
+        #expect(rows.suffix(2).allSatisfy { $0.opensInput })
+    }
+
+    /// Discord's `N`: a full list makes room for `@game` and `@time` by giving
+    /// up its last people, so a bare `@` in a busy server is eight people and
+    /// those two.
+    @Test("`@game` and `@time` take the last places of a full list")
+    func inputWordsPopTheList() {
+        let model = model()
+        for index in 10 ..< 30 {
+            let id = UserID(rawValue: UInt64(index))
+            model.users[id] = User(id: id, username: "member\(index)")
+            model.members[guildID]?[id] = Member(userID: id, roleIDs: [])
+        }
+        let rows = model.mentionCandidates(
+            for: MentionAutocomplete.Trigger(kind: .member, query: "", sigilOffset: 0), in: channelID
+        )
+        #expect(rows.count == MentionAutocomplete.limit)
+        #expect(rows.filter { $0.group == .person }.count == 8)
+        #expect(rows.suffix(2).map(\.title) == ["@game", "@time"])
+        // The whole word is offered however full the list is.
+        let exact = model.mentionCandidates(
+            for: MentionAutocomplete.Trigger(kind: .member, query: "time", sigilOffset: 0), in: channelID
+        )
+        #expect(exact.contains { $0.title == "@time" })
+    }
+
+    /// Two roles named alike are two roles, and both are offered — the
+    /// screenshot that reported their absence had exactly that.
+    @Test("Roles follow, mentionable ones for anybody and every one for the owner")
+    func rolesAreOffered() {
+        func roles(isOwner: Bool) -> [MentionCandidate] {
+            let model = model(isOwner: isOwner)
+            model.roles[guildID] = [
+                RoleID(rawValue: 100): Role(id: RoleID(rawValue: 100), name: "@everyone", position: 0),
+                RoleID(rawValue: 5): Role(id: RoleID(rawValue: 5), name: "new role", position: 2,
+                                          isMentionable: true),
+                RoleID(rawValue: 6): Role(id: RoleID(rawValue: 6), name: "new role", position: 1),
+            ]
+            return model.mentionCandidates(
+                for: MentionAutocomplete.Trigger(kind: .member, query: "new", sigilOffset: 0),
+                in: channelID
+            ).filter { $0.group == .role }
+        }
+        // The owner may name every role, including the one nobody marked
+        // mentionable; the server's own `@everyone` role is never a row.
+        #expect(roles(isOwner: true).map(\.token) == ["<@&5>", "<@&6>"])
+        #expect(roles(isOwner: false).map(\.token) == ["<@&5>"])
+        #expect(roles(isOwner: true).first?.title == "@new role")
+    }
+
+    @Test("The loose match finds letters in order, and nothing out of order")
+    func looseMatch() {
+        #expect(MentionAutocomplete.looselyMatches("nr", "new role"))
+        #expect(MentionAutocomplete.looselyMatches("", "anything"))
+        #expect(!MentionAutocomplete.looselyMatches("rn", "new rol"))
     }
 
     /// A mention is a token, and the token is what the parser reads back.
@@ -215,8 +273,10 @@ struct MentionCandidateTests {
         let people = model.mentionCandidates(
             for: MentionAutocomplete.Trigger(kind: .member, query: "", sigilOffset: 0), in: dm
         )
-        #expect(people.count == 2)
+        #expect(people.filter { $0.group == .person }.count == 2)
         #expect(!people.contains { $0.title == "@everyone" })
+        // `@game` and `@time` are offered in a conversation too.
+        #expect(people.contains { $0.title == "@time" })
 
         let channels = model.mentionCandidates(
             for: MentionAutocomplete.Trigger(kind: .channel, query: "", sigilOffset: 0), in: dm

@@ -379,7 +379,7 @@ private struct OverlayChatRailFace: View {
         return (
             model.avatarURL(for: user, side: Self.side),
             user.monogram,
-            model.presences[userID]?.status ?? .offline
+            model.presenceStatus(of: userID)
         )
     }
 }

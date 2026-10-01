@@ -62,7 +62,8 @@ struct TranscriptFilmsTests {
             playingPreview: nil,
             isCovered: false,
             bookmarks: [],
-            canSuperReact: false
+            canSuperReact: false,
+            canAddReactions: true
         )
     }
 

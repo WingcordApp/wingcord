@@ -21,6 +21,10 @@ nonisolated final class TimelineTextBlock: @unchecked Sendable {
     /// Where each inline emoji's box landed, in the block's own coordinates
     /// (origin top-left, y increasing downward).
     let emojiRects: [(rect: CGRect, emoji: EmojiRef)]
+    /// Standard emoji in the text, outside code, each with its box — what a
+    /// click on one opens the default emoji card from. A standard emoji is a
+    /// glyph rather than a run delegate, so it is found by its grapheme.
+    let unicodeEmojiRects: [(rect: CGRect, emoji: EmojiRef)]
     /// Where each inline SF Symbol's box landed, in the block's own coordinates.
     let symbolRects: [(rect: CGRect, name: String)]
     /// Clickable regions, resolved once.
@@ -99,6 +103,7 @@ nonisolated final class TimelineTextBlock: @unchecked Sendable {
             into: &runs
         )
         emojiRects = runs.emoji
+        unicodeEmojiRects = runs.unicodeEmoji
         symbolRects = runs.symbols
         linkRects = runs.links
         spoilerRects = runs.spoilers
@@ -175,9 +180,39 @@ nonisolated final class TimelineTextBlock: @unchecked Sendable {
         )
     }
 
+    /// Every standard emoji in the text, by its UTF-16 range — outside inline
+    /// code and code blocks, where Discord draws the characters as code and a
+    /// click opens nothing.
+    ///
+    /// One walk of the graphemes, and only for a text that has an emoji
+    /// scalar in it at all, which most messages do not.
+    private static func unicodeEmojiRanges(in text: MessageText) -> [(NSRange, EmojiRef)] {
+        let string = text.attributed.string
+        guard string.unicodeScalars.contains(where: {
+            $0.properties.isEmojiPresentation || $0.value == 0xFE0F
+        }) else { return [] }
+        let code = text.codeBlocks + text.plates.compactMap {
+            if case .code = $0.kind { $0.range } else { nil }
+        }
+        var ranges: [(NSRange, EmojiRef)] = []
+        var offset = 0
+        for character in string {
+            let length = character.utf16.count
+            if character.isEmojiCluster {
+                let range = NSRange(location: offset, length: length)
+                if !code.contains(where: { NSIntersectionRange($0, range).length > 0 }) {
+                    ranges.append((range, EmojiRef(name: String(character))))
+                }
+            }
+            offset += length
+        }
+        return ranges
+    }
+
     /// Everything one walk over the lines produces.
     private struct ResolvedRuns {
         var emoji: [(CGRect, EmojiRef)] = []
+        var unicodeEmoji: [(CGRect, EmojiRef)] = []
         var symbols: [(CGRect, String)] = []
         var links: [(CGRect, MessageText.LinkTarget)] = []
         var spoilers: [(CGRect, Int)] = []
@@ -204,6 +239,7 @@ nonisolated final class TimelineTextBlock: @unchecked Sendable {
         into resolved: inout ResolvedRuns
     ) {
         guard let lines = CTFrameGetLines(frame) as? [CTLine], !lines.isEmpty else { return }
+        let standardEmoji = unicodeEmojiRanges(in: text)
         var origins = [CGPoint](repeating: .zero, count: lines.count)
         CTFrameGetLineOrigins(frame, CFRange(location: 0, length: 0), &origins)
 
@@ -258,6 +294,15 @@ nonisolated final class TimelineTextBlock: @unchecked Sendable {
                         ))
                     }
                 }
+            }
+
+            for (range, emoji) in standardEmoji {
+                guard let span = span(of: range, on: line, lineRange: lineRange) else { continue }
+                resolved.unicodeEmoji.append((
+                    CGRect(x: origin.x + span.start, y: lineTop,
+                           width: span.end - span.start, height: ascent + descent),
+                    emoji
+                ))
             }
 
             // Link rectangles: one per line the link crosses, so a link that
