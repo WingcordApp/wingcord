@@ -54,7 +54,12 @@ struct QuickSwitcher: View {
         .frame(width: Self.width)
         .glassEffect(.clear.tint(Palette.flyoutTint), in: shape)
         .specularEdge(in: shape)
-        .onAppear { isFocused = true }
+        // **After the panel is in the window, not as it appears**: a focus
+        // request made in `onAppear` lands while the materialize transition is
+        // still inserting the field, and is dropped — the switcher opened with
+        // nothing focused. `.task` runs once it is attached, as the DM menu's
+        // field does.
+        .task { isFocused = true }
         // The list is rebuilt by every keystroke, and a lit row that survived
         // into a different list is lighting somewhere nobody asked for.
         .onChange(of: rows) { _, new in

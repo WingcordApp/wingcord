@@ -136,6 +136,8 @@ final class RailDrag {
     /// The scroll view the rail is inside, so the carry can scroll it.
     @ObservationIgnored weak var scrollView: NSScrollView?
     @ObservationIgnored private var autoscroll: Task<Void, Never>?
+    /// When the trackpad last ticked — see `RailHaptics`.
+    @ObservationIgnored private var lastSnap: ContinuousClock.Instant?
 
     /// The gap between tiles — the rail's own stack spacing.
     static let gap = Spacing.base
@@ -164,7 +166,10 @@ final class RailDrag {
     /// The carry is over: dropped where it is, or — with no point — given up.
     func ended(at point: CGPoint?) {
         guard source != nil else { return }
-        if point != nil, let target { drop(target.drop) }
+        if point != nil, let target {
+            drop(target.drop)
+            RailHaptics.drop(target.drop)
+        }
         autoscroll?.cancel()
         autoscroll = nil
         source = nil
@@ -180,7 +185,16 @@ final class RailDrag {
             folders: arrangement,
             gap: Self.gap
         )
-        if target != next { target = next }
+        guard target != next else { return }
+        target = next
+        guard next != nil else { return }
+        // **A detent, not a buzz**: an auto-scroll carries the pointer across
+        // tiles faster than a hand would, so ticks closer than this are
+        // dropped.
+        let now = ContinuousClock.now
+        if let lastSnap, now - lastSnap < .milliseconds(45) { return }
+        lastSnap = now
+        RailHaptics.snap()
     }
 
     /// The tiles, in drawing order, with the frames they were last laid out at.
@@ -273,6 +287,33 @@ final class RailDrag {
         // further along by the same amount.
         location.y += to - from
         retarget()
+    }
+}
+
+// MARK: - What the hand feels
+
+/// The trackpad's half of the carry — Apple's multimodal feedback: causal,
+/// on the same frame as the eye's, and only where it means something.
+///
+/// **A light tick each time the drop point snaps to a new place**
+/// (`.alignment`, what the system gives a guide snapping into place), **a
+/// firmer click when the drop makes a folder** (`.levelChange`), and an
+/// ordinary click for everything else that lands. Fired with the draw that
+/// moves the mark (`.drawCompleted`), so the hand feels the snap on the frame
+/// the eye sees it. A trackpad without Force Touch, or one whose haptics are
+/// off in System Settings, feels nothing, as it should.
+@MainActor
+enum RailHaptics {
+    static func snap() {
+        NSHapticFeedbackManager.defaultPerformer.perform(.alignment, performanceTime: .drawCompleted)
+    }
+
+    static func drop(_ drop: RailDrop) {
+        let makesFolder = if case .combine(_, .guild) = drop { true } else { false }
+        NSHapticFeedbackManager.defaultPerformer.perform(
+            makesFolder ? .levelChange : .generic,
+            performanceTime: .drawCompleted
+        )
     }
 }
 

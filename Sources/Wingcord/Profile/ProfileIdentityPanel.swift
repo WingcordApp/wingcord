@@ -76,7 +76,6 @@ struct ProfileIdentityPanel: View {
                 banner
                 identity
                 bioSection
-                statusRow
                 memberSince
                 roles
                 connections
@@ -495,35 +494,6 @@ struct ProfileIdentityPanel: View {
         }
         .padding(.horizontal, Self.gutter)
         .padding(.top, 14)
-    }
-
-    /// The presence, as the handoff's own capsule row.
-    ///
-    /// **The dot and the words, and nothing on the right-hand end.** The mockup
-    /// puts "4h 12m" there and there is no such number: a presence has no
-    /// duration anywhere in the API, and a client that draws one is drawing a
-    /// figure that is always wrong. What is real is the state itself, and it
-    /// earns the row on its own.
-    private var statusRow: some View {
-        HStack(spacing: Spacing.base) {
-            PresenceDot(status: profile.status, side: 7, hasPlate: false)
-            Text(profile.status.label)
-                .font(.system(.subheadline, weight: .medium))
-                .foregroundStyle(InkColor.primary)
-            Spacer(minLength: 0)
-            if profile.isBot {
-                Text("APP")
-                    .font(.system(size: 10, weight: .bold))
-                    .foregroundStyle(InkColor.tertiary)
-            }
-        }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 9)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .glassEffect(.clear.tint(Palette.flyoutTint), in: .rect(cornerRadius: 13))
-        .padding(.horizontal, Self.gutter)
-        .padding(.top, 16)
-        .accessibilityElement(children: .combine)
     }
 
     // MARK: The sections
