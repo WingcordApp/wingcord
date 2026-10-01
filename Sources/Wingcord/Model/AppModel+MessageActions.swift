@@ -351,6 +351,56 @@ extension AppModel {
     /// One call rather than four assignments at each site: opening the picker
     /// from the menu has to take the menu down, and a site that forgets one
     /// leaves two glass panels stacked over the same row.
+    // MARK: Who reacted
+
+    /// Opens the list of who reacted, on `selection` or on the largest entry.
+    ///
+    /// **Not one of the surfaces `dismissMessageSurfaces` takes down.** A
+    /// right-click on somebody in the list raises the person menu, which
+    /// clears those — and the list has to still be there under it.
+    func openReactionsList(
+        for messageID: MessageID,
+        in channelID: ChannelID,
+        selection: ReactionListing.Key? = nil
+    ) {
+        guard actions(for: messageID, in: channelID).contains(.viewReactions) else { return }
+        dismissMessageSurfaces()
+        reactionHover = nil
+        reactionsList = ReactionsListRequest(
+            messageID: messageID, channelID: channelID, selection: selection
+        )
+    }
+
+    /// Whether the reader may take `userID`'s reaction off this message: their
+    /// own always, anybody's with `removeReactions`.
+    func canRemoveReaction(of userID: UserID, on messageID: MessageID, in channelID: ChannelID) -> Bool {
+        userID == currentUserID || actions(for: messageID, in: channelID).contains(.removeReactions)
+    }
+
+    /// Takes one person's reaction off, from the list. Answers whether it went.
+    ///
+    /// The reader's own goes the way a click on the chip takes it back —
+    /// optimistically, through the same guard. Anybody else's is a request
+    /// whose effect arrives on the gateway like any other removal, so the
+    /// count is not touched here and cannot be moved twice.
+    func removeReaction(
+        of userID: UserID,
+        _ entry: ReactionListing,
+        on messageID: MessageID,
+        in channelID: ChannelID
+    ) async -> Bool {
+        guard canRemoveReaction(of: userID, on: messageID, in: channelID) else { return false }
+        if userID == currentUserID {
+            toggleReaction(entry.emoji, kind: entry.kind, location: .message, on: messageID, in: channelID)
+            return true
+        }
+        let removed = await sessionController.removeReaction(
+            of: userID, emoji: entry.emoji, kind: entry.kind, on: messageID, in: channelID
+        )
+        if !removed { reportActionFailure("That reaction couldn’t be removed.") }
+        return removed
+    }
+
     func dismissMessageSurfaces() {
         if messageMenu != nil { messageMenu = nil }
         if reactionPicker != nil { reactionPicker = nil }

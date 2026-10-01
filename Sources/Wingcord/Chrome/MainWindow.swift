@@ -333,6 +333,8 @@ private struct GuildRailContainer: View {
             selectGuild: { model.selectGuild($0) },
             openGuildMenu: { model.openServerOptions($0, anchor: $1) },
             toggleFolder: { model.toggleFolder($0) },
+            openFolderMenu: { model.openFolderMenu($0, anchor: $1) },
+            drop: { model.dropOnRail($0) },
             addServer: { model.joinServerSheet = JoinServerSheetState() },
             openDiscovery: { model.toggleDiscovery() },
             isDiscoveryShown: model.isDiscoveryShown

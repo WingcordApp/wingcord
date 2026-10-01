@@ -65,7 +65,7 @@ struct ExpressionInfoCard: View {
 
             if let source = info.source {
                 Divider().opacity(0.35)
-                SourceRow(source: source, openGuild: openGuild)
+                ExpressionSourceRow(source: source, openGuild: openGuild)
             }
         }
         .frame(width: Self.width)
@@ -199,7 +199,7 @@ private struct PackSection: View {
 /// answers for one because it is scoped to the emoji rather than to the server,
 /// and publishing a closed community's size because one of its emoji leaked out
 /// is the client doing something nobody asked it to.
-private struct SourceRow: View {
+struct ExpressionSourceRow: View {
     var source: ExpressionInfo.Source
     var openGuild: (GuildID) -> Void
 

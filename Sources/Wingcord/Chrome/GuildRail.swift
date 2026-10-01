@@ -49,12 +49,23 @@ struct GuildRail: View, Equatable {
     /// A right-click on a tile, with its frame. See `GuildRailTile.openMenu`.
     var openGuildMenu: (GuildID, CGRect) -> Void = { _, _ in }
     var toggleFolder: (UInt64) -> Void = { _ in }
+    /// A right-click on a folder's tile, with its frame — `FolderOptionsMenu`.
+    var openFolderMenu: (UInt64, CGRect) -> Void = { _, _ in }
+    /// A server or folder dropped somewhere else in the rail — `RailDrop`.
+    var drop: (RailDrop) -> Void = { _ in }
     var addServer: () -> Void = {}
     var openDiscovery: () -> Void = {}
     /// Whether discovery is the detail column, so the tile can say so. Part of
     /// the value rather than read from the store, because this view holds no
     /// model reference — that is what `.equatable()` needs.
     var isDiscoveryShown = false
+
+    /// The space tile frames and the pointer are measured in while a tile is
+    /// carried: the scrolling content's own, so a scroll moves nothing in it.
+    nonisolated static let contentSpace = "GuildRail.content"
+
+    /// The tile being carried, if any — `RailDrag`.
+    @State private var drag = RailDrag()
 
     var body: some View {
         ScrollView {
@@ -87,7 +98,8 @@ struct GuildRail: View, Equatable {
                             guild: guild,
                             isSelected: guild.id == selectedGuildID,
                             action: { selectGuild(guild.id) },
-                            openMenu: { openGuildMenu(guild.id, $0) }
+                            openMenu: { openGuildMenu(guild.id, $0) },
+                            dragNode: .guild(guild.id)
                         )
                     case .folder(let folder):
                         GuildRailFolder(
@@ -95,7 +107,8 @@ struct GuildRail: View, Equatable {
                             selectedGuildID: selectedGuildID,
                             toggle: { toggleFolder(folder.id) },
                             selectGuild: selectGuild,
-                            openGuildMenu: openGuildMenu
+                            openGuildMenu: openGuildMenu,
+                            openFolderMenu: { openFolderMenu(folder.id, $0) }
                         )
                     }
                 }
@@ -104,12 +117,20 @@ struct GuildRail: View, Equatable {
                 DiscoverRailTile(isSelected: isDiscoveryShown, action: openDiscovery)
             }
             .padding(.vertical, Spacing.base)
+            .coordinateSpace(.named(Self.contentSpace))
+            .overlay(alignment: .topLeading) { RailDropMarks(drag: drag, items: items) }
+            .background { RailScrollViewReader(drag: drag) }
+            .environment(drag)
         }
         .scrollIndicators(.hidden)
         // The rail runs to the top of the window, under the traffic lights,
         // which the split view already insets the column for.
         .frame(width: Proportions.railWidth)
         .softScrollEdgesVertical()
+        .onChange(of: items, initial: true) { drag.items = items }
+        // The act a drop performs never changes — the store's — so it is
+        // handed over once rather than on every evaluation.
+        .onAppear { drag.drop = drop }
     }
 }
 

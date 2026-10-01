@@ -144,6 +144,8 @@ struct ComposerAttachButton: View {
                 Image(systemName: "plus")
                     .font(.system(size: 19, weight: .regular))
             }
+            // The expression controls' box — see `ComposerEnclosedSlot`.
+            .modifier(ComposerEnclosedSlot())
         } else {
             ComposerCircleBody(action: action) {
                 Image(systemName: "plus")
@@ -177,6 +179,7 @@ struct ComposerSendButton: View {
             if shape.enclosesFlankingControls {
                 Button(action: action) { enclosedBody }
                     .buttonStyle(.plain)
+                    .modifier(ComposerEnclosedSlot())
             } else {
                 ComposerCircleBody(tint: isArmed ? Palette.accent.opacity(0.7) : nil, action: action) {
                     arrow
@@ -205,6 +208,20 @@ struct ComposerSendButton: View {
         Image(systemName: "arrow.up")
             .font(.system(size: 15, weight: .bold))
             .foregroundStyle(isArmed ? AnyShapeStyle(.white) : AnyShapeStyle(Ink.tertiary))
+    }
+}
+
+/// The box a 32-point control sits in inside a boxy bar: the bar's own resting
+/// height, the control centred in it.
+///
+/// **The row is bottom-aligned**, so a composer grown to three lines keeps its
+/// controls on the last one — and a bare 32-point control on a 38-point row
+/// sits on the bar's floor rather than in it. The expression controls always
+/// had this box (`Composer.expressionControls`); the `+` and the send arrow did
+/// not, and sat three points low with the arrow's disc on the bar's edge.
+private struct ComposerEnclosedSlot: ViewModifier {
+    func body(content: Content) -> some View {
+        content.frame(height: Metrics.composerControlHeight)
     }
 }
 

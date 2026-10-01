@@ -457,22 +457,26 @@ public actor DiscordREST {
         )
     }
 
-    /// Takes the reader's reaction of `kind` back.
+    /// Takes a reaction of `kind` back — the reader's own, or with `userID`
+    /// somebody else's, which is a moderator's act.
     ///
     /// **The type is a path segment here, not a query** — `…/{emoji}/{type}/@me`
     /// — which is the route Discord's client uses for every removal, plain ones
     /// included. The bare `…/{emoji}/@me` removes only a plain reaction and has
-    /// no way to name a super one.
+    /// no way to name a super one. Somebody else's is the same route with their
+    /// id where `@me` is (`649963`'s `et`, `userId ?? "@me"`).
     public func removeReaction(
         _ emoji: EmojiRef,
         kind: ReactionKind,
         location: ReactionLocation,
         from messageID: MessageID,
-        in channelID: ChannelID
+        in channelID: ChannelID,
+        of userID: UserID? = nil
     ) async throws {
+        let who = userID.map { String($0.rawValue) } ?? "@me"
         _ = try await requestData(
             method: "DELETE",
-            path: "/channels/\(channelID.rawValue)/messages/\(messageID.rawValue)/reactions/\(emoji.apiIdentifier)/\(kind.rawValue)/@me",
+            path: "/channels/\(channelID.rawValue)/messages/\(messageID.rawValue)/reactions/\(emoji.apiIdentifier)/\(kind.rawValue)/\(who)",
             route: "channels/\(channelID.rawValue)/messages/:id/reactions",
             query: [
                 URLQueryItem(name: "location", value: location.rawValue),
@@ -482,26 +486,29 @@ public actor DiscordREST {
         )
     }
 
-    /// The first people who reacted with `emoji` of `kind` — what a chip's
-    /// tooltip names.
+    /// The people who reacted with `emoji` of `kind`, in the order they did.
     ///
     /// **Captured**: `GET …/reactions/x_shaq%3A…?limit=3&type=1` answers a bare
-    /// array of whole user objects, and Discord asks for exactly three, because
-    /// three names are all its sentence has room for.
+    /// array of whole user objects, and Discord asks for exactly three for a
+    /// chip's tooltip, because three names are all its sentence has room for.
+    /// Its reactors list asks for a hundred at a time and pages on from the last
+    /// one with `after` — `limit=100&after=460472293391466508&type=0`, in that
+    /// order (`view reactions.har`).
     public func reactors(
         of emoji: EmojiRef,
         kind: ReactionKind,
         on messageID: MessageID,
         in channelID: ChannelID,
-        limit: Int = 3
+        limit: Int = 3,
+        after: UserID? = nil
     ) async throws -> [User] {
-        try await get(
+        var query = [URLQueryItem(name: "limit", value: String(limit))]
+        if let after { query.append(URLQueryItem(name: "after", value: String(after.rawValue))) }
+        query.append(URLQueryItem(name: "type", value: String(kind.rawValue)))
+        return try await get(
             "/channels/\(channelID.rawValue)/messages/\(messageID.rawValue)/reactions/\(emoji.apiIdentifier)",
             route: "channels/\(channelID.rawValue)/messages/:id/reactions",
-            query: [
-                URLQueryItem(name: "limit", value: String(limit)),
-                URLQueryItem(name: "type", value: String(kind.rawValue)),
-            ],
+            query: query,
             as: [UserDTO].self
         ).map(\.domain)
     }
@@ -1547,4 +1554,7 @@ public enum ReactionLocation: String, Sendable {
     case inlineButton = "Message Inline Button"
     /// The emoji picker a message's Add Reaction opens.
     case reactionPicker = "Message Reaction Picker"
+    /// The reactors list, where a moderator takes somebody's reaction off —
+    /// Discord's `MESSAGE`.
+    case message = "Message"
 }

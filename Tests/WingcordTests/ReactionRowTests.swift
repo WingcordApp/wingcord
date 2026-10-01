@@ -191,7 +191,18 @@ struct ReactionRowTests {
         // three names out of 194.
         #expect(ReactionTooltipText.sentence(
             emojiName: ":x_shaq:", names: names, remaining: remaining, kind: kind
-        ) == expected)
+        )?.text == expected)
+    }
+
+    /// Alex's `:bread:` — 1,181 on the chip, three named, the rest a link.
+    @Test("The count of the others is grouped, and is the part that opens the list")
+    func tooltipLink() throws {
+        let sentence = try #require(ReactionTooltipText.sentence(
+            emojiName: ":bread:", names: ["rhiabackup", "et", "🫖 🪴"], remaining: 1_178, kind: .normal
+        ))
+        #expect(sentence.text == ":bread: reacted by rhiabackup, et, 🫖 🪴, and 1,178 others")
+        #expect(sentence.others == "1,178 others")
+        #expect(ReactionTooltipText.sentence(emojiName: ":a:", names: ["Ana"], remaining: 0, kind: .normal)?.others == nil)
     }
 
     @Test("Nobody to name is no tooltip, and a Unicode emoji is named by its shortcode")

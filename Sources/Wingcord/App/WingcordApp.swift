@@ -6,6 +6,7 @@ import WingcordVoice
 @main
 struct WingcordApp: App {
     @State private var model: AppModel
+    @NSApplicationDelegateAdaptor(WingcordAppDelegate.self) private var appDelegate
 
     init() {
         // Installed before anything else can crash. The report file is opened
@@ -73,6 +74,7 @@ struct WingcordApp: App {
         }
         _model = State(initialValue: model)
         PerformanceMonitor.shared.model = model
+        WingcordAppDelegate.model = model
         MemoryPressureWatcher.shared.model = model
     }
 

@@ -76,8 +76,11 @@ struct Composer: View {
     /// to do, so the key falls through.
     var escapeTranscript: () -> Bool = { false }
     var attach: () -> Void = {}
-    /// Whether `+` and the drop target are offered at all. A channel that
-    /// refuses files gets neither — `INVARIANTS.md` §5.5.
+    /// Files pasted into the field, staged as a drop stages them.
+    var pasteFiles: ([URL]) -> Void = { _ in }
+    /// Whether `+`, the drop target and a pasted file are offered at all. A
+    /// channel that refuses files gets none of them — `INVARIANTS.md` §5.5 —
+    /// and a paste there is the text paste it would be anywhere else.
     var canAttach: Bool = true
     /// Files staged for this message, and why the last one was refused.
     var attachments: [PendingAttachment] = []
@@ -361,7 +364,11 @@ struct Composer: View {
                         }
                         return result == .handled
                     },
-                    onSubmit: pressedReturn
+                    onSubmit: pressedReturn,
+                    onPasteFiles: canAttach ? { urls in
+                        pasteFiles(urls)
+                        return true
+                    } : nil
                 )
                 .frame(minHeight: Metrics.composerFieldMinHeight)
             }

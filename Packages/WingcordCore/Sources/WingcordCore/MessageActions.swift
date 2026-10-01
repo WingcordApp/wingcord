@@ -53,6 +53,14 @@ public struct MessageActions: OptionSet, Hashable, Sendable {
     /// bookmark becomes a reminder.
     public static let remindMe = MessageActions(rawValue: 1 << 15)
 
+    /// Seeing who reacted — Discord's "View Reactions", offered whenever there
+    /// is a reaction to list. Nothing gates it but seeing the message.
+    public static let viewReactions = MessageActions(rawValue: 1 << 16)
+    /// Taking somebody else's reaction off, from that list. A moderator's:
+    /// see `MessageActionPolicy.resolve`. The reader's own reactions need
+    /// nothing, and are not this bit.
+    public static let removeReactions = MessageActions(rawValue: 1 << 17)
+
     /// Whether anything at all is offered. A row with no actions draws no pill
     /// and opens no menu, rather than opening an empty one.
     public var isEmpty: Bool { rawValue == 0 }
@@ -123,6 +131,11 @@ public enum MessageActionPolicy {
         public var isBookmarked: Bool
         /// Whether the reader turned developer mode on.
         public var developerMode: Bool
+        /// Whether anybody has reacted to it at all.
+        public var hasReactions: Bool
+        /// Whether it is in a thread that is archived **and** locked, which
+        /// nothing but a moderator's own unlock reopens.
+        public var isInLockedArchive: Bool
 
         public init(
             permissions: Permissions,
@@ -135,7 +148,9 @@ public enum MessageActionPolicy {
             isDirectMessage: Bool = false,
             isPreviewing: Bool = false,
             isBookmarked: Bool = false,
-            developerMode: Bool = false
+            developerMode: Bool = false,
+            hasReactions: Bool = false,
+            isInLockedArchive: Bool = false
         ) {
             self.permissions = permissions
             self.canSend = canSend
@@ -148,6 +163,8 @@ public enum MessageActionPolicy {
             self.isPreviewing = isPreviewing
             self.isBookmarked = isBookmarked
             self.developerMode = developerMode
+            self.hasReactions = hasReactions
+            self.isInLockedArchive = isInLockedArchive
         }
     }
 
@@ -207,6 +224,17 @@ public enum MessageActionPolicy {
             // hiding the row there would make "remind me" reachable only by
             // un-bookmarking first.
             actions.insert(.remindMe)
+        }
+
+        // Who reacted is anybody's to see who can see the message.
+        if input.hasReactions { actions.insert(.viewReactions) }
+        // Taking somebody else's reaction off is `MANAGE_MESSAGES` — never in
+        // a DM, where nobody holds it — and not in a thread archived and
+        // locked (Discord's reactors list, `112753`, gated by `406704`'s `Id`).
+        if canAct, !input.isDirectMessage, !input.isInLockedArchive,
+           input.permissions.contains(.manageMessages)
+        {
+            actions.insert(.removeReactions)
         }
 
         // Marking unread rewinds the read cursor, which means nothing in a

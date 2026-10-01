@@ -69,6 +69,7 @@ struct ComposerContainer: View {
             replyToLatest: { model.replyToLatestMessage() },
             escapeTranscript: { model.escapeTranscript(in: channelID) },
             attach: { isChoosingFiles = true },
+            pasteFiles: { model.stageAttachments($0, in: channelID) },
             canAttach: model.canAttachFiles(in: channelID),
             attachments: box?.attachments ?? [],
             attachmentRefusal: box?.attachmentRefusal,

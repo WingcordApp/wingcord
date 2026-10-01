@@ -90,8 +90,17 @@ final class AppModel {
     /// (`notification_settings.flags & 16`). It decides how a channel's unread
     /// setting resolves — see `AppModel.resolvedUnreadSetting(of:)`.
     var usesNewNotifications = false
-    /// The rail's arrangement, from the account's own client settings.
+    /// The rail's arrangement, from the account's own client settings, as
+    /// `GuildArrangement` resolves it — and what goes back when the reader
+    /// rearranges it.
     var folders: [GuildFolder] = []
+    /// The settings' `guild_positions`, exactly as they arrived.
+    ///
+    /// **Not an order anything here reads** — the folder list is the order
+    /// whenever it has anything in it. Kept only because a folder write is
+    /// the whole `guild_folders` message, and Discord's own client sends this
+    /// back untouched beside the folders (captured, twice).
+    var guildPositions: [GuildID] = []
     var expandedFolderIDs: Set<UInt64> = []
     var collapsedCategoryIDs: Set<ChannelID> = []
 
@@ -514,6 +523,7 @@ final class AppModel {
     @ObservationIgnored var reactorCache: [ReactorKey: (count: Int, users: [UserID])] = [:]
     var messageMenu: MessageMenuRequest?
     var reactionPicker: ReactionPickerRequest?
+    var reactionsList: ReactionsListRequest?
     var forwardRequest: ForwardRequest?
     var shareProfileRequest: ShareProfileRequest?
     /// Channels a forward is being written to. Keyed by target so two can be in
@@ -528,6 +538,8 @@ final class AppModel {
     /// title or a right-click in the rail. One property for all three: they are
     /// one menu, and two of them open at once is a state with no meaning.
     var serverOptionsMenu: ServerOptionsRequest?
+    /// A folder's right-click menu — see `FolderOptionsMenu`.
+    var folderMenu: FolderMenuRequest?
     /// Every linked role in a server, once its configuration has been fetched.
     ///
     /// **An absent entry is "not asked"; an empty array is "asked, none".** The

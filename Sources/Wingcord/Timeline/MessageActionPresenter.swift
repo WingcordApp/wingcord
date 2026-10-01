@@ -37,6 +37,10 @@ struct MessageActionPresenter: ViewModifier {
         let deletion = model.deleteRequest
 
         return content
+            // Who reacted: a layer over the window rather than a presentation,
+            // so the profile and the person menu it opens stack above it — see
+            // `ReactionsListLayer`.
+            .overlay { ReactionsListLayer() }
             .popover(
                 item: $model.messageMenu,
                 attachmentAnchor: .rect(.rect(model.messageMenu?.anchor ?? .zero)),

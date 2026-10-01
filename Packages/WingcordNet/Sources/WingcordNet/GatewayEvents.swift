@@ -107,6 +107,8 @@ struct GatewayFrame: Decodable, Sendable {
         case relationshipRemove(RelationshipDTO)
         case relationshipUpdate(RelationshipDTO)
         case userGuildSettingsUpdate(GuildSettingsDTO)
+        /// The account's settings blob changed — here, or in another client.
+        case userSettingsProtoUpdate(SettingsProtoUpdateDTO)
         case stageInstanceUpsert(StageInstanceDTO)
         case stageInstanceDelete(StageInstanceDTO)
         case scheduledEventUpsert(ScheduledEventDTO)
@@ -264,6 +266,11 @@ struct GatewayFrame: Decodable, Sendable {
         // pseudo-guild sends `guild_id: null`.
         case "USER_GUILD_SETTINGS_UPDATE":
             payload = .userGuildSettingsUpdate(try decode(GuildSettingsDTO.self))
+        // Settings saved anywhere — Discord's own client rearranging the rail,
+        // or the echo of a write from this one. `partial` means the blob holds
+        // only the fields that changed.
+        case "USER_SETTINGS_PROTO_UPDATE":
+            payload = .userSettingsProtoUpdate(try decode(SettingsProtoUpdateDTO.self))
         // A stage started, was renamed, or ended. **Create and update are one
         // case**: the payload is the whole instance either way, so a client
         // that told them apart would be telling itself something it does not
@@ -366,6 +373,18 @@ struct ReadyPayload: Decodable, Sendable {
 
         private enum Keys: String, CodingKey { case entries }
     }
+}
+
+/// `USER_SETTINGS_PROTO_UPDATE`: `{ settings: { type, proto }, partial }`, the
+/// shape Discord's own dispatcher unpacks (`e.settings.type`,
+/// `e.settings.proto`, `e.partial`). Type 1 is `PreloadedUserSettings`.
+struct SettingsProtoUpdateDTO: Decodable, Sendable {
+    struct Settings: Decodable, Sendable {
+        var type: Int
+        var proto: String
+    }
+    var settings: Settings
+    var partial: Bool?
 }
 
 struct GuildSettingsDTO: Decodable, Sendable {

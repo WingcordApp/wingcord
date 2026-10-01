@@ -21,6 +21,8 @@ enum MessageActionRouter {
         switch kind {
         case .react:
             model.openReactionPicker(for: messageID, in: channelID, anchor: anchor)
+        case .viewReactions:
+            model.openReactionsList(for: messageID, in: channelID)
         case .reply:
             model.beginReply(to: messageID, in: channelID)
         case .forward:

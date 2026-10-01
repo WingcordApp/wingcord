@@ -462,6 +462,10 @@ extension AppModel {
         /// Bottom of the group: `.presentsMedia()` is applied first at the
         /// window root, and an earlier `.overlay` draws under a later one.
         case mediaViewer
+        /// Drawn by `.presentsMessageActions()`, applied after the media
+        /// viewer and before the profiles — so a profile opened from a row in
+        /// it comes up on top.
+        case reactions
         case profile
         case gameProfile
         case tenureBadge
@@ -474,6 +478,7 @@ extension AppModel {
         if tenureBadgeRequest != nil { return .tenureBadge }
         if gameProfileRequest != nil { return .gameProfile }
         if profileRequest != nil { return .profile }
+        if reactionsList != nil { return .reactions }
         if mediaViewer != nil { return .mediaViewer }
         return nil
     }

@@ -292,7 +292,9 @@ final class PermissionGate {
                 isDirectMessage: channel?.kind.isPrivate ?? false,
                 isPreviewing: guildID != nil && guildID == model.guildPreview?.guildID,
                 isBookmarked: model.bookmarkedMessageIDs.contains(message.id),
-                developerMode: AppSettings.shared.developerMode
+                developerMode: AppSettings.shared.developerMode,
+                hasReactions: !message.reactions.isEmpty,
+                isInLockedArchive: channel?.threadMetadata.map { $0.isArchived && $0.isLocked } ?? false
             )
         )
     }

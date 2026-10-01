@@ -948,6 +948,16 @@ struct ServerOptionsPresenter: ViewModifier {
                 .environment(model)
                 .presentationBackground(.clear)
             }
+            // A folder's menu, off the same column — `FolderOptionsMenu`.
+            .popover(
+                item: $model.folderMenu,
+                attachmentAnchor: .rect(.rect(model.folderMenu?.anchor ?? .zero)),
+                arrowEdge: .trailing
+            ) { request in
+                FolderOptionsMenu(folderID: request.folderID, close: { model.folderMenu = nil })
+                    .environment(model)
+                    .presentationBackground(.clear)
+            }
             // **A system alert, deliberately, where the menu above it is glass.**
             // Leaving is the one irreversible act in the set; it wants the
             // platform's own destructive vocabulary, its Escape and Return

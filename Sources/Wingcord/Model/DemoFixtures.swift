@@ -697,7 +697,9 @@ enum DemoFixtures {
         }
 
         if let channelID = model.selectedChannelID {
-            model.setMessages(transcript(in: channelID, users: users), in: channelID)
+            let box = transcript(in: channelID, users: users)
+            model.setMessages(box, in: channelID)
+            seedReactors(model, messages: box.messages, userIDs: userIDs)
             populateTopics(model, in: channelID, guildID: first)
             populateSummaries(model, in: channelID, guildID: first)
         }
@@ -2060,6 +2062,22 @@ enum DemoFixtures {
             excerpt: MessageReference.excerpt(of: target.content),
             hasAttachment: !target.attachments.isEmpty
         )
+    }
+
+    /// Who reacted, for the chips below — so a chip's flyout has names to say
+    /// in `--demo`, where the route that supplies them has no account to
+    /// answer. Put where the flyout's own fetch looks first.
+    private static func seedReactors(_ model: AppModel, messages: [Message], userIDs: [UserID]) {
+        for message in messages {
+            for reaction in message.reactions {
+                for kind in [ReactionKind.normal, .burst] {
+                    let count = reaction.count(of: kind)
+                    guard count > 0 else { continue }
+                    let key = ReactorKey(messageID: message.id, emoji: reaction.emoji.reactionKey, kind: kind)
+                    model.reactorCache[key] = (count, Array(userIDs.dropFirst().prefix(min(3, count))))
+                }
+            }
+        }
     }
 
     /// The chips under a message.

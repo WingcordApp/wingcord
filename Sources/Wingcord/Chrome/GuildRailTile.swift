@@ -21,12 +21,24 @@ struct GuildRailTile: View {
     /// row, and this column can hold ninety-seven of them; the menu is hung off
     /// this rect at the window root — see `ServerOptionsPresenter`.
     var openMenu: (CGRect) -> Void = { _ in }
+    /// What carrying this tile moves, or nil for a tile that stays where it
+    /// is — the previewed server's, which is in no arrangement.
+    var dragNode: RailNodeID? = nil
 
     @Environment(\.motion) private var motion
+    @Environment(RailDrag.self) private var drag: RailDrag?
     @State private var isHovering = false
     /// Whether the animated layer has frames on screen. Drives the still's
     /// hand-off, so there is never both and never neither.
     @State private var isPlaying = false
+
+    /// Whether the name shows: under the pointer, but not while a tile is
+    /// being carried — the pointer is down and hovers nothing — except on the
+    /// tile a drop would go into, which Discord names.
+    private var showsName: Bool {
+        guard let drag, drag.isActive else { return isHovering }
+        return dragNode.map(drag.isCombineTarget) ?? false
+    }
 
     private var side: CGFloat { Metrics.guildTile }
 
@@ -152,10 +164,11 @@ struct GuildRailTile: View {
         // and it has to arrive while the reader is still asking. One chip is
         // drawn for the whole rail and travels between tiles; see
         // `RailHoverLabel`.
-        .railHoverLabel(guild.name, guildID: guild.id, isHovered: isHovering)
+        .railHoverLabel(guild.name, guildID: guild.id, isHovered: showsName)
         // One empty layer-less `NSView` per tile that reports a point — see
         // `SecondaryClickCatcher` for why this is not a `.contextMenu`.
         .onSecondaryClick { openMenu($0) }
+        .railDraggable(dragNode, drag: drag)
         .accessibilityLabel(Text(guild.name))
         .accessibilityAddTraits(isSelected ? [.isButton, .isSelected] : .isButton)
     }

@@ -203,6 +203,12 @@ final class SessionController {
     /// change, which is what stops a sweep through the rail asking about ninety
     /// servers nobody stopped on.
     var guildPrefetchTask: Task<Void, Never>?
+    /// The rail's arrangement waiting to be saved — see
+    /// `SessionController+Rail`. Nil when there is nothing to save.
+    var folderSaveTask: Task<Void, Never>?
+    /// Counts the reader's changes to the rail, so a save's answer can tell
+    /// whether the rail has moved on since it was sent.
+    var railEdits = 0
     /// The message search in flight, replaced rather than queued: an answer to
     /// a question the reader has moved past is worse than no answer.
     var searchTask: Task<Void, Never>?
@@ -452,6 +458,7 @@ final class SessionController {
         model.presences = [:]
         model.readStates = [:]
         model.folders = []
+        model.guildPositions = []
         model.expandedFolderIDs = []
         model.collapsedCategoryIDs = []
         model.selectedGuildID = nil
@@ -536,6 +543,7 @@ final class SessionController {
 
     private func teardownConnection() {
         isTornDown = true
+        cancelFolderSave()
         stopGameDetection()
         eventTask?.cancel()
         eventTask = nil
@@ -688,11 +696,15 @@ final class SessionController {
         model.readStates = readStates
         model.guildEventAcks = snapshot.guildEventAcks
         model.usesNewNotifications = (snapshot.notificationFlags ?? 0) & 16 != 0
-        model.folders = Self.railOrder(
-            settingsFolders: snapshot.settings.folders,
-            guildPositions: snapshot.settings.guildPositions,
-            guilds: snapshot.guilds
+        // **A rearrangement not yet saved outlives a reconnect**: the READY
+        // settings predate it, and the save still pending will write it. Only
+        // the servers are brought up to date under it.
+        model.folders = GuildArrangement.resolve(
+            folders: hasPendingFolderSave ? model.folders : snapshot.settings.folders,
+            guildPositions: hasPendingFolderSave ? [] : snapshot.settings.guildPositions,
+            joined: snapshot.guilds.map(\.id)
         )
+        model.guildPositions = snapshot.settings.guildPositions
         model.selfStatus = snapshot.settings.status
         model.selfCustomStatus = snapshot.settings.customStatus
         // The tab the account was last on, in any client. Seeded rather than
@@ -815,62 +827,6 @@ final class SessionController {
         if !snapshot.presences.isEmpty { model.presenceRevision &+= 1 }
         model.sidebarCache = nil
         model.sidebarRevision &+= 1
-    }
-
-    /// The rail's order.
-    ///
-    /// Three sources, and each covers a case the others cannot:
-    ///
-    ///   1. **The folder list** gives both the grouping and the position of
-    ///      everything the account has arranged. A single-guild entry here is
-    ///      not a folder — it is a guild sitting loose at that position — and
-    ///      `GuildFolder.isRealFolder` is what tells them apart downstream.
-    ///   2. **`guild_positions`** orders what the folder list does not mention.
-    ///      Discord keeps the two separate, so a client reading only folders has
-    ///      no order at all for the rest, which on a 97-guild account is most of
-    ///      the rail. Its absence is why the rack looked arbitrary.
-    ///   3. **READY's own guild order**, last, for anything in neither — a guild
-    ///      joined since the account last rearranged. Discord puts new servers at
-    ///      the end, and so does this.
-    ///
-    /// Guilds named in the settings but no longer joined are dropped rather than
-    /// carried as holes: `guild_positions` outlives leaving a server.
-    private static func railOrder(
-        settingsFolders: [GuildFolder],
-        guildPositions: [GuildID],
-        guilds: [Guild]
-    ) -> [GuildFolder] {
-        // One lookup rather than a linear scan per id. At 97 guilds against a
-        // 97-entry position list the scan is ~9,000 comparisons on the launch
-        // path, for an answer a set gives in one.
-        var known = Set<GuildID>()
-        known.reserveCapacity(guilds.count)
-        for guild in guilds { known.insert(guild.id) }
-
-        var placed = Set<GuildID>()
-        var result: [GuildFolder] = []
-
-        for folder in settingsFolders {
-            let present = folder.guildIDs.filter { known.contains($0) && !placed.contains($0) }
-            guard !present.isEmpty else { continue }
-            placed.formUnion(present)
-            result.append(GuildFolder(
-                id: folder.id,
-                name: folder.name,
-                colorValue: folder.colorValue,
-                guildIDs: present
-            ))
-        }
-
-        for guildID in guildPositions where known.contains(guildID) && !placed.contains(guildID) {
-            placed.insert(guildID)
-            result.append(GuildFolder(guildIDs: [guildID]))
-        }
-
-        for guild in guilds where !placed.contains(guild.id) {
-            result.append(GuildFolder(guildIDs: [guild.id]))
-        }
-        return result
     }
 
     private func restoreNavigation() {
@@ -1087,6 +1043,13 @@ final class SessionController {
             let scheduledEvents
         ):
             model.guilds[guild.id] = guild
+            // **A server just joined goes on top**, as Discord's rebuild on
+            // `GUILD_CREATE` puts it (`GuildArrangement.resolve`). One already
+            // in the rail — an outage ending — keeps its place, and a lurked
+            // one stays out: its tile is the preview's until the join lands.
+            if !model.isPreviewing(guild.id) {
+                GuildArrangement.placeJoined(guild.id, in: &model.folders)
+            }
             model.scheduledEvents[guild.id] = scheduledEvents.isEmpty ? nil : scheduledEvents
             model.voiceChannelInfo.merge(voiceChannelInfo) { _, new in new }
             // The stages already running here. A server arriving mid-session
@@ -1161,15 +1124,7 @@ final class SessionController {
             model.members[guildID] = nil
             model.memberLists = model.memberLists.filter { $0.key.guildID != guildID }
             model.memberListRevision &+= 1
-            model.folders = model.folders.compactMap { folder in
-                let remaining = folder.guildIDs.filter { $0 != guildID }
-                return remaining.isEmpty
-                    ? nil
-                    : GuildFolder(
-                        id: folder.id, name: folder.name,
-                        colorValue: folder.colorValue, guildIDs: remaining
-                    )
-            }
+            GuildArrangement.remove(guildID, from: &model.folders)
             if model.selectedGuildID == guildID {
                 model.selectedGuildID = nil
                 model.selectedChannelID = nil
@@ -1256,6 +1211,11 @@ final class SessionController {
             // same answer its optimistic write already made, and one made on a
             // phone reaches this window without a refetch.
             model.applyFriendNickname(nickname, for: userID)
+
+        case .guildFoldersChanged(let settings):
+            // The rail rearranged in another client — or the echo of this
+            // one's own write, which changes nothing it has not already drawn.
+            applyFolderSettings(settings)
 
         case .guildSettingsChanged(let guildID, let pinned, let muted, let settings):
             // **Only the private-channel entry carries pins**, and it is the

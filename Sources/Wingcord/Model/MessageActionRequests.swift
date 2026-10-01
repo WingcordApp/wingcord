@@ -38,6 +38,18 @@ struct ReactionPickerRequest: Identifiable, Hashable, Sendable {
     var id: UInt64 { messageID.rawValue }
 }
 
+/// Who reacted — Discord's reactors list, from the message menu or from a
+/// chip's flyout.
+struct ReactionsListRequest: Identifiable, Hashable, Sendable {
+    var messageID: MessageID
+    var channelID: ChannelID
+    /// The entry it opens on — the chip a flyout was about — or nil for the
+    /// largest, which is Discord's own default.
+    var selection: ReactionListing.Key?
+
+    var id: UInt64 { messageID.rawValue }
+}
+
 /// The forward sheet.
 struct ForwardRequest: Identifiable, Hashable, Sendable {
     var messageID: MessageID

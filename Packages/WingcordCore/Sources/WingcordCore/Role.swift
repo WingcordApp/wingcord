@@ -171,6 +171,10 @@ public struct Member: Hashable, Sendable, Codable {
     /// Timed-out until, or nil. A past date is not a timeout.
     public var communicationDisabledUntil: Date?
     public var isPending: Bool
+    /// See `MemberFlags`. Empty where the payload did not carry them — a
+    /// member-list row — which reads as "never started onboarding", the answer
+    /// that raises nothing.
+    public var flags: MemberFlags
 
     public init(
         userID: UserID,
@@ -180,7 +184,8 @@ public struct Member: Hashable, Sendable, Codable {
         joinedAt: Date? = nil,
         premiumSince: Date? = nil,
         communicationDisabledUntil: Date? = nil,
-        isPending: Bool = false
+        isPending: Bool = false,
+        flags: MemberFlags = []
     ) {
         self.userID = userID
         self.nickname = nickname
@@ -190,6 +195,7 @@ public struct Member: Hashable, Sendable, Codable {
         self.premiumSince = premiumSince
         self.communicationDisabledUntil = communicationDisabledUntil
         self.isPending = isPending
+        self.flags = flags
     }
 
     public func isTimedOut(now: Date = .now) -> Bool {

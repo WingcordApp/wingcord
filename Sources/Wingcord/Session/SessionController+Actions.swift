@@ -55,23 +55,50 @@ extension SessionController {
         }
     }
 
-    /// The first people who reacted with `emoji` of `kind`, harvested into the
-    /// store so their names resolve — a reactor is very often somebody in no
-    /// roster the reader has loaded. Nil when the route refuses.
+    /// People who reacted with `emoji` of `kind` — the first three for a chip's
+    /// tooltip, a hundred at a time after `after` for the reactors list —
+    /// harvested into the store so their names resolve: a reactor is very
+    /// often somebody in no roster the reader has loaded. Nil when the route
+    /// refuses.
     func reactors(
         of emoji: EmojiRef,
         kind: ReactionKind,
         on messageID: MessageID,
-        in channelID: ChannelID
+        in channelID: ChannelID,
+        limit: Int = 3,
+        after: UserID? = nil
     ) async -> [UserID]? {
         do {
-            let users = try await rest.reactors(of: emoji, kind: kind, on: messageID, in: channelID)
+            let users = try await rest.reactors(
+                of: emoji, kind: kind, on: messageID, in: channelID, limit: limit, after: after
+            )
             // One write for the batch, as a page of history is harvested.
             model.users.merge(users.map { ($0.id, $0) }) { existing, new in new.merged(over: existing) }
             return users.map(\.id)
         } catch {
             Self.trace("reactors \(messageID) failed: \(Self.describe(error))")
             return nil
+        }
+    }
+
+    /// Takes somebody else's reaction off — a moderator's act, from the
+    /// reactors list. Answers whether the server took it; the count moves
+    /// when the gateway says so, as it does for anybody else's removal.
+    func removeReaction(
+        of userID: UserID,
+        emoji: EmojiRef,
+        kind: ReactionKind,
+        on messageID: MessageID,
+        in channelID: ChannelID
+    ) async -> Bool {
+        do {
+            try await rest.removeReaction(
+                emoji, kind: kind, location: .message, from: messageID, in: channelID, of: userID
+            )
+            return true
+        } catch {
+            Self.trace("remove reaction of \(userID) on \(messageID) failed: \(Self.describe(error))")
+            return false
         }
     }
 

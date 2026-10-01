@@ -4,7 +4,7 @@ import WingcordCore
 /// What a reaction chip's tooltip says.
 struct ReactionTooltipContent: Equatable, Sendable {
     /// "`:fire:` reacted by Ana, Bo, and 10 others."
-    var sentence: String
+    var sentence: ReactionTooltipText.Sentence
     /// A second line a super reaction chip may carry — see
     /// `AppModel.reactionTooltip(for:in:)`.
     var note: String?
@@ -67,8 +67,20 @@ extension AppModel {
 
 /// Discord's tooltip sentences, from the en-US strings its reactions module
 /// reads (`reactionTooltip1`, `…1N`, `…2`, `…2N`, `…3`, `…3N`, and their
-/// `burst` twins).
+/// `burst` twins) — and their `…Interactive` forms, which are the same words
+/// with the count of the others made a link to the list of everybody.
 nonisolated enum ReactionTooltipText {
+
+    /// A sentence, split where Discord's link starts.
+    struct Sentence: Equatable, Sendable {
+        /// Everything before the others — or the whole sentence, when
+        /// everybody who reacted is named.
+        var lead: String
+        /// "1,178 others": what opens the list.
+        var others: String?
+
+        var text: String { lead + (others ?? "") }
+    }
 
     /// How the sentence names the emoji: `:name:` for a custom one, the
     /// primary shortcode for a Unicode one — Discord's `convertSurrogateToName`
@@ -80,21 +92,26 @@ nonisolated enum ReactionTooltipText {
 
     /// The sentence, or nil when there is nobody to name — Discord shows no
     /// tooltip then either.
+    ///
+    /// **The count is grouped** — "1,178 others" — because the strings carry it
+    /// as an ICU `#`, which formats; the sentence is English, so the grouping
+    /// is too.
     static func sentence(
         emojiName: String,
         names: [String],
         remaining: Int,
         kind: ReactionKind
-    ) -> String? {
+    ) -> Sentence? {
         let lead = "\(emojiName) \(kind == .burst ? "Super reacted by" : "reacted by")"
-        let others = remaining == 1 ? "1 other" : "\(remaining) others"
+        let count = remaining.formatted(.number.locale(Locale(identifier: "en_US")))
+        let others = remaining == 1 ? "1 other" : "\(count) others"
         switch (names.count, remaining > 0) {
-        case (1, false): return "\(lead) \(names[0])"
-        case (1, true): return "\(lead) \(names[0]) and \(others)"
-        case (2, false): return "\(lead) \(names[0]) and \(names[1])"
-        case (2, true): return "\(lead) \(names[0]), \(names[1]), and \(others)"
-        case (3, false): return "\(lead) \(names[0]), \(names[1]), and \(names[2])"
-        case (3, true): return "\(lead) \(names[0]), \(names[1]), \(names[2]), and \(others)"
+        case (1, false): return Sentence(lead: "\(lead) \(names[0])")
+        case (1, true): return Sentence(lead: "\(lead) \(names[0]) and ", others: others)
+        case (2, false): return Sentence(lead: "\(lead) \(names[0]) and \(names[1])")
+        case (2, true): return Sentence(lead: "\(lead) \(names[0]), \(names[1]), and ", others: others)
+        case (3, false): return Sentence(lead: "\(lead) \(names[0]), \(names[1]), and \(names[2])")
+        case (3, true): return Sentence(lead: "\(lead) \(names[0]), \(names[1]), \(names[2]), and ", others: others)
         default: return nil
         }
     }

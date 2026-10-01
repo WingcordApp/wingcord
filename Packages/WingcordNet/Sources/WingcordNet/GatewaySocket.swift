@@ -1668,6 +1668,10 @@ public enum GatewayUpdate: Sendable {
         muted: Set<ChannelID>,
         settings: GuildUserSettings?
     )
+    /// The rail's arrangement was saved — by another client, or as the echo
+    /// of a write from this one. Only sent when the settings update carried
+    /// `guild_folders`: a partial update leaves out what did not change.
+    case guildFoldersChanged(GuildFolderSettings)
     /// Somebody moved in, out of, or between voice channels. A state whose
     /// `channelID` is nil **is** the departure.
     case voiceStateChanged(VoiceState, member: Member?, user: User?)
@@ -2068,6 +2072,12 @@ public enum GatewayUpdate: Sendable {
                 muted: DiscordREST.muted(in: dto),
                 settings: dto.guild_id.map(dto.domain(guildID:))
             )
+        case .userSettingsProtoUpdate(let dto):
+            guard dto.settings.type == 1,
+                  let data = Data(base64Encoded: dto.settings.proto, options: .ignoreUnknownCharacters),
+                  let folders = UserSettingsProto.guildFolders(in: data)
+            else { return nil }
+            self = .guildFoldersChanged(folders)
         default:
             return nil
         }

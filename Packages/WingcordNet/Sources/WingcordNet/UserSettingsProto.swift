@@ -157,20 +157,9 @@ enum UserSettingsProto {
                 }
 
             case Field.guildFolders:
-                var inner = reader.reader(for: field)
-                while let entry = inner.next() {
-                    switch entry.number {
-                    case FoldersField.folders:
-                        if let folder = decodeFolder(inner.reader(for: entry)) {
-                            folders.append(folder)
-                        }
-                    case FoldersField.guildPositions:
-                        guildPositions = inner.packedFixed64(for: entry)
-                            .map { GuildID(rawValue: $0) }
-                    default:
-                        break
-                    }
-                }
+                let setting = decodeGuildFolders(reader.reader(for: field))
+                folders = setting.folders
+                guildPositions = setting.guildPositions
 
             default:
                 break
@@ -460,6 +449,90 @@ enum UserSettingsProto {
         var outer = ProtobufWriter()
         outer.message(field: Field.inbox, inner.data)
         return outer.base64
+    }
+
+    // MARK: - The rail's folders
+
+    /// `guild_folders` alone, or nil when the blob does not carry it — which
+    /// is what a partial settings update means by "unchanged".
+    static func guildFolders(in data: Data) -> GuildFolderSettings? {
+        var reader = ProtobufReader(data)
+        var found: GuildFolderSettings?
+        while let field = reader.next() {
+            guard field.number == Field.guildFolders else { continue }
+            found = decodeGuildFolders(reader.reader(for: field))
+        }
+        return found
+    }
+
+    private static func decodeGuildFolders(_ source: ProtobufReader) -> GuildFolderSettings {
+        var inner = source
+        var setting = GuildFolderSettings(folders: [], guildPositions: [])
+        while let entry = inner.next() {
+            switch entry.number {
+            case FoldersField.folders:
+                if let folder = decodeFolder(inner.reader(for: entry)) {
+                    setting.folders.append(folder)
+                }
+            case FoldersField.guildPositions:
+                setting.guildPositions = inner.packedFixed64(for: entry)
+                    .map { GuildID(rawValue: $0) }
+            default:
+                break
+            }
+        }
+        return setting
+    }
+
+    /// The body of `PATCH /users/@me/settings-proto/1` for a rearranged rail:
+    /// **the whole `guild_folders` message and nothing else**, which is what
+    /// Discord's own client sends (`817281`'s `um`) — captured twice in
+    /// `rearranging servers.har`, and reproduced byte for byte by
+    /// `GuildFoldersProtoTests`.
+    ///
+    /// **Rebuilt from values, which this file otherwise refuses to do — and
+    /// safe here for a reason that has been checked, not assumed.** Discord's
+    /// compiled descriptor gives `GuildFolders` exactly two fields and
+    /// `GuildFolder` exactly four (`discord_users.v1`), and every one of them
+    /// is decoded above, so there is nothing a rebuild could drop. The server
+    /// replaces the field whole rather than merging into it: the capture's
+    /// response carries back the same 2,113 bytes it was sent.
+    ///
+    /// `guild_positions` goes back as it came, as Discord's client leaves it.
+    static func encodeGuildFolders(_ folders: [GuildFolder], guildPositions: [GuildID]) -> String {
+        var message = ProtobufWriter()
+        for folder in folders {
+            var entry = ProtobufWriter()
+            if !folder.guildIDs.isEmpty {
+                entry.packedFixed64(field: FolderField.guildIDs, folder.guildIDs.map(\.rawValue))
+            }
+            if let id = folder.id {
+                entry.message(field: FolderField.id, wrapped(varint: id))
+            }
+            if let name = folder.name, !name.isEmpty {
+                var value = ProtobufWriter()
+                value.string(field: 1, name)
+                entry.message(field: FolderField.name, value.data)
+            }
+            if let color = folder.colorValue {
+                entry.message(field: FolderField.color, wrapped(varint: UInt64(color)))
+            }
+            message.message(field: FoldersField.folders, entry.data)
+        }
+        if !guildPositions.isEmpty {
+            message.packedFixed64(field: FoldersField.guildPositions, guildPositions.map(\.rawValue))
+        }
+        var outer = ProtobufWriter()
+        outer.message(field: Field.guildFolders, message.data)
+        return outer.base64
+    }
+
+    /// An `Int64Value`/`UInt64Value`: the number at field 1, **left out when
+    /// it is zero**, as proto3 leaves it out.
+    private static func wrapped(varint value: UInt64) -> Data {
+        var wrapper = ProtobufWriter()
+        if value != 0 { wrapper.varint(field: 1, value) }
+        return wrapper.data
     }
 
     private static func decodeFolder(_ source: ProtobufReader) -> GuildFolder? {

@@ -250,10 +250,9 @@ extension AppModel {
     /// The account's servers in the order the rail shows them: the folders'
     /// contents in order, then anything the folder list does not mention.
     ///
-    /// `guild_positions` is the order for loose servers and the folder list is
-    /// the order for the rest — see `HANDOFF.md`. Both are already flattened
-    /// into `folders` by the settings decode, so this only has to catch guilds
-    /// that arrived after the settings did.
+    /// `folders` already holds every joined server — `GuildArrangement` puts
+    /// the ones the settings do not mention on top — so the tail only catches
+    /// a server in the store that is not in the rail, which is a lurked one.
     var orderedGuildIDs: [GuildID] {
         var seen = Set<GuildID>()
         var order: [GuildID] = []

@@ -142,12 +142,12 @@ public struct Guild: Hashable, Sendable, Identifiable, Codable {
     }
 }
 
-/// A user-created folder in the guild rail, from the client's own settings.
+/// One entry of the rail, from the client's own settings: a folder, or a
+/// server sitting loose.
 ///
-/// `id` is optional because Discord genuinely sends folders with no id: a
-/// single-guild "folder" is how the settings payload represents a guild sitting
-/// loose in the rail. Those are unwrapped into bare guild entries rather than
-/// drawn as one-item folders.
+/// `id` is optional because Discord genuinely sends entries with no id, and
+/// that is how the settings payload represents a server loose in the rail —
+/// see `GuildArrangement`.
 public struct GuildFolder: Hashable, Sendable, Codable {
     public var id: UInt64?
     public var name: String?
@@ -167,6 +167,11 @@ public struct GuildFolder: Hashable, Sendable, Codable {
         self.guildIDs = guildIDs
     }
 
-    /// Whether this entry is a real folder or a single guild wearing one.
-    public var isRealFolder: Bool { id != nil && guildIDs.count > 1 }
+    /// Whether this entry is a folder rather than a loose server.
+    ///
+    /// **The id decides, not the count.** Discord draws an entry with an id as
+    /// a folder even when it holds one server (`711014`'s `N`) — which is what
+    /// a folder is after everything else has been dragged out of it, and what
+    /// a captured account had sitting in its rail.
+    public var isRealFolder: Bool { id != nil }
 }

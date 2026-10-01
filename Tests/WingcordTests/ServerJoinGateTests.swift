@@ -22,7 +22,8 @@ struct ServerJoinGateTests {
     private func model(
         isPending: Bool = true,
         responses: Set<UInt64> = [],
-        rulesVersion: String? = "2025-09-25T21:04:15.651000+00:00"
+        rulesVersion: String? = "2025-09-25T21:04:15.651000+00:00",
+        flags: MemberFlags = []
     ) -> AppModel {
         let model = AppModel()
         model.currentUserID = readerID
@@ -33,7 +34,7 @@ struct ServerJoinGateTests {
             features: ["COMMUNITY", "MEMBER_VERIFICATION_GATE_ENABLED"]
         )
         model.members[guildID] = [
-            readerID: Member(userID: readerID, roleIDs: [], joinedAt: .now, isPending: isPending)
+            readerID: Member(userID: readerID, roleIDs: [], joinedAt: .now, isPending: isPending, flags: flags)
         ]
         model.selectedGuildID = guildID
         model.guildOnboardings[guildID] = GuildOnboarding(
@@ -138,6 +139,34 @@ struct ServerJoinGateTests {
     @Test("A server already answered and agreed is not raised again")
     func answeredServerIsNotRaised() {
         let model = model(isPending: false, responses: [1_108_815_692_299_928_788])
+        model.offerJoinGateIfNeeded(guildID)
+        #expect(model.joinGate == nil)
+    }
+
+    /// **The report**: onboarding finished having chosen nothing — the
+    /// optional question skipped, as `forza onboarding.har` submits
+    /// `onboarding_responses: []` — came back on every launch, because the
+    /// gate asked whether any question had an answer. Discord asks the flags.
+    @Test("Onboarding finished with nothing chosen is not raised again")
+    func finishedWithNothingChosen() {
+        let model = model(isPending: false, responses: [], flags: [.startedOnboarding, .completedOnboarding])
+        model.offerJoinGateIfNeeded(guildID)
+        #expect(model.joinGate == nil)
+    }
+
+    /// Discord's own test for raising it on opening a server: started, never
+    /// finished — somebody who closed the flow half way.
+    @Test("Onboarding started and never finished is raised again")
+    func startedNotFinished() {
+        let model = model(isPending: false, flags: [.startedOnboarding])
+        model.offerJoinGateIfNeeded(guildID)
+        #expect(model.joinGate?.guildID == guildID)
+    }
+
+    /// Somebody who was here before the server had onboarding at all.
+    @Test("A member who never started onboarding is not raised on opening")
+    func neverStarted() {
+        let model = model(isPending: false, flags: [])
         model.offerJoinGateIfNeeded(guildID)
         #expect(model.joinGate == nil)
     }

@@ -11,15 +11,30 @@ enum EditorKey: Equatable {
 /// placeholder drawn in the caret's own line, and the keys and focus its owner
 /// asks about reported out.
 final class MarkdownTextView: NSTextView {
-    var placeholder: NSAttributedString?
+    var placeholder: NSAttributedString? {
+        didSet { refreshPlaceholder(force: true) }
+    }
     var onFocusChange: ((Bool) -> Void)?
     /// The selection came to rest — a drag let go, or a keyboard selection
     /// made. What brings the formatting toolbar up.
     var onSelectionSettled: (() -> Void)?
     /// ⌘B, ⌘I and ⌘U: the three formats a keyboard has a habit for.
     var onFormatShortcut: ((MarkdownFormat) -> Void)?
+    /// Files on the clipboard at a paste — see `PastedFiles`. Answers whether
+    /// they were taken; a paste they were not is an ordinary one.
+    var onPasteFiles: (([URL]) -> Bool)?
 
     override var readablePasteboardTypes: [NSPasteboard.PasteboardType] { [.string] }
+
+    /// **Files first, as Discord's box takes them**: a paste carrying files is
+    /// an attachment, and its text — a copied file's name, a copied picture's
+    /// address — is not typed as well. Everything else is the text paste above.
+    override func paste(_ sender: Any?) {
+        if let onPasteFiles, let files = PastedFiles.read(from: .general), onPasteFiles(files) {
+            return
+        }
+        super.paste(sender)
+    }
     /// Text only, so a file dragged over the field falls through to the
     /// composer's own drop target rather than landing as a path.
     override var acceptableDragTypes: [NSPasteboard.PasteboardType] { [.string] }
@@ -58,6 +73,34 @@ final class MarkdownTextView: NSTextView {
         guard let format, let onFormatShortcut else { return super.performKeyEquivalent(with: event) }
         onFormatShortcut(format)
         return true
+    }
+
+    // MARK: The placeholder
+
+    /// Whether the placeholder is on screen, so the field is redrawn whole only
+    /// when that changes.
+    private var showsPlaceholder = true
+
+    override func didChangeText() {
+        super.didChangeText()
+        refreshPlaceholder()
+    }
+
+    override var string: String {
+        didSet { refreshPlaceholder() }
+    }
+
+    /// **The placeholder is paint, not text**, and nothing about typing takes
+    /// paint away: AppKit redraws only what the new letters cover, so the rest
+    /// of "Message #general" stayed on screen under the first word typed. The
+    /// field is redrawn whole on the one change that matters — becoming empty,
+    /// or stopping being — whether the reader typed it or the composer set it,
+    /// as it does when a message is sent.
+    private func refreshPlaceholder(force: Bool = false) {
+        let shows = string.isEmpty && placeholder != nil
+        guard force || shows != showsPlaceholder else { return }
+        showsPlaceholder = shows
+        needsDisplay = true
     }
 
     override func draw(_ dirtyRect: NSRect) {

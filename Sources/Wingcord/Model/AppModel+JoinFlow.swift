@@ -127,23 +127,25 @@ extension AppModel {
         seedJoinGateSelection()
     }
 
-    /// Whether there is anything here the reader has not already answered.
+    /// Whether there is anything here the reader has not already been through.
     ///
-    /// **A server whose questions are all answered and whose rules are agreed is
-    /// not gating**, and re-asking is how a client nags somebody about a server
-    /// they set up months ago. Pending membership is unambiguous. Questions are
-    /// judged on whether *any* join-flow prompt has been answered — Discord's
-    /// own signal for "has been through onboarding here" is the `seen` map, and
-    /// this client does not read it back per prompt, so the honest local test is
-    /// whether the account holds an answer to any of them.
+    /// **Pending membership is unambiguous**: the rules are unagreed.
+    ///
+    /// **Questions are Discord's member flags, not the answers.** Opening a
+    /// server raises its onboarding only for somebody who started it and never
+    /// finished (`MemberFlags.isOnboardingUnfinished` — Discord's own test).
+    /// This used to ask whether any question had an answer, and onboarding can
+    /// be finished having chosen nothing — `forza onboarding.har` submits
+    /// `onboarding_responses: []` — so a reader who skipped the optional
+    /// questions was asked them again on every launch. Joining raises the gate
+    /// on its own path, `openJoinGate`, and is not this.
     private func hasUnansweredJoinGate(_ guildID: GuildID) -> Bool {
         if joinGateHasRules(inGuild: guildID) { return true }
-        let prompts = joinGatePrompts(inGuild: guildID)
-        guard !prompts.isEmpty else { return false }
-        let answered = guildOnboardings[guildID]?.responses ?? []
-        return !prompts.contains { prompt in
-            prompt.options.contains { answered.contains($0.id) }
-        }
+        guard !joinGatePrompts(inGuild: guildID).isEmpty,
+              let userID = currentUserID,
+              let flags = members[guildID]?[userID]?.flags
+        else { return false }
+        return flags.isOnboardingUnfinished
     }
 
     /// Fills the gate's answer set from the account's existing one, once.

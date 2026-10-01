@@ -59,5 +59,16 @@ struct ProtobufWriter {
         message(field: field, Data(value.utf8))
     }
 
+    /// A packed `repeated fixed64`: one length-delimited field holding the
+    /// values back to back, eight little-endian bytes each — how proto3 writes
+    /// a repeated scalar, and how the folder list's guild ids arrive.
+    mutating func packedFixed64(field: Int, _ values: [UInt64]) {
+        var payload = Data(capacity: values.count * 8)
+        for value in values {
+            withUnsafeBytes(of: value.littleEndian) { payload.append(contentsOf: $0) }
+        }
+        message(field: field, payload)
+    }
+
     var base64: String { data.base64EncodedString() }
 }

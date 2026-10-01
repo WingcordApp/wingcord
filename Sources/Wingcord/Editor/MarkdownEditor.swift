@@ -29,6 +29,10 @@ struct MarkdownEditor: View {
     /// handled and the text never sees it.
     var onKey: ((EditorKey) -> Bool)?
     var onSubmit: (() -> Void)?
+    /// Files pasted into the field — copied in the Finder, or an image on the
+    /// clipboard — answered with whether they were taken. Nil where the field
+    /// takes text only. See `PastedFiles`.
+    var onPasteFiles: (([URL]) -> Bool)?
 
     @State private var height: CGFloat?
 
@@ -44,6 +48,7 @@ struct MarkdownEditor: View {
             returnSubmits: returnSubmits,
             onKey: onKey,
             onSubmit: onSubmit,
+            onPasteFiles: onPasteFiles,
             onHeightChange: { measured in
                 if height != measured { height = measured }
             }
@@ -65,6 +70,7 @@ private struct MarkdownEditorRepresentable: NSViewRepresentable {
     var returnSubmits: Bool
     var onKey: ((EditorKey) -> Bool)?
     var onSubmit: (() -> Void)?
+    var onPasteFiles: (([URL]) -> Bool)?
     var onHeightChange: (CGFloat) -> Void
 
     func makeCoordinator() -> Coordinator { Coordinator(owner: self) }
@@ -86,6 +92,9 @@ private struct MarkdownEditorRepresentable: NSViewRepresentable {
         let textView = container.textView
         container.onHeightChange = onHeightChange
         container.lines = lines
+        // Refreshed rather than captured once: it closes over the channel the
+        // composer is on now.
+        textView.onPasteFiles = onPasteFiles
 
         var needsStyle = false
         if textView.font != font {
@@ -175,7 +184,6 @@ private struct MarkdownEditorRepresentable: NSViewRepresentable {
                 .font: owner.font,
                 .foregroundColor: owner.ink?.withAlphaComponent(0.5) ?? NSColor.placeholderTextColor,
             ])
-            textView.needsDisplay = true
         }
 
         // MARK: NSTextViewDelegate

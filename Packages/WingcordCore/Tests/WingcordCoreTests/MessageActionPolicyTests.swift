@@ -19,7 +19,9 @@ struct MessageActionPolicyTests {
         hasText: Bool = true,
         isPinned: Bool = false,
         isDirectMessage: Bool = false,
-        developerMode: Bool = false
+        developerMode: Bool = false,
+        hasReactions: Bool = false,
+        isInLockedArchive: Bool = false
     ) -> MessageActions {
         MessageActionPolicy.resolve(
             MessageActionPolicy.Input(
@@ -31,9 +33,32 @@ struct MessageActionPolicyTests {
                 hasText: hasText,
                 isPinned: isPinned,
                 isDirectMessage: isDirectMessage,
-                developerMode: developerMode
+                developerMode: developerMode,
+                hasReactions: hasReactions,
+                isInLockedArchive: isInLockedArchive
             )
         )
+    }
+
+    // MARK: Who reacted
+
+    @Test("Who reacted is offered wherever there is a reaction, and only there")
+    func viewReactions() {
+        #expect(resolve(reader, hasReactions: true).contains(.viewReactions))
+        #expect(!resolve(reader).contains(.viewReactions))
+        #expect(resolve(reader, isDirectMessage: true, hasReactions: true).contains(.viewReactions))
+    }
+
+    /// Discord's reactors list shows its remove button for `MANAGE_MESSAGES`,
+    /// outside a thread that is archived and locked (`112753`, `406704`).
+    @Test("Taking somebody else's reaction off is a moderator's, never in a DM or a locked archive")
+    func removeReactions() {
+        let moderator = reader.union(.manageMessages)
+        #expect(resolve(moderator, hasReactions: true).contains(.removeReactions))
+        #expect(!resolve(reader, hasReactions: true).contains(.removeReactions))
+        #expect(!resolve(moderator, isDirectMessage: true, hasReactions: true).contains(.removeReactions))
+        #expect(!resolve(moderator, hasReactions: true, isInLockedArchive: true).contains(.removeReactions))
+        #expect(!resolve(moderator, isTimedOut: true, hasReactions: true).contains(.removeReactions))
     }
 
     private let reader: Permissions = [.viewChannel, .readMessageHistory, .addReactions]

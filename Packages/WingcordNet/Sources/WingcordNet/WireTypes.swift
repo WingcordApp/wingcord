@@ -254,6 +254,9 @@ struct MemberDTO: Decodable, Sendable {
     var premium_since: Date?
     var communication_disabled_until: Date?
     var pending: Bool?
+    /// `GuildMemberFlags` — the onboarding pair is what is read. See
+    /// `MemberFlags`.
+    var flags: Int?
 
     func domain(userID: UserID) -> Member {
         Member(
@@ -264,7 +267,8 @@ struct MemberDTO: Decodable, Sendable {
             joinedAt: joined_at,
             premiumSince: premium_since,
             communicationDisabledUntil: communication_disabled_until,
-            isPending: pending ?? false
+            isPending: pending ?? false,
+            flags: MemberFlags(rawValue: flags ?? 0)
         )
     }
 }
@@ -1549,17 +1553,31 @@ struct ClientSettingsDTO: Decodable, Sendable {
     }
 }
 
+/// The settings' `guild_folders` message: the rail's arrangement, and the
+/// stale order it carries beside it.
+public struct GuildFolderSettings: Sendable, Equatable {
+    public var folders: [GuildFolder]
+    public var guildPositions: [GuildID]
+
+    public init(folders: [GuildFolder], guildPositions: [GuildID]) {
+        self.folders = folders
+        self.guildPositions = guildPositions
+    }
+}
+
 /// The account's own client settings, as the app uses them.
 public struct ClientSettings: Sendable {
     /// The account's favourite GIFs, from the settings proto. Empty for an
     /// account with none, and empty for a blob this client could not read —
     /// see `UserSettingsProto.FavoritesField`.
     public var folders: [GuildFolder]
-    /// The rail's order for guilds that are not in a folder.
+    /// The rail's order from before the folder list held every server.
     ///
-    /// Discord keeps this **separate** from the folder list, and a client that
-    /// reads only the folders has no order for everything else — which on this
-    /// account is most of it. Empty when the account has never rearranged.
+    /// **Only an order when the folder list is empty** — Discord's own rule,
+    /// see `GuildArrangement.resolve`. Once anything has been rearranged the
+    /// folder list names every server (loose ones as entries without an id)
+    /// and this goes stale; it is still sent back untouched on every folder
+    /// write, which is the only reason it is kept.
     public var guildPositions: [GuildID] = []
     public var status: PresenceStatus
     /// What the reader wrote about themselves, with its emoji and its expiry.

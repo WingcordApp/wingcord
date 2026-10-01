@@ -151,6 +151,34 @@ struct RailFolder: Hashable, Sendable, Identifiable {
     var isExpanded: Bool
     var mentionCount: Int
     var hasUnread: Bool
+
+    /// The colour of a folder nobody coloured — `--background-brand`, which
+    /// Discord's stylesheet falls back to for the folder's glyph
+    /// (`folderIcon`), and the swatch its Folder Settings calls the default.
+    static let defaultColor: UInt32 = 0x5865F2
+
+    /// What the folder is called: its name, or for a folder nobody named, its
+    /// servers' names.
+    var displayName: String {
+        if let name, !name.isEmpty { return name }
+        return Self.defaultName(for: guilds.map(\.name))
+    }
+
+    /// Discord's name for an unnamed folder (`n8`'s `O`): its servers' names
+    /// joined by commas, **as many as fit in 64 characters** — twice a folder
+    /// name's limit — with ", ..." for the rest. A name longer than what is
+    /// left is skipped rather than ending the list, so a short one after it can
+    /// still fit; the first is always taken. Counted in UTF-16, as JavaScript
+    /// counts.
+    static func defaultName(for names: [String]) -> String {
+        var budget = 64
+        var taken: [String] = []
+        for name in names where name.utf16.count < budget || taken.isEmpty {
+            taken.append(name)
+            budget -= name.utf16.count
+        }
+        return taken.joined(separator: ", ") + (taken.count < names.count ? ", ..." : "")
+    }
 }
 
 /// The channel column's contents for one guild.

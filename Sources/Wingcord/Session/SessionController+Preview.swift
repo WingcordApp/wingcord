@@ -158,6 +158,9 @@ extension SessionController {
             }
             guard model.guildPreview?.guildID == preview.guildID else { return }
             model.guildPreview = nil
+            // On top of the rail, where a server just joined goes — the lurk
+            // kept it out until now.
+            GuildArrangement.placeJoined(preview.guildID, in: &model.folders)
             model.permissionGate.invalidate()
             model.railRevision &+= 1
         }

@@ -430,9 +430,8 @@ extension AppModel {
         }
 
         for folder in folders {
-            // A single-guild "folder" is how the settings payload represents a
-            // guild sitting loose in the rail. Unwrap it rather than drawing a
-            // one-item folder nobody created.
+            // An entry without an id is how the settings payload represents a
+            // server sitting loose in the rail — `GuildArrangement`.
             guard folder.isRealFolder else {
                 if let guildID = folder.guildIDs.first, let entry = makeGuild(guildID) {
                     items.append(.guild(entry))

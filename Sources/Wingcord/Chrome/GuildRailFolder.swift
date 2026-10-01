@@ -13,9 +13,18 @@ struct GuildRailFolder: View {
     var toggle: () -> Void
     var selectGuild: (GuildID) -> Void
     var openGuildMenu: (GuildID, CGRect) -> Void = { _, _ in }
+    /// A right-click on the folder's own tile, with its frame.
+    var openFolderMenu: (CGRect) -> Void = { _ in }
 
     @Environment(\.motion) private var motion
+    @Environment(RailDrag.self) private var drag: RailDrag?
     @State private var isHovering = false
+
+    /// `GuildRailTile.showsName`, for the folder's own tile.
+    private var showsName: Bool {
+        guard let drag, drag.isActive else { return isHovering }
+        return drag.isCombineTarget(.folder(folder.id))
+    }
 
     private var side: CGFloat { Metrics.guildTile }
 
@@ -52,8 +61,10 @@ struct GuildRailFolder: View {
                 guard hovering != isHovering else { return }
                 isHovering = hovering
             }
-            .railHoverLabel(folder.name ?? "Folder", isHovered: isHovering)
-            .accessibilityLabel(Text(folder.name ?? "Folder"))
+            .railHoverLabel(folder.displayName, isHovered: showsName)
+            .accessibilityLabel(Text(folder.displayName))
+            .onSecondaryClick { openFolderMenu($0) }
+            .railDraggable(.folder(folder.id), drag: drag)
 
             if folder.isExpanded {
                 VStack(spacing: Spacing.base) {
@@ -62,7 +73,8 @@ struct GuildRailFolder: View {
                             guild: guild,
                             isSelected: guild.id == selectedGuildID,
                             action: { selectGuild(guild.id) },
-                            openMenu: { openGuildMenu(guild.id, $0) }
+                            openMenu: { openGuildMenu(guild.id, $0) },
+                            dragNode: .guild(guild.id)
                         )
                     }
                 }
@@ -91,7 +103,8 @@ struct GuildRailFolder: View {
 
             Image(systemName: "folder.fill")
                 .font(.system(size: side * 0.36))
-                .foregroundStyle(tint ?? InkColor.solid.opacity(0.8))
+                // Discord's own fallback for the glyph — `RailFolder.defaultColor`.
+                .foregroundStyle(tint ?? Color(hex: RailFolder.defaultColor))
                 .opacity(folder.isExpanded ? 1 : 0)
         }
         .frame(width: side, height: side)

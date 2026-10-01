@@ -8,6 +8,8 @@ import WingcordCore
 /// symbol that ends up meaning Reply in one place and Forward in the other.
 enum MessageActionKind: Hashable, Sendable, Identifiable, CaseIterable {
     case react
+    /// Opens the list of who reacted.
+    case viewReactions
     case reply
     case forward
     case edit
@@ -34,6 +36,7 @@ enum MessageActionKind: Hashable, Sendable, Identifiable, CaseIterable {
     var title: String {
         switch self {
         case .react: "Add Reaction"
+        case .viewReactions: "View Reactions"
         case .reply: "Reply"
         case .forward: "Forward"
         case .edit: "Edit Message"
@@ -56,6 +59,7 @@ enum MessageActionKind: Hashable, Sendable, Identifiable, CaseIterable {
     var symbolName: String {
         switch self {
         case .react: "face.smiling"
+        case .viewReactions: "person.2"
         case .reply: "arrowshape.turn.up.left"
         case .forward: "arrowshape.turn.up.right"
         case .edit: "pencil"
@@ -84,7 +88,7 @@ enum MessageActionKind: Hashable, Sendable, Identifiable, CaseIterable {
     /// looks different from one that acts.
     var opensSurface: Bool {
         switch self {
-        case .react, .forward, .report, .apps, .remindMe: true
+        case .react, .viewReactions, .forward, .report, .apps, .remindMe: true
         default: false
         }
     }
@@ -94,6 +98,7 @@ enum MessageActionKind: Hashable, Sendable, Identifiable, CaseIterable {
     var requirement: MessageActions? {
         switch self {
         case .react: .addReaction
+        case .viewReactions: .viewReactions
         case .reply: .reply
         case .forward: .forward
         case .edit: .edit
@@ -151,7 +156,8 @@ extension MessageActions {
     /// message with nothing in a band draws no separator for it.
     var menuGroups: [[MessageActionKind]] {
         let groups: [[MessageActionKind]] = [
-            [.react],
+            // Discord's own grouping: who reacted sits with reacting.
+            [.react, .viewReactions],
             [.reply, .forward, .edit],
             [.copyText, .pin, .unpin, .bookmark, .unbookmark, .remindMe, .markUnread, .copyLink],
             [.report],
