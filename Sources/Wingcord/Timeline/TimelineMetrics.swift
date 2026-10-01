@@ -239,6 +239,9 @@ nonisolated enum TimelineMetrics {
     /// was allowed to fill lands on top of the words, which is exactly what a
     /// link button did.
     static let componentTrailingGlyphRoom: CGFloat = 16
+    /// A select menu's width, where the column has it — Discord's `.select`,
+    /// `width: 400px`.
+    static let selectMenuWidth: CGFloat = 400
     /// The gutter glyph on a system row — a join, a boost, a pin.
     static let systemGlyphSide: CGFloat = 16
 

@@ -1212,6 +1212,13 @@ final class SessionController {
             // phone reaches this window without a refetch.
             model.applyFriendNickname(nickname, for: userID)
 
+        case .interactionModalCreated(let modal):
+            // The form is the answer to the interaction that raised it, so
+            // that interaction's waiting banner is done — Discord deletes its
+            // own "thinking" placeholder for the same nonce.
+            if let nonce = modal.nonce { model.pendingInteractions[nonce] = nil }
+            model.interactionModal = InteractionModalState(modal: modal, answers: modal.initialAnswers)
+
         case .guildFoldersChanged(let settings):
             // The rail rearranged in another client — or the echo of this
             // one's own write, which changes nothing it has not already drawn.

@@ -342,6 +342,9 @@ nonisolated struct ComponentSlot: Sendable {
     var style: MessageComponent.Style
     /// A select menu, drawn as its placeholder with a disclosure.
     var isMenu: Bool
+    /// What choosing in it names, for a select menu this client can answer.
+    /// Nil for everything else — a button's is `customID`.
+    var selectID: String? = nil
 }
 
 /// The line under a message that says only the reader can see it, and the
@@ -1733,14 +1736,20 @@ nonisolated struct TimelineLayoutEngine: Sendable {
                 // its trailing edge exactly as a menu draws a chevron, and
                 // reserving for one but not the other is what put the mark on
                 // top of "Open roadmap".
-                let chevronRoom: CGFloat = control.kind == .menu || control.destination != nil
+                let chevronRoom: CGFloat = control.isSelectMenu || control.destination != nil
                     ? TimelineMetrics.componentTrailingGlyphRoom
                     : 0
                 let labelWidth = measure(control.label, font: font)
-                let buttonWidth = min(
-                    width,
-                    TimelineMetrics.componentPadding * 2 + glyphRoom + labelWidth + chevronRoom
-                )
+                // **A select is Discord's field width, not its words'**: 400
+                // points or the column, whichever is less (`.select`, `width:
+                // 400px; max-width: 100%`) — a menu the width of its
+                // placeholder reads as a button that says "Make a selection".
+                let buttonWidth = control.isSelectMenu
+                    ? min(width, TimelineMetrics.selectMenuWidth)
+                    : min(
+                        width,
+                        TimelineMetrics.componentPadding * 2 + glyphRoom + labelWidth + chevronRoom
+                    )
                 if usedRow, x + buttonWidth > contentX + width {
                     x = contentX
                     y += TimelineMetrics.componentHeight + TimelineMetrics.componentGap
@@ -1756,7 +1765,8 @@ nonisolated struct TimelineLayoutEngine: Sendable {
                     customID: control.customID,
                     isEnabled: control.isActionable,
                     style: control.style,
-                    isMenu: control.kind == .menu
+                    isMenu: control.isSelectMenu,
+                    selectID: control.select?.customID
                 ))
                 x += buttonWidth + TimelineMetrics.componentGap
                 usedRow = true

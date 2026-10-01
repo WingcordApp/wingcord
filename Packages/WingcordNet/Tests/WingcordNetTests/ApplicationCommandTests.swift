@@ -550,17 +550,69 @@ struct MessageComponentInteractionTests {
         #expect(!disabled.isActionable)
     }
 
-    /// A select menu's interaction carries the options chosen, and no capture
-    /// here contains one. It stays dimmed. `INVARIANTS.md` §5.5.
-    @Test("A select menu is still not pressable")
-    func menusStayInert() throws {
+    /// A select with nothing to choose, or one of the pickers, has nothing
+    /// this client can answer. `INVARIANTS.md` §5.5.
+    @Test("A select with no options, or a picker, is not pressable")
+    func emptyMenusStayInert() throws {
         let menu = try button("""
         [{"type":1,"components":[
           {"type":3,"custom_id":"m","placeholder":"Choose a role"}]}]
         """)
-        #expect(menu.kind == .menu)
+        #expect(menu.isSelectMenu)
         #expect(!menu.isActionable)
         #expect(menu.customID == nil)
+        let picker = try button("""
+        [{"type":1,"components":[{"type":6,"custom_id":"r","placeholder":"Roles"}]}]
+        """)
+        #expect(picker.select == nil)
+        #expect(picker.label == "Roles")
+    }
+
+    /// Sapphire's rules menu: a string select with options, one of them
+    /// already chosen — which is what its closed face says.
+    @Test("A string select with options is live, and shows what is chosen")
+    func stringSelect() throws {
+        let menu = try button("""
+        [{"type":1,"components":[{"type":3,"custom_id":"rules","placeholder":"Additional Information & Rules",
+          "min_values":1,"max_values":1,"options":[
+            {"label":"Moderation System","value":"mod","emoji":{"name":"🛡️"}},
+            {"label":"Light Offenses","value":"light","description":"1-5 damage"},
+            {"label":"VC Rules","value":"vc","default":true}]}]}]
+        """)
+        let select = try #require(menu.select)
+        #expect(select.options.map(\.value) == ["mod", "light", "vc"])
+        #expect(select.options[1].description == "1-5 damage")
+        #expect(select.isSingle)
+        #expect(menu.label == "VC Rules")
+        #expect(menu.isActionable)
+    }
+
+    /// **What a pick sends is Discord's own**: the select's state spread into
+    /// `data` beside the button's two keys — and a button still sends exactly
+    /// the captured two.
+    @Test("A pick sends its type and values; a press sends neither")
+    func selectInteractionBody() throws {
+        let message = Message(
+            id: MessageID(rawValue: 1),
+            channelID: ChannelID(rawValue: 2),
+            authorID: UserID(rawValue: 3),
+            content: ""
+        )
+        func data(_ values: [String]?) throws -> [String: Any] {
+            let interaction = ComponentInteraction(
+                customID: "rules", componentType: values == nil ? 2 : 3, values: values,
+                message: message, applicationID: ApplicationID(rawValue: 4),
+                guildID: nil, sessionID: "s", nonce: "n"
+            )
+            let object = try JSONSerialization.jsonObject(with: JSONEncoder().encode(interaction))
+            return try #require((object as? [String: Any])?["data"] as? [String: Any])
+        }
+        let pick = try data(["light"])
+        #expect(pick["component_type"] as? Int == 3)
+        #expect(pick["type"] as? Int == 3)
+        #expect(pick["values"] as? [String] == ["light"])
+        let press = try data(nil)
+        #expect(Set(press.keys) == ["component_type", "custom_id"])
     }
 
     /// **The pager lives inside a container, not at the top level.** A search

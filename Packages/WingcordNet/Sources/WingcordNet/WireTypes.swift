@@ -2213,11 +2213,23 @@ struct ComponentDTO: Decodable, Sendable {
         items = try container.decodeIfPresent([MediaItemDTO].self, forKey: .items)
         media = try container.decodeIfPresent(MediaSourceDTO.self, forKey: .media)
         accessory = try container.decodeIfPresent(ComponentDTO.self, forKey: .accessory).map { [$0] }
+        options = try container.decodeIfPresent([SelectOptionDTO].self, forKey: .options)
+        min_values = try container.decodeIfPresent(Int.self, forKey: .min_values)
+        max_values = try container.decodeIfPresent(Int.self, forKey: .max_values)
+        min_length = try container.decodeIfPresent(Int.self, forKey: .min_length)
+        max_length = try container.decodeIfPresent(Int.self, forKey: .max_length)
+        required = try container.decodeIfPresent(Bool.self, forKey: .required)
+        value = try container.decodeIfPresent(String.self, forKey: .value)
+        description = try container.decodeIfPresent(String.self, forKey: .description)
+        `default` = try container.decodeIfPresent(Bool.self, forKey: .default)
+        component = try container.decodeIfPresent(ComponentDTO.self, forKey: .component).map { [$0] }
     }
 
     private enum CodingKeys: String, CodingKey {
         case type, style, label, url, custom_id, disabled, placeholder, emoji
         case components, content, accent_color, divider, spacing, items, media, accessory
+        case options, min_values, max_values
+        case min_length, max_length, required, value, description, `default`, component
     }
 
     var type: Int?
@@ -2244,6 +2256,38 @@ struct ComponentDTO: Decodable, Sendable {
     /// would reject it — so the key is decoded by hand into a one-element array.
     var accessory: [ComponentDTO]?
     var media: MediaSourceDTO?
+    /// A string select's options, and how many may be chosen.
+    var options: [SelectOptionDTO]?
+    var min_values: Int?
+    var max_values: Int?
+    /// A form's fields — see `InteractionModalDTO`. A label's one field is
+    /// boxed for the reason `accessory` is.
+    var min_length: Int?
+    var max_length: Int?
+    var required: Bool?
+    var value: String?
+    var description: String?
+    var `default`: Bool?
+    var component: [ComponentDTO]?
+
+    struct SelectOptionDTO: Decodable, Sendable {
+        var label: String?
+        var value: String?
+        var description: String?
+        var emoji: EmojiDTO?
+        var `default`: Bool?
+
+        var domain: SelectMenu.Option? {
+            guard let value, let label else { return nil }
+            return SelectMenu.Option(
+                label: label,
+                value: value,
+                description: description?.isEmpty == false ? description : nil,
+                emoji: emoji?.domain,
+                isDefault: self.default ?? false
+            )
+        }
+    }
 
     /// The top-level rows, flattened to what can be drawn.
     ///
@@ -2307,15 +2351,23 @@ struct ComponentDTO: Decodable, Sendable {
                 emoji: emoji?.domain
             )
         case 3, 5, 6, 7, 8:
-            // Every flavour of select menu. Drawn as its own placeholder, which
-            // is the only thing about it a reader can act on the meaning of.
-            let text = placeholder ?? "Select an option"
+            // Every flavour of select menu. A string select is answerable —
+            // `SelectMenu.isAnswerable` — and the pickers are drawn as what
+            // they say, dimmed.
+            let menu = SelectMenu(
+                customID: custom_id ?? "",
+                type: type ?? SelectMenu.stringType,
+                placeholder: placeholder,
+                options: (options ?? []).compactMap(\.domain),
+                minValues: min_values ?? 1,
+                maxValues: max_values ?? 1
+            )
             return MessageComponent(
-                id: custom_id ?? text,
-                label: text,
-                kind: .menu,
+                id: custom_id ?? menu.summary,
+                label: menu.summary,
+                kind: .select(menu),
                 style: .secondary,
-                isDisabled: true
+                isDisabled: (disabled ?? false) || !menu.isAnswerable
             )
         default:
             return nil

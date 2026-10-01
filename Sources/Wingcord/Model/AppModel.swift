@@ -524,6 +524,9 @@ final class AppModel {
     var messageMenu: MessageMenuRequest?
     var reactionPicker: ReactionPickerRequest?
     var reactionsList: ReactionsListRequest?
+    var selectMenu: SelectMenuRequest?
+    /// A form an application asked for — `InteractionModalLayer`.
+    var interactionModal: InteractionModalState?
     var forwardRequest: ForwardRequest?
     var shareProfileRequest: ShareProfileRequest?
     /// Channels a forward is being written to. Keyed by target so two can be in

@@ -466,6 +466,9 @@ extension AppModel {
         /// viewer and before the profiles — so a profile opened from a row in
         /// it comes up on top.
         case reactions
+        /// A form an application raised — drawn by the same presenter, after
+        /// the reactors list.
+        case interactionModal
         case profile
         case gameProfile
         case tenureBadge
@@ -478,6 +481,7 @@ extension AppModel {
         if tenureBadgeRequest != nil { return .tenureBadge }
         if gameProfileRequest != nil { return .gameProfile }
         if profileRequest != nil { return .profile }
+        if interactionModal != nil { return .interactionModal }
         if reactionsList != nil { return .reactions }
         if mediaViewer != nil { return .mediaViewer }
         return nil

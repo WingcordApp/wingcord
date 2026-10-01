@@ -109,6 +109,8 @@ struct GatewayFrame: Decodable, Sendable {
         case userGuildSettingsUpdate(GuildSettingsDTO)
         /// The account's settings blob changed — here, or in another client.
         case userSettingsProtoUpdate(SettingsProtoUpdateDTO)
+        /// An application asked for a form — `InteractionModalDTO`.
+        case interactionModalCreate(InteractionModalDTO)
         case stageInstanceUpsert(StageInstanceDTO)
         case stageInstanceDelete(StageInstanceDTO)
         case scheduledEventUpsert(ScheduledEventDTO)
@@ -271,6 +273,8 @@ struct GatewayFrame: Decodable, Sendable {
         // only the fields that changed.
         case "USER_SETTINGS_PROTO_UPDATE":
             payload = .userSettingsProtoUpdate(try decode(SettingsProtoUpdateDTO.self))
+        case "INTERACTION_MODAL_CREATE":
+            payload = .interactionModalCreate(try decode(InteractionModalDTO.self))
         // A stage started, was renamed, or ended. **Create and update are one
         // case**: the payload is the whole instance either way, so a client
         // that told them apart would be telling itself something it does not

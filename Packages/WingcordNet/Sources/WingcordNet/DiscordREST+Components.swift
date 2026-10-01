@@ -60,6 +60,7 @@ public struct ComponentInteraction: Encodable, Sendable {
     public init(
         customID: String,
         componentType: Int,
+        values: [String]? = nil,
         message: Message,
         applicationID: ApplicationID,
         guildID: GuildID?,
@@ -73,16 +74,27 @@ public struct ComponentInteraction: Encodable, Sendable {
         message_id = message.id.description
         application_id = applicationID.description
         session_id = sessionID
-        data = Payload(component_type: componentType, custom_id: customID)
+        data = Payload(
+            component_type: componentType,
+            custom_id: customID,
+            type: values == nil ? nil : componentType,
+            values: values
+        )
     }
 
     struct Payload: Encodable {
-        /// `2` for a button. The captured presses are all buttons; a select
-        /// menu is `3` and carries `values` beside these two, which is the part
-        /// no capture here contains.
+        /// `2` for a button, `3` for a string select.
         var component_type: Int
         /// The application's own opaque string, echoed verbatim.
         var custom_id: String
+        /// A select's own state, spread into `data` beside the two above:
+        /// its type again and the values chosen. **Read out of Discord's
+        /// interaction builder**, which returns a string select's state
+        /// object as it is — `{type, values}` — for the spread. Absent for a
+        /// button, and the encoder leaves both out then, so a press is still
+        /// byte for byte the captured one.
+        var type: Int?
+        var values: [String]?
     }
 
     enum CodingKeys: String, CodingKey {

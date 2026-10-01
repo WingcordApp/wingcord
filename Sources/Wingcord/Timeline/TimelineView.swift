@@ -303,6 +303,12 @@ final class TimelineCoordinator: NSObject {
             else { return }
             Task { await self.model.sessionController.pressComponent(component, on: message) }
         }
+        canvas.onOpenSelect = { [weak self] messageID, customID, rect in
+            guard let self, let channelID = self.channelID, let canvas = self.canvas else { return }
+            self.model.openSelectMenu(
+                customID, on: messageID, in: channelID, anchor: canvas.anchorInHostingRoot(rect)
+            )
+        }
         canvas.onDismissEphemeral = { [weak self] messageID in
             guard let self, let channelID = self.channelID else { return }
             // **A removal, not a hide.** The message is delivered over the
@@ -560,6 +566,7 @@ final class TimelineCoordinator: NSObject {
         canvas?.onVote = nil
         canvas?.onPlayActivity = nil
         canvas?.onPressComponent = nil
+        canvas?.onOpenSelect = nil
         canvas?.onDismissEphemeral = nil
         canvas?.onToggleReaction = nil
         canvas?.onHoverReaction = nil

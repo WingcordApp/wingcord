@@ -41,6 +41,23 @@ struct MessageActionPresenter: ViewModifier {
             // so the profile and the person menu it opens stack above it — see
             // `ReactionsListLayer`.
             .overlay { ReactionsListLayer() }
+            // A form an application raised, over everything a message raises.
+            .overlay { InteractionModalLayer() }
+            // A select menu's options, off the menu — Discord's dropdown.
+            .popover(
+                item: Binding(
+                    get: { model.selectMenu },
+                    // **Closing goes through the store**, because closing is
+                    // when a menu that takes several sends what was chosen.
+                    set: { if $0 == nil { model.closeSelectMenu() } else { model.selectMenu = $0 } }
+                ),
+                attachmentAnchor: .rect(.rect(model.selectMenu?.anchor ?? .zero)),
+                arrowEdge: .bottom
+            ) { request in
+                SelectMenuFlyout(request: request)
+                    .environment(model)
+                    .presentationBackground(.clear)
+            }
             .popover(
                 item: $model.messageMenu,
                 attachmentAnchor: .rect(.rect(model.messageMenu?.anchor ?? .zero)),

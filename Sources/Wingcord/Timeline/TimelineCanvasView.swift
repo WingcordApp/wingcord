@@ -387,6 +387,9 @@ final class TimelineCanvasView: NSView {
     /// and the `custom_id` the interaction has to echo — the canvas knows both
     /// and the store knows neither.
     var onPressComponent: ((MessageID, String) -> Void)?
+    /// A select menu clicked, with its rect in this view — the list of its
+    /// options hangs off it.
+    var onOpenSelect: ((MessageID, String, CGRect) -> Void)?
     /// "Dismiss message" on an ephemeral row. A real removal: the message exists
     /// only in this session, so taking it out of the store destroys the only
     /// copy the reader can reach.
@@ -1417,6 +1420,9 @@ final class TimelineCanvasView: NSView {
             } else if let customID {
                 onPressComponent?(row.id, customID)
             }
+        case .select(let customID, let rect):
+            let origin = rowFrame(at: index).origin
+            onOpenSelect?(row.id, customID, rect.offsetBy(dx: origin.x, dy: origin.y))
         case .dismissEphemeral:
             onDismissEphemeral?(row.id)
         case .pollAnswer(let answerID, _):
@@ -1685,6 +1691,8 @@ final class TimelineCanvasView: NSView {
         /// A button an app attached. Carries its origin in row space so the
         /// painter can light the one under the pointer.
         case component(url: String?, customID: String?, origin: CGPoint)
+        /// A select menu this client can answer, with its rect in the row.
+        case select(customID: String, rect: CGRect)
         case dismissEphemeral(origin: CGPoint)
         /// One answer in a poll. `answerID` is nil where the poll cannot be
         /// voted in — the row still swallows the click rather than letting it
@@ -1798,6 +1806,7 @@ final class TimelineCanvasView: NSView {
         // Every button is a hit, live or not: a dead one still has to swallow
         // the click rather than letting it fall through to whatever is beneath.
         for slot in row.components where slot.rect.contains(local) {
+            if let selectID = slot.selectID { return .select(customID: selectID, rect: slot.rect) }
             return .component(url: slot.url, customID: slot.customID, origin: slot.rect.origin)
         }
 

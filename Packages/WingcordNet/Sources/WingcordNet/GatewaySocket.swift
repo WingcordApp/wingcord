@@ -1672,6 +1672,8 @@ public enum GatewayUpdate: Sendable {
     /// of a write from this one. Only sent when the settings update carried
     /// `guild_folders`: a partial update leaves out what did not change.
     case guildFoldersChanged(GuildFolderSettings)
+    /// An application answered an interaction with a form to fill in.
+    case interactionModalCreated(InteractionModal)
     /// Somebody moved in, out of, or between voice channels. A state whose
     /// `channelID` is nil **is** the departure.
     case voiceStateChanged(VoiceState, member: Member?, user: User?)
@@ -2078,6 +2080,8 @@ public enum GatewayUpdate: Sendable {
                   let folders = UserSettingsProto.guildFolders(in: data)
             else { return nil }
             self = .guildFoldersChanged(folders)
+        case .interactionModalCreate(let dto):
+            self = .interactionModalCreated(dto.domain)
         default:
             return nil
         }

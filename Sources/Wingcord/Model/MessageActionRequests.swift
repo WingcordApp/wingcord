@@ -50,6 +50,30 @@ struct ReactionsListRequest: Identifiable, Hashable, Sendable {
     var id: UInt64 { messageID.rawValue }
 }
 
+/// A select menu's options, open — Discord's dropdown, as a flyout off the
+/// menu.
+struct SelectMenuRequest: Identifiable, Hashable, Sendable {
+    var messageID: MessageID
+    var channelID: ChannelID
+    var customID: String
+    /// The menu's frame, in the window root's space.
+    var anchor: CGRect
+    /// What is chosen so far: the menu's own defaults to start with. Sent when
+    /// the list closes, for a menu that takes more than one.
+    var selection: Set<String>
+
+    var id: String { "\(messageID.rawValue)/\(customID)" }
+}
+
+/// A form an application raised, and what the reader has put in it.
+struct InteractionModalState: Equatable, Sendable {
+    var modal: InteractionModal
+    var answers: [String: InteractionModal.Answer]
+    var isSubmitting = false
+    /// Why the last send did not go, in words the reader can act on.
+    var failure: String?
+}
+
 /// The forward sheet.
 struct ForwardRequest: Identifiable, Hashable, Sendable {
     var messageID: MessageID

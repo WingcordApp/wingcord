@@ -124,19 +124,33 @@ struct ComponentLayoutTests {
         }
     }
 
-    /// A select menu is drawn as its own placeholder and is never live: picking
-    /// from one is an interaction round trip this client does not make.
-    @Test("A menu draws its placeholder and cannot be used")
-    func menuIsDrawnAndInert() {
+    /// A select with nothing this client can answer — a picker — draws its
+    /// placeholder, dimmed.
+    @Test("A picker draws its placeholder and cannot be used")
+    func pickerIsDrawnAndInert() {
         let slots = rows([ActionRow(components: [
             MessageComponent(
-                id: "pick", label: "Choose a role", kind: .menu, isDisabled: true
+                id: "pick", label: "Choose a role",
+                kind: .select(SelectMenu(customID: "pick", type: 6)), isDisabled: true
             ),
         ])])
         #expect(slots.count == 1)
         #expect(slots[0].isMenu)
         #expect(!slots[0].isEnabled)
+        #expect(slots[0].selectID == nil)
         #expect(slots[0].label == "Choose a role")
+    }
+
+    /// A string select is live, opens its list, and is Discord's field width.
+    @Test("A string select is live and four hundred points wide")
+    func stringSelectIsLive() {
+        let menu = SelectMenu(customID: "rules", options: [.init(label: "VC Rules", value: "vc")])
+        let slots = rows([ActionRow(components: [
+            MessageComponent(id: "rules", label: menu.summary, kind: .select(menu)),
+        ])], width: 520)
+        #expect(slots[0].isEnabled)
+        #expect(slots[0].selectID == "rules")
+        #expect(slots[0].rect.width == TimelineMetrics.selectMenuWidth)
     }
 }
 

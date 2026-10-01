@@ -401,7 +401,61 @@ extension AppModel {
         return removed
     }
 
+    // MARK: Select menus
+
+    func openSelectMenu(_ customID: String, on messageID: MessageID, in channelID: ChannelID, anchor: CGRect) {
+        guard let menu = message(messageID, in: channelID)?.selectMenu(customID: customID)?.select else { return }
+        dismissMessageSurfaces()
+        selectMenu = SelectMenuRequest(
+            messageID: messageID, channelID: channelID, customID: customID,
+            anchor: anchor, selection: menu.defaultValues
+        )
+    }
+
+    /// The menu an open list is of, as the message has it now.
+    func selectMenuComponent(for request: SelectMenuRequest) -> MessageComponent? {
+        message(request.messageID, in: request.channelID)?.selectMenu(customID: request.customID)
+    }
+
+    /// One option chosen or unchosen. **A menu that takes one sends it now and
+    /// closes**, as Discord's does; one that takes several collects them until
+    /// the list closes, and never past its maximum.
+    func toggleSelectOption(_ value: String) {
+        guard var request = selectMenu, let menu = selectMenuComponent(for: request)?.select else { return }
+        if menu.isSingle {
+            selectMenu = nil
+            submitSelect([value], request: request)
+            return
+        }
+        if request.selection.contains(value) {
+            request.selection.remove(value)
+        } else if request.selection.count < menu.maxValues {
+            request.selection.insert(value)
+        }
+        selectMenu = request
+    }
+
+    /// The list closed. A menu that takes several sends what was chosen —
+    /// Discord sends on close — when it changed and the application will take
+    /// it. In the menu's own order, which is the order the application wrote.
+    func closeSelectMenu() {
+        guard let request = selectMenu else { return }
+        selectMenu = nil
+        guard let menu = selectMenuComponent(for: request)?.select, !menu.isSingle,
+              request.selection != menu.defaultValues, menu.accepts(request.selection)
+        else { return }
+        submitSelect(menu.options.map(\.value).filter(request.selection.contains), request: request)
+    }
+
+    private func submitSelect(_ values: [String], request: SelectMenuRequest) {
+        guard let message = message(request.messageID, in: request.channelID),
+              let component = message.selectMenu(customID: request.customID)
+        else { return }
+        Task { await sessionController.chooseInSelect(values, of: component, on: message) }
+    }
+
     func dismissMessageSurfaces() {
+        if selectMenu != nil { closeSelectMenu() }
         if messageMenu != nil { messageMenu = nil }
         if reactionPicker != nil { reactionPicker = nil }
         if userMenu != nil { userMenu = nil }

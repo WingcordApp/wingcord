@@ -158,6 +158,16 @@ public struct Message: Hashable, Sendable, Identifiable, Codable {
     /// rather than against the slot that was laid out before the last edit.
     /// Both component paths are walked: an ordinary action row, and the
     /// Components V2 tree, where the pager in the capture actually lives.
+    /// The live select menu with this `custom_id`, wherever the message has it.
+    public func selectMenu(customID: String) -> MessageComponent? {
+        for row in components {
+            for control in row.components where control.select?.customID == customID {
+                return control
+            }
+        }
+        return DisplayComponent.firstControl(in: displayComponents) { $0.select?.customID == customID }
+    }
+
     public func pressableComponent(customID: String) -> MessageComponent? {
         for row in components {
             for control in row.components where control.customID == customID {

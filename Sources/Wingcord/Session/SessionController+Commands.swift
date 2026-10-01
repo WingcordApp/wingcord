@@ -169,6 +169,89 @@ extension SessionController {
     /// pager in the capture redraws in place five times without a single new row.
     func pressComponent(_ component: MessageComponent, on message: Message) async {
         guard let customID = component.customID else { return }
+        await sendComponentInteraction(
+            customID: customID,
+            componentType: ComponentInteraction.buttonComponentType,
+            values: nil,
+            // The button's own words. A `custom_id` is the application's opaque
+            // string — `help_page__next,987654321987654321` — and putting that
+            // in front of a reader would be showing them a token, not a label.
+            label: component.label.isEmpty ? "that button" : "“\(component.label)”",
+            verb: "press that button",
+            on: message
+        )
+    }
+
+    /// Answers a select menu with the options chosen — the same interaction
+    /// as a press, carrying the select's `type` and `values` (see
+    /// `ComponentInteraction.Payload`).
+    func chooseInSelect(_ values: [String], of component: MessageComponent, on message: Message) async {
+        guard let menu = component.select, !values.isEmpty else { return }
+        let chosen = menu.options.filter { values.contains($0.value) }.map(\.label)
+        await sendComponentInteraction(
+            customID: menu.customID,
+            componentType: menu.type,
+            values: values,
+            label: chosen.isEmpty ? "that menu" : "“\(chosen.joined(separator: ", "))”",
+            verb: "choose that",
+            on: message
+        )
+    }
+
+    /// Sends the open form back — `ModalSubmission` — and puts it away once
+    /// Discord has taken it. What the application does next arrives as any
+    /// interaction's answer does, under the same waiting banner.
+    func submitInteractionModal() {
+        guard var state = model.interactionModal, !state.isSubmitting,
+              state.modal.isComplete(state.answers)
+        else { return }
+        state.isSubmitting = true
+        state.failure = nil
+        model.interactionModal = state
+        let modal = state.modal
+        let answers = state.answers
+        Task { [weak self] in
+            guard let self else { return }
+            guard let sessionID = await socketSessionID() else {
+                model.interactionModal?.isSubmitting = false
+                model.interactionModal?.failure = "Not connected."
+                return
+            }
+            let nonce = Self.nonce()
+            do {
+                try await rest.submitModal(ModalSubmission(
+                    modal: modal,
+                    answers: answers,
+                    guildID: model.channelIndex[modal.channelID]?.guildID,
+                    sessionID: sessionID,
+                    nonce: nonce
+                ))
+            } catch {
+                guard model.interactionModal?.modal.id == modal.id else { return }
+                model.interactionModal?.isSubmitting = false
+                model.interactionModal?.failure = Self.reason(for: error, verb: "send that")
+                return
+            }
+            if model.interactionModal?.modal.id == modal.id { model.interactionModal = nil }
+            model.pendingInteractions[nonce] = PendingInteraction(
+                nonce: nonce,
+                channelID: modal.channelID,
+                label: modal.title.isEmpty ? "that form" : "“\(modal.title)”",
+                applicationName: modal.applicationName
+                    ?? model.commandApplicationName(for: modal.applicationID)
+            )
+            await awaitInteraction(nonce: nonce)
+        }
+    }
+
+    private func sendComponentInteraction(
+        customID: String,
+        componentType: Int,
+        values: [String]?,
+        label: String,
+        verb: String,
+        on message: Message
+    ) async {
         guard let sessionID = await socketSessionID() else {
             model.reportActionFailure("Not connected.")
             return
@@ -179,10 +262,7 @@ extension SessionController {
         model.pendingInteractions[nonce] = PendingInteraction(
             nonce: nonce,
             channelID: message.channelID,
-            // The button's own words. A `custom_id` is the application's opaque
-            // string — `help_page__next,987654321987654321` — and putting that
-            // in front of a reader would be showing them a token, not a label.
-            label: component.label.isEmpty ? "that button" : "“\(component.label)”",
+            label: label,
             // The application's own display name, from whoever posted the
             // message — an interaction response's author IS the app. The
             // command index answers for a bot whose commands were fetched;
@@ -195,7 +275,8 @@ extension SessionController {
             try await rest.pressComponent(
                 ComponentInteraction(
                     customID: customID,
-                    componentType: ComponentInteraction.buttonComponentType,
+                    componentType: componentType,
+                    values: values,
                     message: message,
                     applicationID: applicationID,
                     guildID: model.channelIndex[message.channelID]?.guildID,
@@ -205,7 +286,7 @@ extension SessionController {
             )
         } catch {
             model.pendingInteractions[nonce] = nil
-            model.reportActionFailure(Self.reason(for: error, verb: "press that button"))
+            model.reportActionFailure(Self.reason(for: error, verb: verb))
             return
         }
         await awaitInteraction(nonce: nonce)
