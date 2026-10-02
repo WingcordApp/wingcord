@@ -652,6 +652,9 @@ struct MessageAckPayload: Decodable, Sendable {
     var channel_id: ChannelID
     var message_id: MessageID?
     var mention_count: Int?
+    /// Another session's Mark Unread, rather than its reading — Discord's
+    /// gateway hands it on as `manual: e.manual`.
+    var manual: Bool?
 }
 
 /// `GUILD_EMOJIS_UPDATE` — the server's whole emoji set, not a delta.

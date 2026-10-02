@@ -1661,7 +1661,9 @@ public enum GatewayUpdate: Sendable {
     case typingStarted(ChannelID, userID: UserID, at: Date)
     case membersChunk(GuildID, members: [UserID: Member], users: [UserID: User], presences: [UserID: Presence])
     case memberListUpdated(MemberListUpdate)
-    case channelAcknowledged(ChannelID, messageID: MessageID?, mentionCount: Int)
+    /// A read cursor moved in another session. `isManual` is a Mark Unread
+    /// there, which may move it back; anything else only ever moves it on.
+    case channelAcknowledged(ChannelID, messageID: MessageID?, mentionCount: Int, isManual: Bool)
     /// The reader's own account changed. The tier and the age status ride
     /// beside the user rather than on it — see `AccountEntitlements` — and are
     /// nil where this update did not carry them.
@@ -1975,7 +1977,8 @@ public enum GatewayUpdate: Sendable {
             self = .channelAcknowledged(
                 payload.channel_id,
                 messageID: payload.message_id,
-                mentionCount: payload.mention_count ?? 0
+                mentionCount: payload.mention_count ?? 0,
+                isManual: payload.manual ?? false
             )
         case .userUpdate(let dto):
             self = .currentUserUpdated(

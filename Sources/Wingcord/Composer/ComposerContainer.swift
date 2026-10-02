@@ -68,7 +68,7 @@ struct ComposerContainer: View {
                     model.mutateBox(channelID) { $0.draft = newValue }
                 }
             ),
-            send: send,
+            send: send(launch:),
             cancelReply: { model.cancelReply(in: channelID) },
             cancelEdit: { model.cancelEdit(in: channelID) },
             replyToLatest: { model.replyToLatestMessage() },
@@ -463,7 +463,7 @@ struct ComposerContainer: View {
         return user.preferredName
     }
 
-    private func send() {
+    private func send(launch: SendLaunch?) {
         // Return commits whichever the bar is holding. One entry point, so the
         // send control, the key press and the menu item cannot disagree about
         // what pressing Send means while an edit is open.
@@ -472,6 +472,6 @@ struct ComposerContainer: View {
             return
         }
         let draft = model.messages(in: channelID)?.draft ?? ""
-        model.sendMessage(draft, in: channelID)
+        model.sendMessage(draft, in: channelID, launch: launch)
     }
 }

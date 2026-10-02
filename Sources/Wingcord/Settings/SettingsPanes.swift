@@ -267,6 +267,18 @@ private struct AppearancePane: View {
             )
         }
 
+        // Above Density, so the preview under that card is the answer to both.
+        SettingsGroup("Bubbles") {
+            SettingsCard {
+                SettingsToggle(
+                    title: "Messages in bubbles",
+                    help: "Yours on the right in the accent, everyone else's on the left — "
+                        + "the way Messages draws a conversation.",
+                    isOn: $settings.usesMessageBubbles
+                )
+            }
+        }
+
         SettingsGroup("Density") {
             SettingsCard {
                 CardHeaderRow(

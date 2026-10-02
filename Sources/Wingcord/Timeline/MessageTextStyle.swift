@@ -189,6 +189,29 @@ nonisolated struct MessageTextStyle: @unchecked Sendable {
         return style
     }
 
+    /// The same style for words on the reader's own bubble, which is the
+    /// accent deepened until white reads on it (`ThemeInk.ownBubble`).
+    ///
+    /// **White, and the hierarchy kept by alpha** — a quote's softer ink, a
+    /// mention's, the time's. **Links take a rule**, because on the accent
+    /// their colour is the one thing that can no longer say what they are.
+    var onAccentBubble: MessageTextStyle {
+        var style = self
+        style.primaryColor = Self.bubbleInk
+        style.secondaryColor = Self.bubbleSecondaryInk
+        style.tertiaryColor = Self.bubbleTertiaryInk
+        style.linkColor = Self.bubbleInk
+        style.mentionColor = Self.bubbleInk
+        style.underlinesLinks = true
+        return style
+    }
+
+    // Built once: a derived colour is an allocation, and every row of the
+    // reader's own messages would otherwise make three.
+    private static let bubbleInk = NSColor(srgbRed: 1, green: 1, blue: 1, alpha: 1)
+    private static let bubbleSecondaryInk = NSColor(srgbRed: 1, green: 1, blue: 1, alpha: 0.82)
+    private static let bubbleTertiaryInk = NSColor(srgbRed: 1, green: 1, blue: 1, alpha: 0.64)
+
     static func criticalInk(isLight: Bool) -> NSColor {
         isLight
             ? NSColor(srgbRed: 0xBA / 255, green: 0x26 / 255, blue: 0x33 / 255, alpha: 1)

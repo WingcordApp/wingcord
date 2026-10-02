@@ -191,10 +191,11 @@ extension SessionController {
             do {
                 guard let sent = try await rest.sendScheduledMessageNow(id) else { return }
                 if model.messages(in: sent.channelID)?.messages.isEmpty == false {
-                    let trims = model.mayTrimOldest(in: sent.channelID)
-                    model.mutateBox(sent.channelID) { $0.receiveLive(sent, trimming: trims) }
+                    receiveOwn(sent, in: sent.channelID)
+                } else {
+                    // The inbox's lists are keyed on it, loaded or not.
+                    model.messageContentRevision &+= 1
                 }
-                model.messageContentRevision &+= 1
                 model.reportScheduling("Message sent.")
             } catch {
                 Self.trace("send scheduled \(id) now failed: \(Self.describe(error))")

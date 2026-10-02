@@ -307,7 +307,7 @@ extension AppModel {
     func composerChip(for mention: EditorMention, in channelID: ChannelID) -> EditorChip? {
         let ink = ThemeInk.current
         let accent = NSColor(cgColor: ink.accent) ?? .controlAccentColor
-        let plate = NSColor(cgColor: ink.mentionFill) ?? accent.withAlphaComponent(0.24)
+        let plate = NSColor(cgColor: ink.plates.mentionFill) ?? accent.withAlphaComponent(0.24)
         let guildID = channelIndex.guildID(of: channelID)
         switch mention {
         case .user(let userID):
@@ -330,7 +330,7 @@ extension AppModel {
             return EditorChip(
                 label: style.format(date),
                 ink: .composerSolid,
-                fill: NSColor(cgColor: ink.timestampFill) ?? .quaternaryLabelColor
+                fill: NSColor(cgColor: ink.plates.timestampFill) ?? .quaternaryLabelColor
             )
         }
     }

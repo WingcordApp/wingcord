@@ -37,8 +37,8 @@ struct MarkdownStyler {
                 ? NSColor(srgbRed: 0x41 / 255, green: 0x43 / 255, blue: 0x4A / 255, alpha: 1)
                 : NSColor(srgbRed: 0x94 / 255, green: 0x9B / 255, blue: 0xA4 / 255, alpha: 1),
             linkColor: NSColor(cgColor: ink.accent) ?? .linkColor,
-            codeFill: NSColor(cgColor: ink.codeFill) ?? .quaternaryLabelColor,
-            spoilerFill: NSColor(cgColor: ink.spoilerRevealed) ?? .quaternaryLabelColor
+            codeFill: NSColor(cgColor: ink.plates.codeFill) ?? .quaternaryLabelColor,
+            spoilerFill: NSColor(cgColor: ink.plates.spoilerRevealed) ?? .quaternaryLabelColor
         )
     }
 

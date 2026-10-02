@@ -39,6 +39,9 @@ struct MarkdownEditor: View {
     /// Moves when anything a chip names may have changed — a name arriving, a
     /// role renamed — so the chips are drawn again without a keystroke.
     var chipRevision: UInt64 = 0
+    /// Told where the field is, for an owner that needs to know where the
+    /// words were when it acted on them — see `EditorAnchor`.
+    var anchor: EditorAnchor?
 
     @State private var height: CGFloat?
 
@@ -57,6 +60,7 @@ struct MarkdownEditor: View {
             onPasteFiles: onPasteFiles,
             chips: chips,
             chipRevision: chipRevision,
+            anchor: anchor,
             onHeightChange: { measured in
                 if height != measured { height = measured }
             }
@@ -81,6 +85,7 @@ private struct MarkdownEditorRepresentable: NSViewRepresentable {
     var onPasteFiles: (([URL]) -> Bool)?
     var chips: ((EditorMention) -> EditorChip?)?
     var chipRevision: UInt64
+    var anchor: EditorAnchor?
     var onHeightChange: (CGFloat) -> Void
 
     func makeCoordinator() -> Coordinator { Coordinator(owner: self) }
@@ -93,6 +98,7 @@ private struct MarkdownEditorRepresentable: NSViewRepresentable {
         textView.string = text
         container.lines = lines
         context.coordinator.attach(container)
+        anchor?.container = container
         return container
     }
 

@@ -45,6 +45,7 @@ struct HistoryRunwayTests {
             jump: nil,
             reachesPresent: true,
             present: nil,
+            flight: nil,
             scroll: TranscriptScrollState(),
             topics: [],
             summaries: [],

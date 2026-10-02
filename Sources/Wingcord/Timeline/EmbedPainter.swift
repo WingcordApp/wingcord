@@ -63,7 +63,7 @@ nonisolated extension TimelineRowPainter {
             // Discord's neutral `--border-normal` where it names none
             // (`embedFull`, stylesheet `198496`). A container draws only a
             // colour it was given.
-            if let rule = slot.accent?.cgColor ?? (slot.isLinkCard ? ThemeInk.current.quoteRule : nil) {
+            if let rule = slot.accent?.cgColor ?? (slot.isLinkCard ? ThemeInk.current.plates.quoteRule : nil) {
                 context.setFillColor(rule)
                 context.fill(CGRect(
                     x: frame.minX,
@@ -82,7 +82,7 @@ nonisolated extension TimelineRowPainter {
                     cornerHeight: corner - 0.5,
                     transform: nil
                 ))
-                context.setStrokeColor(ThemeInk.current.codeBorder)
+                context.setStrokeColor(ThemeInk.current.plates.codeBorder)
                 context.setLineWidth(1)
                 context.strokePath()
                 context.restoreGState()

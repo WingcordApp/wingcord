@@ -37,6 +37,11 @@ struct MessageActionBar: View {
     static let gap: CGFloat = 2
     static let padding: CGFloat = 4
 
+    /// The pill's width for `count` glyphs — solved, as a button's box is.
+    static func width(for count: Int) -> CGFloat {
+        CGFloat(count) * glyphSide + CGFloat(max(0, count - 1)) * gap + padding * 2
+    }
+
     var body: some View {
         HStack(spacing: Self.gap) {
             ForEach(items) { kind in
@@ -149,21 +154,32 @@ struct MessageActionBarOverlay: View {
         // the transcript, or not visibly drawn at all.
         return GeometryReader { _ in
             if let current, !items.isEmpty {
-                MessageActionBar(items: items) { kind in
+                let bar = MessageActionBar(items: items) { kind in
                     perform(kind, on: current.messageID, items: items)
                 }
                 .fixedSize()
                 .onHover { isPointerOnBar = $0 }
-                // **Right-aligned by a frame, not by arithmetic over a measured
-                // width.** `maxWidth: .infinity` with a trailing alignment puts
-                // the pill against the transcript's own margin without anything
-                // having to know how wide it is — and an empty frame hit-tests
-                // nothing, so the transcript underneath still answers the
-                // pointer everywhere the pill is not.
-                .frame(maxWidth: .infinity, alignment: .trailing)
-                .padding(.trailing, TimelineMetrics.actionBarTrailingInset)
-                .offset(y: current.rowFrame.minY - TimelineMetrics.actionBarRise)
-                .transition(.materialize(from: .trailing))
+                if let anchor = current.pillAnchor, let leading = bubbleLeading(of: current, items: items) {
+                    // Beside a bubble, level with its first line, growing out
+                    // of the side it hangs from.
+                    bar
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .offset(x: leading, y: anchor.midY - TimelineMetrics.actionBarHeight / 2)
+                        .transition(.materialize(from: anchor.edge == .trailing ? .trailing : .leading))
+                } else {
+                    // **Right-aligned by a frame, not by arithmetic over a
+                    // measured width.** `maxWidth: .infinity` with a trailing
+                    // alignment puts the pill against the transcript's own
+                    // margin without anything having to know how wide it is —
+                    // and an empty frame hit-tests nothing, so the transcript
+                    // underneath still answers the pointer everywhere the pill
+                    // is not.
+                    bar
+                        .frame(maxWidth: .infinity, alignment: .trailing)
+                        .padding(.trailing, TimelineMetrics.actionBarTrailingInset)
+                        .offset(y: current.rowFrame.minY - TimelineMetrics.actionBarRise)
+                        .transition(.materialize(from: .trailing))
+                }
             }
         }
         .animation(motion.hover, value: current?.messageID)
@@ -214,27 +230,30 @@ struct MessageActionBarOverlay: View {
               let index = items.firstIndex(of: kind)
         else { return .zero }
         let stride = MessageActionBar.glyphSide + MessageActionBar.gap
-        let fromTrailing = CGFloat(items.count - index - 1)
+        let leading = bubbleLeading(of: hover, items: items)
+            ?? hover.rowFrame.maxX - TimelineMetrics.actionBarTrailingInset
+                - MessageActionBar.width(for: items.count)
+        let top = hover.pillAnchor.map { $0.midY - TimelineMetrics.actionBarHeight / 2 }
+            ?? hover.rowFrame.minY - TimelineMetrics.actionBarRise
         return CGRect(
-            x: originInRoot.x + rowTrailingEdge
-                - TimelineMetrics.actionBarTrailingInset
-                - MessageActionBar.padding
-                - MessageActionBar.glyphSide
-                - fromTrailing * stride,
-            y: originInRoot.y + hover.rowFrame.minY
-                - TimelineMetrics.actionBarRise
-                + MessageActionBar.padding,
+            x: originInRoot.x + leading + MessageActionBar.padding + CGFloat(index) * stride,
+            y: originInRoot.y + top + MessageActionBar.padding,
             width: MessageActionBar.glyphSide,
             height: MessageActionBar.glyphSide
         )
     }
 
-    /// The overlay's own trailing edge, which is the transcript's.
+    /// The pill's leading edge beside a bubble, kept inside the transcript's
+    /// margins — on a narrow window it would rather sit over a bubble's
+    /// corner than hang off the edge. Nil over the row's trailing end.
     ///
-    /// Taken from the hover's row rather than from a second geometry read: the
-    /// canvas laid the row out to the full transcript width, so its trailing
-    /// edge *is* the viewport's.
-    private var rowTrailingEdge: CGFloat {
-        (model.messageHover ?? held)?.rowFrame.maxX ?? 0
+    /// The row's trailing edge *is* the transcript's: the canvas lays every
+    /// row out to its full width.
+    private func bubbleLeading(of hover: MessageHover, items: [MessageActionKind]) -> CGFloat? {
+        guard let anchor = hover.pillAnchor else { return nil }
+        let width = MessageActionBar.width(for: items.count)
+        let inset = TimelineMetrics.actionBarTrailingInset
+        let x = anchor.edge == .trailing ? anchor.x - width : anchor.x
+        return min(max(x, hover.rowFrame.minX + inset), hover.rowFrame.maxX - inset - width)
     }
 }

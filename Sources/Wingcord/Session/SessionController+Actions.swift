@@ -261,9 +261,7 @@ extension SessionController {
                     // a box with a single message in it is a resident slot spent
                     // on a channel the reader is not reading.
                     guard model.messages(in: target)?.messages.isEmpty == false else { continue }
-                    let trims = model.mayTrimOldest(in: target)
-                    model.mutateBox(target) { $0.receiveLive(message, trimming: trims) }
-                    model.messageContentRevision &+= 1
+                    receiveOwn(message, in: target)
                 } catch {
                     Self.trace("forward to \(target) failed: \(Self.describe(error))")
                     model.reportActionFailure(Self.describe(error))
@@ -290,9 +288,7 @@ extension SessionController {
                     // Only into a transcript that is actually loaded — see
                     // `forward`.
                     guard model.messages(in: target)?.messages.isEmpty == false else { continue }
-                    let trims = model.mayTrimOldest(in: target)
-                    model.mutateBox(target) { $0.receiveLive(message, trimming: trims) }
-                    model.messageContentRevision &+= 1
+                    receiveOwn(message, in: target)
                 } catch {
                     Self.trace("share to \(target) failed: \(Self.describe(error))")
                     model.reportActionFailure(Self.describe(error))

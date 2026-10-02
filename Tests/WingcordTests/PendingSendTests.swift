@@ -62,6 +62,27 @@ struct PendingSendTests {
         #expect(rows.last?.flags.contains(.failed) == false)
     }
 
+    @Test("A send is read the moment it is made, so no \"NEW\" is drawn in front of it")
+    func ownSendIsRead() {
+        let model = model()
+        // Everything before the send has been read.
+        model.readStates[channel] = ReadState(lastAcknowledgedID: MessageID(rawValue: 10 << 22))
+        let send = entry(20)
+        model.mutateBox(channel) { $0.outbox = [send] }
+        // The echo is newer than the cursor, which is the whole of the bug…
+        #expect(model.timelineRows(for: channel).contains(.unreadDivider))
+        // …and the reader's own message moves the cursor, as Discord's does.
+        model.acknowledgeOwnMessage(send.id, in: channel)
+        #expect(!model.timelineRows(for: channel).contains(.unreadDivider))
+        #expect(model.readStates[channel]?.lastAcknowledgedID == send.id)
+        // Discord's copy, a moment later and a moment newer, moves it on; an
+        // older one never moves it back.
+        let answer = MessageID(rawValue: 21 << 22)
+        model.acknowledgeOwnMessage(answer, in: channel)
+        model.acknowledgeOwnMessage(send.id, in: channel)
+        #expect(model.readStates[channel]?.lastAcknowledgedID == answer)
+    }
+
     @Test("A refusal turns the same row red, and Clyde's notice follows it")
     func refusedRowAndNotice() {
         let model = model()

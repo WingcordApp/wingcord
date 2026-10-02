@@ -34,7 +34,7 @@ struct TextSelectionTests {
             channelID: channel,
             items: TimelineReducer.rows(messages: messages),
             presentationRevision: 0, activityAccents: [:], activityInviteStatuses: [:], uploadProgress: [:],
-            topInset: 0, bottomInset: 0, jump: nil, reachesPresent: true, present: nil,
+            topInset: 0, bottomInset: 0, jump: nil, reachesPresent: true, present: nil, flight: nil,
             scroll: TranscriptScrollState(), topics: [], summaries: [], selectedSummary: nil,
             cardRevision: 0, playingPreview: nil, isCovered: false, bookmarks: [],
             canSuperReact: false,

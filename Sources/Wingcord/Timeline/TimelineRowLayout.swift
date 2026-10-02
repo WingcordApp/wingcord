@@ -43,13 +43,18 @@ nonisolated struct TimelineRow: Sendable {
 nonisolated struct MessageRow: @unchecked Sendable {
     var id: MessageID
     var authorID: UserID
-    var isRunHead: Bool
+    /// Whether the row draws its author's name — a run's first message, and in
+    /// bubbles only somebody else's in a conversation that names them. Every
+    /// reader of the name asks this, so a row with no name line has no name to
+    /// hover, click or light either.
+    var hasAuthorLine: Bool
     var mentionsMe: Bool
     var isPending: Bool
     var isFailed: Bool
 
-    /// Present only on a run head. Everything else in the run leaves the gutter
-    /// empty and reveals a compact timestamp there on hover.
+    /// Present only on a run head — or, in bubbles, on the last message of
+    /// somebody's run, beside its last bubble. Everything else leaves the
+    /// gutter empty and reveals a compact timestamp there on hover.
     var avatarRect: CGRect?
     var avatarURL: URL?
     var avatarMonogram: String
@@ -172,6 +177,10 @@ nonisolated struct MessageRow: @unchecked Sendable {
     /// of them.
     var systemSymbol: String?
     var systemTint: NSColor?
+
+    /// Where the row sits in the bubble arrangement. Nil in Discord's columns,
+    /// and on a system line, which is centred rather than on a side.
+    var bubbles: BubbleRow? = nil
 
     /// One plain string for one accessibility node.
     ///
@@ -442,8 +451,9 @@ nonisolated struct ReplyHeaderSlot: @unchecked Sendable {
     /// rather than a word inside it.
     var rect: CGRect
     /// Where the elbow's horizontal leg lands, so the painter and the hit test
-    /// agree about the strip's own foot.
-    var elbowBottom: CGFloat
+    /// agree about the strip's own foot. Nil in bubbles, where there is no
+    /// avatar gutter for an elbow to rise out of.
+    var elbowBottom: CGFloat?
     var avatarRect: CGRect
     var avatarURL: URL?
     var monogram: String
@@ -471,7 +481,7 @@ nonisolated struct ReplyHeaderSlot: @unchecked Sendable {
 nonisolated struct InteractionHeaderSlot: @unchecked Sendable {
     var rect: CGRect
     /// Where the elbow's horizontal leg lands. See `ReplyHeaderSlot`.
-    var elbowBottom: CGFloat
+    var elbowBottom: CGFloat?
     var avatarRect: CGRect
     var avatarURL: URL?
     var monogram: String
@@ -600,6 +610,37 @@ nonisolated extension MessageRow {
     }
 }
 
+/// One message's own content, laid out — everything between the lines above
+/// it and what hangs under it. See `layoutContent` in
+/// `TimelineLayoutEngine.buildMessage`.
+private nonisolated struct MessageContent {
+    var x: CGFloat
+    var top: CGFloat
+    var textOrigin: CGPoint
+    var forwarded: ForwardedSlot?
+    var stickers: [StickerSlot] = []
+    var attachments: [AttachmentSlot] = []
+    var upload: UploadCardSlot?
+    var hiddenMedia: HiddenMediaSlot?
+    var poll: PollSlot?
+    var activityInvite: ActivityInviteSlot?
+    var listenAlong: ListenAlongSlot?
+    var embeds: [EmbedSlot] = []
+    var components: [ComponentSlot] = []
+    var inviteCards: [InviteCardSlot] = []
+    var userCards: [UserCardSlot] = []
+    /// How far past `x` it reaches — in a bubble, the bubble's width.
+    var width: CGFloat = 0
+    /// Where it ends — in a bubble, the bubble's foot.
+    var bottom: CGFloat = 0
+    /// Whether anything but words is in it.
+    var hasCards = false
+    /// Neither words nor anything else — nothing for a bubble to hold.
+    var isEmpty = false
+
+    var bounds: CGRect { CGRect(x: x, y: top, width: width, height: bottom - top) }
+}
+
 // MARK: - The layout engine
 
 /// Turns timeline items into laid-out rows.
@@ -668,6 +709,11 @@ nonisolated struct TimelineLayoutEngine: Sendable {
         /// The listening parties still on, by party id — whether a listen-along
         /// card is the live one or Discord's "The listening party is over!".
         var listenAlongLive: Set<String> = []
+        /// Columns or bubbles. **Only a transcript ever asks for bubbles** —
+        /// search, the inbox and the pinned pane keep Discord's columns, which
+        /// is why this is decided by the caller rather than read from the
+        /// reader's preference here.
+        var arrangement: MessageArrangement = .columns
     }
 
     /// `@unchecked` for the same reason `MessageTextStyle` is: it carries a
@@ -758,6 +804,10 @@ nonisolated struct TimelineLayoutEngine: Sendable {
         /// one invite resolved, and a chat opens with several resolving.
         var carriesCards: Bool
         var isRunHead: Bool
+        /// Whether the row closed its run, in bubbles — where the last bubble
+        /// wears the tail and somebody's face sits beside it. Nil in columns,
+        /// where it changes nothing, so a run growing there relays nothing.
+        var isRunTail: Bool?
         /// Whether the row was laid out in the critical ink of a refused send —
         /// which is set into the body's text, so a send turning red is a
         /// relayout. Being on its way is not: that is painted.
@@ -778,6 +828,7 @@ nonisolated struct TimelineLayoutEngine: Sendable {
             identityToken: UInt64,
             cardRevision: UInt64,
             isRunHead: Bool,
+            isRunTail: Bool?,
             isFailed: Bool,
             hidesMedia: Bool,
             listenAlongLive: Bool?
@@ -787,6 +838,7 @@ nonisolated struct TimelineLayoutEngine: Sendable {
                 && self.identityToken == identityToken
                 && (!carriesCards || self.cardRevision == cardRevision)
                 && self.isRunHead == isRunHead
+                && self.isRunTail == isRunTail
                 && self.isFailed == isFailed
                 && self.hidesMedia == hidesMedia
                 && self.listenAlongLive == listenAlongLive
@@ -891,6 +943,7 @@ nonisolated struct TimelineLayoutEngine: Sendable {
                 used.insert(message.message.id)
                 let isFailed = message.flags.contains(.failed)
                 let listenAlongLive = message.message.listenAlong.map { input.listenAlongLive.contains($0.partyID) }
+                let isRunTail = input.arrangement == .columns ? nil : message.isRunTail
                 if let cached = cache[message.message.id],
                    cached.matches(
                        message.message,
@@ -899,6 +952,7 @@ nonisolated struct TimelineLayoutEngine: Sendable {
                        identityToken: input.mentions.token,
                        cardRevision: cardRevision,
                        isRunHead: message.isRunHead,
+                       isRunTail: isRunTail,
                        isFailed: isFailed,
                        hidesMedia: input.hidesMedia,
                        listenAlongLive: listenAlongLive
@@ -920,6 +974,7 @@ nonisolated struct TimelineLayoutEngine: Sendable {
                     cardRevision: cardRevision,
                     carriesCards: Self.carriesCards(message.message),
                     isRunHead: message.isRunHead,
+                    isRunTail: isRunTail,
                     isFailed: isFailed,
                     hidesMedia: input.hidesMedia,
                     listenAlongLive: listenAlongLive,
@@ -969,6 +1024,8 @@ nonisolated struct TimelineLayoutEngine: Sendable {
         if let block = row.textBlock {
             bottom = max(bottom, row.textOrigin.y + block.size.height)
         }
+        // The bubble's own padding reaches past its words.
+        if let bubble = row.bubbles?.bubble { bottom = max(bottom, bubble.rect.maxY) }
         for slot in row.stickers { bottom = max(bottom, slot.rect.maxY) }
         for slot in row.attachments { bottom = max(bottom, slot.rect.maxY) }
         if let upload = row.upload { bottom = max(bottom, upload.rect.maxY) }
@@ -997,8 +1054,47 @@ nonisolated struct TimelineLayoutEngine: Sendable {
             ? item.message.restrictedPreview
             : (item.message, 0)
         let author = input.authors[message.authorID]
-        let contentX = TimelineMetrics.contentInset
-        let contentWidth = max(80, input.width - contentX - TimelineMetrics.horizontalMargin)
+        // **Which side the message hugs, and whether it is named, decided
+        // once.** In bubbles the reader's own messages trail and carry neither
+        // a name nor a face; everybody else's lead, named over a run's first
+        // bubble and faced beside its last — unless the conversation has only
+        // one other person in it.
+        let bubbleSide: BubbleRow.Side?
+        let namesAuthor: Bool
+        switch input.arrangement {
+        case .columns:
+            bubbleSide = nil
+            namesAuthor = true
+        case .bubbles(let namesAuthors):
+            let isMine = input.mentions.selfIDs.contains(message.authorID.rawValue)
+            bubbleSide = isMine ? .trailing : .leading
+            namesAuthor = namesAuthors && !isMine
+        }
+        let lane = bubbleSide.map {
+            MessageLane.bubble(
+                rowWidth: input.width,
+                side: $0,
+                indent: namesAuthor ? BubbleMetrics.avatarSide + BubbleMetrics.avatarGap : 0
+            )
+        } ?? .column(rowWidth: input.width)
+        let contentX = lane.minX
+        let contentWidth = lane.width
+        let hasAuthorLine = item.isRunHead && namesAuthor
+
+        /// Lays out a piece whose width is known only once it is laid out —
+        /// and, on a trailing lane, once more against the trailing edge. Every
+        /// layout here is the same at any origin, so the second pass moves the
+        /// piece and breaks no line differently.
+        func placed<Slot>(_ build: (CGFloat) -> Slot, width: (Slot) -> CGFloat) -> Slot {
+            let leading = build(lane.minX)
+            guard lane.isTrailing else { return leading }
+            let used = width(leading)
+            return used > 0 && used < lane.width - 0.5 ? build(lane.maxX - used) : leading
+        }
+        /// How far a run of pieces laid out from the lane's start reaches.
+        func extent(_ rects: [CGRect]) -> CGFloat {
+            (rects.map(\.maxX).max() ?? lane.minX) - lane.minX
+        }
 
         var y: CGFloat = item.isRunHead ? input.settings.runSpacing : TimelineMetrics.lineSpacing
         var avatarRect: CGRect?
@@ -1008,15 +1104,23 @@ nonisolated struct TimelineLayoutEngine: Sendable {
         // The quoted line, above everything. A reply always breaks its run — see
         // `TimelineReducer` — so the header and the author line below it are
         // always drawn together and the elbow always has a face to rise out of.
+        // In bubbles there is no gutter to rise out of: the line sits over the
+        // bubble on its side, and has no elbow.
         var replyHeader: ReplyHeaderSlot?
         if let reference = message.reference {
-            let slot = Self.layoutReplyHeader(
-                reference,
-                y: y,
-                width: input.width,
-                style: input.style,
-                author: reference.authorID.flatMap { input.authors[$0] }
-            )
+            let quoted = reference.authorID.flatMap { input.authors[$0] }
+            let slot = bubbleSide == nil
+                ? Self.layoutReplyHeader(
+                    reference, y: y, leadingX: contentX,
+                    maxX: input.width - TimelineMetrics.horizontalMargin,
+                    elbowX: TimelineMetrics.replyElbowX, style: input.style, author: quoted
+                )
+                : placed({
+                    Self.layoutReplyHeader(
+                        reference, y: y, leadingX: $0, maxX: lane.maxX,
+                        elbowX: nil, style: input.style, author: quoted
+                    )
+                }, width: { $0.rect.width })
             replyHeader = slot
             y = slot.rect.maxY + TimelineMetrics.replyGap
         }
@@ -1026,26 +1130,36 @@ nonisolated struct TimelineLayoutEngine: Sendable {
         // "alex used launch" above each is three statements of one fact.
         var interactionHeader: InteractionHeaderSlot?
         if item.isRunHead, let interaction = message.interaction {
-            let slot = Self.layoutInteractionHeader(
-                interaction,
-                y: y,
-                width: input.width,
-                style: input.style,
-                author: input.authors[interaction.userID]
-            )
+            let invoker = input.authors[interaction.userID]
+            let slot = bubbleSide == nil
+                ? Self.layoutInteractionHeader(
+                    interaction, y: y, leadingX: contentX, maxX: input.width,
+                    elbowX: TimelineMetrics.replyElbowX, style: input.style, author: invoker
+                )
+                : placed({
+                    Self.layoutInteractionHeader(
+                        interaction, y: y, leadingX: $0, maxX: lane.maxX,
+                        elbowX: nil, style: input.style, author: invoker
+                    )
+                }, width: { $0.rect.width })
             interactionHeader = slot
             y = slot.rect.maxY + TimelineMetrics.replyGap
         }
 
         var tagRect = CGRect.zero
         var roleIconRect = CGRect.zero
-        if item.isRunHead {
-            avatarRect = CGRect(
-                x: TimelineMetrics.horizontalMargin,
-                y: y,
-                width: Metrics.avatarMessage,
-                height: Metrics.avatarMessage
-            )
+        if hasAuthorLine {
+            // In bubbles the face sits beside a run's LAST bubble, and the
+            // name lines up with the words in the bubble under it.
+            if bubbleSide == nil {
+                avatarRect = CGRect(
+                    x: TimelineMetrics.horizontalMargin,
+                    y: y,
+                    width: Metrics.avatarMessage,
+                    height: Metrics.avatarMessage
+                )
+            }
+            let nameX = bubbleSide == nil ? contentX : contentX + BubbleMetrics.horizontalPadding
             let name = author?.name ?? "Unknown"
             // **Measured in the face it will be DRAWN in.** The bot badge and
             // the timestamp are placed off this width, so measuring in the
@@ -1056,14 +1170,10 @@ nonisolated struct TimelineLayoutEngine: Sendable {
                 tracking: author?.nameTracking ?? 0
             )
             authorRect = CGRect(
-                x: contentX,
+                x: nameX,
                 y: y,
                 width: nameWidth,
                 height: TimelineMetrics.headerHeight
-            )
-            let stampWidth = Self.measure(
-                input.settings.timestampLabel(message.sentAt, calendar: input.calendar),
-                font: input.style.metadataFont
             )
             // The server tag, in the same chip the roster draws — see
             // `MemberRowGeometry.tagChipWidth`, which both the reservation and
@@ -1099,307 +1209,434 @@ nonisolated struct TimelineLayoutEngine: Sendable {
                 )
                 afterName = roleIconRect.maxX
             }
-            timestampRect = CGRect(
-                x: afterName + 8,
-                y: y,
-                width: stampWidth,
-                height: TimelineMetrics.headerHeight
-            )
+            // In bubbles the time is beside the bubble, under the pointer.
+            if bubbleSide == nil {
+                timestampRect = CGRect(
+                    x: afterName + 8,
+                    y: y,
+                    width: Self.measure(
+                        input.settings.timestampLabel(message.sentAt, calendar: input.calendar),
+                        font: input.style.metadataFont
+                    ),
+                    height: TimelineMetrics.headerHeight
+                )
+            }
             y += TimelineMetrics.headerHeight + TimelineMetrics.headerGap
         }
+        let contentTop = y
 
-        // The message this one forwards, quoted. **Above the body**, because a
-        // forward that carries a note is "here is a thing, and here is what I
-        // think of it" — the thing comes first, which is the order every client
-        // draws it in.
-        var forwarded: ForwardedSlot?
-        if let snapshot = message.forwarded {
-            let slot = Self.layoutForward(
-                snapshot,
-                origin: CGPoint(x: contentX, y: y),
-                availableWidth: contentWidth,
-                input: input,
-                parser: parser
-            )
-            forwarded = slot
-            y = slot.rect.maxY + TimelineMetrics.attachmentGap
-        }
-
-        // Body text.
+        // Body text — built once, wherever it lands.
         //
         // A message that is nothing but emoji is drawn large — the rule every
         // client shares, and the one that decides whether a lone thumbs-up
         // reads as a reply or as punctuation. The decision is made on the
         // PARSED tree, because `<:blobcat:123>` is not emoji by any character
         // test and `:thumbsup:` was expanded server-side long before this.
-        var textBlock: TimelineTextBlock?
-        let textOrigin = CGPoint(x: contentX, y: y)
+        //
         // **`displayedContent`, not `content`.** A message that is nothing but a
         // link to a picture draws the picture — see `Message.displayedContent`.
         // Display only: the words the message actually carries are still what a
         // copy, a search and an accessibility label get.
+        let isFailed = item.flags.contains(.failed)
+        // The reader's bubble is the accent — unless Discord refused the send,
+        // which puts it on the neutral ground in the critical ink, here as
+        // everywhere: `.isFailed`.
+        let ground: MessageBubble.Ground = bubbleSide == .trailing && !isFailed ? .accent : .neutral
         let drawnContent = input.settings.showsEmbeds ? message.displayedContent : message.content
+        var words: (block: TimelineTextBlock, isJumbo: Bool)?
         if !drawnContent.isEmpty {
             let document = parser.parse(drawnContent)
-            let sized = document.jumboEmojiCount == nil ? input.style : input.style.jumbo
-            // A refused send's words are Discord's critical ink — `.isFailed`.
-            let style = item.flags.contains(.failed) ? sized.failed : sized
+            let isJumbo = document.jumboEmojiCount != nil
+            let sized = isJumbo ? input.style.jumbo : input.style
+            let onAccent = bubbleSide != nil && ground == .accent && !isJumbo
+            let style = isFailed ? sized.failed : (onAccent ? sized.onAccentBubble : sized)
             let text = MessageTextBuilder.build(
                 document: document,
                 context: input.mentions,
                 style: style
             )
-            let block = TimelineTextBlock(text: text, width: contentWidth, style: style)
-            textBlock = block
-            y += block.size.height
-        }
-
-        // Stickers, above attachments: a sticker IS the message, and one drawn
-        // under a screenshot reads as a caption on it.
-        var stickers: [StickerSlot] = []
-        for sticker in message.stickers {
-            y += TimelineMetrics.attachmentGap
-            let side = min(Metrics.stickerInline, contentWidth)
-            stickers.append(StickerSlot(
-                rect: CGRect(x: contentX, y: y, width: side, height: side),
-                sticker: sticker,
-                url: CDN.sticker(id: sticker.id, format: sticker.format),
-                isVector: sticker.format == .lottie,
-                isAnimated: sticker.format.isAnimated
-            ))
-            y += side
-        }
-
-        // Attachments.
-        let attachments = Self.attachmentSlots(
-            message.attachments,
-            origin: CGPoint(x: contentX, y: y),
-            availableWidth: contentWidth,
-            style: input.style
-        )
-        for slot in attachments { y = max(y, slot.rect.maxY) }
-
-        var upload: UploadCardSlot?
-        if let summary = input.uploads[message.id] {
-            y += TimelineMetrics.attachmentGap
-            let slot = Self.uploadSlot(
-                summary,
-                origin: CGPoint(x: contentX, y: y),
-                availableWidth: contentWidth,
-                style: input.style
+            words = (
+                TimelineTextBlock(
+                    text: text,
+                    width: bubbleSide == nil
+                        ? contentWidth
+                        : max(1, contentWidth - BubbleMetrics.horizontalPadding * 2),
+                    style: style,
+                    hugsText: bubbleSide != nil
+                ),
+                isJumbo
             )
-            upload = slot
-            y = slot.rect.maxY
         }
 
-        var hiddenMedia: HiddenMediaSlot?
-        if hiddenMediaCount > 0 {
-            y += TimelineMetrics.attachmentGap
-            let slot = Self.hiddenMediaSlot(
-                count: hiddenMediaCount,
-                origin: CGPoint(x: contentX, y: y),
-                availableWidth: contentWidth,
-                style: input.style
-            )
-            hiddenMedia = slot
-            y = slot.rect.maxY
-        }
-
-        // A poll IS the message: it arrives beside an empty body, so a renderer
-        // that does not know about one draws an author line over a blank row.
-        var poll: PollSlot?
-        if let value = message.poll {
-            y += TimelineMetrics.attachmentGap
-            let slot = PollLayoutEngine.layout(
-                value,
-                origin: CGPoint(x: contentX, y: y),
-                availableWidth: contentWidth,
-                style: input.style
-            )
-            poll = slot
-            y = slot.rect.maxY
-        }
-
-        // An activity invitation, for the same reason a poll is here: the
-        // launch message has no content, no embed and no component, so a
-        // renderer that does not know about one draws an author line over a
-        // blank row.
-        var activityInvite: ActivityInviteSlot?
-        if let value = message.activityInvite {
-            y += TimelineMetrics.attachmentGap
-            let slot = ActivityInviteLayoutEngine.layout(
-                value,
-                origin: CGPoint(x: contentX, y: y),
-                availableWidth: contentWidth,
-                style: input.style
-            )
-            activityInvite = slot
-            y = slot.rect.maxY
-        }
-
-        // An invitation to listen along, for the same reason: content `""`,
-        // and the card is the message.
-        var listenAlong: ListenAlongSlot?
-        if let value = message.listenAlong {
-            y += TimelineMetrics.attachmentGap
-            let slot = ListenAlongLayoutEngine.layout(
-                value,
-                isLive: input.listenAlongLive.contains(value.partyID),
-                origin: CGPoint(x: contentX, y: y),
-                availableWidth: contentWidth,
-                style: input.style
-            )
-            listenAlong = slot
-            y = slot.rect.maxY
-        }
-
-        // Embeds. A link unfurl, a bot's status card, a release note — all the
-        // same object with different subsets populated, which is why the layout
-        // branches on what is present rather than on the `kind` string.
-        // Skipped WHOLESALE when the reader has turned unfurls off — not laid
-        // out and then hidden. An embed is a framesetting pass over a title, a
-        // markdown description and a field grid; measuring one nobody will see
-        // is the most expensive way to draw nothing.
-        var embeds: [EmbedSlot] = []
-        // **A poll result's embed is not drawn**: it is a bag of *fields* — the
-        // question, the winner, the counts — that the row's own sentence already
-        // says, and drawn as an ordinary card it is a grey box listing
-        // `victor_answer_id` at somebody. See `Message.pollResult`.
-        // Filled by a Components V2 tree — the message's own, below, or an
-        // embed's — and by rows of buttons.
-        var components: [ComponentSlot] = []
-        for embed in input.settings.showsEmbeds ? message.drawableEmbeds : [] {
-            // A profile link's unfurl, where its profile card is drawn instead —
-            // Discord shows the card and not both.
-            if let url = embed.url, let userID = UserLink.userID(inURL: url),
-               input.userCardSizes[UserCardKey(userID: userID, guildID: input.guildID)] != nil
-            {
-                continue
+        /// The message's own content — everything between the lines above it
+        /// and what hangs under it — laid out from `x`.
+        ///
+        /// **In a bubble the words keep the bubble's padding and everything
+        /// else a card's inset**, which is the gap every card already keeps
+        /// above itself — so a bubble that opens on a card has its inset there
+        /// for nothing, and the content's `width` is how wide the bubble must
+        /// be to hold it all.
+        func layoutContent(x: CGFloat, top: CGFloat, bubbled: Bool) -> MessageContent {
+            let gap = TimelineMetrics.attachmentGap
+            let inset: CGFloat = bubbled ? gap : 0
+            let cardX = x + inset
+            let cardWidth = max(1, contentWidth - inset * 2)
+            var content = MessageContent(x: x, top: top, textOrigin: CGPoint(x: x, y: top))
+            var y = top
+            func holds(_ rect: CGRect) {
+                content.width = max(content.width, rect.maxX - x + inset)
+                content.hasCards = true
             }
-            y += TimelineMetrics.attachmentGap
-            // **An embed of type `components` is its components**: Discord
-            // draws the tree in place of a card, and it is laid out exactly as
-            // a message's own is, cards and controls both.
-            if embed.kind == "components", !embed.components.isEmpty {
+
+            // The message this one forwards, quoted. **Above the body**,
+            // because a forward that carries a note is "here is a thing, and
+            // here is what I think of it" — the thing comes first, which is the
+            // order every client draws it in.
+            if let snapshot = message.forwarded {
+                y += inset
+                let slot = Self.layoutForward(
+                    snapshot,
+                    origin: CGPoint(x: cardX, y: y),
+                    availableWidth: cardWidth,
+                    input: input,
+                    parser: parser
+                )
+                content.forwarded = slot
+                holds(slot.rect)
+                y = slot.rect.maxY + gap
+            }
+
+            if let words {
+                let padding = bubbled ? BubbleMetrics.horizontalPadding : 0
+                if bubbled { y += BubbleMetrics.verticalPadding }
+                content.textOrigin = CGPoint(x: x + padding, y: y)
+                content.width = max(content.width, words.block.size.width + padding * 2)
+                y += words.block.size.height
+                // The words' own padding is the gap to whatever follows them.
+                if bubbled { y += BubbleMetrics.verticalPadding - gap }
+            }
+
+            // Stickers, above attachments: a sticker IS the message, and one
+            // drawn under a screenshot reads as a caption on it.
+            for sticker in message.stickers {
+                y += gap
+                let side = min(Metrics.stickerInline, cardWidth)
+                let rect = CGRect(x: cardX, y: y, width: side, height: side)
+                content.stickers.append(StickerSlot(
+                    rect: rect,
+                    sticker: sticker,
+                    url: CDN.sticker(id: sticker.id, format: sticker.format),
+                    isVector: sticker.format == .lottie,
+                    isAnimated: sticker.format.isAnimated
+                ))
+                holds(rect)
+                y = rect.maxY
+            }
+
+            // Attachments, which keep their own gap above them.
+            content.attachments = Self.attachmentSlots(
+                message.attachments,
+                origin: CGPoint(x: cardX, y: y),
+                availableWidth: cardWidth,
+                style: input.style
+            )
+            for slot in content.attachments {
+                y = max(y, slot.rect.maxY)
+                holds(slot.rect)
+            }
+
+            if let summary = input.uploads[message.id] {
+                y += gap
+                let slot = Self.uploadSlot(
+                    summary,
+                    origin: CGPoint(x: cardX, y: y),
+                    availableWidth: cardWidth,
+                    style: input.style
+                )
+                content.upload = slot
+                holds(slot.rect)
+                y = slot.rect.maxY
+            }
+
+            if hiddenMediaCount > 0 {
+                y += gap
+                let slot = Self.hiddenMediaSlot(
+                    count: hiddenMediaCount,
+                    origin: CGPoint(x: cardX, y: y),
+                    availableWidth: cardWidth,
+                    style: input.style
+                )
+                content.hiddenMedia = slot
+                holds(slot.rect)
+                y = slot.rect.maxY
+            }
+
+            // A poll IS the message: it arrives beside an empty body, so a
+            // renderer that does not know about one draws an author line over a
+            // blank row.
+            if let value = message.poll {
+                y += gap
+                let slot = PollLayoutEngine.layout(
+                    value,
+                    origin: CGPoint(x: cardX, y: y),
+                    availableWidth: cardWidth,
+                    style: input.style
+                )
+                content.poll = slot
+                holds(slot.rect)
+                y = slot.rect.maxY
+            }
+
+            // An activity invitation, for the same reason a poll is here: the
+            // launch message has no content, no embed and no component, so a
+            // renderer that does not know about one draws an author line over a
+            // blank row.
+            if let value = message.activityInvite {
+                y += gap
+                let slot = ActivityInviteLayoutEngine.layout(
+                    value,
+                    origin: CGPoint(x: cardX, y: y),
+                    availableWidth: cardWidth,
+                    style: input.style
+                )
+                content.activityInvite = slot
+                holds(slot.rect)
+                y = slot.rect.maxY
+            }
+
+            // An invitation to listen along, for the same reason: content `""`,
+            // and the card is the message.
+            if let value = message.listenAlong {
+                y += gap
+                let slot = ListenAlongLayoutEngine.layout(
+                    value,
+                    isLive: input.listenAlongLive.contains(value.partyID),
+                    origin: CGPoint(x: cardX, y: y),
+                    availableWidth: cardWidth,
+                    style: input.style
+                )
+                content.listenAlong = slot
+                holds(slot.rect)
+                y = slot.rect.maxY
+            }
+
+            // Embeds. A link unfurl, a bot's status card, a release note — all
+            // the same object with different subsets populated, which is why
+            // the layout branches on what is present rather than on the `kind`
+            // string. Skipped WHOLESALE when the reader has turned unfurls off —
+            // not laid out and then hidden. An embed is a framesetting pass over
+            // a title, a markdown description and a field grid; measuring one
+            // nobody will see is the most expensive way to draw nothing.
+            //
+            // **A poll result's embed is not drawn**: it is a bag of *fields* —
+            // the question, the winner, the counts — that the row's own sentence
+            // already says, and drawn as an ordinary card it is a grey box
+            // listing `victor_answer_id` at somebody. See `Message.pollResult`.
+            // The components are filled by a Components V2 tree — the message's
+            // own, below, or an embed's — and by rows of buttons.
+            for embed in input.settings.showsEmbeds ? message.drawableEmbeds : [] {
+                // A profile link's unfurl, where its profile card is drawn
+                // instead — Discord shows the card and not both.
+                if let url = embed.url, let userID = UserLink.userID(inURL: url),
+                   input.userCardSizes[UserCardKey(userID: userID, guildID: input.guildID)] != nil
+                {
+                    continue
+                }
+                y += gap
+                // **An embed of type `components` is its components**: Discord
+                // draws the tree in place of a card, and it is laid out exactly
+                // as a message's own is, cards and controls both.
+                if embed.kind == "components", !embed.components.isEmpty {
+                    let tree = ComponentsLayoutEngine.layout(
+                        embed.components,
+                        origin: CGPoint(x: cardX, y: y),
+                        width: min(Metrics.embedMaxWidth, cardWidth),
+                        context: ComponentsLayoutEngine.Context(
+                            style: input.style,
+                            mentions: input.mentions,
+                            parser: parser
+                        )
+                    )
+                    content.embeds.append(contentsOf: tree.cards)
+                    content.components.append(contentsOf: tree.controls)
+                    for rect in tree.cards.map(\.rect) + tree.controls.map(\.rect) { holds(rect) }
+                    y = tree.bottom
+                    continue
+                }
+                let slot = EmbedLayoutEngine.layout(
+                    embed,
+                    origin: CGPoint(x: cardX, y: y),
+                    availableWidth: cardWidth,
+                    style: input.style,
+                    mentions: input.mentions,
+                    parser: parser,
+                    spotify: Self.spotifyCard(for: embed, in: input)
+                )
+                content.embeds.append(slot)
+                holds(slot.rect)
+                y = slot.rect.maxY
+            }
+
+            // The invites the text links to — Discord's invite card, one per
+            // code, once the answer has arrived. Until then the link is only a
+            // link.
+            for code in InviteCard.codes(in: message.content) {
+                guard let lookup = input.invites[code] else { continue }
+                y += gap
+                let slot = InviteCardLayoutEngine.layout(
+                    code: code,
+                    lookup: lookup,
+                    sentByReader: input.mentions.selfIDs.contains(message.authorID.rawValue),
+                    selfIDs: input.mentions.selfIDs,
+                    isExpanded: input.expandedInvites.contains(InviteCardFold(message: message.id, code: code)),
+                    palettes: input.palettes,
+                    origin: CGPoint(x: cardX, y: y),
+                    availableWidth: cardWidth,
+                    style: input.style
+                )
+                content.inviteCards.append(slot)
+                holds(slot.rect)
+                y = slot.rect.maxY
+            }
+
+            // The profiles the text links to, once each card has measured
+            // itself. Until then the link is only a link, exactly as an invite
+            // is.
+            if !input.userCardSizes.isEmpty {
+                for userID in UserLink.userIDs(in: message.content) {
+                    let key = UserCardKey(userID: userID, guildID: input.guildID)
+                    guard let size = input.userCardSizes[key] else { continue }
+                    y += gap
+                    let slot = UserCardSlot(
+                        rect: CGRect(x: cardX, y: y, width: size.width, height: size.height),
+                        key: key
+                    )
+                    content.userCards.append(slot)
+                    holds(slot.rect)
+                    y = slot.rect.maxY
+                }
+            }
+
+            // A Components V2 tree, which is the whole body of the message it
+            // arrives on. It produces the same two things an embed does — cards
+            // and controls — so nothing downstream needs a case for it.
+            if !message.displayComponents.isEmpty {
+                y += gap
                 let tree = ComponentsLayoutEngine.layout(
-                    embed.components,
-                    origin: CGPoint(x: contentX, y: y),
-                    width: min(Metrics.embedMaxWidth, contentWidth),
+                    message.displayComponents,
+                    origin: CGPoint(x: cardX, y: y),
+                    width: min(Metrics.embedMaxWidth, cardWidth),
                     context: ComponentsLayoutEngine.Context(
                         style: input.style,
                         mentions: input.mentions,
                         parser: parser
                     )
                 )
-                embeds.append(contentsOf: tree.cards)
-                components.append(contentsOf: tree.controls)
+                content.embeds.append(contentsOf: tree.cards)
+                content.components.append(contentsOf: tree.controls)
+                for rect in tree.cards.map(\.rect) + tree.controls.map(\.rect) { holds(rect) }
                 y = tree.bottom
-                continue
-            }
-            let slot = EmbedLayoutEngine.layout(
-                embed,
-                origin: CGPoint(x: contentX, y: y),
-                availableWidth: contentWidth,
-                style: input.style,
-                mentions: input.mentions,
-                parser: parser,
-                spotify: Self.spotifyCard(for: embed, in: input)
-            )
-            embeds.append(slot)
-            y = slot.rect.maxY
-        }
-
-        // The invites the text links to — Discord's invite card, one per code,
-        // once the answer has arrived. Until then the link is only a link.
-        var inviteCards: [InviteCardSlot] = []
-        for code in InviteCard.codes(in: message.content) {
-            guard let lookup = input.invites[code] else { continue }
-            y += TimelineMetrics.attachmentGap
-            let slot = InviteCardLayoutEngine.layout(
-                code: code,
-                lookup: lookup,
-                sentByReader: input.mentions.selfIDs.contains(message.authorID.rawValue),
-                selfIDs: input.mentions.selfIDs,
-                isExpanded: input.expandedInvites.contains(InviteCardFold(message: message.id, code: code)),
-                palettes: input.palettes,
-                origin: CGPoint(x: contentX, y: y),
-                availableWidth: contentWidth,
-                style: input.style
-            )
-            inviteCards.append(slot)
-            y = slot.rect.maxY
-        }
-
-        // The profiles the text links to, once each card has measured itself.
-        // Until then the link is only a link, exactly as an invite is.
-        var userCards: [UserCardSlot] = []
-        if !input.userCardSizes.isEmpty {
-            for userID in UserLink.userIDs(in: message.content) {
-                let key = UserCardKey(userID: userID, guildID: input.guildID)
-                guard let size = input.userCardSizes[key] else { continue }
-                y += TimelineMetrics.attachmentGap
-                let slot = UserCardSlot(rect: CGRect(x: contentX, y: y, width: size.width, height: size.height), key: key)
-                userCards.append(slot)
-                y = slot.rect.maxY
-            }
-        }
-
-        // A Components V2 tree, which is the whole body of the message it
-        // arrives on. It produces the same two things an embed does — cards and
-        // controls — so nothing downstream needs a case for it.
-        if !message.displayComponents.isEmpty {
-            y += TimelineMetrics.attachmentGap
-            let tree = ComponentsLayoutEngine.layout(
-                message.displayComponents,
-                origin: CGPoint(x: contentX, y: y),
-                width: min(Metrics.embedMaxWidth, contentWidth),
-                context: ComponentsLayoutEngine.Context(
+            } else if !message.components.isEmpty {
+                // The ordinary flat form: rows of buttons under a body or an
+                // embed.
+                y += TimelineMetrics.componentGap
+                y = Self.layoutComponents(
+                    message.components,
+                    contentX: cardX,
+                    y: y,
+                    width: cardWidth,
                     style: input.style,
-                    mentions: input.mentions,
-                    parser: parser
+                    into: &content.components
                 )
-            )
-            embeds.append(contentsOf: tree.cards)
-            components.append(contentsOf: tree.controls)
-            y = tree.bottom
-        } else if !message.components.isEmpty {
-            // The ordinary flat form: rows of buttons under a body or an embed.
-            y += TimelineMetrics.componentGap
-            y = Self.layoutComponents(
-                message.components,
-                contentX: contentX,
+                for slot in content.components { holds(slot.rect) }
+            }
+
+            content.isEmpty = words == nil && !content.hasCards
+            // The bubble's foot: the words' padding, or a card's inset.
+            content.bottom = bubbled && !content.isEmpty ? y + gap : y
+            return content
+        }
+
+        // **One bubble holds the whole message** — its words and every card,
+        // picture and sticker under them — the way Messages holds a link and
+        // its preview in one. Only emoji on their own are drawn bare, as
+        // Messages draws them: a bubble round a jumbo thumbs-up is a frame
+        // round a picture.
+        let content: MessageContent
+        var bubble: MessageBubble?
+        if let bubbleSide {
+            let probe = layoutContent(x: lane.minX, top: y, bubbled: true)
+            if probe.isEmpty {
+                content = probe
+            } else if let words, words.isJumbo, !probe.hasCards {
+                content = layoutContent(x: lane.x(forWidth: words.block.size.width), top: y, bubbled: false)
+            } else {
+                // A letter or two is a circle rather than a pill pinched at its
+                // ends: never narrower than the bubble is tall.
+                let height = probe.bottom - y
+                let width = min(lane.width, max(probe.width, probe.hasCards ? 0 : height))
+                // Laid out again only to move it: every piece here is the same
+                // at any origin, so the second pass breaks no line differently.
+                var laid = lane.isTrailing && width < lane.width - 0.5
+                    ? layoutContent(x: lane.maxX - width, top: y, bubbled: true)
+                    : probe
+                let rect = CGRect(x: laid.x, y: y, width: width, height: height)
+                if let words, !laid.hasCards {
+                    laid.textOrigin.x = rect.minX + ((rect.width - words.block.size.width) / 2).rounded()
+                }
+                content = laid
+                bubble = MessageBubble(
+                    rect: rect,
+                    ground: ground,
+                    hasTail: item.isRunTail,
+                    path: BubbleShape.path(
+                        body: rect,
+                        radius: BubbleMetrics.cornerRadius(for: input.style.bodyFont),
+                        tail: item.isRunTail ? bubbleSide : nil
+                    )
+                )
+            }
+        } else {
+            content = layoutContent(x: contentX, top: y, bubbled: false)
+        }
+        // Where the message's own content ends — the face beside a run's last
+        // bubble sits on it, rather than on reactions hanging under it.
+        y = content.bottom
+        let bodyBottom = y
+
+        // Reaction chips.
+        let reactionRow = placed({ x -> (chips: [ReactionSlot], controls: [ReactionControlSlot], bottom: CGFloat) in
+            var chips: [ReactionSlot] = []
+            var controls: [ReactionControlSlot] = []
+            let bottom = Self.layoutReactions(
+                message.reactions,
+                contentX: x,
                 y: y,
                 width: contentWidth,
                 style: input.style,
-                into: &components
+                // Discord never offers a bookmark on the reader's own message.
+                offersBookmark: !input.mentions.selfIDs.contains(message.authorID.rawValue),
+                into: &chips,
+                controls: &controls
             )
-        }
-
-        // Reaction chips.
-        var reactions: [ReactionSlot] = []
-        var reactionControls: [ReactionControlSlot] = []
-        y = Self.layoutReactions(
-            message.reactions,
-            contentX: contentX,
-            y: y,
-            width: contentWidth,
-            style: input.style,
-            // Discord never offers a bookmark on the reader's own message.
-            offersBookmark: !input.mentions.selfIDs.contains(message.authorID.rawValue),
-            into: &reactions,
-            controls: &reactionControls
-        )
+            return (chips, controls, bottom)
+        }, width: { extent($0.chips.map(\.rect) + $0.controls.map(\.rect)) })
+        let reactions = reactionRow.chips
+        let reactionControls = reactionRow.controls
+        y = reactionRow.bottom
 
         // The thread this message started, under its content and above the
         // ephemeral note — it is about the message, and the note is about the
         // whole row.
-        let chip = Self.layoutThreadChip(
-            message.thread,
-            contentX: contentX,
-            y: y,
-            width: contentWidth,
-            style: input.style
-        )
+        let chip = placed({
+            Self.layoutThreadChip(
+                message.thread,
+                contentX: $0,
+                y: y,
+                width: contentWidth,
+                style: input.style
+            )
+        }, width: { $0.slot?.rect.width ?? 0 })
         y = chip.bottom
 
         // "Only you can see this", last — under everything, which is where a
@@ -1409,23 +1646,25 @@ nonisolated struct TimelineLayoutEngine: Sendable {
             let font = input.style.metadataFont
             let noteWidth = Self.measure(Self.ephemeralNoteText, font: font)
             let dismissWidth = Self.measure(Self.ephemeralDismissText, font: font)
-            let noteEnd = contentX + TimelineMetrics.ephemeralNoteGlyphRoom + noteWidth
+            let lineWidth = TimelineMetrics.ephemeralNoteGlyphRoom + noteWidth
+                + TimelineMetrics.ephemeralNoteSeparatorRoom + dismissWidth
+            let noteX = lane.x(forWidth: lineWidth)
             let top = y + TimelineMetrics.ephemeralNoteGap
             // The control's own rect, measured rather than derived from the
             // line's: it is the only part that takes a click, and a target that
             // spans the note would dismiss the message on a click meant for
             // nothing at all.
             let dismissRect = CGRect(
-                x: noteEnd + TimelineMetrics.ephemeralNoteSeparatorRoom,
+                x: noteX + lineWidth - dismissWidth,
                 y: top,
                 width: dismissWidth,
                 height: TimelineMetrics.ephemeralNoteHeight
             )
             ephemeralNote = EphemeralNoteSlot(
                 rect: CGRect(
-                    x: contentX,
+                    x: noteX,
                     y: top,
-                    width: dismissRect.maxX - contentX,
+                    width: lineWidth,
                     height: TimelineMetrics.ephemeralNoteHeight
                 ),
                 text: Self.ephemeralNoteText,
@@ -1434,10 +1673,49 @@ nonisolated struct TimelineLayoutEngine: Sendable {
             )
         }
 
+        // **The bubble arrangement's two remaining pieces, both placed against
+        // the content.** The face beside the last bubble of somebody's run,
+        // sitting on the content's foot as Messages' does; and the time, on
+        // the side the content leaves open, centred on the bubble when there
+        // is one.
+        var bubbleRow: BubbleRow?
+        if let bubbleSide {
+            if namesAuthor, item.isRunTail {
+                let side = BubbleMetrics.avatarSide
+                avatarRect = CGRect(
+                    x: TimelineMetrics.horizontalMargin,
+                    y: max(contentTop, bodyBottom - side),
+                    width: side,
+                    height: side
+                )
+            }
+            var timeRect = CGRect.zero
+            if !content.isEmpty {
+                let font = input.style.metadataFont
+                let size = CGSize(
+                    width: Self.measure(input.settings.time(message.sentAt), font: font),
+                    height: ceil(font.ascender - font.descender)
+                )
+                let anchor = bubble?.rect ?? content.bounds
+                // Level with the first line: the middle of a one-line bubble,
+                // the top line of a taller one — where the pill hangs too.
+                let band = min(anchor.height, BubbleMetrics.cornerRadius(for: input.style.bodyFont) * 2)
+                timeRect = CGRect(
+                    x: bubbleSide == .trailing
+                        ? anchor.minX - BubbleMetrics.timeGap - size.width
+                        : anchor.maxX + BubbleMetrics.timeGap,
+                    y: (anchor.minY + band / 2 - size.height / 2).rounded(),
+                    width: size.width,
+                    height: size.height
+                )
+            }
+            bubbleRow = BubbleRow(side: bubbleSide, bubble: bubble, timeRect: timeRect)
+        }
+
         return MessageRow(
             id: message.id,
             authorID: message.authorID,
-            isRunHead: item.isRunHead,
+            hasAuthorLine: hasAuthorLine,
             mentionsMe: item.flags.contains(.mentionsMe),
             isPending: item.flags.contains(.pending),
             isFailed: item.flags.contains(.failed),
@@ -1451,46 +1729,51 @@ nonisolated struct TimelineLayoutEngine: Sendable {
             authorName: author?.name ?? "Unknown",
             authorFace: author?.nameFace,
             authorTracking: author?.nameTracking ?? 0,
-            authorGradient: item.isRunHead
+            authorGradient: hasAuthorLine
                 ? author?.gradient.map { $0.map { NSColor(Color(hex: $0)) } }
                 : nil,
-            authorStyle: item.isRunHead ? author?.nameStyle : nil,
+            authorStyle: hasAuthorLine ? author?.nameStyle : nil,
             authorColor: author?.colorValue.map { NSColor(Color(hex: $0)) },
             authorRect: authorRect,
-            timestampText: input.settings.timestampLabel(message.sentAt, calendar: input.calendar),
+            // In bubbles the run head carries no time: every bubble shows its
+            // own beside it — `BubbleRow.timeRect`.
+            timestampText: bubbleSide == nil
+                ? input.settings.timestampLabel(message.sentAt, calendar: input.calendar)
+                : "",
             timestampRect: timestampRect,
             gutterTimestampText: input.settings.time(message.sentAt),
             isBot: author?.isBot ?? false,
             isVerifiedBot: author?.isVerifiedBot ?? false,
-            tag: item.isRunHead ? author?.tag : nil,
-            tagBadgeURL: item.isRunHead ? author?.tagBadgeURL : nil,
+            tag: hasAuthorLine ? author?.tag : nil,
+            tagBadgeURL: hasAuthorLine ? author?.tagBadgeURL : nil,
             tagRect: tagRect,
-            roleIconURL: item.isRunHead ? author?.roleIconURL : nil,
-            roleEmoji: item.isRunHead ? author?.roleEmoji : nil,
+            roleIconURL: hasAuthorLine ? author?.roleIconURL : nil,
+            roleEmoji: hasAuthorLine ? author?.roleEmoji : nil,
             roleIconRect: roleIconRect,
-            forwarded: forwarded,
-            textBlock: textBlock,
-            textOrigin: textOrigin,
-            attachments: attachments,
-            upload: upload,
-            hiddenMedia: hiddenMedia,
-            stickers: stickers,
-            embeds: embeds,
-            components: components,
-            poll: poll,
-            activityInvite: activityInvite,
-            listenAlong: listenAlong,
-            inviteCards: inviteCards,
-            userCards: userCards,
+            forwarded: content.forwarded,
+            textBlock: words?.block,
+            textOrigin: content.textOrigin,
+            attachments: content.attachments,
+            upload: content.upload,
+            hiddenMedia: content.hiddenMedia,
+            stickers: content.stickers,
+            embeds: content.embeds,
+            components: content.components,
+            poll: content.poll,
+            activityInvite: content.activityInvite,
+            listenAlong: content.listenAlong,
+            inviteCards: content.inviteCards,
+            userCards: content.userCards,
             reactions: reactions,
             reactionControls: reactionControls,
             threadChip: chip.slot,
+            bubbles: bubbleRow,
             accessibilityLabel: Self.accessibilityLabel(
                 author: author?.name ?? "Unknown",
                 time: input.settings.time(message.sentAt),
-                body: textBlock?.text.plainLabel ?? "",
+                body: words?.block.text.plainLabel ?? "",
                 attachments: message.attachments.count,
-                stickers: stickers.map(\.sticker.name),
+                stickers: content.stickers.map(\.sticker.name),
                 extra: Self.spokenBody(of: message),
                 isEphemeral: message.isEphemeral,
                 isEdited: message.editedAt != nil,
@@ -1520,8 +1803,6 @@ nonisolated struct TimelineLayoutEngine: Sendable {
         let author = input.authors[message.authorID]
         let name = author?.name ?? "Someone"
         let sentence = SystemMessageText.sentence(for: message, name: name)
-        let contentX = TimelineMetrics.contentInset
-        let contentWidth = max(80, input.width - contentX - TimelineMetrics.horizontalMargin)
         let y = input.settings.runSpacing
 
         let text = Self.systemText(
@@ -1531,7 +1812,25 @@ nonisolated struct TimelineLayoutEngine: Sendable {
             time: input.settings.timestampLabel(message.sentAt, calendar: input.calendar),
             style: input.style
         )
-        let block = TimelineTextBlock(text: text, width: contentWidth, style: input.style)
+        // **Centred in bubbles**, glyph and all, as Messages centres the lines
+        // that are about the conversation rather than in it. The glyph sits a
+        // gutter's gap before the words in both arrangements — the painter
+        // places it from `textOrigin`.
+        let isCentred = input.arrangement != .columns
+        let glyphRoom = TimelineMetrics.systemGlyphSide + TimelineMetrics.avatarGap
+        let margin = TimelineMetrics.horizontalMargin
+        let block = TimelineTextBlock(
+            text: text,
+            width: isCentred
+                ? max(80, input.width - margin * 2 - glyphRoom)
+                : max(80, input.width - TimelineMetrics.contentInset - margin),
+            style: input.style,
+            hugsText: isCentred
+        )
+        let contentX = isCentred
+            ? ((input.width - block.size.width + glyphRoom) / 2).rounded()
+            : TimelineMetrics.contentInset
+        let contentWidth = max(80, input.width - contentX - margin)
 
         // A join message can be reacted to like any other, and dropping them
         // would be dropping data the payload already carries.
@@ -1563,7 +1862,7 @@ nonisolated struct TimelineLayoutEngine: Sendable {
         return MessageRow(
             id: message.id,
             authorID: message.authorID,
-            isRunHead: false,
+            hasAuthorLine: false,
             mentionsMe: item.flags.contains(.mentionsMe),
             isPending: false,
             isFailed: false,
@@ -1668,16 +1967,23 @@ nonisolated struct TimelineLayoutEngine: Sendable {
     /// The name is drawn in the quoted author's own face at the quote's size —
     /// resized from the resolved face rather than looked up again, because the
     /// registry is main-actor state and this runs off it.
+    ///
+    /// - Parameters:
+    ///   - leadingX: where the quoted face starts.
+    ///   - maxX: where the quote must stop.
+    ///   - elbowX: where the elbow rises from, or nil for a line with none.
     private static func layoutReplyHeader(
         _ reference: MessageReference,
         y: CGFloat,
-        width: CGFloat,
+        leadingX: CGFloat,
+        maxX: CGFloat,
+        elbowX: CGFloat?,
         style: MessageTextStyle,
         author: AuthorInfo?
     ) -> ReplyHeaderSlot {
         let height = TimelineMetrics.replyHeight
         let avatarRect = CGRect(
-            x: TimelineMetrics.contentInset,
+            x: leadingX,
             y: y + (height - TimelineMetrics.replyAvatarSide) / 2,
             width: TimelineMetrics.replyAvatarSide,
             height: TimelineMetrics.replyAvatarSide
@@ -1718,23 +2024,24 @@ nonisolated struct TimelineLayoutEngine: Sendable {
         let excerptX = isUnavailable
             ? avatarRect.maxX + TimelineMetrics.replyItemGap
             : nameRect.maxX + TimelineMetrics.replyItemGap
-        let trailing = width - TimelineMetrics.horizontalMargin
         let excerptRect = CGRect(
             x: excerptX,
             y: y,
-            width: max(0, trailing - excerptX),
+            width: max(0, maxX - excerptX),
             height: height
         )
 
-        // The strip's own bounds: from the elbow to wherever the quote ends, so
-        // a click anywhere along the line it draws lands on it.
+        // The strip's own bounds: from the elbow — or the face, where there is
+        // none — to wherever the quote ends, so a click anywhere along the line
+        // it draws lands on it.
         let quoteWidth = quote.isEmpty
             ? 0
             : min(excerptRect.width, measure(quote, font: quoteFont))
+        let start = elbowX ?? leadingX
         let rect = CGRect(
-            x: TimelineMetrics.replyElbowX,
+            x: start,
             y: y,
-            width: max(0, excerptX + quoteWidth - TimelineMetrics.replyElbowX),
+            width: max(0, excerptX + quoteWidth - start),
             height: height
         )
 
@@ -1743,7 +2050,7 @@ nonisolated struct TimelineLayoutEngine: Sendable {
             // The elbow's leg drops to the top of the avatar under it, which is
             // where the author line begins — the connector then reads as coming
             // out of the face rather than as a bracket floating beside it.
-            elbowBottom: y + height + TimelineMetrics.replyGap,
+            elbowBottom: elbowX.map { _ in y + height + TimelineMetrics.replyGap },
             avatarRect: isUnavailable ? .zero : avatarRect,
             avatarURL: author?.avatarURL,
             monogram: author?.monogram ?? "?",
@@ -2753,16 +3060,20 @@ nonisolated extension TimelineLayoutEngine {
     ///
     /// Laid out against the reply header's own metrics so the two lines sit at
     /// the same height with the same elbow — see `InteractionHeaderSlot`.
+    ///
+    /// Placed as the reply header is — see `layoutReplyHeader`'s parameters.
     static func layoutInteractionHeader(
         _ interaction: MessageInteraction,
         y: CGFloat,
-        width: CGFloat,
+        leadingX: CGFloat,
+        maxX: CGFloat,
+        elbowX: CGFloat?,
         style: MessageTextStyle,
         author: AuthorInfo?
     ) -> InteractionHeaderSlot {
         let height = TimelineMetrics.replyHeight
         let avatarRect = CGRect(
-            x: TimelineMetrics.contentInset,
+            x: leadingX,
             y: y + (height - TimelineMetrics.replyAvatarSide) / 2,
             width: TimelineMetrics.replyAvatarSide,
             height: TimelineMetrics.replyAvatarSide
@@ -2802,14 +3113,15 @@ nonisolated extension TimelineLayoutEngine {
             height: height
         )
 
+        let start = elbowX ?? leadingX
         return InteractionHeaderSlot(
             rect: CGRect(
-                x: TimelineMetrics.replyElbowX,
+                x: start,
                 y: y,
-                width: max(0, min(chipRect.maxX, width) - TimelineMetrics.replyElbowX),
+                width: max(0, min(chipRect.maxX, maxX) - start),
                 height: height
             ),
-            elbowBottom: y + height,
+            elbowBottom: elbowX.map { _ in y + height },
             avatarRect: avatarRect,
             avatarURL: author?.avatarURL,
             monogram: author?.monogram ?? "?",

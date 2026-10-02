@@ -1237,7 +1237,18 @@ final class SessionController {
             model.memberLists[key, default: MemberList()].apply(update.operations, groups: update.groups)
             model.memberListRevision &+= 1
 
-        case .channelAcknowledged(let channelID, let messageID, let mentionCount):
+        case .channelAcknowledged(let channelID, let messageID, let mentionCount, let isManual):
+            // **Only a Mark Unread moves the cursor back.** An ordinary ack
+            // landing behind where the reader already is — their own words
+            // since, a message read since — is the past: Discord's divider
+            // hangs on its oldest unread, which an ack clears, so a late one
+            // draws nothing there. This divider hangs on the cursor, and taking
+            // it back put "NEW" in front of the reader's newest message.
+            if !isManual, let messageID, let current = model.readStates[channelID]?.lastAcknowledgedID,
+               messageID.rawValue < current.rawValue
+            {
+                return
+            }
             model.readStates[channelID, default: ReadState()].lastAcknowledgedID = messageID
             model.readStates[channelID, default: ReadState()].mentionCount = mentionCount
             model.sidebarRevision &+= 1
@@ -1418,6 +1429,13 @@ final class SessionController {
     }
 
     private func bumpUnread(for message: Message) {
+        // **The reader's own words are read**, wherever they were written —
+        // except a poll of theirs ending, Discord's one `SELF_MENTIONABLE_SYSTEM`
+        // kind, which is news to them.
+        if message.authorID == model.currentUserID, message.kind != .pollResult {
+            model.acknowledgeOwnMessage(message.id, in: message.channelID)
+            return
+        }
         guard message.channelID != model.selectedChannelID else {
             // The reader is looking at it. Acknowledge rather than counting an
             // unread nobody will ever clear.
@@ -2294,6 +2312,8 @@ final class SessionController {
     ///   may be nothing but these, which is the second such path.
     /// - Parameter poll: A poll from the editor — the third, drawn at once like
     ///   any send, as Discord's `sendPollMessage` is.
+    /// - Returns: the send's nonce — its echo's id — or nil for nothing sent.
+    @discardableResult
     func send(
         _ content: String,
         in channelID: ChannelID,
@@ -2302,11 +2322,11 @@ final class SessionController {
         attachments: [PendingAttachment] = [],
         poll: PollDraft? = nil,
         listenAlong: ListenAlongInvite? = nil
-    ) {
+    ) -> MessageID? {
         guard Self.isSendable(
             content, stickerIDs: stickerIDs, attachments: attachments, poll: poll, listenAlong: listenAlong
         ), let author = model.currentUserID
-        else { return }
+        else { return nil }
         let request = OutgoingMessage.Request(
             content: content.trimmingCharacters(in: .whitespacesAndNewlines),
             replyingTo: replyingTo,
@@ -2329,10 +2349,13 @@ final class SessionController {
             files: attachments
         )
         model.mutateBox(channelID) { $0.outbox.append(entry) }
+        // In the same pass as the echo, so no frame draws "NEW" in front of it.
+        model.acknowledgeOwnMessage(id, in: channelID)
         sendTasks[id] = Task { [weak self] in
             await self?.deliver(entry, in: channelID)
             self?.sendTasks[id] = nil
         }
+        return id
     }
 
     /// Sends a refused message again, as a new send.
@@ -2437,9 +2460,8 @@ final class SessionController {
                     listenAlong: listenAlong
                 )
             }
-            let trims = model.mayTrimOldest(in: channelID)
-            model.mutateBox(channelID) { $0.receiveLive(message, trimming: trims) }
-            model.messageContentRevision &+= 1
+            // Discord's copy is newer than the echo the cursor was moved to.
+            receiveOwn(message, in: channelID)
             // **When Discord has taken it, not when Return was pressed** —
             // Discord's own `SLOWMODE_RESET_COOLDOWN` follows the POST.
             // Started earlier, a send that fails would leave the reader
@@ -2450,6 +2472,21 @@ final class SessionController {
             guard !Task.isCancelled else { return }
             refuse(entry, in: channelID, because: error)
         }
+    }
+
+    /// Takes in one of the reader's own messages a route answered with — a
+    /// send's copy, a forward, a share, a scheduled message sent now — and
+    /// reads it, in the same pass.
+    ///
+    /// **One place for every such route**, because each answers with a message
+    /// newer than the read cursor: taken in without the acknowledgement, the
+    /// reader's own words sat behind the "NEW" line until the socket's copy
+    /// caught up (`AppModel.acknowledgeOwnMessage`).
+    func receiveOwn(_ message: Message, in channelID: ChannelID) {
+        let trims = model.mayTrimOldest(in: channelID)
+        model.mutateBox(channelID) { $0.receiveLive(message, trimming: trims) }
+        model.acknowledgeOwnMessage(message.id, in: channelID)
+        model.messageContentRevision &+= 1
     }
 
     /// Runs one POST after every send before it.

@@ -162,6 +162,10 @@ nonisolated enum TimelineRowPainter {
         /// because it comes and goes with a layer the canvas owns and changes
         /// nothing about the row's geometry.
         var burstEffects: [ReactionEmojiKey: Double] = [:]
+        /// The row's bubble and its words are on a flight over the canvas —
+        /// a send on its way from the composer, see `BubbleFlight` — so they
+        /// are left out here, exactly as a layered picture's box is.
+        var hidesBubble = false
     }
 
     /// - Parameter styledAuthorName: the hovered run head's name, shaped and
@@ -236,15 +240,19 @@ nonisolated enum TimelineRowPainter {
     ) {
         // A mention of the reader tints the whole row and carries a leading
         // rule. Both, not one: the tint alone is easy to miss on a busy channel
-        // and the rule alone reads as a quote.
-        if row.mentionsMe {
-            context.setFillColor(NSColor.systemYellow.withAlphaComponent(0.08).cgColor)
-            context.fill(rowFrame)
-            context.setFillColor(NSColor.systemYellow.withAlphaComponent(0.7).cgColor)
-            context.fill(CGRect(x: rowFrame.minX, y: rowFrame.minY, width: 2, height: rowFrame.height))
-        } else if state.isHovered {
-            context.setFillColor(ThemeInk.current.lift(0.035))
-            context.fill(rowFrame)
+        // and the rule alone reads as a quote. **Not in bubbles**, where a row
+        // is a band across a conversation that has none — the mention tints
+        // its bubble instead, and the pointer lifts the bubble it is on.
+        if row.bubbles == nil {
+            if row.mentionsMe {
+                context.setFillColor(NSColor.systemYellow.withAlphaComponent(0.08).cgColor)
+                context.fill(rowFrame)
+                context.setFillColor(NSColor.systemYellow.withAlphaComponent(0.7).cgColor)
+                context.fill(CGRect(x: rowFrame.minX, y: rowFrame.minY, width: 2, height: rowFrame.height))
+            } else if state.isHovered {
+                context.setFillColor(ThemeInk.current.lift(0.035))
+                context.fill(rowFrame)
+            }
         }
 
         if state.isHighlighted {
@@ -304,6 +312,9 @@ nonisolated enum TimelineRowPainter {
                 style: style,
                 images: images,
                 scale: scale,
+                // A bubble's face is smaller than the size the prefetch asked
+                // for, and the cache is keyed on the asking.
+                peekSide: row.bubbles == nil ? nil : Metrics.avatarMessage,
                 decorationURL: row.decorationURL,
                 avatarFrame: state.avatarFrame,
                 decorationFrame: state.decorationFrame
@@ -316,16 +327,19 @@ nonisolated enum TimelineRowPainter {
             drawSymbol(
                 symbol,
                 tint: row.systemTint ?? style.tertiaryColor,
+                // A gutter's gap before the words, wherever they start — the
+                // avatar column's trailing edge in columns, beside a centred
+                // line in bubbles.
                 in: CGRect(
-                    x: rowFrame.minX + TimelineMetrics.horizontalMargin
-                        + (Metrics.avatarMessage - TimelineMetrics.systemGlyphSide),
+                    x: rowFrame.minX + row.textOrigin.x
+                        - TimelineMetrics.avatarGap - TimelineMetrics.systemGlyphSide,
                     y: rowFrame.minY + row.textOrigin.y,
                     width: TimelineMetrics.systemGlyphSide,
                     height: TimelineMetrics.systemGlyphSide
                 ),
                 context: context
             )
-        } else if state.showsGutterTimestamp {
+        } else if state.showsGutterTimestamp, row.bubbles == nil {
             // A continuation row reveals its time in the empty gutter rather
             // than reserving a column for a stamp almost nobody reads.
             drawText(
@@ -342,7 +356,7 @@ nonisolated enum TimelineRowPainter {
             )
         }
 
-        if row.isRunHead {
+        if row.hasAuthorLine {
             let namePoint = CGPoint(
                 x: rowFrame.minX + row.authorRect.minX,
                 y: rowFrame.minY + row.authorRect.minY
@@ -498,7 +512,11 @@ nonisolated enum TimelineRowPainter {
             )
         }
 
-        if let block = row.textBlock {
+        if let bubbles = row.bubbles {
+            drawBubble(bubbles, of: row, in: rowFrame, state: state, style: style, context: context)
+        }
+
+        if let block = row.textBlock, !(state.hidesBubble && row.bubbles?.bubble != nil) {
             let origin = CGPoint(
                 x: rowFrame.minX + row.textOrigin.x,
                 y: rowFrame.minY + row.textOrigin.y
@@ -507,8 +525,10 @@ nonisolated enum TimelineRowPainter {
             // Discord's `.isSending`, which is on the text and on nothing else:
             // the name, the face and the time are already true. Faded as one
             // layer, as CSS `opacity` fades its box, so a mention's plate and
-            // the words over it do not each let the other through.
-            if row.isPending {
+            // the words over it do not each let the other through. **Not in
+            // bubbles**: the send's flight is its feedback, and half strength
+            // would flash as Discord's answer lands in the middle of it.
+            if row.isPending, row.bubbles == nil {
                 context.saveGState()
                 context.setAlpha(0.5)
                 context.beginTransparencyLayer(
@@ -530,10 +550,11 @@ nonisolated enum TimelineRowPainter {
                     hoveredSpoiler: state.hoveredSpoiler,
                     layeredEmoji: state.layered.emoji,
                     hoveredLink: state.hoveredLink,
-                    selectedRange: state.selectedRange
+                    selectedRange: state.selectedRange,
+                    plates: row.bubbles?.bubble?.ground == .accent ? ThemeInk.current.ownBubblePlates : nil
                 )
             )
-            if row.isPending {
+            if row.isPending, row.bubbles == nil {
                 context.endTransparencyLayer()
                 context.restoreGState()
             }
@@ -815,6 +836,9 @@ nonisolated enum TimelineRowPainter {
         var hoveredLink: MessageText.LinkTarget?
         /// The selected characters, highlighted under the words.
         var selectedRange: NSRange?
+        /// What the words' plates are filled with. Nil is the room's own set;
+        /// the reader's bubble hands its white one — see `TextPlateInk`.
+        var plates: TextPlateInk?
     }
 
     /// Draws a laid-out block: the plates and rules under the words, the words,
@@ -838,7 +862,7 @@ nonisolated enum TimelineRowPainter {
         time: Double,
         state: TextState
     ) {
-        let ink = ThemeInk.current
+        let plates = state.plates ?? ThemeInk.current.plates
 
         // The selection, under everything else, in the system's own colour.
         if let selected = state.selectedRange, selected.length > 0 {
@@ -852,15 +876,15 @@ nonisolated enum TimelineRowPainter {
         // spoiler's plate, and every chip's.
         for rule in block.quoteRules {
             let frame = rule.offsetBy(dx: origin.x, dy: origin.y)
-            context.setFillColor(ink.quoteRule)
+            context.setFillColor(plates.quoteRule)
             context.addPath(CGPath(roundedRect: frame, cornerWidth: 2, cornerHeight: 2, transform: nil))
             context.fillPath()
         }
         for box in block.codeBlockRects {
-            drawCodePlate(box.offsetBy(dx: origin.x, dy: origin.y), corner: 4, ink: ink, context: context)
+            drawCodePlate(box.offsetBy(dx: origin.x, dy: origin.y), corner: 4, plates: plates, context: context)
         }
         for (rect, spoiler) in block.spoilerRects where state.revealedSpoilers?.contains(spoiler) ?? true {
-            context.setFillColor(ink.spoilerRevealed)
+            context.setFillColor(plates.spoilerRevealed)
             context.addPath(CGPath(
                 roundedRect: rect.offsetBy(dx: origin.x, dy: origin.y),
                 cornerWidth: 4, cornerHeight: 4, transform: nil
@@ -873,7 +897,7 @@ nonisolated enum TimelineRowPainter {
             let isHovered = state.hoveredPlate == index
             switch block.text.plates[index].kind {
             case .mention:
-                context.setFillColor(isHovered ? ink.accent : ink.mentionFill)
+                context.setFillColor(isHovered ? plates.mentionHoverFill : plates.mentionFill)
                 if isHovered { overpaint.append((frame, index)) }
             case .role(let fill, let hoverFill):
                 context.setFillColor(isHovered ? hoverFill : fill)
@@ -881,9 +905,9 @@ nonisolated enum TimelineRowPainter {
                 context.setFillColor(isHovered ? hoverFill : fill)
                 overpaint.append((frame, index))
             case .timestamp:
-                context.setFillColor(ink.timestampFill)
+                context.setFillColor(plates.timestampFill)
             case .code:
-                drawCodePlate(frame, corner: 4, ink: ink, context: context)
+                drawCodePlate(frame, corner: 4, plates: plates, context: context)
                 continue
             }
             context.addPath(CGPath(roundedRect: frame, cornerWidth: 3, cornerHeight: 3, transform: nil))
@@ -942,7 +966,7 @@ nonisolated enum TimelineRowPainter {
             } else {
                 // A soft plate rather than nothing, so a line does not visibly
                 // reflow when the picture lands — the box was already reserved.
-                context.setFillColor(ink.placeholderFill)
+                context.setFillColor(plates.emojiPlaceholder)
                 context.fillEllipse(in: frame.insetBy(dx: 2, dy: 2))
             }
         }
@@ -981,7 +1005,7 @@ nonisolated enum TimelineRowPainter {
         for (rect, spoiler) in block.spoilerRects {
             guard let revealed = state.revealedSpoilers, !revealed.contains(spoiler) else { continue }
             context.setFillColor(
-                state.hoveredSpoiler == spoiler ? ink.spoilerHiddenHover : ink.spoilerHidden
+                state.hoveredSpoiler == spoiler ? plates.spoilerHiddenHover : plates.spoilerHidden
             )
             context.addPath(CGPath(
                 roundedRect: rect.offsetBy(dx: origin.x, dy: origin.y),
@@ -1006,15 +1030,15 @@ nonisolated enum TimelineRowPainter {
     private static func drawCodePlate(
         _ frame: CGRect,
         corner: CGFloat,
-        ink: ThemeInk,
+        plates: TextPlateInk,
         context: CGContext
     ) {
         let shape = CGPath(roundedRect: frame, cornerWidth: corner, cornerHeight: corner, transform: nil)
-        context.setFillColor(ink.codeFill)
+        context.setFillColor(plates.codeFill)
         context.addPath(shape)
         context.fillPath()
         let stroke = frame.insetBy(dx: 0.5, dy: 0.5)
-        context.setStrokeColor(ink.codeBorder)
+        context.setStrokeColor(plates.codeBorder)
         context.setLineWidth(1)
         context.addPath(CGPath(
             roundedRect: stroke,
@@ -1250,23 +1274,14 @@ nonisolated enum TimelineRowPainter {
         images: ImageStore,
         scale: CGFloat
     ) {
-        let midY = offset.y + header.rect.midY
-        let x = offset.x + TimelineMetrics.replyElbowX
-
-        context.saveGState()
-        context.setStrokeColor(ThemeInk.current.selectionFill)
-        context.setLineWidth(TimelineMetrics.replyElbowWidth)
-        context.setLineCap(.round)
-        context.beginPath()
-        context.move(to: CGPoint(x: x, y: offset.y + header.elbowBottom))
-        context.addArc(
-            tangent1End: CGPoint(x: x, y: midY),
-            tangent2End: CGPoint(x: offset.x + TimelineMetrics.replyElbowEndX, y: midY),
-            radius: TimelineMetrics.replyElbowRadius
-        )
-        context.addLine(to: CGPoint(x: offset.x + TimelineMetrics.replyElbowEndX, y: midY))
-        context.strokePath()
-        context.restoreGState()
+        if let elbowBottom = header.elbowBottom {
+            drawElbow(
+                from: offset.y + elbowBottom,
+                to: offset.y + header.rect.midY,
+                offset: offset,
+                context: context
+            )
+        }
 
         drawAvatar(
             url: header.avatarURL,
@@ -1315,6 +1330,66 @@ nonisolated enum TimelineRowPainter {
         )
     }
 
+    /// The connector a reply or a command line rises out of the avatar
+    /// gutter on, stroked as one path — see `drawInteractionHeader`.
+    private static func drawElbow(from bottom: CGFloat, to midY: CGFloat, offset: CGPoint, context: CGContext) {
+        let x = offset.x + TimelineMetrics.replyElbowX
+        let end = offset.x + TimelineMetrics.replyElbowEndX
+        context.saveGState()
+        context.setStrokeColor(ThemeInk.current.selectionFill)
+        context.setLineWidth(TimelineMetrics.replyElbowWidth)
+        context.setLineCap(.round)
+        context.beginPath()
+        context.move(to: CGPoint(x: x, y: bottom))
+        context.addArc(
+            tangent1End: CGPoint(x: x, y: midY),
+            tangent2End: CGPoint(x: end, y: midY),
+            radius: TimelineMetrics.replyElbowRadius
+        )
+        context.addLine(to: CGPoint(x: end, y: midY))
+        context.strokePath()
+        context.restoreGState()
+    }
+
+    /// A bubble row's own marks: the bubble under the words, lifted while the
+    /// pointer is on the row and tinted where it mentions the reader, and the
+    /// time beside it on the side the row leaves open.
+    private static func drawBubble(
+        _ bubbles: BubbleRow,
+        of row: MessageRow,
+        in rowFrame: CGRect,
+        state: State,
+        style: MessageTextStyle,
+        context: CGContext
+    ) {
+        if let bubble = bubbles.bubble, !state.hidesBubble {
+            let ink = ThemeInk.current
+            context.saveGState()
+            context.translateBy(x: rowFrame.minX, y: rowFrame.minY)
+            context.addPath(bubble.path)
+            switch bubble.ground {
+            case .accent: context.setFillColor(state.isHovered ? ink.ownBubbleHover : ink.ownBubble)
+            case .neutral: context.setFillColor(state.isHovered ? ink.otherBubbleHover : ink.otherBubble)
+            }
+            context.fillPath()
+            if row.mentionsMe {
+                context.addPath(bubble.path)
+                context.setFillColor(ink.mentionedBubbleTint)
+                context.fillPath()
+            }
+            context.restoreGState()
+        }
+        guard state.showsGutterTimestamp, !bubbles.timeRect.isEmpty, !state.hidesBubble else { return }
+        drawText(
+            row.gutterTimestampText,
+            font: style.metadataFont,
+            color: style.tertiaryColor,
+            at: CGPoint(x: rowFrame.minX + bubbles.timeRect.minX, y: rowFrame.minY + bubbles.timeRect.minY),
+            maxWidth: bubbles.timeRect.width + 8,
+            context: context
+        )
+    }
+
     private static func drawReplyHeader(
         _ header: ReplyHeaderSlot,
         offset: CGPoint,
@@ -1323,24 +1398,14 @@ nonisolated enum TimelineRowPainter {
         images: ImageStore,
         scale: CGFloat
     ) {
-        let midY = offset.y + header.rect.midY
-        let radius = TimelineMetrics.replyElbowRadius
-        let x = offset.x + TimelineMetrics.replyElbowX
-
-        context.saveGState()
-        context.setStrokeColor(ThemeInk.current.selectionFill)
-        context.setLineWidth(TimelineMetrics.replyElbowWidth)
-        context.setLineCap(.round)
-        context.beginPath()
-        context.move(to: CGPoint(x: x, y: offset.y + header.elbowBottom))
-        context.addArc(
-            tangent1End: CGPoint(x: x, y: midY),
-            tangent2End: CGPoint(x: offset.x + TimelineMetrics.replyElbowEndX, y: midY),
-            radius: radius
-        )
-        context.addLine(to: CGPoint(x: offset.x + TimelineMetrics.replyElbowEndX, y: midY))
-        context.strokePath()
-        context.restoreGState()
+        if let elbowBottom = header.elbowBottom {
+            drawElbow(
+                from: offset.y + elbowBottom,
+                to: offset.y + header.rect.midY,
+                offset: offset,
+                context: context
+            )
+        }
 
         if header.avatarRect != .zero {
             drawAvatar(
@@ -1450,8 +1515,10 @@ nonisolated enum TimelineRowPainter {
                 images.cached(
                     ImageStore.Key(
                         url: url,
+                        // From the size the face was asked for, as the
+                        // prefetch asks for the decoration around it.
                         maximumPixelSize: Int(
-                            (decorationRect(around: frame).width * scale).rounded(.up)
+                            ((peekSide ?? frame.width) * Metrics.decorationScale * scale).rounded(.up)
                         )
                     ),
                     bucket: .thumbnail

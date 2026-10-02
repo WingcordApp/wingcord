@@ -125,6 +125,20 @@ final class AppSettings {
         }
     }
 
+    /// The conversation in bubbles: the reader's messages on the trailing
+    /// side in the accent, everyone else's on the leading side — the way
+    /// Messages draws one. Discord has no such mode, so this is the app's own.
+    ///
+    /// **Layout, not paint**: every row changes shape, so it reaches the
+    /// transcript through `TimelineSettings` and moves the revision.
+    var usesMessageBubbles = false {
+        didSet {
+            guard usesMessageBubbles != oldValue else { return }
+            defaults.set(usesMessageBubbles, forKey: Key.messageBubbles)
+            notifyPresentation()
+        }
+    }
+
     /// Whether the member list is shown by default in a new guild.
     var showsMemberListByDefault = true {
         didSet { defaults.set(showsMemberListByDefault, forKey: Key.showsMemberList) }
@@ -890,6 +904,7 @@ final class AppSettings {
         storedUserColorSaturation =
             defaults.object(forKey: Key.userColorSaturation) as? Double ?? 1
         isCompactMode = defaults.object(forKey: Key.compactMode) as? Bool ?? false
+        usesMessageBubbles = defaults.object(forKey: Key.messageBubbles) as? Bool ?? false
         showsMemberListByDefault = defaults.object(forKey: Key.showsMemberList) as? Bool ?? true
         sharesGameActivity = defaults.object(forKey: Key.sharesGameActivity) as? Bool ?? true
         isOverlayEnabled = defaults.object(forKey: Key.overlayEnabled) as? Bool ?? true
@@ -1090,6 +1105,7 @@ final class AppSettings {
         static let textScale = "appearance.textScale"
         static let userColorSaturation = "accessibility.userColorSaturation"
         static let compactMode = "appearance.compactMode"
+        static let messageBubbles = "appearance.messageBubbles"
         static let showsMemberList = "appearance.showsMemberList"
         static let sharesGameActivity = "activity.sharesGameActivity"
         static let overlayEnabled = "overlay.enabled"

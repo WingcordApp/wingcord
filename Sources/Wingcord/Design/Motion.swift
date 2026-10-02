@@ -1,3 +1,4 @@
+import QuartzCore
 import SwiftUI
 
 // MARK: - Motion
@@ -58,6 +59,19 @@ nonisolated struct MotionClass: Equatable, Sendable {
 
     func resolved(reduceMotion: Bool) -> Animation {
         reduceMotion ? reduced : animation
+    }
+
+    /// The same spring for a layer that moves by itself on the render server —
+    /// a property `CALayer` animates, with no repaint per frame.
+    ///
+    /// **Built from the class's own two numbers**, as SwiftUI builds its
+    /// spring from them: Core Animation's perceptual duration is the response,
+    /// and its bounce is what the damping leaves of a critically damped settle.
+    func layerSpring(keyPath: String) -> CASpringAnimation {
+        let animation = CASpringAnimation(perceptualDuration: response, bounce: 1 - dampingFraction)
+        animation.keyPath = keyPath
+        animation.duration = animation.settlingDuration
+        return animation
     }
 
     /// The same spring, started at the pointer's exact release velocity.

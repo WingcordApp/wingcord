@@ -192,6 +192,9 @@ struct DirectMessageMenuRequest: Identifiable, Hashable, Sendable {
 struct MessageHover: Hashable, Sendable {
     var messageID: MessageID
     var rowFrame: CGRect
+    /// Where the pill hangs beside a bubble, in the same space. Nil over the
+    /// row's trailing end — Discord's place, and every row of its columns.
+    var pillAnchor: ActionPillAnchor? = nil
 }
 
 /// A reaction chip under the pointer, and where it is in the transcript's clip

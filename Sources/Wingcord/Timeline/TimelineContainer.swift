@@ -65,6 +65,8 @@ struct TimelineContainer: View {
             reachesPresent: model.messages(in: channelID)?.hasMoreNewer != true,
             // Narrow for the jump's reason.
             present: model.presentRequest.flatMap { $0.channelID == channelID ? $0 : nil },
+            // Narrow for the jump's reason.
+            flight: model.sendFlight.flatMap { $0.channelID == channelID ? $0 : nil },
             scroll: scroll,
             topics: model.conversationTopics[channelID]?.topics ?? [],
             // Only while the bar is up: its place is the one thing tracked.

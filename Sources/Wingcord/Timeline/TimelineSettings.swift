@@ -34,6 +34,13 @@ nonisolated struct TimelineSettings: @unchecked Sendable {
     /// density control that quietly overrode it would be answering a question
     /// nobody asked.
     var isCompact: Bool
+    /// Whether the conversation is drawn in bubbles — see `MessageArrangement`.
+    ///
+    /// **The preference, not the arrangement.** Search, the inbox and the
+    /// pinned pane share the layout engine and stay in Discord's columns; only
+    /// a transcript turns this into `.bubbles`, which is why the engine reads
+    /// `Input.arrangement` and never this.
+    var usesBubbles: Bool
     /// Whether a link's card is laid out at all. Off means the embed is not
     /// measured, not merely hidden — a card that is laid out and then not drawn
     /// costs its framesetting for nothing.
@@ -68,6 +75,7 @@ nonisolated struct TimelineSettings: @unchecked Sendable {
 
     init(
         isCompact: Bool,
+        usesBubbles: Bool = false,
         showsEmbeds: Bool,
         uses24HourTime: Bool,
         showsSeconds: Bool = false,
@@ -77,6 +85,7 @@ nonisolated struct TimelineSettings: @unchecked Sendable {
         locale: Locale
     ) {
         self.isCompact = isCompact
+        self.usesBubbles = usesBubbles
         self.showsEmbeds = showsEmbeds
         self.uses24HourTime = uses24HourTime
         self.showsSeconds = showsSeconds
@@ -173,6 +182,7 @@ nonisolated struct TimelineSettings: @unchecked Sendable {
         let settings = AppSettings.shared
         return TimelineSettings(
             isCompact: settings.isCompactMode,
+            usesBubbles: settings.usesMessageBubbles,
             showsEmbeds: settings.showsEmbeds,
             uses24HourTime: settings.uses24HourTime,
             showsSeconds: settings.showsSeconds,
@@ -194,6 +204,7 @@ extension TimelineSettings: Equatable {
     /// shape.
     nonisolated static func == (lhs: TimelineSettings, rhs: TimelineSettings) -> Bool {
         lhs.isCompact == rhs.isCompact
+            && lhs.usesBubbles == rhs.usesBubbles
             && lhs.showsEmbeds == rhs.showsEmbeds
             && lhs.uses24HourTime == rhs.uses24HourTime
             && lhs.showsSeconds == rhs.showsSeconds

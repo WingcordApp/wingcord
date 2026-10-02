@@ -107,11 +107,13 @@ private final class PreviewView: NSView {
                 items: Self.items,
                 width: bounds.width,
                 style: style,
-                mentions: MentionContext(),
+                // The second author is the reader, so bubbles show both sides.
+                mentions: MentionContext(selfIDs: [Self.secondAuthor.rawValue]),
                 channelName: "general",
                 authors: Self.authors,
                 calendar: .current,
-                settings: settings
+                settings: settings,
+                arrangement: settings.usesBubbles ? .bubbles(namesAuthors: true) : .columns
             ),
             cache: &cache
         )

@@ -65,7 +65,9 @@ struct Composer: View {
     var isEditing: Bool = false
     @Binding var text: String
 
-    var send: () -> Void = {}
+    /// Sends the draft, told where its words were on screen — the start of
+    /// their flight into the transcript, in bubbles.
+    var send: (SendLaunch?) -> Void = { _ in }
     var cancelReply: () -> Void = {}
     var cancelEdit: () -> Void = {}
     /// Replies to the newest message. Returns false when there is nothing to
@@ -162,6 +164,8 @@ struct Composer: View {
 
     @Environment(\.motion) private var motion
     @State private var isFocused = false
+    /// Where the field's words are, read at the moment of a send.
+    @State private var textAnchor = EditorAnchor()
     @State private var isAttachMenuOpen = false
     /// The scheduling bar's own time picker — Discord's "Edit schedule time".
     @State private var isEditingSchedule = false
@@ -400,7 +404,8 @@ struct Composer: View {
                     // A picked mention shows as Discord's box shows it, while
                     // the token stays what is typed and sent.
                     chips: mentionChip,
-                    chipRevision: mentionChipRevision
+                    chipRevision: mentionChipRevision,
+                    anchor: textAnchor
                 )
                 .frame(minHeight: Metrics.composerFieldMinHeight)
             }
@@ -593,7 +598,13 @@ struct Composer: View {
     /// like typing a message rather than filling in a form. See `submitCommand`
     /// for why both halves of that live in the store.
     private func pressedReturn() {
-        if pendingCommand != nil { submitCommand() } else { send() }
+        if pendingCommand != nil {
+            submitCommand()
+        } else {
+            // Read now, while the words are still in the field. The padding
+            // is the field's own air on the bar — see the editor's frame.
+            send(textAnchor.launch(fieldPadding: Spacing.tight))
+        }
     }
 
     /// Tab walks the command's options, and completes an emoji otherwise.

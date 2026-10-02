@@ -43,50 +43,49 @@ nonisolated final class TimelineTextBlock: @unchecked Sendable {
     /// Each line's place, for selection: which characters it holds and the
     /// band it occupies, in the block's own coordinates.
     private let lineBoxes: [LineBox]
+    /// The first line's baseline, from the block's top. What a send's flight
+    /// lines the words up on, so they leave the composer without jumping.
+    var firstBaseline: CGFloat { lineBoxes.first?.baseline ?? 0 }
 
     private struct LineBox {
         let line: CTLine
         let range: CFRange
         let originX: CGFloat
         let top: CGFloat
+        let baseline: CGFloat
         let bottom: CGFloat
     }
 
-    init(text: MessageText, width: CGFloat, style: MessageTextStyle) {
+    /// - Parameter hugsText: lay the words out at the width their widest line
+    ///   takes rather than at `width`. **A bubble's shape is that width**;
+    ///   everywhere else §4.85 holds and a block is the width it was given.
+    init(text: MessageText, width: CGFloat, style: MessageTextStyle, hugsText: Bool = false) {
         self.text = text
 
         let framesetter = CTFramesetterCreateWithAttributedString(text.attributed)
-        let constraints = CGSize(width: width, height: .greatestFiniteMagnitude)
-        var fitRange = CFRange()
-        let suggested = CTFramesetterSuggestFrameSizeWithConstraints(
-            framesetter,
-            CFRange(location: 0, length: 0),
-            nil,
-            constraints,
-            &fitRange
-        )
-        // Round up. A fractional height leaves the next row starting on a
-        // half-pixel, and a column of rows each half a point short accumulates
-        // into a visible drift against the scroll position.
-        let frameHeight = ceil(suggested.height)
         // **A fenced block at either edge reserves its own box.** CoreText
         // honours a paragraph's space before and after only BETWEEN
         // paragraphs — never above the frame's first line or below its last —
         // so a block that opens or closes the message would have its box drawn
         // over the line above or the row below.
         let insets = Self.edgeInsets(for: text, style: style)
+        var laid = Self.frame(of: framesetter, width: width, bottomInset: insets.bottom)
+        var width = width
+        // **Relaid at the hugged width rather than drawn in the wide frame**, so
+        // every rectangle resolved below — a code block's box, a spoiler's
+        // cover — spans the bubble rather than the lane. Kept only when it
+        // breaks the same lines: a frame that wrapped differently is a frame
+        // somebody measured wrong, and the wide one is still right.
+        if hugsText, let hugged = Self.huggedWidth(of: laid.frame, in: text.attributed), hugged < width {
+            let narrow = Self.frame(of: framesetter, width: hugged, bottomInset: insets.bottom)
+            if Self.lineCount(of: narrow.frame) == Self.lineCount(of: laid.frame) {
+                laid = narrow
+                width = hugged
+            }
+        }
+        let frameHeight = laid.height
         size = CGSize(width: width, height: frameHeight + insets.top + insets.bottom)
-
-        let path = CGPath(
-            rect: CGRect(x: 0, y: insets.bottom, width: width, height: frameHeight),
-            transform: nil
-        )
-        frame = CTFramesetterCreateFrame(
-            framesetter,
-            CFRange(location: 0, length: 0),
-            path,
-            nil
-        )
+        frame = laid.frame
 
         var runs = ResolvedRuns()
         Self.resolveRuns(
@@ -124,9 +123,60 @@ nonisolated final class TimelineTextBlock: @unchecked Sendable {
             let baseline = frameTop - origin.y
             return LineBox(
                 line: line, range: CTLineGetStringRange(line), originX: origin.x,
-                top: baseline - ascent, bottom: baseline + descent
+                top: baseline - ascent, baseline: baseline, bottom: baseline + descent
             )
         }
+    }
+
+    /// The words framed into a column `width` wide, and the column's height.
+    private static func frame(
+        of framesetter: CTFramesetter,
+        width: CGFloat,
+        bottomInset: CGFloat
+    ) -> (frame: CTFrame, height: CGFloat) {
+        var fitRange = CFRange()
+        let suggested = CTFramesetterSuggestFrameSizeWithConstraints(
+            framesetter,
+            CFRange(location: 0, length: 0),
+            nil,
+            CGSize(width: width, height: .greatestFiniteMagnitude),
+            &fitRange
+        )
+        // Round up. A fractional height leaves the next row starting on a
+        // half-pixel, and a column of rows each half a point short accumulates
+        // into a visible drift against the scroll position.
+        let height = ceil(suggested.height)
+        let path = CGPath(
+            rect: CGRect(x: 0, y: bottomInset, width: width, height: height),
+            transform: nil
+        )
+        return (CTFramesetterCreateFrame(framesetter, CFRange(location: 0, length: 0), path, nil), height)
+    }
+
+    /// The width the widest line actually takes: its origin and its ink,
+    /// **less its trailing whitespace** (§2.8 — CoreText counts it), plus the
+    /// trailing inset a fenced block's paragraph keeps from the column's edge,
+    /// or a hugged column would break that block's lines one character early.
+    private static func huggedWidth(of frame: CTFrame, in text: NSAttributedString) -> CGFloat? {
+        guard let lines = CTFrameGetLines(frame) as? [CTLine], !lines.isEmpty else { return nil }
+        var origins = [CGPoint](repeating: .zero, count: lines.count)
+        CTFrameGetLineOrigins(frame, CFRange(location: 0, length: 0), &origins)
+        var widest: CGFloat = 0
+        for (line, origin) in zip(lines, origins) {
+            let ink = CGFloat(CTLineGetTypographicBounds(line, nil, nil, nil))
+                - CGFloat(CTLineGetTrailingWhitespaceWidth(line))
+            let start = CTLineGetStringRange(line).location
+            let paragraph = start < text.length
+                ? text.attribute(.paragraphStyle, at: start, effectiveRange: nil) as? NSParagraphStyle
+                : nil
+            let trailingInset = paragraph.map { max(0, -$0.tailIndent) } ?? 0
+            widest = max(widest, origin.x + ink + trailingInset)
+        }
+        return ceil(widest)
+    }
+
+    private static func lineCount(of frame: CTFrame) -> Int {
+        CFArrayGetCount(CTFrameGetLines(frame))
     }
 
     // MARK: Selection

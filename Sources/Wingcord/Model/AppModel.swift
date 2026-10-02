@@ -550,6 +550,9 @@ final class AppModel {
     /// Distinguishes two requests for the same channel, for `jumpToken`'s
     /// reason.
     @ObservationIgnored var presentToken: UInt64 = 0
+    /// The send to fly from the composer into its bubble — see `SendFlight`.
+    /// Consumed by the timeline coordinator, for `pendingJump`'s reason.
+    var sendFlight: SendFlight?
     /// The transcripts scrolled away from each channel's foot, by coordinator.
     ///
     /// **What a live message is allowed to trim.** A channel sat open at its

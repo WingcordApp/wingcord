@@ -56,6 +56,9 @@ struct TimelineView: NSViewRepresentable {
     /// A request to go to the foot, for this channel only. An input for the
     /// reason `jump` is one.
     var present: PresentRequest?
+    /// A send to fly into its bubble, for this channel only — see
+    /// `SendFlight`. An input for the reason `jump` is one.
+    var flight: SendFlight?
     /// Where this transcript tells the chrome over it what its position means.
     var scroll: TranscriptScrollState
     /// The channel's topics, so the coordinator can say which one the reader
@@ -117,6 +120,7 @@ struct TimelineView: NSViewRepresentable {
             jump: jump,
             reachesPresent: reachesPresent,
             present: present,
+            flight: flight,
             scroll: scroll,
             topics: topics,
             summaries: summaries,
@@ -214,6 +218,8 @@ final class TimelineCoordinator: NSObject {
     /// The request to go to the foot already taken, for `appliedJumpToken`'s
     /// reason.
     private var appliedPresentToken: UInt64 = 0
+    /// The send already flown, for the same reason.
+    private var appliedFlight: MessageID?
     /// Going to the foot, once the window reaches it. A request made while cut
     /// off from the present waits for the newest page to land.
     private var pendingPresent = false
@@ -406,9 +412,8 @@ final class TimelineCoordinator: NSObject {
             // the reader in one place with one flash rather than two.
             self.model.sessionController.jumpToMessage(messageID, in: channelID)
         }
-        canvas.onHoverMessage = { [weak self] messageID, rowFrame in
+        canvas.onHoverMessage = { [weak self] hover in
             guard let self else { return }
-            let hover = messageID.map { MessageHover(messageID: $0, rowFrame: rowFrame) }
             // A write of an equal value still publishes, and the pointer
             // generates these at the pace a person moves a mouse.
             guard self.model.messageHover != hover else { return }
@@ -661,6 +666,7 @@ final class TimelineCoordinator: NSObject {
         jump: MessageJump?,
         reachesPresent: Bool,
         present: PresentRequest?,
+        flight: SendFlight?,
         scroll: TranscriptScrollState,
         topics: [ConversationTopic],
         summaries: [ChannelSummary],
@@ -833,6 +839,12 @@ final class TimelineCoordinator: NSObject {
             pendingPresent = false
             goToPresent(gliding: glides)
         }
+        // After the layout above, which is what laid the echo out.
+        if let flight, flight.channelID == channelID, flight.nonce != appliedFlight {
+            appliedFlight = flight.nonce
+            consume(flight)
+            launch(flight)
+        }
         applyPendingJump()
         publishPosition()
         trackTopicPlace()
@@ -845,6 +857,47 @@ final class TimelineCoordinator: NSObject {
         Task { @MainActor [weak self] in
             guard let self, self.model.pendingJump?.token == jump.token else { return }
             self.model.pendingJump = nil
+        }
+    }
+
+    /// Clears a flight once it has been taken, for the present request's
+    /// reason below.
+    private func consume(_ flight: SendFlight) {
+        Task { @MainActor [weak self] in
+            guard let self, self.model.sendFlight == flight else { return }
+            self.model.sendFlight = nil
+        }
+    }
+
+    /// Flies a send from the composer into its bubble — **only where the
+    /// reader can watch it land**: a transcript scrolled away from its foot
+    /// has nowhere on screen for it to go.
+    private func launch(_ flight: SendFlight) {
+        guard settings.usesBubbles, let canvas, let scrollView,
+              let index = canvas.rows.lastIndex(where: { $0.messageID == flight.nonce }),
+              canvas.rowFrame(at: index).intersects(scrollView.contentView.bounds)
+        else { return }
+        canvas.launchBubble(
+            nonce: flight.nonce,
+            from: flight.launch,
+            reducesMotion: NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+        )
+    }
+
+    /// Keeps the flights on their rows after the rows were reinstalled.
+    ///
+    /// **By the nonce, not the id**: Discord's copy replaces the echo under a
+    /// new id, usually while the bubble is still in the air, and carries the
+    /// nonce the echo was minted as.
+    private func followFlights() {
+        guard let canvas, !canvas.flyingNonces.isEmpty else { return }
+        canvas.followFlights { nonce in
+            let token = String(nonce.rawValue)
+            for case .message(let message) in items.reversed()
+            where message.id == nonce || message.message.payload?.nonce == token {
+                return message.id
+            }
+            return nil
         }
     }
 
@@ -979,7 +1032,12 @@ final class TimelineCoordinator: NSObject {
             } ?? false,
             uploads: channelID.map(model.uploadSummaries(in:)) ?? [:],
             hidesMedia: hidesMedia,
-            listenAlongLive: listenAlongLive
+            listenAlongLive: listenAlongLive,
+            // A one-to-one conversation has one other person in it, so their
+            // bubbles carry neither a name nor a face — Messages' own rule.
+            arrangement: settings.usesBubbles
+                ? .bubbles(namesAuthors: channel?.kind != .directMessage)
+                : .columns
         )
 
         isApplyingUpdate = true
@@ -988,6 +1046,7 @@ final class TimelineCoordinator: NSObject {
             rows: rows,
             leadingSpace: leadingSpace(forRowsHeight: rows.reduce(0) { $0 + $1.height })
         )
+        followFlights()
         resizeDocument(to: height)
 
         // **The foot is only somewhere to stick when it is the present.** The
@@ -1044,6 +1103,7 @@ final class TimelineCoordinator: NSObject {
         let wanted = leadingSpace(forRowsHeight: canvas.contentHeight - canvas.leadingSpace)
         guard abs(wanted - canvas.leadingSpace) > 0.5 else { return }
         resizeDocument(to: canvas.apply(rows: canvas.rows, leadingSpace: wanted))
+        followFlights()
         positionCanvas()
         reconcileUserCards()
         placeEmbedPlayer()

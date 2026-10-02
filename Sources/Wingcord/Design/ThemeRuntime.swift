@@ -111,30 +111,29 @@ nonisolated struct ThemeInk: @unchecked Sendable {
     /// Whether the theme is a light room. See `lift(_:)`.
     let isLight: Bool
 
-    // MARK: Text on plates — Discord's markup, in this app's relative fills
-
-    /// The rule down a quote's leading edge (`--spine-default`).
-    let quoteRule: CGColor
-    /// Inline code and a fenced block: the accent at a whisper
-    /// (`--background-code`, blurple at 8%) inside a hairline (`--border-normal`).
-    let codeFill: CGColor
-    let codeBorder: CGColor
-    /// A mention's plate (`--mention-background`) — the accent at a quarter.
-    /// Under the pointer it is the accent itself, with white ink.
-    let mentionFill: CGColor
-    /// An inline timestamp's plate (`--background-mod-normal`).
-    let timestampFill: CGColor
-    /// A concealed spoiler, and the same under the pointer.
-    ///
-    /// **Opaque, and that is the whole job.** The words are drawn in their own
-    /// ink underneath, and a translucent cover lets them through — so it is the
-    /// room's own ground lifted toward its ink, which keeps a themed room's hue.
-    let spoilerHidden: CGColor
-    let spoilerHiddenHover: CGColor
-    /// A revealed spoiler's plate (`--background-mod-subtle`).
-    let spoilerRevealed: CGColor
+    /// What words sit on, anywhere but the reader's own bubble.
+    let plates: TextPlateInk
     /// Where a picture will be, while it loads: `surfaceRaised` at half.
     let placeholderFill: CGColor
+
+    // MARK: Bubbles — see `MessageBubble`
+
+    /// The reader's own bubble: the accent, **deepened in lightness until
+    /// white reads on it at 4.5:1** (`InkContrast.legible`). Hue and chroma
+    /// kept, so a themed room's bubble is still its accent; macOS's own blue
+    /// comes out a step darker than Messages', which sits under that floor.
+    let ownBubble: CGColor
+    let ownBubbleHover: CGColor
+    /// What words sit on inside the reader's own bubble — white, where the
+    /// room's plates are the accent and would vanish into it.
+    let ownBubblePlates: TextPlateInk
+    /// Everybody else's bubble: a neutral lift of the ground, the room's own
+    /// grey rather than a colour of its own.
+    let otherBubble: CGColor
+    let otherBubbleHover: CGColor
+    /// Laid over somebody else's bubble that mentions the reader — the row's
+    /// yellow, kept inside the bubble the mention is in.
+    let mentionedBubbleTint: CGColor
 
     /// A painter's relative fill: white at `alpha` in a dark room, black at
     /// three quarters of it in a light one — `Color.relative` for a context that
@@ -186,15 +185,55 @@ nonisolated struct ThemeInk: @unchecked Sendable {
         }
         let isLight = colors.appearance == .light
         self.isLight = isLight
-        quoteRule = Self.lift(0.26, isLight: isLight)
-        codeFill = accent.copy(alpha: isLight ? 0.06 : 0.08) ?? accent
-        codeBorder = Self.lift(0.12, isLight: isLight)
-        mentionFill = accent.copy(alpha: isLight ? 0.15 : 0.24) ?? accent
-        timestampFill = Self.lift(0.10, isLight: isLight)
-        spoilerRevealed = Self.lift(0.08, isLight: isLight)
-        spoilerHidden = Self.blend(colors.canvas, toward: isLight ? 0 : 0xFF_FF_FF, by: isLight ? 0.34 : 0.22)
-        spoilerHiddenHover = Self.blend(colors.canvas, toward: isLight ? 0 : 0xFF_FF_FF, by: isLight ? 0.40 : 0.28)
-        placeholderFill = raised.copy(alpha: 0.5) ?? raised
+        let placeholder = raised.copy(alpha: 0.5) ?? raised
+        placeholderFill = placeholder
+        plates = TextPlateInk(
+            quoteRule: Self.lift(0.26, isLight: isLight),
+            codeFill: accent.copy(alpha: isLight ? 0.06 : 0.08) ?? accent,
+            codeBorder: Self.lift(0.12, isLight: isLight),
+            mentionFill: accent.copy(alpha: isLight ? 0.15 : 0.24) ?? accent,
+            mentionHoverFill: accent,
+            timestampFill: Self.lift(0.10, isLight: isLight),
+            spoilerHidden: Self.blend(colors.canvas, toward: isLight ? 0 : 0xFF_FF_FF, by: isLight ? 0.34 : 0.22),
+            spoilerHiddenHover: Self.blend(colors.canvas, toward: isLight ? 0 : 0xFF_FF_FF, by: isLight ? 0.40 : 0.28),
+            spoilerRevealed: Self.lift(0.08, isLight: isLight),
+            emojiPlaceholder: placeholder
+        )
+
+        let bubble = InkContrast.legible(Self.packed(accent), on: 0xFF_FF_FF)
+        ownBubble = Self.color(bubble)
+        ownBubbleHover = Self.blend(bubble, toward: 0xFF_FF_FF, by: 0.08)
+        ownBubblePlates = TextPlateInk(
+            quoteRule: Self.white(0.55),
+            codeFill: Self.white(0.16),
+            codeBorder: Self.white(0.28),
+            mentionFill: Self.white(0.22),
+            mentionHoverFill: Self.white(0.40),
+            timestampFill: Self.white(0.18),
+            // Opaque, for the reason the room's own covers are.
+            spoilerHidden: Self.blend(bubble, toward: 0xFF_FF_FF, by: 0.30),
+            spoilerHiddenHover: Self.blend(bubble, toward: 0xFF_FF_FF, by: 0.38),
+            spoilerRevealed: Self.white(0.14),
+            emojiPlaceholder: Self.white(0.20)
+        )
+        otherBubble = Self.lift(0.12, isLight: isLight)
+        otherBubbleHover = Self.lift(0.16, isLight: isLight)
+        mentionedBubbleTint = CGColor(srgbRed: 0.98, green: 0.80, blue: 0.08, alpha: isLight ? 0.22 : 0.16)
+    }
+
+    private static func white(_ alpha: CGFloat) -> CGColor {
+        CGColor(srgbRed: 1, green: 1, blue: 1, alpha: alpha)
+    }
+
+    /// A colour as the 24-bit sRGB integer `InkContrast` works in — macOS's
+    /// own blue for one that cannot be read back, as `fallbackAccent` is.
+    private static func packed(_ color: CGColor) -> UInt32 {
+        guard let space = CGColorSpace(name: CGColorSpace.sRGB),
+              let components = color.converted(to: space, intent: .defaultIntent, options: nil)?.components,
+              components.count >= 3
+        else { return 0x00_7A_FF }
+        func byte(_ value: CGFloat) -> UInt32 { UInt32((min(max(value, 0), 1) * 255).rounded()) }
+        return byte(components[0]) << 16 | byte(components[1]) << 8 | byte(components[2])
     }
 
     /// `from` moved `fraction` of the way to `to`, opaque.
@@ -230,4 +269,37 @@ nonisolated struct ThemeInk: @unchecked Sendable {
     private static func resolvedSystemAccent() -> CGColor {
         NSColor.controlAccentColor.usingColorSpace(.sRGB)?.cgColor ?? fallbackAccent
     }
+}
+
+/// The fills a block of words sits on — a quote's rule, a code box, a mention's
+/// plate, a spoiler's cover — for one kind of ground.
+///
+/// **A value of its own because there are two grounds.** The room's plates are
+/// the accent at a whisper, which is right on the reading surface and invisible
+/// on the reader's own bubble, which *is* the accent; there they are white. The
+/// painter is handed one set or the other and draws the same way with either.
+nonisolated struct TextPlateInk: @unchecked Sendable {
+    /// The rule down a quote's leading edge (`--spine-default`).
+    let quoteRule: CGColor
+    /// Inline code and a fenced block: the accent at a whisper
+    /// (`--background-code`, blurple at 8%) inside a hairline (`--border-normal`).
+    let codeFill: CGColor
+    let codeBorder: CGColor
+    /// A mention's plate (`--mention-background`) — the accent at a quarter.
+    let mentionFill: CGColor
+    /// The same plate under the pointer, under white ink.
+    let mentionHoverFill: CGColor
+    /// An inline timestamp's plate (`--background-mod-normal`).
+    let timestampFill: CGColor
+    /// A concealed spoiler, and the same under the pointer.
+    ///
+    /// **Opaque, and that is the whole job.** The words are drawn in their own
+    /// ink underneath, and a translucent cover lets them through — so it is the
+    /// ground lifted toward its ink, which keeps a themed room's hue.
+    let spoilerHidden: CGColor
+    let spoilerHiddenHover: CGColor
+    /// A revealed spoiler's plate (`--background-mod-subtle`).
+    let spoilerRevealed: CGColor
+    /// Where an inline emoji will be, while it loads.
+    let emojiPlaceholder: CGColor
 }

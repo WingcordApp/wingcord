@@ -440,10 +440,10 @@ final class TimelineCanvasView: NSView {
     var onEditChannel: (() -> Void)?
     /// The thread chip under a message was clicked: open that thread.
     var onOpenThread: ((ChannelID) -> Void)?
-    /// The pointer moved onto, or off, a message row. The rect is in the CLIP
+    /// The pointer moved onto, or off, a message row. Its rect is in the CLIP
     /// VIEW's space, because what reads it is a floating pill overlaid on the
     /// scroll view rather than anything in document coordinates.
-    var onHoverMessage: ((MessageID?, CGRect) -> Void)?
+    var onHoverMessage: ((MessageHover?) -> Void)?
     /// The full menu was asked for — a right-click, or the pill's own button.
     var onOpenMenu: ((MessageID, CGRect) -> Void)?
     /// The pointer moved onto, or off, a reaction chip. The chip's frame is in
@@ -833,7 +833,7 @@ final class TimelineCanvasView: NSView {
     private var nameGradientPhase: CGFloat? {
         guard !isScrolling, let hoveredRow, rows.indices.contains(hoveredRow),
               case .message(let row) = rows[hoveredRow].kind,
-              row.isRunHead, (row.authorGradient?.count ?? 0) >= 2
+              row.hasAuthorLine, (row.authorGradient?.count ?? 0) >= 2
         else { return nil }
         let cycle = AnimationClock.shared.time / Self.nameGradientCycle
         return CGFloat(cycle - cycle.rounded(.down))
@@ -859,7 +859,7 @@ final class TimelineCanvasView: NSView {
         guard !isScrolling, playsNameEffects,
               let hoveredRow, rows.indices.contains(hoveredRow),
               case .message(let row) = rows[hoveredRow].kind,
-              row.isRunHead, let style = row.authorStyle
+              row.hasAuthorLine, let style = row.authorStyle
         else { return false }
         return DisplayNameEffectPainter.animates(style)
     }
@@ -989,7 +989,8 @@ final class TimelineCanvasView: NSView {
             }
         }
         guard playsEmoji else { return }
-        if let block = row.textBlock {
+        // A bubble in flight carries its words, emoji and all, until it lands.
+        if let block = row.textBlock, !isFlying(row.id) {
             let textOrigin = CGPoint(x: origin.x + row.textOrigin.x, y: origin.y + row.textOrigin.y)
             let shown = revealedSpoilers[row.id] ?? []
             let concealed = block.spoilerRects.filter { !shown.contains($0.spoiler) }.map(\.rect)
@@ -1126,6 +1127,98 @@ final class TimelineCanvasView: NSView {
         invalidateRow(index)
     }
 
+    // MARK: A send's flight
+
+    /// Sends on their way from the composer into their bubbles — see
+    /// `BubbleFlight`. Each row's own bubble is left unpainted until its
+    /// flight lands. Empty for nearly every moment of a session.
+    private var flights: [BubbleFlight] = []
+
+    /// The sends in the air, for the coordinator to follow through Discord's
+    /// swap of each echo for its own copy.
+    var flyingNonces: [MessageID] { flights.map(\.nonce) }
+
+    /// Whether `messageID`'s bubble is in the air rather than in its row — the
+    /// one question the painter and the films both ask of a flight.
+    func isFlying(_ messageID: MessageID) -> Bool {
+        !flights.isEmpty && flights.contains { $0.messageID == messageID }
+    }
+
+    /// Flies the bubble of the row `nonce` names, from where its words were in
+    /// the composer. Nothing flies for a row with no bubble.
+    func launchBubble(nonce: MessageID, from launch: SendLaunch, reducesMotion: Bool) {
+        guard let index = messageRows[nonce], case .message(let row) = rows[index].kind,
+              let bubble = row.bubbles?.bubble, let block = row.textBlock, let window
+        else { return }
+        let frame = rowFrame(at: index)
+        let scale = window.backingScaleFactor
+        let ink = ThemeInk.current
+        let onAccent = bubble.ground == .accent
+        let flight = BubbleFlight(
+            nonce: nonce,
+            landing: BubbleFlight.Landing(
+                body: bubble.rect.offsetBy(dx: frame.minX, dy: frame.minY),
+                radius: BubbleMetrics.cornerRadius(for: style.bodyFont),
+                tail: bubble.hasTail ? row.bubbles?.side : nil,
+                fill: onAccent ? ink.ownBubble : ink.otherBubble,
+                words: BubbleFlight.wordsImage(
+                    block, style: style, plates: onAccent ? ink.ownBubblePlates : nil, scale: scale
+                ),
+                wordsFrame: CGRect(
+                    x: row.textOrigin.x - bubble.rect.minX,
+                    y: row.textOrigin.y - bubble.rect.minY,
+                    width: block.size.width,
+                    height: block.size.height
+                ),
+                firstBaseline: block.firstBaseline
+            ),
+            takeOff: BubbleFlight.TakeOff(
+                firstBaseline: convert(launch.firstBaseline, from: nil),
+                field: convert(launch.field, from: nil),
+                fontScale: launch.fontSize / style.bodyFont.pointSize,
+                isOneLine: launch.isOneLine
+            ),
+            scale: scale,
+            reducesMotion: reducesMotion
+        )
+        flight.onLanded = { [weak self, weak flight] in
+            guard let self, let flight else { return }
+            self.land(flight)
+        }
+        layer?.addSublayer(flight.layer)
+        flights.append(flight)
+        setNeedsDisplay(frame)
+        reconcileFilms()
+    }
+
+    /// Keeps each flight on its row as the rows change under it: `landing`
+    /// answers the row a send's nonce is now — its echo, or Discord's copy —
+    /// and a flight whose row is gone lands where it is.
+    func followFlights(_ landing: (MessageID) -> MessageID?) {
+        for flight in flights {
+            guard let id = landing(flight.nonce), let index = messageRows[id],
+                  case .message(let row) = rows[index].kind, let bubble = row.bubbles?.bubble
+            else {
+                land(flight)
+                continue
+            }
+            flight.messageID = id
+            let origin = rowFrame(at: index).origin
+            flight.retarget(to: CGPoint(x: origin.x + bubble.rect.minX, y: origin.y + bubble.rect.minY))
+        }
+    }
+
+    /// The row paints its bubble, then the flight comes off — **in that
+    /// order, in one transaction**, so no frame shows neither.
+    private func land(_ flight: BubbleFlight) {
+        guard let position = flights.firstIndex(where: { $0 === flight }) else { return }
+        flights.remove(at: position)
+        if let index = messageRows[flight.messageID] { setNeedsDisplay(rowFrame(at: index)) }
+        displayIfNeeded()
+        flight.remove()
+        reconcileFilms()
+    }
+
     // MARK: Geometry
 
     /// Installs the viewport window this canvas covers.
@@ -1229,6 +1322,7 @@ final class TimelineCanvasView: NSView {
                 }
                 state.animationTime = AnimationClock.shared.time
                 if case .message(let message) = row.kind {
+                    state.hidesBubble = isFlying(message.id)
                     state.layered = films.layered[message.id] ?? .init()
                     if selection != nil, let block = message.textBlock {
                         state.selectedRange = selectedRange(
@@ -1304,7 +1398,7 @@ final class TimelineCanvasView: NSView {
                 }
                 var preparedName: DisplayNameEffectPainter.Prepared?
                 if state.isHovered, case .message(let message) = row.kind,
-                   message.isRunHead, message.authorStyle != nil
+                   message.hasAuthorLine, message.authorStyle != nil
                 {
                     preparedName = styledAuthorName(for: message)
                     state.playsNameEffect = playsNameEffects
@@ -2086,7 +2180,7 @@ final class TimelineCanvasView: NSView {
                 avatarRect.offsetBy(dx: frame.minX, dy: frame.minY)
             )
         }
-        if row.isRunHead, row.authorRect.contains(local) {
+        if row.hasAuthorLine, row.authorRect.contains(local) {
             return .person(
                 row.authorID,
                 row.authorRect.offsetBy(dx: frame.minX, dy: frame.minY)
@@ -2126,8 +2220,10 @@ final class TimelineCanvasView: NSView {
         guard bounds.contains(point), point.y >= leadingSpace else { return nil }
         let index = rowIndex(at: point.y)
         if let current = hoveredRow, current != index, rows.indices.contains(current),
-           rows[current].isSelectable,
-           TimelineMetrics.actionBarRegion(inRow: rowFrame(at: current)).contains(point)
+           case .message(let row) = rows[current].kind,
+           TimelineMetrics.actionBarRegion(
+               inRow: rowFrame(at: current), anchor: row.bubbles?.pillAnchor
+           ).contains(point)
         {
             return current
         }
@@ -2173,7 +2269,7 @@ final class TimelineCanvasView: NSView {
             switch target(in: row, at: point, rowIndex: index) {
             case .person:
                 // The name, not the face: only the words underline.
-                authorName = row.isRunHead && row.authorRect.contains(local)
+                authorName = row.hasAuthorLine && row.authorRect.contains(local)
                 cursor = .pointingHand
             case .component(let url, let customID, let origin):
                 component = origin
@@ -2364,11 +2460,16 @@ final class TimelineCanvasView: NSView {
         guard let index = hoveredRow, rows.indices.contains(index),
               case .message(let row) = rows[index].kind
         else {
-            onHoverMessage(nil, .zero)
+            onHoverMessage(nil)
             return
         }
         let origin = enclosingScrollView?.contentView.bounds.origin ?? .zero
-        onHoverMessage(row.id, rowFrame(at: index).offsetBy(dx: -origin.x, dy: -origin.y))
+        let frame = rowFrame(at: index).offsetBy(dx: -origin.x, dy: -origin.y)
+        onHoverMessage(MessageHover(
+            messageID: row.id,
+            rowFrame: frame,
+            pillAnchor: row.bubbles?.pillAnchor?.offsetBy(dx: frame.minX, dy: frame.minY)
+        ))
     }
 
     /// Tells the window which reaction chip the pointer rests on. Equal writes

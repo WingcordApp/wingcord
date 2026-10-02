@@ -42,10 +42,13 @@ extension AppModel {
         sessionController.openChannel(channelID)
     }
 
+    /// - Parameter launch: where the words were in the composer when they
+    ///   were sent. In bubbles the send flies from there into its place.
     func sendMessage(
         _ content: String,
         in channelID: ChannelID,
-        stickerIDs: [UInt64] = []
+        stickerIDs: [UInt64] = [],
+        launch: SendLaunch? = nil
     ) {
         let box = messages(in: channelID)
         // An empty Return is not a send, so it must not flash a slowmode
@@ -69,13 +72,22 @@ extension AppModel {
             sessionController.send(content, in: channelID, replyingTo: nil, stickerIDs: stickerIDs)
             return
         }
-        sessionController.send(
+        let nonce = sessionController.send(
             content,
             in: channelID,
             replyingTo: box.replyingTo,
             stickerIDs: stickerIDs,
             attachments: box.attachments
         )
+        // **Only words fly** — a bubble is what they become. Files go up as an
+        // upload's card, and a sticker is not a bubble; in Discord's columns
+        // nothing flies at all. Set in this same pass, so the transcript takes
+        // it in the update that lays the echo out.
+        if let launch, let nonce, box.attachments.isEmpty, stickerIDs.isEmpty,
+           AppSettings.shared.usesMessageBubbles
+        {
+            sendFlight = SendFlight(channelID: channelID, nonce: nonce, launch: launch)
+        }
         // **The composer empties at once — words, reply and files alike**, as
         // Discord's does. The send is in the transcript now, and a refused
         // upload is handed back by `MessageBox.returnToComposer`.
@@ -263,6 +275,33 @@ extension AppModel {
             box.messages[index].payload = existing.replacingPoll(body(poll))
         }
         messageContentRevision &+= 1
+    }
+
+    /// Moves the read cursor to one of the reader's own messages — their echo
+    /// at the moment of the send, and their message whenever it arrives, from
+    /// this window or another device.
+    ///
+    /// **Discord's `ReadStateStore` does exactly this**: a `MESSAGE_CREATE`
+    /// the current user wrote is acknowledged on the spot (`eJ`,
+    /// `local: true`), and its optimistic echo comes through the same handler.
+    /// Without it the echo — minted "now", so newer than the cursor — drew the
+    /// "NEW" divider in front of the reader's own words until Discord's answer
+    /// moved the cursor past it.
+    ///
+    /// **Local only.** Discord's server has already marked a message read for
+    /// the person who wrote it, and an echo's id is a nonce no route would
+    /// recognise. And the reader writing in a channel answers any Mark Unread
+    /// they left on it — the latch would otherwise stop the next message
+    /// being read while they are plainly reading.
+    func acknowledgeOwnMessage(_ messageID: MessageID, in channelID: ChannelID) {
+        var state = readStates[channelID] ?? ReadState()
+        guard state.lastAcknowledgedID.map({ $0.rawValue < messageID.rawValue }) ?? true else { return }
+        state.lastAcknowledgedID = messageID
+        state.mentionCount = 0
+        readStates[channelID] = state
+        if suppressedAckChannelID == channelID { suppressedAckChannelID = nil }
+        sidebarRevision &+= 1
+        railRevision &+= 1
     }
 
     func markRead(_ channelID: ChannelID) {

@@ -153,6 +153,7 @@ struct TimelineSettingsReachTests {
         ))
         #expect(resolves({ $0.isCompactMode = true }, restore: { $0.isCompactMode = false }))
         #expect(resolves({ $0.uses24HourTime = true }, restore: { $0.uses24HourTime = false }))
+        #expect(resolves({ $0.usesMessageBubbles = true }, restore: { $0.usesMessageBubbles = false }))
     }
 
     @Test("And each one moves the revision the row cache keys on")
@@ -170,6 +171,7 @@ struct TimelineSettingsReachTests {
             { $0.alwaysShowsTimestamps = true },
             restore: { $0.alwaysShowsTimestamps = false }
         ))
+        #expect(bumps({ $0.usesMessageBubbles = true }, restore: { $0.usesMessageBubbles = false }))
     }
 
     @Test("The group spacing is clamped rather than trusted")

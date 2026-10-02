@@ -228,7 +228,7 @@ struct TopicTests {
         #expect(drawn == messages.map(\.id))
         // No card opens on a message that continues somebody's run.
         for card in cards.dropFirst() {
-            #expect(card.messageRows.first?.isRunHead == true)
+            #expect(card.messageRows.first?.hasAuthorLine == true)
         }
     }
 }

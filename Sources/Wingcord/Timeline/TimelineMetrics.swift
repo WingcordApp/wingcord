@@ -290,11 +290,20 @@ nonisolated enum TimelineMetrics {
     /// `TimelineCanvasView.hoveredIndex`.
     static let actionBarMaxWidth: CGFloat = 220
 
-    /// Where the pill sits for a row, in the same space the row frame is in.
-    static func actionBarRegion(inRow rowFrame: CGRect) -> CGRect {
-        CGRect(
-            x: rowFrame.maxX - actionBarMaxWidth,
-            y: rowFrame.minY - actionBarRise,
+    /// Where the pill sits for a row, in the same space the row frame is in —
+    /// over its trailing end, or beside a bubble on the side it leaves open.
+    static func actionBarRegion(inRow rowFrame: CGRect, anchor: ActionPillAnchor? = nil) -> CGRect {
+        guard let anchor else {
+            return CGRect(
+                x: rowFrame.maxX - actionBarMaxWidth,
+                y: rowFrame.minY - actionBarRise,
+                width: actionBarMaxWidth,
+                height: actionBarHeight
+            )
+        }
+        return CGRect(
+            x: rowFrame.minX + anchor.x - (anchor.edge == .trailing ? actionBarMaxWidth : 0),
+            y: rowFrame.minY + anchor.midY - actionBarHeight / 2,
             width: actionBarMaxWidth,
             height: actionBarHeight
         )
