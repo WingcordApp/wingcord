@@ -113,22 +113,8 @@ private struct AttachmentTile: View {
                     RoundedRectangle(cornerRadius: Radius.row, style: .continuous)
                         .strokeBorder(attachmentEdge, lineWidth: 1)
                 }
-                .overlay(alignment: .bottom) {
-                    if let progress = attachment.progress {
-                        // A bar hard against the tile's foot, not a spinner in
-                        // the middle: the tile still has to be recognisable
-                        // while its bytes go up.
-                        GeometryReader { proxy in
-                            Rectangle()
-                                .fill(Palette.accent)
-                                .frame(width: proxy.size.width * progress)
-                        }
-                        .frame(height: 3)
-                        .transition(.opacity)
-                    }
-                }
 
-            if isHovered, attachment.progress == nil {
+            if isHovered {
                 Button(action: remove) {
                     Image(systemName: "xmark")
                         .font(.system(size: 9, weight: .bold))
@@ -148,7 +134,6 @@ private struct AttachmentTile: View {
             isHovered = hovering
         }
         .animation(motion.fadeQuick, value: isHovered)
-        .animation(motion.standard, value: attachment.progress)
         .contextMenu {
             Button(attachment.isSpoiler ? "Remove Spoiler" : "Mark as Spoiler", action: toggleSpoiler)
             Button("Remove", role: .destructive, action: remove)

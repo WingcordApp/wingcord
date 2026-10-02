@@ -204,6 +204,8 @@ public struct Message: Hashable, Sendable, Identifiable, Codable {
     public var webhookID: UserID? { payload?.webhookID }
     /// The activity an app launched into this channel. Nil for everything else.
     public var activityInvite: ActivityInvite? { payload?.activityInvite }
+    /// An invitation to listen along on the author's Spotify.
+    public var listenAlong: ListenAlongInvite? { payload?.listenAlong }
     /// Who invoked the command this message answers. Nil for everything a
     /// person typed.
     public var interaction: MessageInteraction? { payload?.interaction }
@@ -227,7 +229,7 @@ public struct Message: Hashable, Sendable, Identifiable, Codable {
     public var isEmpty: Bool {
         content.isEmpty && attachments.isEmpty && embeds.isEmpty
             && stickers.isEmpty && components.isEmpty && displayComponents.isEmpty
-            && poll == nil && !isComponentsOnly && activityInvite == nil
+            && poll == nil && !isComponentsOnly && activityInvite == nil && listenAlong == nil
     }
 
     /// Whether this row addresses an *object* rather than something someone
@@ -286,6 +288,9 @@ public final class MessagePayload: Hashable, Sendable, Codable {
     /// The invitation card an activity launch leaves behind. Nil for every
     /// message a person wrote, which is why it is here rather than on `Message`.
     public let activityInvite: ActivityInvite?
+    /// An invitation to listen along on somebody's Spotify — Discord's
+    /// `message.activity` with a `spotify:` party. Nil for everything else.
+    public let listenAlong: ListenAlongInvite?
     /// Who invoked the command this message answers, and what it was called.
     ///
     /// **Not activity-specific.** An activity launch and a slash command are
@@ -322,11 +327,13 @@ public final class MessagePayload: Hashable, Sendable, Codable {
         webhookID: UserID? = nil,
         nonce: String? = nil,
         activityInvite: ActivityInvite? = nil,
+        listenAlong: ListenAlongInvite? = nil,
         interaction: MessageInteraction? = nil,
         applicationID: ApplicationID? = nil,
         thread: MessageThread? = nil
     ) {
         self.activityInvite = activityInvite
+        self.listenAlong = listenAlong
         self.interaction = interaction
         self.applicationID = applicationID
         self.attachments = attachments
@@ -373,6 +380,7 @@ public final class MessagePayload: Hashable, Sendable, Codable {
             webhookID: webhookID,
             nonce: nonce,
             activityInvite: activityInvite,
+            listenAlong: listenAlong,
             interaction: interaction,
             applicationID: applicationID,
             thread: thread
@@ -397,6 +405,7 @@ public final class MessagePayload: Hashable, Sendable, Codable {
             webhookID: webhookID,
             nonce: nonce,
             activityInvite: activityInvite,
+            listenAlong: listenAlong,
             interaction: interaction,
             applicationID: applicationID,
             thread: thread
@@ -421,6 +430,7 @@ public final class MessagePayload: Hashable, Sendable, Codable {
             webhookID: webhookID,
             nonce: nonce,
             activityInvite: activityInvite,
+            listenAlong: listenAlong,
             interaction: interaction,
             applicationID: applicationID,
             thread: thread
@@ -435,7 +445,7 @@ public final class MessagePayload: Hashable, Sendable, Codable {
             && poll == nil && mentionedUserIDs.isEmpty
             && mentionedRoleIDs.isEmpty && !mentionsEveryone
             && reference == nil && forwarded == nil && webhookID == nil && nonce == nil
-            && activityInvite == nil && interaction == nil && thread == nil
+            && activityInvite == nil && listenAlong == nil && interaction == nil && thread == nil
     }
 
     public static func == (lhs: MessagePayload, rhs: MessagePayload) -> Bool {
@@ -457,6 +467,7 @@ public final class MessagePayload: Hashable, Sendable, Codable {
                 && lhs.forwarded == rhs.forwarded
                 && lhs.webhookID == rhs.webhookID
                 && lhs.activityInvite == rhs.activityInvite
+                && lhs.listenAlong == rhs.listenAlong
                 && lhs.interaction == rhs.interaction
                 && lhs.thread == rhs.thread)
     }

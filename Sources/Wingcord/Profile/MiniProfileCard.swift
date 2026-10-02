@@ -303,7 +303,13 @@ struct MiniProfileCard: View {
                         ),
                         onProfileOption: { option in
                             switch option {
-                            case .fullProfile: model.openFullProfile()
+                            // **The host's own opener, never the store's.** A
+                            // card in a popover raises its request, the DM
+                            // column has no request to raise and opens one —
+                            // only the host knows which, and asking the store
+                            // to raise "the open card" from the column did
+                            // nothing at all.
+                            case .fullProfile: openFullProfile(nil)
                             // Not offered here — see the options above. Written
                             // out rather than defaulted, so a case added later
                             // is a compile error rather than a silent no-op.
@@ -717,7 +723,8 @@ struct MiniProfileCard: View {
                             applicationIconURL: model.applicationIconURL(
                                 first.applicationID, side: Metrics.avatarProfile
                             ),
-                            isOwn: profile.isSelf
+                            isOwn: profile.isSelf,
+                            listenAlong: model.listenAlongOffer(for: profile.userID, activity: first)
                         )
                     } else if let voice {
                         ProfileVoiceCard(

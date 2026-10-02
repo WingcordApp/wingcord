@@ -34,8 +34,8 @@ struct QuickSwitchPanelTests {
     /// servers with a same-named channel in each, a category, a voice channel,
     /// one channel nobody may read, a conversation and a person with no
     /// conversation.
-    private func model() -> AppModel {
-        let model = AppModel()
+    private func model(drafts: DraftStore = DraftStore()) -> AppModel {
+        let model = AppModel(drafts: drafts)
         model.currentUserID = readerID
         model.users = [
             readerID: User(id: readerID, username: "reader"),
@@ -178,6 +178,28 @@ struct QuickSwitchPanelTests {
         let mentions = model.quickSwitchSections.first { $0.id == "mentions" }
         #expect(mentions?.rows.map(\.target) == [.channel(coldGeneral)])
         #expect(mentions?.rows.first?.mentionCount == 3)
+    }
+
+    /// Between where the reader was and who is waiting: what they were writing,
+    /// the latest first, with nothing an earlier list already named.
+    @Test("Drafts follow Previous channels and leave out what it offered")
+    func draftsAreListed() {
+        let store = DraftStore(defaults: UserDefaults(suiteName: "wingcord.tests.\(UUID().uuidString)")!)
+        _ = store.open(for: readerID)
+        let start = Date(timeIntervalSince1970: 1_790_000_000)
+        store.note("already in Previous", in: general, at: start)
+        store.note("to the cave", in: broCave, at: start.addingTimeInterval(1))
+        store.note("to a friend", in: dm, at: start.addingTimeInterval(2))
+        let model = model(drafts: store)
+        model.readStates = [broCave: ReadState(mentionCount: 2)]
+        model.recordChannelVisit(general)
+        model.selectedChannelID = coldGeneral
+        model.recordChannelVisit(coldGeneral)
+
+        model.toggleQuickSwitch()
+        #expect(model.quickSwitchSections.map(\.id) == ["previous", "drafts"])
+        let drafts = model.quickSwitchSections.first { $0.id == "drafts" }
+        #expect(drafts?.rows.map(\.target) == [.person(friendID), .channel(broCave)])
     }
 
     /// A muted channel's unread never reaches the rail, and it must not reach

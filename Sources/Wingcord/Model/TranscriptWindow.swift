@@ -161,6 +161,13 @@ extension MessageBox {
     ///   full — true only when nobody looking at this channel is scrolled away
     ///   from its foot, so what goes is far above everyone.
     mutating func receiveLive(_ message: Message, trimming: Bool) {
+        // **Discord's answer to one of the reader's sends retires its echo**,
+        // whichever arrives first — the reply to the POST or the socket's
+        // copy — and before the window decides whether to hold it, because a
+        // held message is still an answered one.
+        if !outbox.isEmpty, let nonce = message.payload?.nonce {
+            outbox.removeAll { $0.nonce == nonce }
+        }
         guard !hasMoreNewer else {
             // Appending here would put today's message straight after last
             // year's with nothing between them.

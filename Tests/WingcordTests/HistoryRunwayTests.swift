@@ -39,7 +39,7 @@ struct HistoryRunwayTests {
             items: TimelineReducer.rows(messages: messages, hasMoreHistory: true),
             presentationRevision: 0,
             activityAccents: [:],
-            activityInviteStatuses: [:],
+            activityInviteStatuses: [:], uploadProgress: [:],
             topInset: 0,
             bottomInset: 0,
             jump: nil,
@@ -54,7 +54,9 @@ struct HistoryRunwayTests {
             isCovered: false,
             bookmarks: [],
             canSuperReact: false,
-            canAddReactions: true
+            canAddReactions: true,
+            hidesMedia: false,
+            listenAlongCards: [:]
         )
     }
 

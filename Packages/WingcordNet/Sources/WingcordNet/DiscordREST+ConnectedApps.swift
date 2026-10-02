@@ -19,6 +19,21 @@ extension DiscordREST {
         ).compactMap(\.domain)
     }
 
+    /// A Spotify account's own token, which Discord holds and hands out —
+    /// what its client calls Spotify's player with (`107750`'s `iD`).
+    ///
+    /// `GET /users/@me/connections/spotify/{id}/access-token`, answering
+    /// `{"access_token": "…"}`. Asked again whenever Spotify answers 401.
+    public func spotifyAccessToken(accountID: String) async throws -> String {
+        struct Answer: Decodable { var access_token: String }
+        let escaped = accountID.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? accountID
+        return try await get(
+            "/users/@me/connections/spotify/\(escaped)/access-token",
+            route: "users/@me/connections/spotify/{id}/access-token",
+            as: Answer.self
+        ).access_token
+    }
+
     /// "Display on profile". The route takes a `Bool` and answers with the
     /// same connection as an `Int` — captured on the same account, seconds
     /// apart, and `AccountConnection` is where the two are reconciled.

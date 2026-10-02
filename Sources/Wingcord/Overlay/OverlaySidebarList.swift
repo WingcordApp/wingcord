@@ -182,7 +182,7 @@ private struct OverlayPersonRow: View {
                     if let subtitle = person.subtitle {
                         HStack(spacing: Spacing.hair) {
                             if let emoji = person.subtitleEmoji {
-                                InlineEmojiMark(emoji: emoji, side: 11)
+                                ExpressionGlyph(emoji: emoji, side: 11)
                             }
                             Text(subtitle)
                                 .font(.system(size: 11))

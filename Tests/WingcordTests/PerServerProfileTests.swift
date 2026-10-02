@@ -115,10 +115,10 @@ struct PerServerProfileTests {
     }
 
     @Test("Raising the card to the full profile keeps its subject")
-    func openFullProfile() {
+    func expandProfile() {
         let model = model()
         model.profileRequest = ProfileRequest(userID: friendID, guildID: guildID, anchor: .zero)
-        model.openFullProfile()
+        model.expandProfile()
         #expect(model.profileRequest?.depth == .full)
         #expect(model.profileRequest?.userID == friendID)
     }

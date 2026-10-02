@@ -75,12 +75,18 @@ struct Composer: View {
     /// `AppModel.escapeTranscript(in:)`. Returns false when there was nothing
     /// to do, so the key falls through.
     var escapeTranscript: () -> Bool = { false }
-    var attach: () -> Void = {}
+    /// The `+` menu's rows. Empty hides the `+` — see `ComposerAttachActions`.
+    var attachActions = ComposerAttachActions()
+    /// When the next message goes, while the bar is scheduling — Discord's bar
+    /// over the box, "Scheduling message for…". Nil is an ordinary send.
+    var scheduledAt: Date?
+    /// Moves the scheduled time, or leaves scheduling with nil.
+    var setSchedule: (Date?) -> Void = { _ in }
     /// Files pasted into the field, staged as a drop stages them.
     var pasteFiles: ([URL]) -> Void = { _ in }
-    /// Whether `+`, the drop target and a pasted file are offered at all. A
-    /// channel that refuses files gets none of them — `INVARIANTS.md` §5.5 —
-    /// and a paste there is the text paste it would be anywhere else.
+    /// Whether the drop target and a pasted file are offered at all. A channel
+    /// that refuses files gets neither — `INVARIANTS.md` §5.5 — and a paste
+    /// there is the text paste it would be anywhere else.
     var canAttach: Bool = true
     /// Files staged for this message, and why the last one was refused.
     var attachments: [PendingAttachment] = []
@@ -88,8 +94,6 @@ struct Composer: View {
     var removeAttachment: (PendingAttachment.ID) -> Void = { _ in }
     var toggleAttachmentSpoiler: (PendingAttachment.ID) -> Void = { _ in }
     var dismissAttachmentRefusal: () -> Void = {}
-    /// True while the staged files are going up.
-    var isUploading: Bool = false
     /// The `:shortcode` completions for what is currently typed. Empty closes
     /// the list, which is the only thing that does.
     var completions: [ExpressionItem] = []
@@ -158,6 +162,9 @@ struct Composer: View {
 
     @Environment(\.motion) private var motion
     @State private var isFocused = false
+    @State private var isAttachMenuOpen = false
+    /// The scheduling bar's own time picker — Discord's "Edit schedule time".
+    @State private var isEditingSchedule = false
     /// Which of the four trailing controls has its flyout open.
     ///
     /// **Keyed on the control, not on the picker's mode.** Three of the four
@@ -277,6 +284,14 @@ struct Composer: View {
                 .transition(.materialize(from: .bottom))
             }
 
+            // **Beside a reply, never beside an edit.** A scheduled reply is a
+            // real thing Discord sends; an edit borrows the bar and is sent
+            // now, so the time is set aside while it is open.
+            if !isEditing, let scheduledAt {
+                scheduleBanner(scheduledAt)
+                    .transition(.materialize(from: .bottom))
+            }
+
             if canSend, !attachments.isEmpty || attachmentRefusal != nil {
                 AttachmentTray(
                     attachments: attachments,
@@ -298,6 +313,7 @@ struct Composer: View {
         .padding(.bottom, Spacing.snug)
         .animation(motion.panel, value: replyingToAuthor)
         .animation(motion.panel, value: isEditing)
+        .animation(motion.panel, value: scheduledAt)
         .animation(motion.standard, value: canSend)
         .animation(motion.fadeQuick, value: visibleCompletions.isEmpty)
         .animation(motion.fadeQuick, value: visibleMentions.isEmpty)
@@ -331,12 +347,13 @@ struct Composer: View {
 
     private var composerRow: some View {
         ComposerChrome(shape: shape) {
-            // A channel that refuses files gets no control at all rather than a
-            // dimmed one — `INVARIANTS.md` §5.5. In the enclosed arrangement
-            // that closes up against the field, which is right: there is
-            // nothing to attach.
-            if canAttach {
-                ComposerAttachButton(shape: shape, action: attach)
+            // A conversation where none of the menu's rows can work gets no
+            // `+` at all rather than a dimmed one — `INVARIANTS.md` §5.5. In
+            // the enclosed arrangement that closes up against the field, which
+            // is right: there is nothing to add. The settings preview draws it
+            // inert, as it draws the other controls.
+            if isReorderable || !attachActions.isEmpty {
+                attachControl
             }
         } input: {
             HStack(alignment: .bottom, spacing: Spacing.base) {
@@ -433,9 +450,8 @@ struct Composer: View {
     /// `/wordle` case, which takes no options at all.
     private var canCommit: Bool {
         if let pendingCommand { return pendingCommand.isComplete }
-        // A message may be nothing but files, and a second press while they are
-        // going up would upload every one of them twice.
-        return (hasText || !attachments.isEmpty) && !isUploading
+        // A message may be nothing but files.
+        return hasText || !attachments.isEmpty
     }
 
     /// What the list actually shows: the matches, unless this exact query was
@@ -634,7 +650,59 @@ struct Composer: View {
             cancelEdit()
             return .handled
         }
+        // Discord's chain takes the time away next (module `92960`).
+        if scheduledAt != nil {
+            setSchedule(nil)
+            return .handled
+        }
         return escapeTranscript() ? .handled : .ignored
+    }
+
+    private var attachControl: some View {
+        let action: (() -> Void)? = isReorderable ? nil : { pressedPlus() }
+        return ComposerAttachButton(shape: shape, isActive: isAttachMenuOpen, action: action)
+            .popover(isPresented: $isAttachMenuOpen, arrowEdge: .top) {
+                ComposerAttachMenu(actions: attachActions) { isAttachMenuOpen = false }
+            }
+    }
+
+    /// `+` opens its menu, and a double-click opens the file panel straight
+    /// away — Discord's `onDoubleClick`.
+    ///
+    /// **The pair's second click reaches this button while the menu closes**: a
+    /// popover passes on the click that dismisses it, which is also what lets
+    /// one trailing control's click open its flyout over another's. So the
+    /// second click closes the menu and goes to the files.
+    private func pressedPlus() {
+        if let uploadFile = attachActions.uploadFile, (NSApp.currentEvent?.clickCount ?? 1) > 1 {
+            isAttachMenuOpen = false
+            uploadFile()
+        } else {
+            isAttachMenuOpen.toggle()
+        }
+    }
+
+    /// "Scheduling message for October 3 at 9:00 AM": the line opens the time
+    /// and the cross leaves scheduling, as Discord's bar does.
+    private func scheduleBanner(_ date: Date) -> some View {
+        ComposerBanner(
+            symbolName: "clock",
+            text: "Scheduling message for \(date.formatted(.dateTime.month(.wide).day())) at \(date.formatted(date: .omitted, time: .shortened))",
+            edit: ComposerBanner.Edit(label: "Edit schedule time") { isEditingSchedule = true },
+            cancelLabel: "Close",
+            cancel: { setSchedule(nil) }
+        )
+        .popover(isPresented: $isEditingSchedule, arrowEdge: .top) {
+            ScheduleTimeForm(
+                initial: date,
+                cancel: { isEditingSchedule = false },
+                set: { moved in
+                    isEditingSchedule = false
+                    setSchedule(moved)
+                }
+            )
+            .frame(width: ComposerAttachMenu.width)
+        }
     }
 
     /// The four controls at the bar's trailing end, in the reader's own order.
@@ -786,8 +854,16 @@ extension Collection {
 /// the same glass and the same dismiss control, and two copies is two places for
 /// the corner radius to drift.
 private struct ComposerBanner: View {
+    /// Makes the line itself a button — the scheduling bar's, which opens its
+    /// time.
+    struct Edit {
+        var label: String
+        var action: () -> Void
+    }
+
     var symbolName: String
     var text: String
+    var edit: Edit?
     var cancelLabel: String
     var cancel: () -> Void
 
@@ -796,10 +872,13 @@ private struct ComposerBanner: View {
             Image(systemName: symbolName)
                 .font(.system(.caption))
                 .foregroundStyle(Ink.tertiary)
-            Text(text)
-                .font(.system(.caption))
-                .foregroundStyle(Ink.secondary)
-                .lineLimit(1)
+            if let edit {
+                Button(action: edit.action) { line }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel(Text(edit.label))
+            } else {
+                line
+            }
             Spacer(minLength: Spacing.tight)
             Button(action: cancel) {
                 Image(systemName: "xmark")
@@ -814,6 +893,13 @@ private struct ComposerBanner: View {
         .padding(.horizontal, Spacing.snug)
         .padding(.vertical, Spacing.base)
         .glassEffect(.regular, in: .rect(cornerRadius: Radius.chip))
+    }
+
+    private var line: some View {
+        Text(text)
+            .font(.system(.caption))
+            .foregroundStyle(Ink.secondary)
+            .lineLimit(1)
     }
 }
 

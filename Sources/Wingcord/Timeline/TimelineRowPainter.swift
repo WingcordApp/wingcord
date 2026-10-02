@@ -135,6 +135,13 @@ nonisolated enum TimelineRowPainter {
         /// last switched channels.
         var activityInviteStatus: String?
         var activityInviteIsJoined = false
+        /// A listen-along card's host, painted — see `ListenAlongCard`.
+        var listenAlong: ListenAlongCard?
+        /// How far an upload's files have got, 0...1 — the session's, and so
+        /// painted rather than laid out. See `UploadCardSlot`.
+        var uploadProgress: Double = 0
+        /// Whether the pointer is on an upload card's cancel.
+        var isUploadCancelHovered = false
         /// One frame of this author's moving avatar, or nil for the still —
         /// which is every row but the one under the pointer.
         ///
@@ -496,6 +503,19 @@ nonisolated enum TimelineRowPainter {
                 x: rowFrame.minX + row.textOrigin.x,
                 y: rowFrame.minY + row.textOrigin.y
             )
+            // **The words of a send Discord has not taken, at half strength** —
+            // Discord's `.isSending`, which is on the text and on nothing else:
+            // the name, the face and the time are already true. Faded as one
+            // layer, as CSS `opacity` fades its box, so a mention's plate and
+            // the words over it do not each let the other through.
+            if row.isPending {
+                context.saveGState()
+                context.setAlpha(0.5)
+                context.beginTransparencyLayer(
+                    in: CGRect(origin: origin, size: block.size).insetBy(dx: -4, dy: -4),
+                    auxiliaryInfo: nil
+                )
+            }
             drawTextBlock(
                 block,
                 at: origin,
@@ -513,6 +533,10 @@ nonisolated enum TimelineRowPainter {
                     selectedRange: state.selectedRange
                 )
             )
+            if row.isPending {
+                context.endTransparencyLayer()
+                context.restoreGState()
+            }
         }
 
         for (index, slot) in row.stickers.enumerated() where !state.layered.stickers.contains(index) {
@@ -549,6 +573,26 @@ nonisolated enum TimelineRowPainter {
             )
         }
 
+        if let upload = row.upload {
+            drawUploadCard(
+                upload,
+                offset: CGPoint(x: rowFrame.minX, y: rowFrame.minY),
+                context: context,
+                style: style,
+                progress: state.uploadProgress,
+                isCancelHovered: state.isUploadCancelHovered
+            )
+        }
+
+        if let hiddenMedia = row.hiddenMedia {
+            drawHiddenMedia(
+                hiddenMedia,
+                offset: CGPoint(x: rowFrame.minX, y: rowFrame.minY),
+                context: context,
+                style: style
+            )
+        }
+
         if let invite = row.activityInvite {
             drawActivityInvite(
                 invite,
@@ -558,6 +602,20 @@ nonisolated enum TimelineRowPainter {
                 accent: state.activityAccent,
                 status: state.activityInviteStatus,
                 isJoined: state.activityInviteIsJoined,
+                hovered: state.hoveredComponent,
+                images: images,
+                scale: scale
+            )
+        }
+
+        if let listenAlong = row.listenAlong {
+            drawListenAlong(
+                listenAlong,
+                offset: CGPoint(x: rowFrame.minX, y: rowFrame.minY),
+                context: context,
+                style: style,
+                card: state.listenAlong,
+                now: .now,
                 hovered: state.hoveredComponent,
                 images: images,
                 scale: scale
@@ -880,7 +938,7 @@ nonisolated enum TimelineRowPainter {
                 // top-left, so an unflipped `draw` puts every custom emoji in
                 // the transcript upside down — which is invisible on a symmetric
                 // one and unmissable on a face.
-                drawFlipped(image, in: frame, context: context)
+                drawFlipped(image, in: frame, context: context, fit: .contain)
             } else {
                 // A soft plate rather than nothing, so a line does not visibly
                 // reflow when the picture lands — the box was already reserved.
@@ -1539,13 +1597,13 @@ nonisolated enum TimelineRowPainter {
                     film.frames[film.index(at: clock)],
                     in: frame,
                     context: context,
-                    fills: slot.cropsToFill
+                    fit: .init(cropsToFill: slot.cropsToFill)
                 )
                 drewArtwork = true
             } else if let image = images.cached(
                 ImageStore.Key(url: url, maximumPixelSize: pixels), bucket: .attachment
             ) {
-                drawFlipped(image, in: frame, context: context, fills: slot.cropsToFill)
+                drawFlipped(image, in: frame, context: context, fit: .init(cropsToFill: slot.cropsToFill))
                 drewArtwork = true
             }
         }
@@ -1556,7 +1614,7 @@ nonisolated enum TimelineRowPainter {
             // lands — never for a hidden spoiler, whose cover is the point.
             if !isHidden, let placeholder = PlaceholderImages.shared.image(slot.placeholder) {
                 context.interpolationQuality = .high
-                drawFlipped(placeholder, in: frame, context: context, fills: slot.cropsToFill)
+                drawFlipped(placeholder, in: frame, context: context, fit: .init(cropsToFill: slot.cropsToFill))
             }
         }
         context.restoreGState()
@@ -1598,6 +1656,140 @@ nonisolated enum TimelineRowPainter {
     /// **A card, not an empty rectangle.** Anything that is not a picture used
     /// to be laid out as one and then drew a permanent grey box, which is
     /// indistinguishable from a picture that failed to load.
+    /// A send's files going up — see `UploadCardSlot`.
+    /// A request's media, standing in for itself — Discord's `d1`: a picture's
+    /// glyph and "Image attachment" per piece, and why under them.
+    private static func drawHiddenMedia(
+        _ slot: HiddenMediaSlot,
+        offset: CGPoint,
+        context: CGContext,
+        style: MessageTextStyle
+    ) {
+        let ink = ThemeInk.current
+        let inset = TimelineMetrics.attachmentCardInset
+        let glyph: CGFloat = 18
+        for tile in slot.tiles {
+            let frame = tile.offsetBy(dx: offset.x, dy: offset.y)
+            context.addPath(CGPath(
+                roundedRect: frame,
+                cornerWidth: EmbedLayoutEngine.corner,
+                cornerHeight: EmbedLayoutEngine.corner,
+                transform: nil
+            ))
+            context.setFillColor(ink.cardFill)
+            context.fillPath()
+            drawSymbol(
+                "photo",
+                tint: style.tertiaryColor,
+                in: CGRect(x: frame.minX + inset, y: frame.midY - glyph / 2, width: glyph, height: glyph),
+                context: context
+            )
+            let textX = frame.minX + inset + glyph + Spacing.base
+            _ = drawText(
+                "Image attachment",
+                font: style.bodyFont,
+                color: style.tertiaryColor,
+                at: CGPoint(x: textX, y: frame.midY - style.bodyFont.pointSize / 2 - 2),
+                maxWidth: max(0, frame.maxX - inset - textX),
+                context: context
+            )
+        }
+        let note = slot.noteRect.offsetBy(dx: offset.x, dy: offset.y)
+        let mark = style.metadataFont.pointSize + 2
+        drawSymbol(
+            "info.circle",
+            tint: style.tertiaryColor,
+            in: CGRect(x: note.minX, y: note.midY - mark / 2, width: mark, height: mark),
+            context: context
+        )
+        _ = drawText(
+            "Media is hidden until the DM is accepted",
+            font: style.metadataFont,
+            color: style.tertiaryColor,
+            at: CGPoint(x: note.minX + mark + Spacing.tight, y: note.midY - style.metadataFont.pointSize / 2 - 1),
+            maxWidth: max(0, note.width - mark - Spacing.tight),
+            context: context
+        )
+    }
+
+    private static func drawUploadCard(
+        _ slot: UploadCardSlot,
+        offset: CGPoint,
+        context: CGContext,
+        style: MessageTextStyle,
+        progress: Double,
+        isCancelHovered: Bool
+    ) {
+        let ink = ThemeInk.current
+        let frame = slot.rect.offsetBy(dx: offset.x, dy: offset.y)
+        context.addPath(CGPath(
+            roundedRect: frame,
+            cornerWidth: EmbedLayoutEngine.corner,
+            cornerHeight: EmbedLayoutEngine.corner,
+            transform: nil
+        ))
+        context.setFillColor(ink.cardFill)
+        context.fillPath()
+
+        let side = TimelineMetrics.attachmentCardGlyphSide
+        drawSymbol(
+            Self.fileSymbol(for: slot.title),
+            tint: style.linkColor,
+            in: CGRect(
+                x: frame.minX + TimelineMetrics.attachmentCardInset,
+                y: frame.midY - side / 2,
+                width: side,
+                height: side
+            ),
+            context: context
+        )
+        _ = drawText(
+            slot.title,
+            font: style.bodyFont,
+            color: style.primaryColor,
+            at: CGPoint(x: slot.titleOrigin.x + offset.x, y: slot.titleOrigin.y + offset.y),
+            maxWidth: slot.titleWidth,
+            context: context
+        )
+        _ = drawText(
+            slot.sizeLabel,
+            font: style.metadataFont,
+            color: style.tertiaryColor,
+            at: CGPoint(x: slot.sizeOrigin.x + offset.x, y: slot.sizeOrigin.y + offset.y),
+            maxWidth: max(0, frame.maxX - slot.sizeOrigin.x - offset.x),
+            context: context
+        )
+
+        let bar = slot.progressRect.offsetBy(dx: offset.x, dy: offset.y)
+        guard progress < 1 else {
+            // Every byte is up and Discord is still making the message.
+            _ = drawText(
+                "Processing...",
+                font: style.metadataFont,
+                color: style.tertiaryColor,
+                at: CGPoint(x: bar.minX, y: bar.midY - style.metadataFont.pointSize / 2 - 1),
+                maxWidth: bar.width,
+                context: context
+            )
+            return
+        }
+        let radius = bar.height / 2
+        context.addPath(CGPath(roundedRect: bar, cornerWidth: radius, cornerHeight: radius, transform: nil))
+        context.setFillColor(ink.lift(0.12))
+        context.fillPath()
+        let filled = CGRect(x: bar.minX, y: bar.minY, width: max(bar.height, bar.width * progress), height: bar.height)
+        context.addPath(CGPath(roundedRect: filled, cornerWidth: radius, cornerHeight: radius, transform: nil))
+        context.setFillColor(ink.accent)
+        context.fillPath()
+
+        drawSymbol(
+            "xmark",
+            tint: isCancelHovered ? style.primaryColor : style.secondaryColor,
+            in: slot.cancelRect.offsetBy(dx: offset.x, dy: offset.y).insetBy(dx: 2, dy: 2),
+            context: context
+        )
+    }
+
     private static func drawFileCard(
         _ slot: AttachmentSlot,
         in frame: CGRect,
@@ -2030,11 +2222,35 @@ nonisolated enum TimelineRowPainter {
                 .map { $0.frames[$0.index(at: clock)] }
             : nil
         if let image = frame ?? images.cached(ImageStore.Key(url: url, maximumPixelSize: pixels)) {
-            drawFlipped(image, in: glyphRect, context: context)
+            drawFlipped(image, in: glyphRect, context: context, fit: .contain)
         } else {
             context.setFillColor(ThemeInk.current.placeholderFill)
             context.fillEllipse(in: glyphRect.insetBy(dx: 2, dy: 2))
         }
+    }
+
+    /// How a picture meets a box that is not its own shape.
+    ///
+    /// **`CGContext.draw(_:in:)` stretches**, which is invisible for as long as
+    /// every box is derived from its own picture's shape — an avatar, a sized
+    /// attachment. It stops being invisible the moment a box is fixed first
+    /// and the picture arrives later.
+    enum ImageFit {
+        /// To the box's edges. Right only where the box came from the picture.
+        case stretch
+        /// Scaled until the *smaller* overflow is gone, with the rest hanging
+        /// outside the box. The caller's clip is what removes it, so this must
+        /// never be used to fill a box nothing has clipped.
+        case cover
+        /// Whole, and centred in the box — CSS `object-fit: contain`, which is
+        /// how Discord draws every emoji. A custom emoji can be any shape, and
+        /// a wide one drawn to a square box was squeezed into a different
+        /// picture.
+        case contain
+
+        /// A gallery cell's answer: a cell in the mosaic's shape covers, and a
+        /// box sized from its own picture is that picture's edges.
+        init(cropsToFill: Bool) { self = cropsToFill ? .cover : .stretch }
     }
 
     /// Draws a bitmap the right way up.
@@ -2043,22 +2259,17 @@ nonisolated enum TimelineRowPainter {
     /// flipped, so every `draw(_:in:)` in this file goes through here. It used
     /// to be four lines copied at each call site, and the one copy that was
     /// missing is what drew every inline custom emoji upside down.
-    /// - Parameter fills: whether the picture covers the box and is cropped,
-    ///   rather than being drawn to the box's own edges.
-    ///
-    ///   **`CGContext.draw(_:in:)` stretches**, which is invisible for as long
-    ///   as every box is derived from its own picture's shape — which it was,
-    ///   until several pictures started sharing a grid of fixed cells. In a
-    ///   cell the picture is scaled until the *smaller* overflow is gone and
-    ///   the rest hangs outside; the caller's clip is what removes it, so this
-    ///   must never be used to fill a box nothing has clipped.
     static func drawFlipped(
         _ image: CGImage,
         in frame: CGRect,
         context: CGContext,
-        fills: Bool = false
+        fit: ImageFit = .stretch
     ) {
-        let box = fills ? coverRect(image, in: frame) : frame
+        let box = switch fit {
+        case .stretch: frame
+        case .cover: fittedRect(image, in: frame, covering: true)
+        case .contain: fittedRect(image, in: frame, covering: false)
+        }
         context.saveGState()
         context.translateBy(x: 0, y: frame.midY)
         context.scaleBy(x: 1, y: -1)
@@ -2102,12 +2313,15 @@ nonisolated enum TimelineRowPainter {
         drawFlipped(image, in: decorationRect(around: avatar), context: context)
     }
 
-    /// The rect a picture occupies when it covers `frame` and stays centred.
-    private static func coverRect(_ image: CGImage, in frame: CGRect) -> CGRect {
+    /// The rect a picture occupies, centred in `frame`, when it covers the
+    /// frame or when it fits inside it.
+    static func fittedRect(_ image: CGImage, in frame: CGRect, covering: Bool) -> CGRect {
         let width = CGFloat(image.width)
         let height = CGFloat(image.height)
         guard width > 0, height > 0, frame.width > 0, frame.height > 0 else { return frame }
-        let scale = max(frame.width / width, frame.height / height)
+        let scale = covering
+            ? max(frame.width / width, frame.height / height)
+            : min(frame.width / width, frame.height / height)
         let drawn = CGSize(width: width * scale, height: height * scale)
         return CGRect(
             x: frame.midX - drawn.width / 2,

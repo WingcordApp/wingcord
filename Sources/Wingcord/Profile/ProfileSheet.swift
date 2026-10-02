@@ -432,7 +432,8 @@ struct ProfileSheet: View {
                         // The slab around it is already the plate.
                         platesItself: false,
                         traits: activity.ongoing.first { $0.records(current) }?.traits ?? [],
-                        isOwn: profile.isSelf
+                        isOwn: profile.isSelf,
+                        listenAlong: model.listenAlongOffer(for: profile.userID, activity: current)
                     )
                 }
             }

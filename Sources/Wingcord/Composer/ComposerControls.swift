@@ -136,11 +136,13 @@ nonisolated struct ComposerControlShape: Shape {
 /// region inside a larger plate there is no separate body to displace.
 struct ComposerAttachButton: View {
     var shape: ChromeShape
+    /// Its menu is open — drawn as the trailing controls draw an open flyout.
+    var isActive = false
     var action: (() -> Void)?
 
     var body: some View {
         if shape.enclosesFlankingControls {
-            ComposerControlButton(label: "Add attachment", shape: shape, action: action) {
+            ComposerControlButton(label: "More message options", isActive: isActive, shape: shape, action: action) {
                 Image(systemName: "plus")
                     .font(.system(size: 19, weight: .regular))
             }
@@ -152,8 +154,8 @@ struct ComposerAttachButton: View {
                     .font(Typeface.controlGlyph)
                     .foregroundStyle(InkColor.solid)
             }
-            .help("Add attachment")
-            .accessibilityLabel(Text("Add attachment"))
+            .help("More message options")
+            .accessibilityLabel(Text("More message options"))
         }
     }
 }

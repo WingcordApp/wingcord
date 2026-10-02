@@ -118,6 +118,12 @@ nonisolated struct MessageRow: @unchecked Sendable {
     var textOrigin: CGPoint
 
     var attachments: [AttachmentSlot]
+    /// A send's files going up, drawn in place of the attachments they are
+    /// about to be — see `UploadCardSlot`. Nil for every message Discord has.
+    var upload: UploadCardSlot? = nil
+    /// A message request's media, counted and not drawn — see
+    /// `HiddenMediaSlot`. Nil everywhere but a request's preview.
+    var hiddenMedia: HiddenMediaSlot? = nil
     var stickers: [StickerSlot]
     var embeds: [EmbedSlot]
     /// The controls an app attached, laid out into rows.
@@ -127,6 +133,9 @@ nonisolated struct MessageRow: @unchecked Sendable {
     /// The activity invitation, when the message is one. Like a poll, this IS
     /// the message — the launch carries no body at all.
     var activityInvite: ActivityInviteSlot?
+    /// An invitation to listen along on the author's Spotify — the whole
+    /// message, as a poll is. See `ListenAlongSlot`.
+    var listenAlong: ListenAlongSlot? = nil
     /// The invites the text links to, drawn as Discord's invite cards.
     var inviteCards: [InviteCardSlot] = []
     /// The profiles the text links to — Discord's user profile embed. Hosted
@@ -242,6 +251,44 @@ nonisolated struct ConversationStartSlot: Sendable {
         var label: TimelineTextBlock
         var labelOrigin: CGPoint
     }
+}
+
+/// What an upload's card says: its files' name or count, and their size.
+///
+/// Handed to the layout like the Spotify cards, keyed by the echo's id, because
+/// the files are the session's and this type cannot reach it.
+nonisolated struct UploadSummary: Equatable, Sendable {
+    var title: String
+    var size: Int
+}
+
+/// A send's files going up — Discord's pending upload (module `564771`).
+///
+/// **One card for the whole send**, as Discord's is: the file's mark, its name
+/// or "Uploading 3 Files", how big it is, one bar, and a cancel. At the end of
+/// the bar the cancel goes and the bar says "Processing...", until Discord's
+/// message arrives in its place. The bar's fill is painted from the session's
+/// progress, never laid out — it moves a hundred times an upload.
+nonisolated struct UploadCardSlot: Sendable {
+    var rect: CGRect
+    var title: String
+    var titleOrigin: CGPoint
+    var titleWidth: CGFloat
+    /// "— 3.2 MB", after the name: Discord's `size`.
+    var sizeLabel: String
+    var sizeOrigin: CGPoint
+    /// The bar's track; "Processing..." is set on its line once it is full.
+    var progressRect: CGRect
+    var cancelRect: CGRect
+}
+
+/// A message request's media, before it is accepted — Discord's restricted
+/// preview (`d1`): a tile per piece reading "Image attachment", and one line
+/// under them saying why.
+nonisolated struct HiddenMediaSlot: Sendable {
+    var rect: CGRect
+    var tiles: [CGRect]
+    var noteRect: CGRect
 }
 
 nonisolated struct AttachmentSlot: Sendable {
@@ -612,6 +659,15 @@ nonisolated struct TimelineLayoutEngine: Sendable {
         /// Whether the reader may manage this channel, which puts Discord's
         /// Edit Channel button under its welcome header.
         var canEditChannel = false
+        /// The reader's sends whose files are going up, by their echo's id.
+        /// Empty for nearly every transcript at nearly every moment.
+        var uploads: [MessageID: UploadSummary] = [:]
+        /// A message request not yet accepted: words only, the media counted
+        /// — see `Message.restrictedPreview`.
+        var hidesMedia = false
+        /// The listening parties still on, by party id — whether a listen-along
+        /// card is the live one or Discord's "The listening party is over!".
+        var listenAlongLive: Set<String> = []
     }
 
     /// `@unchecked` for the same reason `MessageTextStyle` is: it carries a
@@ -702,6 +758,16 @@ nonisolated struct TimelineLayoutEngine: Sendable {
         /// one invite resolved, and a chat opens with several resolving.
         var carriesCards: Bool
         var isRunHead: Bool
+        /// Whether the row was laid out in the critical ink of a refused send —
+        /// which is set into the body's text, so a send turning red is a
+        /// relayout. Being on its way is not: that is painted.
+        var isFailed: Bool
+        /// Laid out as a request's preview. Accepting one in front of the
+        /// reader is a relayout of every row, into the whole message.
+        var hidesMedia: Bool
+        /// Whether a listen-along card was laid out live. Nil on every other
+        /// row. A party ending is a shorter card, so it is a relayout.
+        var listenAlongLive: Bool?
         var message: Message
         var row: MessageRow
 
@@ -711,13 +777,19 @@ nonisolated struct TimelineLayoutEngine: Sendable {
             presentationRevision: UInt64,
             identityToken: UInt64,
             cardRevision: UInt64,
-            isRunHead: Bool
+            isRunHead: Bool,
+            isFailed: Bool,
+            hidesMedia: Bool,
+            listenAlongLive: Bool?
         ) -> Bool {
             self.width == width
                 && self.presentationRevision == presentationRevision
                 && self.identityToken == identityToken
                 && (!carriesCards || self.cardRevision == cardRevision)
                 && self.isRunHead == isRunHead
+                && self.isFailed == isFailed
+                && self.hidesMedia == hidesMedia
+                && self.listenAlongLive == listenAlongLive
                 && self.message == message
         }
     }
@@ -817,6 +889,8 @@ nonisolated struct TimelineLayoutEngine: Sendable {
 
             case .message(let message):
                 used.insert(message.message.id)
+                let isFailed = message.flags.contains(.failed)
+                let listenAlongLive = message.message.listenAlong.map { input.listenAlongLive.contains($0.partyID) }
                 if let cached = cache[message.message.id],
                    cached.matches(
                        message.message,
@@ -824,12 +898,16 @@ nonisolated struct TimelineLayoutEngine: Sendable {
                        presentationRevision: presentationRevision,
                        identityToken: input.mentions.token,
                        cardRevision: cardRevision,
-                       isRunHead: message.isRunHead
+                       isRunHead: message.isRunHead,
+                       isFailed: isFailed,
+                       hidesMedia: input.hidesMedia,
+                       listenAlongLive: listenAlongLive
                    )
                 {
-                    rows.append(
-                        TimelineRow(height: rowHeight(of: cached.row), kind: .message(cached.row))
-                    )
+                    // Painted, so carried over rather than keyed on.
+                    var row = cached.row
+                    row.isPending = message.flags.contains(.pending)
+                    rows.append(TimelineRow(height: rowHeight(of: row), kind: .message(row)))
                     continue
                 }
                 let row = message.message.isSystemEvent
@@ -842,6 +920,9 @@ nonisolated struct TimelineLayoutEngine: Sendable {
                     cardRevision: cardRevision,
                     carriesCards: Self.carriesCards(message.message),
                     isRunHead: message.isRunHead,
+                    isFailed: isFailed,
+                    hidesMedia: input.hidesMedia,
+                    listenAlongLive: listenAlongLive,
                     message: message.message,
                     row: row
                 )
@@ -890,10 +971,13 @@ nonisolated struct TimelineLayoutEngine: Sendable {
         }
         for slot in row.stickers { bottom = max(bottom, slot.rect.maxY) }
         for slot in row.attachments { bottom = max(bottom, slot.rect.maxY) }
+        if let upload = row.upload { bottom = max(bottom, upload.rect.maxY) }
+        if let hiddenMedia = row.hiddenMedia { bottom = max(bottom, hiddenMedia.rect.maxY) }
         for slot in row.embeds { bottom = max(bottom, slot.rect.maxY) }
         for slot in row.components { bottom = max(bottom, slot.rect.maxY) }
         if let poll = row.poll { bottom = max(bottom, poll.rect.maxY) }
         if let invite = row.activityInvite { bottom = max(bottom, invite.rect.maxY) }
+        if let listenAlong = row.listenAlong { bottom = max(bottom, listenAlong.rect.maxY) }
         for card in row.inviteCards { bottom = max(bottom, card.rect.maxY) }
         for card in row.userCards { bottom = max(bottom, card.rect.maxY) }
         for slot in row.reactions { bottom = max(bottom, slot.rect.maxY) }
@@ -908,7 +992,10 @@ nonisolated struct TimelineLayoutEngine: Sendable {
         input: Input,
         parser: MarkdownParser
     ) -> MessageRow {
-        let message = item.message
+        // A request's preview lays out the words and counts the rest.
+        let (message, hiddenMediaCount) = input.hidesMedia
+            ? item.message.restrictedPreview
+            : (item.message, 0)
         let author = input.authors[message.authorID]
         let contentX = TimelineMetrics.contentInset
         let contentWidth = max(80, input.width - contentX - TimelineMetrics.horizontalMargin)
@@ -1054,7 +1141,9 @@ nonisolated struct TimelineLayoutEngine: Sendable {
         let drawnContent = input.settings.showsEmbeds ? message.displayedContent : message.content
         if !drawnContent.isEmpty {
             let document = parser.parse(drawnContent)
-            let style = document.jumboEmojiCount == nil ? input.style : input.style.jumbo
+            let sized = document.jumboEmojiCount == nil ? input.style : input.style.jumbo
+            // A refused send's words are Discord's critical ink — `.isFailed`.
+            let style = item.flags.contains(.failed) ? sized.failed : sized
             let text = MessageTextBuilder.build(
                 document: document,
                 context: input.mentions,
@@ -1090,6 +1179,32 @@ nonisolated struct TimelineLayoutEngine: Sendable {
         )
         for slot in attachments { y = max(y, slot.rect.maxY) }
 
+        var upload: UploadCardSlot?
+        if let summary = input.uploads[message.id] {
+            y += TimelineMetrics.attachmentGap
+            let slot = Self.uploadSlot(
+                summary,
+                origin: CGPoint(x: contentX, y: y),
+                availableWidth: contentWidth,
+                style: input.style
+            )
+            upload = slot
+            y = slot.rect.maxY
+        }
+
+        var hiddenMedia: HiddenMediaSlot?
+        if hiddenMediaCount > 0 {
+            y += TimelineMetrics.attachmentGap
+            let slot = Self.hiddenMediaSlot(
+                count: hiddenMediaCount,
+                origin: CGPoint(x: contentX, y: y),
+                availableWidth: contentWidth,
+                style: input.style
+            )
+            hiddenMedia = slot
+            y = slot.rect.maxY
+        }
+
         // A poll IS the message: it arrives beside an empty body, so a renderer
         // that does not know about one draws an author line over a blank row.
         var poll: PollSlot?
@@ -1119,6 +1234,22 @@ nonisolated struct TimelineLayoutEngine: Sendable {
                 style: input.style
             )
             activityInvite = slot
+            y = slot.rect.maxY
+        }
+
+        // An invitation to listen along, for the same reason: content `""`,
+        // and the card is the message.
+        var listenAlong: ListenAlongSlot?
+        if let value = message.listenAlong {
+            y += TimelineMetrics.attachmentGap
+            let slot = ListenAlongLayoutEngine.layout(
+                value,
+                isLive: input.listenAlongLive.contains(value.partyID),
+                origin: CGPoint(x: contentX, y: y),
+                availableWidth: contentWidth,
+                style: input.style
+            )
+            listenAlong = slot
             y = slot.rect.maxY
         }
 
@@ -1341,11 +1472,14 @@ nonisolated struct TimelineLayoutEngine: Sendable {
             textBlock: textBlock,
             textOrigin: textOrigin,
             attachments: attachments,
+            upload: upload,
+            hiddenMedia: hiddenMedia,
             stickers: stickers,
             embeds: embeds,
             components: components,
             poll: poll,
             activityInvite: activityInvite,
+            listenAlong: listenAlong,
             inviteCards: inviteCards,
             userCards: userCards,
             reactions: reactions,
@@ -1851,6 +1985,9 @@ nonisolated struct TimelineLayoutEngine: Sendable {
         }
         if let invite = message.activityInvite {
             parts.append("Activity invitation. \(invite.name). Play.")
+        }
+        if let invite = message.listenAlong {
+            parts.append("Invite to Listen Along on \(invite.name).")
         }
         if let poll = message.poll {
             parts.append("Poll. \(poll.question)")
@@ -2415,6 +2552,87 @@ nonisolated struct TimelineLayoutEngine: Sendable {
             sizeLabel: sizeLabel,
             titleOrigin: CGPoint(x: textX, y: top),
             subtitleOrigin: CGPoint(x: textX, y: top + style.bodyFont.pointSize + 4)
+        )
+    }
+
+    /// A request's hidden media: a file card's height per piece, stacked, and
+    /// the note's line under them.
+    private static func hiddenMediaSlot(
+        count: Int,
+        origin: CGPoint,
+        availableWidth: CGFloat,
+        style: MessageTextStyle
+    ) -> HiddenMediaSlot {
+        let width = min(availableWidth, TimelineMetrics.attachmentCardMaxWidth)
+        let height = TimelineMetrics.hiddenMediaTileHeight
+        var tiles: [CGRect] = []
+        tiles.reserveCapacity(count)
+        var y = origin.y
+        for _ in 0..<count {
+            tiles.append(CGRect(x: origin.x, y: y, width: width, height: height))
+            y += height + TimelineMetrics.hiddenMediaGap
+        }
+        let note = CGRect(x: origin.x, y: y, width: width, height: style.bodyFont.pointSize + 6)
+        return HiddenMediaSlot(
+            rect: CGRect(x: origin.x, y: origin.y, width: width, height: note.maxY - origin.y),
+            tiles: tiles,
+            noteRect: note
+        )
+    }
+
+    /// An upload's card: a file card's geometry, with a bar where its size
+    /// line would be and a cancel at its trailing edge.
+    private static func uploadSlot(
+        _ summary: UploadSummary,
+        origin: CGPoint,
+        availableWidth: CGFloat,
+        style: MessageTextStyle
+    ) -> UploadCardSlot {
+        let inset = TimelineMetrics.attachmentCardInset
+        let rect = CGRect(
+            x: origin.x,
+            y: origin.y,
+            width: min(availableWidth, TimelineMetrics.attachmentCardMaxWidth),
+            height: TimelineMetrics.attachmentCardHeight
+        )
+        let cancelSide = TimelineMetrics.uploadCancelSide
+        let cancelRect = CGRect(
+            x: rect.maxX - inset - cancelSide,
+            y: rect.midY - cancelSide / 2,
+            width: cancelSide,
+            height: cancelSide
+        )
+        let textX = rect.minX + inset + TimelineMetrics.attachmentCardGlyphSide + Spacing.base
+        let room = max(0, cancelRect.minX - Spacing.base - textX)
+        let sizeLabel = "— \(AttachmentLimits.describe(bytes: summary.size))"
+        let sizeWidth = measure(sizeLabel, font: style.metadataFont)
+        // The name gives way to the size, never the other way round: how big
+        // the upload is says how long the bar will take.
+        let titleWidth = min(measure(summary.title, font: style.bodyFont), max(0, room - sizeWidth - 4))
+        // Two lines stacked about the card's middle, as a file card's are: the
+        // name on the upper, the bar on the lower.
+        let lineGap: CGFloat = 4
+        let block = style.bodyFont.pointSize + lineGap + style.metadataFont.pointSize
+        let top = rect.minY + (rect.height - block) / 2
+        let barLine = top + style.bodyFont.pointSize + lineGap
+        let barHeight = TimelineMetrics.uploadBarHeight
+        return UploadCardSlot(
+            rect: rect,
+            title: summary.title,
+            titleOrigin: CGPoint(x: textX, y: top),
+            titleWidth: titleWidth,
+            sizeLabel: sizeLabel,
+            sizeOrigin: CGPoint(
+                x: textX + titleWidth + 4,
+                y: top + style.bodyFont.pointSize - style.metadataFont.pointSize
+            ),
+            progressRect: CGRect(
+                x: textX,
+                y: barLine + (style.metadataFont.pointSize - barHeight) / 2,
+                width: room,
+                height: barHeight
+            ),
+            cancelRect: cancelRect
         )
     }
 

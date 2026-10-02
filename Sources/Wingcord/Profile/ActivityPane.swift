@@ -48,6 +48,9 @@ struct CurrentActivityCard: View {
     /// Whether this is the reader's own activity. Discord offers somebody
     /// else's Spotify session to listen to; the reader's own, nothing.
     var isOwn = false
+    /// Listen Along on a Spotify session — see `AppModel.listenAlongOffer`.
+    /// Nil draws none.
+    var listenAlong: ListenAlongOffer?
 
     @Environment(\.openURL) private var openURL
 
@@ -275,19 +278,17 @@ struct CurrentActivityCard: View {
     /// then Play on Spotify, side by side — on somebody else's session, and
     /// only where it offers them (`PLAY`, `SYNC`).
     ///
-    /// **Listen Along is drawn and dimmed, and says why.** Discord's follows
-    /// the listener's own Spotify through their linked account's token and
-    /// Spotify's API; no capture of that exchange exists here, and a control
-    /// that looks live and does nothing is `INVARIANTS.md` §5.5's fault. Play
-    /// on Spotify hands the track to Spotify.
+    /// **Listen Along follows them on the reader's own Spotify** — see
+    /// `SessionController+ListenAlong` — and says, in Discord's words, why it
+    /// is dimmed when it is. Play on Spotify hands the track to Spotify.
     @ViewBuilder
     private var spotifyControls: some View {
         if !isOwn, let track = activity.spotifyTrackURL, activity.offersPlay || activity.offersSync {
             HStack(spacing: Spacing.base) {
-                if activity.offersSync {
-                    spotifyControl("Listen Along") {}
-                        .disabled(true)
-                        .help("Listening along needs Discord's Spotify connection, which Wingcord does not use yet")
+                if activity.offersSync, let listenAlong {
+                    spotifyControl("Listen Along", action: listenAlong.join)
+                        .disabled(!listenAlong.isEnabled)
+                        .help(listenAlong.help)
                 }
                 if activity.offersPlay {
                     spotifyControl("Play on Spotify") { openInSpotify(track) }

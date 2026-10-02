@@ -178,6 +178,9 @@ public struct Channel: Hashable, Sendable, Identifiable, Codable {
     /// outranks the list Discord's rule would otherwise pick. See
     /// `MemberList.id(for:everyonePermissions:)`.
     public var memberListID: String?
+    /// Whether this conversation is still a message request, or was filtered
+    /// as spam. Nil for every ordinary conversation and every server channel.
+    public var messageRequest: MessageRequestStanding?
 
     public init(
         id: ChannelID,
@@ -209,7 +212,8 @@ public struct Channel: Hashable, Sendable, Identifiable, Codable {
         memberCount: Int? = nil,
         memberIDsPreview: [UserID] = [],
         totalMessageSent: Int? = nil,
-        memberListID: String? = nil
+        memberListID: String? = nil,
+        messageRequest: MessageRequestStanding? = nil
     ) {
         self.id = id
         self.kind = kind
@@ -241,6 +245,7 @@ public struct Channel: Hashable, Sendable, Identifiable, Codable {
         self.memberIDsPreview = memberIDsPreview
         self.totalMessageSent = totalMessageSent
         self.memberListID = memberListID
+        self.messageRequest = messageRequest
     }
 
     /// Whether this channel holds posts rather than a transcript.
@@ -301,5 +306,28 @@ public struct PermissionOverwrite: Hashable, Sendable, Codable {
         self.subject = subject
         self.allow = allow
         self.deny = deny
+    }
+}
+
+/// Where a conversation stands as a message request.
+///
+/// **Discord's two stores, as one value** (modules `380335` and `157550`): a
+/// request is `is_message_request` and not `is_spam`; spam is `is_spam`, whatever
+/// the other says. Neither is in the conversation list, the badges or the
+/// notifications until the reader accepts it.
+public enum MessageRequestStanding: String, Hashable, Sendable, Codable {
+    /// Waiting under Message Requests.
+    case pending
+    /// Filtered under Spam.
+    case spam
+
+    public init?(isMessageRequest: Bool, isSpam: Bool) {
+        if isSpam {
+            self = .spam
+        } else if isMessageRequest {
+            self = .pending
+        } else {
+            return nil
+        }
     }
 }

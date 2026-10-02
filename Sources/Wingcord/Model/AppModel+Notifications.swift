@@ -20,7 +20,11 @@ extension AppModel {
         // The reader's own switch, before anything is looked up. Off, this is
         // one boolean per message and nothing else.
         guard AppSettings.shared.postsNotifications else { return nil }
-        guard let channel = channelIndex[message.channelID] else { return nil }
+        // A message request interrupts nobody — Discord's `shouldNotify` turns
+        // one away before anything else is asked. It waits on its own page.
+        guard let channel = channelIndex[message.channelID], channel.messageRequest == nil else {
+            return nil
+        }
 
         let guildID = channel.guildID
         let isRoleMention = message.mentionedRoleIDs.contains {

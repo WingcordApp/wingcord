@@ -244,7 +244,9 @@ private struct ReactionEntryButton: View {
     var body: some View {
         Button(action: select) {
             HStack(spacing: Spacing.base) {
-                ReactionEmoji(emoji: entry.emoji, side: 24)
+                // Discord plays an animated one here and in the flyout alike.
+                ExpressionGlyph(emoji: entry.emoji, side: 24, plays: true)
+                    .accessibilityHidden(true)
                 Text(entry.count, format: .number.grouping(.never))
                     .font(.system(.subheadline, weight: .bold))
                     .monospacedDigit()

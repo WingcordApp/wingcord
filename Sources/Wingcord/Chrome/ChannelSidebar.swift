@@ -46,6 +46,8 @@ struct ChannelSidebar: View, Equatable {
     var openVoiceChat: (ChannelID) -> Void = { _ in }
     var toggleCategory: (ChannelID) -> Void = { _ in }
     var openSurface: (GuildSurface) -> Void = { _ in }
+    /// The Message Requests page, from its row at the head of the conversations.
+    var openMessageRequests: () -> Void = {}
     /// The events panel — on its list, or on one event.
     var openEvents: (GuildID, UInt64?) -> Void = { _, _ in }
     var dismissLiveEvent: (UInt64) -> Void = { _ in }
@@ -59,6 +61,8 @@ struct ChannelSidebar: View, Equatable {
     @Namespace private var selectionNamespace
     /// How far the list has been scrolled — see `SidebarScroll`.
     @State private var scroll = SidebarScroll()
+    /// Whether the pointer is over the banner — see `SidebarBannerPointer`.
+    @State private var bannerPointer = SidebarBannerPointer()
     /// How much room the window's chrome takes above this column.
     ///
     /// **Read from a view that RESPECTS the safe area.** The opposite is the
@@ -93,7 +97,7 @@ struct ChannelSidebar: View, Equatable {
     var body: some View {
         ZStack(alignment: .top) {
             if hasBanner, let header = presentation.header {
-                TravellingBanner(header: header, layout: layout, scroll: scroll)
+                TravellingBanner(header: header, layout: layout, scroll: scroll, pointer: bannerPointer)
                     // Up to the window's top edge, under the toolbar, so the
                     // sidebar toggle sits on the artwork instead of on a bare
                     // strip above it. It is also what makes the banner's frame
@@ -153,10 +157,20 @@ struct ChannelSidebar: View, Equatable {
         switch row {
         case .guildAction(let surface):
             SidebarActionRow(
-                surface: surface,
+                symbolName: surface.symbolName,
+                title: surface.title,
                 isSelected: target == .surface(surface),
                 namespace: selectionNamespace,
                 action: { openSurface(surface) }
+            )
+        case .messageRequests(let pending):
+            SidebarActionRow(
+                symbolName: "envelope.fill",
+                title: "Message Requests",
+                count: pending,
+                isSelected: target == .messageRequests,
+                namespace: selectionNamespace,
+                action: openMessageRequests
             )
         case .events(let events):
             SidebarEventsRowView(row: events) { openEvents(events.guildID, nil) }
@@ -314,6 +328,10 @@ struct ChannelSidebar: View, Equatable {
                 if layout.listReserve > 0 {
                     Color.clear
                         .frame(height: layout.listReserve)
+                        .modifier(BannerHover(
+                            pointer: bannerPointer,
+                            isEnabled: presentation.header?.bannerURL.map(CDN.canAnimate) ?? false
+                        ))
                         .accessibilityHidden(true)
                 }
 
@@ -409,14 +427,83 @@ extension SidebarBannerLayout {
     }
 }
 
+/// Whether the pointer is over the banner.
+///
+/// **An object the banner reads, for `SidebarScroll`'s reason**: held as the
+/// sidebar's own state, every crossing of the banner's edge would re-run the
+/// whole channel list to change one picture.
+@Observable
+private final class SidebarBannerPointer {
+    var isOver = false
+}
+
+/// The pointer, over the banner.
+///
+/// **On the list's own reserve, not on the banner.** The banner is a layer
+/// behind the list and takes no events; the clear band the list reserves for
+/// it sits exactly over it and scrolls with it — Discord's own arrangement, an
+/// overlay the banner's height listening for the pointer.
+///
+/// **Installed only where there is a film to play** — `INVARIANTS.md` §2, guard
+/// the modifier, not the closure: a tracking area on a band that scrolls is
+/// re-derived on every frame of every scroll.
+private struct BannerHover: ViewModifier {
+    var pointer: SidebarBannerPointer
+    var isEnabled: Bool
+
+    func body(content: Content) -> some View {
+        if isEnabled {
+            content
+                .contentShape(.rect)
+                .onHover { hovering in
+                    guard pointer.isOver != hovering else { return }
+                    pointer.isOver = hovering
+                }
+                // A band removed under the pointer gets no exit, and a latch
+                // left set is a banner that never stops.
+                .onDisappear { pointer.isOver = false }
+        } else {
+            content
+        }
+    }
+}
+
 /// The banner, riding the scroll. See `SidebarScroll`.
 private struct TravellingBanner: View {
     var header: SidebarHeader
     var layout: SidebarBannerLayout
     var scroll: SidebarScroll
+    var pointer: SidebarBannerPointer
+
+    /// The five seconds of motion a banner gets when it comes into view.
+    @State private var isArriving = false
+    /// The reader's battery switch. Discord gates the arrival on its GIF
+    /// autoplay and lets the pointer play the banner either way.
+    @State private var settings = AppSettings.shared
+
+    /// What restarts the arrival: another server's banner, or this one coming
+    /// back into view after the list scrolled it away.
+    private struct Arrival: Equatable {
+        var url: URL?
+        var isInView: Bool
+    }
 
     var body: some View {
-        SidebarBanner(header: header, layout: layout.travelled(scroll))
+        let travelled = layout.travelled(scroll)
+        SidebarBanner(header: header, layout: travelled, animates: isArriving || pointer.isOver)
+            .task(id: Arrival(url: header.bannerURL, isInView: travelled.isBannerInView)) {
+                // Cleared before the wait, so a banner scrolled away mid-arrival
+                // stops at once rather than when a stale task notices.
+                isArriving = false
+                guard travelled.isBannerInView,
+                      settings.playsAnimatedContent,
+                      let url = header.bannerURL, CDN.canAnimate(url)
+                else { return }
+                isArriving = true
+                try? await Task.sleep(for: .seconds(5))
+                guard !Task.isCancelled else { return }
+                isArriving = false
+            }
     }
 }
 

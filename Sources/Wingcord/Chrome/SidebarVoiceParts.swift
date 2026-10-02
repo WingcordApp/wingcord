@@ -180,7 +180,7 @@ private struct VoiceStatusChip: View {
 
     var body: some View {
         HStack(spacing: 3) {
-            if let emoji { InlineEmojiMark(emoji: emoji, side: Self.emojiSide) }
+            if let emoji { ExpressionGlyph(emoji: emoji, side: Self.emojiSide) }
             if let text {
                 Text(text)
                     .font(.system(size: 10, weight: .semibold))
@@ -210,31 +210,6 @@ struct LiveChip: View {
     }
 }
 
-/// One emoji, custom or Unicode, at a given size.
-///
-/// **Shared by the status chip and the channel's own status line**, which is why
-/// it is not private to either: the two draw the same thing at two sizes, and a
-/// second copy is a second place for an animated emoji to be asked for as a
-/// still.
-struct InlineEmojiMark: View {
-    var emoji: EmojiRef
-    var side: CGFloat
-
-    var body: some View {
-        if let id = emoji.id {
-            RemoteImage(
-                url: CDN.emoji(id: id, animated: emoji.isAnimated, side: side),
-                side: side
-            ) { Color.clear }
-            .frame(width: side, height: side)
-        } else {
-            Text(emoji.name)
-                .font(.system(size: side))
-                .lineLimit(1)
-        }
-    }
-}
-
 /// The label a voice channel is wearing, under its name.
 ///
 /// **Runs, not a string.** A status may carry custom emoji in Discord's
@@ -257,7 +232,7 @@ struct VoiceStatusLine: View {
                         .lineLimit(1)
                         .truncationMode(.tail)
                 case .emoji(let emoji):
-                    InlineEmojiMark(emoji: emoji, side: Self.emojiSide)
+                    ExpressionGlyph(emoji: emoji, side: Self.emojiSide)
                 }
             }
         }

@@ -192,7 +192,7 @@ private struct OverlaySidebarHeader: View {
                     if let status = identity.customStatus, !status.isEmpty {
                         HStack(spacing: Spacing.hair) {
                             if let emoji = identity.customStatusEmoji {
-                                InlineEmojiMark(emoji: emoji, side: 11)
+                                ExpressionGlyph(emoji: emoji, side: 11)
                             }
                             Text(status)
                                 .font(.system(size: 11))

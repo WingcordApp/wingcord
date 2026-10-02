@@ -35,7 +35,10 @@ public actor DiscordREST {
 
     public enum Failure: Error, Sendable {
         case unauthorized
-        case forbidden
+        /// A 403, with Discord's own code — 50007 for a person who cannot be
+        /// messaged, 50013 for a missing permission. Kept, because what the
+        /// reader is told about a refused send turns on exactly which.
+        case forbidden(code: Int?)
         case notFound
         /// Discord's own error envelope: an HTTP status plus its JSON code.
         case api(status: Int, code: Int?, message: String?)
@@ -337,6 +340,8 @@ public actor DiscordREST {
     /// - Parameter attachments: Files already uploaded through
     ///   `createUploadSlots` and `upload(_:to:)`. A message may be nothing but
     ///   these, which is the second place empty content is legitimate.
+    /// - Parameter poll: A poll, which Discord's editor posts with empty
+    ///   content (`sendPollMessage`) — the third.
     public func sendMessage(
         in channelID: ChannelID,
         content: String,
@@ -344,19 +349,27 @@ public actor DiscordREST {
         replyingTo: MessageID? = nil,
         stickerIDs: [UInt64] = [],
         attachments: [UploadedAttachment] = [],
+        poll: PollDraft? = nil,
+        listenAlong: (sessionID: String, partyID: String)? = nil,
         inventoryEntry: Data? = nil
     ) async throws -> Message {
         struct Body: Encodable {
             var content: String
             var nonce: String
             var tts = false
-            var message_reference: Reference?
+            var message_reference: ReplyBody?
             var flags: Int?
             /// Omitted entirely when empty: the route rejects an empty array
             /// where it accepts a missing key.
             var sticker_ids: [String]?
             /// Omitted when empty, for the same reason as `sticker_ids`.
-            var attachments: [Attached]?
+            var attachments: [AttachmentBody]?
+            var poll: PollBody?
+            /// An invitation to listen along — captured in
+            /// `invite to listen along.har`: `{"type":3,"session_id":…,
+            /// "party_id":"spotify:<id>"}`, the gateway session it was sent
+            /// from and the host's party.
+            var activity: Invitation?
             /// A reply to somebody's activity carries the entry it answers —
             /// Discord's `{unverified_content: entry}` (`428249`).
             var content_inventory_entry: InventoryEntry?
@@ -365,48 +378,43 @@ public actor DiscordREST {
                 var unverified_content: JSONTree
             }
 
-            struct Reference: Encodable {
-                var message_id: String
-                var fail_if_not_exists = false
-            }
-
-            /// **`uploaded_filename` is the object; `filename` is the label.**
-            /// Sending the reader's own name in the first field is the
-            /// documented way to get a 500 out of this route.
-            struct Attached: Encodable {
-                var id: String
-                var filename: String
-                var uploaded_filename: String
-                var description: String?
+            struct Invitation: Encodable {
+                var type = 3
+                var session_id: String
+                var party_id: String
             }
         }
         let body = Body(
             content: content,
             nonce: nonce,
-            message_reference: replyingTo.map {
-                Body.Reference(message_id: $0.description)
-            },
+            message_reference: replyingTo.map(ReplyBody.init),
             flags: nil,
             sticker_ids: stickerIDs.isEmpty ? nil : stickerIDs.map(String.init),
-            attachments: attachments.isEmpty ? nil : attachments.map {
-                Body.Attached(
-                    id: $0.id,
-                    filename: $0.filename,
-                    uploaded_filename: $0.uploadedFilename,
-                    description: $0.altText
-                )
-            },
+            attachments: attachments.isEmpty ? nil : attachments.map(AttachmentBody.init),
+            poll: poll.map(PollBody.init),
+            activity: listenAlong.map { Body.Invitation(session_id: $0.sessionID, party_id: $0.partyID) },
             content_inventory_entry: inventoryEntry
                 .flatMap { try? JSONDecoder().decode(JSONTree.self, from: $0) }
                 .map { Body.InventoryEntry(unverified_content: $0) }
         )
-        return try await post(
-            "/channels/\(channelID.rawValue)/messages",
+        return try await request(
+            method: "POST",
+            path: "/channels/\(channelID.rawValue)/messages",
             route: "channels/\(channelID.rawValue)/messages",
             body: body,
+            // The invitation's own context, as the capture sends it:
+            // `{"location":"activity_share"}`.
+            headers: listenAlong == nil ? [:] : Self.activityShareContext,
             as: MessageDTO.self
         ).domain
     }
+
+    /// `x-context-properties` for a shared activity.
+    private static let activityShareContext: [String: String] = {
+        struct Properties: Encodable { var location = "activity_share" }
+        guard let json = try? JSONEncoder().encode(Properties()) else { return [:] }
+        return ["x-context-properties": json.base64EncodedString()]
+    }()
 
     public func editMessage(
         _ messageID: MessageID,
@@ -721,7 +729,7 @@ public actor DiscordREST {
             throw Failure.unauthorized
         case 403:
             Self.traceRefusal(status: 403, route: route, data: data)
-            throw Failure.forbidden
+            throw Failure.forbidden(code: Self.errorCode(in: data))
         case 404:
             Self.traceRefusal(status: 404, route: route, data: data)
             throw Failure.notFound
@@ -891,14 +899,21 @@ public actor DiscordREST {
         return .slowmode(retryAfter: refusal.retry_after.flatMap { $0 > 0 ? $0 : nil })
     }
 
+    /// Discord's error envelope, `{"code": …, "message": …}`.
+    private struct ErrorEnvelope: Decodable {
+        var code: Int?
+        var message: String?
+    }
+
+    /// The code in a refusal's body, where it carries one.
+    static func errorCode(in data: Data) -> Int? {
+        (try? JSONDecoder().decode(ErrorEnvelope.self, from: data))?.code
+    }
+
     static func apiFailure(status: Int, data: Data) -> Failure {
         // Every path that turns a body into a failure — the ordinary one, the
         // captcha retry — reports slowmode as itself.
         if let refusal = slowmodeRefusal(status: status, data: data) { return refusal }
-        struct ErrorEnvelope: Decodable {
-            var code: Int?
-            var message: String?
-        }
         let envelope = try? JSONDecoder().decode(ErrorEnvelope.self, from: data)
         // **`message` alone is useless on a 50035.** "Invalid Form Body" says a
         // field was rejected and not which one; the `errors` object beside it
@@ -1035,7 +1050,7 @@ public actor DiscordREST {
                 Self.traceRefusal(status: http.statusCode, route: route, data: data)
                 switch http.statusCode {
                 case 401: throw Failure.unauthorized
-                case 403: throw Failure.forbidden
+                case 403: throw Failure.forbidden(code: Self.errorCode(in: data))
                 default: throw Failure.notFound
                 }
             default: throw Self.apiFailure(status: http.statusCode, data: data)

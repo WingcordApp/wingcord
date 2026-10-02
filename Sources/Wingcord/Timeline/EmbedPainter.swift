@@ -285,7 +285,7 @@ nonisolated extension TimelineRowPainter {
                 maximumPixelSize: Int((frame.width * scale).rounded(.up))
             )
             if let image = images.cached(key) {
-                drawFlipped(image, in: frame, context: context)
+                drawFlipped(image, in: frame, context: context, fit: .contain)
             }
             // No plate on a miss here. The box is already reserved, and a soft
             // disc inside a card reads as a bullet rather than as a picture on
@@ -325,14 +325,14 @@ nonisolated extension TimelineRowPainter {
                )
             {
                 drawFlipped(
-                    film.frames[film.index(at: clock)], in: frame, context: context, fills: slot.cropsToFill
+                    film.frames[film.index(at: clock)], in: frame, context: context, fit: .init(cropsToFill: slot.cropsToFill)
                 )
                 drew = true
             } else if let image = images.cached(
                 ImageStore.Key(url: url, maximumPixelSize: pixels),
                 bucket: slot.isArtwork ? .artwork : .thumbnail
             ) {
-                drawFlipped(image, in: frame, context: context, fills: slot.cropsToFill)
+                drawFlipped(image, in: frame, context: context, fit: .init(cropsToFill: slot.cropsToFill))
                 drew = true
             }
         }
@@ -344,7 +344,7 @@ nonisolated extension TimelineRowPainter {
             context.fill(frame)
             if let placeholder = PlaceholderImages.shared.image(slot.placeholder) {
                 context.interpolationQuality = .high
-                drawFlipped(placeholder, in: frame, context: context, fills: slot.cropsToFill)
+                drawFlipped(placeholder, in: frame, context: context, fit: .init(cropsToFill: slot.cropsToFill))
             }
         }
         context.restoreGState()
@@ -454,11 +454,13 @@ nonisolated extension TimelineRowPainter {
     /// One emoji in a box — a button's, a poll answer's, anything chrome-sized.
     ///
     /// **One copy, because getting it wrong is silent and the two surfaces that
-    /// need it look nothing alike.** A colour emoji is about 1.2x as wide as its
-    /// point size, so a glyph sized to the box's *height* overflows the box —
+    /// need it look nothing alike.** A colour emoji's advance is far wider than
+    /// its point size, so a glyph sized to the box's *height* overflows the box —
     /// and `drawText` answers an overflow by truncating, which draws a thumbs-up
     /// as "…". That was fixed on a button and not on a poll, and the second copy
-    /// is what put "…" in front of every poll answer. `INVARIANTS.md` §5.55.
+    /// is what put "…" in front of every poll answer. `INVARIANTS.md` §5.55; the
+    /// sizing itself is `EmojiGlyphMetrics`, which SwiftUI's `ExpressionGlyph`
+    /// shares, and a custom emoji is drawn whole inside the box, never stretched.
     static func drawEmojiInBox(
         _ emoji: EmojiRef,
         in frame: CGRect,
@@ -468,21 +470,19 @@ nonisolated extension TimelineRowPainter {
         scale: CGFloat
     ) {
         guard let id = emoji.id else {
-            // A Unicode emoji, whose name IS the glyph. Measured once and
-            // scaled to fit, which is what keeps it a glyph.
-            let nominal = NSFont.systemFont(ofSize: frame.height * 0.86)
-            let advance = TimelineLayoutEngine.measure(emoji.name, font: nominal)
-            let size = advance > frame.width && advance > 0
-                ? nominal.pointSize * (frame.width / advance)
-                : nominal.pointSize
-            let font = NSFont.systemFont(ofSize: size)
+            // A Unicode emoji, whose name IS the glyph: its ink fills the box
+            // and is centred in it, and its advance — wider than the ink, and
+            // empty past it — runs over the box's edges untruncated.
+            let metrics = EmojiGlyphMetrics.fitting(emoji.name, side: min(frame.width, frame.height))
             drawText(
                 emoji.name,
-                font: font,
+                font: NSFont.systemFont(ofSize: metrics.pointSize),
                 color: color,
-                at: CGPoint(x: frame.minX, y: capCenteredY(of: font, in: frame)),
-                maxWidth: frame.width,
-                alignment: .center,
+                at: CGPoint(
+                    x: frame.midX - metrics.ink.midX,
+                    y: frame.midY + metrics.ink.midY - metrics.ascent
+                ),
+                maxWidth: metrics.advance.rounded(.up) + 1,
                 context: context
             )
             return
@@ -493,7 +493,7 @@ nonisolated extension TimelineRowPainter {
                   maximumPixelSize: Int((frame.width * scale).rounded(.up))
               ))
         else { return }
-        drawFlipped(image, in: frame, context: context)
+        drawFlipped(image, in: frame, context: context, fit: .contain)
     }
 
     private static func drawComponentGlyph(
@@ -702,6 +702,176 @@ nonisolated extension TimelineRowPainter {
                 scale: scale
             )
         }
+    }
+
+    /// A listen-along invitation — Discord's card, in this app's card idiom:
+    /// the activity invitation's ground and rule, in Spotify's green.
+    ///
+    /// **Everything that moves is painted from `card`**, the host's presence:
+    /// the cover, "{track} by {artist}", the clock — read off `now`, which is
+    /// why the canvas repaints a live card every second — the faces and "N
+    /// Listening", and Join or Joined. An ended party draws Spotify's mark and
+    /// Discord's "The listening party is over!", and no button.
+    static func drawListenAlong(
+        _ slot: ListenAlongSlot,
+        offset: CGPoint,
+        context: CGContext,
+        style: MessageTextStyle,
+        card: ListenAlongCard?,
+        now: Date,
+        hovered: CGPoint?,
+        images: ImageStore,
+        scale: CGFloat
+    ) {
+        let ink = ThemeInk.current
+        let frame = slot.rect.offsetBy(dx: offset.x, dy: offset.y)
+        let corner = EmbedLayoutEngine.corner
+        let green = CGColor(srgbRed: 0x1E / 255.0, green: 0xD7 / 255.0, blue: 0x60 / 255.0, alpha: 1)
+
+        context.saveGState()
+        context.addPath(CGPath(roundedRect: frame, cornerWidth: corner, cornerHeight: corner, transform: nil))
+        context.setFillColor(ink.cardFill)
+        context.fillPath()
+        context.addPath(CGPath(roundedRect: frame, cornerWidth: corner, cornerHeight: corner, transform: nil))
+        context.clip()
+        context.setFillColor(green)
+        context.fill(CGRect(x: frame.minX, y: frame.minY, width: ListenAlongLayoutEngine.rule, height: frame.height))
+        context.restoreGState()
+
+        let textWidth = slot.textWidth
+        drawLine(
+            "Invite to Listen Along on \(slot.source.name)",
+            font: NSFont.systemFont(ofSize: style.metadataFont.pointSize, weight: .semibold),
+            color: style.secondaryColor,
+            at: CGPoint(x: offset.x + slot.headerOrigin.x, y: offset.y + slot.headerOrigin.y),
+            maxWidth: frame.maxX - offset.x - slot.headerOrigin.x - ListenAlongLayoutEngine.padding,
+            style: style,
+            context: context,
+            images: images,
+            scale: scale
+        )
+
+        // The cover, or Spotify's own mark once the party is over.
+        let art = slot.artRect.offsetBy(dx: offset.x, dy: offset.y)
+        context.saveGState()
+        context.addPath(CGPath(
+            roundedRect: art,
+            cornerWidth: ListenAlongLayoutEngine.artCorner,
+            cornerHeight: ListenAlongLayoutEngine.artCorner,
+            transform: nil
+        ))
+        context.clip()
+        if slot.isLive {
+            context.setFillColor(ink.surfaceRaised)
+            context.fill(art)
+            if let url = card?.artworkURL,
+               let image = images.cached(
+                   ImageStore.Key(url: url, maximumPixelSize: Int(ListenAlongLayoutEngine.artSide * scale)),
+                   bucket: .thumbnail
+               ) {
+                TimelineRowPainter.drawFlipped(image, in: art, context: context)
+            }
+        } else {
+            context.setFillColor(CGColor(gray: 0, alpha: 1))
+            context.fill(art)
+            if let mark = BrandMark.path(for: "spotify") {
+                let side = art.width * 0.62
+                var transform = CGAffineTransform(translationX: art.midX - side / 2, y: art.midY - side / 2)
+                    .scaledBy(x: side / BrandMark.side, y: side / BrandMark.side)
+                if let placed = mark.copy(using: &transform) {
+                    context.addPath(placed)
+                    context.setFillColor(CGColor(gray: 1, alpha: 1))
+                    context.fillPath(using: .evenOdd)
+                }
+            }
+        }
+        context.restoreGState()
+
+        let titleFont = NSFont.systemFont(ofSize: style.bodyFont.pointSize, weight: .semibold)
+        let x = offset.x + slot.textX
+        func top(_ line: Int) -> CGFloat { offset.y + slot.lineTops[line] }
+        guard slot.isLive else {
+            drawLine(slot.source.name, font: titleFont, color: style.primaryColor,
+                     at: CGPoint(x: x, y: top(0)), maxWidth: textWidth,
+                     style: style, context: context, images: images, scale: scale)
+            drawLine("The listening party is over!", font: style.metadataFont, color: style.secondaryColor,
+                     at: CGPoint(x: x, y: top(1)), maxWidth: textWidth,
+                     style: style, context: context, images: images, scale: scale)
+            return
+        }
+
+        drawLine(card?.title ?? slot.source.name, font: titleFont, color: style.primaryColor,
+                 at: CGPoint(x: x, y: top(0)), maxWidth: textWidth,
+                 style: style, context: context, images: images, scale: scale)
+
+        let glyph = style.metadataFont.pointSize + 2
+        if let start = card?.startedAt {
+            TimelineRowPainter.drawSymbol(
+                "music.note",
+                tint: style.secondaryColor,
+                in: CGRect(x: x, y: top(1) + 1, width: glyph, height: glyph),
+                context: context
+            )
+            drawLine(
+                ListenAlongLayoutEngine.clock(since: start, now: now),
+                font: NSFont.monospacedDigitSystemFont(ofSize: style.metadataFont.pointSize, weight: .regular),
+                color: style.secondaryColor,
+                at: CGPoint(x: x + glyph + Spacing.tight, y: top(1)),
+                maxWidth: textWidth - glyph - Spacing.tight,
+                style: style, context: context, images: images, scale: scale
+            )
+        }
+
+        if let card {
+            let face = ListenAlongLayoutEngine.faceSide
+            var faceX = x
+            for url in card.faces {
+                let circle = CGRect(x: faceX, y: top(2), width: face, height: face)
+                context.saveGState()
+                context.addEllipse(in: circle)
+                context.clip()
+                context.setFillColor(ink.surfaceRaised)
+                context.fill(circle)
+                if let url, let image = images.cached(
+                    ImageStore.Key(url: url, maximumPixelSize: Int(face * scale)), bucket: .thumbnail
+                ) {
+                    TimelineRowPainter.drawFlipped(image, in: circle, context: context)
+                }
+                context.restoreGState()
+                faceX += face + Spacing.hair
+            }
+            drawLine(
+                "\(card.listenerCount) Listening",
+                font: style.metadataFont,
+                color: style.secondaryColor,
+                at: CGPoint(x: faceX + Spacing.tight, y: top(2) + (face - style.metadataFont.pointSize) / 2 - 2),
+                maxWidth: max(0, x + textWidth - faceX - Spacing.tight),
+                style: style, context: context, images: images, scale: scale
+            )
+        }
+
+        guard let button = slot.buttonRect else { return }
+        let buttonRect = button.offsetBy(dx: offset.x, dy: offset.y)
+        let isEnabled = card?.isButtonEnabled ?? false
+        let isHovered = isEnabled && hovered == button.origin
+        context.addPath(CGPath(
+            roundedRect: buttonRect,
+            cornerWidth: ActivityInviteLayoutEngine.buttonCorner,
+            cornerHeight: ActivityInviteLayoutEngine.buttonCorner,
+            transform: nil
+        ))
+        context.setFillColor(isEnabled ? green.copy(alpha: isHovered ? 0.42 : 0.28) ?? green : ink.lift(0.08))
+        context.fillPath()
+        let label = NSFont.systemFont(ofSize: style.bodyFont.pointSize, weight: .semibold)
+        drawLine(
+            card?.buttonTitle ?? "Join",
+            font: label,
+            color: isEnabled ? style.primaryColor : style.tertiaryColor,
+            at: CGPoint(x: buttonRect.minX, y: buttonRect.midY - ListenAlongLayoutEngine.lineHeight(label) / 2),
+            maxWidth: buttonRect.width,
+            centred: true,
+            style: style, context: context, images: images, scale: scale
+        )
     }
 
     /// One line of plain text, laid out at paint time.

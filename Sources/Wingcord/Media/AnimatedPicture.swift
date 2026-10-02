@@ -19,6 +19,9 @@ struct AnimatedPicture<Placeholder: View>: View {
     var side: CGFloat
     var bucket: ImageStore.Bucket = .thumbnail
     var contentMode: ContentMode = .fit
+    /// The caller's own gate on movement, asked before the reader's — a
+    /// sidebar that plays only under the pointer. True leaves it to the reader.
+    var allowsMotion = true
     @ViewBuilder var placeholder: Placeholder
 
     @Environment(\.motion) private var motion
@@ -30,7 +33,7 @@ struct AnimatedPicture<Placeholder: View>: View {
     /// expression card's lesson: only the film can clear `isPlaying`, so a
     /// film that goes away for any reason must not leave the still hidden.
     private var plays: Bool {
-        guard let url, CDN.canAnimate(url) else { return false }
+        guard allowsMotion, let url, CDN.canAnimate(url) else { return false }
         return AnimationClock.playsAnimatedEmoji
     }
 

@@ -371,6 +371,7 @@ private struct ChannelSidebarContainer: View {
             },
             toggleCategory: { model.toggleCategory($0) },
             openSurface: { model.openSurface($0) },
+            openMessageRequests: { model.openMessageRequests() },
             openEvents: { model.openEvents(inGuild: $0, event: $1) },
             dismissLiveEvent: { model.dismissedEventNotices.insert($0) },
             openMenu: { model.openDirectMessageMenu(for: $0, anchor: $1) },

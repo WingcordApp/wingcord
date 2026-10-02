@@ -28,9 +28,23 @@ extension AppModel {
     }
 
     /// What the reader may do to one message. Nil when the message is gone.
+    ///
+    /// **A send Discord has not taken is not a message yet**, and nothing a
+    /// server keeps can be done to it: one still going gets no pill and no
+    /// menu, and one refused gets the three things that mean anything — send
+    /// it again, take its words, or drop it.
     func actions(for messageID: MessageID, in channelID: ChannelID) -> MessageActions {
-        guard let message = message(messageID, in: channelID) else { return [] }
-        return permissionGate.actions(for: message)
+        if let message = message(messageID, in: channelID) {
+            return permissionGate.actions(for: message)
+        }
+        guard let entry = outgoing(messageID, in: channelID), entry.state == .failed else { return [] }
+        return [.resend, .copyText, .delete]
+    }
+
+    /// One of the reader's own sends that Discord has not taken, by its echo's
+    /// id.
+    func outgoing(_ messageID: MessageID, in channelID: ChannelID) -> OutgoingMessage? {
+        messageBoxes[channelID]?.outbox.first { $0.id == messageID }
     }
 
     // MARK: Reacting
@@ -178,6 +192,13 @@ extension AppModel {
     /// undo on this route, the target is a row under a pointer that may have
     /// moved, and Discord confirms it too.
     func requestDelete(of messageID: MessageID, in channelID: ChannelID) {
+        // A refused send exists nowhere but here, so taking it away asks
+        // nobody — Discord deletes its failed messages locally, with no prompt.
+        if outgoing(messageID, in: channelID)?.state == .failed {
+            dismissMessageSurfaces()
+            mutateBox(channelID) { $0.outbox.removeAll { $0.id == messageID } }
+            return
+        }
         guard let message = message(messageID, in: channelID),
               permissionGate.actions(for: message).contains(.delete)
         else { return }
@@ -305,6 +326,10 @@ extension AppModel {
     // MARK: The pasteboard
 
     func copyText(of messageID: MessageID, in channelID: ChannelID) {
+        if let entry = outgoing(messageID, in: channelID) {
+            Self.copy(entry.request.content)
+            return
+        }
         guard let message = message(messageID, in: channelID),
               permissionGate.actions(for: message).contains(.copyText)
         else { return }
@@ -546,8 +571,18 @@ extension AppModel {
     /// then visibly undid it, which reads as the app being broken rather than as
     /// the server saying no. The notice says which.
     func reportActionFailure(_ reason: String) {
-        actionFailureToken &+= 1
-        actionFailure = ActionFailure(reason: reason, id: actionFailureToken)
+        report(reason, as: .failure)
+    }
+
+    /// Says where a scheduled message stands — the confirmations Discord gives
+    /// with a clock, since what was done happened in a list nobody is looking at.
+    func reportScheduling(_ text: String) {
+        report(text, as: .scheduling)
+    }
+
+    private func report(_ text: String, as kind: ActionNotice.Kind) {
+        actionNoticeToken &+= 1
+        actionNotice = ActionNotice(text: text, kind: kind, id: actionNoticeToken)
     }
 
     // MARK: Pins, from the fetch

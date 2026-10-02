@@ -119,12 +119,10 @@ struct SaveDataDTO: Decodable, Sendable {
 ///    one round trip — see `scheduleMessage`. Neither is `scheduled_at`.
 ///  - **The id is spelled twice and both agreed.** `id` is read first.
 ///
-/// **`state` is decoded and not interpreted.** Every captured row carried `0`,
-/// and no capture shows a send that failed — so a client that mapped a
-/// non-zero value onto a failure string would be inventing the one sentence
-/// that tells somebody their message never went out. It is kept so a future
-/// capture has somewhere to land, and `failureReason` stays nil until one
-/// arrives.
+/// **`state` is read through Discord's own table** (`551640` and `566908`'s
+/// `H`): `0` is scheduled, and each of the five failures has a sentence — four
+/// of them "Message could not be sent", and a missing permission saying so.
+/// Every captured row carried `0`; the table is the client's, not a guess.
 ///
 /// **`message_preview` is deliberately not decoded.** The row draws the
 /// reader's own draft text — there is no sent message to lay out — and a
@@ -162,8 +160,19 @@ struct ScheduledMessageDTO: Decodable, Sendable {
             guildID: nil,
             content: draft?.content ?? "",
             scheduledAt: at,
-            failureReason: nil
+            failureReason: state.flatMap(Self.failureReason)
         )
+    }
+
+    /// `ERROR_SCHEDULED_MESSAGES_DISABLED` 1, `USER_NOT_FOUND` 2,
+    /// `USER_CANNOT_USE_SCHEDULED_MESSAGES` 3, `CHANNEL_NOT_FOUND` 4,
+    /// `SEND_FAILED` 5.
+    static func failureReason(_ state: Int) -> String? {
+        switch state {
+        case 3: "Message could not be sent, permission was denied"
+        case 1, 2, 4, 5: "Message could not be sent"
+        default: nil
+        }
     }
 }
 

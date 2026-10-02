@@ -25,8 +25,14 @@ public struct ChannelIndex: Sendable {
     /// Channels grouped by guild, kept in list order so the sidebar does not
     /// sort per evaluation.
     private var channelsByGuild: [GuildID: [ChannelID]] = [:]
-    /// Direct and group-DM channels, newest activity first.
+    /// Direct and group-DM channels, newest activity first — every one,
+    /// requests included.
     private var privateChannels: [ChannelID] = []
+    /// The two halves of that list: the conversations the reader has, and the
+    /// ones still asking — partitioned once per change rather than per read,
+    /// for the reason `channelsByGuild` is stored.
+    private var conversations: [ChannelID] = []
+    private var requests: [ChannelID] = []
     /// Threads, grouped by the channel they hang off, newest activity first.
     ///
     /// **A separate partition, and it has to be.** A thread resolves through
@@ -69,7 +75,24 @@ public struct ChannelIndex: Sendable {
         channelsByGuild[guildID] ?? []
     }
 
-    public func privateChannelIDs() -> [ChannelID] { privateChannels }
+    /// The conversations the reader has, newest activity first.
+    ///
+    /// **Not the message requests.** Discord keeps those out of the list, the
+    /// badges, the notifications and everything else that walks the reader's
+    /// conversations (module `309199`), so the one list everything here reads
+    /// leaves them out, and the requests have a list of their own.
+    public func privateChannelIDs() -> [ChannelID] { conversations }
+
+    /// Every private channel, requests included — for the few things that are
+    /// about the channel rather than the conversation list: a mute setting, and
+    /// whether a conversation with somebody already exists.
+    public func allPrivateChannelIDs() -> [ChannelID] { privateChannels }
+
+    /// The conversations still waiting as message requests or filtered as
+    /// spam, newest activity first — Discord's order for both tabs.
+    public func messageRequestIDs(_ standing: MessageRequestStanding) -> [ChannelID] {
+        requests.filter { channels[$0]?.messageRequest == standing }
+    }
 
     /// The known threads under one channel, most recently active first.
     ///
@@ -147,7 +170,8 @@ public struct ChannelIndex: Sendable {
     /// Adds or replaces one channel. Structural if the channel is new or has
     /// moved guilds.
     public mutating func upsert(_ channel: Channel) {
-        let existed = channels[channel.id] != nil
+        let previous = channels[channel.id]
+        let existed = previous != nil
         let previousGuild = guildOfChannel[channel.id]
         channels[channel.id] = channel
 
@@ -170,6 +194,11 @@ public struct ChannelIndex: Sendable {
             privateChannels.append(channel.id)
             sortPrivateChannels()
             structureRevision &+= 1
+        } else if previous?.messageRequest != channel.messageRequest {
+            // Accepted, or moved between Requests and Spam: the same channel
+            // changes which list it is in.
+            partitionPrivateChannels()
+            structureRevision &+= 1
         }
         valueRevision &+= 1
     }
@@ -191,6 +220,7 @@ public struct ChannelIndex: Sendable {
             }
         } else if channel.kind.isPrivate {
             privateChannels.removeAll { $0 == channelID }
+            partitionPrivateChannels()
         }
         structureRevision &+= 1
         valueRevision &+= 1
@@ -306,6 +336,19 @@ public struct ChannelIndex: Sendable {
             let a = channels[lhs]?.lastMessageID?.rawValue ?? 0
             let b = channels[rhs]?.lastMessageID?.rawValue ?? 0
             return a != b ? a > b : lhs.rawValue > rhs.rawValue
+        }
+        partitionPrivateChannels()
+    }
+
+    private mutating func partitionPrivateChannels() {
+        conversations.removeAll(keepingCapacity: true)
+        requests.removeAll(keepingCapacity: true)
+        for channelID in privateChannels {
+            if channels[channelID]?.messageRequest == nil {
+                conversations.append(channelID)
+            } else {
+                requests.append(channelID)
+            }
         }
     }
 }

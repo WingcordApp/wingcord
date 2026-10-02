@@ -122,4 +122,23 @@ struct PollDecodeTests {
         #expect(poll.answers.count == 1)
         #expect(poll.answers[0].id == 2)
     }
+
+    // MARK: Writing one
+
+    /// Discord's `createPoll`: the answers with words, each its own
+    /// `poll_media`, a custom emoji by id with an empty name, hours, and the
+    /// default layout.
+    @Test("A poll is written the way Discord's editor writes it")
+    func pollBody() throws {
+        var draft = PollDraft(question: " Lunch? ", allowsMultiselect: true, duration: .fourHours)
+        draft.answers = [
+            PollDraft.Answer(text: "Pizza", emoji: EmojiRef(name: "🍕")),
+            PollDraft.Answer(text: "  "),
+            PollDraft.Answer(text: "Ours", emoji: EmojiRef(id: EmojiID(rawValue: 42), name: "blob")),
+        ]
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = .sortedKeys
+        let json = String(decoding: try encoder.encode(PollBody(draft)), as: UTF8.self)
+        #expect(json == #"{"allow_multiselect":true,"answers":[{"poll_media":{"emoji":{"name":"🍕"},"text":"Pizza"}},{"poll_media":{"emoji":{"id":"42","name":""},"text":"Ours"}}],"duration":4,"layout_type":1,"question":{"text":"Lunch?"}}"#)
+    }
 }

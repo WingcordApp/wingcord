@@ -319,34 +319,6 @@ struct CustomStatusBubble: View {
     }
 }
 
-/// One emoji at a fixed size, whichever kind it is.
-///
-/// A Unicode emoji is **text** and costs a glyph; a custom one is a picture at a
-/// known size out of the shared cache. Both appear wherever a status, a chip or
-/// a trait carries one, and writing the branch at each of those call sites is
-/// how one of them ends up drawing `:blobcat:` as a word.
-struct ExpressionGlyph: View {
-    var emoji: EmojiRef
-    var side: CGFloat
-
-    var body: some View {
-        if let id = emoji.id {
-            RemoteImage(
-                url: CDN.emoji(id: id, animated: emoji.isAnimated, side: side),
-                side: side
-            ) {
-                Color.clear
-            }
-            .frame(width: side, height: side)
-        } else {
-            Text(emoji.name)
-                .font(.system(size: side * 0.86))
-                .frame(width: side, height: side)
-        }
-    }
-}
-
-
 // MARK: - Answering somebody's status
 
 /// What the bubble's hover controls do.

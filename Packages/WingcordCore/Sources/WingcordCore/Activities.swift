@@ -725,6 +725,29 @@ public struct RichPresenceActivity: Hashable, Sendable {
     /// buttons resolved to `medal.tv/u/Browhiskey` and `medal.tv/`.
     public var buttons: [String]
     public var applicationID: ApplicationID?
+    /// What a listener plays to follow along — Spotify's track id. Nil on
+    /// everything that is not something to play.
+    public var syncID: String?
+    /// Discord's activity flags: `PLAY | SYNC`, 48, on a Spotify session.
+    public var flags: Int
+    /// What following along needs beyond the track. Spotify's only.
+    public var metadata: ListeningMetadata?
+
+    /// Spotify's `metadata` on a Listening activity (`655116`'s `getActivity`).
+    public struct ListeningMetadata: Hashable, Sendable {
+        public var contextURI: String?
+        public var albumID: String
+        public var artistIDs: [String]
+        /// `track` or `episode`.
+        public var type: String
+
+        public init(contextURI: String?, albumID: String, artistIDs: [String], type: String) {
+            self.contextURI = contextURI
+            self.albumID = albumID
+            self.artistIDs = artistIDs
+            self.type = type
+        }
+    }
 
     public struct Assets: Hashable, Sendable {
         /// An application asset id, or an `mp:`-prefixed external reference.
@@ -789,7 +812,10 @@ public struct RichPresenceActivity: Hashable, Sendable {
         timestamps: Timestamps? = nil,
         party: Party? = nil,
         buttons: [String] = [],
-        applicationID: ApplicationID? = nil
+        applicationID: ApplicationID? = nil,
+        syncID: String? = nil,
+        flags: Int = 0,
+        metadata: ListeningMetadata? = nil
     ) {
         self.type = type
         self.name = name
@@ -800,5 +826,8 @@ public struct RichPresenceActivity: Hashable, Sendable {
         self.party = party
         self.buttons = buttons
         self.applicationID = applicationID
+        self.syncID = syncID
+        self.flags = flags
+        self.metadata = metadata
     }
 }

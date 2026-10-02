@@ -95,6 +95,9 @@ extension SessionController {
                     shows, type: connection.type, id: connection.id
                 )
                 replaceConnection(connection.id) { $0 = updated }
+                // "Display Spotify as your status" decides the Listening
+                // activity, which is on the presence now or must leave it.
+                if connection.type == "spotify" { publishPresence() }
             } catch {
                 replaceConnection(connection.id) { $0 = previous }
                 Self.trace("set shows activity \(connection.id) failed: \(Self.describe(error))")
@@ -115,6 +118,7 @@ extension SessionController {
             defer { model.connectionMutationsInFlight.remove(connection.id) }
             do {
                 try await rest.removeConnection(type: connection.type, id: connection.id)
+                if connection.type == "spotify" { stopFollowingSpotify(connection.id) }
             } catch {
                 let insertAt = min(index, model.connections?.count ?? 0)
                 model.connections?.insert(connection, at: insertAt)

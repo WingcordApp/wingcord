@@ -225,17 +225,28 @@ struct SlowmodeTests {
         #expect(model.slowmodeNudge == nil)
     }
 
-    @Test("A draft comes back after a failed send, but never over a new one")
-    func restoresOnlyIntoAnEmptyComposer() {
+    @Test("A refused upload comes back to the composer, but never over a new one")
+    func returnsOnlyIntoAnEmptyComposer() {
         let model = model()
-        let lost = UnsentDraft(text: "old ones were way better", replyingTo: MessageID(rawValue: 7))
+        let id = MessageID(rawValue: 9 << 22)
+        let lost = OutgoingMessage(
+            id: id,
+            request: .init(content: "old ones were way better"),
+            echo: Message(id: id, channelID: slow, authorID: UserID(rawValue: 1)),
+            state: .sending,
+            files: [PendingAttachment(url: URL(fileURLWithPath: "/tmp/cat.png"))]
+        )
 
-        model.restoreDraft(lost, in: slow)
+        model.mutateBox(slow) { $0.returnToComposer(lost) }
         #expect(model.messages(in: slow)?.draft == "old ones were way better")
-        #expect(model.messages(in: slow)?.replyingTo == MessageID(rawValue: 7))
+        #expect(model.messages(in: slow)?.attachments.count == 1)
 
-        model.mutateBox(fast) { $0.draft = "typing the next one" }
-        model.restoreDraft(lost, in: fast)
+        model.mutateBox(fast) {
+            $0.draft = "typing the next one"
+            $0.attachments = [PendingAttachment(url: URL(fileURLWithPath: "/tmp/dog.png"))]
+        }
+        model.mutateBox(fast) { $0.returnToComposer(lost) }
         #expect(model.messages(in: fast)?.draft == "typing the next one")
+        #expect(model.messages(in: fast)?.attachments.map(\.filename) == ["dog.png"])
     }
 }

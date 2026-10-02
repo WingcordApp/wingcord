@@ -33,12 +33,14 @@ struct TextSelectionTests {
         coordinator.update(
             channelID: channel,
             items: TimelineReducer.rows(messages: messages),
-            presentationRevision: 0, activityAccents: [:], activityInviteStatuses: [:],
+            presentationRevision: 0, activityAccents: [:], activityInviteStatuses: [:], uploadProgress: [:],
             topInset: 0, bottomInset: 0, jump: nil, reachesPresent: true, present: nil,
             scroll: TranscriptScrollState(), topics: [], summaries: [], selectedSummary: nil,
             cardRevision: 0, playingPreview: nil, isCovered: false, bookmarks: [],
             canSuperReact: false,
-            canAddReactions: true
+            canAddReactions: true,
+            hidesMedia: false,
+            listenAlongCards: [:]
         )
         RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.05))
         let canvas = try #require(

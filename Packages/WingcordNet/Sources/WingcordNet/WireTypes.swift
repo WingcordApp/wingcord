@@ -359,6 +359,10 @@ struct ChannelDTO: Decodable, Sendable {
     /// `domain()`: `Channel` holds an `ownerID`, and the person behind it
     /// belongs in the user and member stores like every other.
     var owner: MemberDTO?
+    /// A private channel's standing as a message request — Discord's
+    /// `ChannelRecord.fromServer` reads both. Absent on every ordinary one.
+    var is_message_request: Bool?
+    var is_spam: Bool?
 
     func domain(guildID: GuildID? = nil) -> Channel {
         Channel(
@@ -391,7 +395,11 @@ struct ChannelDTO: Decodable, Sendable {
             memberCount: member_count,
             memberIDsPreview: member_ids_preview ?? [],
             totalMessageSent: total_message_sent,
-            memberListID: member_list_id
+            memberListID: member_list_id,
+            messageRequest: MessageRequestStanding(
+                isMessageRequest: is_message_request ?? false,
+                isSpam: is_spam ?? false
+            )
         )
     }
 }
@@ -1164,6 +1172,9 @@ struct MessageDTO: Decodable, Sendable {
     /// `type: 23` message an activity invitation rather than an ordinary
     /// context-menu command.
     var activity_instance: InstanceDTO?
+    /// An invitation to join somebody's activity — a listen-along when its
+    /// party is Spotify's. See `ListenAlongInvite`.
+    var activity: MessageActivityDTO?
     /// **The newer of the two, and the one to prefer.** Discord sends both on a
     /// launch and has been removing `interaction`; a client reading only the
     /// old key loses the header when it goes.
@@ -1284,6 +1295,7 @@ struct MessageDTO: Decodable, Sendable {
             webhookID: webhook_id,
             nonce: nonce?.text,
             activityInvite: activityInvite,
+            listenAlong: activity?.listenAlong,
             interaction: messageInteraction,
             applicationID: application_id,
             thread: thread.map(\.threadSummary)
@@ -2684,5 +2696,19 @@ struct LossyList<Element: Decodable & Sendable>: Decodable, Sendable {
 
     private struct Skipped: Decodable {
         init(from decoder: any Decoder) throws {}
+    }
+}
+
+/// A message's `activity`: what kind of invitation, and to which party.
+struct MessageActivityDTO: Decodable, Sendable {
+    var type: Int?
+    var party_id: String?
+    var name_override: String?
+    var icon_override: String?
+
+    /// Type 3 is LISTEN; a party that is not Spotify's is something else.
+    var listenAlong: ListenAlongInvite? {
+        guard type == 3, let party_id, SpotifyListening.isSpotifyParty(party_id) else { return nil }
+        return ListenAlongInvite(partyID: party_id, name: name_override ?? "Spotify", iconKey: icon_override)
     }
 }

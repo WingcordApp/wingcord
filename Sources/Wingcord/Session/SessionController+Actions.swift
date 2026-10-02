@@ -550,11 +550,27 @@ extension SessionController {
 
     // MARK: Shared
 
-    /// A send nonce: the millisecond clock, which is what Discord's own clients
-    /// use and what makes an echo matchable to the send that caused it.
-    static func nonce() -> String {
-        String(UInt64(Date.now.timeIntervalSince1970 * 1000))
+    /// A send nonce, which is what makes an echo matchable to the send that
+    /// caused it.
+    static func nonce() -> String { String(mintNonce().rawValue) }
+
+    /// A snowflake minted now — Discord's own nonce, and the id a send's local
+    /// echo is drawn under until Discord's answer replaces it.
+    ///
+    /// **A snowflake rather than a bare clock**, which is what this used to be:
+    /// the echo sorts and is dated by its id, and two sends in one millisecond
+    /// need two ids — the sequence in the low bits is Discord's answer to that.
+    static func mintNonce(at date: Date = .now) -> MessageID {
+        let millisecond = UInt64(max(0, date.timeIntervalSince1970 * 1000))
+        if millisecond == nonceClock.millisecond {
+            nonceClock.sequence &+= 1
+        } else {
+            nonceClock = (millisecond, 0)
+        }
+        return MessageID(minting: date, sequence: nonceClock.sequence)
     }
+
+    private static var nonceClock: (millisecond: UInt64, sequence: UInt64) = (0, 0)
 }
 
 // MARK: - The wire side of a conversation
@@ -798,6 +814,46 @@ extension SessionController {
                 }
             } catch {
                 Self.trace("stage \(channelID): \(Self.describe(error))")
+            }
+        }
+    }
+}
+
+// MARK: - Message requests
+
+extension SessionController {
+
+    /// Accept DM: Discord answers with the conversation, no longer a request,
+    /// which is filed in its place and opened.
+    func acceptMessageRequest(_ channelID: ChannelID) {
+        Task { [weak self] in
+            guard let self else { return }
+            defer { model.messageRequestsInFlight.remove(channelID) }
+            do {
+                let accepted = try await rest.acceptMessageRequest(channelID)
+                model.channelIndex.upsert(accepted)
+                model.permissionGate.invalidate()
+                model.sidebarRevision &+= 1
+                model.selectChannel(channelID)
+            } catch {
+                Self.trace("accept request \(channelID) failed: \(Self.describe(error))")
+                model.reportActionFailure(AppModel.messageRequestFailure)
+            }
+        }
+    }
+
+    /// Ignore and Decline: the reader leaves, and the conversation goes. The
+    /// gateway's `CHANNEL_DELETE` says the same a moment later.
+    func declineMessageRequest(_ channelID: ChannelID) {
+        Task { [weak self] in
+            guard let self else { return }
+            defer { model.messageRequestsInFlight.remove(channelID) }
+            do {
+                try await rest.declineMessageRequest(channelID)
+                model.forgetChannel(channelID)
+            } catch {
+                Self.trace("decline request \(channelID) failed: \(Self.describe(error))")
+                model.reportActionFailure(AppModel.messageRequestFailure)
             }
         }
     }

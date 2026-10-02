@@ -1,3 +1,4 @@
+import PhotosUI
 import SwiftUI
 import UniformTypeIdentifiers
 import WingcordCore
@@ -14,6 +15,10 @@ struct ComposerContainer: View {
     /// The file panel. `@State` here rather than on the store, because it is
     /// this window's presentation and nothing else in the app can raise it.
     @State private var isChoosingFiles = false
+    /// The Photos library's picker, and what was picked in it — taken out as
+    /// files and staged, then cleared.
+    @State private var isPickingPhotos = false
+    @State private var pickedPhotos: [PhotosPickerItem] = []
     /// Read here rather than inside the composer, so the composer stays a pure
     /// value view with no observable reference of its own.
     @State private var settings = AppSettings.shared
@@ -68,7 +73,9 @@ struct ComposerContainer: View {
             cancelEdit: { model.cancelEdit(in: channelID) },
             replyToLatest: { model.replyToLatestMessage() },
             escapeTranscript: { model.escapeTranscript(in: channelID) },
-            attach: { isChoosingFiles = true },
+            attachActions: attachActions,
+            scheduledAt: box?.scheduledAt,
+            setSchedule: { model.setSchedule($0, in: channelID) },
             pasteFiles: { model.stageAttachments($0, in: channelID) },
             canAttach: model.canAttachFiles(in: channelID),
             attachments: box?.attachments ?? [],
@@ -76,7 +83,6 @@ struct ComposerContainer: View {
             removeAttachment: { model.removeAttachment($0, in: channelID) },
             toggleAttachmentSpoiler: { model.toggleAttachmentSpoiler($0, in: channelID) },
             dismissAttachmentRefusal: { model.dismissAttachmentRefusal(in: channelID) },
-            isUploading: box?.isUploading ?? false,
             completions: completions,
             completionQuery: completionQuery ?? "",
             commitCompletion: commit,
@@ -87,12 +93,9 @@ struct ComposerContainer: View {
             mentionChip: { [channelID] in model.composerChip(for: $0, in: channelID) },
             mentionChipRevision: model.composerChipRevision,
             onPick: { model.apply($0.pick, in: channelID) },
-            onPickGIF: { gif in
-                // A GIF is sent as its URL, which every other client unfurls
-                // back into an embed. Straight out rather than into the draft:
-                // picking one is the whole message.
-                model.sendMessage(gif.url.absoluteString, in: channelID)
-            },
+            // Straight out rather than into the draft: picking a GIF is a
+            // whole message, and the draft is left as it was.
+            onPickGIF: { model.sendGIF($0.url, in: channelID) },
             activityChannelID: channelID,
             commandQuery: commandQuery,
             commandSections: commandSections,
@@ -130,6 +133,27 @@ struct ComposerContainer: View {
             guard case .success(let urls) = result else { return }
             model.stageAttachments(urls, in: channelID)
         }
+        // **`.compatible`**: a HEIC photo comes out a JPEG and an HEVC video
+        // H.264, which every client Discord has will show.
+        .photosPicker(
+            isPresented: $isPickingPhotos,
+            selection: $pickedPhotos,
+            maxSelectionCount: AppModel.attachmentCountLimit,
+            matching: .any(of: [.images, .videos]),
+            preferredItemEncoding: .compatible
+        )
+        .task(id: pickedPhotos) {
+            guard !pickedPhotos.isEmpty else { return }
+            let items = pickedPhotos
+            var urls: [URL] = []
+            for item in items {
+                if let file = try? await item.loadTransferable(type: PhotoLibraryFile.self) {
+                    urls.append(file.url)
+                }
+            }
+            model.stageAttachments(urls, in: channelID)
+            pickedPhotos = []
+        }
         // `@game`'s search, a beat after the typing stops — Discord's 200
         // milliseconds — and once per query for the session.
         .task(id: gameSearchKey) {
@@ -145,6 +169,24 @@ struct ComposerContainer: View {
             guard commandQuery != nil else { return }
             await model.sessionController.loadCommandIndex(for: channelID)
         }
+    }
+
+    // MARK: The + menu
+
+    /// Discord's `channel-attach` rows this conversation can honour. Files and
+    /// photos need `ATTACH_FILES`; the rest gate themselves on the store.
+    private var attachActions: ComposerAttachActions {
+        let canAttach = model.canAttachFiles(in: channelID)
+        return ComposerAttachActions(
+            uploadFile: canAttach ? { isChoosingFiles = true } : nil,
+            selectPhotos: canAttach ? { isPickingPhotos = true } : nil,
+            createPoll: model.canPostPolls(in: channelID) ? { model.openPollEditor(in: channelID) } : nil,
+            useApps: model.permissionGate.canUseCommands(in: channelID) ? { model.useApps(in: channelID) } : nil,
+            listenAlong: model.listenAlongInvitationTitle(in: channelID).map { title in
+                ComposerAttachActions.Invitation(title: title) { model.sendListenAlongInvite(in: channelID) }
+            },
+            schedule: model.canScheduleMessages(in: channelID) ? { model.setSchedule($0, in: channelID) } : nil
+        )
     }
 
     // MARK: Slash commands

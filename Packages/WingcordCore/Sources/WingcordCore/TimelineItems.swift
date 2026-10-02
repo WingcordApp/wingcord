@@ -183,6 +183,8 @@ public enum TimelineReducer {
     ///   - marks: the stretches marked in the transcript, each above its first
     ///     message when that message is loaded — in the order they are drawn
     ///     when two begin at one message.
+    ///   - sending: the reader's own messages Discord has not answered yet.
+    ///   - failed: the ones it refused, or that never reached it.
     ///   - calendar: Injected so a test can pin a time zone.
     public static func rows(
         messages: [Message],
@@ -193,6 +195,8 @@ public enum TimelineReducer {
         hasMoreNewer: Bool = false,
         marks: [TimelineMark] = [],
         failure: String? = nil,
+        sending: Set<MessageID> = [],
+        failed: Set<MessageID> = [],
         skeletonDepth: Int = 20,
         calendar: Calendar = .current
     ) -> [TimelineItem] {
@@ -283,6 +287,10 @@ public enum TimelineReducer {
             if Self.mentions(message, ids: mentionedIDs, everyoneCounts: mentionsEveryoneCountsAsMention) {
                 flags.insert(.mentionsMe)
             }
+            // Both sets are empty for every message but the reader's newest few,
+            // so the test is two lookups into nothing.
+            if sending.contains(message.id) { flags.insert(.pending) }
+            if failed.contains(message.id) { flags.insert(.failed) }
 
             rows.append(.message(TimelineMessage(message: message, flags: flags)))
             lastMessageRowIndex = rows.count - 1

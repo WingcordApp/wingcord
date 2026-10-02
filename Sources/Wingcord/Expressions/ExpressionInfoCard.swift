@@ -102,9 +102,7 @@ struct ExpressionInfoCard: View {
         if let sticker = info.sticker {
             StickerArt(sticker: sticker, side: Self.artSide)
         } else if let glyph = info.glyph {
-            Text(glyph)
-                .font(.system(size: Self.artSide * 0.86))
-                .frame(width: Self.artSide, height: Self.artSide)
+            ExpressionGlyph(emoji: EmojiRef(name: glyph), side: Self.artSide)
         } else {
             RemoteImage(url: info.artURL, side: Self.artSide, bucket: .artwork) {
                 RoundedRectangle(cornerRadius: 10, style: .continuous)

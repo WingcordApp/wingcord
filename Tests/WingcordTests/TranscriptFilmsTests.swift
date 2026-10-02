@@ -48,7 +48,7 @@ struct TranscriptFilmsTests {
             items: TimelineReducer.rows(messages: [message]),
             presentationRevision: 0,
             activityAccents: [:],
-            activityInviteStatuses: [:],
+            activityInviteStatuses: [:], uploadProgress: [:],
             topInset: 0,
             bottomInset: 0,
             jump: nil,
@@ -63,7 +63,9 @@ struct TranscriptFilmsTests {
             isCovered: false,
             bookmarks: [],
             canSuperReact: false,
-            canAddReactions: true
+            canAddReactions: true,
+            hidesMedia: false,
+            listenAlongCards: [:]
         )
     }
 

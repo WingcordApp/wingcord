@@ -159,6 +159,10 @@ struct MessageActionPresenter: ViewModifier {
                 ReportSheet(request: request)
                     .environment(model)
             }
+            .sheet(item: $model.pollEditor) { request in
+                PollEditorSheet(request: request)
+                    .environment(model)
+            }
             // Raised by a running activity asking for a grant, not by anything
             // in this file — it lives here because this is where the window's
             // sheets are presented from, and a second presenter would be a

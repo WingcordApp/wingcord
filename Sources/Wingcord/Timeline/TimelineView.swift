@@ -22,6 +22,9 @@ struct TimelineView: NSViewRepresentable {
     /// What each invitation card paints. Observed by the container so presence
     /// moving reaches the canvas; see `TimelineCanvasView.apply(activityInviteStatuses:)`.
     var activityInviteStatuses: [ApplicationID: ActivityInviteStatus] = [:]
+    /// How far each of the reader's uploads has got — read by the container for
+    /// the reason the statuses are, and painted. See `UploadCardSlot`.
+    var uploadProgress: [MessageID: Double] = [:]
     /// How much of the scroll view's foot the composer covers.
     ///
     /// The transcript deliberately extends UNDERNEATH the composer so messages
@@ -84,6 +87,13 @@ struct TimelineView: NSViewRepresentable {
     /// Whether a new reaction may be started in this channel; see
     /// `TimelineCanvasView.apply(canAddReactions:)`.
     var canAddReactions: Bool
+    /// The channel is a message request, laid out as Discord's restricted
+    /// preview — see `Message.restrictedPreview`. Accepting it in front of the
+    /// reader is a relayout, into the whole messages.
+    var hidesMedia: Bool
+    /// The listen-along cards' hosts, by party. Its keys are the parties still
+    /// on, which is the one thing about a card the layout takes.
+    var listenAlongCards: [String: ListenAlongCard]
     var model: AppModel
 
     func makeCoordinator() -> TimelineCoordinator {
@@ -101,6 +111,7 @@ struct TimelineView: NSViewRepresentable {
             presentationRevision: presentationRevision,
             activityAccents: activityAccents,
             activityInviteStatuses: activityInviteStatuses,
+            uploadProgress: uploadProgress,
             topInset: topInset,
             bottomInset: bottomInset,
             jump: jump,
@@ -115,7 +126,9 @@ struct TimelineView: NSViewRepresentable {
             isCovered: isCovered,
             bookmarks: bookmarks,
             canSuperReact: canSuperReact,
-            canAddReactions: canAddReactions
+            canAddReactions: canAddReactions,
+            hidesMedia: hidesMedia,
+            listenAlongCards: listenAlongCards
         )
     }
 
@@ -163,6 +176,10 @@ final class TimelineCoordinator: NSObject {
     /// move together and are invalidated by the same counter.
     private var settings: TimelineSettings = PresentationRevision.shared.timeline
     private var presentationRevision: UInt64 = 0
+    /// See `TimelineView.hidesMedia`.
+    private var hidesMedia = false
+    /// See `TimelineView.listenAlongCards`.
+    private var listenAlongLive: Set<String> = []
     /// What the Spotify table was at when the rows were last laid out.
     private var cardRevision: UInt64 = 0
     /// The live profile cards over the rows in view — see `UserCardHosts`.
@@ -313,6 +330,10 @@ final class TimelineCoordinator: NSObject {
                 customID, on: messageID, in: channelID, anchor: canvas.anchorInHostingRoot(rect)
             )
         }
+        canvas.onCancelUpload = { [weak self] messageID in
+            guard let self, let channelID = self.channelID else { return }
+            self.model.sessionController.cancelUpload(messageID, in: channelID)
+        }
         canvas.onDismissEphemeral = { [weak self] messageID in
             guard let self, let channelID = self.channelID else { return }
             // **A removal, not a hide.** The message is delivered over the
@@ -322,6 +343,14 @@ final class TimelineCoordinator: NSObject {
             // when it cannot.
             self.model.mutateBox(channelID) { $0.remove(messageID) }
             self.model.messageContentRevision &+= 1
+        }
+        canvas.onListenAlong = { [weak self] messageID in
+            guard let self, let channelID = self.channelID,
+                  let box = self.model.messages(in: channelID),
+                  let invite = box.messages.first(where: { $0.id == messageID })?.listenAlong
+                      ?? box.outbox.first(where: { $0.id == messageID })?.request.listenAlong
+            else { return }
+            self.model.pressListenAlong(invite)
         }
         canvas.onPlayActivity = { [weak self] messageID in
             guard let self, let channelID = self.channelID,
@@ -577,9 +606,12 @@ final class TimelineCoordinator: NSObject {
         canvas?.isFavoriteGIF = nil
         canvas?.onVote = nil
         canvas?.onPlayActivity = nil
+        canvas?.onListenAlong = nil
+        canvas?.apply(listenAlongCards: [:])
         canvas?.onPressComponent = nil
         canvas?.onOpenSelect = nil
         canvas?.onDismissEphemeral = nil
+        canvas?.onCancelUpload = nil
         canvas?.onToggleReaction = nil
         canvas?.onHoverReaction = nil
         canvas?.onHoverMark = nil
@@ -623,6 +655,7 @@ final class TimelineCoordinator: NSObject {
         presentationRevision: UInt64,
         activityAccents: [ApplicationID: UInt32],
         activityInviteStatuses: [ApplicationID: ActivityInviteStatus],
+        uploadProgress: [MessageID: Double],
         topInset: CGFloat,
         bottomInset: CGFloat,
         jump: MessageJump?,
@@ -637,9 +670,12 @@ final class TimelineCoordinator: NSObject {
         isCovered: Bool,
         bookmarks: Set<MessageID>,
         canSuperReact: Bool,
-        canAddReactions: Bool
+        canAddReactions: Bool,
+        hidesMedia: Bool,
+        listenAlongCards: [String: ListenAlongCard]
     ) {
         self.scroll = scroll
+        canvas?.apply(listenAlongCards: listenAlongCards)
         self.topics = topics
         self.summaries = summaries
         canvas?.apply(isCovered: isCovered)
@@ -649,6 +685,7 @@ final class TimelineCoordinator: NSObject {
         canvas?.apply(activityAccents: activityAccents)
         canvas?.apply(playingPreview: playingPreview)
         canvas?.apply(activityInviteStatuses: activityInviteStatuses)
+        canvas?.apply(uploadProgress: uploadProgress)
         if let scrollView,
            abs(scrollView.contentInsets.bottom - bottomInset) > 0.5
             || abs(scrollView.contentInsets.top - topInset) > 0.5 {
@@ -695,6 +732,20 @@ final class TimelineCoordinator: NSObject {
             canvas?.style = style
             canvas?.alwaysShowsTimestamps = settings.alwaysShowsTimestamps
             rowCache.removeAll(keepingCapacity: true)
+            if !items.isEmpty { runLayout(preservingPosition: true) }
+        }
+
+        // Every row is a different height once a request's media is drawn, and
+        // the row cache keys on the flag, so this is a relayout of the lot.
+        if hidesMedia != self.hidesMedia {
+            self.hidesMedia = hidesMedia
+            if !items.isEmpty { runLayout(preservingPosition: true) }
+        }
+
+        // A party starting or ending changes its card's height.
+        let live = Set(listenAlongCards.keys)
+        if live != listenAlongLive {
+            listenAlongLive = live
             if !items.isEmpty { runLayout(preservingPosition: true) }
         }
 
@@ -925,7 +976,10 @@ final class TimelineCoordinator: NSObject {
             canEditChannel: channelID.map {
                 model.channelIndex.guildID(of: $0) != nil
                     && model.permissionGate.permissions(in: $0).contains(.manageChannels)
-            } ?? false
+            } ?? false,
+            uploads: channelID.map(model.uploadSummaries(in:)) ?? [:],
+            hidesMedia: hidesMedia,
+            listenAlongLive: listenAlongLive
         )
 
         isApplyingUpdate = true

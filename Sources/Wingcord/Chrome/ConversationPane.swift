@@ -136,6 +136,12 @@ struct ConversationPane: View {
                         PreviewReturnBar(preview: preview, back: { model.leavePreview() })
                             .padding(.horizontal, Spacing.snug)
                             .padding(.bottom, Spacing.snug)
+                    } else if model.channelIndex[channelID]?.messageRequest != nil {
+                        // **A request is answered before it is written in** —
+                        // reached from a profile's Message, it is the same
+                        // conversation the requests page opens, with the same
+                        // bar where the composer will be.
+                        MessageRequestBar(channelID: channelID)
                     } else {
                         // Above the composer, not below it. The composer floats
                         // at the window's foot, so a line under it is a line

@@ -290,12 +290,18 @@ public enum InboxQuota {
                 ? nil
                 : "Free accounts keep one reminder at a time. Nitro raises the limit."
         case .scheduled:
-            hasNitro
-                ? "That's all \(nitroScheduledMessages) scheduled messages. Send or cancel one to queue another."
-                : "Free accounts queue one message at a time. Nitro raises it to \(nitroScheduledMessages)."
+            scheduledLimitMessage(hasNitro: hasNitro)
         case .unreads, .mentions, .bookmarks:
             nil
         }
+    }
+
+    /// Discord's two sentences for a full queue: the upsell a free account sees
+    /// (`2o4lgw`) and the roadblock a subscribed one gets (`3AMt7r`).
+    public static func scheduledLimitMessage(hasNitro: Bool) -> String {
+        hasNitro
+            ? "You've reached the limit of \(nitroScheduledMessages) scheduled messages. Cancel one to schedule another."
+            : "Scheduled message limit reached. Get Nitro for \(nitroScheduledMessages) scheduled messages."
     }
 }
 

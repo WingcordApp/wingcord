@@ -236,6 +236,17 @@ extension AppModel {
         if isDiscoveryShown {
             return WorkspacePresentation(primary: .discovery, supplementary: nil)
         }
+        // The home's own page, with the request being read beside it.
+        if isMessageRequestsShown {
+            return WorkspacePresentation(
+                primary: .messageRequests,
+                // Only while it is still a request: one accepted on another
+                // client leaves the page's list, and its preview with it.
+                supplementary: previewedChannelID.flatMap {
+                    channelIndex[$0]?.messageRequest == nil ? nil : .messageRequestPreview($0)
+                }
+            )
+        }
         // **The gate is checked first, and that is what makes it a gate.** It is
         // the server saying the reader may not use it yet, so it outranks every
         // other answer to "what is this column showing" — including a channel
@@ -488,7 +499,12 @@ extension AppModel {
                 + channelIDs.filter { !pinned.contains($0) }
         }
         var rows: [SidebarRow] = []
-        rows.reserveCapacity(channelIDs.count)
+        rows.reserveCapacity(channelIDs.count + 1)
+        // **Only while something is waiting**, requests or spam — Discord's
+        // `309199`'s `SM`. The badge counts the requests alone.
+        if !channelIndex.messageRequestIDs(.pending).isEmpty || !channelIndex.messageRequestIDs(.spam).isEmpty {
+            rows.append(.messageRequests(pending: pendingMessageRequestCount))
+        }
 
         for channelID in channelIDs {
             guard let channel = channelIndex[channelID] else { continue }
@@ -868,6 +884,16 @@ extension AppModel {
 
     // MARK: Navigation
 
+    /// A channel that is gone — deleted, left, or a request declined. Its
+    /// draft goes with it, and so does anything showing it.
+    func forgetChannel(_ channelID: ChannelID) {
+        channelIndex.remove(channelID)
+        drafts.forget(channelID)
+        if selectedChannelID == channelID { selectedChannelID = nil }
+        if previewedChannelID == channelID { previewedChannelID = nil }
+        sidebarRevision &+= 1
+    }
+
     func selectGuild(_ guildID: GuildID?) {
         // Picking a server is leaving discovery, as it is in Discord — the grid
         // is a page of its own, not something a server is shown inside.
@@ -875,8 +901,10 @@ extension AppModel {
         guard selectedGuildID != guildID else { return }
         selectedGuildID = guildID
         // A guide belongs to the server it describes, so it does not survive
-        // the trip to another one — and neither does anything it opened.
+        // the trip to another one — and neither does anything it opened. The
+        // requests page belongs to the home, and goes the same way.
         openGuildSurface = nil
+        isMessageRequestsOpen = false
         previewedChannelID = nil
         // Return to where the reader was, not to the top of the list.
         if let guildID {
@@ -896,6 +924,7 @@ extension AppModel {
         // happen even when that channel is already the selected one — otherwise
         // clicking the row you came from leaves the page up and does nothing.
         openGuildSurface = nil
+        isMessageRequestsOpen = false
         previewedChannelID = nil
         // A flyout describes the channel it was opened on. Carrying it across
         // is a card that names one channel while the transcript shows another.

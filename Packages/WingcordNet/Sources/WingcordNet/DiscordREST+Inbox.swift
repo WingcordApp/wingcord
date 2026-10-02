@@ -203,21 +203,28 @@ extension DiscordREST {
     ///
     /// `flags` and `attachments` are sent even though both are empty: they are
     /// in every captured body, and §SM.1's rule is that a page sends the fields
-    /// it owns whether or not they changed.
+    /// it owns whether or not they changed. A reply and a poll ride along as
+    /// Discord's `151282` sends them — the message body's own fields, beside the
+    /// time — and are left out when there are none, as they are in the capture.
     ///
     /// The reply is one `ScheduledMessageDTO`, the same element the list
     /// answers with, so the caller can insert the new row without refetching.
     public func scheduleMessage(
         in channelID: ChannelID,
         content: String,
-        at date: Date
+        at date: Date,
+        replyingTo: MessageID? = nil,
+        attachments: [UploadedAttachment] = [],
+        poll: PollDraft? = nil
     ) async throws -> ScheduledMessage? {
         struct Body: Encodable {
             var channel_id: String
             var content: String
             var scheduled_timestamp: String
             var flags: Int
-            var attachments: [String]
+            var message_reference: ReplyBody?
+            var poll: PollBody?
+            var attachments: [AttachmentBody]
         }
         let dto = try await post(
             "/users/@me/scheduled-messages",
@@ -227,7 +234,9 @@ extension DiscordREST {
                 content: content,
                 scheduled_timestamp: ISO8601DateFormatter.withFraction.string(from: date),
                 flags: 0,
-                attachments: []
+                message_reference: replyingTo.map(ReplyBody.init),
+                poll: poll.map(PollBody.init),
+                attachments: attachments.map(AttachmentBody.init)
             ),
             as: ScheduledMessageDTO.self
         )

@@ -29,6 +29,13 @@ extension AppModel {
                 messageCount: topic.topic.messageCount
             ))
         }
+        // **Only at the present.** The reader's sends and Clyde's notices are
+        // all "now", and woven into a window cut off from the present they
+        // would sit straight after last year's messages — a send from there
+        // brings the reader back first, see `SessionController.send`.
+        let atPresent = box?.hasMoreNewer != true
+        let outbox = atPresent ? box?.outbox ?? [] : []
+        let notices = atPresent ? box?.notices ?? [] : []
         let key = TimelineMemoKey(
             channelID: channelID,
             messageCount: box?.messages.count ?? 0,
@@ -39,21 +46,71 @@ extension AppModel {
             hasMoreNewer: box?.hasMoreNewer ?? false,
             marks: marks,
             failure: box?.historyFailure,
-            contentRevision: messageContentRevision
+            contentRevision: messageContentRevision,
+            outbox: outbox.map(\.shape),
+            notices: notices.map(\.id)
         )
         if let timelineCache, timelineCache.key == key { return timelineCache.value }
 
+        var sending = Set<MessageID>()
+        var failed = Set<MessageID>()
+        for entry in outbox {
+            switch entry.state {
+            case .sending: sending.insert(entry.id)
+            case .failed: failed.insert(entry.id)
+            }
+        }
         let value = TimelineReducer.rows(
-            messages: box?.messages ?? [],
+            messages: Self.woven(
+                box?.messages ?? [],
+                with: outbox.map(\.echo) + notices
+            ),
             unreadAnchor: readState?.lastAcknowledgedID,
             mentionedIDs: mentionable,
             hasMoreHistory: box?.hasMoreHistory ?? false,
             hasMoreNewer: box?.hasMoreNewer ?? false,
             marks: marks,
-            failure: box?.historyFailure
+            failure: box?.historyFailure,
+            sending: sending,
+            failed: failed
         )
         timelineCache = (key, value)
         return value
+    }
+
+    /// What each of the reader's uploads in a channel says on its card, by its
+    /// echo's id.
+    func uploadSummaries(in channelID: ChannelID) -> [MessageID: UploadSummary] {
+        var summaries: [MessageID: UploadSummary] = [:]
+        for entry in messageBoxes[channelID]?.outbox ?? [] where entry.isUpload {
+            summaries[entry.id] = UploadSummary(title: entry.uploadTitle, size: entry.uploadSize)
+        }
+        return summaries
+    }
+
+    /// How far each of the reader's uploads in a channel has got.
+    func uploadProgress(in channelID: ChannelID) -> [MessageID: Double] {
+        var progress: [MessageID: Double] = [:]
+        for entry in messageBoxes[channelID]?.outbox ?? [] where entry.isUpload {
+            progress[entry.id] = entry.progress
+        }
+        return progress
+    }
+
+    /// The server's messages with this machine's own woven in by id.
+    ///
+    /// All three kinds are snowflakes, so one order serves them all. The local
+    /// ones are the reader's newest few and nearly always newer than everything
+    /// loaded, so each finds its place from the end in a step or two.
+    static func woven(_ messages: [Message], with locals: [Message]) -> [Message] {
+        guard !locals.isEmpty else { return messages }
+        var result = messages
+        result.reserveCapacity(messages.count + locals.count)
+        for local in locals.sorted(by: { $0.id < $1.id }) {
+            let index = result.lastIndex { $0.id < local.id }.map { $0 + 1 } ?? 0
+            result.insert(local, at: index)
+        }
+        return result
     }
 
     /// Everything the layout engine needs about the people in a page.
@@ -115,6 +172,18 @@ extension AppModel {
             into result: inout [UserID: TimelineLayoutEngine.AuthorInfo]
         ) {
             guard result[userID] == nil else { return }
+            // Discord's local explainer has no account to look up — see `Clyde`.
+            if userID == Clyde.userID {
+                result[userID] = TimelineLayoutEngine.AuthorInfo(
+                    name: Clyde.name,
+                    colorValue: nil,
+                    avatarURL: Clyde.avatarURL,
+                    monogram: "C",
+                    decorationURL: nil,
+                    isBot: true
+                )
+                return
+            }
             guard let user = users[userID] else {
                 result[userID] = TimelineLayoutEngine.AuthorInfo(
                     name: "Unknown",
@@ -469,6 +538,10 @@ struct TimelineMemoKey: Hashable, Sendable {
     /// the middle of a page changes nothing the key can see and the transcript
     /// keeps showing the old text.
     var contentRevision: UInt64
+    /// Which sends are out and how each stands — never their progress, which
+    /// is painted. See `OutgoingMessage.Shape`.
+    var outbox: [OutgoingMessage.Shape]
+    var notices: [MessageID]
 }
 
 // MARK: - Messages drawn outside the transcript

@@ -239,6 +239,16 @@ final class PermissionGate {
         canSend(in: channelID) && permissions(in: channelID).contains(.attachFiles)
     }
 
+    /// Whether a poll may be posted here — Discord's `I7` (module `969632`).
+    ///
+    /// **`SEND_POLLS` is its own bit**, the one a server clears to keep polls
+    /// out of a channel everybody may talk in; a conversation has no such
+    /// switch. Every kind with a composer takes polls, so posting is the rest.
+    func canPostPolls(in channelID: ChannelID) -> Bool {
+        guard canSend(in: channelID), let channel = model.channelIndex[channelID] else { return false }
+        return channel.guildID == nil || permissions(in: channelID).contains(.sendPolls)
+    }
+
     /// Whether the reader may connect to a voice channel.
     ///
     /// **`CONNECT` is a real bit and it was never checked.** Every other write

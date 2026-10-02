@@ -141,6 +141,23 @@ final class SessionController {
     /// history. Read from `SessionController+Spotify`.
     var spotifyFetches: Set<String> = []
     var spotifyRefusals: Set<String> = []
+    /// The reader's own Spotify, per linked account — see
+    /// `SessionController+SpotifyPlayer`.
+    var spotifyFollowers: [String: Task<Void, Never>] = [:]
+    var spotifyClients: [String: SpotifyPlayerClient] = [:]
+    var spotifyPlaying: [String: SpotifyNowPlaying] = [:]
+    var spotifyExpiries: [String: Task<Void, Never>] = [:]
+    /// The waits before listening along stops — the host gone quiet, or the
+    /// reader's own player moving off the host's track. See
+    /// `SessionController+ListenAlong`.
+    var listenAlongHostGrace: Task<Void, Never>?
+    var listenAlongDrift: Task<Void, Never>?
+    /// The sends in flight, by nonce — so an upload can be cancelled from its
+    /// card in the transcript.
+    var sendTasks: [MessageID: Task<Void, Never>] = [:]
+    /// The last send's POST, which the next one waits behind — see
+    /// `inSendOrder`.
+    var sendQueue: Task<Void, Never>?
     private var expressionSourceFetches: Set<UInt64> = []
     /// Widget-template fetches in flight, by application. Read from
     /// `SessionController+Board`.
@@ -455,6 +472,8 @@ final class SessionController {
     func signOut() {
         startingAccountID = nil
         teardownConnection()
+        stopSpotify()
+        model.drafts.close()
         model.currentUserID = nil
         model.entitlements = AccountEntitlements()
         model.mentionableIDs = []
@@ -698,6 +717,11 @@ final class SessionController {
             soundboards: snapshot.soundboardsByGuild
         )
         model.currentUserID = snapshot.currentUser.id
+        model.restoreDrafts(for: snapshot.currentUser.id)
+        // **Whether the composer may schedule** is whether this list answers
+        // — see `AppModel.canScheduleMessages`. Asked once a session.
+        if model.inbox.scheduled == nil { loadInbox(.scheduled) }
+        followSpotify()
         model.users = snapshot.users
         model.guilds = guilds
         model.channelIndex = index
@@ -1162,6 +1186,7 @@ final class SessionController {
 
         case .threadRemoved(let threadID, _):
             model.applyThreadRemoval(threadID)
+            model.drafts.forget(threadID)
 
         case .threadListSynced(let guildID, let channelIDs, let threads, let memberships):
             model.applyThreadListSync(
@@ -1186,9 +1211,7 @@ final class SessionController {
             model.roleRevision &+= 1
 
         case .channelRemoved(let channelID):
-            model.channelIndex.remove(channelID)
-            if model.selectedChannelID == channelID { model.selectedChannelID = nil }
-            model.sidebarRevision &+= 1
+            model.forgetChannel(channelID)
 
         case .presenceUpdated(let presence):
             enqueue(presence)
@@ -1252,7 +1275,7 @@ final class SessionController {
             // would otherwise clear every pin in the direct-message list,
             // because its own override set has none in it.
             if guildID == nil { model.applyPinnedChannels(pinned) }
-            for channelID in model.channelIndex.privateChannelIDs() {
+            for channelID in model.channelIndex.allPrivateChannelIDs() {
                 model.applyChannelMute(muted.contains(channelID), channelID: channelID)
             }
             // A server's own record. Applied whatever set it: our own write
@@ -1440,6 +1463,7 @@ final class SessionController {
         // over every voice state in the account or a rebuild of the whole
         // channel tree on every flush.
         let touchesVoice = pendingPresences.keys.contains { model.voiceStates[$0] != nil }
+        let movesHost = model.listeningAlong.map { pendingPresences[$0.hostID] != nil } ?? false
         model.presences.merge(pendingPresences) { _, new in new }
         pendingPresences.removeAll(keepingCapacity: true)
         model.presenceRevision &+= 1
@@ -1447,6 +1471,7 @@ final class SessionController {
             model.voicePresenceRevision &+= 1
             refreshVoiceActivityIcons()
         }
+        if movesHost { listenAlongHostMoved() }
     }
 
     // MARK: Requests
@@ -2237,7 +2262,7 @@ final class SessionController {
         Task { try? await rest.acknowledge(messageID, in: channelID) }
     }
 
-    /// Whether a send has anything in it: words, a sticker or a file.
+    /// Whether a send has anything in it: words, a sticker, a file or a poll.
     ///
     /// **One rule for both of its callers.** The composer asks before holding a
     /// send for slowmode — an empty Return is not a send and must not flash a
@@ -2245,142 +2270,296 @@ final class SessionController {
     static func isSendable(
         _ content: String,
         stickerIDs: [UInt64],
-        attachments: [PendingAttachment]
+        attachments: [PendingAttachment],
+        poll: PollDraft? = nil,
+        listenAlong: ListenAlongInvite? = nil
     ) -> Bool {
-        !stickerIDs.isEmpty || !attachments.isEmpty
+        !stickerIDs.isEmpty || !attachments.isEmpty || poll != nil || listenAlong != nil
             || !content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
+    /// Sends a message, drawing it at once.
+    ///
+    /// **Discord's eager send.** The reader's words go into the transcript the
+    /// moment Return is pressed, at half strength, and Discord's answer — the
+    /// POST's reply or the socket's copy, whichever is first — replaces them
+    /// (`MessageBox.receiveLive`). A refusal turns them red and keeps them, with
+    /// Resend in their menu. A send with files is drawn as its upload instead —
+    /// a card with a bar and a cancel — and a refused one goes back to the
+    /// composer, words and files, because that is where Discord puts it.
+    ///
     /// - Parameter stickerIDs: Stickers to send. A sticker is a message on its
     ///   own, so this is the one path where empty content is legitimate.
     /// - Parameter attachments: Files already staged in the composer. A message
     ///   may be nothing but these, which is the second such path.
-    /// - Parameter draft: what the composer held when this left it, put back if
-    ///   the send does not land. Nil for a send that did not come from the
-    ///   composer — the overlay's reply field keeps its own text.
+    /// - Parameter poll: A poll from the editor — the third, drawn at once like
+    ///   any send, as Discord's `sendPollMessage` is.
     func send(
         _ content: String,
         in channelID: ChannelID,
         replyingTo: MessageID?,
         stickerIDs: [UInt64] = [],
         attachments: [PendingAttachment] = [],
-        restoring draft: UnsentDraft? = nil
+        poll: PollDraft? = nil,
+        listenAlong: ListenAlongInvite? = nil
     ) {
-        guard Self.isSendable(content, stickerIDs: stickerIDs, attachments: attachments),
-              model.currentUserID != nil
+        guard Self.isSendable(
+            content, stickerIDs: stickerIDs, attachments: attachments, poll: poll, listenAlong: listenAlong
+        ), let author = model.currentUserID
         else { return }
-        let trimmed = content.trimmingCharacters(in: .whitespacesAndNewlines)
-        // A nonce, so the gateway's echo can be matched to this send and replace
-        // the optimistic row rather than appearing beside it.
-        let nonce = String(UInt64(Date.now.timeIntervalSince1970 * 1000))
-        if !attachments.isEmpty { model.mutateBox(channelID) { $0.isUploading = true } }
-        Task { [weak self] in
-            guard let self else { return }
-            defer {
-                if !attachments.isEmpty {
-                    model.mutateBox(channelID) { $0.isUploading = false }
-                }
-            }
-            do {
-                let uploaded = try await upload(attachments, in: channelID)
-                let message = try await rest.sendMessage(
-                    in: channelID,
-                    content: trimmed,
-                    nonce: nonce,
-                    replyingTo: replyingTo,
-                    stickerIDs: stickerIDs,
-                    attachments: uploaded
-                )
-                let trims = model.mayTrimOldest(in: channelID)
-                model.mutateBox(channelID) { box in
-                    box.receiveLive(message, trimming: trims)
-                    box.attachments.removeAll()
-                }
-                model.messageContentRevision &+= 1
-                // **Sending from older messages brings the reader back.** A
-                // message sent while cut off from the present is held, not
-                // drawn, and somebody who has just said something wants to see
-                // it land — so the transcript goes to where it did.
-                if model.messages(in: channelID)?.hasMoreNewer == true {
-                    model.jumpToPresent(in: channelID)
-                }
-                // **When Discord has taken it, not when Return was pressed** —
-                // Discord's own `SLOWMODE_RESET_COOLDOWN` follows the POST.
-                // Started earlier, a send that fails would leave the reader
-                // waiting out a cooldown for a message nobody received.
-                model.startSlowmode(afterSendIn: channelID)
-            } catch {
-                Self.log.error("send failed: \(Self.describe(error), privacy: .public)")
-                if case DiscordREST.Failure.slowmode(let retryAfter) = error {
-                    model.applySlowmodeRefusal(retryAfter: retryAfter, in: channelID)
-                }
-                // **What the reader wrote comes back.** The composer cleared
-                // itself when the send left, so a send that does not land —
-                // slowmode, a dropped connection, a refusal — used to take the
-                // message with it and say so only in the log.
-                if let draft { model.restoreDraft(draft, in: channelID) }
-                // **The files stay staged.** A refused upload that also cleared
-                // the tray would ask somebody to find five pictures again
-                // because the network dropped; the reason goes where the tray
-                // already draws one.
-                model.mutateBox(channelID) { box in
-                    box.attachmentRefusal = attachments.isEmpty
-                        ? nil
-                        : .sendFailed(Self.describe(error))
-                    for index in box.attachments.indices { box.attachments[index].progress = nil }
-                }
-            }
+        let request = OutgoingMessage.Request(
+            content: content.trimmingCharacters(in: .whitespacesAndNewlines),
+            replyingTo: replyingTo,
+            stickerIDs: stickerIDs,
+            poll: poll,
+            listenAlong: listenAlong
+        )
+        // **Sending from older messages brings the reader back** — first, so
+        // the echo lands in the window the reader is going to. Somebody who has
+        // just said something wants to see it.
+        if model.messages(in: channelID)?.hasMoreNewer == true {
+            model.jumpToPresent(in: channelID)
+        }
+        let id = Self.mintNonce()
+        let entry = OutgoingMessage(
+            id: id,
+            request: request,
+            echo: model.echo(of: request, id: id, in: channelID, author: author),
+            state: .sending,
+            files: attachments
+        )
+        model.mutateBox(channelID) { $0.outbox.append(entry) }
+        sendTasks[id] = Task { [weak self] in
+            await self?.deliver(entry, in: channelID)
+            self?.sendTasks[id] = nil
         }
     }
 
-    /// Puts the staged files up, in order, reporting each one's progress.
+    /// Sends a refused message again, as a new send.
+    func resend(_ id: MessageID, in channelID: ChannelID) {
+        guard let entry = model.messages(in: channelID)?.outbox.first(where: { $0.id == id }),
+              entry.state == .failed
+        else { return }
+        model.mutateBox(channelID) { $0.outbox.removeAll { $0.id == id } }
+        send(
+            entry.request.content,
+            in: channelID,
+            replyingTo: entry.request.replyingTo,
+            stickerIDs: entry.request.stickerIDs,
+            attachments: entry.files,
+            poll: entry.request.poll,
+            listenAlong: entry.request.listenAlong
+        )
+    }
+
+    /// Stops an upload from its card, and gives the words back.
+    ///
+    /// **Discord's `cancel`**: the text goes back to a composer that is empty,
+    /// and the files do not come with it — somebody who cancelled an upload
+    /// meant the files.
+    func cancelUpload(_ id: MessageID, in channelID: ChannelID) {
+        sendTasks.removeValue(forKey: id)?.cancel()
+        guard let entry = model.messages(in: channelID)?.outbox.first(where: { $0.id == id }) else { return }
+        model.mutateBox(channelID) { box in
+            box.outbox.removeAll { $0.id == id }
+            if box.draft.isEmpty { box.draft = entry.request.content }
+        }
+    }
+
+    /// Queues a message on Discord's side for later — the composer while it is
+    /// scheduling, and the poll editor's Schedule Poll. Returns once Discord has
+    /// taken it.
+    ///
+    /// **Nothing is drawn in the transcript.** Discord's send skips its eager
+    /// echo when a time is set (`_sendMessage`'s `null==W`): the message will
+    /// not exist for hours. The files go up first, as for any send, and the
+    /// answer is a row for the inbox's Scheduled list and a line saying when it
+    /// will go (`859403`'s `c_`).
+    func schedule(
+        _ content: String,
+        in channelID: ChannelID,
+        at date: Date,
+        replyingTo: MessageID? = nil,
+        attachments: [PendingAttachment] = [],
+        poll: PollDraft? = nil
+    ) async throws {
+        let row: ScheduledMessage?
+        do {
+            let uploaded = try await upload(attachments, in: channelID) { _ in }
+            row = try await rest.scheduleMessage(
+                in: channelID,
+                content: content.trimmingCharacters(in: .whitespacesAndNewlines),
+                at: date,
+                replyingTo: replyingTo,
+                attachments: uploaded,
+                poll: poll
+            )
+        } catch {
+            Self.trace("schedule in \(channelID) failed: \(Self.describe(error))")
+            throw error
+        }
+        if let row { model.noteScheduledMessage(row) }
+        model.reportScheduling(
+            "Message scheduled for \(date.formatted(date: .long, time: .omitted)) at \(date.formatted(date: .omitted, time: .shortened))"
+        )
+    }
+
+    /// What a refused schedule says — `859403`'s `vh`: the limit sentence on
+    /// 640003, otherwise "Failed to schedule message." and Discord's reason.
+    static func schedulingFailure(_ error: any Error, hasNitro: Bool) -> String {
+        switch error {
+        case DiscordREST.Failure.api(_, 640_003?, _), DiscordREST.Failure.forbidden(640_003?):
+            InboxQuota.scheduledLimitMessage(hasNitro: hasNitro)
+        default:
+            "Failed to schedule message. \(describe(error))"
+        }
+    }
+
+    private func deliver(_ entry: OutgoingMessage, in channelID: ChannelID) async {
+        do {
+            let uploaded = try await upload(entry.files, in: channelID) { [weak self] fraction in
+                self?.reportUpload(fraction, of: entry.id, in: channelID)
+            }
+            // An invitation names the gateway session it was sent from.
+            var listenAlong: (sessionID: String, partyID: String)?
+            if let invite = entry.request.listenAlong, let sessionID = await socket?.currentSessionID {
+                listenAlong = (sessionID, invite.partyID)
+            }
+            let message = try await inSendOrder { [rest, listenAlong] in
+                try await rest.sendMessage(
+                    in: channelID,
+                    content: entry.request.content,
+                    nonce: entry.nonce,
+                    replyingTo: entry.request.replyingTo,
+                    stickerIDs: entry.request.stickerIDs,
+                    attachments: uploaded,
+                    poll: entry.request.poll,
+                    listenAlong: listenAlong
+                )
+            }
+            let trims = model.mayTrimOldest(in: channelID)
+            model.mutateBox(channelID) { $0.receiveLive(message, trimming: trims) }
+            model.messageContentRevision &+= 1
+            // **When Discord has taken it, not when Return was pressed** —
+            // Discord's own `SLOWMODE_RESET_COOLDOWN` follows the POST.
+            // Started earlier, a send that fails would leave the reader
+            // waiting out a cooldown for a message nobody received.
+            model.startSlowmode(afterSendIn: channelID)
+        } catch {
+            // Cancelled from its card, which has already taken it down.
+            guard !Task.isCancelled else { return }
+            refuse(entry, in: channelID, because: error)
+        }
+    }
+
+    /// Runs one POST after every send before it.
+    ///
+    /// **Discord sends one message at a time** (its `MessageQueue`), so two
+    /// lines typed in quick succession arrive in the order they were written.
+    /// Each send in its own task let the second overtake the first, which an
+    /// echo drawn at once would only make plainer. The files go up before a
+    /// send joins the queue, exactly as Discord's do.
+    private func inSendOrder<Value: Sendable>(
+        _ post: @escaping @Sendable () async throws -> Value
+    ) async throws -> Value {
+        let previous = sendQueue
+        let turn = Task { () async throws -> Value in
+            await previous?.value
+            return try await post()
+        }
+        sendQueue = Task { _ = try? await turn.value }
+        return try await turn.value
+    }
+
+    /// Answers a refused send the way Discord's client does — see
+    /// `SendRefusal`.
+    private func refuse(_ entry: OutgoingMessage, in channelID: ChannelID, because error: any Error) {
+        Self.log.error("send failed: \(Self.describe(error), privacy: .public)")
+        let channel = model.channelIndex[channelID]
+        let refusal = SendRefusal.of(
+            error,
+            isBotDirectMessage: channel?.kind == .directMessage
+                && (channel?.recipientIDs.contains { model.users[$0]?.isBot == true } ?? false),
+            // A forum, or a post in one — Discord words its cap as posts for both.
+            isForumLike: channel.map {
+                $0.isForumLike || $0.parentID.flatMap { model.channelIndex[$0] }?.isForumLike == true
+            } ?? false,
+            isPrivate: channel?.guildID == nil
+        )
+        if case .slowmode(let retryAfter) = refusal {
+            model.applySlowmodeRefusal(retryAfter: retryAfter, in: channelID)
+        }
+        model.mutateBox(channelID) { box in
+            if entry.isUpload {
+                // Discord's `j`: a refused upload leaves no row behind — its
+                // words and its files go back to the composer, and the reason
+                // goes where the tray already draws one.
+                box.outbox.removeAll { $0.id == entry.id }
+                box.returnToComposer(entry)
+                box.attachmentRefusal = .sendFailed(Self.describe(error))
+            } else if let index = box.outbox.firstIndex(where: { $0.id == entry.id }) {
+                box.outbox[index].state = .failed
+            }
+        }
+        if case .explained(let text) = refusal {
+            let notice = Clyde.notice(text, in: channelID, id: Self.mintNonce())
+            model.mutateBox(channelID) { $0.notices.append(notice) }
+        }
+    }
+
+    /// Puts the files up, in order, reporting how far the lot has got.
     ///
     /// **Serially, and that is deliberate.** These are the largest transfers the
     /// app makes — up to half a gigabyte each — and running five at once splits
-    /// one connection's bandwidth five ways while holding five buffers. One at a
-    /// time also makes the progress figure mean something: it is *this* file,
-    /// not an average across a set whose sizes differ by two orders of
-    /// magnitude.
+    /// one connection's bandwidth five ways while holding five buffers. The bar
+    /// is one for the whole send, as Discord's is, weighted by size so a large
+    /// file is most of it.
     private func upload(
-        _ attachments: [PendingAttachment],
-        in channelID: ChannelID
+        _ files: [PendingAttachment],
+        in channelID: ChannelID,
+        progress: @escaping @MainActor (Double) -> Void
     ) async throws -> [UploadedAttachment] {
-        guard !attachments.isEmpty else { return [] }
+        guard !files.isEmpty else { return [] }
         let slots = try await rest.createUploadSlots(
-            in: channelID, for: attachments.map(\.uploadRequest)
+            in: channelID, for: files.map(\.uploadRequest)
         )
+        let total = Double(max(1, files.reduce(0) { $0 + $1.size }))
+        var sent = 0
         var uploaded: [UploadedAttachment] = []
         uploaded.reserveCapacity(slots.count)
-        for (attachment, slot) in zip(attachments, slots) {
-            try await rest.upload(attachment.url, to: slot) { [weak self] fraction in
-                Task { @MainActor [weak self] in
-                    self?.reportUpload(fraction, of: attachment.id, in: channelID)
+        for (file, slot) in zip(files, slots) {
+            let before = Double(sent)
+            try await rest.upload(file.url, to: slot) { fraction in
+                Task { @MainActor in
+                    progress((before + fraction * Double(file.size)) / total)
                 }
             }
+            sent += file.size
             uploaded.append(UploadedAttachment(
                 id: slot.id,
                 filename: slot.filename,
                 uploadedFilename: slot.uploadedFilename,
-                altText: attachment.altText
+                altText: file.altText
             ))
         }
         return uploaded
     }
 
-    /// Writes a progress figure into the tray, on a change worth drawing.
+    /// Writes an upload's progress, on a change worth drawing.
     ///
     /// **Coalesced on a hundredth**, for the reason `MediaCanvasView` coalesces
     /// a pinch: `URLSession` reports every buffer it hands to the socket —
     /// thousands of times for a large file — and the thing reading this is a bar
     /// a few dozen points wide that cannot show a ten-thousandth.
     @MainActor
-    private func reportUpload(_ fraction: Double, of id: PendingAttachment.ID, in channelID: ChannelID) {
-        guard let box = model.messages(in: channelID),
-              let index = box.attachments.firstIndex(where: { $0.id == id })
+    private func reportUpload(_ fraction: Double, of id: MessageID, in channelID: ChannelID) {
+        guard let entry = model.messages(in: channelID)?.outbox.first(where: { $0.id == id }),
+              fraction >= 1 || fraction - entry.progress >= 0.01
         else { return }
-        let previous = box.attachments[index].progress ?? -1
-        guard fraction >= 1 || fraction - previous >= 0.01 else { return }
-        model.mutateBox(channelID) { $0.attachments[index].progress = fraction }
+        model.mutateBox(channelID) { box in
+            guard let index = box.outbox.firstIndex(where: { $0.id == id }) else { return }
+            box.outbox[index].progress = min(1, fraction)
+        }
     }
 
     static func describe(_ error: any Error) -> String {

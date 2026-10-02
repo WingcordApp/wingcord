@@ -18,6 +18,14 @@ struct SidebarBanner: View {
     /// arithmetic is how the pill ended up sitting in a band of empty column
     /// below the artwork rather than in its corner.
     var layout: SidebarBannerLayout
+    /// Whether an animated banner moves now.
+    ///
+    /// **Discord's rule, read out of its guild header** (`er`): five seconds
+    /// each time the banner comes into view — and only when the reader lets
+    /// things play — then only while the pointer is over it. A banner that
+    /// moved for as long as its server was open was a megabyte-a-frame film
+    /// decoding behind a list nobody was looking at.
+    var animates: Bool
 
     // MARK: What the two layers are fetched at
     //
@@ -97,8 +105,9 @@ struct SidebarBanner: View {
                     // is there a second layer at all — the extension says so
                     // outright, so a still banner never pays for the fetch, the
                     // multi-frame decode, or the view and coordinator that would
-                    // hold the answer.
-                    if let url = header.bannerURL, CDN.canAnimate(url) {
+                    // hold the answer. And only while it is moving: the film
+                    // leaves with the pointer and the still is the banner again.
+                    if animates, let url = header.bannerURL, CDN.canAnimate(url) {
                         AnimatedDecoration(
                             url: url,
                             side: Self.filmSide,

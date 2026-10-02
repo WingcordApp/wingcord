@@ -111,6 +111,11 @@ nonisolated struct SidebarBannerLayout: Equatable {
         hasBanner ? bannerTop + bannerDrawnHeight - travel : 0
     }
 
+    /// Whether any of the artwork is still below the chrome — Discord's
+    /// `bannerVisible`, which is what starts the banner's five seconds of
+    /// motion when it comes back into view.
+    var isBannerInView: Bool { hasBanner && bannerBottom > 0 }
+
     /// The pill's top edge: on the banner's lower lip, travelling with it.
     ///
     /// **Unclamped, deliberately.** It used to stop at zero and park there,

@@ -53,7 +53,13 @@ extension AppModel {
         guard SessionController.isSendable(
             content, stickerIDs: stickerIDs, attachments: box?.attachments ?? []
         ) else { return }
-        guard box?.isUploading != true else { return }
+        // A composer that is scheduling queues the message instead — and a
+        // message posted on Thursday waits on no slowmode today. A sticker is
+        // sent now: Discord's sticker send carries no time.
+        if stickerIDs.isEmpty, let box, let date = box.scheduledAt {
+            schedule(content, from: box, at: date, in: channelID)
+            return
+        }
         // **Held inside a slowmode wait, with everything left where it was** —
         // the draft, the reply and the tray. Discord's composer refuses the
         // same way (module `806150`): a send it knows the server will refuse
@@ -63,39 +69,92 @@ extension AppModel {
             sessionController.send(content, in: channelID, replyingTo: nil, stickerIDs: stickerIDs)
             return
         }
-        // **The tray is not cleared here.** The files are still going up, and
-        // the send is what removes them once Discord has taken them — clearing
-        // now means a refused upload has nothing left to retry with. The draft
-        // and the reply are cleared, because those the composer has already
-        // committed — and they travel with the send, so one that does not land
-        // can put them back.
         sessionController.send(
             content,
             in: channelID,
             replyingTo: box.replyingTo,
             stickerIDs: stickerIDs,
-            attachments: box.attachments,
-            restoring: UnsentDraft(text: box.draft, replyingTo: box.replyingTo)
+            attachments: box.attachments
         )
+        // **The composer empties at once — words, reply and files alike**, as
+        // Discord's does. The send is in the transcript now, and a refused
+        // upload is handed back by `MessageBox.returnToComposer`.
         mutateBox(channelID) {
             $0.draft = ""
             $0.replyingTo = nil
+            $0.attachments = []
             $0.attachmentRefusal = nil
         }
     }
 
-    /// Puts back what the composer held when a send that did not land left it.
+    /// A GIF from the picker, sent as its URL, which every client unfurls back
+    /// into an embed — Discord's `isGif` send.
     ///
-    /// **Only into an empty composer.** Somebody who started the next message
-    /// while the first was in flight keeps what they are typing; losing that
-    /// instead would be the same defect aimed at a different message.
-    func restoreDraft(_ draft: UnsentDraft, in channelID: ChannelID) {
-        guard !draft.text.isEmpty || draft.replyingTo != nil else { return }
-        mutateBox(channelID) { box in
-            guard box.draft.isEmpty else { return }
-            box.draft = draft.text
-            if box.replyingTo == nil { box.replyingTo = draft.replyingTo }
+    /// **It takes the reply and the scheduled time with it, and leaves the
+    /// words and the files where they are**: a GIF is a message of its own,
+    /// not the end of the one being written. Discord's composer is not cleared
+    /// by one (`shouldClear: false`); only the reply is used up.
+    func sendGIF(_ url: URL, in channelID: ChannelID) {
+        let box = messages(in: channelID)
+        let content = url.absoluteString
+        if let date = box?.scheduledAt {
+            queueScheduled(content, at: date, replyingTo: box?.replyingTo, in: channelID)
+        } else {
+            guard !holdsForSlowmode(channelID) else { return }
+            sessionController.send(content, in: channelID, replyingTo: box?.replyingTo)
         }
+        mutateBox(channelID) { $0.replyingTo = nil }
+    }
+
+    /// The reader's own message as the transcript draws it until Discord
+    /// answers — Discord's `createMessage`, which carries the words, the reply
+    /// and the stickers and nothing a server would have to add.
+    func echo(
+        of request: OutgoingMessage.Request,
+        id: MessageID,
+        in channelID: ChannelID,
+        author: UserID
+    ) -> Message {
+        let reference = request.replyingTo.map { replied in
+            let quoted = message(replied, in: channelID)
+            return MessageReference(
+                messageID: replied,
+                channelID: channelID,
+                authorID: quoted?.authorID,
+                isAuthorBot: quoted.flatMap { users[$0.authorID]?.isBot } ?? false,
+                excerpt: MessageReference.excerpt(of: quoted?.content ?? ""),
+                hasAttachment: !(quoted?.attachments.isEmpty ?? true)
+                    || !(quoted?.stickers.isEmpty ?? true)
+            )
+        }
+        return Message(
+            id: id,
+            channelID: channelID,
+            authorID: author,
+            content: request.content,
+            kind: reference == nil ? .default : .reply,
+            payload: MessagePayload(
+                stickers: request.stickerIDs.compactMap(stickerRef),
+                poll: request.poll?.poll(postedAt: id.timestamp),
+                reference: reference,
+                nonce: String(id.rawValue),
+                listenAlong: request.listenAlong
+            )
+        )
+    }
+
+    /// A sticker the account can see, by id — a standard pack's, or a
+    /// server's.
+    func stickerRef(_ id: UInt64) -> StickerRef? {
+        if let pack = standardPackIDByStickerID[id].flatMap({ standardStickerPacks[$0] }),
+           let sticker = pack.stickers.first(where: { $0.id == id })
+        {
+            return sticker
+        }
+        for stickers in guildStickers.values {
+            if let sticker = stickers.first(where: { $0.id == id }) { return sticker }
+        }
+        return nil
     }
 
     /// Puts what a picker chose into the draft, or sends it if it is a sticker.

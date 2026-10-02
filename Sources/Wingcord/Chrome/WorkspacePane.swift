@@ -152,6 +152,8 @@ private struct PrimaryPane: View {
             ServerJoinGateContainer()
         case .discovery:
             DiscoveryContainer()
+        case .messageRequests:
+            MessageRequestsPage()
         }
     }
 }
@@ -210,6 +212,8 @@ private struct SupplementaryPane: View {
             VoiceChatContainer(channelID: channelID)
         case .channelPreview(let channelID):
             ChannelPreviewContainer(channelID: channelID)
+        case .messageRequestPreview(let channelID):
+            MessageRequestPreviewPane(channelID: channelID)
         }
     }
 }

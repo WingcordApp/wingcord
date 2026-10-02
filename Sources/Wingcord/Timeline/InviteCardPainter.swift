@@ -183,7 +183,12 @@ nonisolated extension TimelineRowPainter {
                       let image = images.cached(InviteCardSlot.imageKey(url, in: trait.emojiRect, scale: scale),
                                                 bucket: .thumbnail)
             {
-                drawFlipped(image, in: trait.emojiRect.offsetBy(dx: offset.x, dy: offset.y), context: context)
+                drawFlipped(
+                    image,
+                    in: trait.emojiRect.offsetBy(dx: offset.x, dy: offset.y),
+                    context: context,
+                    fit: .contain
+                )
             }
             drawTextFrame(trait.label, at: shifted(trait.labelOrigin, offset), context: context,
                           images: images, scale: scale)

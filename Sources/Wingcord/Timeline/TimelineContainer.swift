@@ -47,6 +47,7 @@ struct TimelineContainer: View {
             // on presence, and a drawn canvas is only told what SwiftUI
             // re-evaluates.
             activityInviteStatuses: model.activityInviteStatuses(in: channelID),
+            uploadProgress: model.uploadProgress(in: channelID),
             topInset: chromeBottom,
             // The rows stop short of the composer by Discord's own air; the
             // chrome laid over the transcript still measures from the bar.
@@ -87,6 +88,8 @@ struct TimelineContainer: View {
             // control at the end of a reaction row is drawn, and a drawn
             // canvas only hears what SwiftUI re-evaluates.
             canAddReactions: model.permissionGate.canAddReaction(in: channelID),
+            hidesMedia: model.channelIndex[channelID]?.messageRequest != nil,
+            listenAlongCards: model.listenAlongCards(in: channelID),
             model: model
         )
         // **Over the transcript's own corner, lifted clear of the composer** —

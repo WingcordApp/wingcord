@@ -273,7 +273,8 @@ private struct ReactionFlyoutCard: View {
         VStack(alignment: .leading, spacing: Spacing.base) {
             Button(action: openList) {
                 HStack(spacing: Spacing.snug) {
-                    ReactionEmoji(emoji: emoji, side: Self.emojiSide)
+                    ExpressionGlyph(emoji: emoji, side: Self.emojiSide, plays: true)
+                        .accessibilityHidden(true)
                     sentence
                         .font(.system(.subheadline))
                         .fixedSize(horizontal: false, vertical: true)

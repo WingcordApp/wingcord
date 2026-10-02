@@ -41,7 +41,7 @@ struct ActivityLineView: View {
                     .fixedSize()
             }
             if let emoji = line.statusEmoji {
-                InlineEmojiMark(emoji: emoji, side: emojiSide)
+                ExpressionGlyph(emoji: emoji, side: emojiSide)
                     .fixedSize()
             }
             if let statusText = line.statusText {

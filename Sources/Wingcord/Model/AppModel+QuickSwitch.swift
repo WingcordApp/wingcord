@@ -173,10 +173,10 @@ extension AppModel {
 
     // MARK: The empty state
 
-    /// Where you were, and who is waiting.
+    /// Where you were, what you were writing, and who is waiting.
     ///
-    /// The two lists the reference client shows on an empty field, and between
-    /// them they answer the two reasons anybody opens a switcher without typing.
+    /// The lists the reference client shows on an empty field, and between them
+    /// they answer the reasons anybody opens a switcher without typing.
     private func restingSections() -> [QuickSwitchSection] {
         var sections: [QuickSwitchSection] = []
         let previous = previousChannelRows()
@@ -185,13 +185,45 @@ extension AppModel {
                 QuickSwitchSection(id: "previous", title: "Previous channels", rows: previous)
             )
         }
-        let mentions = mentionRows()
+        // **Each list leaves out what an earlier one already offered**, as
+        // Discord's does — one place named twice is one row too many to read.
+        var offered = Set(previous.map(\.target))
+        if let selectedChannelID { offered.insert(.channel(selectedChannelID)) }
+        let drafts = draftRows(excluding: offered)
+        if !drafts.isEmpty {
+            sections.append(QuickSwitchSection(id: "drafts", title: "Drafts", rows: drafts))
+        }
+        offered.formUnion(drafts.map(\.target))
+        let mentions = mentionRows().filter { !offered.contains($0.target) }
         if !mentions.isEmpty {
             sections.append(
                 QuickSwitchSection(id: "mentions", title: "Mentions", rows: mentions)
             )
         }
         return sections
+    }
+
+    /// The conversations with words waiting in their composers, the most
+    /// recently written first — Discord's Drafts.
+    ///
+    /// **Its filter, too**: a server's channel that will not take a message has
+    /// nothing to come back to. A one-to-one conversation is offered as its
+    /// person, which is how this switcher names one everywhere else.
+    private func draftRows(excluding offered: Set<QuickSwitchTarget>) -> [QuickSwitchRow] {
+        var rows: [QuickSwitchRow] = []
+        for channelID in drafts.recentlyEdited {
+            guard let channel = channelIndex[channelID] else { continue }
+            let row: QuickSwitchRow? = if channel.kind == .directMessage {
+                channel.recipientIDs.first { $0 != currentUserID }.flatMap(personRow)
+            } else if channel.guildID == nil || permissionGate.canSend(in: channelID) {
+                channelRow(channelID)
+            } else {
+                nil
+            }
+            guard let row, !offered.contains(row.target) else { continue }
+            rows.append(row)
+        }
+        return rows
     }
 
     /// The channels most recently read, this session first and the account's own

@@ -46,22 +46,6 @@ struct ProseText: View {
     /// Everywhere else the prose was opened to be read, and plays.
     var animates = true
 
-    @Environment(\.motion) private var motion
-    /// The reader's own animation preference. Read here rather than in the
-    /// picture, so a bio with a dozen emoji in it observes the setting once.
-    @State private var settings = AppSettings.shared
-
-    /// Whether a custom emoji in this prose plays.
-    ///
-    /// **Every answer, resolved together.** The caller's gate, then
-    /// `AppSettings.playsAnimatedContent` — the reader's own battery switch —
-    /// and Reduce Motion, which is the system's; honouring one preference and
-    /// not the other is how somebody who turned animation off in System
-    /// Settings gets it anyway.
-    private var playsEmoji: Bool {
-        animates && settings.playsAnimatedContent && !motion.reduceMotion
-    }
-
     var body: some View {
         VStack(alignment: .leading, spacing: Spacing.tight) {
             ForEach(Array(lines.enumerated()), id: \.offset) { _, line in
@@ -77,7 +61,7 @@ struct ProseText: View {
                         color: color,
                         emojiSide: emojiSide,
                         spacing: Self.spaceWidth(for: font),
-                        playsEmoji: playsEmoji,
+                        playsEmoji: animates,
                         onEmoji: onEmoji,
                         onLink: onLink
                     )
@@ -183,98 +167,21 @@ private struct ProseWord: View {
     }
 }
 
-/// One inline custom emoji, and the click that asks where it came from.
+/// One inline emoji, and the click that asks where it came from.
 ///
-/// **The still and the film, where there is a film.** An animated emoji is a
-/// GIF on the CDN — `CDN.emoji` picks the extension off the `a:` in the tag —
-/// and `ImageStore` decodes one frame of it, which is why a bio full of moving
-/// emoji sat perfectly still. The moving form is the same URL through
-/// `AnimatedImageStore`, stacked over the poster the ordinary cache already
-/// has.
-///
-/// A still emoji costs none of it: the tag itself says which kind it is, so
-/// there is no fetch, no multi-frame decode and no clock subscription to
-/// discover an answer that arrived with the text.
+/// **The picture is `ExpressionGlyph`'s**, still and film alike — a standard
+/// emoji is a segment too, so a click on it opens its card the way a custom
+/// one's does: Discord's flyout for a default emoji.
 private struct ProseEmoji: View {
     var emoji: EmojiRef
     var side: CGFloat
-    /// Whether the moving form plays — resolved once by `ProseText` from the
-    /// reader's preference and the system's.
+    /// Whether the moving form may play — the prose's own gate. The reader's
+    /// preference and Reduce Motion are asked after it, by `AnimatedPicture`.
     var plays: Bool
     var onTap: ((EmojiRef) -> Void)?
 
-    /// Whether the filmstrip has frames on screen, which is when the still
-    /// goes. See `NameplateArtwork`, where the rule was settled.
-    @State private var isPlaying = false
-
-    @Environment(\.motion) private var motion
-
-    private var url: URL? {
-        emoji.id.flatMap { CDN.emoji(id: $0, animated: emoji.isAnimated, side: side) }
-    }
-
-    /// Whether there is a moving form to put up at all.
-    ///
-    /// Reduce Motion is answered by **not fetching**, not by parking the film
-    /// on frame zero the way a decoration does. A decoration's artwork *is* the
-    /// filmstrip; this one has a poster from the same URL already on screen, so
-    /// decoding the whole loop to show a picture that is already there buys
-    /// nothing.
-    private var playsFilm: Bool { plays && emoji.isAnimated }
-
-    /// The emoji itself: a standard one's glyph, or a custom one's picture.
-    ///
-    /// **A standard emoji is a segment too**, so a click on it opens its card
-    /// the way a custom one's does — Discord's flyout for a default emoji.
-    @ViewBuilder private var art: some View {
-        if emoji.id == nil {
-            Text(emoji.name)
-                .font(.system(size: side * 0.86))
-                .frame(width: side, height: side)
-        } else {
-            picture
-        }
-    }
-
-    private var picture: some View {
-        ZStack {
-            RemoteImage(url: url, side: side) {
-                // The box is reserved either way, so a line does not reflow when
-                // the picture lands.
-                Color.clear
-            }
-            // Taken away once the film is up, and faded rather than cut: the
-            // shared clock is already somewhere else in the cycle when playback
-            // starts, so a cut lands on an unrelated frame — and two copies of
-            // a downsampled glyph at full strength composite their soft rim
-            // twice. §4.6.
-            .opacity(isPlaying ? 0 : 1)
-            .animation(motion.fadeQuick, value: isPlaying)
-
-            if playsFilm, let url {
-                AnimatedDecoration(
-                    url: url,
-                    side: side,
-                    onPlayback: { playing in
-                        guard isPlaying != playing else { return }
-                        isPlaying = playing
-                    }
-                )
-                .allowsHitTesting(false)
-            }
-        }
-        .frame(width: side, height: side)
-        // The still comes back here, not from the film: the filmstrip reports
-        // playback from its load and never from a view update, so it has
-        // nothing to say on the way out — it is simply gone. Watched on
-        // `playsFilm` rather than on the flag, because the film can also go
-        // because Reduce Motion came on or the preference was switched off.
-        .onChange(of: playsFilm) { _, plays in
-            if !plays { isPlaying = false }
-        }
-    }
-
     var body: some View {
+        let art = ExpressionGlyph(emoji: emoji, side: side, plays: plays)
         if let onTap {
             Button { onTap(emoji) } label: { art.contentShape(.rect) }
                 .buttonStyle(.plain)

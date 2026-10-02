@@ -195,11 +195,12 @@ extension SessionController {
                     model.mutateBox(sent.channelID) { $0.receiveLive(sent, trimming: trims) }
                 }
                 model.messageContentRevision &+= 1
+                model.reportScheduling("Message sent.")
             } catch {
                 Self.trace("send scheduled \(id) now failed: \(Self.describe(error))")
                 model.inbox.scheduled = nil
                 model.loadInboxTab(.scheduled)
-                model.reportActionFailure(Self.describe(error))
+                model.reportActionFailure("Failed to send scheduled message. \(Self.describe(error))")
             }
         }
     }
@@ -213,11 +214,12 @@ extension SessionController {
                 guard let updated = try await rest.editScheduledMessage(id, content: content)
                 else { return }
                 model.applyScheduledMessage(updated)
+                model.reportScheduling("Scheduled message updated")
             } catch {
                 Self.trace("edit scheduled \(id) failed: \(Self.describe(error))")
                 model.inbox.scheduled = nil
                 model.loadInboxTab(.scheduled)
-                model.reportActionFailure(Self.describe(error))
+                model.reportActionFailure("Failed to update message. \(Self.describe(error))")
             }
         }
     }
@@ -230,11 +232,12 @@ extension SessionController {
             do {
                 guard let updated = try await rest.rescheduleMessage(id, to: date) else { return }
                 model.applyScheduledMessage(updated)
+                model.reportScheduling("Scheduled message updated")
             } catch {
                 Self.trace("reschedule \(id) failed: \(Self.describe(error))")
                 model.inbox.scheduled = nil
                 model.loadInboxTab(.scheduled)
-                model.reportActionFailure(Self.describe(error))
+                model.reportActionFailure("Failed to update message. \(Self.describe(error))")
             }
         }
     }
@@ -245,11 +248,12 @@ extension SessionController {
             defer { model.inbox.savesInFlight.remove(id) }
             do {
                 try await rest.deleteScheduledMessage(id)
+                model.reportScheduling("Successfully canceled the message.")
             } catch {
                 Self.trace("cancel scheduled \(id) failed: \(Self.describe(error))")
                 model.inbox.scheduled = nil
                 model.loadInboxTab(.scheduled)
-                model.reportActionFailure(Self.describe(error))
+                model.reportActionFailure("Failed to cancel scheduled message. \(Self.describe(error))")
             }
         }
     }

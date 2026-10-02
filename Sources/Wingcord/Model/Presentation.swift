@@ -226,6 +226,9 @@ enum SidebarRow: Hashable, Sendable, Identifiable {
     case guildAction(GuildSurface)
     /// "3 Events" — Discord's events row, which opens the events panel.
     case events(SidebarEventsRow)
+    /// Message Requests, at the head of the conversations — drawn only while
+    /// there is a request or spam waiting, with the pending ones counted.
+    case messageRequests(pending: Int)
 
     var id: UInt64 {
         switch self {
@@ -237,6 +240,7 @@ enum SidebarRow: Hashable, Sendable, Identifiable {
         case .guildAction(let surface): surface.rawValue
         // Beside the surfaces' small integers, and as far from a snowflake.
         case .events: 99
+        case .messageRequests: 98
         }
     }
 }
@@ -308,6 +312,7 @@ enum SidebarTarget: Hashable, Sendable {
     case none
     case channel(ChannelID)
     case surface(GuildSurface)
+    case messageRequests
 }
 
 struct SidebarCategory: Hashable, Sendable, Identifiable {
@@ -579,6 +584,8 @@ struct WorkspacePresentation: Hashable, Sendable {
         /// it carries no payload — what it is showing lives in `DiscoveryState`,
         /// which survives stepping away to a channel and back.
         case discovery
+        /// The Message Requests page, on the direct-message home.
+        case messageRequests
     }
 
     enum Supplementary: Hashable, Sendable {
@@ -603,6 +610,9 @@ struct WorkspacePresentation: Hashable, Sendable {
         /// list of the other four — so the channel arrives in the column the
         /// roster already lives in and the page keeps its place.
         case channelPreview(ChannelID)
+        /// A message request read beside its page: the words, the media
+        /// counted, and Discord's bar to accept it in place of a composer.
+        case messageRequestPreview(ChannelID)
     }
 
     var primary: Primary

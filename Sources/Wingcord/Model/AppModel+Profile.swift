@@ -334,7 +334,9 @@ extension AppModel {
     /// to keep correct on every channel event for a lookup nobody makes in a
     /// loop.
     func directMessageChannel(with userID: UserID) -> ChannelID? {
-        channelIndex.privateChannelIDs().first { channelID in
+        // A request is still the conversation with them — Discord opens it
+        // rather than making a second.
+        channelIndex.allPrivateChannelIDs().first { channelID in
             guard let channel = channelIndex[channelID],
                   channel.kind == .directMessage
             else { return false }
@@ -464,13 +466,6 @@ extension AppModel {
     func showMainProfile(_ showsMain: Bool) {
         guard var request = profileRequest, request.showsMainProfile != showsMain else { return }
         request.showsMainProfile = showsMain
-        profileRequest = request
-    }
-
-    /// Raises the open card to the full profile, keeping its subject.
-    func openFullProfile() {
-        guard var request = profileRequest, request.depth != .full else { return }
-        request.depth = .full
         profileRequest = request
     }
 

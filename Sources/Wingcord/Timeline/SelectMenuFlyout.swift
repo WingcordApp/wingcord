@@ -70,7 +70,7 @@ struct SelectOptionRow: View {
         Button(action: choose) {
             HStack(spacing: Spacing.snug) {
                 if let emoji = option.emoji {
-                    InlineEmojiMark(emoji: emoji, side: 20)
+                    ExpressionGlyph(emoji: emoji, side: 20)
                 }
                 VStack(alignment: .leading, spacing: 1) {
                     Text(option.label)

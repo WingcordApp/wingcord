@@ -599,7 +599,11 @@ struct SidebarCategoryRow: View {
 /// from `#general` to Channels & Roles read as one pill vanishing and another
 /// appearing, which is the thing `glassEffectID` exists to prevent.
 struct SidebarActionRow: View {
-    var surface: GuildSurface
+    var symbolName: String
+    var title: String
+    /// Drawn at the trailing edge when above zero — the pending message
+    /// requests, in the badge an unread conversation wears.
+    var count = 0
     var isSelected: Bool
     var namespace: Namespace.ID
     var action: () -> Void
@@ -610,19 +614,22 @@ struct SidebarActionRow: View {
     var body: some View {
         Button(action: action) {
             HStack(spacing: Spacing.base) {
-                Image(systemName: surface.symbolName)
+                Image(systemName: symbolName)
                     .font(.system(.caption))
                     .foregroundStyle(isSelected ? AnyShapeStyle(Ink.secondary) : AnyShapeStyle(Ink.tertiary))
                     // The channel rows' glyph gutter, to the point: the two kinds
                     // of row sit in one list and a name that starts two points
                     // off is the thing that makes a list look hand-assembled.
                     .frame(width: 16)
-                Text(surface.title)
+                Text(title)
                     .font(Typeface.rowTitle)
                     .foregroundStyle(isSelected ? AnyShapeStyle(Ink.primary) : AnyShapeStyle(Ink.secondary))
                     .lineLimit(1)
                     .truncationMode(.tail)
                 Spacer(minLength: Spacing.tight)
+                if count > 0 {
+                    UnreadBadge(count: count, isMuted: false)
+                }
             }
             .padding(.horizontal, Spacing.base)
             .padding(.vertical, Spacing.tight)
@@ -652,7 +659,8 @@ struct SidebarActionRow: View {
             isHovering = hovering
         }
         .animation(motion.fadeQuick, value: isHovering)
-        .accessibilityLabel(Text(surface.title))
+        // Discord's own label for the requests row: "Message Requests — 2".
+        .accessibilityLabel(Text(count > 0 ? "\(title) \u{2014} \(count)" : title))
         .accessibilityAddTraits(isSelected ? [.isButton, .isSelected] : .isButton)
     }
 }

@@ -7,6 +7,8 @@ import WingcordCore
 /// the menu draws the whole thing as rows; a symbol chosen at each of them is a
 /// symbol that ends up meaning Reply in one place and Forward in the other.
 enum MessageActionKind: Hashable, Sendable, Identifiable, CaseIterable {
+    /// Sends a refused message again.
+    case resend
     case react
     /// Opens the list of who reacted.
     case viewReactions
@@ -35,6 +37,8 @@ enum MessageActionKind: Hashable, Sendable, Identifiable, CaseIterable {
 
     var title: String {
         switch self {
+        // Discord's own words, case and all (`lXHojr`).
+        case .resend: "Resend message"
         case .react: "Add Reaction"
         case .viewReactions: "View Reactions"
         case .reply: "Reply"
@@ -58,6 +62,7 @@ enum MessageActionKind: Hashable, Sendable, Identifiable, CaseIterable {
 
     var symbolName: String {
         switch self {
+        case .resend: "arrow.clockwise"
         case .react: "face.smiling"
         case .viewReactions: "person.2"
         case .reply: "arrowshape.turn.up.left"
@@ -97,6 +102,7 @@ enum MessageActionKind: Hashable, Sendable, Identifiable, CaseIterable {
     /// the menu, and the menu is only offered when something is in it.
     var requirement: MessageActions? {
         switch self {
+        case .resend: .resend
         case .react: .addReaction
         case .viewReactions: .viewReactions
         case .reply: .reply
@@ -156,6 +162,7 @@ extension MessageActions {
     /// message with nothing in a band draws no separator for it.
     var menuGroups: [[MessageActionKind]] {
         let groups: [[MessageActionKind]] = [
+            [.resend],
             // Discord's own grouping: who reacted sits with reacting.
             [.react, .viewReactions],
             [.reply, .forward, .edit],

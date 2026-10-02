@@ -19,6 +19,8 @@ enum MessageActionRouter {
         anchor: CGRect
     ) {
         switch kind {
+        case .resend:
+            model.sessionController.resend(messageID, in: channelID)
         case .react:
             model.openReactionPicker(for: messageID, in: channelID, anchor: anchor)
         case .viewReactions:

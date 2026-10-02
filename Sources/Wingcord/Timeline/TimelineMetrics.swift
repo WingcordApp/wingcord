@@ -148,6 +148,14 @@ nonisolated enum TimelineMetrics {
     /// The glyph's box inside one, and the gap after it.
     static let attachmentCardGlyphSide: CGFloat = 26
     static let attachmentCardInset: CGFloat = 12
+    /// An upload card's bar, and the cancel at its trailing edge — Discord's
+    /// progress bar and its `md` close glyph.
+    static let uploadBarHeight: CGFloat = 6
+    static let uploadCancelSide: CGFloat = 16
+    /// One of a request's hidden pieces of media — a placeholder, so a row
+    /// rather than a card.
+    static let hiddenMediaTileHeight: CGFloat = 40
+    static let hiddenMediaGap: CGFloat = 4
     /// A voice note's bar.
     static let voiceNoteHeight: CGFloat = 44
     static let voiceNoteMaxWidth: CGFloat = 320

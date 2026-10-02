@@ -307,6 +307,15 @@ final class TimelineCanvasView: NSView {
     /// reader is in it. Pushed in and redrawn — never laid out. See
     /// `ActivityInviteSlot.statusOrigin`.
     private var activityInviteStatuses: [ApplicationID: ActivityInviteStatus] = [:]
+    /// The listen-along cards' hosts, by party — painted, see
+    /// `ListenAlongCard`.
+    private var listenAlongCards: [String: ListenAlongCard] = [:]
+    /// Repaints the live cards each second, while there are any: their clock
+    /// is read at paint time, and a clock read is not a subscription.
+    private var listenAlongClock: Task<Void, Never>?
+    /// How far each of the reader's uploads has got, by its echo's id — see
+    /// `apply(uploadProgress:)`.
+    private var uploadProgress: [MessageID: Double] = [:]
     /// Suppressed while a scroll is running. `.onContinuousHover`-shaped work is
     /// worst exactly during a scroll: a trackpad flick moves no pointer at all
     /// yet drags every row in the list underneath a stationary one, so the
@@ -388,6 +397,8 @@ final class TimelineCanvasView: NSView {
     var isFavoriteGIF: ((GIF) -> Bool)?
     /// The Play button on an activity invitation was pressed.
     var onPlayActivity: ((MessageID) -> Void)?
+    /// A listen-along card's Join.
+    var onListenAlong: ((MessageID) -> Void)?
     /// An invite card's button was pressed.
     var onInviteButton: ((InviteCard) -> Void)?
     /// A profile card was opened past its fold, or folded again.
@@ -409,6 +420,8 @@ final class TimelineCanvasView: NSView {
     /// only in this session, so taking it out of the store destroys the only
     /// copy the reader can reach.
     var onDismissEphemeral: ((MessageID) -> Void)?
+    /// The cancel on one of the reader's uploads, by its echo's id.
+    var onCancelUpload: ((MessageID) -> Void)?
     /// A reaction chip was clicked. The reader's own reaction of that chip's
     /// kind is toggled.
     var onToggleReaction: ((MessageID, EmojiRef, ReactionKind) -> Void)?
@@ -579,6 +592,70 @@ final class TimelineCanvasView: NSView {
         guard statuses != activityInviteStatuses else { return }
         activityInviteStatuses = statuses
         setNeedsDisplay(visibleRect)
+    }
+
+    /// The listen-along cards' painted state. Their pictures come from
+    /// presence, not from a laid-out slot, so they are asked for here — the
+    /// row's image pass cannot see them — and the canvas repaints once they
+    /// land.
+    func apply(listenAlongCards cards: [String: ListenAlongCard]) {
+        guard cards != listenAlongCards else { return }
+        listenAlongCards = cards
+        setNeedsDisplay(visibleRect)
+        let scale = window?.backingScaleFactor ?? 2
+        var keys: [ImageStore.Key] = []
+        for card in cards.values {
+            if let url = card.artworkURL {
+                keys.append(ImageStore.Key(url: url, maximumPixelSize: Int(ListenAlongLayoutEngine.artSide * scale)))
+            }
+            for url in card.faces.compactMap({ $0 }) {
+                keys.append(ImageStore.Key(url: url, maximumPixelSize: Int(ListenAlongLayoutEngine.faceSide * scale)))
+            }
+        }
+        let missing = keys.filter { ImageStore.shared.cached($0, bucket: .thumbnail) == nil }
+        if !missing.isEmpty {
+            Task { [weak self] in
+                for key in missing { _ = await ImageStore.shared.image(for: key, bucket: .thumbnail) }
+                guard let self else { return }
+                self.setNeedsDisplay(self.visibleRect)
+            }
+        }
+        // A live card's clock moves every second; nothing else on the row does.
+        if cards.isEmpty {
+            listenAlongClock?.cancel()
+            listenAlongClock = nil
+        } else if listenAlongClock == nil {
+            listenAlongClock = Task { [weak self] in
+                while !Task.isCancelled {
+                    try? await Task.sleep(for: .seconds(1))
+                    guard let self, !Task.isCancelled else { return }
+                    self.repaintLiveListenAlongCards()
+                }
+            }
+        }
+    }
+
+    private func repaintLiveListenAlongCards() {
+        let visible = visibleRect
+        for (index, row) in rows.enumerated() {
+            guard case .message(let message) = row.kind, let card = message.listenAlong, card.isLive else { continue }
+            let frame = rowFrame(at: index)
+            guard frame.intersects(visible) else { continue }
+            setNeedsDisplay(card.rect.offsetBy(dx: frame.minX, dy: frame.minY))
+        }
+    }
+
+    /// An upload's bar, which moves a hundred times an upload and changes no
+    /// row — so it is paint state, and only the rows it moved repaint.
+    func apply(uploadProgress progress: [MessageID: Double]) {
+        guard progress != uploadProgress else { return }
+        let moved = Set(progress.keys).union(uploadProgress.keys)
+            .filter { progress[$0] != uploadProgress[$0] }
+        uploadProgress = progress
+        for id in moved {
+            guard let index = rows.firstIndex(where: { $0.messageID == id }) else { continue }
+            setNeedsDisplay(rowFrame(at: index))
+        }
     }
 
     func apply(activityAccents accents: [ApplicationID: UInt32]) {
@@ -1209,6 +1286,14 @@ final class TimelineCanvasView: NSView {
                         }
                     }
                 }
+                if case .message(let message) = row.kind, let upload = message.upload {
+                    state.uploadProgress = uploadProgress[message.id] ?? 0
+                    state.isUploadCancelHovered = state.isHovered
+                        && hoveredComponent == upload.cancelRect.origin
+                }
+                if case .message(let message) = row.kind, let listenAlong = message.listenAlong {
+                    state.listenAlong = listenAlongCards[listenAlong.source.partyID]
+                }
                 if case .message(let message) = row.kind,
                    let invite = message.activityInvite {
                     let application = invite.source.applicationID
@@ -1462,11 +1547,15 @@ final class TimelineCanvasView: NSView {
             onOpenSelect?(row.id, customID, rect.offsetBy(dx: origin.x, dy: origin.y))
         case .dismissEphemeral:
             onDismissEphemeral?(row.id)
+        case .cancelUpload:
+            onCancelUpload?(row.id)
         case .pollAnswer(let answerID, _):
             if let answerID { onVote?(row.id, answerID) }
         case .activityInvite(let origin):
             // `.zero` means the click landed on the card but not on the button.
             if origin != .zero { onPlayActivity?(row.id) }
+        case .listenAlong(let origin):
+            if origin != .zero { onListenAlong?(row.id) }
         case .inviteButton(let invite, _):
             onInviteButton?(invite)
         case .inviteFold(let fold, _):
@@ -1731,6 +1820,8 @@ final class TimelineCanvasView: NSView {
         /// A select menu this client can answer, with its rect in the row.
         case select(customID: String, rect: CGRect)
         case dismissEphemeral(origin: CGPoint)
+        /// The cancel on an upload's card. Its origin, in row space.
+        case cancelUpload(origin: CGPoint)
         /// One answer in a poll. `answerID` is nil where the poll cannot be
         /// voted in — the row still swallows the click rather than letting it
         /// fall through to whatever is beneath.
@@ -1739,6 +1830,9 @@ final class TimelineCanvasView: NSView {
         /// space so the painter can light it, exactly as a component button
         /// does.
         case activityInvite(origin: CGPoint)
+        /// A listen-along card's button, when it may be pressed — `.zero`
+        /// for the rest of the card.
+        case listenAlong(origin: CGPoint)
         /// An invite card's button. Carries its origin in row space so the
         /// painter can light it; the card's own body takes no click.
         case inviteButton(InviteCard, origin: CGPoint)
@@ -1850,6 +1944,14 @@ final class TimelineCanvasView: NSView {
             return .dismissEphemeral(origin: note.dismissRect.origin)
         }
 
+        // Only while there is something to stop: a full bar has nothing left
+        // to cancel, and Discord takes its cancel away with "Processing...".
+        if let upload = row.upload, upload.cancelRect.contains(local),
+           uploadProgress[row.id] ?? 0 < 1
+        {
+            return .cancelUpload(origin: upload.cancelRect.origin)
+        }
+
         // Every button is a hit, live or not: a dead one still has to swallow
         // the click rather than letting it fall through to whatever is beneath.
         for slot in row.components where slot.rect.contains(local) {
@@ -1879,6 +1981,13 @@ final class TimelineCanvasView: NSView {
             return .activityInvite(
                 origin: invite.buttonRect.contains(local) ? invite.buttonRect.origin : .zero
             )
+        }
+        if let card = row.listenAlong, card.rect.contains(local) {
+            let pressable = listenAlongCards[card.source.partyID]?.isButtonEnabled == true
+            guard pressable, let button = card.buttonRect, button.contains(local) else {
+                return .listenAlong(origin: .zero)
+            }
+            return .listenAlong(origin: button.origin)
         }
 
         if let poll = row.poll, poll.rect.contains(local) {
@@ -2069,13 +2178,13 @@ final class TimelineCanvasView: NSView {
             case .component(let url, let customID, let origin):
                 component = origin
                 cursor = url == nil && customID == nil ? nil : .pointingHand
-            case .dismissEphemeral(let origin):
+            case .dismissEphemeral(let origin), .cancelUpload(let origin):
                 component = origin
                 cursor = .pointingHand
             case .pollAnswer(let answerID, let origin):
                 component = origin
                 cursor = answerID == nil ? nil : .pointingHand
-            case .activityInvite(let origin):
+            case .activityInvite(let origin), .listenAlong(let origin):
                 component = origin
                 cursor = origin == .zero ? nil : .pointingHand
             case .inviteButton(_, let origin):

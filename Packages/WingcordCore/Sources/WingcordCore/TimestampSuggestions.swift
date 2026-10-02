@@ -153,6 +153,21 @@ public enum TimestampSuggestions {
             let hasCalendarDate = Self.matches(lowered, Self.calendarDate)
             let hasWeekday = !isRelative && !hasCalendarDate && Self.matches(lowered, Self.weekday)
 
+            // **A weekday alone is the nearest one**, chrono's rule — today on
+            // the day itself, Thursday yesterday on a Friday. The detector
+            // always looks forward, so a Friday's "friday" came back a week
+            // out and was never this week's at all.
+            if hasWeekday {
+                var offset = calendar.component(.weekday, from: date) - calendar.component(.weekday, from: now)
+                if abs(offset - 7) < abs(offset) { offset -= 7 }
+                if abs(offset + 7) < abs(offset) { offset += 7 }
+                let day = calendar.date(byAdding: .day, value: offset, to: calendar.startOfDay(for: now)) ?? date
+                let time = calendar.dateComponents([.hour, .minute, .second], from: date)
+                date = calendar.date(
+                    bySettingHour: time.hour ?? 0, minute: time.minute ?? 0, second: time.second ?? 0, of: day
+                ) ?? date
+            }
+
             // What chrono implies for a part nobody wrote: the reference's
             // time for a day named by its distance from today, noon for a date
             // written out — and seconds only where they were typed.

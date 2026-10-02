@@ -74,9 +74,10 @@ struct ChannelPreviewPane: View, Equatable {
 /// rather than `.regular` for the reason §4 gives: what passes underneath is a
 /// transcript — faces, emoji, somebody's message — and `.regular` frosts all of
 /// it into a grey slab.
-private struct ChannelPreviewHeader: View {
+struct ChannelPreviewHeader: View {
     var chrome: ChannelPreviewChrome
-    var open: () -> Void
+    /// Nil draws no Open — a message request is opened by accepting it.
+    var open: (() -> Void)?
     var close: () -> Void
 
     var body: some View {
@@ -99,11 +100,13 @@ private struct ChannelPreviewHeader: View {
 
                 Spacer(minLength: 0)
 
-                PreviewControl(
-                    systemImage: "arrow.up.left.and.arrow.down.right",
-                    label: "Open Channel",
-                    action: open
-                )
+                if let open {
+                    PreviewControl(
+                        systemImage: "arrow.up.left.and.arrow.down.right",
+                        label: "Open Channel",
+                        action: open
+                    )
+                }
                 PreviewControl(systemImage: "xmark", label: "Close Preview", action: close)
             }
         }

@@ -273,6 +273,15 @@ public struct GuildTrait: Hashable, Sendable, Identifiable {
         guard emojiID == nil, let emojiName else { return nil }
         return UnicodeEmoji.glyph(for: emojiName)
     }
+
+    /// The trait's emoji as every other emoji is carried — a custom one's
+    /// picture, or a shortcode's glyph — and nil where neither can be drawn.
+    public var emoji: EmojiRef? {
+        if let emojiID {
+            return EmojiRef(id: emojiID, name: emojiName ?? "", isAnimated: emojiAnimated)
+        }
+        return glyph.map { EmojiRef(name: $0) }
+    }
 }
 
 

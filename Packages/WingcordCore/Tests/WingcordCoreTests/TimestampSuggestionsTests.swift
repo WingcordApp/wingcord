@@ -70,6 +70,26 @@ struct TimestampSuggestionsTests {
         #expect(calendar.component(.second, from: labelled.0) == 0)
     }
 
+    /// **The detector always looks forward**, so a Friday's "friday" came
+    /// back a week out and the list had no This week at all — a failure that
+    /// only showed on the day itself. Chrono's nearest weekday is pinned here
+    /// against a fixed Friday, which works because the weekday is the only
+    /// part of the detector's answer that is kept.
+    @Test("A weekday is the nearest one: today on the day, yesterday's the day after")
+    func nearestWeekday() throws {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = .current
+        let friday = try #require(calendar.date(from: DateComponents(year: 2026, month: 10, day: 2, hour: 14, minute: 7)))
+        let found = options(TimestampSuggestions.rows(for: "friday", now: friday, calendar: calendar))
+        #expect(found.first?.2 == "Next week")
+        let thisWeek = try #require(found.first { $0.2 == "This week" })
+        #expect(calendar.isDate(thisWeek.0, inSameDayAs: friday))
+
+        let thursday = options(TimestampSuggestions.rows(for: "thursday", now: friday, calendar: calendar))
+        let yesterday = try #require(thursday.first { $0.2 == "This week" })
+        #expect(calendar.component(.day, from: yesterday.0) == 1)
+    }
+
     @Test("Words that are not a moment, or are more than one, offer nothing")
     func nothingToRead() {
         #expect(TimestampSuggestions.rows(for: "hello there").isEmpty)

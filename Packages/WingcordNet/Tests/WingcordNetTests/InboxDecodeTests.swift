@@ -363,8 +363,17 @@ struct InboxDecodeTests {
             ISO8601DateFormatter.plain.date(from: "2026-09-21T17:45:00+00:00")
         )
         #expect(message.scheduledAt == expected)
-        // Decoded and deliberately not interpreted — see `ScheduledMessageDTO`.
+        // `state` 0 is Discord's SCHEDULED: nothing has gone wrong.
         #expect(message.failureReason == nil)
+    }
+
+    /// Discord's own table (`566908`'s `H`), so a row whose send failed says so
+    /// in the inbox's words rather than sitting there looking queued.
+    @Test func aFailedScheduledRowSaysWhy() {
+        #expect(ScheduledMessageDTO.failureReason(0) == nil)
+        #expect(ScheduledMessageDTO.failureReason(3) == "Message could not be sent, permission was denied")
+        #expect([1, 2, 4, 5].map(ScheduledMessageDTO.failureReason) == Array(repeating: "Message could not be sent", count: 4))
+        #expect(ScheduledMessageDTO.failureReason(9) == nil)
     }
 
     /// **The shape this decoder used to expect, asserted to decode to nothing.**

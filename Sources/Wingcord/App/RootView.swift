@@ -30,8 +30,8 @@ struct RootView: View {
                 ConnectionBanner(state: model.connectionState)
             }
             .overlay(alignment: .top) {
-                ActionFailureNotice(failure: model.actionFailure) {
-                    model.actionFailure = nil
+                ActionNoticeView(notice: model.actionNotice) {
+                    model.actionNotice = nil
                 }
             }
             // No chrome before there is anything to be chrome FOR.
@@ -159,15 +159,17 @@ extension AppModel {
     }
 }
 
-/// What an act that did not land says.
+/// What an act that did not land says — or one that landed out of sight.
 ///
 /// **Transient, and one at a time.** A refused pin, delete or block is a click
 /// that visibly did something and then visibly undid it, which reads as the app
 /// being broken rather than as the server saying no. It is not an alert: nothing
 /// here needs a decision, and a modal for "that did not work" interrupts the
-/// thing the reader was doing to tell them it failed.
-private struct ActionFailureNotice: View {
-    var failure: ActionFailure?
+/// thing the reader was doing to tell them it failed. A message scheduled from
+/// the composer is the other case: the composer empties and nothing appears, so
+/// this says when it will go, with the clock Discord's own toast carries.
+private struct ActionNoticeView: View {
+    var notice: ActionNotice?
     var dismiss: () -> Void
 
     @Environment(\.motion) private var motion
@@ -178,12 +180,12 @@ private struct ActionFailureNotice: View {
 
     var body: some View {
         Group {
-            if let failure {
+            if let notice {
                 HStack(spacing: Spacing.base) {
-                    Image(systemName: "exclamationmark.triangle.fill")
+                    Image(systemName: notice.kind == .failure ? "exclamationmark.triangle.fill" : "clock.fill")
                         .font(.system(.caption))
-                        .foregroundStyle(Palette.destructive)
-                    Text(failure.reason)
+                        .foregroundStyle(notice.kind == .failure ? AnyShapeStyle(Palette.destructive) : AnyShapeStyle(Ink.secondary))
+                    Text(notice.text)
                         .font(.system(.caption, weight: .medium))
                         .foregroundStyle(Ink.primary)
                         .lineLimit(2)
@@ -194,16 +196,16 @@ private struct ActionFailureNotice: View {
                 .glassEffect(.regular, in: .capsule)
                 .padding(.top, Spacing.base)
                 .transition(.materialize(from: .top))
-                // Keyed on the failure's own token, so a second refusal while
-                // the first is up restarts the clock rather than inheriting it.
-                .task(id: failure.id) {
+                // Keyed on the notice's own token, so a second one while the
+                // first is up restarts the clock rather than inheriting it.
+                .task(id: notice.id) {
                     try? await Task.sleep(for: Self.dwell)
                     guard !Task.isCancelled else { return }
                     dismiss()
                 }
             }
         }
-        .animation(motion.panel, value: failure)
+        .animation(motion.panel, value: notice)
         .allowsHitTesting(false)
     }
 }

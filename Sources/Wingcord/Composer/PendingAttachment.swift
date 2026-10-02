@@ -25,9 +25,6 @@ struct PendingAttachment: Identifiable, Hashable, Sendable {
     /// A description for screen readers, if the reader has written one.
     var altText: String?
     var isSpoiler = false
-    /// 0...1 while the bytes are going up, nil before and after. The tray reads
-    /// it; nothing else does.
-    var progress: Double?
 
     init(url: URL, id: UUID = UUID()) {
         self.id = id
@@ -76,7 +73,6 @@ struct PendingAttachment: Identifiable, Hashable, Sendable {
             && lhs.url == rhs.url
             && lhs.altText == rhs.altText
             && lhs.isSpoiler == rhs.isSpoiler
-            && lhs.progress == rhs.progress
     }
 
     func hash(into hasher: inout Hasher) { hasher.combine(id) }

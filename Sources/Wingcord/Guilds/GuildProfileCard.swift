@@ -345,14 +345,8 @@ private struct TraitFlow: View {
         FlowLayout(spacing: Spacing.tight) {
             ForEach(shown) { trait in
                 HStack(spacing: 4) {
-                    if let glyph = trait.glyph {
-                        Text(glyph).font(.system(size: 11))
-                    } else if let id = trait.emojiID {
-                        RemoteImage(
-                            url: CDN.emoji(id: id, animated: trait.emojiAnimated, side: 12),
-                            side: 12
-                        ) { Color.clear }
-                        .frame(width: 12, height: 12)
+                    if let emoji = trait.emoji {
+                        ExpressionGlyph(emoji: emoji, side: 12)
                     }
                     Text(trait.label)
                         .font(.system(.caption2))

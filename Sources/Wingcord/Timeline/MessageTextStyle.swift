@@ -43,6 +43,9 @@ nonisolated struct MessageTextStyle: @unchecked Sendable {
     /// A mention's ink. Its plate, and every other plate a text run sits on,
     /// is resolved at paint time from `ThemeInk` — see `TextRunPlates`.
     var mentionColor: NSColor
+    /// A refused send's words — Discord's `--text-feedback-critical`, `#FFA19C`
+    /// in a dark room and `#BA2633` in a light one.
+    var criticalColor = Self.criticalInk(isLight: false)
 
     /// The em-space the inline emoji box is measured against, so an emoji tracks
     /// the text size rather than being pinned at 20pt forever.
@@ -101,6 +104,7 @@ nonisolated struct MessageTextStyle: @unchecked Sendable {
             linkColor: .linkColor,
             underlinesLinks: AppSettings.shared.underlinesLinks,
             mentionColor: NSColor(Palette.accent),
+            criticalColor: criticalInk(isLight: ThemeStore.shared.colors.appearance == .light),
             emojiWidth: body.pointSize * 1.28,
             emojiAscent: body.ascender * 1.05,
             emojiDescent: abs(body.descender),
@@ -171,6 +175,24 @@ nonisolated struct MessageTextStyle: @unchecked Sendable {
         // body's two points was tuned for text a third the height.
         style.lineSpacing = lineSpacing * Self.jumboScale
         return style
+    }
+
+    /// The same style for a message Discord refused.
+    ///
+    /// **Discord's `.isFailed`**: the critical ink on the words, their links and
+    /// their code — and on nothing it does not name, so a mention keeps its own.
+    var failed: MessageTextStyle {
+        var style = self
+        style.primaryColor = criticalColor
+        style.secondaryColor = criticalColor
+        style.linkColor = criticalColor
+        return style
+    }
+
+    static func criticalInk(isLight: Bool) -> NSColor {
+        isLight
+            ? NSColor(srgbRed: 0xBA / 255, green: 0x26 / 255, blue: 0x33 / 255, alpha: 1)
+            : NSColor(srgbRed: 0xFF / 255, green: 0xA1 / 255, blue: 0x9C / 255, alpha: 1)
     }
 
     // MARK: Attribute sets

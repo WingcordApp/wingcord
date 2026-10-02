@@ -120,6 +120,37 @@ extension DiscordREST {
         )
     }
 
+    // MARK: Message requests
+
+    /// Accepts a message request — Discord's Accept DM.
+    ///
+    /// **Captured** — `message request accepted.har`:
+    /// `PUT /channels/{id}/recipients/@me` with `{"consent_status":2}`, and the
+    /// reply is the conversation itself, carrying neither `is_message_request`
+    /// nor `is_spam` — so decoding it IS the acceptance.
+    public func acceptMessageRequest(_ channelID: ChannelID) async throws -> Channel {
+        struct Body: Encodable { var consent_status = 2 }
+        return try await request(
+            method: "PUT",
+            path: "/channels/\(channelID.rawValue)/recipients/@me",
+            route: "channels/{id}/recipients/@me",
+            body: Body(),
+            as: ChannelDTO.self
+        ).domain()
+    }
+
+    /// Turns a message request down — Discord's Ignore and Decline, which are
+    /// one act (`966107`'s `UK`): a `DELETE` on the same route, leaving the
+    /// conversation. Not captured; the bundle's own call.
+    public func declineMessageRequest(_ channelID: ChannelID) async throws {
+        _ = try await requestData(
+            method: "DELETE",
+            path: "/channels/\(channelID.rawValue)/recipients/@me",
+            route: "channels/{id}/recipients/@me",
+            body: Optional<String>.none
+        )
+    }
+
     /// Names a friend the way the reader wants to see them, or clears it.
     ///
     /// `PATCH /users/@me/relationships/{id}` with `{"nickname": "…"}`, and

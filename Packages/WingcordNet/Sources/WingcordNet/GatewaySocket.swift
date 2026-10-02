@@ -857,6 +857,21 @@ public actor GatewaySocket {
                 var party: Party?
                 var buttons: [String]?
                 var application_id: String?
+                /// A Spotify session's track, its `PLAY | SYNC` flags and what
+                /// a listener needs to follow it — absent on everything else.
+                var sync_id: String?
+                var flags: Int?
+                var metadata: Metadata?
+            }
+
+            /// Spotify's, as Discord's `getActivity` writes it — `button_urls`
+            /// included, empty.
+            struct Metadata: Encodable {
+                var context_uri: String?
+                var album_id: String
+                var artist_ids: [String]
+                var type: String
+                var button_urls: [String] = []
             }
 
             /// **`id` and `animated` as well as the name.** A custom emoji in a
@@ -941,7 +956,17 @@ public actor GatewaySocket {
                 // Empty is omitted, not sent as `[]`: an empty array is a claim
                 // that there are no buttons, and Discord is happier with silence.
                 buttons: activity.buttons.isEmpty ? nil : Array(activity.buttons.prefix(2)),
-                application_id: activity.applicationID?.description
+                application_id: activity.applicationID?.description,
+                sync_id: activity.syncID,
+                flags: activity.flags == 0 ? nil : activity.flags,
+                metadata: activity.metadata.map {
+                    Update.Metadata(
+                        context_uri: $0.contextURI,
+                        album_id: $0.albumID,
+                        artist_ids: $0.artistIDs,
+                        type: $0.type
+                    )
+                }
             ))
         }
         send(Update(d: .init(status: status, activities: activities)))

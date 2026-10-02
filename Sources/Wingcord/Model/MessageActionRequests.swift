@@ -82,6 +82,13 @@ struct ForwardRequest: Identifiable, Hashable, Sendable {
     var id: UInt64 { messageID.rawValue }
 }
 
+/// Discord's "Create a Poll", for one conversation.
+struct PollEditorRequest: Identifiable, Hashable, Sendable {
+    var channelID: ChannelID
+
+    var id: ChannelID { channelID }
+}
+
 /// The Share Profile sheet — Discord's forward modal with a person in it.
 struct ShareProfileRequest: Identifiable, Hashable, Sendable {
     var userID: UserID

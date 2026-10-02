@@ -60,6 +60,9 @@ public struct MessageActions: OptionSet, Hashable, Sendable {
     /// see `MessageActionPolicy.resolve`. The reader's own reactions need
     /// nothing, and are not this bit.
     public static let removeReactions = MessageActions(rawValue: 1 << 17)
+    /// Sending a refused message again. Only ever on the reader's own echo of
+    /// a send Discord turned down — see `OutgoingMessage`.
+    public static let resend = MessageActions(rawValue: 1 << 18)
 
     /// Whether anything at all is offered. A row with no actions draws no pill
     /// and opens no menu, rather than opening an empty one.

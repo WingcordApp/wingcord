@@ -61,6 +61,16 @@ public struct Snowflake<Tag>: Hashable, Sendable, Comparable, CustomStringConver
             ? (milliseconds &- Self.epochMilliseconds) << 22
             : 0
     }
+
+    /// An id minted on this machine at `date` — how Discord's own client makes
+    /// a nonce (`fromTimestampWithSequence`), and so the id a message's local
+    /// echo can be drawn under until the real one arrives.
+    ///
+    /// `sequence` fills the low twelve bits, which is what keeps two ids minted
+    /// in the same millisecond apart.
+    public init(minting date: Date, sequence: UInt64) {
+        self.init(rawValue: Self(before: date).rawValue | (sequence & 0xFFF))
+    }
 }
 
 // A snowflake encodes back to Discord's string form, so the wire shape is

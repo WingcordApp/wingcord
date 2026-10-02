@@ -193,6 +193,10 @@ final class AppModel {
     private(set) var messageBoxes: [ChannelID: MessageBox] = [:]
     private var boxRecency: [ChannelID] = []
     static let residentChannelLimit = 3
+    /// The composers' words, kept across a relaunch — see `DraftStore`. Fed
+    /// from the two writes every box goes through, so no composer has to
+    /// remember to save.
+    @ObservationIgnored let drafts: DraftStore
 
     /// Each channel's running slowmode wait. See `SlowmodeCooldown`.
     ///
@@ -272,12 +276,27 @@ final class AppModel {
     /// list. Cleared by selecting a channel and by switching servers — a guide
     /// belongs to the server it describes.
     var openGuildSurface: GuildSurface?
+    /// The Message Requests page — Discord's `/message-requests`. Closed like
+    /// a server's page: by picking a conversation, or leaving the home.
+    var isMessageRequestsOpen = false
+    /// Which of its two lists it shows. A request read beside one list does
+    /// not stay open over the other.
+    var messageRequestsTab: MessageRequestsTab = .requests {
+        didSet { if messageRequestsTab != oldValue { previewedChannelID = nil } }
+    }
+    /// Requests being accepted or declined, so their buttons wait.
+    var messageRequestsInFlight: Set<ChannelID> = []
+    /// The senders whose profiles the page asked for — what tells "No Mutual
+    /// Servers" from a profile that has not answered. Read beside
+    /// `profilesLoading`, which is the observed half.
+    @ObservationIgnored var messageRequestProfilesAsked: Set<UserID> = []
     /// A channel being read beside one of those pages.
     ///
     /// Its own property rather than a second meaning for `selectedChannelID`:
     /// the preview and the conversation the reader will return to are two
     /// different channels, and one property holding both is how following a
-    /// resource loses the channel you came from.
+    /// resource loses the channel you came from. A message request's preview
+    /// is one too, beside its page.
     var previewedChannelID: ChannelID?
     /// The thread open in the panel, beside whatever it hangs off.
     ///
@@ -570,6 +589,8 @@ final class AppModel {
     var interactionModal: InteractionModalState?
     var forwardRequest: ForwardRequest?
     var shareProfileRequest: ShareProfileRequest?
+    /// The poll editor, from the composer's `+` — see `PollEditorSheet`.
+    var pollEditor: PollEditorRequest?
     /// Channels a forward is being written to. Keyed by target so two can be in
     /// flight and neither blocks the other.
     var forwardsInFlight: Set<ChannelID> = []
@@ -747,16 +768,17 @@ final class AppModel {
     /// which is also exactly when the reader has stopped meaning it.
     var suppressedAckChannelID: ChannelID?
 
-    /// The last act that did not land, in the reader's words.
+    /// The last act that did not land — or that landed somewhere the reader
+    /// cannot see, like a message queued for Thursday — in the reader's words.
     ///
     /// **One slot, not a queue.** These are transient notices for a click that
-    /// was just made; a second failure while the first is on screen replaces it,
+    /// was just made; a second one while the first is on screen replaces it,
     /// because the reader is looking at the thing they just did and a backlog of
-    /// stale refusals is noise. Cleared by the notice's own timer.
-    var actionFailure: ActionFailure?
-    /// Distinguishes two identical refusals. `@ObservationIgnored` because
-    /// nothing reads it — it exists only to make `actionFailure` differ.
-    @ObservationIgnored var actionFailureToken: UInt64 = 0
+    /// stale notices is noise. Cleared by the notice's own timer.
+    var actionNotice: ActionNotice?
+    /// Distinguishes two identical notices. `@ObservationIgnored` because
+    /// nothing reads it — it exists only to make `actionNotice` differ.
+    @ObservationIgnored var actionNoticeToken: UInt64 = 0
     /// Profile effects, by SKU rather than by person: an effect is a purchase
     /// twenty people in one server may share, and fetching it per wearer would
     /// ask for the same composition twenty times.
@@ -1177,6 +1199,10 @@ final class AppModel {
     /// it starts. Cleared when the activity closes, or everybody's roster keeps
     /// showing a game that ended.
     var publishedActivity: RichPresenceActivity?
+    /// What the reader's Spotify is playing — see `SessionController+SpotifyPlayer`.
+    var spotifyNowPlaying: SpotifyNowPlaying?
+    /// Whose Spotify the reader is listening along to, while they are.
+    var listeningAlong: ListeningAlong?
 
     /// The in-game overlay: its window, its lock and its widgets.
     let overlay = OverlayController()
@@ -1250,7 +1276,25 @@ final class AppModel {
             list.append(detectedGame.activity)
         }
         if let publishedActivity { list.append(publishedActivity) }
+        if let spotifyActivity { list.append(spotifyActivity) }
         return list
+    }
+
+    /// The reader's Listening activity, while Spotify plays — Discord's
+    /// `getActivity` behind its `shouldShowActivity`: only where the account's
+    /// connection has "Display Spotify as your status" on.
+    var spotifyActivity: RichPresenceActivity? {
+        guard let playing = spotifyNowPlaying, let userID = currentUserID,
+              connections?.first(where: { $0.type == "spotify" && $0.id == playing.accountID })?.showsActivity == true
+        else { return nil }
+        return SpotifyListening.activity(
+            for: playing.item,
+            startedAt: playing.startedAt,
+            contextURI: playing.contextURI,
+            // Listening along is joining the host's party — which is what puts
+            // the reader in its "N Listening" and its card at Joined.
+            partyID: listeningAlong?.partyID ?? SpotifyListening.partyID(for: userID)
+        )
     }
 
     // MARK: Memo storage
@@ -1504,7 +1548,8 @@ final class AppModel {
     /// cannot arise here.
     var followRevision: UInt64 = 0
 
-    init() {
+    init(drafts: DraftStore = DraftStore()) {
+        self.drafts = drafts
         // **The overlay needs its model before any keybind can reach it.** It is
         // a stored property, so it cannot be handed `self` at construction; and
         // attaching it lazily from `refreshOverlay` meant the overlay hotkey did
@@ -1520,15 +1565,45 @@ final class AppModel {
     }
 
     func setMessages(_ box: MessageBox, in channelID: ChannelID) {
+        noteDraft(of: box, replacing: messageBoxes[channelID], in: channelID)
         messageBoxes[channelID] = box
         touchBox(channelID)
     }
 
     func mutateBox(_ channelID: ChannelID, _ body: (inout MessageBox) -> Void) {
-        var box = messageBoxes[channelID] ?? MessageBox()
+        let previous = messageBoxes[channelID]
+        var box = previous ?? MessageBox()
         body(&box)
+        noteDraft(of: box, replacing: previous, in: channelID)
         messageBoxes[channelID] = box
         touchBox(channelID)
+    }
+
+    /// Hands a changed draft to the store. A comparison per write, which for
+    /// every write but a keystroke is two equal strings.
+    private func noteDraft(of box: MessageBox, replacing previous: MessageBox?, in channelID: ChannelID) {
+        guard box.draft != (previous?.draft ?? "") else { return }
+        drafts.note(box.draft, in: channelID)
+    }
+
+    /// Puts the account's kept drafts back into their composers.
+    ///
+    /// **Without touching the boxes' recency**, which is the transcript cache's
+    /// order: a box made to hold a draft is not a channel being read, and
+    /// counting forty of them as visits would evict the transcript on screen.
+    /// Only into an empty composer, so a reconnect never writes over words typed
+    /// since — and those, being newer, are what the store keeps instead: it
+    /// ignores every keystroke made before the account was ready.
+    func restoreDrafts(for accountID: UserID) {
+        let kept = drafts.open(for: accountID)
+        for (channelID, box) in messageBoxes where !box.draft.isEmpty {
+            drafts.note(box.draft, in: channelID)
+        }
+        for (channelID, draft) in kept where messageBoxes[channelID]?.draft.isEmpty ?? true {
+            var box = messageBoxes[channelID] ?? MessageBox()
+            box.draft = draft.text
+            messageBoxes[channelID] = box
+        }
     }
 
     /// Drops every loaded transcript. Part of the sign-out funnel, which is the
@@ -1702,8 +1777,15 @@ struct PendingReaction: Hashable, Sendable {
 /// The token is what makes two identical refusals two notices rather than one:
 /// a value equal to the one already on screen publishes nothing, so the second
 /// failure would show no notice at all and read as having quietly worked.
-struct ActionFailure: Hashable, Sendable, Identifiable {
-    var reason: String
+struct ActionNotice: Hashable, Sendable, Identifiable {
+    enum Kind: Hashable, Sendable {
+        case failure
+        /// A scheduled message queued, moved or sent — Discord's clock toasts.
+        case scheduling
+    }
+
+    var text: String
+    var kind: Kind
     var id: UInt64
 }
 
@@ -1712,16 +1794,6 @@ enum ReportSubmissionState: Hashable, Sendable {
     case sending
     case succeeded
     case failed(String)
-}
-
-/// What the composer held when a send left it.
-///
-/// **Carried with the send, never read back from the box afterwards.** By the
-/// time a send fails the box has been cleared, and it may already hold the
-/// next message.
-struct UnsentDraft: Sendable {
-    var text: String
-    var replyingTo: MessageID?
 }
 
 /// One channel's loaded transcript and the state that belongs with it.
@@ -1761,6 +1833,10 @@ struct MessageBox: Sendable {
     var draft: String = ""
     /// A message being replied to. Survives eviction.
     var replyingTo: MessageID?
+    /// When the next message goes, while the composer is scheduling —
+    /// Discord's `ScheduledMessage` draft. Cleared once Discord has taken one;
+    /// a refusal keeps it, as Discord's does.
+    var scheduledAt: Date?
     /// A message being edited, and its text so far. Survives eviction, and sits
     /// *beside* the draft rather than over it — see `MessageEdit`.
     var editing: MessageEdit?
@@ -1779,15 +1855,20 @@ struct MessageBox: Sendable {
     /// Why the last file was refused, in the reader's words. Cleared by the
     /// next successful staging or by dismissing it.
     var attachmentRefusal: AttachmentRefusal?
-    /// True while the staged files are going up. The composer disables its
-    /// send control on it, because a second press would upload everything
-    /// twice.
-    var isUploading = false
+    /// The reader's own sends Discord has not answered, oldest first. See
+    /// `OutgoingMessage`. Survives eviction, as Discord's own sending and
+    /// failed messages survive a reload of the channel.
+    var outbox: [OutgoingMessage] = []
+    /// Discord's explanations of refused sends — Clyde's, local to this
+    /// session, gone on Dismiss. Dropped with the transcript, as Discord's go
+    /// with its message cache: they are about a moment, not about the channel.
+    var notices: [Message] = []
 
     /// Drops the transcript, keeps the user's own input.
     mutating func evictTranscript() {
         messages.removeAll(keepingCapacity: false)
         heldLive.removeAll(keepingCapacity: false)
+        notices.removeAll(keepingCapacity: false)
         hasMoreHistory = true
         isLoadingHistory = false
         historyFailure = nil
@@ -1820,9 +1901,20 @@ struct MessageBox: Sendable {
         }
     }
 
+    /// Puts a send that did not leave back where it came from — Discord's `j`
+    /// for a refused upload: its words into an empty composer, its files into
+    /// an empty tray. **Never over what the reader has started since**; losing
+    /// that instead would be the same defect aimed at a different message.
+    mutating func returnToComposer(_ entry: OutgoingMessage) {
+        if draft.isEmpty { draft = entry.request.content }
+        if attachments.isEmpty { attachments = entry.files }
+    }
+
     mutating func remove(_ messageID: MessageID) {
         messages.removeAll { $0.id == messageID }
         // A message deleted while held must not come back when it is merged.
         heldLive.removeAll { $0.id == messageID }
+        // Dismissing one of Clyde's is the same act from the reader's side.
+        notices.removeAll { $0.id == messageID }
     }
 }
