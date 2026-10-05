@@ -126,7 +126,7 @@ struct ConnectionRow: View {
                                 .font(.system(size: 9))
                                 .foregroundStyle(Palette.affirmative)
                         }
-                        Image(systemName: affordance)
+                        Image(symbol: affordance)
                             .font(.system(size: 8, weight: .bold))
                             .foregroundStyle(InkColor.tertiary)
                             .opacity(isHovering ? 1 : 0.45)

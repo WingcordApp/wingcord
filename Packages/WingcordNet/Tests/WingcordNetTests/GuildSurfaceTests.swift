@@ -199,11 +199,10 @@ struct GuildSurfaceTests {
 
     // MARK: Member verification
 
-    /// **Only `TERMS` is read.** The other field types belong to an application
-    /// form this client cannot submit, and decoding a question nobody can answer
-    /// would be building half of a control that cannot work.
-    @Test("Only the rules field is decoded")
-    func onlyTermsAreRead() throws {
+    /// **Every field is read, in order.** Decoding only `TERMS` is what made
+    /// Apply to Join do nothing: a server's questions never reached the form.
+    @Test("The rules and the questions are both decoded, in order")
+    func everyFieldIsRead() throws {
         let json = """
         {"version":"2020-12-28T20:15:57.529000+00:00",
          "description":"Welcome to the most active CS:GO community on discord!",
@@ -220,6 +219,11 @@ struct GuildSurfaceTests {
         #expect(value.rules.count == 3)
         #expect(value.detail?.hasPrefix("Welcome") == true)
         #expect(!value.isEmpty)
+        #expect(value.fields.count == 2)
+        #expect(value.fields[0].kind.isTerms)
+        #expect(value.questions.map(\.label) == ["Why do you want to join?"])
+        #expect(value.questions.first?.kind == .textInput)
+        #expect(value.asksQuestions)
     }
 
     /// **The version is the thing an agreement is recorded against**, and it is
@@ -244,7 +248,9 @@ struct GuildSurfaceTests {
         #expect(verification.isTermsRequired)
         #expect(verification.canSubmit)
 
-        let body = try #require(MemberVerificationSubmitBody(verification))
+        let terms = try #require(verification.termsField)
+        let application = JoinApplication(form: verification, answers: [terms.id: .agreed(true)])
+        let body = try #require(MemberVerificationSubmitBody(application))
         let encoded = try JSONEncoder().encode(body)
         let text = try #require(String(data: encoded, encoding: .utf8))
         // The captured request carries the version, the label, every rule, the
@@ -252,7 +258,7 @@ struct GuildSurfaceTests {
         // this route was seen to accept.
         #expect(text.contains("2020-12-28T20:15:57.529000+00:00"))
         #expect(text.contains("\"response\":true"))
-        #expect(body.form_fields[0].values.count == 2)
+        #expect(body.form_fields[0].values?.count == 2)
         #expect(body.form_fields[0].field_type == "TERMS")
     }
 
@@ -265,7 +271,7 @@ struct GuildSurfaceTests {
             rules: ["Be kind."]
         )
         #expect(!verification.canSubmit)
-        #expect(MemberVerificationSubmitBody(verification) == nil)
+        #expect(MemberVerificationSubmitBody(JoinApplication(form: verification)) == nil)
     }
 
     /// Three real outcomes: a rules-only gate approves instantly, a server that

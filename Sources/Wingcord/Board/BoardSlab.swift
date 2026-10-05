@@ -422,7 +422,7 @@ struct GameTagChip: View {
 
     var body: some View {
         HStack(spacing: 4) {
-            Image(systemName: tag.symbolName)
+            Image(symbol: tag.symbolName)
                 .font(.system(size: 8, weight: .semibold))
                 .foregroundStyle(InkColor.tertiary)
             Text(tag.title)

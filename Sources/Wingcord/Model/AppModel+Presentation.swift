@@ -33,6 +33,9 @@ struct RailMemoKey: Hashable, Sendable {
     var mutedGuildIDs: Set<GuildID>
     var blockedUserIDs: Set<UserID>
     var ignoredUserIDs: Set<UserID>
+    /// The application marks on the reader's own servers — the value itself,
+    /// which is empty for nearly every account and a handful for the rest.
+    var applicationMarks: [GuildID: RailApplicationMark] = [:]
 }
 
 struct SidebarMemoKey: Hashable, Sendable {
@@ -124,7 +127,8 @@ extension AppModel {
             channelStructure: channelIndex.structureRevision,
             mutedGuildIDs: mutedGuildIDs,
             blockedUserIDs: blockedUserIDs,
-            ignoredUserIDs: ignoredUserIDs
+            ignoredUserIDs: ignoredUserIDs,
+            applicationMarks: railApplicationMarks
         )
         // Reading `guilds` and `folders` here — not inside the builder — is what
         // registers the dependency on a cache hit. Arrays and dictionaries are
@@ -142,7 +146,8 @@ extension AppModel {
             connectedVoiceGuild: connectedVoiceChannelID.flatMap {
                 channelIndex.guildID(of: $0)
             },
-            voiceMarks: voiceMarksByGuild
+            voiceMarks: voiceMarksByGuild,
+            applicationMarks: key.applicationMarks
         )
         railCache = (key, value)
         return value
@@ -236,6 +241,12 @@ extension AppModel {
         if isDiscoveryShown {
             return WorkspacePresentation(primary: .discovery, supplementary: nil)
         }
+        // A server the reader is not in, picked out of the Pending
+        // Applications folder: its page is about the application, and there is
+        // no server here to show anything else of.
+        if let guildID = shownJoinRequestGuildID {
+            return WorkspacePresentation(primary: .joinRequest(guildID), supplementary: nil)
+        }
         // The home's own page, with the request being read beside it.
         if isMessageRequestsShown {
             return WorkspacePresentation(
@@ -259,10 +270,12 @@ extension AppModel {
         if let openGuildSurface, let guildID = selectedGuildID {
             return WorkspacePresentation(
                 primary: .guildSurface(guildID, openGuildSurface),
-                // The only thing that belongs beside a page about the server is
-                // a channel the page pointed at. There is no roster here — the
-                // page is not a conversation — and no profile.
-                supplementary: previewedChannelID.map { .channelPreview($0) }
+                // The only things that belong beside a page about the server
+                // are a channel the page pointed at and a person it opened in
+                // Mod View. There is no roster here — the page is not a
+                // conversation — and no profile.
+                supplementary: openModViewUserID.map { isSearchShown ? .search : .modView($0) }
+                    ?? previewedChannelID.map { .channelPreview($0) }
             )
         }
         guard let channelID = selectedChannelID, let channel = channelIndex[channelID] else {
@@ -290,6 +303,17 @@ extension AppModel {
     /// people and no roster route, and a pane showing one of them would be
     /// arbitrary.
     private func supplementary(for channel: Channel) -> WorkspacePresentation.Supplementary? {
+        // **Mod View takes the column ahead of everything** — Discord opens it
+        // as the server's sidebar, closing a thread on the way. Message
+        // History is the search panel, which shows over it while it is open.
+        if let userID = openModViewUserID, channel.guildID != nil {
+            return isSearchShown ? .search : .modView(userID)
+        }
+        // **A thread being written takes the column**, as Discord's creation
+        // sidebar replaces whatever thread was open beside the channel.
+        if let newThread, newThread.parentID == channel.id {
+            return .newThread(newThread)
+        }
         // **An open thread takes the column ahead of everything.** It is the
         // thing the reader just opened, and it is read *beside* the channel it
         // came out of — which is the whole reason it is a column rather than a
@@ -341,13 +365,26 @@ extension AppModel {
         return orMembers ? .members : nil
     }
 
+    /// A call can be started here: a conversation, and not one with an app
+    /// or with Discord's own account — neither can answer.
+    func canStartCall(in channelID: ChannelID) -> Bool {
+        guard let channel = channelIndex[channelID], channel.kind.isPrivate else { return false }
+        return !channel.recipientIDs.contains { users[$0]?.isBot == true || users[$0]?.isSystem == true }
+    }
+
+    /// Who Mod View is open on in the selected server, if anybody.
+    var openModViewUserID: UserID? {
+        guard let modView, modView.guildID == selectedGuildID else { return nil }
+        return modView.userID
+    }
+
     /// The toolbar's channel chrome.
     var channelChrome: ChannelChrome {
         // **The gate has no chrome at all.** It is a takeover, not a page inside
         // the app: naming a channel over it, or offering a roster toggle beside
         // it, describes a window the reader is not in. An empty name is already
         // how this bar draws nothing — see `ChannelToolbar`.
-        if isJoinGateShown || isDiscoveryShown { return .none }
+        if isColumnTakenOver { return .none }
         // The pill names whatever the column is showing, which on a server page
         // is the page. Its own branch rather than a nil channel, so the bar has
         // a title there instead of a hole its neighbours slide into.
@@ -378,6 +415,13 @@ extension AppModel {
         return ChannelChrome(
             channelID: channelID,
             name: displayName(of: channel),
+            parent: channel.kind.isThread
+                ? channel.parentID.flatMap { id in
+                    channelIndex[id].map {
+                        ChannelCrumb(channelID: id, name: displayName(of: $0), symbolName: $0.kind.symbolName)
+                    }
+                }
+                : nil,
             symbolName: channel.kind.symbolName,
             topic: channel.topic,
             isTopicShown: openTopicChannelID == channelID,
@@ -395,7 +439,7 @@ extension AppModel {
             areThreadsShown: openThreadsChannelID == channelID,
             // A conversation, not a channel: a guild's voice channel is joined
             // from its own pane, and a text channel has no call to start.
-            canStartCall: channel.kind.isPrivate,
+            canStartCall: canStartCall(in: channelID),
             isInCall: connectedVoiceChannelID == channelID,
             // Somebody else is sitting in it. Read from the voice states rather
             // than from `directCalls`, which survives the last person leaving.
@@ -424,7 +468,9 @@ extension AppModel {
         /// tile over the whole voice table is ninety-seven passes over five
         /// hundred states, in a memo that rebuilds whenever any message arrives
         /// anywhere in the account.
-        voiceMarks: [GuildID: RailVoiceMark]
+        voiceMarks: [GuildID: RailVoiceMark],
+        /// How the reader's applications stand — `railApplicationMarks`.
+        applicationMarks: [GuildID: RailApplicationMark]
     ) -> [RailItem] {
         var items: [RailItem] = []
         items.reserveCapacity(folders.count)
@@ -442,7 +488,8 @@ extension AppModel {
                 hasUnread: state.unread,
                 isMuted: state.muted,
                 isConnectedToVoice: connectedVoiceGuild == guildID,
-                voiceMark: voiceMarks[guildID]
+                voiceMark: voiceMarks[guildID],
+                applicationMark: applicationMarks[guildID]
             )
         }
 
@@ -682,7 +729,8 @@ extension AppModel {
                         width: Proportions.channelColumnMax
                     )
                 },
-                mark: guild.mark
+                mark: guild.mark,
+                canCreateChannels: permissionGate.permissions(inGuild: guild.id).contains(.manageChannels)
             ),
             rows: rows
         )
@@ -898,6 +946,11 @@ extension AppModel {
         // Picking a server is leaving discovery, as it is in Discord — the grid
         // is a page of its own, not something a server is shown inside.
         if discovery != nil { closeDiscovery() }
+        // Discord opens the folder that holds the destination (`rc`), so an
+        // application's page never sits beside a closed folder.
+        if let guildID, guilds[guildID] == nil, ownJoinRequests[guildID] != nil {
+            isPendingApplicationsOpen = true
+        }
         guard selectedGuildID != guildID else { return }
         selectedGuildID = guildID
         // A guide belongs to the server it describes, so it does not survive

@@ -36,10 +36,14 @@ import SwiftUI
 struct SecondaryClickCatcher: NSViewRepresentable {
     /// Called with the row's own frame, already in the root's coordinate space.
     var onClick: (CGRect) -> Void
+    /// The row is inside a popover, whose root is its own — see
+    /// `anchorInHostingRoot(_:insidePopover:)`.
+    var isInPopover = false
 
     func makeNSView(context: Context) -> CatcherView {
         let view = CatcherView()
         view.onClick = onClick
+        view.isInPopover = isInPopover
         return view
     }
 
@@ -47,10 +51,12 @@ struct SecondaryClickCatcher: NSViewRepresentable {
         // Refreshed rather than captured once: the closure closes over the
         // current generation's state, and a stale one reports into a dead row.
         nsView.onClick = onClick
+        nsView.isInPopover = isInPopover
     }
 
     final class CatcherView: NSView {
         var onClick: (CGRect) -> Void = { _ in }
+        var isInPopover = false
 
         override var isFlipped: Bool { true }
 
@@ -74,7 +80,7 @@ struct SecondaryClickCatcher: NSViewRepresentable {
         }
 
         private func report() {
-            onClick(anchorInHostingRoot(bounds))
+            onClick(anchorInHostingRoot(bounds, insidePopover: isInPopover))
         }
 
         private static func isSecondary(_ event: NSEvent?) -> Bool {
@@ -95,7 +101,10 @@ extension View {
     /// Reports a secondary click on this view, with its own frame as the
     /// anchor. See `SecondaryClickCatcher` for why this is not a
     /// `.contextMenu`.
-    func onSecondaryClick(perform action: @escaping (CGRect) -> Void) -> some View {
-        overlay { SecondaryClickCatcher(onClick: action) }
+    ///
+    /// - Parameter inPopover: the view is inside a popover, and the rect is
+    ///   for a presenter at that popover's root rather than the window's.
+    func onSecondaryClick(inPopover: Bool = false, perform action: @escaping (CGRect) -> Void) -> some View {
+        overlay { SecondaryClickCatcher(onClick: action, isInPopover: inPopover) }
     }
 }

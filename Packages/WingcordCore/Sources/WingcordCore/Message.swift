@@ -96,13 +96,20 @@ public struct Message: Hashable, Sendable, Identifiable, Codable {
 
     /// The embeds a transcript should draw.
     ///
-    /// Everything but a poll result's, whose fields the row's own sentence
-    /// already says — drawn as an ordinary card it is a grey box listing
-    /// `victor_answer_id` at somebody.
+    /// Everything but the kinds Discord never draws as a card (`581619`) and
+    /// this client draws its own way: a poll result's, whose fields the row's
+    /// own sentence already says — drawn as an ordinary card it is a grey box
+    /// listing `victor_answer_id` at somebody — AutoMod's, and a safety
+    /// notice's.
     public var drawableEmbeds: [Embed] {
-        let drawn = kind == .pollResult ? embeds.filter { $0.kind != "poll_result" } : embeds
+        let drawn = embeds.filter { !Self.ownCardKinds.contains($0.kind ?? "") }
         return Embed.mergingGalleries(drawn)
     }
+
+    /// The embed kinds drawn as a card of their own rather than an embed.
+    static let ownCardKinds: Set<String> = SafetyNotice.embedKinds.union([
+        "poll_result", AutoModFields.messageKind, AutoModFields.notificationKind,
+    ])
 
     /// The words to draw, which is not always the words that were sent.
     ///
@@ -239,6 +246,13 @@ public struct Message: Hashable, Sendable, Identifiable, Codable {
     /// quotes an empty body, Forward delivers a call record to a channel it did
     /// not happen in, and Edit has nothing anyone wrote. Those actions are
     /// dropped from both the menu and the hover pill for these kinds.
+    /// A message published from a followed announcement channel (`943667`):
+    /// an ordinary message flagged as a crosspost, its reference the original.
+    /// It is not a reply, and draws no quote above it.
+    public var isCrosspost: Bool {
+        kind == .default && flags.contains(.isCrosspost) && reference != nil
+    }
+
     public var isSystemEvent: Bool {
         switch kind {
         case .default, .reply, .chatInputCommand, .contextMenuCommand, .threadStarterMessage:
@@ -551,6 +565,10 @@ public struct MessageFlags: OptionSet, Hashable, Sendable, Codable {
     /// The message renders entirely from `components`. See
     /// `Message.isComponentsOnly`.
     public static let isComponentsV2 = MessageFlags(rawValue: 1 << 15)
+    /// Its author's account is suspended, and Discord asks clients to hide the
+    /// message — folded under "messages removed from a suspended account",
+    /// which cannot be opened. See `CollapsedGroup`.
+    public static let hiddenSuspendedUser = MessageFlags(rawValue: 1 << 17)
 }
 
 public struct Attachment: Hashable, Sendable, Identifiable, Codable {
@@ -825,6 +843,10 @@ public struct StickerRef: Hashable, Sendable, Identifiable, Codable {
 public struct MessageReference: Hashable, Sendable, Codable {
     public var messageID: MessageID?
     public var channelID: ChannelID?
+    /// The server the referenced message is in. A crosspost's is the server
+    /// that published it — which is what its SERVER card shows, and what makes
+    /// one of Discord's own OFFICIAL.
+    public var guildID: GuildID?
     /// Nil when the reference arrived with no message behind it — deleted, or
     /// out of reach. The header then says so rather than drawing a blank quote.
     public var authorID: UserID?
@@ -837,6 +859,7 @@ public struct MessageReference: Hashable, Sendable, Codable {
     public init(
         messageID: MessageID? = nil,
         channelID: ChannelID? = nil,
+        guildID: GuildID? = nil,
         authorID: UserID? = nil,
         isAuthorBot: Bool = false,
         excerpt: String = "",
@@ -844,6 +867,7 @@ public struct MessageReference: Hashable, Sendable, Codable {
     ) {
         self.messageID = messageID
         self.channelID = channelID
+        self.guildID = guildID
         self.authorID = authorID
         self.isAuthorBot = isAuthorBot
         self.excerpt = excerpt

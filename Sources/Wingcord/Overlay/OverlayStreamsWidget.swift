@@ -240,7 +240,7 @@ private struct OverlayStreamTile: View {
         action: @escaping () -> Void
     ) -> some View {
         Button(action: action) {
-            Image(systemName: symbol)
+            Image(symbol: symbol)
                 .font(.system(size: 11, weight: .semibold))
                 .foregroundStyle(tint ?? .white)
                 .frame(width: 26, height: 26)

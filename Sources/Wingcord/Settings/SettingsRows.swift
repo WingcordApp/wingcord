@@ -244,7 +244,7 @@ struct SettingsIconTile: View {
             .fill(tint.gradient)
             .frame(width: side, height: side)
             .overlay {
-                Image(systemName: symbolName)
+                Image(symbol: symbolName)
                     .font(.system(size: side * 0.58, weight: .medium))
                     .foregroundStyle(.white)
             }
@@ -331,7 +331,7 @@ struct SettingsSegmentedControl<Value: Hashable>: View {
             Button(action: select) {
                 HStack(spacing: Spacing.tight + 2) {
                     if let symbolName = option.symbolName {
-                        Image(systemName: symbolName)
+                        Image(symbol: symbolName)
                             .font(.system(size: 12))
                             .foregroundStyle(isSelected ? Ink.primary : Ink.secondary)
                     }
@@ -471,7 +471,7 @@ struct SettingsFootnote: View {
     var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: Spacing.base) {
             if let symbolName {
-                Image(systemName: symbolName)
+                Image(symbol: symbolName)
                     .font(.system(size: 11))
                     .foregroundStyle(Ink.tertiary)
             }
@@ -560,7 +560,7 @@ struct SettingsTileRow<Value: Hashable>: View {
         var body: some View {
             Button(action: tile.action) {
                 VStack(spacing: Spacing.tight) {
-                    Image(systemName: tile.symbolName)
+                    Image(symbol: tile.symbolName)
                         .font(.system(size: 17, weight: .medium))
                         .foregroundStyle(Ink.primary)
                         .frame(height: 22)

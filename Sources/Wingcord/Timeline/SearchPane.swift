@@ -179,7 +179,7 @@ struct SearchPane: View {
 
     private func notice(_ text: String, symbolName: String) -> some View {
         HStack(alignment: .top, spacing: Spacing.base) {
-            Image(systemName: symbolName)
+            Image(symbol: symbolName)
                 .font(.system(.callout))
                 .foregroundStyle(Ink.tertiary)
                 .accessibilityHidden(true)
@@ -222,7 +222,7 @@ private struct SearchChannelHeading: View {
 
     var body: some View {
         HStack(spacing: Spacing.tight) {
-            Image(systemName: card.channelSymbolName)
+            Image(symbol: card.channelSymbolName)
                 .font(.system(.caption))
                 .foregroundStyle(Ink.tertiary)
             Text(card.channelName)
@@ -440,9 +440,9 @@ private struct SearchPageBar: View {
     ) -> some View {
         Button { go(page) } label: {
             HStack(spacing: Spacing.tight) {
-                if symbol == "chevron.left" { Image(systemName: symbol) }
+                if symbol == "chevron.left" { Image(symbol: symbol) }
                 Text(title)
-                if symbol == "chevron.right" { Image(systemName: symbol) }
+                if symbol == "chevron.right" { Image(symbol: symbol) }
             }
             .font(.system(.caption, weight: .medium))
             .foregroundStyle(isEnabled ? AnyShapeStyle(Ink.primary) : AnyShapeStyle(Ink.quaternary))

@@ -99,6 +99,7 @@ struct ConversationPane: View {
             // the canvas for the pill's reason. See `ReactionTooltipOverlay`.
             .overlay { ReactionTooltipOverlay(channelID: channelID) }
             .overlay { GuildMarkTooltipOverlay() }
+            .overlay { AutoModActionTooltipOverlay(channelID: channelID) }
             // **The transcript runs to the window's foot, under the composer.**
             //
             // Left inset by the bar, the scroll view stops above it — so the
@@ -142,7 +143,33 @@ struct ConversationPane: View {
                         // conversation the requests page opens, with the same
                         // bar where the composer will be.
                         MessageRequestBar(channelID: channelID)
+                    } else if model.isSystemDirectMessage(channelID) {
+                        // Discord's own messages take no reply: its blocker,
+                        // its words, and its article on them.
+                        ComposerBlocker(
+                            message: "This chat is reserved for official Discord notifications.",
+                            subtitle: "Discord will never ask you for your password or account token.",
+                            image: SystemDirectMessageArt.image,
+                            buttonTitle: "Learn More"
+                        ) {
+                            if let url = URL(string: "https://support.discord.com/hc/en-us/articles/360036118732") {
+                                NSWorkspace.shared.open(url)
+                            }
+                        }
+                    } else if let blocked = model.blockedRecipient(in: channelID) {
+                        // Discord's own blocker: nothing can be sent to somebody
+                        // the reader blocked, and the remedy is the one button.
+                        ComposerBlocker(
+                            message: "You cannot send messages to a user you have blocked.",
+                            buttonTitle: "Unblock",
+                            isBusy: model.relationshipsInFlight.contains(blocked)
+                        ) {
+                            model.setBlocked(false, userID: blocked)
+                        }
                     } else {
+                        // A locked thread's banner, as Discord puts it over
+                        // the composer — see `ThreadBanner`.
+                        ThreadBannerContainer(channelID: channelID)
                         // Above the composer, not below it. The composer floats
                         // at the window's foot, so a line under it is a line
                         // jammed against the edge of the screen.

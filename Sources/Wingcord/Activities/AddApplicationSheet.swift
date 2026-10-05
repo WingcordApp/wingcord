@@ -68,11 +68,18 @@ struct AddApplicationSheet: View {
 
     // MARK: The head
 
+    /// The app's own answer, once the sheet has fetched it — what a request
+    /// raised without the directory's record behind it (an app's profile)
+    /// falls back to for its icon and its line.
+    private var loaded: ApplicationInstall? {
+        model.applicationInstall.flatMap { $0.applicationID == request.applicationID ? $0 : nil }
+    }
+
     private var header: some View {
         VStack(spacing: Spacing.base) {
             navigation
             ApplicationMark(
-                url: request.iconHash.flatMap {
+                url: (request.iconHash ?? loaded?.iconHash).flatMap {
                     CDN.applicationIcon(id: request.applicationID, hash: $0, side: 56)
                 },
                 monogram: String(request.name.prefix(1)).uppercased(),
@@ -81,8 +88,9 @@ struct AddApplicationSheet: View {
             Text(request.name)
                 .font(.system(.title3, weight: .bold))
                 .foregroundStyle(Ink.primary)
-            if !request.summary.isEmpty {
-                Text(request.summary)
+            let summary = request.summary.isEmpty ? loaded?.summary ?? "" : request.summary
+            if !summary.isEmpty {
+                Text(summary)
                     .font(.system(.subheadline))
                     .foregroundStyle(Ink.secondary)
                     .multilineTextAlignment(.center)
@@ -98,22 +106,25 @@ struct AddApplicationSheet: View {
     /// a reader ends up with a Back that does nothing.
     private var navigation: some View {
         HStack(spacing: 0) {
+            // With one place the app can go there was no choice to go back
+            // to, so the arrow closes there too.
+            let closes = integrationType == nil || didInstall
+                || (model.applicationInstallTypes[request.applicationID]?.count ?? 2) < 2
             Button {
-                if didInstall || integrationType == nil {
+                if closes {
                     dismiss()
                 } else {
                     goBack()
                 }
             } label: {
-                Image(systemName: integrationType == nil || didInstall
-                    ? "xmark" : "chevron.backward")
+                Image(symbol: closes ? "xmark" : "chevron.backward")
                     .font(Typeface.controlGlyph)
                     .foregroundStyle(Ink.secondary)
                     .frame(width: Metrics.control, height: Metrics.control)
                     .contentShape(.circle)
             }
             .buttonStyle(.plain)
-            .accessibilityLabel(integrationType == nil || didInstall ? "Close" : "Back")
+            .accessibilityLabel(closes ? "Close" : "Back")
             Spacer(minLength: 0)
         }
     }
@@ -126,21 +137,43 @@ struct AddApplicationSheet: View {
 
     // MARK: Where
 
+    /// **Only where the app can go**, as Discord's picker filters its two
+    /// (`991054`) — and with just one, the sheet goes straight there. Both
+    /// while the app's record is still on its way, and if it never arrives:
+    /// the route then answers for itself.
     private var destinations: some View {
-        VStack(spacing: Spacing.hair) {
-            destination(
-                .userInstall,
-                title: "Add to My Apps",
-                subtitle: "Use this app everywhere",
-                systemImage: "person.crop.circle.badge.plus"
-            )
-            destination(
-                .guildInstall,
-                title: "Add to Server",
-                subtitle: "Customize your server by adding this app",
-                systemImage: "building.2.crop.circle"
-            )
+        let offered = model.applicationInstallTypes[request.applicationID]
+        return VStack(spacing: Spacing.hair) {
+            if offered?.contains(.userInstall) ?? true {
+                destination(
+                    .userInstall,
+                    title: "Add to My Apps",
+                    subtitle: "Use this app everywhere!",
+                    systemImage: "person.crop.circle.badge.plus"
+                )
+            }
+            if offered?.contains(.guildInstall) ?? true {
+                destination(
+                    .guildInstall,
+                    title: "Add to Server",
+                    subtitle: "Customize your server by adding this app",
+                    systemImage: "building.2.crop.circle"
+                )
+            }
         }
+        .task(id: request.applicationID) {
+            await model.sessionController.loadApplicationInstallTypes(request.applicationID)
+            if integrationType == nil, let only = model.applicationInstallTypes[request.applicationID],
+               only.count == 1
+            {
+                choose(only[0])
+            }
+        }
+    }
+
+    private func choose(_ type: IntegrationType) {
+        integrationType = type
+        Task { await model.sessionController.loadApplicationInstall(request.applicationID, integrationType: type) }
     }
 
     private func destination(
@@ -150,13 +183,10 @@ struct AddApplicationSheet: View {
         systemImage: String
     ) -> some View {
         Button {
-            integrationType = type
-            Task { await model.sessionController.loadApplicationInstall(
-                request.applicationID, integrationType: type
-            ) }
+            choose(type)
         } label: {
             HStack(spacing: Spacing.snug) {
-                Image(systemName: systemImage)
+                Image(symbol: systemImage)
                     .font(.system(.title3))
                     .foregroundStyle(Ink.secondary)
                     .frame(width: 28)

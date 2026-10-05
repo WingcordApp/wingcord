@@ -121,4 +121,31 @@ struct ProfileTabTests {
         )
         #expect(tabs.count >= 2)
     }
+
+    // MARK: An app's
+
+    @Test("An app's tabs are Discord's: its servers in common, counted, and Data Access")
+    func application() {
+        var app = profile()
+        app.isBot = true
+        let tabs = ProfileTab.available(profile: app, board: board, activity: recent)
+        #expect(tabs == [.mutuals, .dataAccess])
+        #expect(ProfileTab.mutuals.title(for: app) == "No Mutual Servers")
+        #expect(ProfileTab.dataAccess.title(for: app) == "Data Access")
+        app.isLoading = true
+        #expect(ProfileTab.mutuals.title(for: app) == "Mutual Servers")
+        // A person's tab keeps its own word.
+        #expect(ProfileTab.mutuals.title(for: profile()) == "Mutuals")
+    }
+
+    @Test("Discord's own authorize link for the app stays in the app; any other address leaves it")
+    func customInstallAddress() throws {
+        let id = ApplicationID(rawValue: 42)
+        let discord = try #require(URL(string: "https://discord.com/oauth2/authorize?client_id=42&scope=bot"))
+        let other = try #require(URL(string: "https://discord.com/oauth2/authorize?client_id=7&scope=bot"))
+        let site = try #require(URL(string: "https://helper.test/invite"))
+        #expect(AppModel.isDiscordAuthorize(discord, for: id))
+        #expect(!AppModel.isDiscordAuthorize(other, for: id))
+        #expect(!AppModel.isDiscordAuthorize(site, for: id))
+    }
 }

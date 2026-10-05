@@ -52,7 +52,7 @@ struct LiveEventCard: View {
             .buttonStyle(.plain)
 
             HStack(alignment: .firstTextBaseline, spacing: 6) {
-                Image(systemName: notice.placeSymbol)
+                Image(symbol: notice.placeSymbol)
                     .font(.caption)
                     .foregroundStyle(Ink.tertiary)
                 // Markdown, as Discord parses a location: a link in it is a link.

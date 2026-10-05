@@ -29,17 +29,16 @@ struct RolesPane: View {
 
             VStack(alignment: .leading, spacing: 0) {
                 if let everyone {
-                    SettingsGroup("Default permissions") {
+                    SettingsGroup("Default Permissions") {
                         SettingsCard {
                             ObjectRow(
-                                title: "@everyone",
-                                subtitle: "Applies to every member of this server"
+                                title: "@everyone"
                             ) {
                                 RoleSwatch(role: everyone)
                             } trailing: {
                                 RowIconButton(
                                     symbolName: "pencil",
-                                    label: "Edit default permissions"
+                                    label: "Edit"
                                 ) {
                                     editing = everyone.id
                                 }
@@ -51,25 +50,20 @@ struct RolesPane: View {
                 SettingsGroup("Roles — \(ordered.count)") {
                     SettingsCard {
                         SettingsActionRow(
-                            "Create a role",
-                            help: "Roles group members and grant permissions.",
-                            actionTitle: "Create"
+                            "Create Role",
+                            actionTitle: "Create Role"
                         ) {
                             Task { await store.createRole() }
                         }
                         if ordered.count > 6 {
                             CardDivider()
-                            SearchRow(query: $query, placeholder: "Search roles")
+                            SearchRow(query: $query, placeholder: "Search Roles")
                         }
                         ForEach(Array(shown.enumerated()), id: \.element.id) { _, role in
                             CardDivider()
                             row(role, all: ordered)
                         }
                     }
-                    SettingsFootnote(
-                        "Members take the colour of the highest role on this list "
-                            + "that has one. Use the arrows to reorder."
-                    )
                 }
             }
             .sheet(item: Binding(
@@ -134,9 +128,9 @@ struct RolesPane: View {
                 get: { deleting?.id == role.id },
                 set: { if !$0 { deleting = nil } }
             ),
-            title: "Delete \(role.name)?",
-            message: "Everyone who has it loses its permissions, and its colour, immediately.",
-            confirmTitle: "Delete role"
+            title: "Delete Role",
+            message: "Are you sure you want to delete the \(role.name) role? This action cannot be undone.",
+            confirmTitle: "Delete"
         ) {
             Task { await store.deleteRole(role.id) }
         }
@@ -233,16 +227,15 @@ struct InvitesPane: View {
     let model: AppModel
 
     @State private var isCreating = false
-    @State private var revoking: GuildInvite?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             SettingsGroup {
                 SettingsCard {
                     SettingsActionRow(
-                        "Create an invite link",
-                        help: "Choose a channel, how long it lasts and how many people may use it.",
-                        actionTitle: "Create"
+                        "Create Invite Link",
+                        help: "Create an invite link anyone can use to join, or invite friends directly.",
+                        actionTitle: "Create Invite Link"
                     ) {
                         isCreating = true
                     }
@@ -252,9 +245,9 @@ struct InvitesPane: View {
             LoadableContent(
                 store.invites,
                 isEmpty: \.isEmpty,
-                empty: { EmptyRow(message: "No active invite links.", symbolName: "link") }
+                empty: { EmptyRow(message: "No active invite links", symbolName: "link") }
             ) { invites in
-                SettingsGroup("Active links — \(invites.count)") {
+                SettingsGroup("Active invite links") {
                     SettingsCard {
                         ForEach(Array(invites.enumerated()), id: \.element.id) { index, invite in
                             if index > 0 { CardDivider() }
@@ -284,30 +277,20 @@ struct InvitesPane: View {
                 .background(SettingsSurface.controlTrough, in: .circle)
         } trailing: {
             HStack(spacing: 2) {
-                RowIconButton(symbolName: "doc.on.doc", label: "Copy link") {
+                RowIconButton(symbolName: "doc.on.doc", label: "Copy Link") {
                     guard let url = invite.url else { return }
                     NSPasteboard.general.clearContents()
                     NSPasteboard.general.setString(url.absoluteString, forType: .string)
                 }
+                // Discord's X revokes at once, as it does here.
                 RowIconButton(
                     symbolName: "trash",
-                    label: "Revoke this link",
+                    label: "Revoke",
                     role: .destructive
                 ) {
-                    revoking = invite
+                    Task { await store.deleteInvite(invite.id) }
                 }
             }
-        }
-        .destructiveConfirmation(
-            isPresented: Binding(
-                get: { revoking?.id == invite.id },
-                set: { if !$0 { revoking = nil } }
-            ),
-            title: "Revoke \(invite.id)?",
-            message: "Anyone holding this link will no longer be able to use it.",
-            confirmTitle: "Revoke"
-        ) {
-            Task { await store.deleteInvite(invite.id) }
         }
     }
 
@@ -342,8 +325,8 @@ struct InviteSheet: View {
 
     var body: some View {
         SheetFrame(
-            title: "Create an invite link",
-            confirmTitle: "Create",
+            title: "Server invite link settings",
+            confirmTitle: "Generate a New Link",
             canConfirm: channelID != nil
         ) {
             guard let channelID else { return }
@@ -351,7 +334,7 @@ struct InviteSheet: View {
         } content: {
             SheetField(title: "Channel", isRequired: true) {
                 Picker("", selection: $channelID) {
-                    Text("Choose a channel").tag(ChannelID?.none)
+                    Text("Select a Channel").tag(ChannelID?.none)
                     ForEach(channels) { channel in
                         Text("#\(channel.name)").tag(ChannelID?.some(channel.id))
                     }
@@ -359,7 +342,7 @@ struct InviteSheet: View {
                 .labelsHidden()
             }
 
-            SheetField(title: "Expires after") {
+            SheetField(title: "Expire After") {
                 Picker("", selection: $options.maxAge) {
                     ForEach(InviteOptions.ageChoices, id: \.self) { seconds in
                         Text(InviteOptions.ageTitle(seconds)).tag(seconds)
@@ -368,7 +351,7 @@ struct InviteSheet: View {
                 .labelsHidden()
             }
 
-            SheetField(title: "Maximum uses") {
+            SheetField(title: "Max Number of Uses") {
                 Picker("", selection: $options.maxUses) {
                     ForEach(InviteOptions.useChoices, id: \.self) { uses in
                         Text(InviteOptions.usesTitle(uses)).tag(uses)
@@ -377,242 +360,20 @@ struct InviteSheet: View {
                 .labelsHidden()
             }
 
-            SheetField(
-                title: "Membership",
-                detail: "A temporary member is removed when they disconnect, "
-                    + "unless somebody gives them a role first."
-            ) {
+            VStack(alignment: .leading, spacing: Spacing.tight) {
                 Toggle("Grant temporary membership", isOn: $options.isTemporary)
                     .toggleStyle(.switch)
                     .controlSize(.small)
+                Text("Temporary members are automatically kicked when they disconnect unless a role has been assigned")
+                    .font(.system(.caption))
+                    .foregroundStyle(Ink.tertiary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
         }
         .task {
             // The first channel, so the sheet opens usable. Discord's own picker
             // defaults to wherever you were.
             if channelID == nil { channelID = channels.first?.id }
-        }
-    }
-}
-
-// MARK: - Access
-
-struct AccessPane: View {
-    let store: ServerSettingsStore
-
-    var body: some View {
-        LoadableContent(store.settings) { settings in
-            VStack(alignment: .leading, spacing: 0) {
-                joinMode(settings)
-                ageGate(settings)
-                application(settings)
-            }
-        }
-    }
-
-    /// The three tiles.
-    ///
-    /// **Three routes behind one control**, which is why the mode is resolved in
-    /// `GuildAccessMode` rather than at each tile: Invite Only is the absence of
-    /// the other two, Apply to Join is `PATCH /member-verification`, and
-    /// Discoverable is a guild feature Discord refuses until six requirements
-    /// are met.
-    private func joinMode(_ settings: GuildSettings) -> some View {
-        let mode = GuildAccessMode(
-            features: settings.features,
-            hasJoinForm: store.joinForm.value?.isEnabled ?? false
-        )
-        return SettingsGroup("How people join") {
-            HStack(spacing: Spacing.base) {
-                ForEach(GuildAccessMode.allCases) { candidate in
-                    AccessTile(
-                        mode: candidate,
-                        isSelected: candidate == mode,
-                        isEnabled: isSelectable(candidate, settings: settings)
-                    ) {
-                        choose(candidate, settings: settings)
-                    }
-                }
-            }
-            if !(store.discoveryRequirements.value?.isSufficient ?? true) {
-                DiscoveryRequirementsCard(store: store)
-            }
-        }
-    }
-
-    private func ageGate(_ settings: GuildSettings) -> some View {
-        SettingsGroup("Age") {
-            SettingsCard {
-                SettingsToggle(
-                    title: "Age-restricted server",
-                    help: "Members confirm they are over the legal age before they can see anything here.",
-                    isOn: Binding(
-                        get: { settings.contentLevel.isAgeRestricted },
-                        set: { isOn in
-                            Task { await store.saveContentLevel(isOn ? .ageRestricted : .default) }
-                        }
-                    )
-                )
-            }
-            // Discord's own classification is separate from the owner's switch
-            // and cannot be set from here, so it is stated rather than offered.
-            if settings.nsfwLevel != 0 {
-                SettingsFootnote(
-                    "Discord has separately classified this server's content. "
-                        + "That classification is not something this switch changes.",
-                    symbolName: "info.circle"
-                )
-            }
-        }
-    }
-
-    @ViewBuilder
-    private func application(_ settings: GuildSettings) -> some View {
-        let mode = GuildAccessMode(
-            features: settings.features,
-            hasJoinForm: store.joinForm.value?.isEnabled ?? false
-        )
-        if mode == .applyToJoin || store.joinForm.value?.fields.isEmpty == false {
-            LoadableContent(store.joinForm) { form in
-                JoinFormEditor(form: form) { updated in
-                    Task { await store.saveJoinForm(updated) }
-                }
-            }
-        }
-    }
-
-    /// Whether a tile can be pressed.
-    ///
-    /// Discoverable is refused outright until the server meets its requirements,
-    /// and the reference client's own answer is a toast saying so *after* the
-    /// press. Disabling it and stating the reasons underneath is the same
-    /// information, before the press rather than after.
-    private func isSelectable(_ mode: GuildAccessMode, settings: GuildSettings) -> Bool {
-        switch mode {
-        case .inviteOnly, .applyToJoin: true
-        case .discoverable: store.discoveryRequirements.value?.isSufficient ?? false
-        }
-    }
-
-    private func choose(_ mode: GuildAccessMode, settings: GuildSettings) {
-        switch mode {
-        case .inviteOnly:
-            // Turning the form off is the whole of it — discovery is a feature
-            // this client does not add or remove, because applying to discovery
-            // is a submission rather than a switch.
-            guard var form = store.joinForm.value else { return }
-            form.isEnabled = false
-            Task { await store.saveJoinForm(form) }
-        case .applyToJoin:
-            var form = store.joinForm.value ?? JoinApplicationForm(guildID: store.guildID)
-            if form.fields.isEmpty {
-                form.fields = [
-                    JoinApplicationForm.Field(label: "Why do you want to join our server?")
-                ]
-            }
-            form.isEnabled = true
-            Task { await store.saveJoinForm(form) }
-        case .discoverable:
-            // Deliberately unreachable while the tile is disabled, and left
-            // without an implementation rather than given a wrong one: joining
-            // discovery is an application with a category and keywords, not a
-            // feature flag a client may set.
-            break
-        }
-    }
-}
-
-private struct AccessTile: View {
-    var mode: GuildAccessMode
-    var isSelected: Bool
-    var isEnabled: Bool
-    var choose: () -> Void
-
-    var body: some View {
-        Button(action: choose) {
-            VStack(spacing: Spacing.base) {
-                Image(systemName: mode.symbolName)
-                    .font(.system(size: 18))
-                    .foregroundStyle(isEnabled ? Ink.primary : Ink.tertiary)
-                Text(mode.title)
-                    .font(.system(.subheadline, weight: .semibold))
-                    .foregroundStyle(isEnabled ? Ink.primary : Ink.tertiary)
-                Text(mode.detail)
-                    .font(.system(.caption))
-                    .foregroundStyle(Ink.secondary)
-                    .multilineTextAlignment(.center)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-            .frame(maxWidth: .infinity)
-            .padding(.vertical, Spacing.margin)
-            .padding(.horizontal, Spacing.snug)
-            .background(
-                isSelected ? SettingsSurface.controlSelected : SettingsSurface.card,
-                in: .settingsRect(10)
-            )
-            .overlay {
-                if isSelected {
-                    RoundedRectangle(cornerRadius: 10, style: .continuous)
-                        .strokeBorder(Palette.accent, lineWidth: 1.5)
-                }
-            }
-        }
-        .buttonStyle(.plain)
-        .disabled(!isEnabled)
-        .accessibilityAddTraits(isSelected ? [.isSelected, .isButton] : .isButton)
-    }
-}
-
-/// Why discovery is refused.
-private struct DiscoveryRequirementsCard: View {
-    let store: ServerSettingsStore
-
-    var body: some View {
-        LoadableContent(store.discoveryRequirements) { requirements in
-            SettingsCard {
-                ForEach(Array(requirements.requirements.enumerated()), id: \.element.id) { index, item in
-                    if index > 0 { CardDivider() }
-                    HStack(alignment: .top, spacing: Spacing.snug) {
-                        Image(systemName: symbol(item.outcome))
-                            .font(.system(size: 13))
-                            .foregroundStyle(tint(item.outcome))
-                            .frame(width: 18)
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(item.title)
-                                .font(SettingsType.rowTitle)
-                                .foregroundStyle(Ink.primary)
-                            Text(item.detail)
-                                .font(SettingsType.rowSubtitle)
-                                .foregroundStyle(Ink.secondary)
-                                .fixedSize(horizontal: false, vertical: true)
-                        }
-                        Spacer(minLength: 0)
-                    }
-                    .padding(.horizontal, SettingsMetrics.cardContentInset)
-                    .padding(.vertical, Spacing.snug)
-                    .accessibilityElement(children: .combine)
-                }
-            }
-        }
-    }
-
-    private func symbol(_ outcome: DiscoveryRequirements.Requirement.Outcome) -> String {
-        switch outcome {
-        case .met: "checkmark.circle.fill"
-        case .unmet: "xmark.circle.fill"
-        case .pending: "exclamationmark.circle.fill"
-        }
-    }
-
-    /// **Pending is not a failure.** Discord cannot measure activity below a
-    /// couple of hundred members, which is the ordinary case — drawing it as a
-    /// cross would tell most servers they had failed something nobody has
-    /// measured.
-    private func tint(_ outcome: DiscoveryRequirements.Requirement.Outcome) -> Color {
-        switch outcome {
-        case .met: Palette.affirmative
-        case .unmet: Palette.destructive
-        case .pending: .orange
         }
     }
 }
@@ -629,13 +390,18 @@ struct BansPane: View {
         LoadableContent(
             store.bans,
             isEmpty: \.isEmpty,
-            empty: { EmptyRow(message: "Nobody is banned from this server.", symbolName: "hand.raised") }
+            empty: {
+                EmptyRow(
+                    message: "No Bans — You haven\u{2019}t banned anybody... but if and when you must, do not hesitate!",
+                    symbolName: "hand.raised"
+                )
+            }
         ) { bans in
             let shown = filtered(bans)
-            SettingsGroup("Banned — \(bans.count)") {
+            SettingsGroup("Server Ban List") {
                 SettingsCard {
                     if bans.count > 6 {
-                        SearchRow(query: $query, placeholder: "Search bans")
+                        SearchRow(query: $query, placeholder: "Search Bans by User Id or Username")
                         CardDivider()
                     }
                     ForEach(Array(shown.enumerated()), id: \.element.id) { index, ban in
@@ -643,10 +409,6 @@ struct BansPane: View {
                         row(ban)
                     }
                 }
-                SettingsFootnote(
-                    "Discord does not record when a ban was issued, so this list "
-                        + "cannot be sorted by date."
-                )
             }
         }
     }
@@ -657,13 +419,14 @@ struct BansPane: View {
         return bans.filter {
             $0.username.lowercased().contains(needle)
                 || ($0.displayName?.lowercased().contains(needle) ?? false)
+                || String($0.id.rawValue) == query
         }
     }
 
     private func row(_ ban: GuildBan) -> some View {
         ObjectRow(
             title: ban.displayName ?? ban.username,
-            subtitle: ban.reason ?? "No reason given",
+            subtitle: ban.reason,
             badge: ban.displayName == nil ? nil : ban.username
         ) {
             RemoteImage(
@@ -677,7 +440,7 @@ struct BansPane: View {
             .frame(width: 28, height: 28)
             .clipShape(.circle)
         } trailing: {
-            RowIconButton(symbolName: "arrow.uturn.backward", label: "Lift this ban") {
+            RowIconButton(symbolName: "arrow.uturn.backward", label: "Revoke Ban") {
                 lifting = ban
             }
         }
@@ -686,9 +449,9 @@ struct BansPane: View {
                 get: { lifting?.id == ban.id },
                 set: { if !$0 { lifting = nil } }
             ),
-            title: "Lift the ban on \(ban.displayName ?? ban.username)?",
-            message: "They will be able to rejoin with a new invite.",
-            confirmTitle: "Lift ban"
+            title: ban.displayName ?? ban.username,
+            message: ban.reason.map { "Ban Reason: \($0)" } ?? "Ban Reason",
+            confirmTitle: "Revoke Ban"
         ) {
             Task { await store.unban(ban.id) }
         }

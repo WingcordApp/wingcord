@@ -882,7 +882,7 @@ private struct PlumageRoundButton: View {
 
     var body: some View {
         Button(action: action) {
-            Image(systemName: systemName)
+            Image(symbol: systemName)
                 .font(.system(size: 13, weight: .semibold))
                 // The glyph dims when there is nothing to do, not the glass:
                 // a material faded as a whole is one of the ways §1.5 paints

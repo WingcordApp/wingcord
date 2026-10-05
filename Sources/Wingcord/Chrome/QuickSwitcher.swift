@@ -359,7 +359,7 @@ private struct QuickSwitchRowView: View {
     @ViewBuilder
     private var leading: some View {
         if let symbolName = row.symbolName {
-            Image(systemName: symbolName)
+            Image(symbol: symbolName)
                 .font(.system(.callout))
                 .foregroundStyle(Ink.tertiary)
                 .frame(width: Metrics.avatarRow, height: Metrics.avatarRow)

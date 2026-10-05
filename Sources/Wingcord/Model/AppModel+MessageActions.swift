@@ -488,14 +488,18 @@ extension AppModel {
 
     // MARK: Reporting
 
-    func requestReport(of messageID: MessageID, in channelID: ChannelID) {
+    /// - Parameter isFirstDirectMessage: Discord's Report Spam at a DM's head,
+    ///   which files the conversation's first message under its own menu.
+    func requestReport(of messageID: MessageID, in channelID: ChannelID, isFirstDirectMessage: Bool = false) {
         guard let message = message(messageID, in: channelID),
               permissionGate.actions(for: message).contains(.report)
         else { return }
         dismissMessageSurfaces()
         let author = users[message.authorID]
         reportRequest = ReportRequest(
-            subject: .message(messageID, channelID: channelID),
+            subject: isFirstDirectMessage
+                ? .firstDirectMessage(messageID, channelID: channelID)
+                : .message(messageID, channelID: channelID),
             preview: .quoted(QuotedMessage(
                 authorName: author?.preferredName ?? "Unknown",
                 avatarURL: avatarURL(
@@ -508,7 +512,7 @@ extension AppModel {
                 excerpt: Self.excerpt(of: message)
             ))
         )
-        sessionController.loadReportMenu(.message)
+        sessionController.loadReportMenu(isFirstDirectMessage ? .firstDirectMessage : .message)
     }
 
     func requestReport(of userID: UserID, inGuild guildID: GuildID?) {
@@ -578,6 +582,11 @@ extension AppModel {
     /// with a clock, since what was done happened in a list nobody is looking at.
     func reportScheduling(_ text: String) {
         report(text, as: .scheduling)
+    }
+
+    /// Says that an act landed, where Discord says so — see `ActionNotice.Kind.success`.
+    func reportSuccess(_ text: String) {
+        report(text, as: .success)
     }
 
     private func report(_ text: String, as kind: ActionNotice.Kind) {

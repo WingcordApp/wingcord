@@ -68,13 +68,16 @@ extension DiscordREST {
             var channel_ids: [String]
             var role_ids: [String]
             var emoji: EmojiBody?
+            var emoji_id: String?
             var emoji_name: String?
+            var emoji_animated: Bool?
             var title: String
             var description: String
         }
         struct EmojiBody: Encodable {
             var name: String?
             var id: String?
+            var animated: Bool?
         }
         struct PromptBody: Encodable {
             var id: String
@@ -91,18 +94,24 @@ extension DiscordREST {
             PromptBody(
                 id: prompt.id,
                 options: prompt.options.map { option in
-                    // **The emoji goes up twice** — as an object and as a bare
-                    // name — and an option without one omits both keys rather
-                    // than sending null. Both halves are the capture's.
+                    // **The emoji goes up twice** — as an object and as bare
+                    // keys — and an option without one omits them rather than
+                    // sending null. Both halves are the capture's; a custom
+                    // emoji adds its id and `animated` to each, as Discord's
+                    // `D` (`5075269`) does.
+                    let customID = option.emojiID.map { String($0.rawValue) }
+                    let animated: Bool? = customID == nil ? nil : option.isEmojiAnimated
                     let emoji: EmojiBody? = option.emojiName.map {
-                        EmojiBody(name: $0, id: option.emojiID.map { String($0.rawValue) })
+                        EmojiBody(name: $0, id: customID, animated: animated)
                     }
                     return OptionBody(
                         id: option.id,
                         channel_ids: option.channelIDs.map { String($0.rawValue) },
                         role_ids: option.roleIDs.map { String($0.rawValue) },
                         emoji: emoji,
+                        emoji_id: customID,
                         emoji_name: option.emojiName,
+                        emoji_animated: animated,
                         title: option.title,
                         description: option.detail ?? ""
                     )
@@ -201,7 +210,7 @@ extension DiscordREST {
     // takes an enum rather than an optional id.
 
     /// Where a community channel comes from.
-    public enum CommunityChannel: Sendable {
+    public enum CommunityChannel: Hashable, Sendable {
         case existing(ChannelID)
         /// Discord makes it — `#rules` or `#moderator-only` as appropriate.
         case createForMe
@@ -261,14 +270,20 @@ extension DiscordREST {
         feature: String,
         isOn: Bool
     ) async throws -> GuildSettings {
-        struct Body: Encodable { var features: [String] }
         var next = features
         if isOn { next.insert(feature) } else { next.remove(feature) }
+        return try await setGuildFeatures(in: guildID, features: next)
+    }
+
+    /// Writes the server's whole feature list — Discord's `updateGuild({features})`,
+    /// for a switch that moves two features at once (the Activity Feed's pair).
+    public func setGuildFeatures(in guildID: GuildID, features: Set<String>) async throws -> GuildSettings {
+        struct Body: Encodable { var features: [String] }
         return try await request(
             method: "PATCH",
             path: "/guilds/\(guildID.rawValue)",
             route: "guilds/{id}",
-            body: Body(features: Array(next)),
+            body: Body(features: features.sorted()),
             as: GuildAdminDTO.self
         ).domain(fallbackID: guildID)
     }
@@ -341,6 +356,38 @@ extension DiscordREST {
         )
     }
 
+    /// Acts on an AutoMod alert — Discord's Delete User's Message (`995786.E5`).
+    /// Discord then edits the alert to record who did it, which is what takes
+    /// the button away.
+    ///
+    /// - Parameters:
+    ///   - alertID: the **alert's** own id, and `channelID` the channel it was
+    ///     posted in — not the flagged message's.
+    public func performAutoModAlertAction(
+        _ action: AutoModExecutedAction.Kind,
+        alert alertID: MessageID,
+        in channelID: ChannelID,
+        guildID: GuildID
+    ) async throws {
+        _ = try await requestData(
+            method: "POST",
+            path: "/guilds/\(guildID.rawValue)/auto-moderation/alert-action",
+            route: "guilds/{id}/auto-moderation/alert-action",
+            body: AutoModAlertActionBody(action: action, alertID: alertID, channelID: channelID)
+        )
+    }
+
+    /// Lifts what a suspected mention raid restricted — Discord's Remove
+    /// Restrictions (`995786.W5`), which sends no body.
+    public func clearMentionRaid(in guildID: GuildID) async throws {
+        _ = try await requestData(
+            method: "POST",
+            path: "/guilds/\(guildID.rawValue)/auto-moderation/clear-mention-raid",
+            route: "guilds/{id}/auto-moderation/clear-mention-raid",
+            body: Optional<Never>.none
+        )
+    }
+
     // MARK: - Channels
 
     /// Creates a channel.
@@ -348,19 +395,28 @@ extension DiscordREST {
     /// **Private is not a field here.** The captured create always sends an empty
     /// overwrite array; making a channel private is a separate
     /// `PUT /channels/{id}/permissions/{roleID}` afterwards — see
-    /// `setChannelPrivate`. A caller looking for a `private` flag is looking for
-    /// something that does not exist.
+    /// `ChannelAccess.everyoneOverwrite`. A caller looking for a `private` flag
+    /// is looking for something that does not exist.
     public func createChannel(
         in guildID: GuildID,
         name: String,
         kind: ChannelKind,
-        parentID: ChannelID? = nil
+        parentID: ChannelID? = nil,
+        overwrites: [PermissionOverwrite] = []
     ) async throws -> Channel? {
         struct Body: Encodable {
             var type: Int
             var name: String
-            var permission_overwrites: [String] = []
+            /// In the create itself — Discord's `createChannel` sends a private
+            /// channel's overwrites here, so it is never briefly public.
+            var permission_overwrites: [Overwrite]
             var parent_id: String?
+            struct Overwrite: Encodable {
+                var id: String
+                var type: Int
+                var allow: String
+                var deny: String
+            }
         }
         return try await request(
             method: "POST",
@@ -369,6 +425,14 @@ extension DiscordREST {
             body: Body(
                 type: kind.rawValue,
                 name: name,
+                permission_overwrites: overwrites.map {
+                    Body.Overwrite(
+                        id: String($0.id),
+                        type: $0.subject.rawValue,
+                        allow: $0.allow.apiString,
+                        deny: $0.deny.apiString
+                    )
+                },
                 parent_id: parentID.map { String($0.rawValue) }
             ),
             as: ChannelDTO.self
@@ -383,49 +447,19 @@ extension DiscordREST {
     /// literal, and matching it is cheaper than deciding per kind which of the
     /// eight are meaningful.
     ///
+    /// A voice or stage channel adds the two keys only its page owns —
+    /// `rtc_region`, sent as an explicit `null` for Automatic, and
+    /// `video_quality_mode` — which is what Discord's own save does with a draft
+    /// that carries them (`saveChannel`'s body leaves undefined keys out).
+    ///
     /// `type` is here because the **Announcement switch rewrites it**, 0 ⇄ 5.
     /// It is the only place in this client a channel's kind is mutable.
-    public func updateChannel(
-        _ channelID: ChannelID,
-        name: String,
-        kind: ChannelKind,
-        topic: String,
-        isAgeRestricted: Bool,
-        isSpoiler: Bool,
-        bitrate: Int,
-        userLimit: Int,
-        slowmodeSeconds: Int,
-        autoArchiveMinutes: Int?
-    ) async throws -> Channel? {
-        struct Body: Encodable {
-            var name: String
-            var type: Int
-            var topic: String
-            var bitrate: Int
-            var user_limit: Int
-            var nsfw: Bool
-            var flags: Int
-            var rate_limit_per_user: Int
-            var default_auto_archive_duration: Int?
-        }
-        return try await request(
+    public func updateChannel(_ overview: ChannelOverview) async throws -> Channel? {
+        try await request(
             method: "PATCH",
-            path: "/channels/\(channelID.rawValue)",
+            path: "/channels/\(overview.id.rawValue)",
             route: "channels/{id}",
-            body: Body(
-                name: name,
-                type: kind.rawValue,
-                topic: topic,
-                bitrate: bitrate,
-                user_limit: userLimit,
-                nsfw: isAgeRestricted,
-                // `1 << 21` is `IS_SPOILER_CHANNEL`, and it is the *only* flag
-                // this route may set. Content Visibility's three choices are a
-                // product of this bit and `nsfw` — see `ChannelVisibility`.
-                flags: isSpoiler ? ChannelVisibility.spoilerFlag : 0,
-                rate_limit_per_user: slowmodeSeconds,
-                default_auto_archive_duration: autoArchiveMinutes
-            ),
+            body: ChannelOverviewBody(overview),
             as: ChannelDTO.self
         ).domain(guildID: nil)
     }
@@ -460,23 +494,59 @@ extension DiscordREST {
         )
     }
 
-    /// Makes a channel private, or public again.
-    ///
-    /// One denied bit on `@everyone`, whose role id is the guild's own. Named
-    /// rather than left to the caller, because "private" being an overwrite
-    /// rather than a field is the thing about this that surprises people.
-    public func setChannelPrivate(
-        _ channelID: ChannelID,
-        in guildID: GuildID,
-        isPrivate: Bool
-    ) async throws {
-        try await setChannelOverwrite(
-            in: channelID,
-            subjectID: guildID.rawValue,
-            isRole: true,
-            allow: [],
-            deny: isPrivate ? .viewChannel : []
+    /// Deletes the server — Discord's `deleteGuild`: `POST /guilds/{id}/delete`
+    /// with no body, owner only. An owner with two-factor on is asked for a
+    /// code first, and the refusal comes back as the API's own error.
+    public func deleteGuild(_ guildID: GuildID) async throws {
+        _ = try await requestData(
+            method: "POST",
+            path: "/guilds/\(guildID.rawValue)/delete",
+            route: "guilds/{id}/delete",
+            body: Optional<Never>.none
         )
+    }
+
+    /// Removes one role's or member's overwrite — Discord's
+    /// `clearPermissionOverwrite`. Answers 204.
+    public func deleteChannelOverwrite(in channelID: ChannelID, subjectID: UInt64) async throws {
+        _ = try await requestData(
+            method: "DELETE",
+            path: "/channels/\(channelID.rawValue)/permissions/\(subjectID)",
+            route: "channels/{id}/permissions/{id}",
+            body: Optional<Never>.none
+        )
+    }
+
+    /// Writes a channel's whole overwrite list — Sync Now, which makes a
+    /// channel's permissions its category's (`RT` with `permissionOverwrites`).
+    @discardableResult
+    public func setChannelOverwrites(
+        _ overwrites: [PermissionOverwrite],
+        of channelID: ChannelID
+    ) async throws -> Channel? {
+        struct Body: Encodable {
+            var permission_overwrites: [Overwrite]
+            struct Overwrite: Encodable {
+                var id: String
+                var type: Int
+                var allow: String
+                var deny: String
+            }
+        }
+        return try await request(
+            method: "PATCH",
+            path: "/channels/\(channelID.rawValue)",
+            route: "channels/{id}",
+            body: Body(permission_overwrites: overwrites.map {
+                Body.Overwrite(
+                    id: String($0.id),
+                    type: $0.subject.rawValue,
+                    allow: $0.allow.apiString,
+                    deny: $0.deny.apiString
+                )
+            }),
+            as: ChannelDTO.self
+        ).domain(guildID: nil)
     }
 
     /// Deletes a channel.
@@ -498,6 +568,19 @@ extension DiscordREST {
             route: "channels/{id}",
             body: Optional<Never>.none
         )
+    }
+}
+
+/// An alert action's body: ids as strings, as Discord's client sends them.
+struct AutoModAlertActionBody: Encodable {
+    var message_id: String
+    var channel_id: String
+    var alert_action_type: Int
+
+    init(action: AutoModExecutedAction.Kind, alertID: MessageID, channelID: ChannelID) {
+        message_id = String(alertID.rawValue)
+        channel_id = String(channelID.rawValue)
+        alert_action_type = action.rawValue
     }
 }
 
@@ -596,4 +679,66 @@ private struct AutoModBody: Encodable {
         )
         try container.encode(draft.exemptRoleIDs.map { String($0.rawValue) }, forKey: .exempt_roles)
     }
+}
+
+/// The Overview page's body. Hand-written because one key is an explicit
+/// `null` on a voice channel and absent on every other kind, which a
+/// synthesised `Encodable` cannot say.
+struct ChannelOverviewBody: Encodable {
+    var overview: ChannelOverview
+
+    init(_ overview: ChannelOverview) { self.overview = overview }
+
+    private enum Key: String, CodingKey {
+        case name, type, topic, bitrate, user_limit, nsfw, flags, rate_limit_per_user
+        case default_auto_archive_duration, rtc_region, video_quality_mode
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: Key.self)
+        try container.encode(overview.name, forKey: .name)
+        try container.encode(overview.kind.rawValue, forKey: .type)
+        try container.encode(overview.topic, forKey: .topic)
+        try container.encode(overview.bitrate, forKey: .bitrate)
+        try container.encode(overview.userLimit, forKey: .user_limit)
+        try container.encode(overview.visibility.isAgeRestricted, forKey: .nsfw)
+        try container.encode(overview.wireFlags, forKey: .flags)
+        try container.encode(overview.slowmodeSeconds, forKey: .rate_limit_per_user)
+        try container.encodeIfPresent(overview.autoArchiveMinutes, forKey: .default_auto_archive_duration)
+        if overview.isVoice {
+            // Explicit null is Automatic; leaving the key out would leave a
+            // pinned region in place.
+            if let region = overview.rtcRegion {
+                try container.encode(region, forKey: .rtc_region)
+            } else {
+                try container.encodeNil(forKey: .rtc_region)
+            }
+            try container.encodeIfPresent(overview.videoQualityMode, forKey: .video_quality_mode)
+        }
+    }
+}
+
+// MARK: - Voice regions
+
+extension DiscordREST {
+    /// The regions a voice channel in this server may be pinned to, sorted by
+    /// name as Discord's own `RegionStore` sorts them. Deprecated regions are
+    /// dropped: the route still lists them and Discord's picker does not.
+    public func voiceRegions(in guildID: GuildID) async throws -> [VoiceRegion] {
+        try await get(
+            "/guilds/\(guildID.rawValue)/regions",
+            route: "guilds/{id}/regions",
+            as: [VoiceRegionDTO].self
+        )
+        .filter { $0.deprecated != true }
+        .map { VoiceRegion(id: $0.id, name: $0.name, isOptimal: $0.optimal ?? false) }
+        .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+    }
+}
+
+struct VoiceRegionDTO: Decodable, Sendable {
+    var id: String
+    var name: String
+    var optimal: Bool?
+    var deprecated: Bool?
 }

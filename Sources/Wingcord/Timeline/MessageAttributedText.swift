@@ -89,13 +89,16 @@ nonisolated struct MessageText: @unchecked Sendable {
             case timestamp
             /// Inline code: the code tint and a hairline.
             case code
+            /// The words an AutoMod rule matched — Discord's `.highlight`,
+            /// its yellow at 30% and nothing else: no corner, no air.
+            case highlight
         }
 
         /// Whether the pointer changes it — the plates that are links.
         var isInteractive: Bool {
             switch kind {
             case .mention, .role, .gradientRole: true
-            case .timestamp, .code: false
+            case .timestamp, .code, .highlight: false
             }
         }
     }
@@ -141,6 +144,63 @@ nonisolated extension MessageText {
             quotes: [],
             codeBlocks: [],
             plainLabel: attributed.string
+        )
+    }
+
+    /// Pieces built apart — a sentence's words and a channel's chip — as one
+    /// text, every range moved to where its piece now starts.
+    static func joined(_ pieces: [MessageText]) -> MessageText {
+        let attributed = NSMutableAttributedString()
+        var inlineEmoji: [Int: EmojiRef] = [:]
+        var inlineSymbols: [Int: String] = [:]
+        var links: [LinkRun] = []
+        var spoilers: [NSRange] = []
+        var plates: [Plate] = []
+        var quotes: [NSRange] = []
+        var codeBlocks: [NSRange] = []
+        var label = ""
+        for piece in pieces {
+            let offset = attributed.length
+            func moved(_ range: NSRange) -> NSRange { NSRange(location: range.location + offset, length: range.length) }
+            attributed.append(piece.attributed)
+            for (index, emoji) in piece.inlineEmoji { inlineEmoji[index + offset] = emoji }
+            for (index, symbol) in piece.inlineSymbols { inlineSymbols[index + offset] = symbol }
+            links += piece.links.map { LinkRun(range: moved($0.range), target: $0.target) }
+            spoilers += piece.spoilers.map(moved)
+            plates += piece.plates.map { Plate(range: moved($0.range), kind: $0.kind, padding: $0.padding) }
+            quotes += piece.quotes.map(moved)
+            codeBlocks += piece.codeBlocks.map(moved)
+            label += piece.plainLabel
+        }
+        return MessageText(
+            attributed: attributed,
+            inlineEmoji: inlineEmoji,
+            inlineSymbols: inlineSymbols,
+            links: links,
+            spoilers: spoilers,
+            plates: plates,
+            quotes: quotes,
+            codeBlocks: codeBlocks,
+            plainLabel: label
+        )
+    }
+
+    /// The same text with `ranges` lit as Discord lights what an AutoMod rule
+    /// matched. Kept in the plates' order of appearance, which the painter's
+    /// walk assumes.
+    func highlighting(_ ranges: [NSRange]) -> MessageText {
+        guard !ranges.isEmpty else { return self }
+        let added = ranges.map { Plate(range: $0, kind: .highlight, padding: 0) }
+        return MessageText(
+            attributed: attributed,
+            inlineEmoji: inlineEmoji,
+            inlineSymbols: inlineSymbols,
+            links: links,
+            spoilers: spoilers,
+            plates: (plates + added).sorted { $0.range.location < $1.range.location },
+            quotes: quotes,
+            codeBlocks: codeBlocks,
+            plainLabel: plainLabel
         )
     }
 }
@@ -290,11 +350,24 @@ nonisolated enum MessageTextBuilder {
                     after: MessageTextStyle.quoteMargin + style.paragraphSpacing
                 )
             case .list(let ordered, let startIndex, let items):
+                // Discord's indent (`.markup ul`, `ol`): 1em for bullets, and
+                // for numbers `.4em` and `.6em` a digit of the longest.
+                let digits = String(startIndex + max(0, items.count - 1)).count
+                let em = style.bodyFont.pointSize
+                let indent = ordered ? em * (0.4 + 0.6 * CGFloat(digits)) : em
                 for (offset, item) in items.enumerated() {
                     if offset > 0 { appendRaw("\n", attributes: style.body) }
+                    let start = output.length
                     let marker = ordered ? "\(startIndex + offset). " : "• "
+                    let markerText = NSAttributedString(string: marker, attributes: style.listMarker)
                     appendRaw(marker, attributes: style.listMarker)
                     for child in item { append(child) }
+                    let width = CGFloat(CTLineGetTypographicBounds(CTLineCreateWithAttributedString(markerText), nil, nil, nil))
+                    output.addAttribute(
+                        .paragraphStyle,
+                        value: style.listParagraph(marker: width, indent: indent),
+                        range: NSRange(location: start, length: output.length - start)
+                    )
                 }
             }
         }

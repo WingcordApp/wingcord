@@ -161,6 +161,10 @@ struct Composer: View {
     var stickerPickerRequest: StickerPickerRequest?
     /// Tells the store the request was taken, so it opens the picker once.
     var takeStickerPickerRequest: () -> Void = {}
+    /// The app launcher, asked for at one app — Open App on its profile. The
+    /// page is already set on the store; this only opens the control.
+    var appLauncherRequest: AppLauncherRequest?
+    var takeAppLauncherRequest: () -> Void = {}
 
     @Environment(\.motion) private var motion
     @State private var isFocused = false
@@ -343,6 +347,11 @@ struct Composer: View {
             stickerSection = request.sectionID
             openControl = .sticker
             takeStickerPickerRequest()
+        }
+        .onChange(of: appLauncherRequest?.token, initial: true) { _, _ in
+            guard appLauncherRequest != nil else { return }
+            if activityChannelID != nil { openControl = .apps }
+            takeAppLauncherRequest()
         }
         .onChange(of: openControl) { _, control in
             if control != .sticker { stickerSection = nil }
@@ -833,7 +842,7 @@ private struct InteractionBanner: View {
         }
         .padding(.horizontal, Spacing.snug)
         .padding(.vertical, Spacing.base)
-        .glassEffect(.regular, in: .rect(cornerRadius: Radius.chip))
+        .glassEffect(.clear, in: .rect(cornerRadius: Radius.chip))
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(Text(message))
     }
@@ -880,7 +889,7 @@ private struct ComposerBanner: View {
 
     var body: some View {
         HStack(spacing: Spacing.base) {
-            Image(systemName: symbolName)
+            Image(symbol: symbolName)
                 .font(.system(.caption))
                 .foregroundStyle(Ink.tertiary)
             if let edit {
@@ -903,7 +912,7 @@ private struct ComposerBanner: View {
         }
         .padding(.horizontal, Spacing.snug)
         .padding(.vertical, Spacing.base)
-        .glassEffect(.regular, in: .rect(cornerRadius: Radius.chip))
+        .glassEffect(.clear, in: .rect(cornerRadius: Radius.chip))
     }
 
     private var line: some View {
@@ -934,7 +943,7 @@ private struct PermissionNotice: View {
         .padding(.horizontal, Spacing.snug)
         .frame(minHeight: Metrics.composerControlHeight)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .glassEffect(.regular, in: .rect(cornerRadius: Radius.glass))
+        .glassEffect(.clear, in: .rect(cornerRadius: Radius.glass))
     }
 }
 

@@ -152,7 +152,7 @@ struct ForwardSheet<Preview: View>: View {
                     copyLink()
                     didCopy = true
                 } label: {
-                    Image(systemName: didCopy ? "checkmark" : "link")
+                    Image(symbol: didCopy ? "checkmark" : "link")
                         .font(.system(size: 13, weight: .semibold))
                         .contentTransition(.symbolEffect(.replace))
                         .frame(width: Metrics.composerControlHeight, height: Metrics.composerControlHeight)
@@ -223,7 +223,7 @@ private struct ForwardRow: View {
                 VStack(alignment: .leading, spacing: 0) {
                     HStack(spacing: Spacing.tight) {
                         if let symbolName = target.symbolName {
-                            Image(systemName: symbolName)
+                            Image(symbol: symbolName)
                                 .font(.system(size: 10, weight: .semibold))
                                 .foregroundStyle(Ink.tertiary)
                         }
@@ -242,7 +242,7 @@ private struct ForwardRow: View {
 
                 Spacer(minLength: Spacing.base)
 
-                Image(systemName: isChosen ? "checkmark.circle.fill" : "circle")
+                Image(symbol: isChosen ? "checkmark.circle.fill" : "circle")
                     .font(.system(size: 15, weight: .regular))
                     .foregroundStyle(isChosen ? AnyShapeStyle(Palette.accent) : AnyShapeStyle(Ink.quaternary))
             }

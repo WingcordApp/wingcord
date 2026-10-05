@@ -230,22 +230,29 @@ extension SessionController {
 
 extension SessionController {
 
-    /// Reads back which applications are still out.
-    ///
-    /// Asked once after READY, because nothing in the bootstrap mentions them
-    /// and a submitted application is otherwise invisible across a relaunch.
+    /// Asks which servers the reader's applications are to, to draw them with.
     func loadJoinRequestGuilds() {
         Task { [weak self] in
             guard let self else { return }
             do {
                 model.applyJoinRequestGuilds(try await rest.joinRequestGuilds())
             } catch {
-                Self.trace("join requests: \(Self.describe(error))")
+                Self.trace("join request guilds: \(Self.describe(error))")
             }
         }
     }
 
-    func writeWithdrawJoinRequest(_ guildID: GuildID) {
+    /// Asks only where an application's server is still unknown — which is
+    /// how Discord's folder asks (`hasFetchedRequestToJoinGuilds`), so a rail
+    /// with no applications in it never sends the request.
+    func loadJoinRequestGuildsIfNeeded() {
+        let known = Set(model.joinRequestGuilds.map(\.id))
+        guard model.pendingApplicationGuildIDs.contains(where: { !known.contains($0) }) else { return }
+        loadJoinRequestGuilds()
+    }
+
+    /// Takes an application back, and puts it back if the server refused.
+    func writeWithdrawJoinRequest(_ guildID: GuildID, restoring previous: OwnJoinRequest?) {
         Task { [weak self] in
             guard let self else { return }
             do {
@@ -253,9 +260,76 @@ extension SessionController {
             } catch {
                 Self.trace("withdraw \(guildID.rawValue): \(Self.describe(error))")
                 model.reportActionFailure(Self.describe(error))
-                // Put it back: the application is still out.
-                loadJoinRequestGuilds()
+                // The application is still out.
+                if let previous, model.ownJoinRequests[guildID] == nil {
+                    model.fileOwnJoinRequest(previous)
+                }
             }
         }
+    }
+
+    /// Opens a denied application again: `POST /guilds/{id}/requests/@me`,
+    /// then the form or the page.
+    func writeResetJoinRequest(_ guildID: GuildID, opensForm: Bool) {
+        Task { [weak self] in
+            guard let self else { return }
+            defer { model.reapplyingGuildIDs.remove(guildID) }
+            do {
+                let request = try await rest.resetJoinRequest(inGuild: guildID)
+                // An answer this client cannot read is still an application
+                // opened again, and STARTED is what one is until it is sent.
+                model.fileOwnJoinRequest(request ?? OwnJoinRequest(guildID: guildID, status: .started))
+                if opensForm {
+                    model.openJoinApplication(guildID)
+                } else {
+                    model.selectGuild(guildID)
+                }
+            } catch {
+                Self.trace("reapply \(guildID.rawValue): \(Self.describe(error))")
+                model.reportActionFailure(Self.describe(error))
+            }
+        }
+    }
+
+    /// Tells the server the approval was seen. Discord swallows a failure
+    /// here and forgets the request regardless; so does this, past a trace.
+    func writeAcknowledgeJoinRequest(_ guildID: GuildID, requestID: JoinRequestID) {
+        Task { [weak self] in
+            guard let self else { return }
+            do {
+                try await rest.acknowledgeJoinRequest(inGuild: guildID, requestID: requestID)
+            } catch {
+                Self.trace("ack join request \(guildID.rawValue): \(Self.describe(error))")
+            }
+        }
+    }
+
+    /// One of the socket's join requests. **A moderator is sent everybody's**,
+    /// and only the reader's own are theirs — Discord's store drops any other
+    /// (`212455`'s `A`).
+    func applyJoinRequestEvent(_ request: OwnJoinRequest, userID: UserID?) {
+        guard let userID, userID == model.currentUserID else {
+            // Somebody else's: a moderator's open list moves with it.
+            model.memberSafety?.applicationsDidChange(in: request.guildID)
+            return
+        }
+        model.fileOwnJoinRequest(request)
+        // Approved while the reader is looking at the server.
+        model.offerApprovedApplicationIfNeeded(request.guildID)
+        // A request from another client, to a server this one has never drawn.
+        if model.guilds[request.guildID] == nil,
+           !model.joinRequestGuilds.contains(where: { $0.id == request.guildID }),
+           model.ownJoinRequests[request.guildID] != nil
+        {
+            loadJoinRequestGuilds()
+        }
+    }
+
+    func removeJoinRequest(_ guildID: GuildID, userID: UserID?) {
+        if let userID, userID != model.currentUserID {
+            model.memberSafety?.applicationsDidChange(in: guildID)
+            return
+        }
+        model.ownJoinRequests[guildID] = nil
     }
 }

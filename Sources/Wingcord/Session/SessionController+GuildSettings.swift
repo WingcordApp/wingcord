@@ -41,15 +41,15 @@ extension SessionController {
     /// **Thirty days, captured** — Discord's own invite modal sends
     /// `max_age: 2592000` and says "Your invite link expires in 30 days"
     /// underneath the field, which is the copy this client draws too.
-    func mintInviteLink(for guildID: GuildID, channelID: ChannelID) {
+    func mintInviteLink(for channelID: ChannelID) {
         Task { [weak self] in
             guard let self else { return }
             do {
-                model.serverInviteLinks[guildID] = try await rest.createInvite(in: channelID)
+                model.inviteLinks[channelID] = try await rest.createInvite(in: channelID)
             } catch {
                 // No link and no row: the surface keeps its spinner, which is
                 // the honest state. A retry is re-opening it.
-                Self.trace("invite link \(guildID) failed: \(Self.describe(error))")
+                Self.trace("invite link \(channelID) failed: \(Self.describe(error))")
             }
         }
     }

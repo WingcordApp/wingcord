@@ -62,12 +62,12 @@ extension DiscordREST {
         safetyAlertsChannelID: ChannelID?
     ) async throws -> GuildSettings {
         struct Body: Encodable {
-            var description: String?
+            @ExplicitNull var description: String?
             var features: [String]
             var preferred_locale: String
-            var rules_channel_id: String?
-            var public_updates_channel_id: String?
-            var safety_alerts_channel_id: String?
+            @ExplicitNull var rules_channel_id: String?
+            @ExplicitNull var public_updates_channel_id: String?
+            @ExplicitNull var safety_alerts_channel_id: String?
         }
         return try await request(
             method: "PATCH",
@@ -98,10 +98,10 @@ extension DiscordREST {
         afkTimeout: Int
     ) async throws -> GuildSettings {
         struct Body: Encodable {
-            var system_channel_id: String?
+            @ExplicitNull var system_channel_id: String?
             var system_channel_flags: Int
             var default_message_notifications: Int
-            var afk_channel_id: String?
+            @ExplicitNull var afk_channel_id: String?
             var afk_timeout: Int
         }
         return try await request(
@@ -117,6 +117,77 @@ extension DiscordREST {
             ),
             as: GuildAdminDTO.self
         ).domain(fallbackID: guildID)
+    }
+
+    /// **Boost Perks** — Discord's `saveGuild(id, {premiumProgressBarEnabled,
+    /// banner, splash})`: the progress bar, the banner over the channel list
+    /// and the invite background, each sent only when it changed.
+    ///
+    /// - Parameters:
+    ///   - banner: nil leaves it, `.some(nil)` removes it, an image sets it.
+    ///   - splash: the same three ways.
+    public func updateBoostPerks(
+        in guildID: GuildID,
+        progressBar: Bool? = nil,
+        banner: ImageData?? = nil,
+        splash: ImageData?? = nil
+    ) async throws -> GuildSettings {
+        /// Hand-written: a removal is an explicit `null`, and an untouched
+        /// field is no key at all.
+        struct Body: Encodable {
+            var progressBar: Bool?
+            var banner: ImageData??
+            var splash: ImageData??
+
+            private enum Key: String, CodingKey {
+                case premium_progress_bar_enabled, banner, splash
+            }
+
+            func encode(to encoder: any Encoder) throws {
+                var container = encoder.container(keyedBy: Key.self)
+                if let progressBar { try container.encode(progressBar, forKey: .premium_progress_bar_enabled) }
+                switch banner {
+                case .some(.some(let image)): try container.encode(image.dataURI, forKey: .banner)
+                case .some(.none): try container.encodeNil(forKey: .banner)
+                case .none: break
+                }
+                switch splash {
+                case .some(.some(let image)): try container.encode(image.dataURI, forKey: .splash)
+                case .some(.none): try container.encodeNil(forKey: .splash)
+                case .none: break
+                }
+            }
+        }
+        return try await request(
+            method: "PATCH",
+            path: "/guilds/\(guildID.rawValue)",
+            route: "guilds/{id}",
+            body: Body(progressBar: progressBar, banner: banner, splash: splash),
+            as: GuildAdminDTO.self
+        ).domain(fallbackID: guildID)
+    }
+
+    /// The Custom Invite Link and how often it was used —
+    /// `GET /guilds/{id}/vanity-url`, `{code, uses}`.
+    public func vanityURL(of guildID: GuildID) async throws -> VanityURL {
+        try await get(
+            "/guilds/\(guildID.rawValue)/vanity-url",
+            route: "guilds/{id}/vanity-url",
+            as: VanityURLDTO.self
+        ).domain
+    }
+
+    /// Sets or clears the Custom Invite Link — `PATCH … {code}`; an empty
+    /// code is Discord's Remove Custom Invite Link.
+    public func setVanityURL(_ code: String, in guildID: GuildID) async throws -> VanityURL {
+        struct Body: Encodable { var code: String }
+        return try await request(
+            method: "PATCH",
+            path: "/guilds/\(guildID.rawValue)/vanity-url",
+            route: "guilds/{id}/vanity-url",
+            body: Body(code: code),
+            as: VanityURLDTO.self
+        ).domain
     }
 
     /// **Access — the Age-Restricted switch.** One field, exactly as captured.
@@ -166,7 +237,7 @@ extension DiscordREST {
     ) async throws -> GuildWidgetSettings {
         struct Body: Encodable {
             var enabled: Bool
-            var channel_id: String?
+            @ExplicitNull var channel_id: String?
         }
         return try await request(
             method: "PATCH",
@@ -216,6 +287,13 @@ extension DiscordREST {
             var emoji_id: String?
             var emoji_animated: Bool
         }
+        /// **Hand-written, because a nil here is an explicit `null`.** A
+        /// synthesised `Encodable` leaves nil keys out, and on a route that
+        /// replaces the page's fields an absent key means "unchanged" — so
+        /// choosing "Server Icon Color" (Discord's `brandColorPrimary: null`),
+        /// clearing the description or removing the icon all left the old value
+        /// standing. Discord's own save sends the page's eight keys every time,
+        /// nulls included.
         struct Body: Encodable {
             var name: String
             var description: String?
@@ -225,10 +303,35 @@ extension DiscordREST {
             var brand_color_primary: String?
             var traits: [TraitBody]
             var game_application_ids: [String]
+            /// Sent only where the server may wear a tag — see `carriesTag`.
+            var carriesTag: Bool
             var tag: String?
             var badge: Int?
             var badge_color_primary: String?
             var badge_color_secondary: String?
+
+            private enum Key: String, CodingKey {
+                case name, description, icon, custom_banner, visibility, brand_color_primary
+                case traits, game_application_ids, tag, badge, badge_color_primary
+                case badge_color_secondary
+            }
+
+            func encode(to encoder: Encoder) throws {
+                var container = encoder.container(keyedBy: Key.self)
+                try container.encode(name, forKey: .name)
+                try container.encode(description, forKey: .description)
+                try container.encode(icon, forKey: .icon)
+                try container.encode(custom_banner, forKey: .custom_banner)
+                try container.encode(visibility, forKey: .visibility)
+                try container.encode(brand_color_primary, forKey: .brand_color_primary)
+                try container.encode(traits, forKey: .traits)
+                try container.encode(game_application_ids, forKey: .game_application_ids)
+                guard carriesTag else { return }
+                try container.encode(tag, forKey: .tag)
+                try container.encode(badge, forKey: .badge)
+                try container.encode(badge_color_primary, forKey: .badge_color_primary)
+                try container.encode(badge_color_secondary, forKey: .badge_color_secondary)
+            }
         }
 
         // Unchanged means "send the hash back". Discord accepts the hash it gave
@@ -257,7 +360,11 @@ extension DiscordREST {
             custom_banner: bannerValue,
             visibility: profile.visibility,
             brand_color_primary: profile.brandColorPrimary.map(Self.hex),
-            traits: profile.traits.enumerated().map { index, trait in
+            // Discord's page draws five slots whether or not they hold
+            // anything; an empty one is not a trait and is not sent.
+            traits: profile.traits.filter {
+                !$0.label.trimmingCharacters(in: .whitespaces).isEmpty
+            }.enumerated().map { index, trait in
                 TraitBody(
                     label: trait.label,
                     // Position is the trait's ORDER, and the captured body sends
@@ -270,6 +377,7 @@ extension DiscordREST {
                 )
             },
             game_application_ids: profile.gameApplicationIDs.map { String($0.rawValue) },
+            carriesTag: carriesTag,
             tag: carriesTag ? profile.tag : nil,
             badge: carriesTag ? profile.badge : nil,
             badge_color_primary: carriesTag ? profile.badgeColorPrimary.map(Self.hex) : nil,
@@ -342,10 +450,12 @@ extension DiscordREST {
     /// `updateGuildProfile` takes the profile: the captured body carries every
     /// one of these eight, and a caller that passed four would clear the rest.
     public func updateRole(_ role: Role, in guildID: GuildID) async throws -> Role {
+        // A role going back to one colour sends its secondary and tertiary as
+        // `null` — Discord's own body does — or the old gradient stays.
         struct ColorsBody: Encodable {
             var primary_color: UInt32
-            var secondary_color: UInt32?
-            var tertiary_color: UInt32?
+            @ExplicitNull var secondary_color: UInt32?
+            @ExplicitNull var tertiary_color: UInt32?
         }
         struct Body: Encodable {
             var name: String
@@ -406,6 +516,25 @@ extension DiscordREST {
             body: positions.map { Entry(id: String($0.id.rawValue), position: $0.position) },
             as: [RoleDTO].self
         ).map(\.domain)
+    }
+
+    /// Writes one role's permissions and nothing else — Discord's
+    /// `updateRolePermissions`, which is what "Remove risky permissions from
+    /// @everyone" sends (`HANDOFF.md` §SM.11: it cleared `1 << 17` alone). A
+    /// decimal string, like every permission bitfield on these routes.
+    public func updateRolePermissions(
+        _ roleID: RoleID,
+        in guildID: GuildID,
+        permissions: Permissions
+    ) async throws -> Role {
+        struct Body: Encodable { var permissions: String }
+        return try await request(
+            method: "PATCH",
+            path: "/guilds/\(guildID.rawValue)/roles/\(roleID.rawValue)",
+            route: "guilds/{id}/roles/{id}",
+            body: Body(permissions: permissions.apiString),
+            as: RoleDTO.self
+        ).domain
     }
 
     public func deleteRole(_ roleID: RoleID, in guildID: GuildID) async throws {
@@ -665,6 +794,16 @@ extension DiscordREST {
         ).compactMap(\.domain)
     }
 
+    /// One channel's invites — its settings' Invites page, which asks for the
+    /// channel's rather than the server's so Manage Channel is enough.
+    public func channelInvites(in channelID: ChannelID) async throws -> [GuildInvite] {
+        try await get(
+            "/channels/\(channelID.rawValue)/invites",
+            route: "channels/{id}/invites",
+            as: [GuildInviteDTO].self
+        ).compactMap(\.domain)
+    }
+
     /// Creates an invite. **On the channel, not the guild** — there is no
     /// guild-level create, and the channel decides where the link lands.
     public func createInvite(
@@ -756,6 +895,9 @@ extension DiscordREST {
             var description: String?
             var placeholder: String?
             var choices: [String]?
+            /// The rules, on the `TERMS` field. **Sent back every time** — a
+            /// save that edited one question would otherwise empty the rules.
+            var values: [String]?
         }
         struct Body: Encodable {
             var form_fields: [FieldBody]
@@ -769,14 +911,20 @@ extension DiscordREST {
             body: Body(
                 form_fields: form.fields.map { field in
                     var choices: [String]?
-                    if case .multipleChoice(let options) = field.kind { choices = options }
+                    var values: [String]?
+                    switch field.kind {
+                    case .multipleChoice(let options): choices = options
+                    case .terms(let rules): values = rules
+                    default: break
+                    }
                     return FieldBody(
                         field_type: field.kind.wireName,
                         label: field.label,
                         required: field.isRequired,
                         description: field.detail,
                         placeholder: field.placeholder,
-                        choices: choices
+                        choices: choices,
+                        values: values
                     )
                 },
                 enabled: form.isEnabled,
@@ -845,10 +993,70 @@ extension DiscordREST {
         )
     }
 
+    /// Turns on a subscriber sync for one of the reader's own connected
+    /// accounts — Discord's `enableIntegration`: `POST … {type, id}`, the
+    /// connection's platform and its account id.
+    public func enableIntegration(type: String, accountID: String, in guildID: GuildID) async throws {
+        struct Body: Encodable {
+            var type: String
+            var id: String
+        }
+        _ = try await requestData(
+            method: "POST",
+            path: "/guilds/\(guildID.rawValue)/integrations",
+            route: "guilds/{id}/integrations",
+            body: Body(type: type, id: accountID)
+        )
+    }
+
+    /// Saves a sync's expiry settings — Discord's `updateIntegration`:
+    /// `PATCH /guilds/{id}/integrations/{id}` with all three fields, always.
+    public func updateIntegration(
+        _ integrationID: UInt64,
+        in guildID: GuildID,
+        expiry: GuildIntegration.Expiry
+    ) async throws {
+        struct Body: Encodable {
+            var expire_behavior: Int
+            var expire_grace_period: Int
+            var enable_emoticons: Bool
+        }
+        _ = try await requestData(
+            method: "PATCH",
+            path: "/guilds/\(guildID.rawValue)/integrations/\(integrationID)",
+            route: "guilds/{id}/integrations/{id}",
+            body: Body(
+                expire_behavior: expiry.behavior.rawValue,
+                expire_grace_period: expiry.gracePeriod,
+                enable_emoticons: expiry.enablesEmoticons
+            )
+        )
+    }
+
+    /// Discord's Sync — `POST /guilds/{id}/integrations/{id}/sync`, no body.
+    public func syncIntegration(_ integrationID: UInt64, in guildID: GuildID) async throws {
+        _ = try await requestData(
+            method: "POST",
+            path: "/guilds/\(guildID.rawValue)/integrations/\(integrationID)/sync",
+            route: "guilds/{id}/integrations/{id}/sync",
+            body: Optional<Never>.none
+        )
+    }
+
     public func guildWebhooks(in guildID: GuildID) async throws -> [GuildWebhook] {
         try await get(
             "/guilds/\(guildID.rawValue)/webhooks",
             route: "guilds/{id}/webhooks",
+            as: [GuildWebhookDTO].self
+        ).compactMap(\.domain)
+    }
+
+    /// One channel's webhooks, incoming and following — its settings'
+    /// Integrations page.
+    public func channelWebhooks(in channelID: ChannelID) async throws -> [GuildWebhook] {
+        try await get(
+            "/channels/\(channelID.rawValue)/webhooks",
+            route: "channels/{id}/webhooks",
             as: [GuildWebhookDTO].self
         ).compactMap(\.domain)
     }
@@ -884,14 +1092,26 @@ extension DiscordREST {
         channelID: ChannelID?,
         avatar: ImageData?? = nil
     ) async throws -> GuildWebhook? {
+        /// `avatar` is three-way: absent leaves it, `null` removes it, a data
+        /// URI replaces it — so it is written by hand rather than synthesised,
+        /// which would turn a removal into "leave it".
         struct Body: Encodable {
             var name: String
             var channel_id: String?
-            var avatar: String?
-        }
-        let avatarValue: String? = switch avatar {
-        case .none, .some(.none): nil
-        case .some(.some(let image)): image.dataURI
+            var avatar: ImageData??
+
+            enum CodingKeys: String, CodingKey { case name, channel_id, avatar }
+
+            func encode(to encoder: any Encoder) throws {
+                var container = encoder.container(keyedBy: CodingKeys.self)
+                try container.encode(name, forKey: .name)
+                try container.encodeIfPresent(channel_id, forKey: .channel_id)
+                switch avatar {
+                case .none: break
+                case .some(.none): try container.encodeNil(forKey: .avatar)
+                case .some(.some(let image)): try container.encode(image.dataURI, forKey: .avatar)
+                }
+            }
         }
         return try await request(
             method: "PATCH",
@@ -900,7 +1120,7 @@ extension DiscordREST {
             body: Body(
                 name: name,
                 channel_id: channelID.map { String($0.rawValue) },
-                avatar: avatarValue
+                avatar: avatar
             ),
             as: GuildWebhookDTO.self
         ).domain
@@ -1034,12 +1254,17 @@ extension DiscordREST {
     ///
     /// `before` is an entry id, and the page's own oldest entry is where the
     /// next call starts — see `AuditLogPage.oldestEntryID`.
+    ///
+    /// `targetID` narrows it to what was done to one person — Mod View's
+    /// Audit Log, captured as `?limit=50&target_id=…`.
     public func auditLog(
         in guildID: GuildID,
         limit: Int = 50,
-        before: UInt64? = nil
+        before: UInt64? = nil,
+        targetID: UInt64? = nil
     ) async throws -> AuditLogPage {
         var query = [URLQueryItem(name: "limit", value: String(limit))]
+        if let targetID { query.append(URLQueryItem(name: "target_id", value: String(targetID))) }
         if let before { query.append(URLQueryItem(name: "before", value: String(before))) }
         return try await get(
             "/guilds/\(guildID.rawValue)/audit-logs",
@@ -1144,26 +1369,30 @@ struct GameSummaryDTO: Decodable, Sendable {
 //      has been watched working.
 
 extension DiscordREST {
-    /// One page of a server's members.
+    /// One page of a server's members, narrowed by `query`.
     ///
     /// Returns nil where the index is still building — the caller shows "still
     /// indexing" and retries, rather than reporting an empty server.
+    ///
+    /// **The body is Discord's own builder's** (`144073`): the text becomes
+    /// `usernames` and `user_id` terms, the four safety flags go into
+    /// `or_query.safety_signals`, everything else into `and_query`, and the two
+    /// query objects are sent even when empty — the shape the capture shows.
+    /// `after` is the last row's join time and id, which is how a page follows
+    /// the one before it.
     public func searchMembers(
         in guildID: GuildID,
-        sort: GuildMemberRow.Sort = .joinedNewest,
-        limit: Int = 250
-    ) async throws -> (rows: [GuildMemberRow], total: Int)? {
-        struct Body: Encodable {
-            var or_query = [String: String]()
-            var and_query = [String: String]()
-            var sort: Int
-            var limit: Int
-        }
+        query: MemberSearchQuery = MemberSearchQuery(),
+        after cursor: MemberSearchCursor? = nil,
+        limit: Int = 250,
+        now: Date = .now
+    ) async throws -> MemberSearchPage? {
+        let body = MemberSearchBody(query: query, cursor: cursor, limit: limit, now: now)
         let (data, status) = try await requestRaw(
             method: "POST",
             path: "/guilds/\(guildID.rawValue)/members-search",
             route: "guilds/{id}/members-search",
-            body: Body(sort: sort.rawValue, limit: limit)
+            body: body
         )
         // 202 with a `retry_after` is Discord saying "ask again", and its body
         // has no members in it at all.
@@ -1172,7 +1401,10 @@ extension DiscordREST {
             throw Self.apiFailure(status: status, data: data)
         }
         let payload = try Self.decoder.decode(MemberSearchDTO.self, from: data)
-        return (payload.members?.compactMap(\.domain) ?? [], payload.total_result_count ?? 0)
+        return MemberSearchPage(
+            rows: payload.members?.compactMap(\.domain) ?? [],
+            total: payload.total_result_count ?? 0
+        )
     }
 
     /// The people waiting to be let in, or already judged.
@@ -1190,6 +1422,21 @@ extension DiscordREST {
             ],
             as: JoinRequestPageDTO.self
         ).domain
+    }
+
+    /// Opens a conversation with an applicant, or returns the one already
+    /// open — Discord's Interview, `createOrEnterJoinRequestInterview`
+    /// (`624458`): `POST /join-requests/{id}/interview`, answered with the
+    /// channel. Not captured; the answer is read as the channel object
+    /// Discord's client files with `CHANNEL_CREATE`.
+    public func openJoinRequestInterview(_ requestID: UInt64) async throws -> Channel {
+        try await request(
+            method: "POST",
+            path: "/join-requests/\(requestID)/interview",
+            route: "join-requests/{id}/interview",
+            body: Optional<String>.none,
+            as: ChannelDTO.self
+        ).domain()
     }
 
     /// Approves or rejects one.
@@ -1214,55 +1461,6 @@ extension DiscordREST {
         )
     }
 
-    /// Removes a member. They can come back with a new invite.
-    public func kickMember(_ userID: UserID, in guildID: GuildID) async throws {
-        _ = try await requestData(
-            method: "DELETE",
-            path: "/guilds/\(guildID.rawValue)/members/\(userID.rawValue)",
-            route: "guilds/{id}/members/{id}",
-            body: Optional<Never>.none
-        )
-    }
-
-    /// Bans a member.
-    ///
-    /// `delete_message_seconds` rather than the days the old route took — the
-    /// two coexist and only one of them is current.
-    public func banMember(
-        _ userID: UserID,
-        in guildID: GuildID,
-        deleteMessageSeconds: Int = 0
-    ) async throws {
-        struct Body: Encodable { var delete_message_seconds: Int }
-        _ = try await requestData(
-            method: "PUT",
-            path: "/guilds/\(guildID.rawValue)/bans/\(userID.rawValue)",
-            route: "guilds/{id}/bans/{id}",
-            body: Body(delete_message_seconds: deleteMessageSeconds)
-        )
-    }
-
-    /// Times a member out, or lifts one.
-    ///
-    /// `nil` lifts it. **Not a duration** — the field is the instant it ends,
-    /// and sending a duration produces a timeout that expired in 1970.
-    public func timeOutMember(
-        _ userID: UserID,
-        in guildID: GuildID,
-        until: Date?
-    ) async throws {
-        struct Body: Encodable { var communication_disabled_until: String? }
-        _ = try await requestData(
-            method: "PATCH",
-            path: "/guilds/\(guildID.rawValue)/members/\(userID.rawValue)",
-            route: "guilds/{id}/members/{id}",
-            body: Body(
-                communication_disabled_until: until.map {
-                    ISO8601DateFormatter.eventTimestamp.string(from: $0)
-                }
-            )
-        )
-    }
 }
 
 struct MemberSearchDTO: Decodable, Sendable {
@@ -1270,7 +1468,7 @@ struct MemberSearchDTO: Decodable, Sendable {
     var total_result_count: Int?
 
     struct RowDTO: Decodable, Sendable {
-        var member: MemberDTO?
+        var member: RowMemberDTO?
         var source_invite_code: String?
         var join_source_type: Int?
         var inviter_id: UserID?
@@ -1282,7 +1480,8 @@ struct MemberSearchDTO: Decodable, Sendable {
                 username: user.username,
                 displayName: user.global_name.nonEmpty,
                 nickname: member.nick.nonEmpty,
-                avatarHash: member.avatar ?? user.avatar,
+                avatarHash: user.avatar,
+                guildAvatarHash: member.avatar,
                 joinedAt: member.joined_at,
                 roleIDs: member.roles ?? [],
                 isPending: member.pending ?? false,
@@ -1291,9 +1490,156 @@ struct MemberSearchDTO: Decodable, Sendable {
                     rawValue: join_source_type,
                     code: source_invite_code.nonEmpty,
                     inviterID: inviter_id
-                )
+                ),
+                discriminator: user.discriminator,
+                isBot: user.bot ?? false,
+                flags: MemberFlags(rawValue: member.flags ?? 0),
+                unusualDMActivityUntil: member.unusual_dm_activity_until,
+                isSpammer: (user.flags ?? 0) & UserFlagBits.spammer != 0
             )
         }
+    }
+
+    /// The member inside a row. Its own type because it carries the one field
+    /// no other member payload does — `unusual_dm_activity_until`.
+    struct RowMemberDTO: Decodable, Sendable {
+        var user: UserDTO?
+        var nick: String?
+        var avatar: String?
+        var roles: [RoleID]?
+        var joined_at: Date?
+        var communication_disabled_until: Date?
+        var unusual_dm_activity_until: Date?
+        var pending: Bool?
+        var flags: Int?
+    }
+}
+
+/// Discord's user flag for an account it believes is spamming (`SPAMMER`).
+enum UserFlagBits {
+    static let spammer: UInt64 = 1 << 20
+}
+
+/// The members-search body, built the way Discord's builder builds it.
+struct MemberSearchBody: Encodable {
+    var query: MemberSearchQuery
+    var cursor: MemberSearchCursor?
+    var limit: Int
+    var now: Date
+
+    private enum Key: String, CodingKey {
+        case or_query, and_query, sort, limit, after
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: Key.self)
+        try container.encode(orQuery, forKey: .or_query)
+        try container.encode(andQuery, forKey: .and_query)
+        // The default sort is left out, as Discord leaves its unset sort out.
+        if query.sort != .joinedNewest { try container.encode(query.sort.rawValue, forKey: .sort) }
+        try container.encode(limit, forKey: .limit)
+        if let cursor {
+            try container.encode(
+                Cursor(guild_joined_at: Self.milliseconds(cursor.joinedAt), user_id: String(cursor.userID.rawValue)),
+                forKey: .after
+            )
+        }
+    }
+
+    private struct Cursor: Encodable {
+        var guild_joined_at: Int64
+        var user_id: String
+    }
+
+    private struct Terms: Encodable {
+        var or_query: [String]
+    }
+
+    private struct AllOf: Encodable {
+        var and_query: [String]
+    }
+
+    private struct Range<Value: Encodable>: Encodable {
+        var range: Bounds<Value>
+    }
+
+    private struct Bounds<Value: Encodable>: Encodable {
+        var gte: Value?
+        var lte: Value?
+    }
+
+    private struct UserIDFilter: Encodable {
+        var or_query: [String]?
+        var range: Bounds<String>?
+    }
+
+    private struct Signals: Encodable {
+        var unusual_dm_activity_until: Range<Int64>?
+        var communication_disabled_until: Range<Int64>?
+        var unusual_account_activity: Bool?
+        var automod_quarantined_username: Bool?
+    }
+
+    private struct OrQuery: Encodable {
+        var safety_signals: Signals?
+    }
+
+    private struct AndQuery: Encodable {
+        var usernames: Terms?
+        var user_id: UserIDFilter?
+        var role_ids: AllOf?
+        var guild_joined_at: Range<Int64>?
+        var source_invite_code: Terms?
+        var join_source_type: OrInt?
+    }
+
+    private struct OrInt: Encodable {
+        var or_query: [Int]
+    }
+
+    private var orQuery: OrQuery {
+        var signals = Signals()
+        if query.requiresUnusualDMActivity {
+            let since = now.addingTimeInterval(-MemberSearchQuery.unusualDMWindow)
+            signals.unusual_dm_activity_until = Range(range: Bounds(gte: Self.milliseconds(since), lte: nil))
+        }
+        if query.requiresTimeout {
+            signals.communication_disabled_until = Range(range: Bounds(gte: Self.milliseconds(now), lte: nil))
+        }
+        if query.requiresUnusualAccountActivity { signals.unusual_account_activity = true }
+        if query.requiresQuarantine { signals.automod_quarantined_username = true }
+        return query.filtersSignals ? OrQuery(safety_signals: signals) : OrQuery()
+    }
+
+    private var andQuery: AndQuery {
+        var and = AndQuery()
+        let terms = query.terms
+        if !terms.usernames.isEmpty { and.usernames = Terms(or_query: terms.usernames) }
+        var userID = UserIDFilter()
+        if !terms.userIDs.isEmpty { userID.or_query = terms.userIDs }
+        if let after = query.accountCreated.after {
+            userID.range = Bounds(
+                gte: String(SnowflakeTime.snowflake(at: after)),
+                lte: query.accountCreated.before.map { String(SnowflakeTime.snowflake(at: $0)) }
+            )
+        }
+        if userID.or_query != nil || userID.range != nil { and.user_id = userID }
+        if !query.roleIDs.isEmpty {
+            and.role_ids = AllOf(and_query: query.roleIDs.map { String($0.rawValue) }.sorted())
+        }
+        if let after = query.joined.after {
+            and.guild_joined_at = Range(range: Bounds(
+                gte: Self.milliseconds(after),
+                lte: query.joined.before.map(Self.milliseconds)
+            ))
+        }
+        if let code = query.sourceInviteCode, !code.isEmpty { and.source_invite_code = Terms(or_query: [code]) }
+        if let type = query.joinSourceType { and.join_source_type = OrInt(or_query: [type]) }
+        return and
+    }
+
+    private static func milliseconds(_ date: Date) -> Int64 {
+        Int64((date.timeIntervalSince1970 * 1000).rounded())
     }
 }
 
@@ -1310,6 +1656,22 @@ struct JoinRequestPageDTO: Decodable, Sendable {
         var application_status: String?
         var rejection_reason: String?
         var form_responses: [ResponseDTO]?
+        /// The conversation a moderator opened with the applicant.
+        var interview_channel_id: ChannelID?
+        /// **Read as text, and leniently.** Discord's client takes it for a
+        /// snowflake and reads the time out of it (`extractTimestamp`); nothing
+        /// here has caught one on the wire, and a page of applications must not
+        /// fail on the shape of a date only drawn under a verdict.
+        var actioned_at: String?
+        var actioned_by_user: UserDTO?
+
+        /// The moment a verdict was given: a snowflake's own time, or — if
+        /// the field turns out to be a date — the date.
+        var actionedAt: Date? {
+            guard let actioned_at, !actioned_at.isEmpty else { return nil }
+            if let raw = UInt64(actioned_at) { return JoinRequestID(rawValue: raw).timestamp }
+            return try? Date(actioned_at, strategy: .iso8601)
+        }
 
         struct ResponseDTO: Decodable, Sendable {
             var label: String?
@@ -1368,7 +1730,10 @@ struct JoinRequestPageDTO: Decodable, Sendable {
                         response: value.rendered
                     )
                 },
-                rejectionReason: entry.rejection_reason.nonEmpty
+                rejectionReason: entry.rejection_reason.nonEmpty,
+                interviewChannelID: entry.interview_channel_id,
+                actionedAt: entry.actionedAt,
+                actionedByName: entry.actioned_by_user.map { $0.global_name.nonEmpty ?? $0.username }
             )
         }
     }

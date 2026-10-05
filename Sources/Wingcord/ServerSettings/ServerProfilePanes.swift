@@ -15,7 +15,9 @@ import WingcordCore
 
 struct ServerProfilePane: View {
     let store: ServerSettingsStore
+    let model: AppModel
 
+    @Environment(\.colorScheme) private var colorScheme
     /// The edited copy. Nil until the fetch lands.
     @State private var draft: GuildProfile?
     @State private var games: [GameSummary] = []
@@ -43,11 +45,11 @@ struct ServerProfilePane: View {
         _ profile: Binding<GuildProfile>,
         committed: GuildProfile
     ) -> some View {
-        SettingsGroup("Identity") {
+        SettingsGroup {
             SettingsCard {
                 EditableTextRow(
                     title: "Name",
-                    placeholder: "Server name",
+                    placeholder: "Name",
                     text: profile.name,
                     committed: committed.name
                 ) {
@@ -56,9 +58,14 @@ struct ServerProfilePane: View {
                 CardDivider()
                 ImageWell(
                     title: "Icon",
-                    detail: "At least 512×512.",
+                    detail: "We recommend an image of at least 512x512.",
                     url: iconURL(profile.wrappedValue),
                     isCircular: true,
+                    allowsAnimated: BoostTier.unlocks(
+                        .animatedIcon,
+                        features: profile.wrappedValue.features,
+                        premiumTier: store.settings.value?.premiumTier ?? 0
+                    ),
                     onPick: { image in save(profile.wrappedValue, icon: .some(image)) },
                     onRemove: profile.wrappedValue.iconHash == nil
                         ? nil
@@ -77,46 +84,92 @@ struct ServerProfilePane: View {
     /// third — see `GuildProfile.brandColorPrimary`, where the three are told
     /// apart once.
     private func banner(_ profile: Binding<GuildProfile>) -> some View {
-        SettingsGroup("Banner") {
+        let current = profile.wrappedValue
+        let usesCustomBanner = isDiscoverable(current) && current.customBannerHash != nil
+        return SettingsGroup("Banner") {
             SettingsCard {
-                VStack(alignment: .leading, spacing: Spacing.snug) {
-                    LazyVGrid(
-                        columns: Array(
-                            repeating: GridItem(.flexible(), spacing: Spacing.base),
-                            count: 4
-                        ),
-                        spacing: Spacing.base
+                LazyVGrid(
+                    columns: Array(
+                        repeating: GridItem(.flexible(), spacing: Spacing.base),
+                        count: 4
+                    ),
+                    spacing: Spacing.base
+                ) {
+                    BrandSwatch(
+                        colour: iconColour(current),
+                        name: "Server Icon Color",
+                        isSelected: !usesCustomBanner && current.brandColorPrimary == nil
                     ) {
-                        ForEach(BrandColor.swatches, id: \.self) { value in
-                            BrandSwatch(
-                                value: value,
-                                isSelected: profile.wrappedValue.brandColorPrimary == value
-                            ) {
-                                var next = profile.wrappedValue
-                                next.brandColorPrimary = value
-                                save(next)
-                            }
+                        choose(nil, in: current)
+                    }
+                    ForEach(BrandColor.presets) { preset in
+                        BrandSwatch(
+                            colour: preset.value,
+                            name: preset.name,
+                            isSelected: !usesCustomBanner && current.brandColorPrimary == preset.value
+                        ) {
+                            choose(preset.value, in: current)
+                        }
+                    }
+                    if isDiscoverable(current) {
+                        CustomBannerTile(
+                            url: current.customBannerHash.flatMap {
+                                CDN.guildDiscoverySplash(guildID: current.id, hash: $0, width: 300)
+                            },
+                            isSelected: usesCustomBanner
+                        ) { image in
+                            save(current, customBanner: .some(image))
                         }
                     }
                 }
                 .padding(SettingsMetrics.cardContentInset)
             }
-            SettingsFootnote(
-                "Shown behind your server's name in invite links and, if you are "
-                    + "in Server Discovery, on your listing."
+        }
+        // The first tile's colour is the icon's first swatch, read once per
+        // picture through the palette table every card already shares.
+        .task(id: current.iconHash) {
+            model.sessionController.deriveBannerColor(
+                guildID: current.id,
+                iconHash: current.iconHash,
+                brandColor: nil
             )
         }
+    }
+
+    /// The "Server Icon Color" tile: the icon's first swatch, else Discord's
+    /// neutral — `aG` with `GUILD_PROFILE_BANNER_BACKGROUND_DEFAULT` as its
+    /// fallback.
+    private func iconColour(_ profile: GuildProfile) -> UInt32 {
+        profile.iconHash
+            .flatMap { GuildBannerArt.paletteURL(guildID: profile.id, iconHash: $0) }
+            .flatMap { model.derivedPalettes[$0]?.first }
+            ?? GuildBannerArt.defaultColour(isLight: colorScheme == .light)
+    }
+
+    /// Discord's own write for a tile: the colour, and the custom banner
+    /// cleared with it — `updateGuildProfile(id, {brandColorPrimary, customBanner: null})`.
+    private func choose(_ colour: UInt32?, in profile: GuildProfile) {
+        var next = profile
+        next.brandColorPrimary = colour
+        let clearsBanner = profile.customBannerHash != nil
+        if clearsBanner { next.customBannerHash = nil }
+        save(next, customBanner: clearsBanner ? .some(nil) : nil)
+    }
+
+    /// The custom banner tile exists only for a discoverable server — Discord's
+    /// `Is` returns nothing otherwise, and the artwork is shown nowhere else.
+    private func isDiscoverable(_ profile: GuildProfile) -> Bool {
+        profile.features.contains("DISCOVERABLE")
     }
 
     private func traits(_ profile: Binding<GuildProfile>) -> some View {
         SettingsGroup("Traits") {
             SettingsCard {
-                TraitEditor(traits: profile.traits) { save(profile.wrappedValue) }
+                TraitEditor(traits: profile.traits, isEnabled: true) {
+                    save(profile.wrappedValue)
+                }
             }
-            SettingsFootnote(
-                "Up to \(GuildTraitLimits.maximum) words describing your server's "
-                    + "interests and personality."
-            )
+            SettingsFootnote("Add up to 5 traits to show off your server\u{2019}s interests and personality.")
         }
     }
 
@@ -143,13 +196,12 @@ struct ServerProfilePane: View {
 
     private func gamesSection(_ profile: Binding<GuildProfile>) -> some View {
         SettingsGroup("Games") {
+            Text("What games does your server play?")
+                .font(SettingsType.rowSubtitle)
+                .foregroundStyle(Ink.secondary)
+                .padding(.bottom, Spacing.snug)
             SettingsCard {
-                if games.isEmpty {
-                    Text("This server has not named any games.")
-                        .font(SettingsType.rowLabel)
-                        .foregroundStyle(Ink.secondary)
-                        .padding(SettingsMetrics.cardContentInset)
-                } else {
+                if !games.isEmpty {
                     LazyVGrid(
                         columns: Array(
                             repeating: GridItem(.flexible(), spacing: Spacing.snug),
@@ -166,11 +218,11 @@ struct ServerProfilePane: View {
                         }
                     }
                     .padding(SettingsMetrics.cardContentInset)
+                    CardDivider()
                 }
-                CardDivider()
                 SettingsActionRow(
-                    "Add a game",
-                    actionTitle: "Search…"
+                    "Your Members Play",
+                    actionTitle: "Search for a game..."
                 ) {
                     isPickingGames = true
                 }
@@ -189,26 +241,52 @@ struct ServerProfilePane: View {
         }
     }
 
+    /// Discord's Private Profile (`IH`): the switch, its sentence, and beside
+    /// it the card a stranger sees once it is on — "Private Server", "The
+    /// server has limited who can see this profile." A discoverable server
+    /// cannot hide its profile, and says where that is changed.
     private func privacy(_ profile: Binding<GuildProfile>) -> some View {
-        SettingsGroup("Privacy") {
+        let isDiscoverable = profile.wrappedValue.features.contains("DISCOVERABLE")
+        return SettingsGroup {
             SettingsCard {
-                SettingsToggle(
-                    title: "Private profile",
-                    help: "Only members can see this server's profile. "
-                        + "Everyone else sees a placeholder unless they have an invite.",
-                    isOn: Binding(
-                        get: { profile.wrappedValue.isPrivateProfile },
-                        set: { isPrivate in
-                            var next = profile.wrappedValue
-                            // 1 ⇄ 2. Not a boolean on the wire, and the third
-                            // value — public with recruitment — belongs to the
-                            // Access page's "Apply to Join", so a switch here
-                            // must never write it.
-                            next.visibility = isPrivate ? 2 : 1
-                            save(next)
+                HStack(alignment: .top, spacing: Spacing.margin) {
+                    VStack(alignment: .leading, spacing: Spacing.tight) {
+                        Toggle(isOn: Binding(
+                            get: { profile.wrappedValue.isPrivateProfile },
+                            set: { isPrivate in
+                                var next = profile.wrappedValue
+                                // Discord's: private is visibility 2; back out of
+                                // it is 1 — the third value, public with
+                                // recruitment, belongs to Access's Apply from
+                                // Profile.
+                                next.visibility = isPrivate ? 2 : 1
+                                save(next)
+                            }
+                        )) {
+                            Text("Private Profile")
+                                .font(SettingsType.rowTitle)
                         }
-                    )
-                )
+                        .toggleStyle(.switch)
+                        .controlSize(.small)
+                        .tint(SettingsSurface.switchOn)
+                        .disabled(isDiscoverable)
+                        Text("When enabled, only server members can view profile content. Non-members won\u{2019}t be able to see this content unless they have an invite.")
+                            .font(SettingsType.rowSubtitle)
+                            .foregroundStyle(Ink.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                        if isDiscoverable {
+                            Text("Discoverable servers cannot have their content hidden. You can change this setting in Access")
+                                .font(.system(.caption))
+                                .foregroundStyle(Ink.tertiary)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    PrivateProfilePreview(guildID: profile.wrappedValue.id)
+                        // Discord shows the private card faded until it is on.
+                        .opacity(profile.wrappedValue.isPrivateProfile ? 1 : 0.45)
+                }
+                .padding(SettingsMetrics.cardContentInset)
             }
         }
     }
@@ -238,9 +316,13 @@ struct ServerProfilePane: View {
         profile.iconHash.flatMap { CDN.guildIcon(guildID: profile.id, hash: $0, side: 64) }
     }
 
-    private func save(_ profile: GuildProfile, icon: ImageData?? = nil) {
+    private func save(
+        _ profile: GuildProfile,
+        icon: ImageData?? = nil,
+        customBanner: ImageData?? = nil
+    ) {
         draft = profile
-        Task { await store.saveProfile(profile, icon: icon) }
+        Task { await store.saveProfile(profile, icon: icon, customBanner: customBanner) }
     }
 
     private func resolveGames(_ profile: GuildProfile) async {
@@ -270,11 +352,15 @@ struct ServerTagPane: View {
         LoadableContent(store.profile) { profile in
             let binding = Binding(get: { draft ?? profile }, set: { draft = $0 })
             VStack(alignment: .leading, spacing: 0) {
-                SettingsGroup("Tag") {
+                SettingsGroup("Customize Server Tag") {
+                    Text("Create a tag that your server members can display next to their name! Anyone outside your server can view your Server Profile through the Server Tag, and if applications are enabled, they can apply to join.")
+                        .font(SettingsType.rowSubtitle)
+                        .foregroundStyle(Ink.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .padding(.bottom, Spacing.snug)
                     SettingsCard {
                         EditableTextRow(
-                            title: "Letters",
-                            help: "Two to four characters.",
+                            title: "Server Tag Name",
                             placeholder: "TAG",
                             text: Binding(
                                 get: { binding.wrappedValue.tag ?? "" },
@@ -285,13 +371,9 @@ struct ServerTagPane: View {
                             save(binding.wrappedValue)
                         }
                     }
-                    SettingsFootnote(
-                        "Members who wear your tag show these letters beside their "
-                            + "name everywhere on Discord."
-                    )
                 }
 
-                SettingsGroup("Badge") {
+                SettingsGroup("Choose Badge") {
                     BadgePicker(
                         selection: Binding(
                             get: { GuildBadge(rawValue: binding.wrappedValue.badge) },
@@ -323,11 +405,18 @@ struct ServerTagPane: View {
 
 struct EngagementPane: View {
     let store: ServerSettingsStore
+    /// The server's size, which decides the Activity Feed's default.
+    var memberCount: Int?
 
     var body: some View {
         LoadableContent(store.settings) { settings in
             VStack(alignment: .leading, spacing: 0) {
+                // Discord's order (`pJ`): summaries, system messages, the feed.
+                if settings.offersChannelSummaries {
+                    channelSummaries(settings)
+                }
                 systemMessages(settings)
+                activityFeed(settings)
                 notifications(settings)
                 inactivity(settings)
                 widget(settings)
@@ -335,7 +424,59 @@ struct EngagementPane: View {
         }
     }
 
-    /// The four switches.
+    /// Discord's Channel Summaries (`pG`): one feature an administrator turns
+    /// on, for a server Discord has released them to.
+    private func channelSummaries(_ settings: GuildSettings) -> some View {
+        SettingsGroup("Channel Summaries") {
+            Text("Enable Channel Summaries for this server to help your members catch up and dive into discussions. In text channels, members will be able to see a list of topics being discussed and which members are involved.")
+                .font(SettingsType.rowSubtitle)
+                .foregroundStyle(Ink.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+                .padding(.bottom, Spacing.snug)
+            SettingsCard {
+                SettingsToggle(
+                    title: "Enable Channel Summaries",
+                    isOn: Binding(
+                        get: { settings.hasChannelSummaries },
+                        set: { isOn in
+                            Task { await store.setFeature("SUMMARIES_ENABLED_BY_USER", isOn: isOn) }
+                        }
+                    )
+                )
+            }
+        }
+    }
+
+    /// Discord's Activity Feed Settings (`ph`): a pair of features, one set
+    /// and the other cleared, over a default by the server's size.
+    private func activityFeed(_ settings: GuildSettings) -> some View {
+        SettingsGroup("Activity Feed Settings") {
+            Text("Shows a feed of activity from games and connected apps in this server.")
+                .font(SettingsType.rowSubtitle)
+                .foregroundStyle(Ink.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+                .padding(.bottom, Spacing.snug)
+            SettingsCard {
+                SettingsToggle(
+                    title: "Display Activity Feed in this server",
+                    isOn: Binding(
+                        get: { settings.showsActivityFeed(memberCount: memberCount) },
+                        set: { isOn in
+                            let (on, off) = ("ACTIVITY_FEED_ENABLED_BY_USER", "ACTIVITY_FEED_DISABLED_BY_USER")
+                            Task {
+                                await store.setFeatures(
+                                    adding: [isOn ? on : off],
+                                    removing: [isOn ? off : on]
+                                )
+                            }
+                        }
+                    )
+                )
+            }
+        }
+    }
+
+    /// The switches — `SystemChannelFlags.engagementRows`.
     ///
     /// **Every bit on the wire is a suppression**, so each switch is the
     /// inverse of its flag — `SystemChannelFlags.sends(_:)` is the one place
@@ -344,8 +485,16 @@ struct EngagementPane: View {
     /// touched them, where zero looks correct either way.
     private func systemMessages(_ settings: GuildSettings) -> some View {
         SettingsGroup("System Messages") {
+            Text("Configure system event messages sent to your server.")
+                .font(SettingsType.rowSubtitle)
+                .foregroundStyle(Ink.secondary)
+                .padding(.bottom, Spacing.snug)
             SettingsCard {
-                ForEach(Array(SystemChannelFlags.engagementOrder.enumerated()), id: \.offset) { index, entry in
+                let rows = SystemChannelFlags.engagementRows(
+                    features: settings.features,
+                    flags: settings.systemChannelFlags
+                )
+                ForEach(Array(rows.enumerated()), id: \.offset) { index, entry in
                     if index > 0 { CardDivider() }
                     SettingsToggle(
                         title: entry.label,
@@ -363,11 +512,11 @@ struct EngagementPane: View {
                 }
                 CardDivider()
                 channelPicker(
-                    "System messages channel",
-                    help: "Where member joins and boosts are announced.",
+                    "System Messages Channel",
+                    help: "This is the channel we send system event messages to.",
                     selection: settings.systemChannelID,
                     channels: store.textChannels,
-                    noneTitle: "No system messages"
+                    noneTitle: "No System Messages"
                 ) { channelID in
                     saveEngagement(settings, systemChannelID: .some(channelID))
                 }
@@ -376,10 +525,10 @@ struct EngagementPane: View {
     }
 
     private func notifications(_ settings: GuildSettings) -> some View {
-        SettingsGroup("Default Notifications") {
+        SettingsGroup("Default Notification Settings") {
             SettingsCard {
                 SettingsPickerRow(
-                    title: "New members receive",
+                    title: "Default Notification Settings",
                     options: [
                         .init(NotificationLevel.allMessages, NotificationLevel.allMessages.title),
                         .init(NotificationLevel.onlyMentions, NotificationLevel.onlyMentions.title),
@@ -391,27 +540,26 @@ struct EngagementPane: View {
                 )
             }
             SettingsFootnote(
-                "What members get notified about until they choose for themselves. "
-                    + "Only @mentions is the kinder default for a busy server."
+                "This will determine whether members who have not explicitly set their notification settings receive a notification for every message sent in this server or not. We highly recommend setting this to only @mentions for a Community Server."
             )
         }
     }
 
     private func inactivity(_ settings: GuildSettings) -> some View {
-        SettingsGroup("Inactivity") {
+        SettingsGroup("Inactive Channel") {
             SettingsCard {
                 channelPicker(
-                    "Inactive channel",
-                    help: "Members idle for longer than the timeout are moved here and muted.",
+                    "Inactive Channel",
+                    help: "Automatically move members to this channel and mute them when they have been idle for longer than the inactive timeout. This does not affect browsers.",
                     selection: settings.afkChannelID,
                     channels: store.voiceChannels,
-                    noneTitle: "No inactive channel"
+                    noneTitle: "No Inactive Channel"
                 ) { channelID in
                     saveEngagement(settings, afkChannelID: .some(channelID))
                 }
                 CardDivider()
                 SettingsPickerRow(
-                    title: "Inactive timeout",
+                    title: "Inactive Timeout",
                     options: AFKTimeout.seconds.map { .init($0, AFKTimeout.title($0)) },
                     selection: Binding(
                         get: { settings.afkTimeout },
@@ -431,7 +579,7 @@ struct EngagementPane: View {
             LoadableContent(store.widget) { widget in
                 SettingsCard {
                     SettingsToggle(
-                        title: "Enable server widget",
+                        title: "Enable Server Widget",
                         isOn: Binding(
                             get: { widget.isEnabled },
                             set: { isOn in
@@ -447,11 +595,11 @@ struct EngagementPane: View {
                     if widget.isEnabled {
                         CardDivider()
                         channelPicker(
-                            "Invite channel",
-                            help: "The widget generates an invite to this channel.",
+                            "Invite Channel",
+                            help: "If a channel is selected then an invite link will be generated with the widget, otherwise only online members and voice channels will be provided.",
                             selection: widget.channelID,
                             channels: store.textChannels,
-                            noneTitle: "No invite"
+                            noneTitle: "No Invite"
                         ) { channelID in
                             Task {
                                 await store.saveWidget(
@@ -464,8 +612,7 @@ struct EngagementPane: View {
                 }
             }
             SettingsFootnote(
-                "An HTML widget for your own website, showing who is online and a "
-                    + "link to join."
+                "Embed an HTML widget on your website to display your online members, voice channels, and invite link."
             )
         }
     }
@@ -516,5 +663,41 @@ struct EngagementPane: View {
                 afkTimeout: afkTimeout ?? settings.afkTimeout
             )
         }
+    }
+}
+
+/// What a stranger sees of a private server: Discord's placeholder card —
+/// "Private Server", a "?" for the icon, and its one sentence.
+private struct PrivateProfilePreview: View {
+    var guildID: GuildID
+
+    var body: some View {
+        let card = GuildProfilePresentation(
+            guildID: guildID,
+            name: "Private Server",
+            tag: nil,
+            iconURL: nil,
+            monogram: "?",
+            bannerURL: nil,
+            bannerColor: nil,
+            badgeURL: nil,
+            mark: nil,
+            description: nil,
+            memberCount: nil,
+            onlineCount: nil,
+            traits: [],
+            games: [],
+            createdAt: guildID.timestamp,
+            isJoined: false,
+            isLoading: false,
+            entry: .none
+        )
+        return GuildProfileCard(profile: card, openGuild: { _ in })
+            .background(Palette.surfaceRaised)
+            .clipShape(.rect(cornerRadius: Radius.card, style: .continuous))
+            .scaleEffect(0.8, anchor: .topTrailing)
+            .frame(width: 256, height: 220, alignment: .topTrailing)
+            .allowsHitTesting(false)
+            .accessibilityHidden(true)
     }
 }

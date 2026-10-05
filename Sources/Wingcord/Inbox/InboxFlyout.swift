@@ -150,7 +150,7 @@ struct InboxFlyout: View {
 
     private var header: some View {
         HStack(spacing: Spacing.base) {
-            Image(systemName: model.inbox.isShowingFriendRequests ? "person.2" : "tray")
+            Image(symbol: model.inbox.isShowingFriendRequests ? "person.2" : "tray")
                 .font(.system(size: 15, weight: .medium))
                 .foregroundStyle(Ink.secondary)
                 // The glyph is decoration beside a title that already says it.
@@ -375,7 +375,7 @@ struct InboxNotice: View {
 
     var body: some View {
         VStack(spacing: Spacing.base) {
-            Image(systemName: symbolName)
+            Image(symbol: symbolName)
                 .font(.system(size: 26))
                 .foregroundStyle(Ink.tertiary)
             Text(title)

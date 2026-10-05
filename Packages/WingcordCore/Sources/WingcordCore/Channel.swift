@@ -60,7 +60,8 @@ public enum ChannelKind: Int, Hashable, Sendable, Codable {
         self == .directMessage || self == .groupDirectMessage
     }
 
-    /// The SF Symbol drawn in the channel list's gutter.
+    /// The symbol drawn in the channel list's gutter — an SF Symbol, or for a
+    /// thread one of Discord's glyphs, which the app resolves by name.
     ///
     /// A `#` for a text channel is a glyph, not a symbol — `number` is the
     /// system's own and lines up on the text baseline, which a literal "#"
@@ -74,7 +75,10 @@ public enum ChannelKind: Int, Hashable, Sendable, Codable {
         case .forum: "list.bullet.rectangle"
         case .media: "photo.on.rectangle"
         case .directory: "signpost.right.fill"
-        case .announcementThread, .publicThread, .privateThread: "text.bubble"
+        // Discord's own glyphs, which the app ships as custom symbols — see
+        // `DiscordGlyph`. A private thread wears the lock Discord gives it.
+        case .announcementThread, .publicThread: "discord.thread"
+        case .privateThread: "discord.thread.lock"
         case .directMessage, .groupDirectMessage: "at"
         case .category, .unknown: "questionmark"
         }
@@ -158,6 +162,17 @@ public struct Channel: Hashable, Sendable, Identifiable, Codable {
     /// Discord's channel bitfield. Carried whole so the bits this client cannot
     /// draw survive a write back — `INVARIANTS.md` §1.
     public var flags: ChannelFlags
+    /// A voice or stage channel's region override. Nil is Discord's
+    /// "Automatic" — the server picks per call.
+    public var rtcRegion: String?
+    /// A voice or stage channel's camera quality: 1 automatic, 2 720p. Kept as
+    /// the number Discord sent, so a value this client has no name for is
+    /// written back unchanged rather than folded into a default.
+    public var videoQualityMode: Int?
+    /// The minutes after which a new thread here hides itself, or nil where
+    /// the channel has never been given one — Discord's own client leaves the
+    /// key out until somebody sets it (`HANDOFF.md` §SM.14).
+    public var defaultAutoArchiveDuration: Int?
     /// A thread's approximate member count. **Discord stops counting at 50**, so
     /// this is a floor above that, never a total.
     public var memberCount: Int?
@@ -209,6 +224,9 @@ public struct Channel: Hashable, Sendable, Identifiable, Codable {
         defaultThreadRateLimitPerUser: Int? = nil,
         template: String? = nil,
         flags: ChannelFlags = [],
+        rtcRegion: String? = nil,
+        videoQualityMode: Int? = nil,
+        defaultAutoArchiveDuration: Int? = nil,
         memberCount: Int? = nil,
         memberIDsPreview: [UserID] = [],
         totalMessageSent: Int? = nil,
@@ -241,6 +259,9 @@ public struct Channel: Hashable, Sendable, Identifiable, Codable {
         self.defaultThreadRateLimitPerUser = defaultThreadRateLimitPerUser
         self.template = template
         self.flags = flags
+        self.rtcRegion = rtcRegion
+        self.videoQualityMode = videoQualityMode
+        self.defaultAutoArchiveDuration = defaultAutoArchiveDuration
         self.memberCount = memberCount
         self.memberIDsPreview = memberIDsPreview
         self.totalMessageSent = totalMessageSent

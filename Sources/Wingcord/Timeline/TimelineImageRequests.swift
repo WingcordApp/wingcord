@@ -77,6 +77,21 @@ nonisolated enum TimelineImageRequests {
             : nil
     }
 
+    /// The pictures a conversation's head draws: the person's or the group's
+    /// face, and the servers in common. Keyed as `drawAvatar` peeks — the
+    /// box's own size, the thumbnail bucket.
+    static func requests(forHead slot: ConversationStartSlot, scale: CGFloat) -> [Request] {
+        var faces: [(URL, CGFloat)] = []
+        if let url = slot.avatarURL { faces.append((url, slot.iconRect.width)) }
+        for icon in slot.mutuals?.icons ?? [] {
+            if let url = icon.mark.iconURL { faces.append((url, icon.rect.width)) }
+        }
+        return faces.compactMap { url, side in
+            let key = ImageStore.Key(url: url, maximumPixelSize: Int((side * scale).rounded(.up)))
+            return ImageStore.shared.cached(key) == nil ? Request(key: key, source: .still(.thumbnail)) : nil
+        }
+    }
+
     /// - Parameter loadsArtwork: The reader's "load images automatically"
     ///   preference. Avatars, emoji and stickers ignore it — a transcript
     ///   without them is unreadable rather than merely plainer — and the two
@@ -155,6 +170,17 @@ nonisolated enum TimelineImageRequests {
                         (MemberRowGeometry.tagBadgeSide * scale).rounded(.up)
                     )
                 )
+                if seen.insert(key).inserted, ImageStore.shared.cached(key) == nil {
+                    requests.append(Request(key: key, source: .still(.thumbnail)))
+                }
+            }
+
+            // A drawn card's faces — AutoMod's own, the member it acted on,
+            // whoever switched Activity Alerts on — keyed at the box's size, as
+            // the painter peeks them.
+            for part in row.card?.parts ?? [] {
+                guard case .avatar(let url?, _, let rect) = part else { continue }
+                let key = ImageStore.Key(url: url, maximumPixelSize: Int((rect.width * scale).rounded(.up)))
                 if seen.insert(key).inserted, ImageStore.shared.cached(key) == nil {
                     requests.append(Request(key: key, source: .still(.thumbnail)))
                 }

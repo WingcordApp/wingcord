@@ -25,14 +25,23 @@ struct ServerOptionsMenu: View {
     /// name pill and the toolbar title own their own `isPresented`, and a menu
     /// that closed by clearing a request would leave both of them up.
     var close: () -> Void
+    /// The channel an invite is for, when a channel's own menu asked — its
+    /// Invite to Channel. Nil for the server's, which invites to its default.
+    var inviteChannelID: ChannelID?
 
     @Environment(AppModel.self) private var model
     @Environment(\.motion) private var motion
     @State private var surface: Surface
 
-    init(guildID: GuildID, startsOn: Surface = .root, close: @escaping () -> Void) {
+    init(
+        guildID: GuildID,
+        startsOn: Surface = .root,
+        inviteChannelID: ChannelID? = nil,
+        close: @escaping () -> Void
+    ) {
         self.guildID = guildID
         self.close = close
+        self.inviteChannelID = inviteChannelID
         _surface = State(initialValue: startsOn)
     }
 
@@ -146,6 +155,24 @@ struct ServerOptionsMenu: View {
             FlyoutRow(title: "Server Settings", symbolName: "gearshape") {
                 ServerSettingsWindow.open(guildID)
                 close()
+            }
+        }
+        // Discord's header popout: Create Channel and Create Category for a
+        // reader who may make them, then Create Event.
+        if model.permissionGate.permissions(inGuild: guildID).contains(.manageChannels) {
+            FlyoutRow(title: "Create Channel", symbolName: "plus.circle") {
+                close()
+                model.openChannelCreation(inGuild: guildID)
+            }
+            FlyoutRow(title: "Create Category", symbolName: "folder.badge.plus") {
+                close()
+                model.openChannelCreation(inGuild: guildID, kind: .category)
+            }
+        }
+        if model.canManageEvents(inGuild: guildID) {
+            FlyoutRow(title: "Create Event", symbolName: "calendar.badge.plus") {
+                close()
+                model.openEventEditor(inGuild: guildID)
             }
         }
         FlyoutRow(title: "App Directory", symbolName: "square.grid.2x2") {
@@ -494,9 +521,9 @@ struct ServerOptionsMenu: View {
     /// per menu open would litter a server's invite list with codes nobody used.
     @ViewBuilder
     private func invitePanel(_ options: ServerOptions) -> some View {
-        FlyoutBackRow(title: "Invite to Server") { surface = .root }
+        FlyoutBackRow(title: inviteTitle) { surface = .root }
         FlyoutDivider()
-        if let channelID = options.inviteChannelID {
+        if let channelID = inviteChannelID ?? options.inviteChannelID {
             inviteLink(channelID: channelID)
             FlyoutDivider()
             let friends = model.invitableFriends(for: guildID)
@@ -518,9 +545,19 @@ struct ServerOptionsMenu: View {
         }
     }
 
+    /// Discord's own three names for it (`e6e0cb97`'s `D`): Invite to Server
+    /// from the server, and from a channel, Invite to Voice or Invite to
+    /// Channel by its kind.
+    private var inviteTitle: String {
+        guard let inviteChannelID, let channel = model.channelIndex[inviteChannelID] else {
+            return "Invite to Server"
+        }
+        return channel.kind == .voice ? "Invite to Voice" : "Invite to Channel"
+    }
+
     @ViewBuilder
     private func inviteLink(channelID: ChannelID) -> some View {
-        let link = model.serverInviteLinks[guildID]
+        let link = model.inviteLinks[channelID]
         FlyoutRow(
             title: link ?? "Making a link…",
             subtitle: link == nil ? nil : "Expires in 30 days",
@@ -530,7 +567,7 @@ struct ServerOptionsMenu: View {
         ) {
             if let link { AppModel.copy(link) }
         }
-        .task(id: guildID) { model.mintInviteLink(for: guildID, channelID: channelID) }
+        .task(id: channelID) { model.mintInviteLink(for: channelID) }
     }
 
     // MARK: Linked roles
@@ -715,7 +752,7 @@ private struct ChannelOverrideMenuRow: View {
         HStack(spacing: 0) {
             Button(action: open) {
                 HStack(spacing: Spacing.snug) {
-                    Image(systemName: symbolName)
+                    Image(symbol: symbolName)
                         .font(.system(size: 12, weight: .medium))
                         .frame(width: 16)
                     Text(name)
@@ -943,6 +980,7 @@ struct ServerOptionsPresenter: ViewModifier {
                 ServerOptionsMenu(
                     guildID: request.guildID,
                     startsOn: request.page,
+                    inviteChannelID: request.inviteChannelID,
                     close: { model.dismissServerOptions() }
                 )
                 .environment(model)
@@ -957,6 +995,38 @@ struct ServerOptionsPresenter: ViewModifier {
                 FolderOptionsMenu(folderID: request.folderID, close: { model.folderMenu = nil })
                     .environment(model)
                     .presentationBackground(.clear)
+            }
+            // A pending application's menu, off the same column.
+            .popover(
+                item: $model.joinRequestMenu,
+                attachmentAnchor: .rect(.rect(model.joinRequestMenu?.anchor ?? .zero)),
+                arrowEdge: .trailing
+            ) { request in
+                JoinRequestMenu(guildID: request.guildID, close: { model.joinRequestMenu = nil })
+                    .environment(model)
+                    .presentationBackground(.clear)
+            }
+            // Discord's "Are you sure?" (`314116`) before an application goes —
+            // a system alert for the reason Leave Server's is one.
+            .alert(
+                "Are you sure?",
+                isPresented: Binding(
+                    get: { model.withdrawApplicationRequest != nil },
+                    set: { if !$0 { model.withdrawApplicationRequest = nil } }
+                ),
+                presenting: model.withdrawApplicationRequest
+            ) { request in
+                Button("Yes", role: .destructive) {
+                    model.withdrawApplicationRequest = nil
+                    model.withdrawApplication(request.guildID)
+                }
+                Button("Never Mind", role: .cancel) { model.withdrawApplicationRequest = nil }
+            } message: { request in
+                if request.isDiscard {
+                    Text("If you discard, you can start a new application from an invite link.")
+                } else {
+                    Text("Are you sure you want to withdraw your application from \(request.serverName ?? "")?")
+                }
             }
             // **A system alert, deliberately, where the menu above it is glass.**
             // Leaving is the one irreversible act in the set; it wants the

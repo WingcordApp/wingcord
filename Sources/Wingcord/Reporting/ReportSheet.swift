@@ -319,7 +319,7 @@ struct ReportSheet: View {
     private var reportedUserID: UserID? {
         switch request.subject {
         case .user(let userID, _): userID
-        case .message(let messageID, let channelID):
+        case .message(let messageID, let channelID), .firstDirectMessage(let messageID, let channelID):
             model.message(messageID, in: channelID)?.authorID
         // A widget report names its owner directly — the acknowledgement's
         // block and ignore act on the person whose board it is.
@@ -329,28 +329,6 @@ struct ReportSheet: View {
 }
 
 // MARK: - Parts
-
-/// A standing note above a node's choices — "if there is immediate danger…".
-private struct Callout: View {
-    var text: String
-    var symbolName: String = "info.circle.fill"
-    var tint: Color = Palette.accent
-
-    var body: some View {
-        HStack(alignment: .top, spacing: Spacing.base) {
-            Image(systemName: symbolName)
-                .font(.system(size: 12, weight: .semibold))
-                .foregroundStyle(tint)
-            Text(text)
-                .font(.system(.subheadline))
-                .foregroundStyle(Ink.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-            Spacer(minLength: 0)
-        }
-        .padding(Spacing.snug)
-        .background(tint.opacity(0.10), in: .rect(cornerRadius: Radius.chip, style: .continuous))
-    }
-}
 
 /// The path taken so far, on the summary screen.
 private struct ReportTrail: View {
@@ -433,7 +411,7 @@ private struct CheckboxGroup: View {
                 if index > 0 { CardDivider() }
                 Button { toggle(option.value) } label: {
                     HStack(spacing: Spacing.snug) {
-                        Image(systemName: isChosen(option.value) ? "checkmark.square.fill" : "square")
+                        Image(symbol: isChosen(option.value) ? "checkmark.square.fill" : "square")
                             .font(.system(size: 14))
                             .foregroundStyle(
                                 isChosen(option.value)
@@ -469,7 +447,7 @@ private struct FollowUpRow: View {
     var body: some View {
         Button(action: act) {
             HStack(spacing: Spacing.snug) {
-                Image(systemName: symbolName)
+                Image(symbol: symbolName)
                     .font(.system(size: 12, weight: .medium))
                     .frame(width: 16)
                 Text(title)

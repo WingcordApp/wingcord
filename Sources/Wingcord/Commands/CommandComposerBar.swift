@@ -185,7 +185,7 @@ struct CommandOptionList: View {
     private func optionRow(_ row: CommandOptionRow, isSelected: Bool) -> some View {
         HStack(spacing: Spacing.base) {
             if let symbol = row.symbolName {
-                Image(systemName: symbol)
+                Image(symbol: symbol)
                     .font(.system(.caption))
                     .foregroundStyle(Ink.tertiary)
                     .frame(width: 16)

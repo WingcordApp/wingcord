@@ -50,7 +50,7 @@ nonisolated final class SymbolCache: @unchecked Sendable {
         )
         .applying(NSImage.SymbolConfiguration(paletteColors: [tint]))
 
-        guard let symbol = NSImage(systemSymbolName: name, accessibilityDescription: nil)?
+        guard let symbol = NSImage.symbol(named: name)?
             .withSymbolConfiguration(configuration),
             let built = symbol.cgImage(forProposedRect: nil, context: nil, hints: nil)
         else { return nil }

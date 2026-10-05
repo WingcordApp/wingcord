@@ -120,6 +120,32 @@ extension DiscordREST {
         )
     }
 
+    // MARK: Groups
+
+    /// Brings a friend into a group — Discord's Add Friends to DM:
+    /// `PUT /channels/{id}/recipients/{user}`. The socket's
+    /// `CHANNEL_RECIPIENT_ADD` is what puts them on the roster.
+    public func addGroupRecipient(_ userID: UserID, to channelID: ChannelID) async throws {
+        _ = try await requestData(
+            method: "PUT",
+            path: "/channels/\(channelID.rawValue)/recipients/\(userID.rawValue)",
+            route: "channels/{id}/recipients/{user}",
+            body: Optional<String>.none
+        )
+    }
+
+    /// Discord's Edit Group: `PATCH /channels/{id}` with `{"name": …}`, the
+    /// field sent as typed — an empty one is a group named by its members.
+    public func renameGroup(_ channelID: ChannelID, to name: String) async throws {
+        struct Body: Encodable { var name: String }
+        _ = try await requestData(
+            method: "PATCH",
+            path: "/channels/\(channelID.rawValue)",
+            route: "channels/{id}",
+            body: Body(name: name)
+        )
+    }
+
     // MARK: Message requests
 
     /// Accepts a message request — Discord's Accept DM.

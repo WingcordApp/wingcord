@@ -36,6 +36,7 @@ extension AppModel {
         let atPresent = box?.hasMoreNewer != true
         let outbox = atPresent ? box?.outbox ?? [] : []
         let notices = atPresent ? box?.notices ?? [] : []
+        let openGroups = openCollapsedGroups[channelID] ?? []
         let key = TimelineMemoKey(
             channelID: channelID,
             messageCount: box?.messages.count ?? 0,
@@ -48,7 +49,10 @@ extension AppModel {
             failure: box?.historyFailure,
             contentRevision: messageContentRevision,
             outbox: outbox.map(\.shape),
-            notices: notices.map(\.id)
+            notices: notices.map(\.id),
+            blocked: blockedUserIDs,
+            ignored: ignoredUserIDs,
+            openGroups: openGroups
         )
         if let timelineCache, timelineCache.key == key { return timelineCache.value }
 
@@ -72,7 +76,10 @@ extension AppModel {
             marks: marks,
             failure: box?.historyFailure,
             sending: sending,
-            failed: failed
+            failed: failed,
+            blockedUserIDs: blockedUserIDs,
+            ignoredUserIDs: ignoredUserIDs,
+            openGroups: openGroups
         )
         timelineCache = (key, value)
         return value
@@ -164,6 +171,14 @@ extension AppModel {
             if let quoted = message.message.reference?.authorID {
                 resolve(quoted, into: &result)
             }
+            // AutoMod's card names two more: the person an app's modal was
+            // shown to, and whoever switched Activity Alerts on — each only
+            // where this client knows them, as Discord draws neither otherwise.
+            if message.message.kind == .autoModerationAction {
+                for named in AutoModMessage(message.message)?.namedUserIDs ?? [] where users[named] != nil {
+                    resolve(named, into: &result)
+                }
+            }
         }
         return result
 
@@ -228,7 +243,11 @@ extension AppModel {
                 decorationURL: cosmetics(of: user)?.avatarDecorationHash
                     .flatMap { CDN.avatarDecoration(hash: $0) },
                 isBot: user.isBot,
+                // Discord's order: a block outranks an ignore.
+                isBlocked: blockedUserIDs.contains(userID),
+                isIgnored: !blockedUserIDs.contains(userID) && ignoredUserIDs.contains(userID),
                 isVerifiedBot: user.flags.contains(.verifiedBot),
+                isSystem: user.isSystem,
                 // **The tag the roster has always drawn, in the transcript at
                 // last.** `primaryGuildTag` and its badge were on the wire and
                 // read by two surfaces out of three: the member list and the
@@ -281,7 +300,8 @@ extension AppModel {
                     .map { UserColor.desaturated($0, by: saturation) },
                 nameStyle: guildID != nil
                     ? nil
-                    : style.flatMap { DisplayNameEffectPainter.paints($0) ? $0 : nil }
+                    : style.flatMap { DisplayNameEffectPainter.paints($0) ? $0 : nil },
+                username: user.username
             )
         }
     }
@@ -342,6 +362,7 @@ extension AppModel {
             roleRevision: roleRevision,
             expressionRevision: expressionRevision,
             gameMentionRevision: gameMentionRevision,
+            hiddenAuthorRevision: hiddenAuthorRevision,
             // A role's colour goes through the reader's role-colour settings
             // and the room's ink, both of which move this.
             presentationRevision: PresentationRevision.shared.value
@@ -361,6 +382,7 @@ extension AppModel {
             &+ roleRevision &* 131
             &+ expressionRevision
             &+ gameMentionRevision &* 524_287
+            &+ hiddenAuthorRevision &* 2_147_483_647
         context.gameNames = gameMentionNames
         context.currentGuildID = guildID
         // Shared, not copied: the table is memoized on the channel tree alone.
@@ -468,6 +490,19 @@ extension AppModel {
         return true
     }
 
+    /// Opens a fold, or shuts it again — its Show and its Hide.
+    ///
+    /// Shutting forgets every message of the fold, not just the first: a fold
+    /// a jump opened is held open by the message it landed on.
+    func toggleCollapsedGroup(_ group: CollapsedGroup, in channelID: ChannelID) {
+        guard group.canOpen else { return }
+        if group.isOpen {
+            openCollapsedGroups[channelID]?.subtract(group.messageIDs)
+        } else {
+            openCollapsedGroups[channelID, default: []].insert(group.id)
+        }
+    }
+
     /// Records whether one transcript is away from its channel's foot. See
     /// `viewersAwayFromFoot`.
     func setTranscript(
@@ -504,6 +539,8 @@ struct MentionMemoKey: Hashable, Sendable {
     /// Moves when a server is added, removed or renamed — the chips name them.
     var expressionRevision: UInt64
     var gameMentionRevision: UInt64
+    /// A block or an ignore re-words the replies that quote that person.
+    var hiddenAuthorRevision: UInt64
     var presentationRevision: UInt64
 }
 
@@ -542,6 +579,11 @@ struct TimelineMemoKey: Hashable, Sendable {
     /// is painted. See `OutgoingMessage.Shape`.
     var outbox: [OutgoingMessage.Shape]
     var notices: [MessageID]
+    /// Whose messages fold, and which folds are open — a block, an unblock or
+    /// a Show changes the rows without changing a message.
+    var blocked: Set<UserID>
+    var ignored: Set<UserID>
+    var openGroups: Set<MessageID>
 }
 
 // MARK: - Messages drawn outside the transcript

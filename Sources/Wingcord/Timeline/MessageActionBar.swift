@@ -46,7 +46,7 @@ struct MessageActionBar: View {
         HStack(spacing: Self.gap) {
             ForEach(items) { kind in
                 Button { perform(kind) } label: {
-                    Image(systemName: kind.symbolName)
+                    Image(symbol: kind.symbolName)
                         .font(.system(size: 14, weight: .medium))
                         .foregroundStyle(tint(of: kind))
                         .frame(width: Self.glyphSide, height: Self.glyphSide)

@@ -78,6 +78,14 @@ final class ServerSettingsStore {
     var sounds: Loadable<[SoundboardSound]> = .idle
     var soundUploaders: [String: UserID] = [:]
     var invites: Loadable<[GuildInvite]> = .idle
+    /// A channel's own invites and webhooks — its settings' Invites and
+    /// Integrations pages. Separate from the server's lists, which need Manage
+    /// Server where these need only Manage Channel.
+    /// The channel whose own settings are open on the Channels page — set
+    /// from that page, or by the main window's Edit Channel.
+    var openChannelID: ChannelID?
+    var channelInviteTable: [ChannelID: Loadable<[GuildInvite]>] = [:]
+    var channelWebhookTable: [ChannelID: Loadable<[GuildWebhook]>] = [:]
     var bans: Loadable<[GuildBan]> = .idle
     var integrations: Loadable<[GuildIntegration]> = .idle
     var webhooks: Loadable<[GuildWebhook]> = .idle
@@ -87,13 +95,16 @@ final class ServerSettingsStore {
     var joinForm: Loadable<JoinApplicationForm> = .idle
     var discoveryRequirements: Loadable<DiscoveryRequirements> = .idle
     var widget: Loadable<GuildWidgetSettings> = .idle
-    var events: Loadable<[ScheduledEvent]> = .idle
-    var members: Loadable<MemberPage> = .idle
-    /// One list per tab, because the three are three separate requests and a
-    /// reader who opens Pending must not be shown Approved's spinner.
-    var joinRequests: [GuildJoinRequest.Status: Loadable<[GuildJoinRequest]>] = [:]
+    var vanity: Loadable<VanityURL> = .idle
+    /// Where a refused write is told, outside this window — an editor the main
+    /// window raises has no toolbar to carry `save`.
+    var reportFailure: ((String) -> Void)?
     var onboarding: Loadable<GuildOnboarding> = .idle
+    var voiceRegions: Loadable<[VoiceRegion]> = .idle
     var serverGuide: Loadable<ServerGuide> = .idle
+    /// A Community server's Welcome Screen — asked when the window opens, as
+    /// Discord's is, because its answer is what offers the row.
+    var welcomeScreen: Loadable<WelcomeScreen> = .idle
 
     /// People named by a table — emoji uploaders, ban subjects, invite creators.
     /// One shared table, because four pages name the same handful of
@@ -120,16 +131,6 @@ final class ServerSettingsStore {
         case failed(String)
     }
 
-    /// A page of the members table, with the total the search reported.
-    ///
-    /// The total is separate from `rows.count` and both matter: a server of
-    /// forty thousand answers 250 rows and a total of 40,000, and a page that
-    /// showed only the first number would be telling the reader the server is
-    /// smaller than it is.
-    struct MemberPage: Sendable {
-        var rows: [GuildMemberRow]
-        var total: Int
-    }
 
     /// A channel, as a picker needs it.
     struct ChannelSummary: Hashable, Sendable, Identifiable {
@@ -146,6 +147,7 @@ final class ServerSettingsStore {
     /// The in-flight fetch per section, so leaving and re-entering a page does
     /// not stack two of the same request.
     private var tasks: [ServerSettingsSection: Task<Void, Never>] = [:]
+    private var channelSettingsTask: Task<Void, Never>?
     /// Games already resolved, by id. See `resolveGames`.
     private var gameCache: [ApplicationID: GameSummary] = [:]
     /// Clears the "Saved" tick after a beat. Replaced rather than stacked — two
@@ -200,9 +202,22 @@ final class ServerSettingsStore {
         case .profile, .tag:
             await loadGuild()
             await loadProfile()
+        case .serverTheme:
+            // The theme itself is the resident server's; the guild is what
+            // says the server may wear one.
+            await loadGuild()
         case .engagement:
             await loadGuild()
             await loadWidget()
+        case .boostPerks:
+            await loadGuild()
+            // The Custom Invite Link is an administrator's section, and only
+            // a server with the perk answers the route.
+            if permissions.contains(.administrator), let settings = settings.value,
+               BoostTier.unlocks(.vanityURL, features: settings.features, premiumTier: settings.premiumTier)
+            {
+                await fill(\.vanity) { [rest, guildID] in try await rest.vanityURL(of: guildID) }
+            }
         case .emoji:
             await loadEmoji()
         case .stickers:
@@ -217,10 +232,14 @@ final class ServerSettingsStore {
             await loadGuild()
             await loadJoinForm()
             await loadDiscoveryRequirements()
+            // Apply from Profile is the profile's visibility.
+            await loadProfile()
         case .integrations:
+            // Webhooks and followed channels are two rows on this page, and a
+            // Twitch or YouTube sync names the role it grants.
             await loadIntegrations()
-        case .webhooks:
             await loadWebhooks()
+            await loadRoles()
         case .safety:
             await loadGuild()
             await loadAutoModRules()
@@ -230,26 +249,36 @@ final class ServerSettingsStore {
             await loadBans()
         case .community:
             await loadGuild()
+            // Enable Community's last step can clear @everyone's risky
+            // permissions, which is a write of that role.
+            await loadRoles()
         case .onboarding:
+            // The Server Guide is a row on this page.
             await loadOnboarding()
-        case .serverGuide:
             await loadServerGuide()
         case .template:
             await loadTemplate()
-        case .events:
-            await loadEvents()
-        case .members:
-            // The join form decides whether the applicant tabs exist at all,
-            // so it is fetched with the list rather than when a tab is pressed.
-            await loadMembers()
-            await loadJoinForm()
-        case .channels:
-            // The channel list is resident. What this page needs beyond it is
-            // the delete gate's two inputs — a guide task or a default channel
-            // is what makes a channel undeletable, and neither is knowable from
-            // the channel itself.
-            await loadServerGuide()
-            await loadOnboarding()
+        case .welcomeScreen:
+            await loadWelcomeScreen()
+        case .insights, .members, .appDirectory, .deleteServer:
+            // Server Insights lives on Discord's website; the other three act
+            // rather than open a page.
+            break
+        }
+    }
+
+    /// What a channel's own settings need beyond the resident channel: the
+    /// delete gate's two inputs — a guide task or a default channel is what
+    /// makes a channel undeletable, and neither is knowable from the channel —
+    /// and the server's level and features, which set the Overview's bitrate
+    /// ceiling and its summaries switch.
+    func loadChannelSettings() {
+        guard channelSettingsTask == nil else { return }
+        channelSettingsTask = Task { [weak self] in
+            await self?.loadServerGuide()
+            await self?.loadOnboarding()
+            await self?.loadGuild()
+            self?.channelSettingsTask = nil
         }
     }
 
@@ -344,89 +373,6 @@ final class ServerSettingsStore {
         await fill(\.webhooks) { [rest, guildID] in try await rest.guildWebhooks(in: guildID) }
     }
 
-    /// The events, with the reader's own interest folded in.
-    ///
-    /// Three routes for one page, and they are separate on the wire: the list,
-    /// the reader's RSVPs, and a per-event count. The count is asked for per
-    /// event because there is no bulk form of it — bounded by how many events a
-    /// server has, which is single digits.
-    private func loadEvents() async {
-        await fill(\.events) { [rest, guildID] in
-            let list = try await rest.scheduledEvents(in: guildID)
-            // Failing to learn the reader's own RSVPs is not a reason to have no
-            // events page, so this one degrades to "interested in nothing".
-            let interested = (try? await rest.interestedEventIDs(in: guildID)) ?? []
-            var resolved: [ScheduledEvent] = []
-            resolved.reserveCapacity(list.count)
-            for var event in list {
-                event.isInterested = interested.contains(event.id)
-                if event.interestedCount == nil {
-                    event.interestedCount = try? await rest.interestedCount(
-                        for: event.id, in: guildID
-                    )
-                }
-                resolved.append(event)
-            }
-            return resolved
-        }
-    }
-
-    /// The members table.
-    ///
-    /// **A 202 is retried, not reported.** An unindexed guild answers "index not
-    /// yet available" with a `retry_after`, and treating that as an empty result
-    /// would draw an empty server. One retry: a second 202 is a server large
-    /// enough that the index is genuinely still building, and a client that
-    /// looped would sit there asking for minutes.
-    private func loadMembers(sort: GuildMemberRow.Sort = .joinedNewest) async {
-        guard members.wantsFetch else { return }
-        members = .loading
-        do {
-            var answer = try await rest.searchMembers(in: guildID, sort: sort)
-            if answer == nil {
-                try await Task.sleep(for: .seconds(3))
-                guard !Task.isCancelled else { return }
-                answer = try await rest.searchMembers(in: guildID, sort: sort)
-            }
-            guard !Task.isCancelled else { return }
-            guard let answer else {
-                members = .failed("This server's member index is still building. Try again shortly.")
-                return
-            }
-            members = .loaded(MemberPage(rows: answer.rows, total: answer.total))
-        } catch {
-            guard !Task.isCancelled else { return }
-            members = .failed(Self.describe(error))
-        }
-    }
-
-    /// Re-runs the search with a different ordering.
-    ///
-    /// Its own entry point because `loadMembers` will not re-fetch a loaded
-    /// table — that guard is the whole "ask once" rule, and a sort is the one
-    /// thing that has to get past it.
-    func reloadMembers(sort: GuildMemberRow.Sort) {
-        members = .idle
-        Task { await loadMembers(sort: sort) }
-    }
-
-    /// One tab of applicants, fetched when it is first opened.
-    func load(joinRequests status: GuildJoinRequest.Status) {
-        guard (joinRequests[status] ?? .idle).wantsFetch else { return }
-        joinRequests[status] = .loading
-        Task { [weak self] in
-            guard let self else { return }
-            do {
-                let list = try await rest.joinRequests(in: guildID, status: status)
-                guard !Task.isCancelled else { return }
-                joinRequests[status] = .loaded(list)
-            } catch {
-                guard !Task.isCancelled else { return }
-                joinRequests[status] = .failed(Self.describe(error))
-            }
-        }
-    }
-
     private func loadTemplate() async {
         await fill(\.template) { [rest, guildID] in try await rest.guildTemplate(of: guildID) }
     }
@@ -481,7 +427,7 @@ final class ServerSettingsStore {
             // A failed page-two leaves page one alone. Turning the whole log
             // into an error because the *second* request failed throws away
             // fifty rows the reader is looking at.
-            Self.trace("audit log page failed: \(Self.describe(error))")
+            Self.trace("audit log page failed: \(error)")
         }
     }
 
@@ -510,7 +456,9 @@ final class ServerSettingsStore {
             }
             return true
         } catch {
-            save = .failed(Self.describe(error))
+            let message = Self.describe(error)
+            save = .failed(message)
+            reportFailure?(message)
             return false
         }
     }
@@ -555,6 +503,30 @@ final class ServerSettingsStore {
                 afkChannelID: afkChannelID,
                 afkTimeout: afkTimeout
             ))
+        }
+    }
+
+    /// Boost Perks' writes: the progress bar, the banner, the invite
+    /// background — each only when it changed.
+    func saveBoostPerks(
+        progressBar: Bool? = nil,
+        banner: ImageData?? = nil,
+        splash: ImageData?? = nil
+    ) async {
+        await perform { [self] in
+            settings = .loaded(try await rest.updateBoostPerks(
+                in: guildID,
+                progressBar: progressBar,
+                banner: banner,
+                splash: splash
+            ))
+        }
+    }
+
+    /// Sets the Custom Invite Link; an empty code removes it.
+    func saveVanityURL(_ code: String) async {
+        await perform { [self] in
+            vanity = .loaded(try await rest.setVanityURL(code, in: guildID))
         }
     }
 
@@ -779,6 +751,9 @@ final class ServerSettingsStore {
             guard let invite = try await rest.createInvite(in: channelID, options: options)
             else { return }
             invites = .loaded([invite] + (invites.value ?? []))
+            if let list = channelInviteTable[channelID]?.value {
+                channelInviteTable[channelID] = .loaded([invite] + list)
+            }
         }
     }
 
@@ -786,6 +761,9 @@ final class ServerSettingsStore {
         await perform { [self] in
             try await rest.deleteInvite(code)
             invites = .loaded((invites.value ?? []).filter { $0.id != code })
+            for (channelID, table) in channelInviteTable {
+                if let list = table.value { channelInviteTable[channelID] = .loaded(list.filter { $0.id != code }) }
+            }
         }
     }
 
@@ -804,6 +782,34 @@ final class ServerSettingsStore {
 
     // MARK: Apps
 
+    /// Turns on a Twitch or YouTube sync for one of the reader's accounts,
+    /// then reads the list back — the route answers with nothing to merge.
+    func enableIntegration(type: String, accountID: String) async {
+        await perform { [self] in
+            try await rest.enableIntegration(type: type, accountID: accountID, in: guildID)
+            integrations = .loaded(try await rest.guildIntegrations(in: guildID))
+        }
+    }
+
+    /// Saves a sync's expiry settings and keeps the list in step.
+    func updateIntegration(_ id: UInt64, expiry: GuildIntegration.Expiry) async {
+        await perform { [self] in
+            try await rest.updateIntegration(id, in: guildID, expiry: expiry)
+            integrations = .loaded((integrations.value ?? []).map { integration in
+                guard integration.id == id else { return integration }
+                var updated = integration
+                updated.expiry = expiry
+                return updated
+            })
+        }
+    }
+
+    func syncIntegration(_ id: UInt64) async {
+        await perform { [self] in
+            try await rest.syncIntegration(id, in: guildID)
+        }
+    }
+
     func deleteIntegration(_ id: UInt64) async {
         await perform { [self] in
             try await rest.deleteIntegration(id, in: guildID)
@@ -815,23 +821,32 @@ final class ServerSettingsStore {
         await perform { [self] in
             guard let webhook = try await rest.createWebhook(in: channelID) else { return }
             webhooks = .loaded((webhooks.value ?? []) + [webhook])
+            if let list = channelWebhookTable[channelID]?.value {
+                channelWebhookTable[channelID] = .loaded(list + [webhook])
+            }
         }
     }
 
-    func saveWebhook(_ id: UInt64, name: String, channelID: ChannelID?) async {
+    func saveWebhook(_ id: UInt64, name: String, channelID: ChannelID?, avatar: ImageData?? = nil) async {
         await perform { [self] in
-            guard let updated = try await rest.updateWebhook(
-                id, name: name, channelID: channelID
+            guard var updated = try await rest.updateWebhook(
+                id, name: name, channelID: channelID, avatar: avatar
             ) else { return }
-            var current = webhooks.value ?? []
-            if let index = current.firstIndex(where: { $0.id == id }) {
-                // The update response drops the token. Keeping the row's own
-                // means Copy Link still works after a rename.
-                let token = current[index].token
+            // The update response drops the token. Keeping the row's own
+            // means Copy Webhook URL still works after a rename.
+            let known = (webhooks.value ?? []) + channelWebhookTable.values.flatMap { $0.value ?? [] }
+            if updated.token == nil { updated.token = known.first { $0.id == id }?.token }
+            if var current = webhooks.value, let index = current.firstIndex(where: { $0.id == id }) {
                 current[index] = updated
-                if current[index].token == nil { current[index].token = token }
+                webhooks = .loaded(current)
             }
-            webhooks = .loaded(current)
+            // A webhook moved to another channel leaves one table and joins the other.
+            for (key, table) in channelWebhookTable {
+                guard var list = table.value else { continue }
+                list.removeAll { $0.id == id }
+                if key == updated.channelID { list.append(updated) }
+                channelWebhookTable[key] = .loaded(list)
+            }
         }
     }
 
@@ -839,6 +854,9 @@ final class ServerSettingsStore {
         await perform { [self] in
             try await rest.deleteWebhook(id)
             webhooks = .loaded((webhooks.value ?? []).filter { $0.id != id })
+            for (key, table) in channelWebhookTable {
+                if let list = table.value { channelWebhookTable[key] = .loaded(list.filter { $0.id != id }) }
+            }
         }
     }
 
@@ -884,6 +902,59 @@ final class ServerSettingsStore {
             try await rest.deleteTemplate(code, in: guildID)
             template = .loaded(nil)
         }
+    }
+
+    // MARK: The server's theme
+
+    /// Saves a theme — Discord's settings save, one `PATCH` of the theme and
+    /// its switch. The `GUILD_UPDATE` that follows is what dresses the window.
+    func saveServerTheme(_ theme: GuildTheme) async -> GuildTheme? {
+        var saved: GuildTheme?
+        _ = await perform { [self] in
+            saved = try await rest.updateServerTheme(theme, in: guildID)
+        }
+        return saved
+    }
+
+    // MARK: The Welcome Screen
+
+    /// Asked only of a Community server — Discord's settings ask it beside
+    /// onboarding when the window opens on one, and no other server has one.
+    private func loadWelcomeScreen() async {
+        await loadGuild()
+        guard settings.value?.isCommunity == true else { return }
+        await fill(\.welcomeScreen) { [rest, guildID] in try await rest.welcomeScreen(of: guildID) }
+    }
+
+    /// Whether it is on — the server's feature, not the route's answer.
+    var isWelcomeScreenEnabled: Bool {
+        settings.value?.features.contains(WelcomeScreen.enabledFeature) ?? false
+    }
+
+    /// Discord's Disable — the switch only goes this way now.
+    func disableWelcomeScreen() async {
+        await perform { [self] in
+            welcomeScreen = .loaded(try await rest.disableWelcomeScreen(in: guildID))
+            dropWelcomeScreenFeature()
+        }
+    }
+
+    /// Saves the channels after one was moved or taken out. The last one out
+    /// turns the screen off with it, as Discord's page does.
+    func saveWelcomeChannels(_ channels: [WelcomeScreen.Channel]) async {
+        let disables = channels.isEmpty && isWelcomeScreenEnabled
+        await perform { [self] in
+            welcomeScreen = .loaded(try await rest.setWelcomeChannels(channels, in: guildID, disables: disables))
+            if disables { dropWelcomeScreenFeature() }
+        }
+    }
+
+    /// The feature leaves the server with the write; the `GUILD_UPDATE` that
+    /// says so reaches the main window, not this table.
+    private func dropWelcomeScreenFeature() {
+        guard var current = settings.value else { return }
+        current.features.remove(WelcomeScreen.enabledFeature)
+        settings = .loaded(current)
     }
 
     // MARK: Onboarding, the guide, community and AutoMod
@@ -946,11 +1017,37 @@ final class ServerSettingsStore {
         }
     }
 
+    /// Clears Discord's risky permissions from `@everyone` — one write of the
+    /// role's permissions alone, as Discord's own button sends it.
+    func removeRiskyPermissions() async {
+        await perform { [self] in
+            guard var current = roles.value,
+                  let index = current.firstIndex(where: { $0.id.rawValue == guildID.rawValue })
+            else { return }
+            let reduced = current[index].permissions.subtracting(.risky)
+            current[index] = try await rest.updateRolePermissions(
+                current[index].id, in: guildID, permissions: reduced
+            )
+            roles = .loaded(current)
+        }
+    }
+
     func setFeature(_ feature: String, isOn: Bool) async {
         await perform { [self] in
             guard let current = settings.value else { return }
             settings = .loaded(try await rest.setGuildFeature(
                 in: guildID, features: current.features, feature: feature, isOn: isOn
+            ))
+        }
+    }
+
+    /// Adds and removes features in one write — the Activity Feed's switch
+    /// sets one of a pair and clears the other, as Discord's does.
+    func setFeatures(adding added: Set<String>, removing removed: Set<String>) async {
+        await perform { [self] in
+            guard let current = settings.value else { return }
+            settings = .loaded(try await rest.setGuildFeatures(
+                in: guildID, features: current.features.subtracting(removed).union(added)
             ))
         }
     }
@@ -986,55 +1083,129 @@ final class ServerSettingsStore {
 
     // MARK: Channels
 
-    func createChannel(name: String, kind: ChannelKind, isPrivate: Bool) async {
+    /// The Private Channel switch — Discord's `uB` and `tP` (`495273`).
+    ///
+    /// **`@everyone`'s overwrite is edited, not replaced**: only the access bits
+    /// move, so a read-only channel stays read-only. Going private, a reader
+    /// who is not an administrator is given access of their own first, as
+    /// Discord gives it, so the switch cannot lock out the person flipping it.
+    func setChannelPrivate(_ channel: Channel, isPrivate: Bool, keepingAccessFor readerID: UserID?) async {
         await perform { [self] in
-            guard let channel = try await rest.createChannel(
-                in: guildID, name: name, kind: kind
-            ) else { return }
-            // **Private is not part of the create** — it is a denied
-            // VIEW_CHANNEL bit on @everyone, applied afterwards. See §SM.13.
-            if isPrivate {
-                try await rest.setChannelPrivate(channel.id, in: guildID, isPrivate: true)
+            let access = ChannelAccess.permissions(for: channel.kind)
+            if isPrivate, let readerID {
+                var mine = channel.overwrites.first { $0.id == readerID.rawValue }
+                    ?? PermissionOverwrite(id: readerID.rawValue, subject: .member, allow: [], deny: [])
+                mine.allow.formUnion(access)
+                mine.deny.subtract(access)
+                try await rest.setChannelOverwrite(
+                    in: channel.id, subjectID: mine.id, isRole: false, allow: mine.allow, deny: mine.deny
+                )
             }
-            channels.append(ChannelSummary(
-                id: channel.id,
-                name: channel.name,
-                kind: channel.kind,
-                categoryName: nil,
-                isPublic: !isPrivate
-            ))
-            channels.sort { $0.name < $1.name }
-        }
-    }
-
-    func setChannelPrivate(_ channelID: ChannelID, isPrivate: Bool) async {
-        await perform { [self] in
-            try await rest.setChannelPrivate(channelID, in: guildID, isPrivate: isPrivate)
-            if let index = channels.firstIndex(where: { $0.id == channelID }) {
+            let everyone = ChannelAccess.everyoneOverwrite(for: channel, guildID: guildID, makingPrivate: isPrivate)
+            try await rest.setChannelOverwrite(
+                in: channel.id, subjectID: everyone.id, isRole: true, allow: everyone.allow, deny: everyone.deny
+            )
+            if let index = channels.firstIndex(where: { $0.id == channel.id }) {
                 channels[index].isPublic = !isPrivate
             }
         }
     }
 
-    func saveChannel(_ draft: ChannelDraft) async {
+    /// Writes one role's or member's overwrite, or removes it when it is
+    /// empty — an overwrite that grants and denies nothing is noise in the list.
+    func saveOverwrite(_ overwrite: PermissionOverwrite, in channelID: ChannelID) async {
         await perform { [self] in
-            guard let updated = try await rest.updateChannel(
-                draft.id,
-                name: draft.name,
-                kind: draft.kind,
-                topic: draft.topic,
-                isAgeRestricted: draft.visibility.isAgeRestricted,
-                isSpoiler: draft.visibility.isSpoiler,
-                bitrate: draft.bitrate,
-                userLimit: draft.userLimit,
-                slowmodeSeconds: draft.slowmodeSeconds,
-                autoArchiveMinutes: draft.autoArchiveMinutes
-            ) else { return }
-            if let index = channels.firstIndex(where: { $0.id == draft.id }) {
+            if overwrite.allow.isEmpty && overwrite.deny.isEmpty && overwrite.id != guildID.rawValue {
+                try await rest.deleteChannelOverwrite(in: channelID, subjectID: overwrite.id)
+            } else {
+                try await rest.setChannelOverwrite(
+                    in: channelID,
+                    subjectID: overwrite.id,
+                    isRole: overwrite.subject == .role,
+                    allow: overwrite.allow,
+                    deny: overwrite.deny
+                )
+            }
+        }
+    }
+
+    /// "Delete Permission Settings": one role or member off the channel.
+    func removeOverwrite(_ subjectID: UInt64, in channelID: ChannelID) async {
+        await perform { [self] in
+            try await rest.deleteChannelOverwrite(in: channelID, subjectID: subjectID)
+        }
+    }
+
+    /// Sync Now: the channel's permissions become its category's.
+    func syncWithCategory(_ channelID: ChannelID, overwrites: [PermissionOverwrite]) async {
+        await perform { [self] in
+            try await rest.setChannelOverwrites(overwrites, of: channelID)
+        }
+    }
+
+    // MARK: A channel's invites and webhooks
+
+    /// One channel's invites, asked for when its Invites page opens.
+    func loadChannelInvites(_ channelID: ChannelID) async {
+        guard (channelInviteTable[channelID] ?? .idle).wantsFetch else { return }
+        channelInviteTable[channelID] = .loading
+        do {
+            channelInviteTable[channelID] = .loaded(try await rest.channelInvites(in: channelID))
+        } catch {
+            channelInviteTable[channelID] = .failed(Self.describe(error))
+        }
+    }
+
+    func revokeChannelInvite(_ code: String, in channelID: ChannelID) async {
+        await perform { [self] in
+            try await rest.deleteInvite(code)
+            if case .loaded(let list) = channelInviteTable[channelID] ?? .idle {
+                channelInviteTable[channelID] = .loaded(list.filter { $0.id != code })
+            }
+            invites = .idle
+        }
+    }
+
+    func loadChannelWebhooks(_ channelID: ChannelID) async {
+        guard (channelWebhookTable[channelID] ?? .idle).wantsFetch else { return }
+        channelWebhookTable[channelID] = .loading
+        do {
+            channelWebhookTable[channelID] = .loaded(try await rest.channelWebhooks(in: channelID))
+        } catch {
+            channelWebhookTable[channelID] = .failed(Self.describe(error))
+        }
+    }
+
+    func saveChannel(_ overview: ChannelOverview) async {
+        await perform { [self] in
+            guard let updated = try await rest.updateChannel(overview) else { return }
+            if let index = channels.firstIndex(where: { $0.id == overview.id }) {
                 channels[index].name = updated.name
                 channels[index].kind = updated.kind
             }
         }
+    }
+
+    /// The regions a voice channel may be pinned to. Asked for when a voice
+    /// channel's Overview opens, once per window.
+    func loadVoiceRegions() async {
+        await fill(\.voiceRegions) { [rest, guildID] in try await rest.voiceRegions(in: guildID) }
+    }
+
+    /// The server's voice bitrate ceiling, from its level and features.
+    var maximumBitrate: Int {
+        let settings = self.settings.value
+        return BoostTier.maximumBitrate(
+            premiumTier: settings?.premiumTier ?? 0,
+            features: settings?.features ?? []
+        )
+    }
+
+    /// Whether the server takes channel summaries at all — the two feature
+    /// strings the reader's own summaries are gated on.
+    var offersSummaries: Bool {
+        let features = settings.value?.features ?? []
+        return AppModel.summaryFeatures.contains { features.contains($0) }
     }
 
     func deleteChannel(_ channelID: ChannelID) async {
@@ -1051,73 +1222,25 @@ final class ServerSettingsStore {
     /// would in fact accept the delete, it is the only thing standing between an
     /// administrator and a Server Guide pointing at nothing.
     func deleteRefusal(for channelID: ChannelID) -> ChannelDeleteGate.Refusal? {
-        ChannelDeleteGate.refusal(
+        let settings = settings.value
+        return ChannelDeleteGate.refusal(
             for: channelID,
             guide: serverGuide.value,
             onboarding: onboarding.value,
             chattableDefaults: (onboarding.value?.defaultChannelIDs ?? [])
                 .filter { id in channels.first { $0.id == id }?.isPublic ?? false }
-                .count
+                .count,
+            community: settings.flatMap {
+                $0.isCommunity ? ($0.rulesChannelID, $0.publicUpdatesChannelID) : nil
+            }
         )
     }
 
-    // MARK: Members
-
-    func kick(_ userID: UserID) async {
-        await perform { [self] in
-            try await rest.kickMember(userID, in: guildID)
-            removeMemberRow(userID)
-        }
-    }
-
-    func ban(_ userID: UserID) async {
-        await perform { [self] in
-            try await rest.banMember(userID, in: guildID)
-            removeMemberRow(userID)
-            // The bans table, if it has been looked at, is now one entry short
-            // of the truth. Invalidated rather than patched: this client does
-            // not have the ban's reason, and inventing an empty one would put a
-            // row on that page saying something the server did not say.
-            bans = .idle
-        }
-    }
-
-    func timeOut(_ userID: UserID, until: Date?) async {
-        await perform { [self] in
-            try await rest.timeOutMember(userID, in: guildID, until: until)
-            guard var page = members.value else { return }
-            if let index = page.rows.firstIndex(where: { $0.id == userID }) {
-                page.rows[index].timedOutUntil = until
-            }
-            members = .loaded(page)
-        }
-    }
-
-    func resolve(_ requestID: UInt64, approve: Bool, reason: String? = nil) async {
-        await perform { [self] in
-            try await rest.resolveJoinRequest(
-                requestID, in: guildID, approve: approve, reason: reason
-            )
-            // The row leaves Pending and joins one of the other two. Both of
-            // those are invalidated rather than patched, because an approval
-            // also changes the members table and this client does not have the
-            // member record the approval created.
-            if case .loaded(let pending) = joinRequests[.submitted] ?? .idle {
-                joinRequests[.submitted] = .loaded(pending.filter { $0.id != requestID })
-            }
-            joinRequests[approve ? .approved : .rejected] = .idle
-            if approve { members = .idle }
-        }
-    }
-
-    private func removeMemberRow(_ userID: UserID) {
-        guard var page = members.value else { return }
-        page.rows.removeAll { $0.id == userID }
-        page.total = max(0, page.total - 1)
-        members = .loaded(page)
-    }
-
     // MARK: Events
+    //
+    // Created and edited from the server's events in the main window
+    // (`EventEditorHost`); the gateway's `GUILD_SCHEDULED_EVENT_CREATE` and
+    // `…_UPDATE` are what put the result on screen.
 
     func createEvent(
         name: String,
@@ -1129,7 +1252,7 @@ final class ServerSettingsStore {
         cover: ImageData?
     ) async {
         await perform { [self] in
-            guard let event = try await rest.createEvent(
+            _ = try await rest.createEvent(
                 in: guildID,
                 name: name,
                 description: description,
@@ -1138,8 +1261,7 @@ final class ServerSettingsStore {
                 endsAt: endsAt,
                 recurrence: recurrence,
                 cover: cover
-            ) else { return }
-            events = .loaded((events.value ?? []) + [event])
+            )
         }
     }
 
@@ -1154,7 +1276,7 @@ final class ServerSettingsStore {
         cover: ImageData?
     ) async {
         await perform { [self] in
-            guard let updated = try await rest.updateEvent(
+            _ = try await rest.updateEvent(
                 eventID,
                 in: guildID,
                 name: name,
@@ -1164,51 +1286,24 @@ final class ServerSettingsStore {
                 endsAt: endsAt,
                 recurrence: recurrence,
                 cover: cover
-            ) else { return }
-            replaceEvent(updated)
+            )
         }
     }
 
-    func cancelEvent(_ eventID: UInt64) async {
-        await perform { [self] in
-            guard let updated = try await rest.cancelEvent(eventID, in: guildID) else { return }
-            replaceEvent(updated)
-        }
-    }
+    // MARK: Deleting the server
 
-    func deleteEvent(_ eventID: UInt64) async {
-        await perform { [self] in
-            try await rest.deleteEvent(eventID, in: guildID)
-            events = .loaded((events.value ?? []).filter { $0.id != eventID })
-        }
-    }
-
-    /// Keeps the two fields the write routes do not answer with.
+    /// Discord's `deleteGuild`: `POST /guilds/{id}/delete`, owner only.
     ///
-    /// `interestedCount` comes from a separate route and `isInterested` from a
-    /// third; an edit response carries neither, and replacing the row wholesale
-    /// would blank both every time somebody renamed an event.
-    private func replaceEvent(_ updated: ScheduledEvent) {
-        var current = events.value ?? []
-        guard let index = current.firstIndex(where: { $0.id == updated.id }) else {
-            current.append(updated)
-            events = .loaded(current)
-            return
+    /// Returns what to say when it is refused — an account with two-factor on
+    /// is asked for a code this client cannot yet collect, and the refusal is
+    /// Discord's own sentence.
+    func deleteServer() async -> String? {
+        do {
+            try await rest.deleteGuild(guildID)
+            return nil
+        } catch {
+            return Self.describe(error)
         }
-        var merged = updated
-        merged.interestedCount = updated.interestedCount ?? current[index].interestedCount
-        merged.isInterested = current[index].isInterested
-        current[index] = merged
-        events = .loaded(current)
-    }
-
-    /// An invite code for a channel, for the event share link.
-    ///
-    /// Not banner-ed through `perform`: copying a link is not a save, and a
-    /// "Saved" tick for it would be the window reporting something that did not
-    /// happen.
-    func inviteCode(in channelID: ChannelID) async -> String? {
-        try? await rest.createInvite(in: channelID)?.id
     }
 
     // MARK: Games
@@ -1255,22 +1350,15 @@ final class ServerSettingsStore {
     ///
     /// Discord's own message wherever there is one — "Missing Permissions" is
     /// far more use than "the request failed" — and a plain sentence otherwise.
+    /// What to say about a refused read or write: Discord's own sentence
+    /// where the API sent one, and its generic line otherwise — never one this
+    /// client wrote.
     static func describe(_ error: Error) -> String {
         switch error {
-        case DiscordREST.Failure.unauthorized:
-            "Your session has expired."
-        case DiscordREST.Failure.forbidden:
-            "You do not have permission to do that here."
-        case DiscordREST.Failure.notFound:
-            "This server has not set that up."
-        case DiscordREST.Failure.api(_, _, let message):
-            message ?? "Discord refused that."
-        case DiscordREST.Failure.transport:
-            "Could not reach Discord."
-        case DiscordREST.Failure.decoding:
-            "Discord answered with something this client could not read."
+        case DiscordREST.Failure.api(_, _, let message?) where !message.isEmpty:
+            message
         default:
-            (error as NSError).localizedDescription
+            "Oops, something went wrong..."
         }
     }
 

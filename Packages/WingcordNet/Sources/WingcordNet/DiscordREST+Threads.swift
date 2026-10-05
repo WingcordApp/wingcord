@@ -330,65 +330,129 @@ extension DiscordREST {
         return dto.domain()
     }
 
-    /// Starts a thread hanging off an existing message.
+    /// Starts a thread — off a message, or on its own — as Discord's New
+    /// Thread does (`659617`'s `H`): `POST /channels/{id}/messages/{id}/threads`
+    /// or `POST /channels/{id}/threads`, with the same body either way. The
+    /// first message is sent into it afterwards, as an ordinary send.
     ///
-    /// The thread's id **is** the source message's id, which is why the reply is
-    /// merged rather than inserted: the timeline already has a row at that id.
+    /// A thread off a message takes that message's id, which is why the reply
+    /// is merged rather than inserted: the timeline already has a row at that
+    /// id, and its thread chip appears on it.
     public func createThread(
-        from messageID: MessageID,
         in channelID: ChannelID,
+        from messageID: MessageID?,
         name: String,
-        autoArchiveMinutes: Int
+        kind: ChannelKind,
+        autoArchiveMinutes: Int,
+        location: String
     ) async throws -> Channel {
         struct Body: Encodable {
             var name: String
+            var type: Int
             var auto_archive_duration: Int
+            var location: String
         }
-        let dto = try await post(
-            "/channels/\(channelID.rawValue)/messages/\(messageID.rawValue)/threads",
-            route: "channels/{id}/messages/{id}/threads",
-            body: Body(name: name, auto_archive_duration: autoArchiveMinutes),
-            as: ChannelDTO.self
-        )
+        let body = Body(name: name, type: kind.rawValue, auto_archive_duration: autoArchiveMinutes, location: location)
+        let dto = if let messageID {
+            try await post(
+                "/channels/\(channelID.rawValue)/messages/\(messageID.rawValue)/threads",
+                route: "channels/{id}/messages/{id}/threads",
+                body: body,
+                as: ChannelDTO.self
+            )
+        } else {
+            try await post(
+                "/channels/\(channelID.rawValue)/threads",
+                route: "channels/{id}/threads",
+                body: body,
+                as: ChannelDTO.self
+            )
+        }
         return dto.domain()
     }
 
     // MARK: Editing one
 
-    /// Archives, un-archives, locks or re-tags a post.
+    /// Closes, opens, locks, pins, re-tags, renames or re-times a thread.
     ///
     /// A thread is a channel, so this is `PATCH /channels/{id}` — the same route
-    /// that renames a text channel. Only the fields the caller names are sent:
-    /// `INVARIANTS.md` §1, a page sends the fields it owns.
-    public func updateThread(
-        _ threadID: ChannelID,
-        archived: Bool? = nil,
-        locked: Bool? = nil,
-        appliedTags: [ForumTagID]? = nil,
-        autoArchiveMinutes: Int? = nil,
-        name: String? = nil
-    ) async throws -> Channel {
-        struct Body: Encodable {
-            var archived: Bool?
-            var locked: Bool?
-            var applied_tags: [String]?
-            var auto_archive_duration: Int?
-            var name: String?
-        }
+    /// that renames a text channel. Only the fields the edit names are sent:
+    /// `INVARIANTS.md` §1, a write sends the fields it owns.
+    public func updateThread(_ threadID: ChannelID, _ edit: ThreadEdit) async throws -> Channel {
         let dto = try await request(
             method: "PATCH",
             path: "/channels/\(threadID.rawValue)",
             route: "channels/{id}",
-            body: Body(
-                archived: archived,
-                locked: locked,
-                applied_tags: appliedTags?.map { String($0.rawValue) },
-                auto_archive_duration: autoArchiveMinutes,
-                name: name
-            ),
+            body: ThreadEditBody(edit),
             as: ChannelDTO.self
         )
         return dto.domain()
+    }
+}
+
+/// What one write to a thread changes.
+///
+/// **Every field optional, and an absent one is left out of the body.**
+/// Discord's own writes are this narrow — a pin sends `flags` alone, a lock on
+/// a closed thread `locked` and `archived` — and a body carrying the rest
+/// would put back whatever this client last saw over somebody else's edit.
+public struct ThreadEdit: Hashable, Sendable {
+    public var name: String?
+    public var archived: Bool?
+    public var locked: Bool?
+    /// A private thread's "Anyone can invite".
+    public var invitable: Bool?
+    /// The whole bitfield, bits this client cannot draw included — §1.
+    public var flags: ChannelFlags?
+    public var appliedTags: [ForumTagID]?
+    public var autoArchiveMinutes: Int?
+    public var rateLimitPerUser: Int?
+
+    public init(
+        name: String? = nil,
+        archived: Bool? = nil,
+        locked: Bool? = nil,
+        invitable: Bool? = nil,
+        flags: ChannelFlags? = nil,
+        appliedTags: [ForumTagID]? = nil,
+        autoArchiveMinutes: Int? = nil,
+        rateLimitPerUser: Int? = nil
+    ) {
+        self.name = name
+        self.archived = archived
+        self.locked = locked
+        self.invitable = invitable
+        self.flags = flags
+        self.appliedTags = appliedTags
+        self.autoArchiveMinutes = autoArchiveMinutes
+        self.rateLimitPerUser = rateLimitPerUser
+    }
+
+    /// Whether the edit changes anything at all — a sheet saved untouched
+    /// sends nothing.
+    public var isEmpty: Bool { self == ThreadEdit() }
+}
+
+/// The edit as Discord's keys. A nil field is not encoded at all.
+struct ThreadEditBody: Encodable {
+    var name: String?
+    var archived: Bool?
+    var locked: Bool?
+    var invitable: Bool?
+    var flags: Int?
+    var applied_tags: [String]?
+    var auto_archive_duration: Int?
+    var rate_limit_per_user: Int?
+
+    init(_ edit: ThreadEdit) {
+        name = edit.name
+        archived = edit.archived
+        locked = edit.locked
+        invitable = edit.invitable
+        flags = edit.flags?.rawValue
+        applied_tags = edit.appliedTags?.map { String($0.rawValue) }
+        auto_archive_duration = edit.autoArchiveMinutes
+        rate_limit_per_user = edit.rateLimitPerUser
     }
 }
 

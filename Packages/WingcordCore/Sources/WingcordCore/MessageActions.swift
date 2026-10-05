@@ -63,6 +63,8 @@ public struct MessageActions: OptionSet, Hashable, Sendable {
     /// Sending a refused message again. Only ever on the reader's own echo of
     /// a send Discord turned down — see `OutgoingMessage`.
     public static let resend = MessageActions(rawValue: 1 << 18)
+    /// Discord's Create Thread from a message — see `ThreadCreation`.
+    public static let createThread = MessageActions(rawValue: 1 << 19)
 
     /// Whether anything at all is offered. A row with no actions draws no pill
     /// and opens no menu, rather than opening an empty one.
@@ -139,6 +141,10 @@ public enum MessageActionPolicy {
         /// Whether it is in a thread that is archived **and** locked, which
         /// nothing but a moderator's own unlock reopens.
         public var isInLockedArchive: Bool
+        /// Whether a public thread may start from this message — the channel
+        /// holds threads, the reader may start them, and the message is
+        /// somebody's words with no thread yet. `ThreadCreation.canCreatePublic`.
+        public var canStartThread: Bool
 
         public init(
             permissions: Permissions,
@@ -153,7 +159,8 @@ public enum MessageActionPolicy {
             isBookmarked: Bool = false,
             developerMode: Bool = false,
             hasReactions: Bool = false,
-            isInLockedArchive: Bool = false
+            isInLockedArchive: Bool = false,
+            canStartThread: Bool = false
         ) {
             self.permissions = permissions
             self.canSend = canSend
@@ -168,6 +175,7 @@ public enum MessageActionPolicy {
             self.developerMode = developerMode
             self.hasReactions = hasReactions
             self.isInLockedArchive = isInLockedArchive
+            self.canStartThread = canStartThread
         }
     }
 
@@ -223,6 +231,8 @@ public enum MessageActionPolicy {
         if !input.isSystemEvent { actions.insert(.forward) }
 
         if input.isAuthor, !input.isSystemEvent { actions.insert(.edit) }
+
+        if canAct, input.canStartThread { actions.insert(.createThread) }
 
         // **Deleting is the one place a DM must NOT inherit an implicit grant.**
         // Both parties may pin in a conversation; only the author may delete.

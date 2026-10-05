@@ -2,272 +2,7 @@ import AppKit
 import SwiftUI
 import WingcordCore
 
-// MARK: - Integrations
-//
-// **One route answers for three unrelated things**, and the page draws them as
-// three sections because that is what they are: apps somebody added, subscriber
-// syncs on Twitch and YouTube, and — from a different route entirely — the
-// webhooks and followed channels, which get their own page.
-
-struct IntegrationsPane: View {
-    let store: ServerSettingsStore
-    let model: AppModel
-
-    @State private var removing: GuildIntegration?
-
-    var body: some View {
-        LoadableContent(
-            store.integrations,
-            isEmpty: \.isEmpty,
-            empty: {
-                EmptyRow(
-                    message: "Nothing is connected to this server.",
-                    symbolName: "puzzlepiece.extension"
-                )
-            }
-        ) { integrations in
-            let apps = integrations.filter { $0.kind == .discord }
-            let syncs = integrations.filter { $0.kind != .discord }
-
-            VStack(alignment: .leading, spacing: 0) {
-                section("Apps and bots — \(apps.count)", integrations: apps)
-                section("Connected accounts — \(syncs.count)", integrations: syncs)
-            }
-        }
-    }
-
-    @ViewBuilder
-    private func section(_ title: String, integrations: [GuildIntegration]) -> some View {
-        if !integrations.isEmpty {
-            SettingsGroup(title) {
-                SettingsCard {
-                    ForEach(Array(integrations.enumerated()), id: \.element.id) { index, item in
-                        if index > 0 { CardDivider() }
-                        row(item)
-                    }
-                }
-            }
-        }
-    }
-
-    private func row(_ integration: GuildIntegration) -> some View {
-        ObjectRow(
-            title: integration.name,
-            subtitle: subtitle(integration),
-            badge: integration.kind == .discord ? nil : integration.kind.title
-        ) {
-            RemoteImage(url: integration.application?.iconURL, side: 28) {
-                SettingsSurface.controlTrough.overlay {
-                    Image(systemName: "puzzlepiece.extension.fill")
-                        .font(.system(size: 12))
-                        .foregroundStyle(Ink.tertiary)
-                }
-            }
-            .frame(width: 28, height: 28)
-            .clipShape(.rect(cornerRadius: 7, style: .continuous))
-        } trailing: {
-            RowIconButton(
-                symbolName: "trash",
-                label: "Remove \(integration.name)",
-                role: .destructive
-            ) {
-                removing = integration
-            }
-        }
-        .destructiveConfirmation(
-            isPresented: Binding(
-                get: { removing?.id == integration.id },
-                set: { if !$0 { removing = nil } }
-            ),
-            title: "Remove \(integration.name)?",
-            message: removalMessage(integration),
-            confirmTitle: "Remove"
-        ) {
-            Task { await store.deleteIntegration(integration.id) }
-        }
-    }
-
-    private func subtitle(_ integration: GuildIntegration) -> String? {
-        var parts: [String] = []
-        if let installer = integration.installerID, let user = model.users[installer] {
-            parts.append("Added by \(user.preferredName)")
-        }
-        parts.append(integration.addedAt.formatted(date: .abbreviated, time: .omitted))
-        if let account = integration.accountName { parts.append(account) }
-        return parts.isEmpty ? nil : parts.joined(separator: " · ")
-    }
-
-    private func removalMessage(_ integration: GuildIntegration) -> String {
-        switch integration.kind {
-        case .discord:
-            "Its commands stop working here, and any role it manages is removed."
-        case .twitch, .youtube:
-            "Subscribers stop being given the role this sync grants."
-        default:
-            "This removes it from the server."
-        }
-    }
-}
-
-// MARK: - Webhooks
-//
-// Two kinds behind one route, and the difference decides what a row may offer.
-// An **incoming** webhook has a URL somebody pastes into another service; a
-// **channel follower** is the far end of a Follow on somebody else's
-// announcement channel, has no URL, and has its name and avatar rewritten by
-// Discord on every sync — so renaming it is a control that reverts itself.
-
-struct WebhooksPane: View {
-    let store: ServerSettingsStore
-    let model: AppModel
-
-    @State private var isCreating = false
-    @State private var renaming: UInt64?
-    @State private var deleting: GuildWebhook?
-    @State private var copied: UInt64?
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            SettingsGroup {
-                SettingsCard {
-                    SettingsActionRow(
-                        "Create a webhook",
-                        help: "A URL another service can post to, as a named sender in one channel.",
-                        actionTitle: "Create"
-                    ) {
-                        isCreating = true
-                    }
-                }
-            }
-
-            LoadableContent(
-                store.webhooks,
-                isEmpty: \.isEmpty,
-                empty: {
-                    EmptyRow(
-                        message: "No webhooks and no followed channels.",
-                        symbolName: "arrow.triangle.branch"
-                    )
-                }
-            ) { webhooks in
-                let incoming = webhooks.filter { $0.kind == .incoming }
-                let followers = webhooks.filter { $0.kind == .channelFollower }
-                section("Webhooks — \(incoming.count)", webhooks: incoming)
-                section("Channels followed — \(followers.count)", webhooks: followers)
-            }
-        }
-        .sheet(isPresented: $isCreating) {
-            ChannelPickerSheet(
-                title: "Create a webhook",
-                confirmTitle: "Create",
-                channels: store.textChannels
-            ) { channelID in
-                Task { await store.createWebhook(in: channelID) }
-            }
-        }
-    }
-
-    @ViewBuilder
-    private func section(_ title: String, webhooks: [GuildWebhook]) -> some View {
-        if !webhooks.isEmpty {
-            SettingsGroup(title) {
-                SettingsCard {
-                    ForEach(Array(webhooks.enumerated()), id: \.element.id) { index, hook in
-                        if index > 0 { CardDivider() }
-                        row(hook)
-                    }
-                }
-            }
-        }
-    }
-
-    private func row(_ hook: GuildWebhook) -> some View {
-        ObjectRow(
-            title: hook.name,
-            subtitle: subtitle(hook)
-        ) {
-            RemoteImage(
-                url: hook.avatarHash.flatMap {
-                    CDN.avatar(userID: UserID(rawValue: hook.id), hash: $0, side: 28)
-                },
-                side: 28
-            ) {
-                SettingsSurface.controlTrough.overlay {
-                    Image(systemName: hook.kind == .channelFollower ? "arrow.turn.down.right" : "arrow.triangle.branch")
-                        .font(.system(size: 11))
-                        .foregroundStyle(Ink.tertiary)
-                }
-            }
-            .frame(width: 28, height: 28)
-            .clipShape(.circle)
-        } trailing: {
-            HStack(spacing: 2) {
-                // **Only an incoming webhook has a URL, and the URL is a
-                // credential.** Anybody holding it can post here forever with no
-                // account behind it, so it is never drawn — one deliberate press
-                // puts it on the pasteboard and nothing else ever sees it.
-                if hook.url != nil {
-                    RowIconButton(
-                        symbolName: copied == hook.id ? "checkmark" : "doc.on.doc",
-                        label: "Copy webhook URL"
-                    ) {
-                        guard let url = hook.url else { return }
-                        NSPasteboard.general.clearContents()
-                        NSPasteboard.general.setString(url.absoluteString, forType: .string)
-                        copied = hook.id
-                    }
-                }
-                if hook.isEditable {
-                    RowIconButton(symbolName: "pencil", label: "Rename \(hook.name)") {
-                        renaming = hook.id
-                    }
-                }
-                RowIconButton(
-                    symbolName: "trash",
-                    label: "Delete \(hook.name)",
-                    role: .destructive
-                ) {
-                    deleting = hook
-                }
-            }
-        }
-        .sheet(isPresented: Binding(
-            get: { renaming == hook.id },
-            set: { if !$0 { renaming = nil } }
-        )) {
-            RenameSheet(title: "Rename webhook", name: hook.name) { name in
-                Task { await store.saveWebhook(hook.id, name: name, channelID: hook.channelID) }
-            }
-        }
-        .destructiveConfirmation(
-            isPresented: Binding(
-                get: { deleting?.id == hook.id },
-                set: { if !$0 { deleting = nil } }
-            ),
-            title: "Delete \(hook.name)?",
-            message: hook.kind == .channelFollower
-                ? "This channel stops receiving that server's announcements."
-                : "Anything posting through its URL stops working immediately.",
-            confirmTitle: "Delete"
-        ) {
-            Task { await store.deleteWebhook(hook.id) }
-        }
-    }
-
-    private func subtitle(_ hook: GuildWebhook) -> String? {
-        var parts: [String] = []
-        if let source = hook.followedSource {
-            parts.append("Following \(source)")
-        }
-        if let name = store.channelName(hook.channelID) { parts.append("posts to #\(name)") }
-        if let creator = hook.creatorID, let user = model.users[creator] {
-            parts.append("by \(user.preferredName)")
-        }
-        return parts.isEmpty ? nil : parts.joined(separator: " · ")
-    }
-}
-
-/// Pick one channel and confirm. Shared by the webhook and template flows.
+/// Pick one channel and confirm — the template flow.
 struct ChannelPickerSheet: View {
     var title: String
     var confirmTitle: String
@@ -283,7 +18,7 @@ struct ChannelPickerSheet: View {
         } content: {
             SheetField(title: "Channel", isRequired: true) {
                 Picker("", selection: $channelID) {
-                    Text("Choose a channel").tag(ChannelID?.none)
+                    Text("Select a Channel").tag(ChannelID?.none)
                     ForEach(channels) { channel in
                         Text("#\(channel.name)").tag(ChannelID?.some(channel.id))
                     }
@@ -307,75 +42,145 @@ struct ChannelPickerSheet: View {
 /// The create is captured; `PATCH /auto-moderation/rules/{id}` is not.
 struct SafetyPane: View {
     let store: ServerSettingsStore
+    let model: AppModel
 
     @State private var editing: AutoModRule?
     @State private var creating = false
     @State private var deleting: AutoModRule?
+    @State private var isRemovingRisky = false
+    @State private var page = Page.overview
 
+    /// Discord's Safety Setup pages (`uS.C`).
+    enum Page: Hashable {
+        case overview
+        case raidProtection
+        case dmAndSpam
+        case autoMod
+        case permissions
+    }
+
+    /// Discord's Safety Setup (`uB`): on a Community server, an overview of
+    /// four rows — Raid Protection and CAPTCHA, DM and Spam Protection,
+    /// AutoMod, Permissions — each "N of M enabled" with Edit, opening its own
+    /// page. The always-on rows are Discord's statements rather than settings —
+    /// drawn as it draws them, a switch that is on and cannot move, with "This
+    /// feature is on by default" — and only on a Community server, which is the
+    /// only kind Discord shows them on. A server that is not one gets Discord's
+    /// older single page: its levels, AutoMod and permissions.
     var body: some View {
         LoadableContent(store.settings) { settings in
-            VStack(alignment: .leading, spacing: 0) {
-                SettingsGroup("Verification") {
-                    SettingsCard {
-                        SettingsPickerRow(
-                            title: "Members must",
-                            options: VerificationLevel.selectable.map { .init($0, $0.title) },
-                            selection: Binding(
-                                get: { settings.verificationLevel },
-                                set: { level in
-                                    Task {
-                                        await store.saveModerationLevels(
-                                            verification: level,
-                                            explicitContent: settings.explicitContentFilter
-                                        )
-                                    }
-                                }
-                            )
-                        )
-                    }
-                    SettingsFootnote(settings.verificationLevel.detail)
+            if settings.isCommunity {
+                switch page {
+                case .overview: overview(settings)
+                case .raidProtection: subpage("Raid Protection and CAPTCHA") { raidProtection(settings) }
+                case .dmAndSpam: subpage("DM and Spam Protection") { dmAndSpam(settings) }
+                case .autoMod: subpage("AutoMod") { autoMod }
+                case .permissions: subpage("Permissions") { permissions(settings) }
                 }
-
-                SettingsGroup("Explicit media filter") {
-                    SettingsCard {
-                        SettingsPickerRow(
-                            title: "Scan media from",
-                            options: ExplicitContentFilter.selectable.map { .init($0, $0.title) },
-                            selection: Binding(
-                                get: { settings.explicitContentFilter },
-                                set: { filter in
-                                    Task {
-                                        await store.saveModerationLevels(
-                                            verification: settings.verificationLevel,
-                                            explicitContent: filter
-                                        )
-                                    }
-                                }
-                            )
-                        )
-                    }
+            } else {
+                VStack(alignment: .leading, spacing: 0) {
+                    dmAndSpam(settings)
+                    autoMod
+                    permissions(settings)
                 }
+            }
+        }
+        .task { store.load(.roles) }
+    }
 
-                raidProtection(settings)
-                autoMod
+    // MARK: Overview
+
+    private func overview(_ settings: GuildSettings) -> some View {
+        let everyone = store.roles.value?.first { $0.id.rawValue == store.guildID.rawValue }
+        return SettingsGroup {
+            SettingsCard {
+                overviewRow(
+                    "Raid Protection and CAPTCHA",
+                    count: SafetyCounts.raidProtection(features: settings.features),
+                    symbolName: "shield.lefthalf.filled",
+                    page: .raidProtection
+                )
+                CardDivider()
+                overviewRow(
+                    "DM and Spam Protection",
+                    count: SafetyCounts.dmAndSpam,
+                    symbolName: "envelope.badge.shield.half.filled",
+                    page: .dmAndSpam
+                )
+                CardDivider()
+                overviewRow(
+                    "AutoMod",
+                    count: SafetyCounts.autoMod(store.autoModRules.value ?? []),
+                    symbolName: "wand.and.stars",
+                    page: .autoMod
+                )
+                CardDivider()
+                overviewRow(
+                    "Permissions",
+                    count: SafetyCounts.permissions(
+                        mfaLevel: settings.mfaLevel,
+                        features: settings.features,
+                        everyonePermissions: everyone?.permissions
+                    ),
+                    symbolName: "key.fill",
+                    page: .permissions
+                )
             }
         }
     }
 
-    /// Two switches that are **guild features rather than fields**, both
-    /// captured as a whole `features` array on `PATCH /guilds/{id}`.
-    ///
-    /// `RAID_ALERTS_DISABLED` is **inverted** — its presence means the alerts
-    /// are off — which is the same shape as `SystemChannelFlags` and the same
-    /// trap: a client mapping the flag straight onto the switch shows every
-    /// server the opposite of the truth.
+    private func overviewRow(
+        _ title: String,
+        count: (enabled: Int, total: Int),
+        symbolName: String,
+        page target: Page
+    ) -> some View {
+        DescribedRow(title, detail: Text(SafetyCounts.sentence(count))) {
+            Image(symbol: symbolName)
+                .font(.system(size: 15, weight: .semibold))
+                .foregroundStyle(.white)
+                .frame(width: 36, height: 36)
+                .background(Color.pink.gradient, in: .circle)
+                .accessibilityHidden(true)
+        } trailing: {
+            Button("Edit") { page = target }
+                .buttonStyle(.glass)
+                .controlSize(.small)
+        }
+    }
+
+    /// A page inside Safety Setup — Discord's Back above its title.
+    private func subpage<Content: View>(_ title: String, @ViewBuilder content: () -> Content) -> some View {
+        VStack(alignment: .leading, spacing: Spacing.margin) {
+            Button { page = .overview } label: {
+                Label("Back", systemImage: "chevron.left")
+                    .font(SettingsType.controlLabel)
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(Ink.secondary)
+            Text(verbatim: title)
+                .font(.system(.title3, weight: .semibold))
+                .foregroundStyle(Ink.primary)
+            content()
+        }
+    }
+
+    /// A section's own heading on the single page; none inside a sub-page,
+    /// which carries it already.
+    private func sectionTitle(_ title: String) -> String? {
+        store.settings.value?.isCommunity == true ? nil : title
+    }
+
+    // MARK: Raid protection
+
     private func raidProtection(_ settings: GuildSettings) -> some View {
-        SettingsGroup("Raid protection") {
+        SettingsGroup(sectionTitle("Raid Protection and CAPTCHA")) {
             SettingsCard {
                 SettingsToggle(
-                    title: "Activity alerts",
-                    help: "Notifies moderators about unusual join or DM activity.",
+                    title: "Activity Alerts",
+                    help: "Includes added protection from join raids.",
                     isOn: Binding(
+                        // `RAID_ALERTS_DISABLED` is inverted — present means off.
                         get: { !settings.features.contains("RAID_ALERTS_DISABLED") },
                         set: { isOn in
                             Task { await store.setFeature("RAID_ALERTS_DISABLED", isOn: !isOn) }
@@ -383,9 +188,99 @@ struct SafetyPane: View {
                     )
                 )
                 CardDivider()
+                AlwaysOnRow(title: "CAPTCHA suspicious accounts before they are able to join")
+                CardDivider()
+                AlwaysOnRow(title: "CAPTCHA all accounts before they can join during a suspected raid")
+            }
+        }
+    }
+
+    // MARK: DM and spam
+
+    private func dmAndSpam(_ settings: GuildSettings) -> some View {
+        SettingsGroup(sectionTitle("DM and Spam Protection")) {
+            SettingsCard {
+                SettingsPickerRow(
+                    title: "Verification Level",
+                    help: "Members of the server must meet the following criteria before they can "
+                        + "send messages. If a member has an assigned role and server onboarding is "
+                        + "not enabled, this does not apply.",
+                    options: VerificationLevel.selectable.map { .init($0, $0.title) },
+                    selection: Binding(
+                        get: { settings.verificationLevel },
+                        set: { level in
+                            Task {
+                                await store.saveModerationLevels(
+                                    verification: level,
+                                    explicitContent: settings.explicitContentFilter
+                                )
+                            }
+                        }
+                    )
+                )
+                CardDivider()
+                SettingsPickerRow(
+                    title: "Explicit image filter",
+                    options: ExplicitContentFilter.selectable.map { .init($0, $0.title) },
+                    selection: Binding(
+                        get: { settings.explicitContentFilter },
+                        set: { filter in
+                            Task {
+                                await store.saveModerationLevels(
+                                    verification: settings.verificationLevel,
+                                    explicitContent: filter
+                                )
+                            }
+                        }
+                    )
+                )
+                if settings.isCommunity {
+                    CardDivider()
+                    AlwaysOnRow(
+                        title: "Hide DMs from suspicious users",
+                        detail: "Send suspicious DMs to a separate Spam Inbox. Members can send a scam "
+                            + "report or move it back to Inbox."
+                    )
+                    CardDivider()
+                    AlwaysOnRow(
+                        title: "Filter DMs from unknown users",
+                        detail: "Filter DMs from unknown users to Message Requests Inbox. Members must "
+                            + "approve the request before they are able to respond."
+                    )
+                    CardDivider()
+                    AlwaysOnRow(title: "Warn members before they visit outbound links")
+                    CardDivider()
+                    AlwaysOnRow(title: "Hide all messages from and delete suspected spammers")
+                }
+            }
+            SettingsFootnote(settings.verificationLevel.detail)
+        }
+    }
+
+    // MARK: Permissions
+
+    private func permissions(_ settings: GuildSettings) -> some View {
+        SettingsGroup(sectionTitle("Permissions")) {
+            SettingsCard {
+                // Changing it takes the owner's two-factor code, which this
+                // client cannot collect yet — so it says where it stands and
+                // why it does not move, in Discord's words.
+                DescribedRow(
+                    "Require 2FA for moderator actions",
+                    detail: Text("Moderators must have two-factor authentication enabled to ban, kick, or timeout members and delete messages.")
+                ) {
+                    Toggle("Require 2FA for moderator actions", isOn: .constant(settings.mfaLevel == 1))
+                        .toggleStyle(.switch)
+                        .labelsHidden()
+                        .controlSize(.small)
+                        .disabled(true)
+                        .help("This setting can only be changed by a server owner with 2FA enabled on their account.")
+                }
+                CardDivider()
                 SettingsToggle(
                     title: "Restrict member prune to admins",
-                    help: "Only administrators and the owner can prune inactive members.",
+                    help: "Only administrators and the server owner can prune inactive members when "
+                        + "this setting is enabled.",
                     isOn: Binding(
                         get: { settings.features.contains("PRUNE_REQUIRES_ADMIN") },
                         set: { isOn in
@@ -393,24 +288,75 @@ struct SafetyPane: View {
                         }
                     )
                 )
+                CardDivider()
+                riskyPermissions
             }
-            SettingsFootnote(
-                "CAPTCHA settings and the 2FA requirement are not here: the first "
-                    + "has no captured route, and the second needs an MFA-signed "
-                    + "request this client does not make."
-            )
         }
     }
 
+    /// Discord's "Remove risky permissions from @everyone": a count, and one
+    /// write that clears them — refused, as Discord refuses it, where it would
+    /// take a permission away from the reader themselves.
+    @ViewBuilder
+    private var riskyPermissions: some View {
+        let everyone = store.roles.value?.first { $0.id.rawValue == store.guildID.rawValue }
+        let risky = everyone.map { $0.permissions.intersection(.risky) } ?? []
+        let count = risky.rawValue.nonzeroBitCount
+        let refusal = revokesOwnPermission(risky)
+        SettingsControlRow(
+            "Remove risky permissions from @everyone",
+            help: count == 0
+                ? "All risky permissions disabled!"
+                : "@everyone currently has \(count) risky permissions enabled"
+        ) {
+            if count == 0 {
+                Image(systemName: "checkmark.circle.fill")
+                    .foregroundStyle(Palette.affirmative)
+                    .accessibilityLabel(Text("Item completed"))
+            } else {
+                Button(isRemovingRisky ? "Disabling risky permissions..." : "Remove risky permissions") {
+                    isRemovingRisky = true
+                    Task {
+                        await store.removeRiskyPermissions()
+                        isRemovingRisky = false
+                    }
+                }
+                .buttonStyle(.glass)
+                .controlSize(.small)
+                .disabled(isRemovingRisky || refusal)
+                .help(refusal
+                    ? "Cannot disable risky permissions because this would revoke your own permissions."
+                    : "")
+            }
+        }
+    }
+
+    /// Whether clearing these from `@everyone` would leave the reader without
+    /// one of them — Discord's check: every risky bit must still come from one
+    /// of the reader's other roles, unless they own the server or administer it
+    /// through another role.
+    private func revokesOwnPermission(_ risky: Permissions) -> Bool {
+        guard !risky.isEmpty, let me = model.currentUserID else { return false }
+        if model.guilds[store.guildID]?.ownerID == me { return false }
+        let roles = store.roles.value ?? []
+        let mine = Set(model.members[store.guildID]?[me]?.roleIDs ?? [])
+        let granted = roles
+            .filter { mine.contains($0.id) && $0.id.rawValue != store.guildID.rawValue }
+            .reduce(into: Permissions()) { $0.formUnion($1.permissions) }
+        if granted.contains(.administrator) { return false }
+        return !granted.isSuperset(of: risky)
+    }
+
     private var autoMod: some View {
-        SettingsGroup("AutoMod") {
+        SettingsGroup(sectionTitle("AutoMod")) {
             SettingsCard {
-                SettingsActionRow(
-                    "Create a rule",
-                    help: "Block words, spam, mention raids, or words in profiles.",
-                    actionTitle: "Create"
+                DescribedRow(
+                    "AutoMod",
+                    detail: Text("Give your mods a break while keeping your server safe! Set up filters to moderate content and automate a custom response when they\u{2019}re found, and AutoMod will make it happen.")
                 ) {
-                    creating = true
+                    Button("Create") { creating = true }
+                        .buttonStyle(.glass)
+                        .controlSize(.small)
                 }
             }
             .padding(.bottom, Spacing.base)
@@ -418,12 +364,7 @@ struct SafetyPane: View {
             LoadableContent(
                 store.autoModRules,
                 isEmpty: \.isEmpty,
-                empty: {
-                    EmptyRow(
-                        message: "No AutoMod rules yet.",
-                        symbolName: "exclamationmark.shield"
-                    )
-                }
+                empty: { EmptyView() }
             ) { rules in
                 SettingsCard {
                     ForEach(Array(rules.enumerated()), id: \.element.id) { index, rule in
@@ -492,8 +433,8 @@ struct SafetyPane: View {
                 get: { deleting?.id == rule.id },
                 set: { if !$0 { deleting = nil } }
             ),
-            title: "Delete \(rule.name)?",
-            message: "AutoMod stops acting on what this rule caught.",
+            title: rule.name,
+            message: Self.triggerLine(rule.trigger),
             confirmTitle: "Delete"
         ) {
             Task { await store.deleteAutoModRule(rule.id) }
@@ -501,11 +442,20 @@ struct SafetyPane: View {
     }
 
     private func ruleHelp(_ rule: AutoModRule) -> String {
-        var parts = [rule.trigger.detail]
-        if !rule.actions.isEmpty {
-            parts.append(rule.actions.map(\.title).formatted(.list(type: .and)))
+        Self.triggerLine(rule.trigger)
+    }
+
+    /// Discord's line for each kind of rule, from its AutoMod page.
+    static func triggerLine(_ trigger: AutoModRule.Trigger) -> String {
+        switch trigger {
+        case .keyword: "Create your own filter to block specific language from your server."
+        case .spam: "Monitor messages, Forum posts, and threads for potentially spammy content or activity. (Support for English only)"
+        case .keywordPreset: "Flag messages that contain profanity and more. (Support for English only)"
+        case .mentionSpam: "Block messages with an excessive # of role and user mentions"
+        case .userProfile: "Block specific language in your member\u{2019}s usernames."
+        case .guildPolicy: "The app chooses what action to take for each message, including blocking the message or doing nothing at all."
+        case .unrecognised: ""
         }
-        return parts.joined(separator: " — ")
     }
 }
 
@@ -516,6 +466,24 @@ struct SafetyPane: View {
 /// **The entry does not carry the objects it names** — `user_id` is a snowflake
 /// and the users are in a sibling array — so the page reads names out of the
 /// page's own side tables rather than off the row. See `AuditLogPage`.
+/// One of Discord's always-on safety statements: a switch that is on and
+/// cannot move, with its reason on hover — "This feature is on by default".
+private struct AlwaysOnRow: View {
+    var title: String
+    var detail: String?
+
+    var body: some View {
+        SettingsControlRow(title, help: detail) {
+            Toggle(title, isOn: .constant(true))
+                .toggleStyle(.switch)
+                .labelsHidden()
+                .controlSize(.small)
+                .disabled(true)
+                .help("This feature is on by default")
+        }
+    }
+}
+
 struct AuditLogPane: View {
     let store: ServerSettingsStore
 
@@ -526,7 +494,7 @@ struct AuditLogPane: View {
             store.auditLog,
             isEmpty: { $0.entries.isEmpty },
             empty: {
-                EmptyRow(message: "Nothing has been recorded yet.", symbolName: "list.bullet.rectangle")
+                EmptyRow(message: "No Logs Yet — Once moderators begin moderating, you can moderate the moderation here.", symbolName: "list.bullet.rectangle")
             }
         ) { page in
             VStack(alignment: .leading, spacing: 0) {
@@ -553,7 +521,7 @@ struct AuditLogPane: View {
                         if isLoadingMore {
                             ProgressView().controlSize(.small)
                         } else {
-                            Text("Load older entries")
+                            Text("Load More")
                         }
                     }
                     .buttonStyle(.glass)

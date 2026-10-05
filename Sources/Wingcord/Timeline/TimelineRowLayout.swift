@@ -26,6 +26,11 @@ nonisolated struct TimelineRow: Sendable {
         case loadingFirstPage
         case historyUnavailable(reason: String)
         case message(MessageRow)
+        /// A fold's own line — see `CollapsedGroupSlot`.
+        case collapsedGroup(CollapsedGroupSlot)
+        /// A forum post's bar under its opening message — see
+        /// `PostActionsSlot`.
+        case postActions(PostActionsSlot)
     }
 
     var messageID: MessageID? {
@@ -51,6 +56,10 @@ nonisolated struct MessageRow: @unchecked Sendable {
     var mentionsMe: Bool
     var isPending: Bool
     var isFailed: Bool
+    /// The message is in a fold the reader opened, and sits on its tint —
+    /// Discord's `expanded`. Painted, so carried over from the cache like
+    /// `isPending` rather than keyed on.
+    var isInOpenFold = false
 
     /// Present only on a run head — or, in bubbles, on the last message of
     /// somebody's run, beside its last bubble. Everything else leaves the
@@ -91,10 +100,12 @@ nonisolated struct MessageRow: @unchecked Sendable {
     /// The compact `HH:mm` shown in the gutter on hover, for a continuation row.
     var gutterTimestampText: String
 
-    var isBot: Bool
-    /// Whether the app is one Discord verified, which puts a check in its
-    /// badge — see `AppBadge`.
-    var isVerifiedBot = false
+    /// Discord's tag beside the name — OFFICIAL, SERVER, APP or OP. See
+    /// `AuthorTag`.
+    var authorTag: AuthorTag?
+    /// A crosspost, whose author is the channel that published it: its name
+    /// opens that server's card rather than a person's.
+    var isCrosspost = false
 
     /// The server tag worn beside the name, and where it sits.
     ///
@@ -153,18 +164,12 @@ nonisolated struct MessageRow: @unchecked Sendable {
     /// there is something on it, and two controls floating under a message
     /// nobody has reacted to is chrome the hover bar already offers.
     var reactionControls: [ReactionControlSlot] = []
+    /// A card drawn from parts — AutoMod's alert or notice, which is the
+    /// whole row, or a safety notice under a system message's words. See
+    /// `DrawnCard`.
+    var card: DrawnCard? = nil
     /// The thread this message started, when it did.
     var threadChip: ThreadChipSlot?
-
-    /// A system event's gutter glyph — a join, a boost, a pin.
-    ///
-    /// **A field on the ordinary row rather than a row kind of its own.** A
-    /// system message is still a message: it has an id, an author, a timestamp,
-    /// reactions and a place in the layout cache, and the only things that
-    /// differ are that the gutter holds a symbol instead of a face and the
-    /// sentence is composed rather than typed. A separate kind would duplicate
-    /// the cache key, the height calculation and the hit testing to change two
-    /// of them.
 
     /// A system event's gutter glyph — a join, a boost, a pin.
     ///
@@ -192,6 +197,61 @@ nonisolated struct MessageRow: @unchecked Sendable {
     /// VoiceOver, because on a real Mac something always holds the accessibility
     /// API open.
     var accessibilityLabel: String
+}
+
+/// A fold's line — Discord's `blockedSystemMessage`, on its system-message
+/// frame: the fold's glyph where a system message's sits, the sentence in the
+/// reading ink, then " — Show" or " — Hide" with the one word quieter until the
+/// row is hovered.
+///
+/// **Only the word takes a click**, as only Discord's anchor does: the rest of
+/// the line is a statement, and a line that opened wherever it was clicked
+/// would open under a drag meant to select the message above it.
+nonisolated struct CollapsedGroupSlot: Sendable {
+    var group: CollapsedGroup
+    var symbolName: String
+    /// The sentence and the dash after it, in the reading ink — or, for a fold
+    /// that cannot open, the whole line in the quiet one.
+    var text: TimelineTextBlock
+    var textOrigin: CGPoint
+    /// "Show" or "Hide", where it is drawn in row space, and the word laid out
+    /// twice: in the quiet ink, and in the link's for a hovered row — Discord's
+    /// `blockedAction` and its `:hover`. Two blocks rather than one recoloured
+    /// at paint time, which would be a framesetting pass per hover. Nil for a
+    /// fold that cannot open.
+    var action: Action?
+    var accessibilityLabel: String
+
+    struct Action: Sendable {
+        var word: String
+        var rect: CGRect
+        var quiet: TimelineTextBlock
+        var lit: TimelineTextBlock
+    }
+
+    /// Discord's words for the fold, by its count — `+FcYM/`, `VFWjc+` and
+    /// `rHRovo`, whose ICU plurals these are.
+    static func sentence(for group: CollapsedGroup) -> String {
+        let count = group.count
+        switch group.reason {
+        case .blocked: return count == 1 ? "1 blocked message" : "\(count) blocked messages"
+        case .ignored: return count == 1 ? "1 ignored message" : "\(count) ignored messages"
+        case .suspended:
+            return count == 1
+                ? "One message removed from a suspended account."
+                : "Some messages removed from a suspended account."
+        }
+    }
+
+    /// The fold's glyph: Discord's block mark, its eye with a slash, and its
+    /// suspended person, in the system's own symbols.
+    static func symbolName(for reason: CollapsedGroup.Reason) -> String {
+        switch reason {
+        case .blocked: "nosign"
+        case .ignored: "eye.slash"
+        case .suspended: "person.crop.circle.badge.xmark"
+        }
+    }
 }
 
 /// A forwarded message, quoted inside the one that carries it.
@@ -227,6 +287,157 @@ nonisolated struct ForwardedSlot: Sendable {
     var footerOrigin: CGPoint
 }
 
+/// What a forum post's bar needs to know — Discord's `rg`, under the opening
+/// message: React to Post, Follow, and Copy Link.
+nonisolated struct PostActions: Sendable, Equatable {
+    /// The opening message, whose id is the post's own.
+    var openerID: MessageID
+    /// The opening message is gone, so the bar hangs under the post's head.
+    var openerDeleted: Bool
+    /// Following the post — "Following" with a tick, or "Follow" with a bell.
+    var isFollowing: Bool
+    /// Not while previewing the server: Discord offers no follow there.
+    var offersFollow: Bool
+    /// "React to Post", while the opening message has no reactions and the
+    /// reader may add one.
+    var offersReaction: Bool
+    /// The link went to the clipboard a moment ago — "Copied", for two
+    /// seconds, as Discord's says.
+    var isLinkCopied: Bool
+}
+
+/// A forum post's bar, laid out.
+nonisolated struct PostActionsSlot: Sendable {
+    enum Action: Hashable, Sendable {
+        case react
+        case follow
+        case copyLink
+    }
+
+    struct Button: Sendable {
+        var action: Action
+        var rect: CGRect
+        var symbolName: String
+        var glyphRect: CGRect
+        /// Nil for Copy Link at rest — Discord's is a bare icon until it has
+        /// copied.
+        var label: TimelineTextBlock?
+        var labelOrigin: CGPoint
+        /// Drawn in the accent: Following, and Copied.
+        var isLit: Bool
+        var accessibilityLabel: String
+    }
+
+    var buttons: [Button]
+}
+
+/// Which of Discord's heads a transcript opens with (`aE`).
+nonisolated enum ChannelHead: Sendable, Equatable {
+    /// "Welcome to #channel!" — `sM`.
+    case channel
+    /// A thread's name, "Started by" its author, and for a private thread how
+    /// to bring people in — `sL`. A nil name is an author nobody has told this
+    /// client about, which Discord draws as "???".
+    case thread(startedBy: String?, isPrivate: Bool)
+    /// A forum post's title, its tags, and "Original message was deleted"
+    /// when it is — `iX`.
+    case post(tags: [ForumTag], openerDeleted: Bool)
+    /// A direct message — Discord's `sc` with a person: their face, their
+    /// names, the sentence, the servers in common, and what can be done.
+    case directMessage(DirectMessageHead)
+    /// A group — its picture, its name, and "Welcome to the beginning of the
+    /// **{name}** group."
+    case groupDirectMessage(iconURL: URL?)
+    /// Discord's own system messages, under its face.
+    case systemDirectMessage(avatarURL: URL?)
+}
+
+nonisolated extension ChannelHead {
+    /// The controls under the head: a person's, an app's, or a group's.
+    var actions: [HeadAction] {
+        switch self {
+        case .directMessage(let head): head.actions
+        case .groupDirectMessage: [.inviteToGroup, .editGroup]
+        default: []
+        }
+    }
+}
+
+/// What Discord's head of a direct message shows about the other person.
+nonisolated struct DirectMessageHead: Sendable, Equatable {
+    var avatarURL: URL?
+    var monogram: String
+    /// The username under the name, Discord's second heading. Nil where it
+    /// would only repeat the name.
+    var username: String?
+    /// "{username} sent you a friend request." — an incoming request, answered
+    /// right here.
+    var incomingRequestFrom: String?
+    /// The servers in common: up to three faces and the count. A count of
+    /// none — or one nobody has asked for — reads "No servers in common", as
+    /// Discord's does.
+    var mutualIcons: [MutualMark]
+    var mutualCount: Int
+    var actions: [HeadAction]
+
+    nonisolated struct MutualMark: Sendable, Equatable {
+        var iconURL: URL?
+        var monogram: String
+    }
+}
+
+/// A control in a direct message's head (`au`, `ad`, `at`).
+nonisolated enum HeadAction: Hashable, Sendable {
+    case addFriend
+    /// "Friend Request Sent" — Discord's disabled primary.
+    case friendRequestSent
+    case acceptRequest
+    case ignoreRequest
+    case removeFriend
+    case block
+    case unblock
+    /// The servers-in-common line, which opens them.
+    case mutualServers
+    /// An app's DM, with a grant the reader holds (`s7`'s `sq` and `s$`).
+    case mute
+    case unmute
+    case deauthorize
+    /// The app's first message, through Discord's first-DM report (`sW`).
+    case reportSpam
+    /// A group's two (`sr`).
+    case inviteToGroup
+    case editGroup
+
+    var title: String {
+        switch self {
+        case .addFriend: "Add Friend"
+        case .friendRequestSent: "Friend Request Sent"
+        case .acceptRequest: "Accept Request"
+        case .ignoreRequest: "Ignore Request"
+        case .removeFriend: "Remove Friend"
+        case .block: "Block"
+        case .unblock: "Unblock"
+        case .mutualServers: ""
+        case .mute: "Mute"
+        case .unmute: "Unmute"
+        case .deauthorize: "Deauthorize"
+        case .reportSpam: "Report Spam"
+        case .inviteToGroup: "Invite to Group DM"
+        case .editGroup: "Edit Group"
+        }
+    }
+
+    /// Discord's primary buttons; the rest are its secondary.
+    var isProminent: Bool {
+        self == .addFriend || self == .friendRequestSent || self == .acceptRequest || self == .inviteToGroup
+    }
+
+    /// Discord's `critical-primary`: Mute, and Report Spam.
+    var isCritical: Bool { self == .mute || self == .reportSpam }
+
+    var isEnabled: Bool { self != .friendRequestSent }
+}
+
 /// The head of a channel: an icon, a welcome, and what the channel is for.
 ///
 /// **Laid out rather than drawn at fixed offsets.** The old version painted two
@@ -238,14 +449,65 @@ nonisolated struct ForwardedSlot: Sendable {
 nonisolated struct ConversationStartSlot: Sendable {
     /// The icon tile.
     var iconRect: CGRect
-    /// The channel's own symbol — `#`, a speaker, a megaphone.
+    /// The channel's own symbol — `#`, a speaker, a megaphone, a thread.
     var symbolName: String
     /// Where the glyph sits inside the tile.
     var glyphRect: CGRect
     var title: TimelineTextBlock
     var titleOrigin: CGPoint
-    var subtitle: TimelineTextBlock
+    /// "This is the start of…" for a channel, "Started by…" for a thread. A
+    /// forum post has none: its title is the whole head.
+    var subtitle: TimelineTextBlock?
     var subtitleOrigin: CGPoint
+    /// A second line where Discord has one: how to bring people into a
+    /// private thread, or that a post's opening message is gone.
+    var note: TimelineTextBlock?
+    var noteOrigin: CGPoint
+    /// A forum post's tags, as chips under its title.
+    var tags: [Tag]
+    /// A person's or a group's picture in the tile's place, round.
+    var avatarURL: URL?
+    var avatarMonogram: String?
+    /// The servers-in-common line of a direct message's head.
+    var mutuals: Mutuals?
+    /// A direct message's controls — Add Friend, Block and their kin.
+    var buttons: [HeadButton]
+    /// A conversation's head is a face in a circle; a channel's a tile.
+    var isRound: Bool
+
+    struct Mutuals: Sendable {
+        var icons: [(mark: DirectMessageHead.MutualMark, rect: CGRect)]
+        var label: TimelineTextBlock
+        var labelOrigin: CGPoint
+        /// The whole line, which opens the servers.
+        var rect: CGRect
+    }
+
+    struct HeadButton: Sendable {
+        var action: HeadAction
+        var rect: CGRect
+        var label: TimelineTextBlock
+        var labelOrigin: CGPoint
+    }
+
+    /// The head's control under a point in the row's own space — an enabled
+    /// button, or the servers-in-common line — and where its plate starts,
+    /// which is how the hover is told which one to lift.
+    func control(at point: CGPoint) -> (action: HeadAction, origin: CGPoint)? {
+        if let button = buttons.first(where: { $0.action.isEnabled && $0.rect.contains(point) }) {
+            return (button.action, button.rect.origin)
+        }
+        if let mutuals, mutuals.rect.contains(point) {
+            return (.mutualServers, mutuals.rect.origin)
+        }
+        return nil
+    }
+
+    struct Tag: Sendable {
+        var rect: CGRect
+        var label: TimelineTextBlock
+        var labelOrigin: CGPoint
+    }
     /// The channel's topic, when it has one. Markdown, because people write it
     /// there — a topic rendered as a plain string shows `<:emoji:id>` and
     /// `**bold**` as literal characters.
@@ -625,6 +887,7 @@ private nonisolated struct MessageContent {
     var poll: PollSlot?
     var activityInvite: ActivityInviteSlot?
     var listenAlong: ListenAlongSlot?
+    var card: DrawnCard?
     var embeds: [EmbedSlot] = []
     var components: [ComponentSlot] = []
     var inviteCards: [InviteCardSlot] = []
@@ -659,6 +922,14 @@ nonisolated struct TimelineLayoutEngine: Sendable {
         var style: MessageTextStyle
         var mentions: MentionContext
         var channelName: String
+        /// Which of Discord's heads the transcript opens with — see
+        /// `ChannelHead`.
+        var head: ChannelHead = .channel
+        /// A forum post's bar, for a transcript that is one — see
+        /// `PostActions`.
+        var postActions: PostActions?
+        /// The forum post's author, whose messages in it are OP.
+        var postOwnerID: UserID?
         /// The channel's own SF Symbol — `#`, a speaker, a megaphone. Resolved
         /// by the caller, because the kind is a store fact and this type is
         /// deliberately unable to reach the store.
@@ -700,6 +971,9 @@ nonisolated struct TimelineLayoutEngine: Sendable {
         /// Whether the reader may manage this channel, which puts Discord's
         /// Edit Channel button under its welcome header.
         var canEditChannel = false
+        /// Whether the reader may manage messages here — Discord's Delete
+        /// User's Message on an AutoMod alert.
+        var canManageMessages = false
         /// The reader's sends whose files are going up, by their echo's id.
         /// Empty for nearly every transcript at nearly every moment.
         var uploads: [MessageID: UploadSummary] = [:]
@@ -729,8 +1003,14 @@ nonisolated struct TimelineLayoutEngine: Sendable {
         var monogram: String
         var decorationURL: URL?
         var isBot: Bool
+        /// The reader blocked or ignored this person, so a reply quoting them
+        /// says "Blocked message" or "Ignored message" — Discord's own.
+        var isBlocked = false
+        var isIgnored = false
         /// A verified app's badge carries a check — `AppBadge`.
         var isVerifiedBot = false
+        /// Discord's own system account, whose messages are OFFICIAL.
+        var isSystem = false
         /// The server tag they wear, beside their name.
         ///
         /// **The same fact the roster and the direct-message list already
@@ -764,6 +1044,9 @@ nonisolated struct TimelineLayoutEngine: Sendable {
         /// and no effect, in every channel, forever — which is the shape of
         /// `INVARIANTS.md`'s "on the wire and read by nothing".
         var nameStyle: DisplayNameStyle?
+        /// Their account's username — the `@name` AutoMod's Activity Alerts
+        /// notice names whoever switched them on by.
+        var username: String?
     }
 
     /// One message's laid-out form, and everything it was laid out against.
@@ -818,6 +1101,10 @@ nonisolated struct TimelineLayoutEngine: Sendable {
         /// Whether a listen-along card was laid out live. Nil on every other
         /// row. A party ending is a shorter card, so it is a relayout.
         var listenAlongLive: Bool?
+        /// Whether an AutoMod alert was laid out for a reader who may delete
+        /// the member's message. Nil on every other row; a permission change
+        /// adds or takes away the bar's last button.
+        var canManageMessages: Bool?
         var message: Message
         var row: MessageRow
 
@@ -831,7 +1118,8 @@ nonisolated struct TimelineLayoutEngine: Sendable {
             isRunTail: Bool?,
             isFailed: Bool,
             hidesMedia: Bool,
-            listenAlongLive: Bool?
+            listenAlongLive: Bool?,
+            canManageMessages: Bool?
         ) -> Bool {
             self.width == width
                 && self.presentationRevision == presentationRevision
@@ -842,6 +1130,7 @@ nonisolated struct TimelineLayoutEngine: Sendable {
                 && self.isFailed == isFailed
                 && self.hidesMedia == hidesMedia
                 && self.listenAlongLive == listenAlongLive
+                && self.canManageMessages == canManageMessages
                 && self.message == message
         }
     }
@@ -939,11 +1228,20 @@ nonisolated struct TimelineLayoutEngine: Sendable {
                     kind: .historyUnavailable(reason: reason)
                 ))
 
+            case .collapsedGroup(let group):
+                let slot = Self.collapsedGroup(group, input: input)
+                rows.append(TimelineRow(
+                    height: ceil(slot.textOrigin.y + slot.text.size.height + TimelineMetrics.runBottomPadding),
+                    kind: .collapsedGroup(slot)
+                ))
+
             case .message(let message):
                 used.insert(message.message.id)
                 let isFailed = message.flags.contains(.failed)
                 let listenAlongLive = message.message.listenAlong.map { input.listenAlongLive.contains($0.partyID) }
                 let isRunTail = input.arrangement == .columns ? nil : message.isRunTail
+                let autoMod = AutoModMessage(message.message)
+                let canManageMessages = autoMod == nil ? nil : input.canManageMessages
                 if let cached = cache[message.message.id],
                    cached.matches(
                        message.message,
@@ -955,18 +1253,25 @@ nonisolated struct TimelineLayoutEngine: Sendable {
                        isRunTail: isRunTail,
                        isFailed: isFailed,
                        hidesMedia: input.hidesMedia,
-                       listenAlongLive: listenAlongLive
+                       listenAlongLive: listenAlongLive,
+                       canManageMessages: canManageMessages
                    )
                 {
                     // Painted, so carried over rather than keyed on.
                     var row = cached.row
                     row.isPending = message.flags.contains(.pending)
+                    row.isInOpenFold = message.flags.contains(.inOpenGroup)
                     rows.append(TimelineRow(height: rowHeight(of: row), kind: .message(row)))
                     continue
                 }
-                let row = message.message.isSystemEvent
-                    ? buildSystemMessage(message, input: input)
-                    : buildMessage(message, input: input, parser: parser)
+                var row = if let autoMod {
+                    Self.autoModRow(message, autoMod, input: input, parser: parser)
+                } else if message.message.isSystemEvent {
+                    buildSystemMessage(message, input: input)
+                } else {
+                    buildMessage(message, input: input, parser: parser)
+                }
+                row.isInOpenFold = message.flags.contains(.inOpenGroup)
                 cache[message.message.id] = CacheEntry(
                     width: width,
                     presentationRevision: presentationRevision,
@@ -978,6 +1283,7 @@ nonisolated struct TimelineLayoutEngine: Sendable {
                     isFailed: isFailed,
                     hidesMedia: input.hidesMedia,
                     listenAlongLive: listenAlongLive,
+                    canManageMessages: canManageMessages,
                     message: message.message,
                     row: row
                 )
@@ -990,6 +1296,20 @@ nonisolated struct TimelineLayoutEngine: Sendable {
         // leak with a polite name.
         if cache.count > used.count + Self.cacheSlack {
             cache = cache.filter { used.contains($0.key) }
+        }
+
+        // A forum post's bar goes under its opening message — Discord's
+        // `FORUM_POST_ACTION_BAR` stream item — or under the post's head where
+        // the opening message is gone.
+        if let actions = input.postActions {
+            let anchor = rows.firstIndex { $0.messageID?.rawValue == actions.openerID.rawValue }
+                ?? (actions.openerDeleted
+                    ? rows.firstIndex { if case .conversationStart = $0.kind { true } else { false } }
+                    : nil)
+            if let anchor {
+                let slot = Self.postActions(actions, input: input)
+                rows.insert(TimelineRow(height: slot.height, kind: .postActions(slot.slot)), at: anchor + 1)
+            }
         }
 
         return rows
@@ -1041,6 +1361,7 @@ nonisolated struct TimelineLayoutEngine: Sendable {
         for slot in row.reactionControls { bottom = max(bottom, slot.rect.maxY) }
         if let chip = row.threadChip { bottom = max(bottom, chip.rect.maxY) }
         if let note = row.ephemeralNote { bottom = max(bottom, note.rect.maxY) }
+        if let card = row.card { bottom = max(bottom, card.rect.maxY) }
         return ceil(bottom + TimelineMetrics.runBottomPadding)
     }
 
@@ -1080,6 +1401,17 @@ nonisolated struct TimelineLayoutEngine: Sendable {
         let contentX = lane.minX
         let contentWidth = lane.width
         let hasAuthorLine = item.isRunHead && namesAuthor
+        // Discord's tag beside the name, decided by the message — see
+        // `AuthorTag`. Only where there is a name to put it beside.
+        let authorTag = hasAuthorLine
+            ? AuthorTag.resolve(
+                message: message,
+                isSystem: author?.isSystem ?? false,
+                isBot: author?.isBot ?? false,
+                isVerifiedBot: author?.isVerifiedBot ?? false,
+                postOwnerID: input.postOwnerID
+            )
+            : nil
 
         /// Lays out a piece whose width is known only once it is laid out —
         /// and, on a trailing lane, once more against the trailing edge. Every
@@ -1107,7 +1439,9 @@ nonisolated struct TimelineLayoutEngine: Sendable {
         // In bubbles there is no gutter to rise out of: the line sits over the
         // bubble on its side, and has no elbow.
         var replyHeader: ReplyHeaderSlot?
-        if let reference = message.reference {
+        // A crosspost's reference is where it was published, not a message it
+        // answers — Discord draws no quote over it.
+        if let reference = message.reference, !message.isCrosspost {
             let quoted = reference.authorID.flatMap { input.authors[$0] }
             let slot = bubbleSide == nil
                 ? Self.layoutReplyHeader(
@@ -1179,7 +1513,7 @@ nonisolated struct TimelineLayoutEngine: Sendable {
             // `MemberRowGeometry.tagChipWidth`, which both the reservation and
             // the draw call so the padding cannot end up pooled on one side.
             var afterName = authorRect.maxX
-                + (author?.isBot == true ? AppBadge.width(isVerified: author?.isVerifiedBot == true) + 4 : 0)
+                + (authorTag.map { AuthorTagChip.width($0) + 4 } ?? 0)
             if let tag = author?.tag {
                 let width = MemberRowGeometry.tagChipWidth(
                     textWidth: Self.measure(tag, font: MemberRowGeometry.tagChipFont),
@@ -1420,6 +1754,21 @@ nonisolated struct TimelineLayoutEngine: Sendable {
                 y = slot.rect.maxY
             }
 
+            // A safety notice in Discord's system DM — the message's one embed,
+            // drawn as Discord's own card rather than as an embed's.
+            if let notice = SafetyNotice(message) {
+                y += gap
+                let card = Self.safetyCard(
+                    notice,
+                    origin: CGPoint(x: cardX, y: y),
+                    width: cardWidth,
+                    style: input.style
+                )
+                content.card = card
+                holds(card.rect)
+                y = card.rect.maxY
+            }
+
             // Embeds. A link unfurl, a bot's status card, a release note — all
             // the same object with different subsets populated, which is why
             // the layout branches on what is present rather than on the `kind`
@@ -1470,7 +1819,8 @@ nonisolated struct TimelineLayoutEngine: Sendable {
                     style: input.style,
                     mentions: input.mentions,
                     parser: parser,
-                    spotify: Self.spotifyCard(for: embed, in: input)
+                    spotify: Self.spotifyCard(for: embed, in: input),
+                    footerStamp: embed.timestamp.map { input.settings.timestampLabel($0, calendar: input.calendar) }
                 )
                 content.embeds.append(slot)
                 holds(slot.rect)
@@ -1742,8 +2092,8 @@ nonisolated struct TimelineLayoutEngine: Sendable {
                 : "",
             timestampRect: timestampRect,
             gutterTimestampText: input.settings.time(message.sentAt),
-            isBot: author?.isBot ?? false,
-            isVerifiedBot: author?.isVerifiedBot ?? false,
+            authorTag: authorTag,
+            isCrosspost: message.isCrosspost,
             tag: hasAuthorLine ? author?.tag : nil,
             tagBadgeURL: hasAuthorLine ? author?.tagBadgeURL : nil,
             tagRect: tagRect,
@@ -1766,6 +2116,7 @@ nonisolated struct TimelineLayoutEngine: Sendable {
             userCards: content.userCards,
             reactions: reactions,
             reactionControls: reactionControls,
+            card: content.card,
             threadChip: chip.slot,
             bubbles: bubbleRow,
             accessibilityLabel: Self.accessibilityLabel(
@@ -1780,6 +2131,58 @@ nonisolated struct TimelineLayoutEngine: Sendable {
                 reactions: message.reactions,
                 muted: input.settings.mutedSpokenDetails
             )
+        )
+    }
+
+    /// A fold's line, laid out on a system message's frame: the same top, the
+    /// same text column, the glyph in the same place before it.
+    private static func collapsedGroup(_ group: CollapsedGroup, input: Input) -> CollapsedGroupSlot {
+        let style = input.style
+        let sentence = CollapsedGroupSlot.sentence(for: group)
+        let lead = group.canOpen ? sentence + " \u{2014} " : sentence
+        let text = MessageText.plain(NSAttributedString(string: lead, attributes: [
+            .font: style.bodyFont,
+            // Discord's `blockedMessageText` reads in the default ink; a fold
+            // with no Show in the muted one, `blockedMessageTextMuted`.
+            .foregroundColor: group.canOpen ? style.primaryColor : style.secondaryColor,
+        ]))
+        let x = TimelineMetrics.contentInset
+        let y = input.settings.runSpacing
+        let block = TimelineTextBlock(
+            text: text,
+            width: max(80, input.width - x - TimelineMetrics.horizontalMargin),
+            style: style,
+            hugsText: true
+        )
+        var action: CollapsedGroupSlot.Action?
+        if group.canOpen {
+            let word = group.isOpen ? "Hide" : "Show"
+            func laid(_ color: NSColor) -> TimelineTextBlock {
+                TimelineTextBlock(
+                    text: .plain(NSAttributedString(string: word, attributes: [
+                        .font: style.bodyFont,
+                        .foregroundColor: color,
+                    ])),
+                    width: max(40, input.width - x - block.size.width - TimelineMetrics.horizontalMargin),
+                    style: style,
+                    hugsText: true
+                )
+            }
+            let quiet = laid(style.tertiaryColor)
+            action = CollapsedGroupSlot.Action(
+                word: word,
+                rect: CGRect(origin: CGPoint(x: x + block.size.width, y: y), size: quiet.size),
+                quiet: quiet,
+                lit: laid(style.linkColor)
+            )
+        }
+        return CollapsedGroupSlot(
+            group: group,
+            symbolName: CollapsedGroupSlot.symbolName(for: group.reason),
+            text: block,
+            textOrigin: CGPoint(x: x, y: y),
+            action: action,
+            accessibilityLabel: action.map { "\(sentence), \($0.word)" } ?? sentence
         )
     }
 
@@ -1876,7 +2279,6 @@ nonisolated struct TimelineLayoutEngine: Sendable {
             timestampText: "",
             timestampRect: .zero,
             gutterTimestampText: "",
-            isBot: false,
             textBlock: block,
             textOrigin: CGPoint(x: contentX, y: y),
             attachments: [],
@@ -2014,6 +2416,10 @@ nonisolated struct TimelineLayoutEngine: Sendable {
         let quote: String
         if isUnavailable {
             quote = "Original message was deleted"
+        } else if author?.isBlocked == true {
+            quote = "Blocked message"
+        } else if author?.isIgnored == true {
+            quote = "Ignored message"
         } else if !reference.excerpt.isEmpty {
             quote = reference.excerpt
         } else if reference.hasAttachment {
@@ -2111,7 +2517,7 @@ nonisolated struct TimelineLayoutEngine: Sendable {
         )
     }
 
-    private static func layoutReactions(
+    static func layoutReactions(
         _ reactions: [Reaction],
         contentX: CGFloat,
         y startY: CGFloat,
@@ -2296,6 +2702,15 @@ nonisolated struct TimelineLayoutEngine: Sendable {
         if let invite = message.listenAlong {
             parts.append("Invite to Listen Along on \(invite.name).")
         }
+        switch SafetyNotice(message) {
+        case .policy(_, let incident):
+            parts.append("You broke Discord's community guidelines. \(SafetyNotice.daysAgo(since: incident)). "
+                + "We've taken action that affects your account.")
+        case .system(let system):
+            parts.append("\(system.header). \(SafetyNotice.daysAgo(since: system.date)). \(system.body)")
+        case nil:
+            break
+        }
         if let poll = message.poll {
             parts.append("Poll. \(poll.question)")
             for answer in poll.answers {
@@ -2385,7 +2800,8 @@ nonisolated struct TimelineLayoutEngine: Sendable {
                     style: style,
                     mentions: input.mentions,
                     parser: parser,
-                    spotify: Self.spotifyCard(for: embed, in: input)
+                    spotify: Self.spotifyCard(for: embed, in: input),
+                    footerStamp: embed.timestamp.map { input.settings.timestampLabel($0, calendar: input.calendar) }
                 )
                 embeds.append(slot)
                 y = slot.rect.maxY
@@ -2437,6 +2853,77 @@ nonisolated struct TimelineLayoutEngine: Sendable {
         )
     }
 
+    // MARK: A forum post's bar
+
+    /// Discord's bar under a post's opening message (`rg`): React to Post while
+    /// it has no reactions, Follow or Following, and Copy Link — a bare link
+    /// glyph, then a tick and "Copied".
+    private static func postActions(
+        _ actions: PostActions,
+        input: Input
+    ) -> (slot: PostActionsSlot, height: CGFloat) {
+        let style = input.style
+        let font = NSFont.systemFont(ofSize: style.metadataFont.pointSize + 1, weight: .medium)
+        let glyphSide = TimelineMetrics.componentGlyphSide
+        let padding = TimelineMetrics.componentPadding
+        let height = TimelineMetrics.componentHeight
+        let gap = TimelineMetrics.conversationStartLineGap + 2
+        let top: CGFloat = TimelineMetrics.conversationStartLineGap
+        var x = TimelineMetrics.contentInset
+        var buttons: [PostActionsSlot.Button] = []
+
+        func add(_ action: PostActionsSlot.Action, symbol: String, title: String?, lit: Bool, spoken: String) {
+            let label = title.map { words in
+                TimelineTextBlock(
+                    text: .plain(NSAttributedString(
+                        string: words,
+                        attributes: [.font: font, .foregroundColor: lit ? style.linkColor : style.primaryColor]
+                    )),
+                    width: Self.measure(words, font: font) + 2,
+                    style: style
+                )
+            }
+            let width = label.map { padding + glyphSide + TimelineMetrics.componentGlyphGap + $0.size.width + padding }
+                ?? height
+            let rect = CGRect(x: x, y: top, width: width, height: height)
+            let glyphX = label == nil ? rect.midX - glyphSide / 2 : rect.minX + padding
+            buttons.append(.init(
+                action: action,
+                rect: rect,
+                symbolName: symbol,
+                glyphRect: CGRect(x: glyphX, y: rect.midY - glyphSide / 2, width: glyphSide, height: glyphSide),
+                label: label,
+                labelOrigin: CGPoint(
+                    x: rect.minX + padding + glyphSide + TimelineMetrics.componentGlyphGap,
+                    y: rect.midY - (label?.size.height ?? 0) / 2
+                ),
+                isLit: lit,
+                accessibilityLabel: spoken
+            ))
+            x = rect.maxX + gap
+        }
+
+        if actions.offersReaction {
+            add(.react, symbol: "face.smiling", title: "React to Post", lit: false, spoken: "React to Post")
+        }
+        if actions.offersFollow {
+            add(
+                .follow,
+                symbol: actions.isFollowing ? "checkmark" : "bell",
+                title: actions.isFollowing ? "Following" : "Follow",
+                lit: false,
+                spoken: actions.isFollowing ? "Following" : "Follow"
+            )
+        }
+        if actions.isLinkCopied {
+            add(.copyLink, symbol: "checkmark", title: "Copied", lit: true, spoken: "Copied")
+        } else {
+            add(.copyLink, symbol: "link", title: nil, lit: false, spoken: "Copy Link")
+        }
+
+        return (PostActionsSlot(buttons: buttons), top + height + TimelineMetrics.runBottomPadding)
+    }
+
     // MARK: The head of a channel
 
     /// Lays out the welcome block at the top of a channel.
@@ -2447,7 +2934,15 @@ nonisolated struct TimelineLayoutEngine: Sendable {
     ) -> (slot: ConversationStartSlot, height: CGFloat) {
         let style = input.style
         let margin = TimelineMetrics.horizontalMargin
-        let side = TimelineMetrics.conversationStartIconSide
+        // A conversation with people opens on a face, at Discord's 80; a
+        // channel on its tile.
+        let avatar: (url: URL?, monogram: String?)? = switch input.head {
+        case .directMessage(let head): (head.avatarURL, head.monogram)
+        case .groupDirectMessage(let iconURL): (iconURL, nil)
+        case .systemDirectMessage(let avatarURL): (avatarURL, nil)
+        case .channel, .thread, .post: nil
+        }
+        let side = avatar == nil ? TimelineMetrics.conversationStartIconSide : 80
         let available = max(80, width - margin * 2)
 
         var y = TimelineMetrics.conversationStartTopPadding
@@ -2465,10 +2960,15 @@ nonisolated struct TimelineLayoutEngine: Sendable {
         // so it goes through the same run builder the body does rather than
         // through a bare `drawText`, which would draw a custom one as literal
         // angle brackets.
+        let titleText: String = switch input.head {
+        // Discord's own words, exclamation and all.
+        case .channel: "Welcome to #\(input.channelName)!"
+        // A thread's head is its name, and a conversation's its people's.
+        case .thread, .post, .directMessage, .groupDirectMessage, .systemDirectMessage: input.channelName
+        }
         let title = TimelineTextBlock(
             text: .plain(NSAttributedString(
-                // Discord's own words, exclamation and all.
-                string: "Welcome to #\(input.channelName)!",
+                string: titleText,
                 attributes: [
                     .font: NSFont.systemFont(
                         ofSize: style.bodyFont.pointSize * 1.65, weight: .bold
@@ -2480,25 +2980,198 @@ nonisolated struct TimelineLayoutEngine: Sendable {
             style: style
         )
         let titleOrigin = CGPoint(x: margin, y: y)
-        y += title.size.height + TimelineMetrics.conversationStartLineGap
+        y += title.size.height
 
-        let subtitle = TimelineTextBlock(
-            text: .plain(NSAttributedString(
-                string: "This is the start of the #\(input.channelName) channel.",
+        func line(_ string: NSAttributedString) -> (TimelineTextBlock, CGPoint) {
+            y += TimelineMetrics.conversationStartLineGap
+            let block = TimelineTextBlock(text: .plain(string), width: available, style: style)
+            let origin = CGPoint(x: margin, y: y)
+            y += block.size.height
+            return (block, origin)
+        }
+        func plain(_ string: String, color: NSColor) -> NSAttributedString {
+            NSAttributedString(string: string, attributes: [.font: style.bodyFont, .foregroundColor: color])
+        }
+        /// Discord's sentences with a name in bold (`$b`) between two runs.
+        func emphasised(_ before: String, _ name: String, _ after: String) -> NSAttributedString {
+            let text = NSMutableAttributedString(attributedString: plain(before, color: style.secondaryColor))
+            text.append(NSAttributedString(
+                string: name,
                 attributes: [
-                    .font: style.bodyFont,
-                    .foregroundColor: style.secondaryColor,
+                    .font: NSFont.systemFont(ofSize: style.bodyFont.pointSize, weight: .semibold),
+                    .foregroundColor: style.primaryColor,
                 ]
-            )),
-            width: available,
-            style: style
-        )
-        let subtitleOrigin = CGPoint(x: margin, y: y)
-        y += subtitle.size.height
+            ))
+            text.append(plain(after, color: style.secondaryColor))
+            return text
+        }
+
+        var subtitle: TimelineTextBlock?
+        var subtitleOrigin = CGPoint.zero
+        var note: TimelineTextBlock?
+        var noteOrigin = CGPoint.zero
+        switch input.head {
+        case .channel:
+            (subtitle, subtitleOrigin) = line(plain(
+                "This is the start of the #\(input.channelName) channel.", color: style.secondaryColor
+            ))
+        case .thread(let startedBy, let isPrivate):
+            // Discord's `imPXd5`, the author's name in the reader's ink.
+            let started = NSMutableAttributedString(attributedString: plain("Started by ", color: style.secondaryColor))
+            started.append(NSAttributedString(
+                string: startedBy ?? "???",
+                attributes: [
+                    .font: NSFont.systemFont(ofSize: style.bodyFont.pointSize, weight: .semibold),
+                    .foregroundColor: style.primaryColor,
+                ]
+            ))
+            (subtitle, subtitleOrigin) = line(started)
+            if isPrivate {
+                (note, noteOrigin) = line(plain(
+                    "@mention users to add them to this private thread.", color: style.secondaryColor
+                ))
+            }
+        case .post(_, let openerDeleted):
+            if openerDeleted {
+                (note, noteOrigin) = line(plain("Original message was deleted", color: style.secondaryColor))
+            }
+        case .directMessage(let head):
+            if let username = head.username {
+                (subtitle, subtitleOrigin) = line(NSAttributedString(
+                    string: username,
+                    attributes: [
+                        .font: NSFont.systemFont(ofSize: style.bodyFont.pointSize * 1.25, weight: .medium),
+                        .foregroundColor: style.primaryColor,
+                    ]
+                ))
+            }
+            // Discord's `Qvg+6+`, and an incoming request's `uIomXw` under it.
+            let sentence = NSMutableAttributedString(attributedString: emphasised(
+                "This is the beginning of your direct message history with ", input.channelName, "."
+            ))
+            if let requester = head.incomingRequestFrom {
+                sentence.append(plain("\n", color: style.secondaryColor))
+                sentence.append(emphasised("", requester, " sent you a friend request."))
+            }
+            (note, noteOrigin) = line(sentence)
+        case .groupDirectMessage:
+            (subtitle, subtitleOrigin) = line(emphasised(
+                "Welcome to the beginning of the ", input.channelName, " group."
+            ))
+        case .systemDirectMessage:
+            (subtitle, subtitleOrigin) = line(plain(
+                "This is an official message from Team Discord. Please be advised that Discord will "
+                    + "never ask you for your password or account token.",
+                color: style.secondaryColor
+            ))
+        }
+
+        // The servers in common and the controls, under a person's head.
+        var mutuals: ConversationStartSlot.Mutuals?
+        var buttons: [ConversationStartSlot.HeadButton] = []
+        if case .directMessage(let head) = input.head {
+            y += TimelineMetrics.conversationStartButtonGap
+            let iconSide: CGFloat = 20
+            var x = margin
+            var icons: [(mark: DirectMessageHead.MutualMark, rect: CGRect)] = []
+            for mark in head.mutualIcons.prefix(3) {
+                icons.append((mark, CGRect(x: x, y: y, width: iconSide, height: iconSide)))
+                x += iconSide - 4
+            }
+            if !icons.isEmpty { x += 4 + TimelineMetrics.conversationStartLineGap }
+            let words = head.mutualCount == 0
+                ? "No servers in common"
+                : head.mutualCount == 1 ? "1 Mutual Server" : "\(head.mutualCount) Mutual Servers"
+            let label = TimelineTextBlock(
+                text: .plain(NSAttributedString(
+                    string: words,
+                    attributes: [.font: style.bodyFont, .foregroundColor: style.secondaryColor]
+                )),
+                width: Self.measure(words, font: style.bodyFont) + 2,
+                style: style
+            )
+            let labelOrigin = CGPoint(x: x, y: y + (iconSide - label.size.height) / 2)
+            mutuals = .init(
+                icons: icons,
+                label: label,
+                labelOrigin: labelOrigin,
+                rect: CGRect(x: margin, y: y, width: labelOrigin.x + label.size.width - margin, height: iconSide)
+            )
+            y += iconSide
+        }
+
+        let actions = input.head.actions
+        if !actions.isEmpty {
+            y += TimelineMetrics.conversationStartButtonGap
+            let font = NSFont.systemFont(ofSize: style.bodyFont.pointSize, weight: .medium)
+            let padding = TimelineMetrics.componentPadding
+            let height = TimelineMetrics.componentHeight + 4
+            var bx = margin
+            for action in actions {
+                let label = TimelineTextBlock(
+                    text: .plain(NSAttributedString(
+                        string: action.title,
+                        attributes: [
+                            .font: font,
+                            .foregroundColor: action.isProminent || action.isCritical ? NSColor.white : style.primaryColor,
+                        ]
+                    )),
+                    width: Self.measure(action.title, font: font) + 2,
+                    style: style
+                )
+                let rect = CGRect(x: bx, y: y, width: label.size.width + padding * 2, height: height)
+                buttons.append(.init(
+                    action: action,
+                    rect: rect,
+                    label: label,
+                    labelOrigin: CGPoint(x: rect.minX + padding, y: rect.midY - label.size.height / 2)
+                ))
+                bx = rect.maxX + TimelineMetrics.conversationStartLineGap + 2
+            }
+            y += height
+        }
+
+        // A post's tags, as Discord's `iJ` row wraps them under the title.
+        var tags: [ConversationStartSlot.Tag] = []
+        if case .post(let postTags, _) = input.head, !postTags.isEmpty {
+            y += TimelineMetrics.conversationStartLineGap * 2
+            let font = NSFont.systemFont(ofSize: style.metadataFont.pointSize, weight: .medium)
+            let padding = TimelineMetrics.componentPadding
+            let height = TimelineMetrics.componentHeight - 4
+            let gap = TimelineMetrics.conversationStartLineGap
+            var x = margin
+            for tag in postTags {
+                let words = [tag.emoji.flatMap { $0.id == nil ? $0.name : nil }, tag.name]
+                    .compactMap(\.self)
+                    .joined(separator: " ")
+                let label = TimelineTextBlock(
+                    text: .plain(NSAttributedString(
+                        string: words,
+                        attributes: [.font: font, .foregroundColor: style.secondaryColor]
+                    )),
+                    width: Self.measure(words, font: font) + 2,
+                    style: style
+                )
+                let width = min(available, label.size.width + padding * 2)
+                if x > margin, x + width > margin + available {
+                    x = margin
+                    y += height + gap
+                }
+                let rect = CGRect(x: x, y: y, width: width, height: height)
+                tags.append(.init(
+                    rect: rect,
+                    label: label,
+                    labelOrigin: CGPoint(x: rect.minX + padding, y: rect.midY - label.size.height / 2)
+                ))
+                x = rect.maxX + gap
+            }
+            y += height
+        }
 
         var topic: TimelineTextBlock?
         var topicOrigin = CGPoint.zero
-        if let text = input.channelTopic?.trimmingCharacters(in: .whitespacesAndNewlines),
+        if case .channel = input.head,
+           let text = input.channelTopic?.trimmingCharacters(in: .whitespacesAndNewlines),
            !text.isEmpty
         {
             y += TimelineMetrics.conversationStartLineGap
@@ -2524,8 +3197,9 @@ nonisolated struct TimelineLayoutEngine: Sendable {
 
         // Discord's Edit Channel, under the welcome, for a reader who may
         // manage the channel: a pencil and the words on the row's quiet plate.
+        // A thread's head has none — its edit is the thread's own menu.
         var editButton: ConversationStartSlot.EditButton?
-        if input.canEditChannel {
+        if input.canEditChannel, case .channel = input.head {
             y += TimelineMetrics.conversationStartButtonGap
             let font = NSFont.systemFont(ofSize: style.bodyFont.pointSize, weight: .medium)
             let label = TimelineTextBlock(
@@ -2566,6 +3240,14 @@ nonisolated struct TimelineLayoutEngine: Sendable {
                 titleOrigin: titleOrigin,
                 subtitle: subtitle,
                 subtitleOrigin: subtitleOrigin,
+                note: note,
+                noteOrigin: noteOrigin,
+                tags: tags,
+                avatarURL: avatar?.url,
+                avatarMonogram: avatar?.monogram,
+                mutuals: mutuals,
+                buttons: buttons,
+                isRound: avatar != nil,
                 topic: topic,
                 topicOrigin: topicOrigin,
                 editButton: editButton

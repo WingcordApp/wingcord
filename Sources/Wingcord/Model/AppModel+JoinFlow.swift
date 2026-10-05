@@ -27,7 +27,10 @@ extension AppModel {
     /// `member.pending` is Discord's own bit for "has not agreed yet", and it is
     /// what gates the step.
     func joinGateHasRules(inGuild guildID: GuildID) -> Bool {
-        memberVerifications[guildID]?.canSubmit == true && isPendingMember(inGuild: guildID)
+        guard let form = memberVerifications[guildID] else { return false }
+        // A form that also asks questions is answered whole, in the
+        // application — an agreement sent alone is a form the server refuses.
+        return form.canSubmit && !form.asksQuestions && isPendingMember(inGuild: guildID)
     }
 
     /// The steps this server actually has, computed rather than assumed.
@@ -97,7 +100,7 @@ extension AppModel {
     /// a two-hundred-point hole beside a full-width page. The rail stays in
     /// both, deliberately: stepping away to another server and coming back is
     /// the point of these being destinations rather than modals.
-    var isColumnTakenOver: Bool { isJoinGateShown || isDiscoveryShown }
+    var isColumnTakenOver: Bool { isJoinGateShown || isDiscoveryShown || isJoinRequestShown }
 
     /// Offers the gate for a server the reader has opened.
     ///
@@ -108,6 +111,7 @@ extension AppModel {
     /// that fill asynchronously, so this is called again as they land rather
     /// than once on selection.
     func offerJoinGateIfNeeded(_ guildID: GuildID) {
+        if offerJoinApplicationIfNeeded(guildID) { return }
         guard joinGate == nil,
               // **The server on screen, not merely the one that answered.**
               // These loaders finish on their own schedule, and stepping through
@@ -125,6 +129,23 @@ extension AppModel {
         else { return }
         joinGate = ServerJoinGate(guildID: guildID)
         seedJoinGateSelection()
+    }
+
+    /// Puts the application in front of a pending member whose server's form
+    /// asks questions — Discord opens its form wherever `V(guildId)` holds:
+    /// pending, in a server with the gate on. Once a session, like the gate,
+    /// and never over an application already waiting on a moderator.
+    private func offerJoinApplicationIfNeeded(_ guildID: GuildID) -> Bool {
+        guard selectedGuildID == guildID,
+              joinApplicationRequest == nil,
+              !dismissedJoinGates.contains(guildID),
+              !pendingJoinRequestGuildIDs.contains(guildID),
+              isPendingMember(inGuild: guildID),
+              memberVerifications[guildID]?.asksQuestions == true
+        else { return false }
+        dismissedJoinGates.insert(guildID)
+        openJoinApplication(guildID)
+        return true
     }
 
     /// Whether there is anything here the reader has not already been through.
@@ -396,6 +417,15 @@ extension AppModel {
 
 // MARK: - Getting into a server you are looking at from the outside
 
+/// One server's application form, asked for.
+struct JoinApplicationRequest: Identifiable, Hashable {
+    var guildID: GuildID
+    /// The invite it was reached through, which the form's route takes.
+    var inviteCode: String?
+
+    var id: GuildID { guildID }
+}
+
 extension AppModel {
 
     /// The tag card's button: a look inside the server, or its application.
@@ -407,26 +437,50 @@ extension AppModel {
     func enterGuild(_ guildID: GuildID) {
         guard guilds[guildID] == nil else { return openGuild(guildID) }
         switch guildEntry(for: guildID, profile: guildProfiles[guildID], isJoined: false) {
-        case .apply: openJoinGate(guildID)
+        // **The application, not the gate.** The gate is drawn in the detail
+        // column of a server the reader is in, and this reader is not in it —
+        // which is why Apply to Join used to do nothing at all.
+        case .apply: openJoinApplication(guildID)
         case .join: previewFromGuildProfile(guildID)
         case .none, .pending: break
         }
     }
 
-    /// Takes an application back.
+    /// Puts a server's application form on screen — Discord's
+    /// `openMemberVerificationModal(guildId, _, inviteKey)`.
     ///
-    /// **The confirmation is the caller's.** Discord asks "Are you sure?" and
-    /// so should whatever draws the control; this is the act, and it is one
-    /// route.
-    func withdrawJoinRequest(inGuild guildID: GuildID) {
-        joinRequestGuilds.removeAll { $0.id == guildID }
-        sessionController.writeWithdrawJoinRequest(guildID)
+    /// The card or menu it was asked from closes first: the form is a sheet,
+    /// and a popover left standing over it would be the thing with focus.
+    func openJoinApplication(_ guildID: GuildID, inviteCode: String? = nil) {
+        expressionInfoRequest = nil
+        profileRequest = nil
+        joinApplicationRequest = JoinApplicationRequest(guildID: guildID, inviteCode: inviteCode)
     }
 
-    /// Replaces the outstanding-application list with what the route answered.
-    func applyJoinRequestGuilds(_ guilds: [JoinRequestGuild]) {
-        guard joinRequestGuilds != guilds else { return }
-        joinRequestGuilds = guilds
-        railRevision &+= 1
+    /// The server card at the head of its application form.
+    ///
+    /// **The tag card's own presentation where the reader has one**, which is
+    /// Discord's choice too — its form shows the server's profile card when it
+    /// is known. Somebody who arrived by invite has no profile yet, and the
+    /// form's own `with_guild` answer names the server instead.
+    func joinApplicationCard(
+        for guildID: GuildID,
+        outsider: JoinApplicationGuild?
+    ) -> GuildProfilePresentation {
+        var card = guildProfilePresentation(of: guildID, tag: nil)
+        card.entry = .none
+        guard guildProfiles[guildID] == nil, guilds[guildID] == nil, let outsider else { return card }
+        card.name = outsider.name
+        card.monogram = AppModel.monogram(of: outsider.name)
+        card.iconURL = outsider.iconHash.flatMap {
+            CDN.guildIcon(guildID: guildID, hash: $0, side: Metrics.avatarProfile)
+        }
+        card.description = outsider.description
+        card.memberCount = outsider.memberCount
+        card.onlineCount = outsider.onlineCount
+        card.bannerColor = outsider.iconHash.flatMap {
+            GuildBannerArt.paletteURL(guildID: guildID, iconHash: $0).flatMap { derivedPalettes[$0]?.first }
+        }
+        return card
     }
 }

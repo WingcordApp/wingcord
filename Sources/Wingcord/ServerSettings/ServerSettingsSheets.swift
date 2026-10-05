@@ -17,52 +17,30 @@ import WingcordCore
 /// The chrome every sheet here wears.
 struct SheetFrame<Content: View>: View {
     var title: String
+    /// Discord's line under the title, where the modal has one.
+    var subtitle: String?
     var confirmTitle: String
     /// Whether the confirm button can be pressed. A sheet that accepts an empty
     /// name and answers a 400 is a sheet that made the reader do the validating.
     var canConfirm: Bool
+    var isDestructive = false
     var confirm: () -> Void
     @ViewBuilder var content: Content
 
-    @Environment(\.dismiss) private var dismiss
-
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            Text(title)
-                .font(.system(.headline))
-                .foregroundStyle(Ink.primary)
-                .padding(.horizontal, Spacing.margin)
-                .padding(.top, Spacing.margin)
-                .padding(.bottom, Spacing.snug)
-
-            ScrollView {
-                VStack(alignment: .leading, spacing: Spacing.snug) {
-                    content
-                }
-                .padding(.horizontal, Spacing.margin)
-                .padding(.bottom, Spacing.margin)
-            }
-            .scrollBounceBehavior(.basedOnSize)
-
-            Divider()
-
-            HStack(spacing: Spacing.base) {
-                Spacer()
-                Button("Cancel", role: .cancel) { dismiss() }
-                    .buttonStyle(.glass)
-                    .keyboardShortcut(.cancelAction)
-                Button(confirmTitle) {
-                    confirm()
-                    dismiss()
-                }
-                .buttonStyle(.glassProminent)
-                .keyboardShortcut(.defaultAction)
-                .disabled(!canConfirm)
-            }
-            .padding(Spacing.margin)
+        // The window's one form sheet; the store finishes the write, so the
+        // sheet closes on the press.
+        FormSheet(
+            title: title,
+            subtitle: subtitle.map { Text(verbatim: $0) },
+            confirmTitle: confirmTitle,
+            isDestructive: isDestructive,
+            canConfirm: canConfirm,
+            closesOnConfirm: true,
+            confirm: confirm
+        ) {
+            content
         }
-        .frame(width: 420)
-        .background(Palette.surface)
     }
 }
 
@@ -116,7 +94,7 @@ struct RenameSheet: View {
     var body: some View {
         SheetFrame(
             title: title,
-            confirmTitle: "Rename",
+            confirmTitle: "Save",
             canConfirm: !draft.trimmingCharacters(in: .whitespaces).isEmpty && draft != name
         ) {
             commit(draft.trimmingCharacters(in: .whitespaces))
@@ -158,8 +136,8 @@ struct StickerSheet: View {
 
     var body: some View {
         SheetFrame(
-            title: isNew ? "Upload a sticker" : "Edit sticker",
-            confirmTitle: isNew ? "Upload" : "Save",
+            title: existing?.name ?? "Upload a file",
+            confirmTitle: isNew ? "Upload" : "Update",
             canConfirm: canConfirm
         ) {
             commit(draft)
@@ -167,16 +145,15 @@ struct StickerSheet: View {
             if isNew {
                 SheetField(
                     title: "File",
-                    detail: "PNG, APNG or GIF, up to 512 KB.",
                     isRequired: true
                 ) {
                     HStack {
-                        Text(draft.file?.filename ?? "No file chosen")
+                        Text(draft.file?.filename ?? "Choose a file")
                             .font(SettingsType.rowLabel)
                             .foregroundStyle(draft.file == nil ? Ink.tertiary : Ink.primary)
                             .lineLimit(1)
                         Spacer()
-                        Button("Browse…") {
+                        Button("Browse") {
                             draft.file = ExpressionUpload.pickFile(types: [.png, .gif])
                             if draft.name.isEmpty, let file = draft.file {
                                 draft.name = ExpressionUpload.sanitised(
@@ -190,25 +167,31 @@ struct StickerSheet: View {
                 }
             }
 
-            SheetField(
-                title: "Related emoji",
-                detail: "The emoji people can type to suggest this sticker. "
-                    + "Paste the emoji itself, not its name.",
-                isRequired: true
-            ) {
-                TextField("💯", text: $draft.relatedEmoji)
-                    .textFieldStyle(.roundedBorder)
-            }
-
-            SheetField(title: "Name", isRequired: true) {
+            SheetField(title: "Sticker Name", isRequired: true) {
                 TextField("ex: cat hug", text: $draft.name)
                     .textFieldStyle(.roundedBorder)
             }
 
+            // The picker, not a text field: a sticker's related emoji is a
+            // Unicode glyph, which this kept refusing to be typed into.
+            SheetField(title: "Related Emoji", isRequired: true) {
+                EmojiSlotButton(
+                    emoji: Binding(
+                        get: { draft.relatedEmoji.isEmpty ? nil : EmojiRef(name: draft.relatedEmoji) },
+                        set: { picked in
+                            guard let picked else { draft.relatedEmoji = ""; return }
+                            // A custom emoji cannot stand for a sticker.
+                            if !picked.isCustom { draft.relatedEmoji = picked.name }
+                        }
+                    ),
+                    addLabel: "Related Emoji",
+                    updateLabel: { "Related Emoji, \($0.name)" }
+                )
+            }
+
             SheetField(
                 title: "Description",
-                detail: "Alt text, so people using a screen reader know what this is. "
-                    + "Optional, but more than one character if given."
+                detail: "You can add a description, sometimes called alt-text, to your stickers so they\u{2019}re accessible to even more people, including those who are blind or visually impaired. Good descriptions are concise, but present what\u{2019}s in your stickers accurately enough to understand their context. Descriptions are optional but must be more than 1 character."
             ) {
                 TextField("", text: $draft.description, axis: .vertical)
                     .textFieldStyle(.roundedBorder)
@@ -248,7 +231,8 @@ struct SoundSheet: View {
 
     struct Draft {
         var name = ""
-        var emojiName = ""
+        /// The sound's emoji — Unicode or one of the server's own.
+        var emoji: EmojiRef?
         var volume: Double = 1
         var sound: ImageData?
         var filename: String?
@@ -260,7 +244,7 @@ struct SoundSheet: View {
 
     var body: some View {
         SheetFrame(
-            title: isNew ? "Upload a sound" : "Edit sound",
+            title: isNew ? "Upload a Sound" : "Edit Sound",
             confirmTitle: isNew ? "Upload" : "Save",
             canConfirm: canConfirm
         ) {
@@ -269,33 +253,35 @@ struct SoundSheet: View {
             if isNew {
                 SheetField(
                     title: "File",
-                    detail: "MP3 or OGG, up to 512 KB and 5 seconds.",
                     isRequired: true
                 ) {
                     HStack {
-                        Text(draft.filename ?? "No file chosen")
+                        Text(draft.filename ?? "Choose a file")
                             .font(SettingsType.rowLabel)
                             .foregroundStyle(draft.sound == nil ? Ink.tertiary : Ink.primary)
                             .lineLimit(1)
                         Spacer()
-                        Button("Browse…", action: pick)
+                        Button("Browse", action: pick)
                             .buttonStyle(.glass)
                             .controlSize(.small)
                     }
                 }
             }
 
-            SheetField(title: "Name", isRequired: true) {
-                TextField("ex: airhorn", text: $draft.name)
+            SheetField(title: "Sound Name", isRequired: true) {
+                TextField("", text: $draft.name)
                     .textFieldStyle(.roundedBorder)
             }
 
-            SheetField(title: "Emoji", detail: "Shown on the button in voice.") {
-                TextField("😄", text: $draft.emojiName)
-                    .textFieldStyle(.roundedBorder)
+            SheetField(title: "Related Emoji") {
+                EmojiSlotButton(
+                    emoji: $draft.emoji,
+                    addLabel: "Related Emoji",
+                    updateLabel: { "Related Emoji, \($0.name)" }
+                )
             }
 
-            SheetField(title: "Volume") {
+            SheetField(title: "Sound Volume") {
                 HStack(spacing: Spacing.snug) {
                     Slider(value: $draft.volume, in: 0...1)
                     Text("\(Int(draft.volume * 100))%")
@@ -308,7 +294,8 @@ struct SoundSheet: View {
         .task {
             guard let existing else { return }
             draft.name = existing.name
-            draft.emojiName = existing.emojiName ?? ""
+            draft.emoji = existing.emojiID.map { EmojiRef(id: EmojiID(rawValue: $0), name: existing.emojiName ?? "emoji") }
+                ?? existing.emojiName.map { EmojiRef(name: $0) }
             draft.volume = existing.volume
         }
     }
@@ -319,7 +306,10 @@ struct SoundSheet: View {
     }
 
     private func pick() {
-        guard let file = ExpressionUpload.pickFile(types: [.mp3, .audio]) else { return }
+        // MP3 and OGG only — the two the route takes. A WAV or an M4A offered
+        // here went up labelled `audio/mpeg` and was refused.
+        let ogg = UTType(filenameExtension: "ogg") ?? .audio
+        guard let file = ExpressionUpload.pickFile(types: [.mp3, ogg]) else { return }
         // The route's field is `sound` and its captured value is an OGG data
         // URI. An MP3 goes up declared as MP3 rather than mislabelled: Discord
         // transcodes, and a wrong `Content-Type` in a data URI is refused before

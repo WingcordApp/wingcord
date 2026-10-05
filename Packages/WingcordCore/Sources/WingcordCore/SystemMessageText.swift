@@ -186,15 +186,12 @@ public enum SystemMessageText {
                 prefix: "", name: name, suffix: " started a call.",
                 symbolName: "phone.fill", tint: .quiet
             )
-        case .autoModerationAction:
-            return SystemSentence(
-                prefix: "AutoMod blocked a message from ", name: name, suffix: ".",
-                symbolName: "shield.lefthalf.filled", tint: .destructive
-            )
-
         case .default, .reply, .chatInputCommand, .contextMenuCommand,
              .threadStarterMessage, .unknown:
             // Not a system event: these carry something somebody wrote.
+            return nil
+        case .autoModerationAction:
+            // AutoMod's own card — see `AutoModMessage`.
             return nil
         }
     }

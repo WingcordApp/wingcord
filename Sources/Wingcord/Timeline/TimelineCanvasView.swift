@@ -438,6 +438,17 @@ final class TimelineCanvasView: NSView {
     var onOpenTopicMarker: (() -> Void)?
     /// The welcome header's Edit Channel button.
     var onEditChannel: (() -> Void)?
+    /// A fold's Show or Hide: open the fold, or shut it again.
+    var onToggleCollapsedGroup: ((CollapsedGroup) -> Void)?
+    /// A button on a forum post's bar, with its rect in the SwiftUI root's
+    /// space for the reaction picker to hang off.
+    var onPostAction: ((PostActionsSlot.Action, CGRect) -> Void)?
+    /// A crosspost's author was clicked: the server that published it, not a
+    /// person — Discord's server card, or its Community Updates card.
+    var onOpenCrosspostAuthor: ((MessageID, CGRect) -> Void)?
+    /// A control in a direct message's head — Add Friend, Block, the servers
+    /// in common — with its rect in the SwiftUI root's space.
+    var onHeadAction: ((HeadAction, CGRect) -> Void)?
     /// The thread chip under a message was clicked: open that thread.
     var onOpenThread: ((ChannelID) -> Void)?
     /// The pointer moved onto, or off, a message row. Its rect is in the CLIP
@@ -446,6 +457,8 @@ final class TimelineCanvasView: NSView {
     var onHoverMessage: ((MessageHover?) -> Void)?
     /// The full menu was asked for — a right-click, or the pill's own button.
     var onOpenMenu: ((MessageID, CGRect) -> Void)?
+    /// A right-click on a name or a face: the person menu, at that rect.
+    var onOpenPersonMenu: ((UserID, CGRect) -> Void)?
     /// The pointer moved onto, or off, a reaction chip. The chip's frame is in
     /// the CLIP VIEW's space, for the reason `onHoverMessage`'s is: what reads
     /// it is the tooltip overlaid on the scroll view.
@@ -458,6 +471,15 @@ final class TimelineCanvasView: NSView {
     var onHoverMark: ((GuildMarkHover?) -> Void)?
     /// The mark last published through `onHoverMark`.
     private var hoveredMark: GuildMarkHover?
+    /// A control on a drawn card — AutoMod's, a safety notice's — with the
+    /// message it is on and its rect in the SwiftUI root's space.
+    var onCardAction: ((MessageID, DrawnCardAction, CGRect) -> Void)?
+    /// The pointer moved onto, or off, the mark of something a moderator did
+    /// on an AutoMod alert. Its frame is in the CLIP VIEW's space, for the
+    /// reason `onHoverReaction`'s is.
+    var onHoverAutoModAction: ((AutoModActionHover?) -> Void)?
+    /// The mark last published through `onHoverAutoModAction`.
+    private var hoveredAutoModAction: AutoModActionHover?
 
     private var trackingArea: NSTrackingArea?
     /// See `apply(isCovered:)`.
@@ -1338,9 +1360,14 @@ final class TimelineCanvasView: NSView {
                     }
                 }
                 state.playingPreviewURL = playingPreview
-                // The welcome header carries no message, and one control.
-                if hoveredRow == index, case .conversationStart = row.kind {
-                    state.hoveredComponent = hoveredComponent
+                // The welcome header carries no message, and one control; a
+                // fold's line the same.
+                if hoveredRow == index {
+                    switch row.kind {
+                    case .conversationStart, .collapsedGroup, .postActions:
+                        state.hoveredComponent = hoveredComponent
+                    default: break
+                    }
                 }
                 if let messageID = row.messageID {
                     state.isHighlighted = messageID == highlightedMessageID
@@ -1574,6 +1601,28 @@ final class TimelineCanvasView: NSView {
                button.rect.offsetBy(dx: frame.minX, dy: frame.minY).contains(point)
             {
                 onEditChannel?()
+            } else if let control = slot.control(at: CGPoint(x: point.x - frame.minX, y: point.y - frame.minY)) {
+                let rect = slot.buttons.first { $0.action == control.action }?.rect ?? slot.mutuals?.rect ?? .zero
+                onHeadAction?(control.action, anchorInHostingRoot(rect.offsetBy(dx: frame.minX, dy: frame.minY)))
+            }
+            return
+        }
+        if case .postActions(let slot) = rows[index].kind {
+            let frame = rowFrame(at: index)
+            if let button = slot.buttons.first(where: {
+                $0.rect.offsetBy(dx: frame.minX, dy: frame.minY).contains(point)
+            }) {
+                onPostAction?(button.action, anchorInHostingRoot(button.rect.offsetBy(dx: frame.minX, dy: frame.minY)))
+            }
+            return
+        }
+        // A fold opens and shuts from its one word, as Discord's anchor does.
+        if case .collapsedGroup(let slot) = rows[index].kind {
+            let frame = rowFrame(at: index)
+            if let action = slot.action,
+               action.rect.offsetBy(dx: frame.minX, dy: frame.minY).contains(point)
+            {
+                onToggleCollapsedGroup?(slot.group)
             }
             return
         }
@@ -1627,6 +1676,10 @@ final class TimelineCanvasView: NSView {
             onOpenSticker?(sticker, rect)
         case .person(let userID, let rect):
             onOpenProfile?(userID, rect)
+        case .crosspostAuthor(let rect):
+            onOpenCrosspostAuthor?(row.id, rect)
+        case .card(let action, _, let rect):
+            onCardAction?(row.id, action, anchorInHostingRoot(rect))
         case .component(let url, let customID, _):
             // A disabled control consumes the click and does nothing, which is
             // what a disabled control is. A live one is exactly one of the two:
@@ -1873,6 +1926,12 @@ final class TimelineCanvasView: NSView {
             super.rightMouseDown(with: event)
             return
         }
+        // A right-click on somebody's name or face is about them rather than
+        // the message — Discord's member menu, beside what was clicked.
+        if case .person(let userID, let rect)? = target(in: row, at: point, rowIndex: index) {
+            onOpenPersonMenu?(userID, rect)
+            return
+        }
         onOpenMenu?(row.id, CGRect(origin: point, size: CGSize(width: 1, height: 1)))
     }
 
@@ -1908,6 +1967,11 @@ final class TimelineCanvasView: NSView {
         case emoji(EmojiRef, CGRect)
         case sticker(StickerRef, CGRect)
         case person(UserID, CGRect)
+        /// A crosspost's name or face: its publisher's card.
+        case crosspostAuthor(CGRect)
+        /// A control on a drawn card: what it does, its origin in row space
+        /// for the painter to light, and its rect in this view's space.
+        case card(DrawnCardAction, origin: CGPoint, rect: CGRect)
         /// A button an app attached. Carries its origin in row space so the
         /// painter can light the one under the pointer.
         case component(url: String?, customID: String?, origin: CGPoint)
@@ -1967,6 +2031,22 @@ final class TimelineCanvasView: NSView {
         // nil check on everything else.
         if let header = row.replyHeader, header.rect.contains(local) {
             return .replyHeader(header.targetID)
+        }
+
+        // A drawn card's words first — the channel's chip and the names in
+        // AutoMod's sentence — then its controls, faces before the card.
+        if let card = row.card, card.rect.contains(local) {
+            for part in card.parts {
+                guard case .text(let block, let origin) = part, !block.linkRects.isEmpty,
+                      let hit = block.link(at: CGPoint(x: local.x - origin.x, y: local.y - origin.y))
+                else { continue }
+                return .link(hit.target, hit.rect.offsetBy(dx: origin.x + frame.minX, dy: origin.y + frame.minY))
+            }
+            if let control = card.control(at: local) {
+                let rect = control.rect.offsetBy(dx: frame.minX, dy: frame.minY)
+                if case .person(let userID) = control.action { return .person(userID, rect) }
+                return .card(control.action, origin: control.rect.origin, rect: rect)
+            }
         }
 
         // A spoiler beats everything under it: the reveal has to happen before
@@ -2173,18 +2253,15 @@ final class TimelineCanvasView: NSView {
         }
 
         // The face, then the name. Both open the same card, and both are things
-        // a reader points at when they want to know who somebody is.
+        // a reader points at when they want to know who somebody is — or, for
+        // a crosspost, what published it.
         if let avatarRect = row.avatarRect, avatarRect.contains(local) {
-            return .person(
-                row.authorID,
-                avatarRect.offsetBy(dx: frame.minX, dy: frame.minY)
-            )
+            let rect = avatarRect.offsetBy(dx: frame.minX, dy: frame.minY)
+            return row.isCrosspost ? .crosspostAuthor(rect) : .person(row.authorID, rect)
         }
         if row.hasAuthorLine, row.authorRect.contains(local) {
-            return .person(
-                row.authorID,
-                row.authorRect.offsetBy(dx: frame.minX, dy: frame.minY)
-            )
+            let rect = row.authorRect.offsetBy(dx: frame.minX, dy: frame.minY)
+            return row.isCrosspost ? .crosspostAuthor(rect) : .person(row.authorID, rect)
         }
         return nil
     }
@@ -2247,6 +2324,7 @@ final class TimelineCanvasView: NSView {
         var burst: (key: SuperReactionEffects.Key, slot: ReactionSlot, row: MessageRow)?
         var reaction: ReactionHover?
         var markHover: GuildMarkHover?
+        var autoModHover: AutoModActionHover?
         var onReactions = false
         if let index, rows.indices.contains(index), case .message(let row) = rows[index].kind {
             // **Resolved from the geometry, not from the click target.** The
@@ -2259,6 +2337,15 @@ final class TimelineCanvasView: NSView {
                 y: point.y - rowFrame(at: index).minY
             )
             onReactions = row.reactionStripContains(local, rowWidth: rowFrame(at: index).width)
+            // What a moderator did on an AutoMod alert answers the pointer
+            // with Discord's sentence — see `onHoverAutoModAction`.
+            if let tip = row.card?.tips.first(where: { $0.rect.contains(local) }) {
+                let clip = enclosingScrollView?.contentView.bounds.origin ?? .zero
+                autoModHover = AutoModActionHover(
+                    action: tip.action,
+                    frame: tip.rect.offsetBy(dx: rowFrame(at: index).minX - clip.x, dy: offsets[index] - clip.y)
+                )
+            }
             attachment = row.attachments.firstIndex { $0.rect.contains(local) }
             // The same rule for an unfurled GIF, and only for the embeds that
             // have a star at all — a card the pointer crosses has nothing to
@@ -2267,7 +2354,7 @@ final class TimelineCanvasView: NSView {
                 $0.favorite != nil && $0.rect.contains(local)
             }
             switch target(in: row, at: point, rowIndex: index) {
-            case .person:
+            case .person, .crosspostAuthor:
                 // The name, not the face: only the words underline.
                 authorName = row.hasAuthorLine && row.authorRect.contains(local)
                 cursor = .pointingHand
@@ -2322,6 +2409,9 @@ final class TimelineCanvasView: NSView {
             case .addReaction(let rect):
                 component = rect.origin
                 cursor = .pointingHand
+            case .card(_, let origin, _):
+                component = origin
+                cursor = .pointingHand
             case .bookmark(let origin):
                 component = origin
                 cursor = .pointingHand
@@ -2367,6 +2457,27 @@ final class TimelineCanvasView: NSView {
         {
             component = button.rect.origin
             cursor = .pointingHand
+        } else if let index, rows.indices.contains(index), case .conversationStart(let slot) = rows[index].kind,
+                  let control = slot.control(at: CGPoint(x: point.x - rowFrame(at: index).minX,
+                                                         y: point.y - rowFrame(at: index).minY))
+        {
+            component = control.origin
+            cursor = .pointingHand
+        } else if let index, rows.indices.contains(index), case .postActions(let slot) = rows[index].kind,
+                  let button = slot.buttons.first(where: {
+                      $0.rect.contains(CGPoint(x: point.x - rowFrame(at: index).minX,
+                                               y: point.y - rowFrame(at: index).minY))
+                  })
+        {
+            component = button.rect.origin
+            cursor = .pointingHand
+        } else if let index, rows.indices.contains(index), case .collapsedGroup(let slot) = rows[index].kind,
+                  let action = slot.action,
+                  action.rect.contains(CGPoint(x: point.x - rowFrame(at: index).minX,
+                                               y: point.y - rowFrame(at: index).minY))
+        {
+            component = action.rect.origin
+            cursor = .pointingHand
         }
         applyCursor(cursor)
 
@@ -2379,6 +2490,7 @@ final class TimelineCanvasView: NSView {
         }
         publishReactionHover(reaction)
         publishMarkHover(markHover)
+        publishAutoModHover(autoModHover)
 
         // A write of an equal value still costs a redraw request, and the
         // pointer generates these at event rate.
@@ -2487,11 +2599,18 @@ final class TimelineCanvasView: NSView {
         onHoverMark?(hover)
     }
 
-    /// Both floating answers about the thing under the pointer, withdrawn
+    private func publishAutoModHover(_ hover: AutoModActionHover?) {
+        guard hover != hoveredAutoModAction else { return }
+        hoveredAutoModAction = hover
+        onHoverAutoModAction?(hover)
+    }
+
+    /// Every floating answer about the thing under the pointer, withdrawn
     /// together — `INVARIANTS.md` §5: nothing outlives what it names.
     private func clearTooltips() {
         publishReactionHover(nil)
         publishMarkHover(nil)
+        publishAutoModHover(nil)
     }
 
     // MARK: Highlight
@@ -2514,15 +2633,84 @@ final class TimelineCanvasView: NSView {
 
     override func accessibilityChildren() -> [Any]? {
         let range = visibleRowRange()
-        return range.compactMap { index -> NSAccessibilityElement? in
-            guard case .message(let row) = rows[index].kind else { return nil }
-            let element = NSAccessibilityElement()
-            element.setAccessibilityRole(.staticText)
-            element.setAccessibilityLabel(row.accessibilityLabel)
-            element.setAccessibilityParent(self)
-            element.setAccessibilityFrameInParentSpace(rowFrame(at: index))
-            return element
+        return range.flatMap { index -> [NSAccessibilityElement] in
+            switch rows[index].kind {
+            case .message(let row):
+                let element = NSAccessibilityElement()
+                element.setAccessibilityRole(.staticText)
+                element.setAccessibilityLabel(row.accessibilityLabel)
+                element.setAccessibilityParent(self)
+                element.setAccessibilityFrameInParentSpace(rowFrame(at: index))
+                // A drawn card's buttons, one each, as it draws them.
+                let frame = rowFrame(at: index)
+                let buttons = (row.card?.controls ?? []).filter { !$0.accessibilityLabel.isEmpty }.map { control in
+                    let button = PressableAccessibilityElement()
+                    let rect = control.rect.offsetBy(dx: frame.minX, dy: frame.minY)
+                    let action = control.action
+                    let messageID = row.id
+                    button.press = { [weak self] in
+                        guard let self else { return }
+                        if case .person(let userID) = action {
+                            self.onOpenProfile?(userID, rect)
+                        } else {
+                            self.onCardAction?(messageID, action, self.anchorInHostingRoot(rect))
+                        }
+                    }
+                    button.setAccessibilityRole(.button)
+                    button.setAccessibilityLabel(control.accessibilityLabel)
+                    button.setAccessibilityParent(self)
+                    button.setAccessibilityFrameInParentSpace(rect)
+                    return button as NSAccessibilityElement
+                }
+                return [element] + buttons
+            case .collapsedGroup(let slot):
+                // A fold that opens is a button; one that cannot is a line.
+                let element = PressableAccessibilityElement()
+                if slot.action != nil {
+                    let group = slot.group
+                    element.press = { [weak self] in self?.onToggleCollapsedGroup?(group) }
+                }
+                element.setAccessibilityRole(slot.action == nil ? .staticText : .button)
+                element.setAccessibilityLabel(slot.accessibilityLabel)
+                element.setAccessibilityParent(self)
+                element.setAccessibilityFrameInParentSpace(rowFrame(at: index))
+                return [element]
+            case .postActions(let slot):
+                // One button each, as the bar draws them.
+                let frame = rowFrame(at: index)
+                return slot.buttons.map { button in
+                    let element = PressableAccessibilityElement()
+                    let rect = button.rect.offsetBy(dx: frame.minX, dy: frame.minY)
+                    let action = button.action
+                    element.press = { [weak self] in
+                        guard let self else { return }
+                        self.onPostAction?(action, self.anchorInHostingRoot(rect))
+                    }
+                    element.setAccessibilityRole(.button)
+                    element.setAccessibilityLabel(button.accessibilityLabel)
+                    element.setAccessibilityParent(self)
+                    element.setAccessibilityFrameInParentSpace(rect)
+                    return element
+                }
+            default:
+                return []
+            }
         }
+    }
+}
+
+/// A drawn control as VoiceOver meets it — a fold's word, a post bar's button:
+/// pressing it does what clicking it does.
+///
+/// `nonisolated` as its superclass is; AppKit asks it on the main thread, which
+/// is where the press runs.
+private nonisolated final class PressableAccessibilityElement: NSAccessibilityElement {
+    nonisolated(unsafe) var press: (@MainActor () -> Void)?
+
+    override func accessibilityPerformPress() -> Bool {
+        guard let press else { return false }
+        MainActor.assumeIsolated { press() }
+        return true
     }
 }
 

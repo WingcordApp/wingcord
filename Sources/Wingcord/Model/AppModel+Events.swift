@@ -296,3 +296,22 @@ extension AppModel {
         return permissions.contains(.createEvents) && event.creatorID == currentUserID
     }
 }
+
+// MARK: - Creating and editing
+
+/// An event to create, or one to edit — Discord's Create Event, raised from the
+/// server's events.
+struct EventEditorRequest: Identifiable, Hashable {
+    var guildID: GuildID
+    var event: ScheduledEvent?
+
+    var id: String { "\(guildID.rawValue)-\(event?.id ?? 0)" }
+}
+
+extension AppModel {
+    /// Opens the event editor over the main window, where Discord's lives.
+    func openEventEditor(inGuild guildID: GuildID, event: ScheduledEvent? = nil) {
+        eventsPanel = nil
+        eventEditor = EventEditorRequest(guildID: guildID, event: event)
+    }
+}

@@ -174,4 +174,18 @@ struct MessageActionPolicyTests {
         #expect(!resolve(reader).contains(.copyID))
         #expect(resolve(reader, developerMode: true).contains(.copyID))
     }
+
+    @Test("Create Thread follows its own rule, and not while previewing or timed out")
+    func createThread() {
+        let starts = { (input: MessageActionPolicy.Input) -> Bool in
+            var input = input
+            input.canStartThread = true
+            return MessageActionPolicy.resolve(input).contains(.createThread)
+        }
+        #expect(!MessageActionPolicy.resolve(MessageActionPolicy.Input(permissions: reader, canSend: true, isAuthor: false))
+            .contains(.createThread))
+        #expect(starts(MessageActionPolicy.Input(permissions: reader, canSend: true, isAuthor: false)))
+        #expect(!starts(MessageActionPolicy.Input(permissions: reader, canSend: true, isAuthor: false, isPreviewing: true)))
+        #expect(!starts(MessageActionPolicy.Input(permissions: reader, canSend: true, isAuthor: false, isTimedOut: true)))
+    }
 }

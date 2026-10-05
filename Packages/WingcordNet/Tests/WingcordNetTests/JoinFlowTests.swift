@@ -225,14 +225,17 @@ struct JoinFlowTests {
         #expect(rules.rules.count == 2)
         #expect(rules.canSubmit)
 
-        let body = try #require(MemberVerificationSubmitBody(rules))
+        let terms = try #require(rules.termsField)
+        let body = try #require(MemberVerificationSubmitBody(
+            JoinApplication(form: rules, answers: [terms.id: .agreed(true)])
+        ))
         #expect(body.version == "2025-09-25T21:04:15.651000+00:00")
         #expect(body.form_fields.count == 1)
         #expect(body.form_fields[0].field_type == "TERMS")
         #expect(body.form_fields[0].label == "Read and agree to the server rules")
-        #expect(body.form_fields[0].values.count == 2)
+        #expect(body.form_fields[0].values?.count == 2)
         #expect(body.form_fields[0].required)
-        #expect(body.form_fields[0].response)
+        #expect(body.form_fields[0].response == .bool(true))
     }
 
     /// The 201 the capture answered with. `APPROVED` is what clears `pending`;

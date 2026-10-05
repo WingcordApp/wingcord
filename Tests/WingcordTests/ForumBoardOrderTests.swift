@@ -50,7 +50,7 @@ struct ForumBoardOrderTests {
 
     /// The failure that shipped: a board with live posts in the index showing
     /// only the archived page.
-    @Test("Live posts come before the archived page")
+    @Test("Live posts come before the archived page, which is its own section")
     func liveBeforeArchived() {
         let model = model()
         // The archived half, as `threads/search?archived=true` delivers it.
@@ -81,8 +81,11 @@ struct ForumBoardOrderTests {
             in: forumID
         )
 
-        let ids = model.forumPresentation(for: forumID).posts.map(\.id.rawValue)
-        #expect(ids == [20, 10])
+        // Discord's two sections: the live post, then the archived page
+        // under "Older Posts".
+        let board = model.forumPresentation(for: forumID)
+        #expect(board.posts.map(\.id.rawValue) == [20])
+        #expect(board.olderPosts.map(\.id.rawValue) == [10])
     }
 
     @Test("A thread with no metadata is live, not archived")
@@ -134,8 +137,11 @@ struct ForumBoardOrderTests {
             in: forumID
         )
 
-        let ids = model.forumPresentation(for: forumID).posts.map(\.id.rawValue)
-        #expect(ids == [20, 10])
+        // Discord's two sections: the live post, then the archived page
+        // under "Older Posts".
+        let board = model.forumPresentation(for: forumID)
+        #expect(board.posts.map(\.id.rawValue) == [20])
+        #expect(board.olderPosts.map(\.id.rawValue) == [10])
     }
 
     @Test("Live posts are newest first")

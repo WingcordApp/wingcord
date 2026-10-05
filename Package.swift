@@ -61,10 +61,19 @@ let package = Package(
             // The super reaction effects are Discord's own Lottie files, LZFSE
             // compressed — see `Resources/SuperReactions/README.md`. Read one
             // at a time, when a reaction first plays that effect.
+            //
+            // The glyphs are Discord's own icons as custom symbols — see
+            // `DiscordGlyph`. `.process` rather than `.copy`: an asset catalog
+            // is compiled by `actool` into the `Assets.car` the symbol lookup
+            // reads. `Art` holds Discord's own pictures: the two faint
+            // skeletons drawn blurred behind "Show Profile?", and the voice
+            // status modal's illustration.
             resources: [
                 .copy("Resources/Fonts"),
                 .copy("Resources/Sounds"),
                 .copy("Resources/SuperReactions"),
+                .process("Resources/Glyphs.xcassets"),
+                .copy("Resources/Art"),
             ],
             swiftSettings: [
                 .defaultIsolation(MainActor.self),

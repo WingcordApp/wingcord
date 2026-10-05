@@ -62,7 +62,7 @@ struct ChannelHeadLayoutTests {
             Issue.record("no conversation start row")
             return
         }
-        let lastInk = slot.subtitleOrigin.y + slot.subtitle.size.height
+        let lastInk = slot.subtitleOrigin.y + (slot.subtitle?.size.height ?? 0)
         // The band under the last line is the padding and nothing else. The old
         // row left about forty points of nothing here — the "weird space".
         #expect(list[0].height - lastInk <= TimelineMetrics.conversationStartBottomPadding + 1)

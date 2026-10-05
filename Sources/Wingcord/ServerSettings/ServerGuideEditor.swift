@@ -19,24 +19,8 @@ struct GuideEditor: View {
     private var working: ServerGuide { draft ?? guide }
     private var isDirty: Bool { draft != nil && draft != guide }
 
-    /// Discord refuses an enabled guide without a welcome and at least three
-    /// tasks — its own Review step says so in those words. Stated rather than
-    /// enforced by dimming, because the reader needs to know *how many more*.
-    private var missing: String? {
-        var wants: [String] = []
-        if (working.welcome?.message ?? "").trimmingCharacters(in: .whitespaces).isEmpty {
-            wants.append("a welcome message")
-        }
-        if working.actions.count < 3 {
-            let short = 3 - working.actions.count
-            wants.append("\(short) more task\(short == 1 ? "" : "s")")
-        }
-        return wants.isEmpty ? nil : wants.formatted(.list(type: .and))
-    }
-
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            enableCard
             welcomeCard
             tasksCard
             resourcesCard
@@ -66,35 +50,13 @@ struct GuideEditor: View {
         }
     }
 
-    private var enableCard: some View {
-        SettingsGroup {
-            SettingsCard {
-                SettingsToggle(
-                    title: "Server Guide is enabled",
-                    isOn: Binding(
-                        get: { guide.isEnabled },
-                        set: { isOn in
-                            // The whole guide goes with the switch, because the
-                            // route takes the whole guide. Sending the current
-                            // one rather than the draft: flipping Enable is not
-                            // a way to save half-finished edits.
-                            Task { await store.saveServerGuide(guide, isEnabled: isOn) }
-                        }
-                    )
-                )
-                .disabled(!guide.isEnabled && missing != nil)
-            }
-            if let missing {
-                SettingsFootnote(
-                    "Before this can be turned on, the guide needs \(missing).",
-                    symbolName: "exclamationmark.circle"
-                )
-            }
-        }
-    }
-
     private var welcomeCard: some View {
-        SettingsGroup("Welcome message") {
+        SettingsGroup("Welcome Sign") {
+            Text("Tell new members what\u{2019}s special about your community and why you\u{2019}re excited to see them!")
+                .font(SettingsType.rowSubtitle)
+                .foregroundStyle(Ink.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+                .padding(.bottom, Spacing.snug)
             SettingsCard {
                 GuideWelcomeField(guide: working) { message in
                     var next = working
@@ -105,15 +67,16 @@ struct GuideEditor: View {
                     draft = next
                 }
             }
-            SettingsFootnote(
-                "Write [@username] where each new member's own name should go. "
-                    + "It stays literal here and is substituted when they read it."
-            )
         }
     }
 
     private var tasksCard: some View {
-        SettingsGroup("New member tasks — \(working.actions.count)") {
+        SettingsGroup("New Member To Do\u{2019}s") {
+            Text("Set 3-5 tasks for your new members to do. Get them to \(Text("talk and engage in your channels.").bold())")
+                .font(SettingsType.rowSubtitle)
+                .foregroundStyle(Ink.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+                .padding(.bottom, Spacing.snug)
             SettingsCard {
                 ForEach(Array(working.actions.enumerated()), id: \.element.id) { index, action in
                     if index > 0 { CardDivider() }
@@ -131,7 +94,7 @@ struct GuideEditor: View {
                             }
                             RowIconButton(
                                 symbolName: "trash",
-                                label: "Remove task",
+                                label: "Remove",
                                 role: .destructive
                             ) {
                                 var next = working
@@ -146,12 +109,21 @@ struct GuideEditor: View {
                     editingTask = GuideTaskDraft(nextID: (working.actions.map(\.id).max() ?? -1) + 1)
                 }
             }
-            SettingsFootnote("Discord asks for three to five. Five is the maximum.")
         }
     }
 
     private var resourcesCard: some View {
-        SettingsGroup("Resource pages — \(working.resources.count)") {
+        SettingsGroup("Resource Pages") {
+            VStack(alignment: .leading, spacing: Spacing.tight) {
+                Text("Turn read-only channels into fancy resource pages in your Server Guide. They will no longer appear on the channel list unless you enable All Channels. Resources come with some perks:")
+                Text("\u{2022} Members start at the top of pages instead of the bottom of a message thread")
+                Text("\u{2022} Chat bars and avatars are removed so it looks cleaner")
+                Text("\u{2022} All the content, embeds, media, and formatting will stay the same")
+            }
+            .font(SettingsType.rowSubtitle)
+            .foregroundStyle(Ink.secondary)
+            .fixedSize(horizontal: false, vertical: true)
+            .padding(.bottom, Spacing.snug)
             SettingsCard {
                 ForEach(Array(working.resources.enumerated()), id: \.element.id) { index, resource in
                     if index > 0 { CardDivider() }
@@ -170,7 +142,7 @@ struct GuideEditor: View {
                             }
                             RowIconButton(
                                 symbolName: "trash",
-                                label: "Remove resource",
+                                label: "Remove",
                                 role: .destructive
                             ) {
                                 var next = working
@@ -187,10 +159,6 @@ struct GuideEditor: View {
                     )
                 }
             }
-            SettingsFootnote(
-                "Read-only channels turned into pages. Seven is the maximum, and "
-                    + "they leave the ordinary channel list."
-            )
         }
     }
 
@@ -199,27 +167,23 @@ struct GuideEditor: View {
         if let name = store.channelName(action.channelID) { parts.append("#\(name)") }
         // 0 is "visits the channel", 1 is "sends a message" — checked against
         // Discord's own copy, see §SM.12.
-        parts.append(action.kind == .write ? "sends a message" : "visits the channel")
+        parts.append(action.kind == .write ? "Member sends a message in the channel" : "Member visits the channel")
         return parts.joined(separator: " · ")
     }
 
     @ViewBuilder
     private var saveBar: some View {
         if isDirty {
-            HStack(spacing: Spacing.base) {
-                Spacer()
-                Button("Revert") { draft = nil }
-                    .buttonStyle(.plain)
-                    .font(.system(.caption))
-                    .foregroundStyle(Ink.tertiary)
-                Button("Save guide") {
+            UnsavedChangesBar(
+                reset: { draft = nil },
+                save: {
+                    let saved = working
                     Task {
-                        await store.saveServerGuide(working, isEnabled: guide.isEnabled)
+                        await store.saveServerGuide(saved, isEnabled: guide.isEnabled)
                         draft = nil
                     }
                 }
-                .buttonStyle(.glassProminent)
-            }
+            )
             .padding(.top, Spacing.margin)
         }
     }
@@ -234,7 +198,7 @@ private struct GuideWelcomeField: View {
 
     var body: some View {
         EditableTextBlock(
-            placeholder: "Hey [@username], glad you're here!",
+            placeholder: "Hi [@username]! I made this server so that nerds like us could have a safe space to be ourselves. I\u{2019}ve made a bunch of lifelong friends and hope you can find the same thing too. I\u{2019}ve curated some things for you to get started with below:",
             text: $text,
             committed: guide.welcome?.message ?? "",
             characterLimit: 300
@@ -298,7 +262,7 @@ struct GuideTaskSheet: View {
 
     var body: some View {
         SheetFrame(
-            title: "Task",
+            title: "Edit task",
             confirmTitle: "Save",
             canConfirm: !working.title.trimmingCharacters(in: .whitespaces).isEmpty
                 && working.channelID != nil
@@ -306,7 +270,7 @@ struct GuideTaskSheet: View {
             commit(working)
         } content: {
             SheetField(title: "What should the new member do?", isRequired: true) {
-                TextField("Post a photo of your pet", text: $working.title)
+                TextField("Ex: Post a photo of your pet", text: $working.title)
                     .textFieldStyle(.roundedBorder)
             }
 
@@ -314,11 +278,11 @@ struct GuideTaskSheet: View {
                 title: "Where should they do it?",
                 // Discord's own requirement, and it is why the picker is
                 // filtered rather than offering every channel and failing.
-                detail: "Channels must be viewable by @everyone.",
+                detail: "Channels must be viewable by @everyone",
                 isRequired: true
             ) {
                 Picker("", selection: $working.channelID) {
-                    Text("Choose a channel").tag(ChannelID?.none)
+                    Text("Select").tag(ChannelID?.none)
                     ForEach(store.textChannels.filter(\.isPublic)) { channel in
                         Text("#\(channel.name)").tag(ChannelID?.some(channel.id))
                     }
@@ -326,21 +290,30 @@ struct GuideTaskSheet: View {
                 .labelsHidden()
             }
 
-            SheetField(title: "This task is complete when", isRequired: true) {
+            SheetField(title: "This task is complete when:", isRequired: true) {
                 Picker("", selection: $working.kind) {
-                    Text("The member visits the channel").tag(ServerGuide.Action.Kind.read)
-                    Text("The member sends a message in it").tag(ServerGuide.Action.Kind.write)
+                    Text("Member visits the channel").tag(ServerGuide.Action.Kind.read)
+                    Text("Member sends a message in the channel").tag(ServerGuide.Action.Kind.write)
                 }
                 .pickerStyle(.radioGroup)
                 .labelsHidden()
             }
 
-            SheetField(title: "Emoji") {
-                TextField("👋", text: Binding(
-                    get: { working.emojiName ?? "" },
-                    set: { working.emojiName = $0.isEmpty ? nil : $0 }
-                ))
-                .textFieldStyle(.roundedBorder)
+            // The picker — this was a text field with 👋 for a placeholder,
+            // the same dead control the onboarding answers had.
+            SheetField(title: "Choose Emoji") {
+                EmojiSlotButton(
+                    emoji: Binding(
+                        get: { working.emojiName.map { EmojiRef(name: $0) } },
+                        set: { picked in
+                            // A task's emoji is a Unicode glyph.
+                            guard let picked else { working.emojiName = nil; return }
+                            if !picked.isCustom { working.emojiName = picked.name }
+                        }
+                    ),
+                    addLabel: "Choose Emoji",
+                    updateLabel: { "Choose Emoji, \($0.name)" }
+                )
             }
         }
     }
@@ -396,7 +369,7 @@ struct GuideResourceSheet: View {
 
     var body: some View {
         SheetFrame(
-            title: "Resource page",
+            title: "Edit Resource",
             confirmTitle: "Save",
             canConfirm: !working.title.trimmingCharacters(in: .whitespaces).isEmpty
                 && working.channelID != nil
@@ -405,11 +378,11 @@ struct GuideResourceSheet: View {
         } content: {
             SheetField(
                 title: "Channel",
-                detail: "Only channels that are read-only for @everyone.",
+                detail: "Assigned channel must be readonly for @everyone",
                 isRequired: true
             ) {
                 Picker("", selection: $working.channelID) {
-                    Text("Choose a channel").tag(ChannelID?.none)
+                    Text("Select").tag(ChannelID?.none)
                     ForEach(store.textChannels) { channel in
                         Text("#\(channel.name)").tag(ChannelID?.some(channel.id))
                     }
@@ -417,13 +390,13 @@ struct GuideResourceSheet: View {
                 .labelsHidden()
             }
 
-            SheetField(title: "Name", isRequired: true) {
-                TextField("Rules", text: $working.title)
+            SheetField(title: "Title", isRequired: true) {
+                TextField("Title", text: $working.title)
                     .textFieldStyle(.roundedBorder)
             }
 
             SheetField(title: "Description") {
-                TextField("Rules for the server", text: $working.detail, axis: .vertical)
+                TextField("Ex: Rules for the server", text: $working.detail, axis: .vertical)
                     .textFieldStyle(.roundedBorder)
                     .lineLimit(2...4)
             }

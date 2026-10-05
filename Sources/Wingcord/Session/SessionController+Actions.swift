@@ -132,18 +132,26 @@ extension SessionController {
     /// **Removed optimistically.** A row that lingers for a round trip after
     /// Delete reads as the click having missed, and the reader presses again —
     /// which is a second DELETE against an id that is already gone.
+    ///
+    /// A message that is not loaded is deleted all the same: a post's opening
+    /// message can go from its card on the board — Delete Message — where its
+    /// transcript was never opened.
     func delete(_ messageID: MessageID, in channelID: ChannelID) {
-        guard let previous = model.message(messageID, in: channelID) else { return }
-        model.mutateBox(channelID) { $0.remove(messageID) }
-        model.messageContentRevision &+= 1
+        let previous = model.message(messageID, in: channelID)
+        if previous != nil {
+            model.mutateBox(channelID) { $0.remove(messageID) }
+            model.messageContentRevision &+= 1
+        }
         Task { [weak self] in
             guard let self else { return }
             do {
                 try await rest.deleteMessage(messageID, in: channelID)
             } catch {
                 Self.trace("delete \(messageID) failed: \(Self.describe(error))")
-                model.mutateBox(channelID) { $0.upsert(previous) }
-                model.messageContentRevision &+= 1
+                if let previous {
+                    model.mutateBox(channelID) { $0.upsert(previous) }
+                    model.messageContentRevision &+= 1
+                }
                 model.reportActionFailure(Self.describe(error))
             }
         }
@@ -537,9 +545,42 @@ extension SessionController {
                     language: language
                 )
                 model.reportSubmission = .succeeded
+                // Discord's Report Spam leaves the conversation it was about.
+                if case .firstDirectMessage(_, let channelID) = subject {
+                    model.closeDirectMessage(channelID)
+                }
             } catch {
                 Self.trace("report failed: \(Self.describe(error))")
                 model.reportSubmission = .failed(Self.describe(error))
+            }
+        }
+    }
+
+    // MARK: Groups
+
+    /// Discord's Edit Group, saved.
+    func renameGroup(_ channelID: ChannelID, to name: String) {
+        Task { [weak self] in
+            guard let self else { return }
+            do {
+                try await rest.renameGroup(channelID, to: name)
+            } catch {
+                Self.trace("rename group failed: \(Self.describe(error))")
+            }
+        }
+    }
+
+    /// Add Friends to DM: one write a person. The roster fills from the
+    /// socket's `CHANNEL_RECIPIENT_ADD`.
+    func addGroupRecipients(_ userIDs: [UserID], to channelID: ChannelID) {
+        Task { [weak self] in
+            guard let self else { return }
+            for userID in userIDs {
+                do {
+                    try await rest.addGroupRecipient(userID, to: channelID)
+                } catch {
+                    Self.trace("add \(userID) to group failed: \(Self.describe(error))")
+                }
             }
         }
     }

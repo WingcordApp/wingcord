@@ -285,7 +285,7 @@ extension DiscordREST {
             widget_id: nil
         )
         switch subject {
-        case .message(let messageID, let channelID):
+        case .message(let messageID, let channelID), .firstDirectMessage(let messageID, let channelID):
             body.channel_id = channelID.description
             body.message_id = messageID.description
         case .user(let userID, let guildID):
@@ -313,6 +313,9 @@ public enum ReportSubjectKind: String, Hashable, Sendable {
     /// welcome node carries a `widget_preview`, which is the reported tile drawn
     /// inside the sheet.
     case widget
+    /// The first message of a conversation somebody started — Discord's
+    /// Report Spam at the head of a DM (`928658`'s `b8`).
+    case firstDirectMessage = "first_dm"
 }
 
 /// What is being reported, and the ids the submission needs for it.
@@ -323,12 +326,14 @@ public enum ReportSubject: Hashable, Sendable {
     /// whose board it is on, and the user id alone does not say which tile —
     /// somebody with five widgets would be reported for all of them.
     case widget(id: String, userID: UserID)
+    case firstDirectMessage(MessageID, channelID: ChannelID)
 
     public var kind: ReportSubjectKind {
         switch self {
         case .message: .message
         case .user: .user
         case .widget: .widget
+        case .firstDirectMessage: .firstDirectMessage
         }
     }
 }

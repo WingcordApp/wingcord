@@ -241,44 +241,83 @@ struct MemberVerificationDTO: Decodable, Sendable {
     var version: String?
     var description: String?
     var form_fields: [FieldDTO]?
+    /// Sent only with `with_guild=true`, which is what a non-member asks with.
+    var guild: GuildDTO?
 
     struct FieldDTO: Decodable, Sendable {
         var field_type: String?
         var label: String?
+        /// The rules, on a `TERMS` field.
         var values: [String]?
+        /// The options, on a `MULTIPLE_CHOICE` field.
+        var choices: [String]?
         var required: Bool?
+        var description: String?
+        var placeholder: String?
+    }
+
+    struct GuildDTO: Decodable, Sendable {
+        var id: GuildID?
+        var name: String?
+        var icon: String?
+        var banner: String?
+        var splash: String?
+        var description: String?
+        var features: [String]?
+        var approximate_member_count: Int?
+        var approximate_presence_count: Int?
+        /// Discord's form reads it from here for a server the reader is not
+        /// in (`823591`'s `Q`: the guild store's, else the form's).
+        var verification_level: Int?
     }
 
     func domain(guildID: GuildID) -> MemberVerification {
-        // Only TERMS carries rules. Every other field type is a question on an
-        // application form this client cannot fill in — see `MemberVerification`.
-        var rules: [String] = []
-        var label: String?
-        var isRequired = true
-        for field in form_fields ?? [] where field.field_type == "TERMS" {
-            label = field.label.nonEmpty
-            isRequired = field.required ?? true
-            for value in field.values ?? [] where !value.isEmpty {
-                rules.append(value)
-            }
-        }
-        return MemberVerification(
+        MemberVerification(
             guildID: guildID,
             detail: description.nonEmpty,
-            rules: rules,
             version: version.nonEmpty,
-            termsLabel: label,
-            isTermsRequired: isRequired
+            // **Every field, in order, none dropped.** The submission echoes
+            // the form back whole; a field left out of it is a question the
+            // server sees unanswered.
+            fields: (form_fields ?? []).map { field in
+                JoinApplicationForm.Field(
+                    kind: .init(
+                        wireName: field.field_type ?? "",
+                        choices: field.choices ?? [],
+                        values: field.values ?? []
+                    ),
+                    label: field.label ?? "",
+                    isRequired: field.required ?? true,
+                    detail: field.description.nonEmpty,
+                    placeholder: field.placeholder.nonEmpty
+                )
+            },
+            guild: guild.flatMap { guild in
+                guard let name = guild.name else { return nil }
+                return JoinApplicationGuild(
+                    id: guild.id ?? guildID,
+                    name: name,
+                    iconHash: guild.icon,
+                    bannerHash: guild.banner,
+                    splashHash: guild.splash,
+                    description: guild.description.nonEmpty,
+                    features: Set(guild.features ?? []),
+                    memberCount: guild.approximate_member_count,
+                    onlineCount: guild.approximate_presence_count,
+                    verificationLevel: guild.verification_level.map(VerificationLevel.init(rawValue:))
+                )
+            }
         )
     }
 }
 
 /// The body of `PUT /guilds/{id}/requests/@me`.
 ///
-/// **The whole form goes back, not an acknowledgement.** The captured request
-/// echoes the version, the field's label, its every rule and its required flag,
-/// and adds one key: `response: true`. Sending a bare `{"version": …}` is not
-/// what the client sends and is not what this route was observed to accept.
+/// **The whole form goes back, not an acknowledgement** — Discord's
+/// `submitVerificationForm` sends `{version, form_fields}` with each field
+/// spread back as it came and its `response` added. The captured rules
+/// agreement echoes the version, the field's label, its every rule and its
+/// required flag, and adds `response: true`.
 struct MemberVerificationSubmitBody: Encodable, Sendable {
     var version: String
     var form_fields: [FieldBody]
@@ -286,28 +325,60 @@ struct MemberVerificationSubmitBody: Encodable, Sendable {
     struct FieldBody: Encodable, Sendable {
         var field_type: String
         var label: String
-        var values: [String]
         var required: Bool
-        /// The agreement itself.
-        var response: Bool
+        var values: [String]?
+        var choices: [String]?
+        var description: String?
+        var placeholder: String?
+        /// Absent until answered, as on Discord's own form.
+        var response: Response?
     }
 
-    /// Nil when there is nothing to agree to, which is what stops the button
-    /// existing rather than what stops it working.
-    init?(_ verification: MemberVerification) {
-        guard let version = verification.version, !verification.rules.isEmpty else {
+    /// `true`, the text, or the choice's index — one JSON value.
+    enum Response: Encodable, Sendable, Equatable {
+        case bool(Bool)
+        case text(String)
+        case index(Int)
+
+        func encode(to encoder: any Encoder) throws {
+            var container = encoder.singleValueContainer()
+            switch self {
+            case .bool(let value): try container.encode(value)
+            case .text(let value): try container.encode(value)
+            case .index(let value): try container.encode(value)
+            }
+        }
+    }
+
+    /// Nil without a version — there is nothing to record the answers against,
+    /// and that is what stops the button existing rather than what stops it
+    /// working.
+    init?(_ application: JoinApplication) {
+        guard let version = application.form.version, !application.form.fields.isEmpty else {
             return nil
         }
         self.version = version
-        form_fields = [
-            FieldBody(
-                field_type: "TERMS",
-                label: verification.termsLabel ?? "Read and agree to the server rules",
-                values: verification.rules,
-                required: verification.isTermsRequired,
-                response: true
+        form_fields = application.form.fields.map { field in
+            var body = FieldBody(
+                field_type: field.kind.wireName,
+                label: field.label,
+                required: field.isRequired,
+                description: field.detail,
+                placeholder: field.placeholder
             )
-        ]
+            switch field.kind {
+            case .terms(let values): body.values = values
+            case .multipleChoice(let choices): body.choices = choices
+            default: break
+            }
+            body.response = switch application.answers[field.id] {
+            case .agreed(let agreed)?: .bool(agreed)
+            case .text(let text)?: .text(text)
+            case .choice(let index)?: .index(index)
+            case nil: nil
+            }
+            return body
+        }
     }
 }
 
@@ -322,6 +393,76 @@ struct JoinRequestDTO: Decodable, Sendable {
             rejectionReason: rejection_reason.nonEmpty
         )
     }
+}
+
+/// The reader's own join request, wherever it arrives: READY's
+/// `guild_join_requests`, the socket's `GUILD_JOIN_REQUEST_*` and the reapply's
+/// answer. Discord maps all of them through one function (`212455`'s `_`).
+///
+/// **Only what the applicant's side reads.** The moderator's list decodes the
+/// answers and the applicant's user object from the same shape; nothing here
+/// draws them.
+struct OwnJoinRequestDTO: Decodable, Sendable {
+    /// The captured answer carries the id twice, as `id` and as
+    /// `join_request_id`; either will do.
+    var id: JoinRequestID?
+    var join_request_id: JoinRequestID?
+    var guild_id: GuildID?
+    var user_id: UserID?
+    var application_status: String?
+    var rejection_reason: String?
+    /// Whether it carries a `last_seen` at all — read only for being there,
+    /// whatever its type (`OwnJoinRequest.isOutcomeSeen`).
+    var hasLastSeen = false
+
+    private enum Keys: String, CodingKey {
+        case id, join_request_id, guild_id, user_id, application_status, rejection_reason, last_seen
+    }
+
+    /// **Field by field, and only the server is required.** READY's entries
+    /// have never been captured, and a strict decode dropped an application
+    /// Discord's own rail was showing — one field of another type, and the
+    /// lossy list threw the whole entry away (`ready: join_requests=0`).
+    init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: Keys.self)
+        id = try? container.decodeIfPresent(JoinRequestID.self, forKey: .id)
+        join_request_id = try? container.decodeIfPresent(JoinRequestID.self, forKey: .join_request_id)
+        guild_id = try? container.decodeIfPresent(GuildID.self, forKey: .guild_id)
+        user_id = try? container.decodeIfPresent(UserID.self, forKey: .user_id)
+        application_status = try? container.decodeIfPresent(String.self, forKey: .application_status)
+        rejection_reason = try? container.decodeIfPresent(String.self, forKey: .rejection_reason)
+        hasLastSeen = container.contains(.last_seen) && (try? container.decodeNil(forKey: .last_seen)) == false
+    }
+
+    /// Nil without a server: a request that names none cannot be filed.
+    var domain: OwnJoinRequest? { domain(guildID: guild_id) }
+
+    /// Filed under `guildID` — an event's envelope names the server it is
+    /// about, and that is the key Discord's store uses.
+    func domain(guildID: GuildID?) -> OwnJoinRequest? {
+        guard let guildID else { return nil }
+        return OwnJoinRequest(
+            guildID: guildID,
+            requestID: join_request_id ?? id,
+            status: OwnJoinRequest.Status(rawValue: application_status),
+            rejectionReason: rejection_reason.nonEmpty,
+            isOutcomeSeen: hasLastSeen
+        )
+    }
+}
+
+/// `GUILD_JOIN_REQUEST_CREATE` and `UPDATE`: `{guild_id, request, status}`, as
+/// Discord's socket handler reads them. **Sent to moderators as well**, for
+/// everybody's requests — the applicant is `request.user_id`.
+struct GuildJoinRequestEventDTO: Decodable, Sendable {
+    var guild_id: GuildID
+    var request: OwnJoinRequestDTO?
+}
+
+/// `GUILD_JOIN_REQUEST_DELETE`: `{id, user_id, guild_id}`.
+struct GuildJoinRequestDeleteDTO: Decodable, Sendable {
+    var guild_id: GuildID
+    var user_id: UserID?
 }
 
 // MARK: - Game servers

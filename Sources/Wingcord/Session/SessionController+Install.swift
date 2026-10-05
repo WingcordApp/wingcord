@@ -81,6 +81,16 @@ extension SessionController {
         model.storeRevision &+= 1
     }
 
+    /// Where an app can be added, before the sheet asks the reader — so it
+    /// offers only those, as Discord's picker does. Nil left in place on a
+    /// failure: the sheet then offers both and lets the route answer.
+    func loadApplicationInstallTypes(_ id: ApplicationID) async {
+        guard model.applicationInstallTypes[id] == nil,
+              let info = try? await rest.applicationPublicInfo(id)
+        else { return }
+        model.applicationInstallTypes[id] = info.installTypes
+    }
+
     // MARK: The store
 
     /// One application's storefront.

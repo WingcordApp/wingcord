@@ -140,7 +140,7 @@ private struct BoardTileMenu: View {
     ) -> some View {
         Button(action: action) {
             HStack(spacing: Spacing.base) {
-                Image(systemName: symbolName)
+                Image(symbol: symbolName)
                     .font(.system(size: 12))
                     .frame(width: 16)
                 Text(title)

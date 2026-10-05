@@ -80,7 +80,7 @@ struct GameTagPicker: View {
     private func radioRow(title: String, isOn: Bool, select: @escaping () -> Void) -> some View {
         Button(action: select) {
             HStack(spacing: Spacing.base) {
-                Image(systemName: isOn ? "largecircle.fill.circle" : "circle")
+                Image(symbol: isOn ? "largecircle.fill.circle" : "circle")
                     .font(.system(size: 13))
                     .foregroundStyle(isOn ? Color.accentColor : InkColor.tertiary)
                 Text(title)

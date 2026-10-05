@@ -138,7 +138,7 @@ struct OverlayScene: View {
                 Button {
                     controller.setEditingLayout(!controller.isEditingLayout)
                 } label: {
-                    Image(systemName: controller.isEditingLayout
+                    Image(symbol: controller.isEditingLayout
                         ? "square.grid.2x2.fill" : "square.grid.2x2")
                         .font(.system(size: 14, weight: .semibold))
                         .frame(width: 34, height: 34)
@@ -282,7 +282,7 @@ private struct OverlayWidgetHost: View {
                         layout.setPinned(!layout.placement(for: kind).isPinned, for: kind)
                         controller.layout = layout
                     } label: {
-                        Image(systemName: controller.layout.placement(for: kind).isPinned
+                        Image(symbol: controller.layout.placement(for: kind).isPinned
                             ? "pin.fill" : "pin.slash")
                             .font(.system(size: 10, weight: .semibold))
                     }

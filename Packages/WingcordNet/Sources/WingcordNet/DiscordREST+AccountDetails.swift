@@ -12,6 +12,8 @@ public struct CurrentAccount: Sendable {
     public var user: User
     public var premiumType: Int?
     public var ageVerificationStatus: Int?
+    /// Nil where the answer was not the reader's private object.
+    public var verification: AccountVerification?
 }
 
 extension DiscordREST {
@@ -35,6 +37,18 @@ extension DiscordREST {
                 isEmailVerified: dto.verified ?? false,
                 hasMFA: dto.mfa_enabled ?? false
             )
+        )
+    }
+
+    /// Sends the account's confirmation e-mail again — Discord's
+    /// `verifyResend`, the Verify and Resend Email of an application form's
+    /// e-mail row. `POST /auth/verify/resend`, no body. Not captured.
+    public func resendVerificationEmail() async throws {
+        _ = try await requestData(
+            method: "POST",
+            path: "/auth/verify/resend",
+            route: "auth/verify/resend",
+            body: Optional<String>.none
         )
     }
 

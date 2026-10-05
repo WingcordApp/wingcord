@@ -88,6 +88,23 @@ public struct Permissions: OptionSet, Hashable, Sendable, Codable {
         .createExpressions, .manageExpressions, .manageWebhooks, .viewAuditLog,
         .viewGuildInsights,
     ]
+    /// Discord's moderator mask (`402655`): holding any one of these opens the
+    /// Members page and Mod View. Wider than `guildSettingsAccess` — a
+    /// moderator who may only kick or time out has no settings window and still
+    /// has the page.
+    public static let moderatorAccess: Permissions = [
+        .administrator, .manageGuild, .banMembers, .kickMembers, .moderateMembers,
+        .manageRoles, .manageNicknames,
+    ]
+    /// The permissions Discord's Safety Setup calls risky on `@everyone`
+    /// (`124759`'s `R`) — the ones "Remove risky permissions from @everyone"
+    /// takes away. Also the list Mod View highlights as moderator permissions.
+    public static let risky: Permissions = [
+        .administrator, .kickMembers, .banMembers, .manageGuild, .manageChannels,
+        .manageRoles, .manageMessages, .manageExpressions, .createExpressions,
+        .manageEvents, .createEvents, .moderateMembers, .mentionEveryone,
+        .manageOfficialMessages,
+    ]
     public static let createEvents = Permissions(rawValue: 1 << 44)
     public static let useExternalSounds = Permissions(rawValue: 1 << 45)
     public static let sendVoiceMessages = Permissions(rawValue: 1 << 46)

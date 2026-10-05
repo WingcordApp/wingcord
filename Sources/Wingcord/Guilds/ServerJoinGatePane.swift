@@ -312,7 +312,7 @@ private struct GateOptionChip: View {
 
                 Spacer(minLength: Spacing.tight)
 
-                Image(systemName: option.isSelected ? "checkmark.circle.fill" : "circle")
+                Image(symbol: option.isSelected ? "checkmark.circle.fill" : "circle")
                     .font(.system(size: 15))
                     .foregroundStyle(
                         option.isSelected ? AnyShapeStyle(Palette.accent) : AnyShapeStyle(Ink.quaternary)
@@ -614,7 +614,7 @@ private struct GateBarButton: View {
     }
 
     private func glyph(_ name: String) -> some View {
-        Image(systemName: name)
+        Image(symbol: name)
             .font(.system(.caption, weight: .semibold))
     }
 }

@@ -80,6 +80,9 @@ final class AppModel {
     /// the one thing the DM list draws of it.
     var directMessageTypingRevision: UInt64 = 0
     var readStates: [ChannelID: ReadState] = [:]
+    /// Each open board's forum read state as it stood when the board opened —
+    /// what "NEW" is measured against. See `openForum`.
+    var forumReadMarks: [ChannelID: MessageID] = [:]
     /// Each server's scheduled-events cursor — see `ReadySnapshot.guildEventAcks`.
     var guildEventAcks: [GuildID: MessageID] = [:]
     /// Each server's scheduled events, from READY, `GUILD_CREATE` and the
@@ -99,6 +102,10 @@ final class AppModel {
     var eventCounts: [UInt64: ScheduledEventCounts] = [:]
     /// The events panel, when it is open — see `EventsLayer`.
     var eventsPanel: EventsPanelRequest?
+    /// Create Event or Edit Event, open over the window.
+    var eventEditor: EventEditorRequest?
+    /// Create Channel or Create Category, open over the window.
+    var channelCreation: ChannelCreationRequest?
     /// The live-event notices the reader closed, for this session — Discord's
     /// `LIVE_CHANNEL_NOTICE_HIDE`, which is not persisted either.
     var dismissedEventNotices: Set<UInt64> = []
@@ -496,6 +503,12 @@ final class AppModel {
     // every row on every evaluation.
 
     var profileRequest: ProfileRequest?
+    /// Add App, raised from an app's profile and presented over it — see
+    /// `AppModel.addApplication(from:)`.
+    var profileApplicationInstall: ApplicationInstallRequest?
+    /// The composer's app launcher, asked for at one app — Open App on an
+    /// app's profile. See `AppLauncherRequest`.
+    var appLauncherRequest: AppLauncherRequest?
     /// Whose detail fetch is still in flight. Observed, so a card can show a
     /// skeleton while it waits and swap to the real thing when it lands.
     var profilesLoading: Set<UserID> = []
@@ -519,6 +532,22 @@ final class AppModel {
     /// answer once a name.
     var guildProfiles: [GuildID: GuildProfile] = [:]
     var guildProfilesLoading: Set<GuildID> = []
+    /// Profiles Discord refused or failed — see `GuildProfileRefusal`. A
+    /// retry clears the entry.
+    var guildProfileRefusals: [GuildID: GuildProfileRefusal] = [:]
+    /// A crosspost's publisher, raised from its author in the transcript — see
+    /// `CrosspostCardPresenter`.
+    var crosspostCard: CrosspostCardRequest?
+    /// A mention raid's Remove Restrictions, asking first — the server it
+    /// would lift them in. See `AutoModCardPresenter`.
+    var mentionRaidRemoval: GuildID?
+    /// An app's Deauthorize under its DM head, asking first — the grant it
+    /// would revoke. See `ConversationHeadPresenter`.
+    var headDeauthorization: AuthorizedApp?
+    /// A group's Edit Group, open on that group.
+    var groupRename: ChannelID?
+    /// A group's Invite to Group DM, open on that group.
+    var groupInvite: ChannelID?
     /// Where a foreign emoji or sticker came from, keyed by its own snowflake.
     ///
     /// **One table for both**, because an emoji id and a sticker id are both
@@ -578,6 +607,9 @@ final class AppModel {
     /// The server mark the pointer is resting on, on an invite card. Drives its
     /// flyout and nothing else — see `GuildMarkTooltipOverlay`.
     var markHover: GuildMarkHover?
+    /// The mark of something a moderator did, on an AutoMod alert, under the
+    /// pointer — see `AutoModActionTooltipOverlay`.
+    var autoModActionHover: AutoModActionHover?
     /// The unread groups folded in the inbox, from the account's settings.
     var inboxCollapse = InboxCollapse()
     /// Who reacted, per chip, and the count they were fetched at — a tooltip
@@ -600,6 +632,17 @@ final class AppModel {
     var deleteRequest: DeleteMessageRequest?
     var reportRequest: ReportRequest?
     var userMenu: UserMenuRequest?
+    /// The moderation dialog on screen — Kick, Ban, Timeout and the rest.
+    var moderationDialog: ModerationDialog?
+    /// The Members page's search, for the server whose page was last opened.
+    var memberSafety: MemberSafetyStore?
+    /// The person a moderator has open in Mod View — kept per server, as
+    /// Discord keeps its guild sidebar, and drawn while that server is the
+    /// selected one.
+    var modView: ModViewStore?
+    /// Servers with a bulk ban this window started and has not heard the end
+    /// of — see `SessionController.applyBulkBanOutcome`.
+    @ObservationIgnored var bulkBansInFlight: Set<GuildID> = []
     /// The conversation whose own menu is open, and where to hang it.
     var directMessageMenu: DirectMessageMenuRequest?
     /// The server whose own menu is open — from the name pill, the toolbar
@@ -608,6 +651,34 @@ final class AppModel {
     var serverOptionsMenu: ServerOptionsRequest?
     /// A folder's right-click menu — see `FolderOptionsMenu`.
     var folderMenu: FolderMenuRequest?
+    /// A pending application's right-click menu — see `JoinRequestMenu`.
+    var joinRequestMenu: JoinRequestMenuRequest?
+    /// "Are you sure?" before an application is withdrawn or discarded.
+    var withdrawApplicationRequest: WithdrawApplicationRequest?
+    /// "You are now a member of" — see `ApprovedApplicationNotice`.
+    var approvedApplication: ApprovedApplicationNotice?
+    /// "Explore the Server" after an invite — see `WelcomeScreenNotice`.
+    var welcomeScreenNotice: WelcomeScreenNotice?
+    /// A server channel's right-click menu — see `ChannelOptionsMenu`.
+    var channelOptionsMenu: ChannelOptionsRequest?
+    /// A channel the reader asked to delete, with Discord's refusal or
+    /// confirmation.
+    var channelDeletion: ChannelDeletionRequest?
+    /// A right-click on a thread — see `ThreadOptionsMenu`. The ⋯ over a
+    /// thread raises the same menu from its own button.
+    var threadOptionsMenu: ThreadOptionsRequest?
+    /// A thread or post the reader asked to delete, waiting on Discord's
+    /// confirmation.
+    var threadDeletion: ThreadDeletionRequest?
+    /// "Pin this post?", while another post in the forum holds the pin.
+    var pinReplacement: PinReplacementRequest?
+    /// Edit Thread or Edit Post — see `ThreadEditSheet`.
+    var threadEditor: ThreadEditRequest?
+    /// Discord's New Thread, open beside its channel — see `NewThreadPanel`.
+    var newThread: NewThreadRequest?
+    /// The post whose link the bar copied a moment ago — "Copied" for two
+    /// seconds. See `performPostAction`.
+    var copiedPostLinkID: ChannelID?
     /// Every linked role in a server, once its configuration has been fetched.
     ///
     /// **An absent entry is "not asked"; an empty array is "asked, none".** The
@@ -616,13 +687,15 @@ final class AppModel {
     /// answer landed and then vanish again.
     var linkedRoles: [GuildID: [LinkedRole]] = [:]
 
-    /// The shareable link for each server, once one has been made.
+    /// The shareable link for each channel invited to, once one has been made
+    /// — a channel's own Invite to Channel, or the server's default channel.
     ///
     /// **Cached for the session, because every mint is a real invite.** The
     /// menu's invite surface would otherwise `POST` a new code every time it
     /// was opened, and a server's invite list would fill with codes nobody
-    /// ever used.
-    var serverInviteLinks: [GuildID: String] = [:]
+    /// ever used. **Keyed by the channel**, because an invite is to one: keyed
+    /// by the server, a channel's own invite showed the default channel's link.
+    var inviteLinks: [ChannelID: String] = [:]
     /// The server the reader has asked to leave, pending their confirmation.
     ///
     /// **The one irreversible act in the menu**, so it takes the platform's own
@@ -703,6 +776,9 @@ final class AppModel {
     /// Nil until the account pane has asked — see
     /// `SessionController.loadAccountDetails`.
     var accountDetails: AccountDetails?
+    /// Whether the reader has confirmed an e-mail and holds a phone — the
+    /// application form's verification row reads it. See `AccountVerification`.
+    var accountVerification: AccountVerification?
     /// Everywhere the account is signed in. Nil is "not asked or refused" and
     /// `[]` is "nowhere else", and the pane draws them differently.
     var authSessions: [AuthSession]?
@@ -712,8 +788,23 @@ final class AppModel {
     /// **Two sets, because they are two independent facts** — you can ignore a
     /// friend, and blocking somebody does not ignore them. Read from READY's
     /// relationship list and kept current by the routes that write them.
-    var blockedUserIDs: Set<UserID> = []
-    var ignoredUserIDs: Set<UserID> = []
+    var blockedUserIDs: Set<UserID> = [] { didSet { hiddenAuthorRevision &+= 1 } }
+    var ignoredUserIDs: Set<UserID> = [] { didSet { hiddenAuthorRevision &+= 1 } }
+    /// Moves whenever either set does. A laid-out reply quotes a blocked author
+    /// as "Blocked message", so the row cache has to see a block — see
+    /// `mentionContext`. Not observed: the transcript already reads the sets.
+    @ObservationIgnored private(set) var hiddenAuthorRevision: UInt64 = 0
+    /// Discord's synced preferences the app honours — split view for threads,
+    /// and whether an ignored person's profile warns first. See
+    /// `SyncedPreferences`.
+    var syncedPreferences = SyncedPreferences()
+    /// The voice channel whose status the reader is writing — Discord's "What
+    /// are we chatting about?", see `VoiceStatusSheet`.
+    var voiceStatusEditor: VoiceStatusRequest?
+    /// The folds the reader opened in each transcript, each by any message
+    /// inside it — see `CollapsedGroup`. A jump adds its target, which opens
+    /// the fold it lands in without knowing where that fold begins.
+    var openCollapsedGroups: [ChannelID: Set<MessageID>] = [:]
     /// What the account is to each person it has a relationship with. An absent
     /// entry is `.none`, which is what the table already says — storing every
     /// stranger as `.none` would be a row per person the reader has ever seen.
@@ -745,16 +836,27 @@ final class AppModel {
     /// remembered answer that was never checked against the server is worse
     /// than no answer.
     var bookmarkedMessageIDs: Set<MessageID> = []
-    /// Servers the reader has applied to and not yet heard back from.
-    ///
-    /// `GET /users/@me/join-request-guilds`, which is the only thing that puts
-    /// a submitted application back in front of somebody after a relaunch —
-    /// the request itself lives on the server and nothing in READY mentions
-    /// it. See `JoinRequestGuild`.
+    /// The reader's own applications to servers, keyed by the server — off
+    /// READY and the socket. See `OwnJoinRequest`.
+    var ownJoinRequests: [GuildID: OwnJoinRequest] = [:]
+    /// The servers those applications are to, as
+    /// `GET /users/@me/join-request-guilds` describes them — what the rail and
+    /// the status page draw them with. See `JoinRequestGuild`.
     var joinRequestGuilds: [JoinRequestGuild] = []
+    /// Servers whose application is waiting on a moderator.
     var pendingJoinRequestGuildIDs: Set<GuildID> {
-        Set(joinRequestGuilds.map(\.id))
+        Set(ownJoinRequests.values.lazy.filter { $0.status == .submitted }.map(\.guildID))
     }
+    /// Whether the rail's Pending Applications folder is open. This session's
+    /// only, as Discord's is.
+    var isPendingApplicationsOpen = false
+    /// Discord's coachmark on that folder after an application goes in.
+    var showsApplicationCoachmark = false
+    /// The coachmark, waiting for the application's sheet to finish closing —
+    /// see `raiseQueuedApplicationCoachmark`.
+    var isApplicationCoachmarkQueued = false
+    /// Servers whose reapply is on its way, so its button waits.
+    var reapplyingGuildIDs: Set<GuildID> = []
     /// What the reader has privately decided to call somebody.
     ///
     /// **Beside `notes` rather than on `User`, and for the same reason.** It is
@@ -949,6 +1051,9 @@ final class AppModel {
     /// second gate would be a second answer to "what is this column showing" —
     /// which §1 does not allow and which nobody could act on anyway.
     var joinGate: ServerJoinGate?
+    /// The application form on screen — Discord's member verification modal,
+    /// for a server that reviews who joins. See `AppModel+JoinFlow`.
+    var joinApplicationRequest: JoinApplicationRequest?
     /// The message-search panel — nil when it is not open.
     ///
     /// **On the store rather than in the panel's own `@State`**, because the
@@ -957,6 +1062,10 @@ final class AppModel {
     /// own results would lose them on the first jump, which is the one thing
     /// the reader is there to do.
     var messageSearch: MessageSearchState?
+    /// Moves whenever something asks for the toolbar's search field — a
+    /// thread's Search item, which opens the thread as the page and puts the
+    /// reader in the field. Only `MainWindow` reads it.
+    var searchFocusRequest: UInt64 = 0
     /// Whether the search filter sheet is up. A bool rather than a value: it
     /// edits the query the panel already holds, so there is nothing else to
     /// carry and a second copy would be a second source of truth.
@@ -1184,6 +1293,9 @@ final class AppModel {
     /// Which sheet the reader asked for, before its data lands.
     var applicationInstallRequest: ApplicationInstallRequest?
     var applicationInstallFailure: String?
+    /// Where each app can be added, by its public record — see
+    /// `SessionController.loadApplicationInstallTypes`.
+    var applicationInstallTypes: [ApplicationID: [IntegrationType]] = [:]
     /// Storefronts, by application. An app with none is stored **empty** rather
     /// than left absent — absent means "not asked".
     @ObservationIgnored var applicationStores: [ApplicationID: ApplicationStore] = [:]
@@ -1785,6 +1897,9 @@ struct ActionNotice: Hashable, Sendable, Identifiable {
         case failure
         /// A scheduled message queued, moved or sent — Discord's clock toasts.
         case scheduling
+        /// An act Discord confirms with its own success toast — a timeout set
+        /// or lifted. Most moderation answers itself on screen and says nothing.
+        case success
     }
 
     var text: String

@@ -278,7 +278,7 @@ struct CopyButton: View {
     var body: some View {
         Button(action: copy) {
             HStack(spacing: Spacing.tight) {
-                Image(systemName: didCopy ? "checkmark" : "doc.on.doc")
+                Image(symbol: didCopy ? "checkmark" : "doc.on.doc")
                     .font(.system(.caption, weight: .semibold))
                     .contentTransition(.symbolEffect(.replace))
                 Text(didCopy ? "Copied" : "Copy")

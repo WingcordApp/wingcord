@@ -23,7 +23,6 @@ struct EmojiPane: View {
     let model: AppModel
 
     @State private var renaming: EmojiID?
-    @State private var deleting: GuildEmoji?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -47,9 +46,9 @@ struct EmojiPane: View {
                         )
                         CardDivider()
                         SettingsActionRow(
-                            "Add an emoji",
-                            help: "PNG, JPEG or GIF, up to 256 KB.",
-                            actionTitle: "Upload…",
+                            "Upload Emoji",
+                            help: "File type: JPEG, PNG, GIF, WEBP, AVIF",
+                            actionTitle: "Upload Emoji",
                             action: upload
                         )
                     }
@@ -105,7 +104,7 @@ struct EmojiPane: View {
                         label: "Delete \(emoji.name)",
                         role: .destructive
                     ) {
-                        deleting = emoji
+                        Task { await store.deleteEmoji(emoji.id) }
                     }
                 }
             }
@@ -114,20 +113,9 @@ struct EmojiPane: View {
             get: { renaming == emoji.id },
             set: { if !$0 { renaming = nil } }
         )) {
-            RenameSheet(title: "Rename emoji", name: emoji.name) { name in
+            RenameSheet(title: "Edit Emoji", name: emoji.name) { name in
                 Task { await store.renameEmoji(emoji.id, to: name) }
             }
-        }
-        .destructiveConfirmation(
-            isPresented: Binding(
-                get: { deleting?.id == emoji.id },
-                set: { if !$0 { deleting = nil } }
-            ),
-            title: "Delete :\(emoji.name):?",
-            message: "Messages that already use it will show the name instead of the picture.",
-            confirmTitle: "Delete"
-        ) {
-            Task { await store.deleteEmoji(emoji.id) }
         }
     }
 
@@ -138,9 +126,18 @@ struct EmojiPane: View {
         return model.users[uploader].map { "Added by \($0.preferredName)" }
     }
 
+    /// Discord's uploader takes several files at once and adds them one after
+    /// another; so does this. Each still is shrunk to fit the route's 256 KB.
     private func upload() {
-        guard let file = ExpressionUpload.pickImage() else { return }
-        Task { await store.createEmoji(name: file.suggestedName, image: file.image) }
+        Task {
+            let files = await ExpressionUpload.pickImages(
+                allowsMultiple: true,
+                maximumBytes: ExpressionSlots.emojiByteLimit
+            )
+            for file in files {
+                await store.createEmoji(name: file.suggestedName, image: file.image)
+            }
+        }
     }
 }
 
@@ -152,7 +149,6 @@ struct StickersPane: View {
 
     @State private var isUploading = false
     @State private var editing: GuildSticker?
-    @State private var deleting: GuildSticker?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -168,9 +164,8 @@ struct StickersPane: View {
                         )
                         CardDivider()
                         SettingsActionRow(
-                            "Add a sticker",
-                            help: "PNG, APNG or GIF, up to 512 KB.",
-                            actionTitle: "Upload…"
+                            "Upload Sticker",
+                            actionTitle: "Upload Sticker"
                         ) {
                             isUploading = true
                         }
@@ -179,7 +174,7 @@ struct StickersPane: View {
 
                 if stickers.isEmpty {
                     EmptyRow(
-                        message: "No stickers yet.",
+                        message: "Upload custom stickers for everyone to use",
                         symbolName: "seal"
                     )
                 } else {
@@ -232,7 +227,7 @@ struct StickersPane: View {
                     label: "Delete \(sticker.name)",
                     role: .destructive
                 ) {
-                    deleting = sticker
+                    Task { await store.deleteSticker(sticker.id) }
                 }
             }
         }
@@ -251,17 +246,6 @@ struct StickersPane: View {
                 }
             }
         }
-        .destructiveConfirmation(
-            isPresented: Binding(
-                get: { deleting?.id == sticker.id },
-                set: { if !$0 { deleting = nil } }
-            ),
-            title: "Delete \(sticker.name)?",
-            message: "Nobody in this server will be able to send it again.",
-            confirmTitle: "Delete"
-        ) {
-            Task { await store.deleteSticker(sticker.id) }
-        }
     }
 
     private func subtitle(_ sticker: GuildSticker) -> String? {
@@ -279,7 +263,6 @@ struct SoundboardPane: View {
 
     @State private var isUploading = false
     @State private var editing: SoundboardSound?
-    @State private var deleting: SoundboardSound?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -295,9 +278,8 @@ struct SoundboardPane: View {
                         )
                         CardDivider()
                         SettingsActionRow(
-                            "Add a sound",
-                            help: "MP3 or OGG, up to 512 KB and 5 seconds.",
-                            actionTitle: "Upload…"
+                            "Upload Sound",
+                            actionTitle: "Upload Sound"
                         ) {
                             isUploading = true
                         }
@@ -305,7 +287,7 @@ struct SoundboardPane: View {
                 }
 
                 if sounds.isEmpty {
-                    EmptyRow(message: "No sounds yet.", symbolName: "speaker.wave.2")
+                    EmptyRow(message: "No Sounds — Get the party started by uploading a sound", symbolName: "speaker.wave.2")
                 } else {
                     SettingsGroup("Sounds — \(sounds.count)") {
                         SettingsCard {
@@ -326,8 +308,8 @@ struct SoundboardPane: View {
                         name: draft.name,
                         sound: sound,
                         volume: draft.volume,
-                        emojiName: draft.emojiName.isEmpty ? nil : draft.emojiName,
-                        emojiID: nil
+                        emojiName: draft.emoji?.isCustom == true ? nil : draft.emoji?.name,
+                        emojiID: draft.emoji?.id?.rawValue
                     )
                 }
             }
@@ -356,7 +338,7 @@ struct SoundboardPane: View {
                     label: "Delete \(sound.name)",
                     role: .destructive
                 ) {
-                    deleting = sound
+                    Task { await store.deleteSound(sound.id) }
                 }
             }
         }
@@ -370,22 +352,11 @@ struct SoundboardPane: View {
                         sound.id,
                         name: draft.name,
                         volume: draft.volume,
-                        emojiName: draft.emojiName.isEmpty ? nil : draft.emojiName,
-                        emojiID: nil
+                        emojiName: draft.emoji?.isCustom == true ? nil : draft.emoji?.name,
+                        emojiID: draft.emoji?.id?.rawValue
                     )
                 }
             }
-        }
-        .destructiveConfirmation(
-            isPresented: Binding(
-                get: { deleting?.id == sound.id },
-                set: { if !$0 { deleting = nil } }
-            ),
-            title: "Delete \(sound.name)?",
-            message: "Nobody in this server will be able to play it again.",
-            confirmTitle: "Delete"
-        ) {
-            Task { await store.deleteSound(sound.id) }
         }
     }
 }
@@ -410,21 +381,54 @@ enum ExpressionUpload {
         var contentType: String
     }
 
-    static func pickImage() -> PickedImage? {
-        guard let url = panel(types: [.png, .jpeg, .gif]),
-              let bytes = try? Data(contentsOf: url)
-        else { return nil }
-        let isGIF = url.pathExtension.lowercased() == "gif"
-        return PickedImage(
-            image: isGIF ? .gif(bytes) : .png(bytes),
-            suggestedName: sanitised(url.deletingPathExtension().lastPathComponent)
-        )
+    /// The still formats Discord's own uploader takes, plus GIF where an
+    /// animation is allowed.
+    static func imageTypes(allowsAnimated: Bool) -> [UTType] {
+        var types: [UTType] = [.png, .jpeg, .webP]
+        if let avif = UTType(filenameExtension: "avif") { types.append(avif) }
+        if allowsAnimated { types.append(.gif) }
+        return types
+    }
+
+    /// Chooses images and prepares them for a JSON image route.
+    ///
+    /// **Every still goes up as PNG, re-encoded rather than relabelled.** This
+    /// used to send a JPEG's bytes under `image/png`, which the route answers
+    /// with a refusal that names the field rather than the encoding. Discord's
+    /// own uploader re-encodes when it crops, and so does this — off the main
+    /// actor, because a decode of a large photograph is the wrong thing to do
+    /// between a click and the next frame.
+    ///
+    /// `maximumBytes` shrinks a still until it fits (an emoji's 256 KB); a GIF
+    /// keeps its frames and the route judges its size.
+    static func pickImages(
+        allowsMultiple: Bool = false,
+        allowsAnimated: Bool = true,
+        maximumBytes: Int? = nil
+    ) async -> [PickedImage] {
+        let urls = panel(types: imageTypes(allowsAnimated: allowsAnimated), allowsMultiple: allowsMultiple)
+        guard !urls.isEmpty else { return [] }
+        return await Task.detached(priority: .userInitiated) {
+            urls.compactMap { url -> PickedImage? in
+                guard let bytes = try? Data(contentsOf: url),
+                      let image = UploadImageEncoder.prepared(
+                          bytes,
+                          isGIF: url.pathExtension.lowercased() == "gif",
+                          maximumBytes: maximumBytes
+                      )
+                else { return nil }
+                return PickedImage(
+                    image: image,
+                    suggestedName: sanitised(url.deletingPathExtension().lastPathComponent)
+                )
+            }
+        }.value
     }
 
     static func pickFile(types: [UTType]) -> PickedFile? {
-        guard let url = panel(types: types), let bytes = try? Data(contentsOf: url) else {
-            return nil
-        }
+        guard let url = panel(types: types, allowsMultiple: false).first,
+              let bytes = try? Data(contentsOf: url)
+        else { return nil }
         return PickedFile(
             bytes: bytes,
             filename: url.lastPathComponent,
@@ -432,7 +436,7 @@ enum ExpressionUpload {
         )
     }
 
-    static func sanitised(_ name: String) -> String {
+    nonisolated static func sanitised(_ name: String) -> String {
         let kept = name.unicodeScalars.filter {
             CharacterSet.alphanumerics.contains($0) || $0 == "_"
         }
@@ -442,13 +446,13 @@ enum ExpressionUpload {
         return result.count >= 2 ? String(result.prefix(32)) : "emoji"
     }
 
-    private static func panel(types: [UTType]) -> URL? {
+    private static func panel(types: [UTType], allowsMultiple: Bool) -> [URL] {
         let panel = NSOpenPanel()
-        panel.allowsMultipleSelection = false
+        panel.allowsMultipleSelection = allowsMultiple
         panel.canChooseDirectories = false
         panel.allowedContentTypes = types
-        guard panel.runModal() == .OK else { return nil }
-        return panel.url
+        guard panel.runModal() == .OK else { return [] }
+        return panel.urls
     }
 
     private static func contentType(for url: URL) -> String {

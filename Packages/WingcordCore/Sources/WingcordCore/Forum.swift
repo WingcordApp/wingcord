@@ -120,6 +120,16 @@ public struct ChannelFlags: OptionSet, Hashable, Sendable, Codable {
     /// The server turned summaries off for this one channel. Discord's
     /// `SUMMARIES_DISABLED`, 2048 in its channel-flag table.
     public static let summariesDisabled = ChannelFlags(rawValue: 1 << 11)
+    /// Discord's `HIDE_MEDIA_DOWNLOAD_OPTIONS` — set when the Overview's "Show
+    /// Option to Save and Copy Embedded Media" is off.
+    public static let hideMediaDownloadOptions = ChannelFlags(rawValue: 1 << 15)
+    /// Discord's `IS_MODERATOR_REPORT_CHANNEL`, 524288 in its table: a
+    /// server's moderator-report forum, and each report posted in it. A report
+    /// is resolved rather than edited, so most of a thread's menu leaves it
+    /// alone — see `ThreadGate`.
+    public static let isModeratorReportChannel = ChannelFlags(rawValue: 1 << 19)
+    /// Discord's `IS_SPOILER_CHANNEL`, Content Visibility's one bit.
+    public static let spoilerChannel = ChannelFlags(rawValue: 1 << 21)
 }
 
 /// What a forum's post list was asked for.

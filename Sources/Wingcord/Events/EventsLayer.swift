@@ -138,11 +138,8 @@ private struct EventsListPage: View {
                     .accessibilityHidden(true)
             } trailing: {
                 if canCreate {
-                    // Creating lives in Server Settings, where every field of
-                    // an event can be set.
                     Button("Create Event") {
-                        model.eventsPanel = nil
-                        ServerSettingsWindow.open(guildID, section: .events)
+                        model.openEventEditor(inGuild: guildID)
                     }
                     .buttonStyle(.borderedProminent)
                     .controlSize(.small)

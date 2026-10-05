@@ -111,7 +111,7 @@ struct EmptyRow: View {
     var body: some View {
         SettingsCard {
             VStack(spacing: Spacing.snug) {
-                Image(systemName: symbolName)
+                Image(symbol: symbolName)
                     .font(.system(size: 22))
                     .foregroundStyle(Ink.tertiary)
                 Text(message)
@@ -156,7 +156,7 @@ struct EditableTextRow: View {
             SettingsControlRow(title, help: help) {
                 HStack(spacing: Spacing.tight) {
                     if isDirty {
-                        Button("Revert") { text = committed }
+                        Button("Reset") { text = committed }
                             .buttonStyle(.plain)
                             .font(.system(.caption))
                             .foregroundStyle(Ink.tertiary)
@@ -221,7 +221,7 @@ struct EditableTextBlock: View {
 
             HStack(spacing: Spacing.base) {
                 if isDirty {
-                    Button("Revert") { text = committed }
+                    Button("Reset") { text = committed }
                         .buttonStyle(.plain)
                         .font(.system(.caption))
                         .foregroundStyle(Ink.tertiary)
@@ -279,7 +279,11 @@ struct SettingsPickerRow<Value: Hashable>: View {
                         selection = option.value
                     } label: {
                         if let symbolName = option.symbolName {
-                            Label(option.title, systemImage: symbolName)
+                            Label {
+                                Text(option.title)
+                            } icon: {
+                                Image(symbol: symbolName)
+                            }
                         } else {
                             Text(option.title)
                         }
@@ -395,7 +399,7 @@ struct RowIconButton: View {
 
     var body: some View {
         Button(action: action) {
-            Image(systemName: symbolName)
+            Image(symbol: symbolName)
                 .font(.system(size: 11, weight: .semibold))
                 .foregroundStyle(role == .destructive ? AnyShapeStyle(Palette.destructive) : AnyShapeStyle(Ink.secondary))
                 .frame(width: 26, height: 26)
@@ -491,5 +495,84 @@ extension View {
             confirmTitle: confirmTitle,
             perform: perform
         ))
+    }
+}
+
+// MARK: - A described setting
+
+/// A setting as Discord lays one out — Safety Setup's rows, Onboarding's,
+/// Integrations' and Boost Perks': an optional mark, the title with an
+/// optional level badge, the sentence under it in full, and the control at the
+/// trailing edge.
+///
+/// **The sentence is drawn, not tucked into a tooltip.** On these pages the
+/// line under a title is the explanation Discord gives, and a glyph that only
+/// shows it on hover hides the one thing the row is there to say.
+struct DescribedRow<Mark: View, Trailing: View>: View {
+    private let title: String
+    private let detail: Text?
+    private let badge: String?
+    private let mark: Mark
+    private let trailing: Trailing
+
+    init(
+        _ title: String,
+        detail: Text? = nil,
+        badge: String? = nil,
+        @ViewBuilder mark: () -> Mark = { EmptyView() },
+        @ViewBuilder trailing: () -> Trailing
+    ) {
+        self.title = title
+        self.detail = detail
+        self.badge = badge
+        self.mark = mark()
+        self.trailing = trailing()
+    }
+
+    var body: some View {
+        HStack(alignment: .center, spacing: SettingsMetrics.navigationIconGap) {
+            mark
+            VStack(alignment: .leading, spacing: 2) {
+                HStack(spacing: Spacing.tight) {
+                    Text(title)
+                        .font(SettingsType.rowTitle)
+                        .foregroundStyle(Ink.primary)
+                    if let badge { LevelBadge(text: badge) }
+                }
+                if let detail {
+                    detail
+                        .font(SettingsType.rowSubtitle)
+                        .foregroundStyle(Ink.secondary)
+                        .tint(Palette.accent)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            trailing
+        }
+        .padding(.horizontal, SettingsMetrics.cardContentInset)
+        .padding(.vertical, Spacing.snug)
+        .frame(maxWidth: .infinity, minHeight: SettingsMetrics.navigationRowHeight, alignment: .leading)
+        .accessibilityElement(children: .contain)
+    }
+}
+
+/// Discord's "LVL 2" pill beside a perk the server has not reached, with its
+/// lock.
+struct LevelBadge: View {
+    var text: String
+
+    var body: some View {
+        HStack(spacing: 2) {
+            Image(systemName: "lock.fill")
+                .font(.system(size: 7, weight: .bold))
+            Text(text)
+                .font(.system(.caption2, weight: .bold))
+        }
+        .foregroundStyle(Ink.secondary)
+        .padding(.horizontal, 6)
+        .padding(.vertical, 2)
+        .background(SettingsSurface.controlTrough, in: .capsule)
+        .accessibilityElement(children: .combine)
     }
 }

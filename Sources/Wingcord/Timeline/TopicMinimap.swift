@@ -244,7 +244,7 @@ private struct TopicMinimapRow: View {
                 .foregroundStyle(titleStyle)
                 .lineLimit(1)
             if emphasis == .hovered {
-                Image(systemName: pointsDown ? "arrow.down" : "arrow.up")
+                Image(symbol: pointsDown ? "arrow.down" : "arrow.up")
                     .font(.system(.caption, weight: .semibold))
                     .foregroundStyle(InkColor.solid)
                     .transition(.opacity)

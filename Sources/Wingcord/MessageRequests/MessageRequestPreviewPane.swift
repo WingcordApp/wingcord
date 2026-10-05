@@ -14,45 +14,33 @@ struct MessageRequestPreviewPane: View {
     var channelID: ChannelID
 
     @Environment(AppModel.self) private var model
-    /// The bar's measured height, paid by the transcript as an inset — the
-    /// composer's arrangement in `ConversationPane`.
-    @State private var barHeight: CGFloat = 0
 
     var body: some View {
         let isSpam = model.channelIndex[channelID]?.messageRequest == .spam
-        TimelineContainer(channelID: channelID, bottomInset: barHeight)
-            .ignoresSafeArea(.container, edges: .bottom)
-            .floatingTopBar {
-                VStack(spacing: Spacing.base) {
-                    ChannelPreviewHeader(
-                        chrome: model.channelPreviewChrome(for: channelID),
-                        open: nil,
-                        close: { model.previewMessageRequest(channelID) }
-                    )
-                    if isSpam { SpamQuestion(channelID: channelID) }
-                }
-                .padding(.horizontal, Spacing.snug)
-                .padding(.bottom, Spacing.base)
+        ColumnTranscript(channelID: channelID) {
+            VStack(spacing: Spacing.base) {
+                ChannelPreviewHeader(
+                    chrome: model.channelPreviewChrome(for: channelID),
+                    open: nil,
+                    close: { model.previewMessageRequest(channelID) }
+                )
+                if isSpam { SpamQuestion(channelID: channelID) }
             }
-            .safeAreaBar(edge: .bottom, spacing: 0) {
-                MessageRequestBar(channelID: channelID)
-                    .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { height in
-                        guard abs(barHeight - height) > 0.5 else { return }
-                        // A measured value: written with animations off, as the
-                        // composer's is.
-                        var transaction = Transaction()
-                        transaction.disablesAnimations = true
-                        withTransaction(transaction) { barHeight = height }
-                    }
-            }
-            .frame(width: Proportions.previewColumnIdeal)
-            // The column's own edge — `ChannelPreviewPane`'s reason.
-            .overlay(alignment: .leading) {
-                Rectangle()
-                    .fill(Ink.quaternary)
-                    .frame(width: 1)
-                    .ignoresSafeArea()
-            }
+            .padding(.horizontal, Spacing.snug)
+            .padding(.bottom, Spacing.base)
+        } foot: {
+            // The request's bar where the composer would be — measured and
+            // paid as an inset like the composer, by `ColumnTranscript`.
+            MessageRequestBar(channelID: channelID)
+        }
+        .frame(width: Proportions.previewColumnIdeal)
+        // The column's own edge — `ChannelPreviewPane`'s reason.
+        .overlay(alignment: .leading) {
+            Rectangle()
+                .fill(Ink.quaternary)
+                .frame(width: 1)
+                .ignoresSafeArea()
+        }
     }
 }
 

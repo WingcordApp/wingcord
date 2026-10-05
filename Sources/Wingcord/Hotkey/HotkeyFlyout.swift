@@ -354,7 +354,7 @@ private struct FooterChip: View {
                 // A glyph chip is square and the glyph is centred in it. Padding
                 // would make it as wide as whatever the symbol happens to
                 // measure, and `return` is half again as wide as `esc` is tall.
-                Image(systemName: symbol)
+                Image(symbol: symbol)
                     .font(.system(size: 9))
                     .frame(width: HotkeyMetrics.chipMinWidth, height: HotkeyMetrics.chipHeight)
             } else if let label {

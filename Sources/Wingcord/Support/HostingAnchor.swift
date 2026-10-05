@@ -54,7 +54,10 @@ enum PresentationOrigin {
 /// places for the flip to be forgotten, and the failure is a card that opens
 /// somewhere plausible but wrong.
 extension NSView {
-    func anchorInHostingRoot(_ rect: CGRect) -> CGRect {
+    /// - Parameter insidePopover: the view is inside a popover, whose SwiftUI
+    ///   root starts at its hosting view's own origin — there is no titlebar
+    ///   strip above it, and `PresentationOrigin` is the main window's.
+    func anchorInHostingRoot(_ rect: CGRect, insidePopover: Bool = false) -> CGRect {
         guard let host = Self.hostingAncestor(of: self) ?? window?.contentView else {
             return convert(rect, to: nil)
         }
@@ -71,7 +74,7 @@ extension NSView {
         // view's.** The root is laid out below the titlebar strip while the
         // hosting view spans the whole content area, so a rect that stops here
         // is one titlebar too low. See `PresentationOrigin`.
-        let origin = PresentationOrigin.value
+        let origin = insidePopover ? .zero : PresentationOrigin.value
         let result = flipped.offsetBy(dx: -origin.x, dy: -origin.y)
         Self.traceAnchor(rect, in: self, host: host, result: result)
         return result

@@ -63,6 +63,22 @@ struct ApplicationInstallTests {
         #expect(legacy.parameters(for: .userInstall)?.permissions.contains(.administrator) == true)
     }
 
+    /// Discord's picker offers only where the app gives install parameters,
+    /// the user's first; an app from before the per-type config goes to a
+    /// server alone.
+    @Test("Where an app can be added follows its own config")
+    func installTypes() throws {
+        #expect(try decoded().installTypes == [.userInstall, .guildInstall])
+        func types(_ json: String) throws -> [IntegrationType] {
+            try JSONDecoder().decode(InstallDTO.ApplicationDTO.self, from: Data(json.utf8)).installTypes
+        }
+        #expect(try types(#"{"id":"1","install_params":{"scopes":["bot"],"permissions":"8"}}"#) == [.guildInstall])
+        #expect(try types(#"""
+            {"id":"1","integration_types_config":{"0":{},"1":{"oauth2_install_params":{"scopes":["applications.commands"],"permissions":"0"}}}}
+            """#) == [.userInstall])
+        #expect(try types(#"{"id":"1"}"#).isEmpty)
+    }
+
     /// **The store gate, and it needs no store fetch.**
     @Test("storefront_available says whether the app has a store")
     func readsTheStorefrontFlag() throws {

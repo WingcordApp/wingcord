@@ -92,6 +92,18 @@ struct GatewayFrame: Decodable, Sendable {
         case presenceUpdate(PresenceDTO)
         case typingStart(TypingPayload)
         case guildMembersChunk(MembersChunkPayload)
+        /// Somebody joined, or a member changed — roles, nickname, timeout,
+        /// flags. **One case for both**: the payload is the whole member
+        /// either way, and the store upserts it.
+        case guildMemberUpsert(GuildMemberEventDTO)
+        case guildMemberRemove(GuildMemberRemoveDTO)
+        /// The outcome of a bulk ban — the POST answers before the bans are
+        /// done, and this is where Discord's own client learns how it went.
+        case guildBulkBanUpdate(GuildBulkBanUpdateDTO)
+        /// A join request was made or changed — the reader's own, or, for a
+        /// moderator, anybody's in a server they review.
+        case guildJoinRequestUpsert(GuildJoinRequestEventDTO)
+        case guildJoinRequestDelete(GuildJoinRequestDeleteDTO)
         case guildMemberListUpdate(MemberListUpdatePayload)
         case messageAck(MessageAckPayload)
         /// A mention was acknowledged — here, or on the reader's phone. The
@@ -249,6 +261,21 @@ struct GatewayFrame: Decodable, Sendable {
         case "TYPING_START": payload = .typingStart(try decode(TypingPayload.self))
         case "GUILD_MEMBERS_CHUNK":
             payload = .guildMembersChunk(try decode(MembersChunkPayload.self))
+        // A role given, a nickname set, a timeout, a kick — the authority for
+        // what a moderation write did, and for the reader's own member record.
+        case "GUILD_MEMBER_ADD", "GUILD_MEMBER_UPDATE":
+            payload = .guildMemberUpsert(try decode(GuildMemberEventDTO.self))
+        case "GUILD_MEMBER_REMOVE":
+            payload = .guildMemberRemove(try decode(GuildMemberRemoveDTO.self))
+        case "GUILD_BULK_BAN_UPDATE":
+            payload = .guildBulkBanUpdate(try decode(GuildBulkBanUpdateDTO.self))
+        // An application sent, reviewed, reopened or taken back. Create and
+        // update are one case: the payload is the whole request either way,
+        // and Discord's store files both with one function (`212455`'s `A`).
+        case "GUILD_JOIN_REQUEST_CREATE", "GUILD_JOIN_REQUEST_UPDATE":
+            payload = .guildJoinRequestUpsert(try decode(GuildJoinRequestEventDTO.self))
+        case "GUILD_JOIN_REQUEST_DELETE":
+            payload = .guildJoinRequestDelete(try decode(GuildJoinRequestDeleteDTO.self))
         case "GUILD_MEMBER_LIST_UPDATE":
             payload = .guildMemberListUpdate(try decode(MemberListUpdatePayload.self))
         case "MESSAGE_ACK": payload = .messageAck(try decode(MessageAckPayload.self))
@@ -370,6 +397,9 @@ struct ReadyPayload: Decodable, Sendable {
     /// `{ "<user id>": "note" }`. Keyed by string because JSON objects are, and
     /// parsed to snowflakes on the way into the snapshot.
     var notes: [String: String]?
+    /// The reader's own applications to servers, each with how it stands —
+    /// Discord's `CONNECTION_OPEN` reads `e.guild_join_requests ?? []`.
+    var guild_join_requests: JoinRequestList?
 
     /// Discord wrapped several READY arrays in `{ entries, partial, version }`
     /// envelopes and left others bare, in the same payload. Both shapes decode.
@@ -386,6 +416,19 @@ struct ReadyPayload: Decodable, Sendable {
         }
 
         private enum Keys: String, CodingKey { case entries }
+    }
+
+    /// **Never the reason READY fails.** Nothing here has been captured off a
+    /// real READY, so an element that cannot be read is dropped and a shape
+    /// that is not a list reads as none — the bootstrap carries every other
+    /// table in the app, and losing it over an applicant's list would be
+    /// losing the session over a folder.
+    struct JoinRequestList: Decodable, Sendable {
+        var requests: [OwnJoinRequestDTO]
+
+        init(from decoder: any Decoder) throws {
+            requests = (try? LossyList<OwnJoinRequestDTO>(from: decoder))?.elements ?? []
+        }
     }
 
     struct GuildSettingsEnvelope: Decodable, Sendable {
@@ -594,6 +637,38 @@ struct TypingPayload: Decodable, Sendable {
     var guild_id: GuildID?
     var timestamp: Double?
     var member: MemberDTO?
+}
+
+/// `GUILD_MEMBER_ADD` and `GUILD_MEMBER_UPDATE`: a member object with the
+/// server's id beside its fields, at one level.
+struct GuildMemberEventDTO: Decodable, Sendable {
+    var guild_id: GuildID
+    var member: MemberDTO
+
+    private enum Key: String, CodingKey { case guild_id }
+
+    init(from decoder: Decoder) throws {
+        guild_id = try decoder.container(keyedBy: Key.self).decode(GuildID.self, forKey: .guild_id)
+        member = try MemberDTO(from: decoder)
+    }
+}
+
+/// `GUILD_MEMBER_REMOVE`: who left, or was removed, and from where.
+struct GuildMemberRemoveDTO: Decodable, Sendable {
+    var guild_id: GuildID
+    var user: UserDTO
+}
+
+/// `{guild_id, bulk_ban: {banned_users, failed_users}}`, as Discord's own
+/// socket handler reads it.
+struct GuildBulkBanUpdateDTO: Decodable, Sendable {
+    var guild_id: GuildID
+    var bulk_ban: Outcome?
+
+    struct Outcome: Decodable, Sendable {
+        var banned_users: [UserID]?
+        var failed_users: [UserID]?
+    }
 }
 
 struct MembersChunkPayload: Decodable, Sendable {

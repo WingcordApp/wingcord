@@ -39,6 +39,10 @@ struct ServerSettingsTarget: Hashable, Codable, Identifiable {
     /// *same* window at two different pages — and a window already open for
     /// this server has to move to the page the second one asked for.
     var section: ServerSettingsSection?
+    /// A channel whose own settings should open — the main window's Edit
+    /// Channel. The window shows that channel's sidebar instead of the
+    /// server's, as Discord's channel settings replace its server settings.
+    var channelID: ChannelID?
 
     /// **Identity is the guild alone.** Two menu items asking for two pages of
     /// one server must reach one window, not two.
@@ -62,6 +66,13 @@ enum ServerSettingsWindow {
     static func open(_ guildID: GuildID, section: ServerSettingsSection? = nil) {
         NSApp.activate()
         opener?(ServerSettingsTarget(guildID: guildID, section: section))
+    }
+
+    /// Opens a channel's own settings — Overview, Permissions, Invites,
+    /// Integrations.
+    static func open(_ guildID: GuildID, channel channelID: ChannelID) {
+        NSApp.activate()
+        opener?(ServerSettingsTarget(guildID: guildID, channelID: channelID))
     }
 }
 
@@ -91,7 +102,10 @@ struct ServerSettingsView: View {
 
     @State private var store: ServerSettingsStore?
     @State private var selection: ServerSettingsSection = .profile
+    @State private var channelTab: ChannelSettingsTab = .overview
+    @State private var isDeletingServer = false
     @State private var query = ""
+    @Environment(\.dismissWindow) private var dismissWindow
     @State private var sidebar = SidebarWidth()
     @State private var dragOrigin: CGFloat?
     @Environment(\.motion) private var motion
@@ -121,31 +135,78 @@ struct ServerSettingsView: View {
         .task(id: target.section) {
             if let requested = target.section { selection = requested }
         }
+        .task(id: target.channelID) {
+            guard let channelID = target.channelID else { return }
+            store?.openChannelID = channelID
+        }
         // Not `deinit` — see `ServerSettingsStore.cancelAll`.
         .onDisappear { store?.cancelAll() }
     }
 
     private func columns(_ store: ServerSettingsStore) -> some View {
-        HStack(spacing: 0) {
-            ServerSettingsSidebar(
-                store: store,
-                guildName: model.guilds[target.guildID]?.name ?? "Server",
-                guildIconURL: guildIconURL,
-                selection: $selection,
-                query: $query
-            )
+        let guildName = model.guilds[target.guildID]?.name ?? "Server"
+        let channel = store.openChannelID.flatMap { model.channelIndex[$0] }
+        return HStack(spacing: 0) {
+            Group {
+                if let channel {
+                    ChannelSettingsSidebar(
+                        store: store,
+                        model: model,
+                        channel: channel,
+                        guildName: guildName,
+                        selection: $channelTab,
+                        close: { store.openChannelID = nil }
+                    )
+                } else {
+                    ServerSettingsSidebar(
+                        store: store,
+                        guildName: guildName,
+                        guildIconURL: guildIconURL,
+                        isOwner: model.guilds[target.guildID]?.ownerID == model.currentUserID,
+                        selection: $selection,
+                        query: $query,
+                        act: act
+                    )
+                }
+            }
             .frame(width: sidebar.current)
             .opacity(sidebar.current < 1 ? 0 : 1)
 
             ServerSettingsDetailPane(
                 store: store,
                 model: model,
-                section: selection,
+                page: channel.map { .channel($0.id, channelTab) } ?? .server(selection),
                 isSidebarCollapsed: sidebar.isCollapsed,
                 toggleSidebar: { withAnimation(motion.reposition) { sidebar.toggle() } }
             )
         }
         .overlay(alignment: .leading) { divider }
+        // A channel opened onto starts on its first page.
+        .onChange(of: store.openChannelID) { channelTab = .overview }
+        .sheet(isPresented: $isDeletingServer) {
+            DeleteServerSheet(store: store, guildName: guildName) {
+                dismissWindow()
+            }
+        }
+    }
+
+    /// The rows that leave or ask — Discord's `onClick` sections. Members and
+    /// App Directory hand the reader to the main window and close settings, as
+    /// Discord's close its layer; Delete Server asks first.
+    private func act(_ section: ServerSettingsSection) {
+        switch section {
+        case .members:
+            model.openMembersPage(in: target.guildID)
+            dismissWindow()
+        case .appDirectory:
+            model.openAppDirectory()
+            MainWindow.raise()
+            dismissWindow()
+        case .deleteServer:
+            isDeletingServer = true
+        default:
+            selection = section
+        }
     }
 
     private var guildIconURL: URL? {
@@ -160,70 +221,18 @@ struct ServerSettingsView: View {
     private func build() {
         guard store?.guildID != target.guildID else { return }
         let permissions = model.permissionGate.permissions(inGuild: target.guildID)
-        store = ServerSettingsStore(
-            guildID: target.guildID,
-            permissions: permissions,
-            channels: channelSummaries(),
-            rest: controller.rest
-        )
+        store = ServerSettingsStore.make(for: target.guildID, model: model)
+        // Opened onto a channel: the first build may land after the task
+        // that would have set it.
+        if let channelID = target.channelID {
+            store?.openChannelID = channelID
+        }
         // The catalog needs a `GuildSettings` to filter on and it has not been
         // fetched yet, so the first pass filters on permissions alone and the
         // sidebar re-filters when the fetch lands — it also fixes up a selection
         // that disappears underneath itself.
-        let reachable = ServerSettingsSection.reachable(with: permissions)
-        if !reachable.contains(selection) { selection = reachable.first ?? .profile }
-    }
-
-    /// The channel list every picker on every page uses, built once.
-    ///
-    /// From the resident store rather than fetched: the window opens on a server
-    /// the reader is already in, whose channels the sidebar is already drawing.
-    private func channelSummaries() -> [ServerSettingsStore.ChannelSummary] {
-        let channels = model.channelIndex
-            .channelIDs(inGuild: target.guildID)
-            .compactMap { model.channelIndex[$0] }
-        var categories: [ChannelID: String] = [:]
-        for channel in channels where channel.kind == .category {
-            categories[channel.id] = channel.name
-        }
-        let everyone = model.roles[target.guildID]?[RoleID(rawValue: target.guildID.rawValue)]
-        return channels
-            .filter { $0.kind != .category }
-            .map { channel in
-                ServerSettingsStore.ChannelSummary(
-                    id: channel.id,
-                    name: channel.name,
-                    kind: channel.kind,
-                    categoryName: channel.parentID.flatMap { categories[$0] },
-                    isPublic: Self.everyoneCanView(channel, everyone: everyone, guildID: target.guildID)
-                )
-            }
-    }
-
-    /// Whether `@everyone` can see a channel.
-    ///
-    /// **Not `PermissionGate`'s job.** That class answers what *the reader* may
-    /// do and caches per channel on the hottest path in the app; this is a
-    /// question about a different subject entirely, asked once when a window
-    /// opens. Putting it there would mean a second cache keyed on a second
-    /// subject for one caller.
-    ///
-    /// `@everyone`'s role id equals the guild's, which is Discord's own
-    /// convention — and the only overwrite that matters is the one naming it,
-    /// because a channel hidden from `@everyone` and allowed back for one role
-    /// is still not public.
-    private static func everyoneCanView(
-        _ channel: Channel,
-        everyone: Role?,
-        guildID: GuildID
-    ) -> Bool {
-        var allowed = everyone?.permissions.contains(.viewChannel) ?? true
-        for overwrite in channel.overwrites
-        where overwrite.subject == .role && overwrite.id == guildID.rawValue {
-            if overwrite.deny.contains(.viewChannel) { allowed = false }
-            if overwrite.allow.contains(.viewChannel) { allowed = true }
-        }
-        return allowed
+        let pages = ServerSettingsSection.reachable(with: permissions).filter { !$0.isAction }
+        if !pages.contains(selection) { selection = pages.first ?? .profile }
     }
 
     /// The grab handle, identical in behaviour to the settings window's — same
@@ -258,4 +267,73 @@ struct ServerSettingsView: View {
             )
             .accessibilityHidden(true)
     }
+}
+
+// MARK: - Building a store
+
+extension ServerSettingsStore {
+    /// A store for one server, from what the main window already holds — for
+    /// this window, and for the editors the main window raises on their own
+    /// (an event's).
+    static func make(for guildID: GuildID, model: AppModel) -> ServerSettingsStore {
+        ServerSettingsStore(
+            guildID: guildID,
+            permissions: model.permissionGate.permissions(inGuild: guildID),
+            channels: channelSummaries(of: guildID, model: model),
+            rest: model.sessionController.rest
+        )
+    }
+
+    /// The channel list every picker on every page uses, built once.
+    ///
+    /// From the resident store rather than fetched: the window opens on a server
+    /// the reader is already in, whose channels the sidebar is already drawing.
+    private static func channelSummaries(of guildID: GuildID, model: AppModel) -> [ChannelSummary] {
+        let channels = model.channelIndex
+            .channelIDs(inGuild: guildID)
+            .compactMap { model.channelIndex[$0] }
+        var categories: [ChannelID: String] = [:]
+        for channel in channels where channel.kind == .category {
+            categories[channel.id] = channel.name
+        }
+        let everyone = model.roles[guildID]?[RoleID(rawValue: guildID.rawValue)]
+        return channels
+            .filter { $0.kind != .category }
+            .map { channel in
+                ChannelSummary(
+                    id: channel.id,
+                    name: channel.name,
+                    kind: channel.kind,
+                    categoryName: channel.parentID.flatMap { categories[$0] },
+                    isPublic: everyoneCanView(channel, everyone: everyone, guildID: guildID)
+                )
+            }
+    }
+
+    /// Whether `@everyone` can see a channel.
+    ///
+    /// **Not `PermissionGate`'s job.** That class answers what *the reader* may
+    /// do and caches per channel on the hottest path in the app; this is a
+    /// question about a different subject entirely, asked once when a window
+    /// opens. Putting it there would mean a second cache keyed on a second
+    /// subject for one caller.
+    ///
+    /// `@everyone`'s role id equals the guild's, which is Discord's own
+    /// convention — and the only overwrite that matters is the one naming it,
+    /// because a channel hidden from `@everyone` and allowed back for one role
+    /// is still not public.
+    private static func everyoneCanView(
+        _ channel: Channel,
+        everyone: Role?,
+        guildID: GuildID
+    ) -> Bool {
+        var allowed = everyone?.permissions.contains(.viewChannel) ?? true
+        for overwrite in channel.overwrites
+        where overwrite.subject == .role && overwrite.id == guildID.rawValue {
+            if overwrite.deny.contains(.viewChannel) { allowed = false }
+            if overwrite.allow.contains(.viewChannel) { allowed = true }
+        }
+        return allowed
+    }
+
 }

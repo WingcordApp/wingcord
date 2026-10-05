@@ -14,23 +14,29 @@ extension AppModel {
 
     /// Raises the person menu beside the row that asked for it.
     ///
-    /// Silent for the reader themselves and for anybody the store does not know,
-    /// which is what `userActions` already decides — a menu that opens onto
-    /// "nothing to do here" is a menu that should not have opened.
+    /// Silent for anybody the store does not know, and for the reader outside
+    /// a server — a menu that opens onto "nothing to do here" is a menu that
+    /// should not have opened. Inside one the reader's own menu has their
+    /// profile, Edit Per-server Profile and their roles.
     func openUserMenu(for userID: UserID, anchor: CGRect, inGuild guildID: GuildID? = nil) {
-        guard userActions(for: userID) != nil else { return }
+        let guildID = guildID ?? selectedGuildID
+        guard users[userID] != nil,
+              userActions(for: userID) != nil || guildID != nil
+        else { return }
         dismissMessageSurfaces()
-        userMenu = UserMenuRequest(
-            userID: userID,
-            guildID: guildID ?? selectedGuildID,
-            anchor: anchor
-        )
+        userMenu = UserMenuRequest(userID: userID, guildID: guildID, anchor: anchor)
     }
 
     func isBlocked(_ userID: UserID) -> Bool { blockedUserIDs.contains(userID) }
     func isIgnored(_ userID: UserID) -> Bool { ignoredUserIDs.contains(userID) }
     func relationship(with userID: UserID) -> Relationship {
         relationships[userID] ?? .none
+    }
+
+    /// Whether a profile's ⋯ has anything behind it: Discord's own account
+    /// offers only its ID, and that only in Developer Mode.
+    func offersProfileMenu(for userID: UserID) -> Bool {
+        users[userID]?.isSystem != true || AppSettings.shared.developerMode
     }
 
     /// Everything the person menu offers for one person.
@@ -46,7 +52,8 @@ extension AppModel {
             isIgnored: isIgnored(userID),
             isBusy: relationshipsInFlight.contains(userID),
             canInvite: !invitableGuilds(for: userID).isEmpty,
-            developerMode: AppSettings.shared.developerMode
+            developerMode: AppSettings.shared.developerMode,
+            offersFriendship: !(users[userID]?.isBot ?? false) && !(users[userID]?.isSystem ?? false)
         )
     }
 
@@ -95,6 +102,43 @@ extension AppModel {
         if trimmed.isEmpty { notes[userID] = nil } else { notes[userID] = trimmed }
         identityRevision &+= 1
         sessionController.writeNote(trimmed, for: userID)
+    }
+
+    /// The other person in a one-to-one conversation, when the reader blocked
+    /// them — nil anywhere else, a group included, where Discord keeps the
+    /// composer.
+    func blockedRecipient(in channelID: ChannelID) -> UserID? {
+        guard let channel = channelIndex[channelID], channel.kind == .directMessage,
+              let partner = channel.recipientIDs.first(where: { $0 != currentUserID }),
+              blockedUserIDs.contains(partner)
+        else { return nil }
+        return partner
+    }
+
+    /// Whether this is the direct message with Discord's system account —
+    /// Discord's `isSystemDM`, which nobody can write in.
+    func isSystemDirectMessage(_ channelID: ChannelID) -> Bool {
+        guard let channel = channelIndex[channelID], channel.kind == .directMessage,
+              let partner = channel.recipientIDs.first(where: { $0 != currentUserID })
+        else { return false }
+        return users[partner]?.isSystem == true
+    }
+
+    /// Turns the warning in front of an ignored person's profile off — its
+    /// "Don't show this again" — here at once and on the account.
+    func skipIgnoredProfileWarning() {
+        let previous = syncedPreferences
+        syncedPreferences.skipsIgnoredProfileWarning = true
+        sessionController.writeSyncedPreference(.skipsIgnoredProfileWarning(true), restoring: previous)
+    }
+
+    /// The warning a profile opens behind, if it opens behind one — Discord's
+    /// `useShowBlockedOrIgnoredProfile`: every blocked person's, and every
+    /// ignored person's unless the reader turned that off.
+    func profileWarning(for userID: UserID) -> ProfileWarning? {
+        if blockedUserIDs.contains(userID) { return .blocked }
+        if ignoredUserIDs.contains(userID), !syncedPreferences.skipsIgnoredProfileWarning { return .ignored }
+        return nil
     }
 
     func setBlocked(_ isBlocked: Bool, userID: UserID) {
@@ -206,6 +250,9 @@ struct UserActions: Hashable, Sendable {
     var isBusy: Bool
     var canInvite: Bool
     var developerMode: Bool
+    /// Whether the friend row is offered at all — never on an app or on
+    /// Discord's own account, as Discord's (`803664`: `bot ? null`).
+    var offersFriendship = true
 }
 
 /// One server the reader could invite somebody to, and the channel it would be

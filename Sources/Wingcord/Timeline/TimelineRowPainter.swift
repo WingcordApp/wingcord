@@ -199,6 +199,7 @@ nonisolated enum TimelineRowPainter {
                 context: context,
                 style: style,
                 isButtonHovered: slot.editButton.map { state.hoveredComponent == $0.rect.origin } ?? false,
+                hoveredComponent: state.hoveredComponent,
                 images: images,
                 scale: scale
             )
@@ -223,6 +224,119 @@ nonisolated enum TimelineRowPainter {
                 scale: scale,
                 styledAuthorName: styledAuthorName
             )
+        case .collapsedGroup(let slot):
+            drawCollapsedGroup(slot, in: rowFrame, context: context, style: style, state: state, images: images, scale: scale)
+        case .postActions(let slot):
+            drawPostActions(slot, in: rowFrame, context: context, style: style, state: state, images: images, scale: scale)
+        }
+    }
+
+    // MARK: A forum post's bar
+
+    /// Discord's bar under a post's opening message — `PostActionsSlot`: each
+    /// button on the quiet plate the drawn secondary buttons wear, lifted a
+    /// step under the pointer.
+    private static func drawPostActions(
+        _ slot: PostActionsSlot,
+        in rowFrame: CGRect,
+        context: CGContext,
+        style: MessageTextStyle,
+        state: State,
+        images: ImageStore,
+        scale: CGFloat
+    ) {
+        for button in slot.buttons {
+            let rect = button.rect.offsetBy(dx: rowFrame.minX, dy: rowFrame.minY)
+            let isHovered = state.hoveredComponent == button.rect.origin
+            context.addPath(CGPath(
+                roundedRect: rect, cornerWidth: Radius.row, cornerHeight: Radius.row, transform: nil
+            ))
+            context.setFillColor(ThemeInk.current.lift(isHovered ? 0.18 : 0.12))
+            context.fillPath()
+            drawSymbol(
+                button.symbolName,
+                tint: button.isLit ? style.linkColor : style.primaryColor,
+                in: button.glyphRect.offsetBy(dx: rowFrame.minX, dy: rowFrame.minY),
+                context: context
+            )
+            if let label = button.label {
+                drawTextFrame(
+                    label,
+                    at: CGPoint(x: rowFrame.minX + button.labelOrigin.x, y: rowFrame.minY + button.labelOrigin.y),
+                    context: context,
+                    images: images,
+                    scale: scale
+                )
+            }
+        }
+    }
+
+    // MARK: Fold
+
+    /// A fold's line — `CollapsedGroupSlot`.
+    ///
+    /// On the fold's tint while it is open, which Discord's `expanded` lays over
+    /// the line and everything it put back, or the pointer's while it is
+    /// hovered. Under the pointer the glyph turns critical and the word takes the
+    /// link's ink, underlined when the word itself is under it.
+    private static func drawCollapsedGroup(
+        _ slot: CollapsedGroupSlot,
+        in rowFrame: CGRect,
+        context: CGContext,
+        style: MessageTextStyle,
+        state: State,
+        images: ImageStore,
+        scale: CGFloat
+    ) {
+        if slot.group.isOpen || state.isHovered {
+            context.setFillColor(ThemeInk.current.lift(0.035))
+            context.fill(rowFrame)
+        }
+        drawSymbol(
+            slot.symbolName,
+            // Discord reddens the block mark and the eye; a suspended fold's
+            // glyph keeps its quiet ink, as it offers nothing to press.
+            tint: state.isHovered && slot.group.canOpen ? style.criticalColor : style.tertiaryColor,
+            in: CGRect(
+                x: rowFrame.minX + slot.textOrigin.x
+                    - TimelineMetrics.avatarGap - TimelineMetrics.systemGlyphSide,
+                y: rowFrame.minY + slot.textOrigin.y,
+                width: TimelineMetrics.systemGlyphSide,
+                height: TimelineMetrics.systemGlyphSide
+            ),
+            context: context
+        )
+        drawTextBlock(
+            slot.text,
+            at: CGPoint(x: rowFrame.minX + slot.textOrigin.x, y: rowFrame.minY + slot.textOrigin.y),
+            context: context,
+            style: style,
+            images: images,
+            scale: scale,
+            time: state.animationTime,
+            state: TextState()
+        )
+        guard let action = slot.action else { return }
+        let origin = CGPoint(x: rowFrame.minX + action.rect.minX, y: rowFrame.minY + action.rect.minY)
+        drawTextBlock(
+            state.isHovered ? action.lit : action.quiet,
+            at: origin,
+            context: context,
+            style: style,
+            images: images,
+            scale: scale,
+            time: state.animationTime,
+            state: TextState()
+        )
+        if state.hoveredComponent == action.rect.origin {
+            let font = style.bodyFont
+            context.setFillColor(style.linkColor.cgColor)
+            context.fill(CGRect(
+                x: origin.x,
+                y: origin.y + action.rect.height + font.descender + 1.5,
+                width: action.rect.width,
+                height: max(1, font.underlineThickness)
+            ))
         }
     }
 
@@ -249,7 +363,10 @@ nonisolated enum TimelineRowPainter {
                 context.fill(rowFrame)
                 context.setFillColor(NSColor.systemYellow.withAlphaComponent(0.7).cgColor)
                 context.fill(CGRect(x: rowFrame.minX, y: rowFrame.minY, width: 2, height: rowFrame.height))
-            } else if state.isHovered {
+            } else if state.isHovered || row.isInOpenFold {
+                // An open fold's messages sit on the pointer's tint for as long
+                // as it stays open — Discord's `expanded` — so what was folded
+                // still reads as apart from the conversation around it.
                 context.setFillColor(ThemeInk.current.lift(0.035))
                 context.fill(rowFrame)
             }
@@ -342,15 +459,21 @@ nonisolated enum TimelineRowPainter {
         } else if state.showsGutterTimestamp, row.bubbles == nil {
             // A continuation row reveals its time in the empty gutter rather
             // than reserving a column for a stamp almost nobody reads.
+            //
+            // **The whole gutter, not the avatar's width.** Right-aligned to
+            // the avatar's edge as before, but free to run back to the row's
+            // own margin: "5:07 PM" is wider than a 38-point face, and inside
+            // the face's width it came out as "5:07…".
+            let gutterInset: CGFloat = 4
             drawText(
                 row.gutterTimestampText,
                 font: style.metadataFont,
                 color: style.tertiaryColor,
                 at: CGPoint(
-                    x: rowFrame.minX + TimelineMetrics.horizontalMargin,
+                    x: rowFrame.minX + gutterInset,
                     y: rowFrame.minY + 3
                 ),
-                maxWidth: Metrics.avatarMessage,
+                maxWidth: TimelineMetrics.horizontalMargin + Metrics.avatarMessage - gutterInset,
                 alignment: .right,
                 context: context
             )
@@ -424,15 +547,15 @@ nonisolated enum TimelineRowPainter {
                 ))
             }
 
-            if row.isBot {
+            if let tag = row.authorTag {
                 let badgeRect = CGRect(
                     x: rowFrame.minX + row.authorRect.maxX + 6,
                     y: rowFrame.minY + row.authorRect.minY + 3,
-                    width: AppBadge.width(isVerified: row.isVerifiedBot),
+                    width: AuthorTagChip.width(tag),
                     height: 14
                 )
                 drawChip(
-                    AppBadge.label(isVerified: row.isVerifiedBot),
+                    tag.label,
                     in: badgeRect,
                     fill: NSColor.controlAccentColor,
                     textColor: .white,
@@ -664,6 +787,19 @@ nonisolated enum TimelineRowPainter {
                 hovered: state.hoveredComponent,
                 images: images,
                 scale: scale
+            )
+        }
+
+        if let card = row.card {
+            drawCard(
+                card,
+                offset: CGPoint(x: rowFrame.minX, y: rowFrame.minY),
+                context: context,
+                style: style,
+                hovered: state.hoveredComponent,
+                images: images,
+                scale: scale,
+                time: state.animationTime
             )
         }
 
@@ -908,6 +1044,10 @@ nonisolated enum TimelineRowPainter {
                 context.setFillColor(plates.timestampFill)
             case .code:
                 drawCodePlate(frame, corner: 4, plates: plates, context: context)
+                continue
+            case .highlight:
+                context.setFillColor(TextPlateInk.highlightFill)
+                context.fill(frame)
                 continue
             }
             context.addPath(CGPath(roundedRect: frame, cornerWidth: 3, cornerHeight: 3, transform: nil))
@@ -2589,6 +2729,123 @@ nonisolated enum TimelineRowPainter {
         )
     }
 
+    // MARK: Drawn cards
+
+    /// Discord's critical button ground (`--control-critical-primary-background-default`,
+    /// `red-new-50`), the same in every theme.
+    private static let criticalGround = CGColor(srgbRed: 0xD1 / 255, green: 0x2E / 255, blue: 0x38 / 255, alpha: 1)
+
+    /// A card drawn from parts — see `DrawnCard`. Its grounds are already
+    /// first in the list; the control under the pointer draws its lit words.
+    static func drawCard(
+        _ card: DrawnCard,
+        offset: CGPoint,
+        context: CGContext,
+        style: MessageTextStyle,
+        hovered: CGPoint?,
+        images: ImageStore,
+        scale: CGFloat,
+        time: Double
+    ) {
+        let ink = ThemeInk.current
+        for part in card.parts {
+            switch part {
+            case .ground(let rect, let ground, let corners, let radius):
+                let frame = rect.offsetBy(dx: offset.x, dy: offset.y)
+                let fill = switch ground {
+                case .card: ink.cardFill
+                case .bar: ink.surface
+                case .plate: ink.hoverFill
+                case .critical: criticalGround
+                }
+                context.setFillColor(fill)
+                context.addPath(groundPath(frame, corners: corners, radius: radius))
+                context.fillPath()
+            case .text(let block, let origin):
+                drawTextBlock(
+                    block,
+                    at: CGPoint(x: origin.x + offset.x, y: origin.y + offset.y),
+                    context: context,
+                    style: style,
+                    images: images,
+                    scale: scale,
+                    time: time,
+                    state: TextState()
+                )
+            case .symbol(let name, let rect, let tint):
+                let color = switch tint {
+                case .accent: NSColor.controlAccentColor
+                case .primary: style.primaryColor
+                case .muted: style.tertiaryColor
+                case .critical: style.criticalColor
+                case .positive: NSColor(Palette.presenceOnline)
+                case .link: style.linkColor
+                }
+                drawSymbol(
+                    name,
+                    tint: color,
+                    in: rect.offsetBy(dx: offset.x, dy: offset.y),
+                    context: context
+                )
+            case .avatar(let url, let monogram, let rect):
+                drawAvatar(
+                    url: url,
+                    monogram: monogram,
+                    in: rect.offsetBy(dx: offset.x, dy: offset.y),
+                    context: context,
+                    style: style,
+                    images: images,
+                    scale: scale
+                )
+            case .tag(let tag, let rect):
+                drawChip(
+                    tag.label,
+                    in: rect.offsetBy(dx: offset.x, dy: offset.y),
+                    fill: NSColor.controlAccentColor,
+                    textColor: .white,
+                    font: AppBadge.font,
+                    context: context
+                )
+            case .dot(let rect):
+                context.setFillColor(ink.selectionFill)
+                context.fillEllipse(in: rect.offsetBy(dx: offset.x, dy: offset.y))
+            }
+        }
+        for control in card.controls {
+            guard let label = control.label else { continue }
+            let lit = hovered == control.rect.origin ? control.litLabel ?? label : label
+            drawTextBlock(
+                lit,
+                at: CGPoint(x: control.labelOrigin.x + offset.x, y: control.labelOrigin.y + offset.y),
+                context: context,
+                style: style,
+                images: images,
+                scale: scale,
+                time: time,
+                state: TextState()
+            )
+        }
+    }
+
+    /// A rounded rectangle with only some corners rounded — a card whose bar
+    /// is joined under it, and the bar.
+    private static func groundPath(_ rect: CGRect, corners: DrawnCard.Corners, radius: CGFloat) -> CGPath {
+        let top: CGFloat = corners == .bottom ? 0 : radius
+        let bottom: CGFloat = corners == .top ? 0 : radius
+        let path = CGMutablePath()
+        path.move(to: CGPoint(x: rect.minX + top, y: rect.minY))
+        path.addLine(to: CGPoint(x: rect.maxX - top, y: rect.minY))
+        path.addArc(tangent1End: CGPoint(x: rect.maxX, y: rect.minY), tangent2End: CGPoint(x: rect.maxX, y: rect.minY + top), radius: top)
+        path.addLine(to: CGPoint(x: rect.maxX, y: rect.maxY - bottom))
+        path.addArc(tangent1End: CGPoint(x: rect.maxX, y: rect.maxY), tangent2End: CGPoint(x: rect.maxX - bottom, y: rect.maxY), radius: bottom)
+        path.addLine(to: CGPoint(x: rect.minX + bottom, y: rect.maxY))
+        path.addArc(tangent1End: CGPoint(x: rect.minX, y: rect.maxY), tangent2End: CGPoint(x: rect.minX, y: rect.maxY - bottom), radius: bottom)
+        path.addLine(to: CGPoint(x: rect.minX, y: rect.minY + top))
+        path.addArc(tangent1End: CGPoint(x: rect.minX, y: rect.minY), tangent2End: CGPoint(x: rect.minX + top, y: rect.minY), radius: top)
+        path.closeSubpath()
+        return path
+    }
+
     // MARK: Separators
 
     /// The open topic's marker: its title in a band across the transcript,
@@ -2882,28 +3139,46 @@ nonisolated enum TimelineRowPainter {
         context: CGContext,
         style: MessageTextStyle,
         isButtonHovered: Bool,
+        hoveredComponent: CGPoint?,
         images: ImageStore,
         scale: CGFloat
     ) {
         let offset = CGPoint(x: frame.minX, y: frame.minY)
 
         // The tile. A rounded square rather than a circle: the channel list's
-        // own rows are rounded rectangles, and a disc here reads as an avatar.
+        // own rows are rounded rectangles, and a disc here reads as an avatar —
+        // which is what a conversation's head draws instead: its people's face.
         let icon = slot.iconRect.offsetBy(dx: offset.x, dy: offset.y)
-        context.addPath(CGPath(
-            roundedRect: icon,
-            cornerWidth: Radius.card,
-            cornerHeight: Radius.card,
-            transform: nil
-        ))
-        context.setFillColor(ThemeInk.current.surfaceRaised)
-        context.fillPath()
-        drawSymbol(
-            slot.symbolName,
-            tint: style.secondaryColor,
-            in: slot.glyphRect.offsetBy(dx: offset.x, dy: offset.y),
-            context: context
-        )
+        if slot.isRound, slot.avatarURL != nil || slot.avatarMonogram != nil {
+            drawAvatar(
+                url: slot.avatarURL,
+                monogram: slot.avatarMonogram ?? "",
+                in: icon,
+                context: context,
+                style: style,
+                images: images,
+                scale: scale
+            )
+        } else {
+            if slot.isRound {
+                context.addEllipse(in: icon)
+            } else {
+                context.addPath(CGPath(
+                    roundedRect: icon,
+                    cornerWidth: Radius.card,
+                    cornerHeight: Radius.card,
+                    transform: nil
+                ))
+            }
+            context.setFillColor(ThemeInk.current.surfaceRaised)
+            context.fillPath()
+            drawSymbol(
+                slot.symbolName,
+                tint: style.secondaryColor,
+                in: slot.glyphRect.offsetBy(dx: offset.x, dy: offset.y),
+                context: context
+            )
+        }
 
         drawTextFrame(
             slot.title,
@@ -2912,17 +3187,96 @@ nonisolated enum TimelineRowPainter {
             images: images,
             scale: scale
         )
-        drawTextFrame(
-            slot.subtitle,
-            at: CGPoint(x: offset.x + slot.subtitleOrigin.x, y: offset.y + slot.subtitleOrigin.y),
-            context: context,
-            images: images,
-            scale: scale
-        )
+        if let subtitle = slot.subtitle {
+            drawTextFrame(
+                subtitle,
+                at: CGPoint(x: offset.x + slot.subtitleOrigin.x, y: offset.y + slot.subtitleOrigin.y),
+                context: context,
+                images: images,
+                scale: scale
+            )
+        }
+        if let note = slot.note {
+            drawTextFrame(
+                note,
+                at: CGPoint(x: offset.x + slot.noteOrigin.x, y: offset.y + slot.noteOrigin.y),
+                context: context,
+                images: images,
+                scale: scale
+            )
+        }
+        // A post's tags, each on the quiet plate the drawn buttons wear.
+        for tag in slot.tags {
+            let rect = tag.rect.offsetBy(dx: offset.x, dy: offset.y)
+            context.addPath(CGPath(
+                roundedRect: rect,
+                cornerWidth: rect.height / 2,
+                cornerHeight: rect.height / 2,
+                transform: nil
+            ))
+            context.setFillColor(ThemeInk.current.lift(0.12))
+            context.fillPath()
+            drawTextFrame(
+                tag.label,
+                at: CGPoint(x: offset.x + tag.labelOrigin.x, y: offset.y + tag.labelOrigin.y),
+                context: context,
+                images: images,
+                scale: scale
+            )
+        }
         if let topic = slot.topic {
             drawTextFrame(
                 topic,
                 at: CGPoint(x: offset.x + slot.topicOrigin.x, y: offset.y + slot.topicOrigin.y),
+                context: context,
+                images: images,
+                scale: scale
+            )
+        }
+        // A person's servers in common: up to three faces, then the count.
+        if let mutuals = slot.mutuals {
+            for icon in mutuals.icons {
+                drawAvatar(
+                    url: icon.mark.iconURL,
+                    monogram: icon.mark.monogram,
+                    in: icon.rect.offsetBy(dx: offset.x, dy: offset.y),
+                    context: context,
+                    style: style,
+                    images: images,
+                    scale: scale
+                )
+            }
+            drawTextFrame(
+                mutuals.label,
+                at: CGPoint(x: offset.x + mutuals.labelOrigin.x, y: offset.y + mutuals.labelOrigin.y),
+                context: context,
+                images: images,
+                scale: scale
+            )
+        }
+        // A person's controls: Discord's primary on the accent, its secondary
+        // on the quiet plate, each lifted a step under the pointer.
+        for button in slot.buttons {
+            let rect = button.rect.offsetBy(dx: offset.x, dy: offset.y)
+            let isHovered = button.action.isEnabled && hoveredComponent == button.rect.origin
+            context.addPath(CGPath(
+                roundedRect: rect, cornerWidth: Radius.row, cornerHeight: Radius.row, transform: nil
+            ))
+            if button.action.isCritical {
+                context.setFillColor(NSColor.systemRed.withAlphaComponent(isHovered ? 0.85 : 1).cgColor)
+            } else if button.action.isProminent {
+                let accent = NSColor.controlAccentColor
+                context.setFillColor(
+                    (button.action.isEnabled ? accent.withAlphaComponent(isHovered ? 0.85 : 1) : accent.withAlphaComponent(0.5))
+                        .cgColor
+                )
+            } else {
+                context.setFillColor(ThemeInk.current.lift(isHovered ? 0.18 : 0.12))
+            }
+            context.fillPath()
+            drawTextFrame(
+                button.label,
+                at: CGPoint(x: offset.x + button.labelOrigin.x, y: offset.y + button.labelOrigin.y),
                 context: context,
                 images: images,
                 scale: scale

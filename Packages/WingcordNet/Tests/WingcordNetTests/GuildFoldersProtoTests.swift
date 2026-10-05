@@ -124,7 +124,7 @@ struct GuildFoldersProtoTests {
             return GatewayUpdate(frame.payload)
         }
         let compact = Self.before.filter { !$0.isWhitespace }
-        guard case .guildFoldersChanged(let setting)? = try update(compact) else {
+        guard case .userSettingsChanged(let setting?, _)? = try update(compact) else {
             Issue.record("the folders should have been read")
             return
         }

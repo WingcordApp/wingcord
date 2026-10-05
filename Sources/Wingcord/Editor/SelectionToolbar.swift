@@ -150,7 +150,7 @@ private struct SelectionToolbarButton: View {
 
     var body: some View {
         Button(action: action) {
-            Image(systemName: symbol)
+            Image(symbol: symbol)
                 .font(.system(size: 13, weight: .semibold))
                 .foregroundStyle(isOn ? InkColor.primary : InkColor.secondary)
                 .frame(width: 28, height: 28)

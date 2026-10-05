@@ -29,6 +29,8 @@ enum MessageActionRouter {
             model.beginReply(to: messageID, in: channelID)
         case .forward:
             model.requestForward(of: messageID, in: channelID)
+        case .createThread:
+            model.startThread(in: channelID, from: messageID, location: "Message")
         case .edit:
             model.beginEdit(of: messageID, in: channelID)
         case .copyText:

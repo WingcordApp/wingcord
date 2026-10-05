@@ -134,6 +134,29 @@ extension SessionController {
 
     /// Takes the reader into a server an accept has just joined.
     private func land(_ acceptance: InviteAcceptance, code: String) async {
+        // **An application joins nobody yet.** The accept opened a join request
+        // and no `GUILD_CREATE` is coming, so waiting for one would wait out the
+        // timeout and then show nothing — Discord's `transitionToInvite` opens
+        // the form instead, for a new member of a server that reviews them.
+        if acceptance.isApplication, acceptance.isNewMember {
+            // Filed as Discord files it, so an application closed unsent is
+            // still in the folder to come back to.
+            if let request = acceptance.joinRequest { model.fileOwnJoinRequest(request) }
+            if let guild = acceptance.applicationGuild,
+               !model.joinRequestGuilds.contains(where: { $0.id == guild.id })
+            {
+                model.joinRequestGuilds.append(guild)
+            }
+            // **An application already sent goes to its page, not the form**
+            // — Discord's `610101`: anything but STARTED is a request the
+            // reader has to read about, not fill in again.
+            if let status = model.ownJoinRequests[acceptance.guildID]?.status, status != .started {
+                model.selectGuild(acceptance.guildID)
+            } else {
+                model.openJoinApplication(acceptance.guildID, inviteCode: code)
+            }
+            return
+        }
         // **Wait for the socket, not for the 200.** The response carries the
         // invite's guild half and none of the server's contents; the rail
         // tile, the channel list and the roles all come from the
@@ -159,6 +182,16 @@ extension SessionController {
             return
         }
 
+        // A first visit is greeted, where the server still has a Welcome
+        // Screen to greet with.
+        if acceptance.isNewMember {
+            model.offerWelcomeScreen(
+                acceptance.welcomeScreen,
+                inGuild: acceptance.guildID,
+                features: acceptance.features
+            )
+        }
+
         // **`new_member` decides whether to ask.** Re-accepting an invite to
         // a server you are already in succeeds, and treating that as a fresh
         // join is how a client asks a three-year member to read the rules
@@ -177,7 +210,7 @@ extension SessionController {
     /// a rail hover already asked for.
     ///
     /// - Parameter inviteCode: passed to the rules route, which takes one. See
-    ///   `DiscordREST.memberVerification(of:inviteCode:)`.
+    ///   `DiscordREST.memberVerification(of:inviteCode:withGuild:)`.
     func loadJoinGate(_ guildID: GuildID, inviteCode: String?) {
         loadOnboarding(guildID)
         loadServerGuide(guildID)
@@ -220,7 +253,7 @@ extension SessionController {
 
             if let verification {
                 do {
-                    let outcome = try await rest.agreeToRules(verification, inGuild: guildID)
+                    let outcome = try await rest.submitJoinApplication(.agreeing(to: verification))
                     switch outcome {
                     case .approved:
                         // The gateway's `GUILD_MEMBER_UPDATE` is the authority and

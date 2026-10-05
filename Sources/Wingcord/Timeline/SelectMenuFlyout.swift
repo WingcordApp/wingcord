@@ -91,7 +91,7 @@ struct SelectOptionRow: View {
                         .foregroundStyle(Palette.accent)
                         .opacity(isChosen ? 1 : 0)
                 } else {
-                    Image(systemName: isChosen ? "checkmark.square.fill" : "square")
+                    Image(symbol: isChosen ? "checkmark.square.fill" : "square")
                         .font(.system(size: 14))
                         .foregroundStyle(isChosen ? AnyShapeStyle(Palette.accent) : AnyShapeStyle(Ink.tertiary))
                 }

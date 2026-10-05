@@ -44,6 +44,11 @@ struct TimelineView: NSViewRepresentable {
     /// A card that resolved without this would sit in the store and never be
     /// drawn.
     var cardRevision: UInt64
+    /// Which of Discord's heads the transcript opens with, and a forum post's
+    /// bar — read by the container for the reason `cardRevision` is: the
+    /// canvas only hears what SwiftUI re-evaluates.
+    var head: ChannelHead = .channel
+    var postActions: PostActions?
     /// The clip playing anywhere in the app, so the chip that started it offers
     /// to stop it. Read by the container for the reason the accents are.
     var playingPreview: URL?
@@ -132,7 +137,9 @@ struct TimelineView: NSViewRepresentable {
             canSuperReact: canSuperReact,
             canAddReactions: canAddReactions,
             hidesMedia: hidesMedia,
-            listenAlongCards: listenAlongCards
+            listenAlongCards: listenAlongCards,
+            head: head,
+            postActions: postActions
         )
     }
 
@@ -186,6 +193,8 @@ final class TimelineCoordinator: NSObject {
     private var listenAlongLive: Set<String> = []
     /// What the Spotify table was at when the rows were last laid out.
     private var cardRevision: UInt64 = 0
+    private var head: ChannelHead = .channel
+    private var postActions: PostActions?
     /// The live profile cards over the rows in view — see `UserCardHosts`.
     private let userCardHosts = UserCardHosts()
 
@@ -288,6 +297,22 @@ final class TimelineCoordinator: NSObject {
         canvas.onOpenProfile = { [weak self] userID, rect in
             guard let self, let canvas = self.canvas else { return }
             self.model.openProfile(userID, anchor: canvas.anchorInHostingRoot(rect))
+        }
+        canvas.onHeadAction = { [weak self] action, rect in
+            guard let self, let channelID = self.channelID else { return }
+            self.model.performHeadAction(action, in: channelID, anchor: rect)
+        }
+        canvas.onOpenCrosspostAuthor = { [weak self] messageID, rect in
+            guard let self, let canvas = self.canvas, let channelID = self.channelID else { return }
+            self.model.openCrosspostAuthor(messageID, in: channelID, anchor: canvas.anchorInHostingRoot(rect))
+        }
+        canvas.onOpenPersonMenu = { [weak self] userID, rect in
+            guard let self, let canvas = self.canvas else { return }
+            self.model.openUserMenu(
+                for: userID,
+                anchor: canvas.anchorInHostingRoot(rect),
+                inGuild: self.channelID.flatMap { self.model.channelIndex.guildID(of: $0) }
+            )
         }
         canvas.onOpenEmoji = { [weak self] emoji, rect in
             guard let self, let canvas = self.canvas else { return }
@@ -396,15 +421,22 @@ final class TimelineCoordinator: NSObject {
             self?.model.openThread(threadID)
         }
         canvas.onEditChannel = { [weak self] in
-            // The channel's own settings live in the server's: the Channels
-            // page, where this channel is one row.
+            // The channel's own settings — Discord's Edit Channel.
             guard let self, let channelID = self.channelID,
                   let guildID = self.model.channelIndex.guildID(of: channelID)
             else { return }
-            ServerSettingsWindow.open(guildID, section: .channels)
+            ServerSettingsWindow.open(guildID, channel: channelID)
         }
         canvas.onOpenTopicMarker = { [weak self] in
             self?.model.reopenTopicPanel()
+        }
+        canvas.onToggleCollapsedGroup = { [weak self] group in
+            guard let self, let channelID = self.channelID else { return }
+            self.model.toggleCollapsedGroup(group, in: channelID)
+        }
+        canvas.onPostAction = { [weak self] action, anchor in
+            guard let self, let channelID = self.channelID else { return }
+            self.model.performPostAction(action, postID: channelID, anchor: anchor)
         }
         canvas.onOpenReplyTarget = { [weak self] messageID in
             guard let self, let channelID = self.channelID else { return }
@@ -426,6 +458,14 @@ final class TimelineCoordinator: NSObject {
         canvas.onHoverMark = { [weak self] hover in
             guard let self, self.model.markHover != hover else { return }
             self.model.markHover = hover
+        }
+        canvas.onHoverAutoModAction = { [weak self] hover in
+            guard let self, self.model.autoModActionHover != hover else { return }
+            self.model.autoModActionHover = hover
+        }
+        canvas.onCardAction = { [weak self] messageID, action, anchor in
+            guard let self, let channelID = self.channelID else { return }
+            self.model.performCardAction(action, on: messageID, in: channelID, anchor: anchor)
         }
         canvas.onInviteButton = { [weak self] card in
             self?.model.openInvite(card)
@@ -599,6 +639,8 @@ final class TimelineCoordinator: NSObject {
         canvas?.onVisibleRangeChange = nil
         canvas?.onActivateMessage = nil
         canvas?.onOpenProfile = nil
+        canvas?.onOpenCrosspostAuthor = nil
+        canvas?.onHeadAction = nil
         canvas?.onOpenEmoji = nil
         canvas?.onOpenSticker = nil
         canvas?.onOpenAttachment = nil
@@ -620,11 +662,15 @@ final class TimelineCoordinator: NSObject {
         canvas?.onToggleReaction = nil
         canvas?.onHoverReaction = nil
         canvas?.onHoverMark = nil
+        canvas?.onHoverAutoModAction = nil
+        canvas?.onCardAction = nil
         canvas?.onInviteButton = nil
         canvas?.onToggleInviteFold = nil
         canvas?.isInviteSettled = nil
         canvas?.onOpenTopicMarker = nil
         canvas?.onEditChannel = nil
+        canvas?.onToggleCollapsedGroup = nil
+        canvas?.onPostAction = nil
         (scrollView as? TimelineScrollView)?.acceptsScrollInput = { true }
         // The clock holds a closure over the canvas; a subscriber that outlives
         // its transcript is a display link running for a channel nobody is
@@ -678,7 +724,9 @@ final class TimelineCoordinator: NSObject {
         canSuperReact: Bool,
         canAddReactions: Bool,
         hidesMedia: Bool,
-        listenAlongCards: [String: ListenAlongCard]
+        listenAlongCards: [String: ListenAlongCard],
+        head: ChannelHead = .channel,
+        postActions: PostActions? = nil
     ) {
         self.scroll = scroll
         canvas?.apply(listenAlongCards: listenAlongCards)
@@ -762,6 +810,14 @@ final class TimelineCoordinator: NSObject {
             self.cardRevision = cardRevision
             if !items.isEmpty { runLayout(preservingPosition: true) }
         }
+
+        // A thread's head and a post's bar are rows, so a change to either —
+        // a follow, "Copied", a tag — is a relayout. Within one channel only:
+        // a channel change lays out from scratch below.
+        let headChanged = head != self.head || postActions != self.postActions
+        self.head = head
+        self.postActions = postActions
+        if headChanged, channelID == self.channelID, !items.isEmpty { runLayout(preservingPosition: true) }
 
         let channelChanged = channelID != self.channelID
         if channelChanged {
@@ -1008,6 +1064,9 @@ final class TimelineCoordinator: NSObject {
             style: style,
             mentions: model.mentionContext(),
             channelName: channel.map { model.displayName(of: $0) } ?? "",
+            head: head,
+            postActions: postActions,
+            postOwnerID: { if case .post = head { channel?.ownerID } else { nil } }(),
             channelSymbol: channel?.kind.symbolName ?? "number",
             channelTopic: channel?.topic,
             // **The channel being drawn, not the one that is selected.** See
@@ -1029,6 +1088,10 @@ final class TimelineCoordinator: NSObject {
             canEditChannel: channelID.map {
                 model.channelIndex.guildID(of: $0) != nil
                     && model.permissionGate.permissions(in: $0).contains(.manageChannels)
+            } ?? false,
+            canManageMessages: channelID.map {
+                model.channelIndex.guildID(of: $0) != nil
+                    && model.permissionGate.permissions(in: $0).contains(.manageMessages)
             } ?? false,
             uploads: channelID.map(model.uploadSummaries(in:)) ?? [:],
             hidesMedia: hidesMedia,
@@ -1580,14 +1643,20 @@ final class TimelineCoordinator: NSObject {
     /// that draws messages shares — see the note there for why there is only one
     /// of these.
     private func visibleImageRequests(canvas: TimelineCanvasView) -> [TimelineImageRequests.Request] {
+        let scale = canvas.window?.backingScaleFactor ?? 2
         var rows: [MessageRow] = []
+        // A conversation's head is the one other row that draws faces.
+        var head: [TimelineImageRequests.Request] = []
         for index in canvas.visibleRowRange() {
-            guard case .message(let row) = canvas.rows[index].kind else { continue }
-            rows.append(row)
+            switch canvas.rows[index].kind {
+            case .message(let row): rows.append(row)
+            case .conversationStart(let slot): head = TimelineImageRequests.requests(forHead: slot, scale: scale)
+            default: continue
+            }
         }
-        return TimelineImageRequests.requests(
+        return head + TimelineImageRequests.requests(
             for: rows,
-            scale: canvas.window?.backingScaleFactor ?? 2,
+            scale: scale,
             loadsArtwork: AppSettings.shared.loadsImagesAutomatically,
             playsAnimatedEmoji: AnimationClock.playsAnimatedEmoji,
             filmsOnLayers: true,

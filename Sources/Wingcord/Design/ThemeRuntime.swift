@@ -302,4 +302,8 @@ nonisolated struct TextPlateInk: @unchecked Sendable {
     let spoilerRevealed: CGColor
     /// Where an inline emoji will be, while it loads.
     let emojiPlaceholder: CGColor
+
+    /// What an AutoMod rule matched — Discord's `.highlight`: its yellow
+    /// (`--yellow-new-36`, #FDB833) at 30%, in every theme.
+    static let highlightFill = CGColor(srgbRed: 253 / 255, green: 184 / 255, blue: 51 / 255, alpha: 0.3)
 }

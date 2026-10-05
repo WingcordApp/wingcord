@@ -35,6 +35,8 @@ public struct Guild: Hashable, Sendable, Identifiable, Codable {
     public var memberCount: Int?
     /// The rules channel, for a community guild.
     public var rulesChannelID: ChannelID?
+    /// The Community Updates channel, where Discord posts to moderators.
+    public var publicUpdatesChannelID: ChannelID?
     /// Where the server parks members who have gone idle in voice.
     ///
     /// **Nobody in it is counted as being in voice.** Discord's rail chip and
@@ -66,6 +68,11 @@ public struct Guild: Hashable, Sendable, Identifiable, Codable {
     /// (1 or 3) — its client's test for a server whose channels are never
     /// summarised (module `260509`).
     public var isAgeRestricted: Bool
+    /// What the server asks of an account before it may talk — and before it
+    /// may apply: Discord's application form reads it to decide which of its
+    /// two verification rows to show (`823591`). Nil where the payload did not
+    /// carry it, which asks for nothing rather than guessing.
+    public var verificationLevel: VerificationLevel?
 
     /// The mark beside the server's name — see `GuildMark`.
     public var mark: GuildMark? {
@@ -86,12 +93,14 @@ public struct Guild: Hashable, Sendable, Identifiable, Codable {
         tagBadgeHash: String? = nil,
         memberCount: Int? = nil,
         rulesChannelID: ChannelID? = nil,
+        publicUpdatesChannelID: ChannelID? = nil,
         afkChannelID: ChannelID? = nil,
         isLarge: Bool = false,
         defaultMessageNotifications: NotificationLevel = .allMessages,
         joinedAt: Date? = nil,
         theme: GuildTheme? = nil,
-        isAgeRestricted: Bool = false
+        isAgeRestricted: Bool = false,
+        verificationLevel: VerificationLevel? = nil
     ) {
         self.id = id
         self.name = name
@@ -106,12 +115,14 @@ public struct Guild: Hashable, Sendable, Identifiable, Codable {
         self.tagBadgeHash = tagBadgeHash
         self.memberCount = memberCount
         self.rulesChannelID = rulesChannelID
+        self.publicUpdatesChannelID = publicUpdatesChannelID
         self.afkChannelID = afkChannelID
         self.isLarge = isLarge
         self.defaultMessageNotifications = defaultMessageNotifications
         self.joinedAt = joinedAt
         self.theme = theme
         self.isAgeRestricted = isAgeRestricted
+        self.verificationLevel = verificationLevel
     }
 
     public var hasAnimatedIcon: Bool { iconHash?.hasPrefix("a_") ?? false }

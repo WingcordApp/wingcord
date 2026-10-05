@@ -155,7 +155,7 @@ private struct EventInfo: View {
 
     private func infoRow(symbol: String, @ViewBuilder content: () -> some View) -> some View {
         HStack(alignment: .firstTextBaseline, spacing: Spacing.base) {
-            Image(systemName: symbol)
+            Image(symbol: symbol)
                 .font(.system(.subheadline))
                 .foregroundStyle(InkColor.secondary)
                 .frame(width: 20)

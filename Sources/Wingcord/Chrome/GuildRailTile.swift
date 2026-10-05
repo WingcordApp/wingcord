@@ -114,6 +114,9 @@ struct GuildRailTile: View {
                     if guild.mentionCount > 0 {
                         UnreadBadge(count: guild.mentionCount, isMuted: guild.isMuted)
                             .offset(x: 3, y: 3)
+                    } else if let mark = guild.applicationMark {
+                        ApplicationMarkBadge(mark: mark)
+                            .offset(x: 3, y: 3)
                     }
                 }
                 // **The opposite corner from the mention count**, because the
@@ -285,6 +288,46 @@ struct UnreadBadge: View {
     }
 }
 
+/// Discord's application mark on a rail tile (`O`): its glyph on its colour —
+/// red for a denial, green for an approval, and the neutral badge for the two
+/// that are still the reader's or the moderator's move.
+///
+/// Drawn like `UnreadBadge`, ring and all, because it sits in the same corner
+/// over the same kind of artwork.
+struct ApplicationMarkBadge: View {
+    var mark: RailApplicationMark
+
+    var body: some View {
+        Image(symbol: symbolName)
+            .font(.system(size: 8, weight: .heavy))
+            .foregroundStyle(.white)
+            .frame(width: 16, height: 16)
+            .background(fill, in: .circle)
+            .overlay {
+                Circle()
+                    .strokeBorder(Color(nsColor: .windowBackgroundColor), lineWidth: 1.5)
+            }
+            .accessibilityLabel(Text(mark.membershipLine))
+    }
+
+    private var symbolName: String {
+        switch mark {
+        case .inReview: "clock"
+        case .denied: "xmark"
+        case .approved: "checkmark"
+        case .incomplete: "pencil"
+        }
+    }
+
+    private var fill: Color {
+        switch mark {
+        case .denied: Palette.destructive
+        case .approved: Palette.affirmative
+        case .inReview, .incomplete: Palette.mutedBadge
+        }
+    }
+}
+
 /// Add a Server.
 ///
 /// **Below the servers, not above them**, which is where Discord puts it and
@@ -411,7 +454,7 @@ struct LiveVoiceMark: View {
     var isConnected = false
 
     var body: some View {
-        Image(systemName: mark.symbolName)
+        Image(symbol: mark.symbolName)
             .font(.system(size: 9, weight: .bold))
             .foregroundStyle(.white)
             .frame(width: RailMarkGeometry.side, height: RailMarkGeometry.side)

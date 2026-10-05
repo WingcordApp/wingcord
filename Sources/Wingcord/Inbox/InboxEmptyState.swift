@@ -18,7 +18,7 @@ struct InboxEmptyState: View {
 
     var body: some View {
         VStack(spacing: Spacing.base) {
-            Image(systemName: symbolName)
+            Image(symbol: symbolName)
                 .font(.system(size: 30, weight: .light))
                 .foregroundStyle(Ink.tertiary)
                 .padding(.bottom, Spacing.tight)

@@ -299,6 +299,19 @@ public actor GatewaySocket {
         }
     }
 
+    /// What kind of JSON value this is — for a trace that must name a shape
+    /// without printing anybody's data.
+    nonisolated private static func kind(of value: Any?) -> String {
+        switch value {
+        case nil, is NSNull: "null"
+        case is String: "string"
+        case let number as NSNumber: CFGetTypeID(number) == CFBooleanGetTypeID() ? "bool" : "number"
+        case is [Any]: "array"
+        case is [String: Any]: "object"
+        default: "other"
+        }
+    }
+
     /// Names the top-level keys of a READY payload, and the settings shape
     /// inside it. Diagnostic only, and gated on the trace sink being installed.
     nonisolated private static func traceReadyShape(_ data: Data) {
@@ -308,6 +321,20 @@ public actor GatewaySocket {
             let body = root["d"] as? [String: Any]
         else { return }
         trace("READY keys: \(body.keys.sorted().joined(separator: ","))")
+        // The reader's own applications as READY carries them — never captured,
+        // and once decoded to nothing while Discord's rail showed one. Keys and
+        // value kinds only.
+        switch body["guild_join_requests"] {
+        case let list as [Any]:
+            let first = (list.first as? [String: Any]).map { entry in
+                entry.keys.sorted().map { "\($0):\(Self.kind(of: entry[$0]))" }.joined(separator: ",")
+            } ?? "-"
+            trace("READY guild_join_requests: \(list.count) first={\(first)}")
+        case nil:
+            trace("READY guild_join_requests: absent")
+        case let other?:
+            trace("READY guild_join_requests: \(Self.kind(of: other))")
+        }
         if let settings = body["user_settings"] as? [String: Any] {
             let folders = settings["guild_folders"] as? [Any]
             trace("READY user_settings keys: \(settings.keys.sorted().joined(separator: ","))")
@@ -1190,6 +1217,9 @@ public struct ReadySnapshot: Sendable {
     /// and the session trace prints which one READY sent.
     public var premiumType: Int?
     public var ageVerificationStatus: Int?
+    /// Whether the reader has confirmed an e-mail and holds a phone — off
+    /// READY's own `user`, nil where it did not say. See `AccountVerification`.
+    public var accountVerification: AccountVerification?
     public var guilds: [Guild]
     public var channelsByGuild: [GuildID: [Channel]]
     /// The threads the account follows, per guild.
@@ -1270,6 +1300,9 @@ public struct ReadySnapshot: Sendable {
     /// The account's private notes about people. READY carries the whole set,
     /// which is why the profile card never has to fetch one.
     public var notes: [UserID: String]
+    /// The reader's own applications, keyed by the server applied to — see
+    /// `OwnJoinRequest`.
+    public var joinRequests: [GuildID: OwnJoinRequest]
     /// Every stage that was live when this session connected, keyed by its
     /// channel. See `StageInstance` for why the channel is the key.
     public var stages: [ChannelID: StageInstance]
@@ -1296,6 +1329,7 @@ public struct ReadySnapshot: Sendable {
         currentUser = payload.user.domain
         premiumType = payload.user.premium_type
         ageVerificationStatus = payload.user.age_verification_status
+        accountVerification = payload.user.accountVerification
 
         var guilds: [Guild] = []
         var channelsByGuild: [GuildID: [Channel]] = [:]
@@ -1426,6 +1460,13 @@ public struct ReadySnapshot: Sendable {
             notes[userID] = note
         }
         self.notes = notes
+        // Every one of them is the reader's, so there is nobody to filter out —
+        // Discord's `CONNECTION_OPEN` files them all.
+        var joinRequests: [GuildID: OwnJoinRequest] = [:]
+        for request in (payload.guild_join_requests?.requests ?? []).compactMap(\.domain) {
+            joinRequests[request.guildID] = request
+        }
+        self.joinRequests = joinRequests
         self.voiceStates = voiceStates
         self.voiceChannelInfo = voiceChannelInfo
         self.soundboardsByGuild = soundboardsByGuild
@@ -1660,6 +1701,15 @@ public enum GatewayUpdate: Sendable {
     case presenceUpdated(Presence)
     case typingStarted(ChannelID, userID: UserID, at: Date)
     case membersChunk(GuildID, members: [UserID: Member], users: [UserID: User], presences: [UserID: Presence])
+    /// Somebody left the server, or was kicked or banned from it.
+    case memberRemoved(GuildID, UserID)
+    /// A bulk ban finished: who was banned and who could not be.
+    case bulkBanFinished(GuildID, banned: [UserID], failed: [UserID])
+    /// A join request was made or changed. `userID` is the applicant: a
+    /// moderator is sent everybody's, and only the reader's own is theirs.
+    case joinRequestChanged(OwnJoinRequest, userID: UserID?)
+    /// A join request is gone — withdrawn, or settled.
+    case joinRequestRemoved(GuildID, userID: UserID?)
     case memberListUpdated(MemberListUpdate)
     /// A read cursor moved in another session. `isManual` is a Mark Unread
     /// there, which may move it back; anything else only ever moves it on.
@@ -1667,7 +1717,9 @@ public enum GatewayUpdate: Sendable {
     /// The reader's own account changed. The tier and the age status ride
     /// beside the user rather than on it — see `AccountEntitlements` — and are
     /// nil where this update did not carry them.
-    case currentUserUpdated(User, premiumType: Int?, ageVerificationStatus: Int?)
+    case currentUserUpdated(
+        User, premiumType: Int?, ageVerificationStatus: Int?, verification: AccountVerification?
+    )
     /// A mention was acknowledged somewhere. The inbox drops the row.
     case recentMentionDeleted(MessageID)
     /// A message was bookmarked or a reminder set — here, or elsewhere.
@@ -1704,10 +1756,11 @@ public enum GatewayUpdate: Sendable {
         muted: Set<ChannelID>,
         settings: GuildUserSettings?
     )
-    /// The rail's arrangement was saved — by another client, or as the echo
-    /// of a write from this one. Only sent when the settings update carried
-    /// `guild_folders`: a partial update leaves out what did not change.
-    case guildFoldersChanged(GuildFolderSettings)
+    /// Another client changed the account's settings, or this one's write
+    /// echoed back. A partial update leaves out what did not change, so the
+    /// rail's folders are nil, and each synced preference nil, where it did
+    /// not carry them.
+    case userSettingsChanged(folders: GuildFolderSettings?, preferences: SyncedPreferences.Delta)
     /// An application answered an interaction with a form to fill in.
     case interactionModalCreated(InteractionModal)
     /// Somebody moved in, out of, or between voice channels. A state whose
@@ -1971,6 +2024,31 @@ public enum GatewayUpdate: Sendable {
                 users: users,
                 presences: presences
             )
+        case .guildMemberUpsert(let payload):
+            guard let user = payload.member.user else { return nil }
+            self = .membersChunk(
+                payload.guild_id,
+                members: [user.id: payload.member.domain(userID: user.id)],
+                users: [user.id: user.domain],
+                presences: [:]
+            )
+        case .guildMemberRemove(let payload):
+            self = .memberRemoved(payload.guild_id, payload.user.id)
+        case .guildBulkBanUpdate(let payload):
+            self = .bulkBanFinished(
+                payload.guild_id,
+                banned: payload.bulk_ban?.banned_users ?? [],
+                failed: payload.bulk_ban?.failed_users ?? []
+            )
+        case .guildJoinRequestUpsert(let payload):
+            // The request names its server too; the envelope's is the one
+            // Discord files it under.
+            guard let dto = payload.request,
+                  let request = dto.domain(guildID: payload.guild_id)
+            else { return nil }
+            self = .joinRequestChanged(request, userID: dto.user_id)
+        case .guildJoinRequestDelete(let payload):
+            self = .joinRequestRemoved(payload.guild_id, userID: payload.user_id)
         case .guildMemberListUpdate(let payload):
             self = .memberListUpdated(MemberListUpdate(payload))
         case .messageAck(let payload):
@@ -1984,7 +2062,8 @@ public enum GatewayUpdate: Sendable {
             self = .currentUserUpdated(
                 dto.domain,
                 premiumType: dto.premium_type,
-                ageVerificationStatus: dto.age_verification_status
+                ageVerificationStatus: dto.age_verification_status,
+                verification: dto.accountVerification
             )
         case .recentMentionDelete(let dto):
             self = .recentMentionDeleted(dto.message_id)
@@ -2130,10 +2209,14 @@ public enum GatewayUpdate: Sendable {
             )
         case .userSettingsProtoUpdate(let dto):
             guard dto.settings.type == 1,
-                  let data = Data(base64Encoded: dto.settings.proto, options: .ignoreUnknownCharacters),
-                  let folders = UserSettingsProto.guildFolders(in: data)
+                  let data = Data(base64Encoded: dto.settings.proto, options: .ignoreUnknownCharacters)
             else { return nil }
-            self = .guildFoldersChanged(folders)
+            let folders = UserSettingsProto.guildFolders(in: data)
+            let preferences = SyncedPreferencesProto.decode(data)
+            // An update about something else — the inbox's tab, a theme — has
+            // nothing for the session.
+            guard folders != nil || preferences != SyncedPreferences.Delta() else { return nil }
+            self = .userSettingsChanged(folders: folders, preferences: preferences)
         case .interactionModalCreate(let dto):
             self = .interactionModalCreated(dto.domain)
         default:

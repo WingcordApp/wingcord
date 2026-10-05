@@ -376,7 +376,7 @@ private struct OwnProfileRow: View {
                 if let dot {
                     PresenceDot(status: dot, side: 10, hasPlate: false).frame(width: 16)
                 } else if let symbolName {
-                    Image(systemName: symbolName)
+                    Image(symbol: symbolName)
                         .font(.system(size: 12, weight: .medium))
                         .frame(width: 16)
                 }

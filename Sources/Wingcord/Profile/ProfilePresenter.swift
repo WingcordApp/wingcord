@@ -221,6 +221,18 @@ struct ProfilePresenter: ViewModifier {
                     )
                 }
             }
+            // Add App, over the app's profile — Discord's authorize modal over
+            // its own. Its own value, not the directory's, so discovery's sheet
+            // and this one can never both be asked for at once.
+            .sheet(item: Binding(
+                get: { model.profileApplicationInstall },
+                set: { model.profileApplicationInstall = $0 }
+            )) { install in
+                AddApplicationSheet(request: install, channelID: model.selectedChannelID) {
+                    model.profileApplicationInstall = nil
+                }
+                .environment(model)
+            }
             // **And then given the whole container to sit in.** The layer's
             // stack is top-leading aligned, so a sized child without this is
             // pinned to the window's corner — which is where the stage was
@@ -383,6 +395,12 @@ struct ProfilePresenter: ViewModifier {
             openLink: { model.openLink($0) },
             widgetPreviews: model.widgetPreviews(for: request.userID),
             width: Self.cardWidth,
+            // The window's height less the placement's margins and the frame's
+            // overhang — past it the card scrolls rather than leaving the window.
+            maxHeight: max(
+                0,
+                container.height - 2 * ProfileCardPlacement.margin - overhang.top - overhang.bottom
+            ),
             // Only where the caller asked for them — see
             // `ProfileRequest.showsOwnActions`. Opening your own card from a
             // transcript is opening it to read.

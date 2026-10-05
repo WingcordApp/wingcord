@@ -1,4 +1,5 @@
 import SwiftUI
+import WingcordCore
 
 /// The window's one row of chrome.
 ///
@@ -17,6 +18,8 @@ struct ChannelToolbar: ToolbarContent {
     var chrome: ChannelChrome
     var toggleMemberList: () -> Void = {}
     var toggleUserProfile: () -> Void = {}
+    /// A thread's parent, from the crumb before its name.
+    var openParent: (ChannelID) -> Void = { _ in }
     var openChannelDetails: () -> Void = {}
     /// The topic flyout's contents. A closure for the reason `pinsContent` is
     /// one: the bar is evaluated on every navigation and the flyout is opened a
@@ -42,15 +45,20 @@ struct ChannelToolbar: ToolbarContent {
     // **Not on `chrome`, and that is the point.** Every other control in this
     // bar is about the channel the reader is standing in, and `ChannelChrome`
     // is what resolves that. The inbox is about the account: it is the same
-    // control in every channel, on a server page, and with nothing selected at
-    // all. Putting it on the chrome would tie a global surface to a per-channel
-    // projection and make it vanish wherever that projection is `.none`.
+    // control in every channel and with nothing selected at all. Putting it on
+    // the chrome would tie a global surface to a per-channel projection and
+    // make it vanish wherever that projection is `.none`.
+    //
+    // **A server's own page goes without it**, as Discord's does: the header
+    // there carries the page's title and nothing else.
     //
     // **Deliberately unbadged.** Discord does not badge it either, and the
     // reason here is mechanical: a count would have to be summed over
     // `readStates`, which would make this bar — evaluated on every navigation —
     // depend on a table every inbound message writes. The counts live on the
     // rail and on each group's own header, where they already are.
+    /// The column is a server's own page — `Primary.isServerPage`.
+    var isServerPage = false
     var isInboxShown: Bool = false
     var toggleInbox: () -> Void = {}
     /// The flyout's contents. A closure for the reason `pinsContent` is one:
@@ -78,14 +86,36 @@ struct ChannelToolbar: ToolbarContent {
             // channel and still has a title, and an item that disappears there
             // is a hole the bar closes by sliding its neighbours.
             if !chrome.name.isEmpty {
-                ChannelPill(
-                    name: chrome.name,
-                    symbolName: chrome.symbolName,
-                    canOpenTopic: !(chrome.topic?.isEmpty ?? true),
-                    isTopicShown: chrome.isTopicShown,
-                    action: openChannelDetails,
-                    topicContent: topicContent
-                )
+                HStack(spacing: 0) {
+                    // A thread names what it hangs off first, and that name
+                    // goes there — Discord's thread header.
+                    if let parent = chrome.parent {
+                        Button { openParent(parent.channelID) } label: {
+                            HStack(spacing: Spacing.tight) {
+                                Image(symbol: parent.symbolName)
+                                    .foregroundStyle(Ink.tertiary)
+                                Text(parent.name)
+                                    .foregroundStyle(Ink.secondary)
+                                    .lineLimit(1)
+                                Image(systemName: "chevron.right")
+                                    .font(.system(size: 9, weight: .bold))
+                                    .foregroundStyle(Ink.tertiary)
+                            }
+                            .padding(.leading, Spacing.snug)
+                            .contentShape(.rect)
+                        }
+                        .buttonStyle(.plain)
+                        .help(parent.name)
+                    }
+                    ChannelPill(
+                        name: chrome.name,
+                        symbolName: chrome.symbolName,
+                        canOpenTopic: !(chrome.topic?.isEmpty ?? true),
+                        isTopicShown: chrome.isTopicShown,
+                        action: openChannelDetails,
+                        topicContent: topicContent
+                    )
+                }
             }
         }
 
@@ -112,11 +142,11 @@ struct ChannelToolbar: ToolbarContent {
             } else if chrome.canShowVoiceChat {
                 Button(action: toggleVoiceChat) {
                     Label(
-                        chrome.isVoiceChatShown ? "Hide the Chat" : "Show the Chat",
+                        chrome.isVoiceChatShown ? "Hide Chat" : "Show Chat",
                         systemImage: "bubble.left.and.text.bubble.right"
                     )
                 }
-                .help(chrome.isVoiceChatShown ? "Hide the chat" : "Show the chat")
+                .help(chrome.isVoiceChatShown ? "Hide Chat" : "Show Chat")
             }
         }
 
@@ -132,11 +162,27 @@ struct ChannelToolbar: ToolbarContent {
         ToolbarItem(placement: .primaryAction) {
             if chrome.canShowThreads {
                 Button(action: toggleThreads) {
-                    Label("Threads", systemImage: "bubble.left.and.bubble.right")
+                    // Discord's own thread glyph, as its toolbar draws it.
+                    Label {
+                        Text("Threads")
+                    } icon: {
+                        Image(symbol: DiscordGlyph.thread)
+                    }
                 }
                 .help("Threads")
                 .popover(isPresented: threadsBinding, arrowEdge: .bottom) {
                     threadsContent()
+                }
+            }
+        }
+
+        // A thread open as the page has Discord's ⋯ — "Toolbar Overflow". The
+        // menu's popover hangs off the item, under the same scoped exception
+        // the pins and threads take.
+        ToolbarItem(placement: .primaryAction) {
+            if let threadID = chrome.threadID {
+                ThreadMoreButton(threadID: threadID, place: .page) {
+                    Label("More", systemImage: "ellipsis")
                 }
             }
         }
@@ -193,23 +239,26 @@ struct ChannelToolbar: ToolbarContent {
             }
         }
 
-        // **Its own group, because it is not about this channel.** A spacer
-        // between toolbar items breaks the glass platter they share, which is
-        // how a Liquid Glass bar says "these belong together and that one does
-        // not" — and every item before this one is scoped to the channel while
-        // the inbox is scoped to the account.
-        ToolbarSpacer(.fixed)
+        if !isServerPage {
+            // **Its own group, because it is not about this channel.** A spacer
+            // between toolbar items breaks the glass platter they share, which
+            // is how a Liquid Glass bar says "these belong together and that
+            // one does not" — and every item before this one is scoped to the
+            // channel while the inbox is scoped to the account.
+            ToolbarSpacer(.fixed)
 
-        // The third and last inline presentation in this app, under the same
-        // scoped exception the pins and threads panes take: one toolbar item,
-        // evaluated once, pointing its popover at the control that opened it.
-        ToolbarItem(placement: .primaryAction) {
-            Button(action: toggleInbox) {
-                Label("Inbox", systemImage: "tray")
-            }
-            .help("Inbox")
-            .popover(isPresented: inboxBinding, arrowEdge: .bottom) {
-                inboxContent()
+            // The third and last inline presentation in this app, under the
+            // same scoped exception the pins and threads panes take: one
+            // toolbar item, evaluated once, pointing its popover at the control
+            // that opened it.
+            ToolbarItem(placement: .primaryAction) {
+                Button(action: toggleInbox) {
+                    Label("Inbox", systemImage: "tray")
+                }
+                .help("Inbox")
+                .popover(isPresented: inboxBinding, arrowEdge: .bottom) {
+                    inboxContent()
+                }
             }
         }
     }

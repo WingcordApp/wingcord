@@ -177,6 +177,28 @@ nonisolated struct MessageTextStyle: @unchecked Sendable {
         return style
     }
 
+    /// The same style at `factor` of its size — Discord's `text-sm` inside an
+    /// embed, 14 px against its 16 px body. The metadata face is already the
+    /// small one and stays as it is.
+    func scaled(_ factor: CGFloat) -> MessageTextStyle {
+        var style = self
+        func resized(_ font: NSFont) -> NSFont {
+            NSFont(descriptor: font.fontDescriptor, size: font.pointSize * factor) ?? font
+        }
+        style.bodyFont = resized(bodyFont)
+        style.boldFont = resized(boldFont)
+        style.italicFont = resized(italicFont)
+        style.boldItalicFont = resized(boldItalicFont)
+        style.codeFont = resized(codeFont)
+        style.codeBlockFont = resized(codeBlockFont)
+        style.mentionFont = resized(mentionFont)
+        style.authorFont = resized(authorFont)
+        style.emojiWidth = emojiWidth * factor
+        style.emojiAscent = emojiAscent * factor
+        style.emojiDescent = emojiDescent * factor
+        return style
+    }
+
     /// The same style for a message Discord refused.
     ///
     /// **Discord's `.isFailed`**: the critical ink on the words, their links and
@@ -309,6 +331,16 @@ nonisolated struct MessageTextStyle: @unchecked Sendable {
         // plate painted OVER the measured range, so revealing one is a repaint
         // and the words are there to show — drawn clear, a revealed spoiler
         // uncovered nothing at all.
+    }
+
+    /// A list item's lines: Discord's `list-style-position: outside`, the
+    /// marker hanging in the list's `indent` and every wrapped line starting
+    /// where the first line's words do — under the words, not the marker.
+    func listParagraph(marker width: CGFloat, indent: CGFloat) -> NSParagraphStyle {
+        let style = (bodyParagraph.mutableCopy() as? NSMutableParagraphStyle) ?? NSMutableParagraphStyle()
+        style.firstLineHeadIndent = max(0, indent - width)
+        style.headIndent = style.firstLineHeadIndent + width
+        return style
     }
 
     private var bodyParagraph: NSParagraphStyle {

@@ -34,7 +34,7 @@ struct SearchSuggestionRow: View {
         } else if let monogram = suggestion.monogram {
             AvatarView(url: nil, monogram: monogram, side: Metrics.avatarRow)
         } else if let symbolName = suggestion.symbolName {
-            Image(systemName: symbolName)
+            Image(symbol: symbolName)
                 .font(.system(.callout))
                 .foregroundStyle(Ink.tertiary)
                 .frame(width: Metrics.avatarRow, height: Metrics.avatarRow)

@@ -21,6 +21,8 @@ struct ServerOptionsRequest: Identifiable, Hashable, Sendable {
     /// Which page the menu opens on — the root, or linked roles when a chip
     /// in a message asked for them.
     var page: ServerOptionsMenu.Surface = .root
+    /// The channel an invite is for — a channel's own Invite to Channel.
+    var inviteChannelID: ChannelID?
 
     /// **Keyed on the server, not on the anchor.** Re-opening the same menu
     /// from the other surface should move it, not stack a second one; and a
@@ -37,9 +39,12 @@ extension AppModel {
         _ guildID: GuildID,
         anchor: CGRect,
         edge: Edge = .trailing,
-        page: ServerOptionsMenu.Surface = .root
+        page: ServerOptionsMenu.Surface = .root,
+        inviteChannelID: ChannelID? = nil
     ) {
-        serverOptionsMenu = ServerOptionsRequest(guildID: guildID, anchor: anchor, edge: edge, page: page)
+        serverOptionsMenu = ServerOptionsRequest(
+            guildID: guildID, anchor: anchor, edge: edge, page: page, inviteChannelID: inviteChannelID
+        )
     }
 
     /// Goes where an `<id:…>` chip points — Discord's module `392605`.
@@ -312,9 +317,11 @@ extension AppModel {
     /// that calls this runs whenever the invite surface appears, and a `POST`
     /// per appearance would litter the server's invite list with codes nobody
     /// used.
-    func mintInviteLink(for guildID: GuildID, channelID: ChannelID) {
-        guard serverInviteLinks[guildID] == nil else { return }
-        sessionController.mintInviteLink(for: guildID, channelID: channelID)
+    /// One link per channel, minted once: a channel's own invite is not the
+    /// server's, and the server's is its default channel's.
+    func mintInviteLink(for channelID: ChannelID) {
+        guard inviteLinks[channelID] == nil else { return }
+        sessionController.mintInviteLink(for: channelID)
     }
 
     // MARK: Linked roles

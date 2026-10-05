@@ -24,6 +24,10 @@ struct GuildRail: View, Equatable {
     /// a server nobody joined has no place in it. Discord pins the preview to the
     /// top for the same reason: it is a temporary destination, not a membership.
     var previewedGuild: RailGuild?
+    /// The servers the reader has applied to — `PendingApplicationsFolder`.
+    /// Above the divider with the preview, which is where Discord puts it
+    /// (`rf`): both are servers the reader is not in.
+    var pendingApplications: PendingApplicationsRail?
     var selectedGuildID: GuildID?
     /// Whether the home (DMs) entry is the current destination.
     var isHomeSelected: Bool
@@ -38,6 +42,7 @@ struct GuildRail: View, Equatable {
     static func == (lhs: GuildRail, rhs: GuildRail) -> Bool {
         lhs.items == rhs.items
             && lhs.previewedGuild == rhs.previewedGuild
+            && lhs.pendingApplications == rhs.pendingApplications
             && lhs.selectedGuildID == rhs.selectedGuildID
             && lhs.isHomeSelected == rhs.isHomeSelected
             && lhs.homeMentionCount == rhs.homeMentionCount
@@ -53,6 +58,10 @@ struct GuildRail: View, Equatable {
     var openFolderMenu: (UInt64, CGRect) -> Void = { _, _ in }
     /// A server or folder dropped somewhere else in the rail — `RailDrop`.
     var drop: (RailDrop) -> Void = { _ in }
+    var togglePendingApplications: () -> Void = {}
+    /// A right-click on a pending application's tile, with its frame.
+    var openJoinRequestMenu: (GuildID, CGRect) -> Void = { _, _ in }
+    var dismissApplicationCoachmark: () -> Void = {}
     var addServer: () -> Void = {}
     var openDiscovery: () -> Void = {}
     /// Whether discovery is the detail column, so the tile can say so. Part of
@@ -86,6 +95,17 @@ struct GuildRail: View, Equatable {
                         isSelected: previewedGuild.id == selectedGuildID,
                         action: { selectGuild(previewedGuild.id) },
                         openMenu: { openGuildMenu(previewedGuild.id, $0) }
+                    )
+                }
+
+                if let pendingApplications {
+                    PendingApplicationsFolder(
+                        folder: pendingApplications,
+                        selectedGuildID: selectedGuildID,
+                        toggle: togglePendingApplications,
+                        selectGuild: selectGuild,
+                        openMenu: openJoinRequestMenu,
+                        dismissCoachmark: dismissApplicationCoachmark
                     )
                 }
 

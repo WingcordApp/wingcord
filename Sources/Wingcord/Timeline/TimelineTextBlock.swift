@@ -43,6 +43,8 @@ nonisolated final class TimelineTextBlock: @unchecked Sendable {
     /// Each line's place, for selection: which characters it holds and the
     /// band it occupies, in the block's own coordinates.
     private let lineBoxes: [LineBox]
+    /// How many lines the words broke into.
+    var lineCount: Int { lineBoxes.count }
     /// The first line's baseline, from the block's top. What a send's flight
     /// lines the words up on, so they leave the composer without jumping.
     var firstBaseline: CGFloat { lineBoxes.first?.baseline ?? 0 }

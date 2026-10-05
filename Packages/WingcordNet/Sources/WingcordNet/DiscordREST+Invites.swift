@@ -122,11 +122,29 @@ extension DiscordREST {
         guard let dto = try? Self.decoder.decode(InviteDTO.self, from: data),
               let guildID = dto.guildID
         else { throw Failure.decoding("invite accept carried no guild") }
+        let features = Set(dto.guild?.features ?? [])
+        // Discord files the request and the server only when both are there.
+        let joinRequest = dto.guild == nil ? nil : dto.join_request?.domain(guildID: guildID)
         return InviteAcceptance(
             guildID: guildID,
             channelID: dto.channel?.id,
             requiresVerification: dto.show_verification_form ?? false,
-            isNewMember: dto.new_member ?? false
+            isNewMember: dto.new_member ?? false,
+            isApplication: features.contains("MEMBER_VERIFICATION_GATE_ENABLED")
+                && features.contains("MEMBER_VERIFICATION_MANUAL_APPROVAL"),
+            joinRequest: joinRequest,
+            applicationGuild: joinRequest == nil ? nil : dto.guild.map {
+                JoinRequestGuild(
+                    id: guildID,
+                    name: $0.name ?? "",
+                    iconHash: $0.icon,
+                    description: $0.description.nonEmpty,
+                    splashHash: $0.splash,
+                    features: features
+                )
+            },
+            welcomeScreen: dto.guild?.welcome_screen?.domain,
+            features: features
         )
     }
 }
@@ -170,6 +188,9 @@ struct InviteDTO: Decodable, Sendable {
     var show_verification_form: Bool?
     /// Accept only.
     var new_member: Bool?
+    /// Accept only, into a server that reviews applications: the request the
+    /// accept opened — Discord's `INVITE_ACCEPT_SUCCESS` reads it. Not captured.
+    var join_request: OwnJoinRequestDTO?
 
     /// The guild as an invite describes it: thirteen fields, and none of the
     /// contents. **Deliberately not `GuildDTO`** — that type's `domain` builds a
@@ -185,6 +206,9 @@ struct InviteDTO: Decodable, Sendable {
         var features: [String]?
         var premium_tier: Int?
         var premium_subscription_count: Int?
+        /// Where the server has one — Discord's `INVITE_RESOLVE_SUCCESS` and
+        /// `INVITE_ACCEPT_SUCCESS` both file it. Not captured.
+        var welcome_screen: WelcomeScreenDTO?
     }
 
     struct ChannelHalfDTO: Decodable, Sendable {

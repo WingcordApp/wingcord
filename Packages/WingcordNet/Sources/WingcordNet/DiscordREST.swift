@@ -105,6 +105,13 @@ public actor DiscordREST {
     }()
 
     public init(metadata: ClientMetadata = ClientMetadata()) {
+        self.init(metadata: metadata, protocolClasses: nil)
+    }
+
+    /// Tests only: every request goes through `protocolClasses` — a recorder
+    /// that keeps the method, path, query, headers and body of each call, so a
+    /// route's wire shape is asserted rather than assumed.
+    init(metadata: ClientMetadata = ClientMetadata(), protocolClasses: [AnyClass]?) {
         self.metadata = metadata
         let configuration = URLSessionConfiguration.default
         configuration.httpMaximumConnectionsPerHost = 6
@@ -114,6 +121,7 @@ public actor DiscordREST {
         // read state changes — and a cache here only costs disk and staleness.
         configuration.urlCache = nil
         configuration.requestCachePolicy = .reloadIgnoringLocalCacheData
+        if let protocolClasses { configuration.protocolClasses = protocolClasses }
         session = URLSession(configuration: configuration)
     }
 
@@ -1420,23 +1428,22 @@ extension DiscordREST {
             ?? optionIDs
     }
 
-    /// The rules a server makes people agree to.
+    /// What a server asks of somebody before they can talk: its rules, and
+    /// where it reviews applications, its questions.
     ///
-    /// `with_guild=false` because the guild half of the response is a copy of
-    /// an object the store already holds, and asking for it doubles the payload
-    /// to learn nothing.
-    ///
-    /// - Parameter inviteCode: the invite this gate was reached through, when it
+    /// - Parameter withGuild: Discord's own `with_guild: !isMember` — a member
+    ///   is not sent the server again, somebody applying from outside is, and
+    ///   it is the application's header.
+    /// - Parameter inviteCode: the invite this form was reached through, when it
     ///   was. Captured — `?with_guild=false&invite_code=forza` — and sent for the
     ///   same reason `location` is sent on the join: Discord's own client sends
-    ///   it, and a gate reached by a route this client does not model is a gate
-    ///   Discord may describe differently. Omitted where there was no invite,
-    ///   which is every server opened from the rail.
+    ///   it. Omitted where there was no invite.
     public func memberVerification(
         of guildID: GuildID,
-        inviteCode: String? = nil
+        inviteCode: String? = nil,
+        withGuild: Bool = false
     ) async throws -> MemberVerification {
-        var query = [URLQueryItem(name: "with_guild", value: "false")]
+        var query = [URLQueryItem(name: "with_guild", value: withGuild ? "true" : "false")]
         if let inviteCode, !inviteCode.isEmpty {
             query.append(URLQueryItem(name: "invite_code", value: inviteCode))
         }
@@ -1498,27 +1505,27 @@ extension DiscordREST {
         return followed
     }
 
-    /// Records that the reader has read and agreed to a server's rules.
+    /// Sends a server's form back answered — the rules agreed to, an
+    /// application's questions answered.
     ///
     /// `PUT /guilds/{id}/requests/@me` — the route behind the join flow's
-    /// **Finish**, and the only write on any of these pages besides the
-    /// onboarding ballot.
+    /// **Finish** and the application's **Submit** alike.
     ///
     /// **The whole form goes back, version string included, byte for byte.** The
-    /// agreement is recorded against that text; a client that re-serialised it
+    /// answers are recorded against that text; a client that re-serialised it
     /// from a `Date` would record against a string the server does not have.
     ///
     /// The answer is a *join request*, not an acknowledgement: a rules-only gate
-    /// approves instantly, a server that also asks questions leaves it pending a
-    /// moderator, and one that has turned somebody away answers rejected. All
-    /// three are real, and the caller tells them apart.
-    public func agreeToRules(
-        _ verification: MemberVerification,
-        inGuild guildID: GuildID
+    /// approves instantly, an application waits for a moderator, and one that
+    /// has turned somebody away answers rejected. All three are real, and the
+    /// caller tells them apart.
+    public func submitJoinApplication(
+        _ application: JoinApplication
     ) async throws -> MemberVerificationOutcome {
-        guard let body = MemberVerificationSubmitBody(verification) else {
-            throw Failure.transport("no rules to agree to")
+        guard let body = MemberVerificationSubmitBody(application) else {
+            throw Failure.transport("no form to answer")
         }
+        let guildID = application.form.guildID
         let data = try await requestData(
             method: "PUT",
             path: "/guilds/\(guildID.rawValue)/requests/@me",

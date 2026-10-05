@@ -40,6 +40,21 @@ extension AppModel {
         // the reader put down by leaving.
         if let open = openTopic, open.channelID != channelID { openTopic = nil }
         sessionController.openChannel(channelID)
+        // A direct message's head names the servers in common, which only the
+        // profile carries — Discord fetches it as the head appears (`at`).
+        if let channel = channelIndex[channelID], channel.kind == .directMessage,
+           let partner = channel.recipientIDs.first(where: { $0 != currentUserID }),
+           users[partner]?.decoration == nil
+        {
+            sessionController.loadProfile(of: partner, inGuild: nil)
+        }
+        // An app's head offers Mute and Deauthorize only on a grant the reader
+        // holds, which Discord asks for as the head appears (`sJ`).
+        if let channel = channelIndex[channelID], channel.kind == .directMessage,
+           channel.recipientIDs.contains(where: { users[$0]?.isBot == true })
+        {
+            sessionController.loadAuthorizedApps()
+        }
     }
 
     /// - Parameter launch: where the words were in the composer when they

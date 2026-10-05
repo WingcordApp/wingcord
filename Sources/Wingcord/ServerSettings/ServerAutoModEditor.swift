@@ -40,21 +40,21 @@ struct AutoModSheet: View {
 
     var body: some View {
         SheetFrame(
-            title: existing == nil ? "Create a rule" : "Edit rule",
+            title: existing == nil ? Self.discordName(draft.trigger) : "Edit Rule",
             confirmTitle: existing == nil ? "Create" : "Save",
             canConfirm: draft.isSavable
         ) {
             commit(draft, existing?.id)
         } content: {
-            SheetField(title: "Rule name", isRequired: true) {
-                TextField("Block Custom Words", text: $draft.name)
+            SheetField(title: "Rule Name", isRequired: true) {
+                TextField("Enter a rule name", text: $draft.name)
                     .textFieldStyle(.roundedBorder)
             }
 
             // The trigger is fixed once a rule exists: changing it would rewrite
             // the metadata, and Discord treats the two as one thing.
             if existing == nil {
-                SheetField(title: "What sets it off", isRequired: true) {
+                SheetField(title: "Content", isRequired: true) {
                     VStack(alignment: .leading, spacing: Spacing.base) {
                         ForEach(Array(AutoModRule.Trigger.creatable.enumerated()), id: \.offset) { _, candidate in
                             TriggerChoice(
@@ -76,8 +76,8 @@ struct AutoModSheet: View {
                     }
                 }
             } else {
-                SheetField(title: "What sets it off") {
-                    Text(draft.trigger.title)
+                SheetField(title: "Content") {
+                    Text(Self.discordName(draft.trigger))
                         .font(SettingsType.rowLabel)
                         .foregroundStyle(Ink.secondary)
                 }
@@ -85,7 +85,7 @@ struct AutoModSheet: View {
 
             triggerFields
 
-            SheetField(title: "What it does", isRequired: true) {
+            SheetField(title: "Choose a response", isRequired: true) {
                 VStack(alignment: .leading, spacing: Spacing.base) {
                     ForEach(draft.trigger.permittedActions) { candidate in
                         ActionRow(
@@ -98,8 +98,10 @@ struct AutoModSheet: View {
             }
 
             SheetField(
-                title: "Exempt roles",
-                detail: "Members with Administrator or Manage Server are always exempt."
+                title: draft.trigger.allowsChannelExemptions
+                    ? "Allow certain roles or channels (optional)"
+                    : "Allow certain roles (optional)",
+                detail: "Pssst \u{2014} members with Admin and Manage Server permissions are always excluded from filter rules."
             ) {
                 exemptMenu(
                     options: (store.roles.value ?? [])
@@ -116,7 +118,7 @@ struct AutoModSheet: View {
             // Meaningless on a profile rule, which fires on a member joining
             // rather than in a channel — so it is absent rather than dimmed.
             if draft.trigger.allowsChannelExemptions {
-                SheetField(title: "Exempt channels") {
+                SheetField(title: "Channels") {
                     exemptMenu(
                         options: store.textChannels.map { ($0.id.rawValue, "#\($0.name)") },
                         chosen: Set(draft.exemptChannelIDs.map(\.rawValue))
@@ -130,13 +132,18 @@ struct AutoModSheet: View {
                     }
                 }
             }
+        }
+    }
 
-            SheetField(title: "Enabled") {
-                Toggle("", isOn: $draft.isEnabled)
-                    .toggleStyle(.switch)
-                    .labelsHidden()
-                    .controlSize(.small)
-            }
+    /// Discord's name for each kind of rule, from its AutoMod page.
+    static func discordName(_ trigger: AutoModRule.Trigger) -> String {
+        switch trigger {
+        case .keyword: "Block Custom Words"
+        case .keywordPreset: "Block Commonly Flagged Words"
+        case .mentionSpam: "Block Mention Spam"
+        case .userProfile: "Block Words in Member Profile Names"
+        case .spam: "Block messages with spam-like content from being posted."
+        case .guildPolicy, .unrecognised: "AutoMod"
         }
     }
 
@@ -146,36 +153,28 @@ struct AutoModSheet: View {
         case .keyword(let filter, let regexes, let allowList),
              .userProfile(let filter, let regexes, let allowList):
             SheetField(
-                title: "Words and phrases",
-                detail: "One per line. Use * at the start, the end or both for "
-                    + "partial matching — cat* matches catch, *cat* matches location. "
-                    + "Matching is case-insensitive."
+                title: "Choose your words",
+                detail: "Use the * character at the beginning or end of your keyword for partial matches within a word."
             ) {
                 listField(filter, limit: AutoModRule.Trigger.Limits.keywordCount) { next in
                     setKeywordMetadata(filter: next, regexes: regexes, allowList: allowList)
                 }
             }
-            SheetField(
-                title: "Regular expressions",
-                // The trap worth stating where somebody types one: this is Rust
-                // regex, not ICU, so a pattern that compiles on this side may
-                // still be refused. That is what /validate is for.
-                detail: "Rust-flavoured, up to \(AutoModRule.Trigger.Limits.regexCount). "
-                    + "Case-insensitive and global by default. Checked with Discord "
-                    + "before the rule is saved."
-            ) {
+            // Rust regex, not ICU: a pattern that compiles on this side may
+            // still be refused, which is what /validate is for.
+            SheetField(title: "Use regex patterns for advanced matching (optional)") {
                 listField(regexes, limit: AutoModRule.Trigger.Limits.regexCount) { next in
                     setKeywordMetadata(filter: filter, regexes: next, allowList: allowList)
                 }
             }
-            SheetField(title: "Allowed words") {
+            SheetField(title: "Allow words and phrases (optional)") {
                 listField(allowList, limit: AutoModRule.Trigger.Limits.allowListCount) { next in
                     setKeywordMetadata(filter: filter, regexes: regexes, allowList: next)
                 }
             }
 
         case .keywordPreset(let presets, let allowList):
-            SheetField(title: "Word sets", isRequired: true) {
+            SheetField(title: "Choose your words", isRequired: true) {
                 VStack(alignment: .leading, spacing: Spacing.base) {
                     ForEach(AutoModRule.KeywordPreset.selectable, id: \.rawValue) { preset in
                         Toggle(isOn: Binding(
@@ -198,7 +197,7 @@ struct AutoModSheet: View {
                     }
                 }
             }
-            SheetField(title: "Allowed words") {
+            SheetField(title: "Allow words and phrases (optional)") {
                 listField(allowList, limit: 1000) { next in
                     draft.trigger = .keywordPreset(presets: presets, allowList: next)
                 }
@@ -206,8 +205,8 @@ struct AutoModSheet: View {
 
         case .mentionSpam(let limit, let raid):
             SheetField(
-                title: "Mention limit",
-                detail: "Unique role and user mentions allowed in one message."
+                title: "Unique mentions (role + user) per message",
+                detail: "Limit the number of unique mentions in each message."
             ) {
                 Picker("", selection: Binding(
                     get: { limit },
@@ -217,8 +216,8 @@ struct AutoModSheet: View {
                 }
                 .labelsHidden()
             }
-            SheetField(title: "Raid protection") {
-                Toggle("Automatically detect mention raids", isOn: Binding(
+            SheetField(title: "Enable mention raid detection", detail: "Allow automatic detection of mention raids in the server.") {
+                Toggle("Enable mention raid detection", isOn: Binding(
                     get: { raid },
                     set: { draft.trigger = .mentionSpam(limit: limit, raidProtection: $0) }
                 ))
@@ -310,18 +309,16 @@ private struct TriggerChoice: View {
     var body: some View {
         Button(action: choose) {
             HStack(alignment: .top, spacing: Spacing.snug) {
-                Image(systemName: isSelected ? "largecircle.fill.circle" : "circle")
+                Image(symbol: isSelected ? "largecircle.fill.circle" : "circle")
                     .font(.system(size: 13))
                     .foregroundStyle(isSelected ? AnyShapeStyle(Palette.accent) : AnyShapeStyle(Ink.tertiary))
                 VStack(alignment: .leading, spacing: 1) {
-                    Text(trigger.title)
+                    Text(AutoModSheet.discordName(trigger))
                         .font(.system(.subheadline, weight: .medium))
                         .foregroundStyle(remaining > 0 ? AnyShapeStyle(Ink.primary) : AnyShapeStyle(Ink.tertiary))
-                    Text(
-                        remaining > 0
-                            ? trigger.detail
-                            : "This server already has as many of these as Discord allows."
-                    )
+                    // A kind at its limit is dimmed rather than explained in a
+                    // sentence Discord never wrote.
+                    Text(SafetyPane.triggerLine(trigger))
                     .font(.system(.caption))
                     .foregroundStyle(Ink.secondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -376,11 +373,11 @@ private struct ActionRow: View {
     private func detail(_ action: AutoModDraft.Action) -> some View {
         switch action {
         case .alert(let channelID):
-            Picker("Post to", selection: Binding(
+            Picker("Select channel", selection: Binding(
                 get: { channelID },
                 set: { replace(.alert(channelID: $0)) }
             )) {
-                Text("Choose a channel").tag(ChannelID?.none)
+                Text("Select channel").tag(ChannelID?.none)
                 ForEach(channels) { Text("#\($0.name)").tag(ChannelID?.some($0.id)) }
             }
             .padding(.leading, Spacing.group)
@@ -397,7 +394,7 @@ private struct ActionRow: View {
             .padding(.leading, Spacing.group)
 
         case .blockMessage(let message):
-            TextField("Custom explanation (optional)", text: Binding(
+            TextField("Enter your custom message", text: Binding(
                 get: { message ?? "" },
                 set: { replace(.blockMessage(customMessage: $0.isEmpty ? nil : $0)) }
             ))

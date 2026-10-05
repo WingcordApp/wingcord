@@ -56,6 +56,8 @@ struct TimelineContainer: View {
             // drawn canvas, and a card that resolved without something SwiftUI
             // owns changing would never be told to draw it.
             cardRevision: model.cardRevision,
+            head: model.channelIndex[channelID].map(model.channelHead(for:)) ?? .channel,
+            postActions: model.postActions(for: channelID),
             playingPreview: model.spotifyPreviewURL,
 
             // Read narrowly: a jump for a different channel is not this

@@ -214,14 +214,7 @@ extension GlobalHotkey {
             app.hide(nil)
             return
         }
-        app.activate()
-        // The main window, not `keyWindow`: after `hide` there is no key window
-        // to raise, and the settings window is not what the reader asked for.
-        for window in app.windows where window.identifier?.rawValue.contains("main") == true {
-            window.makeKeyAndOrderFront(nil)
-            return
-        }
-        app.windows.first { $0.isVisible && $0.canBecomeKey }?.makeKeyAndOrderFront(nil)
+        MainWindow.raise()
     }
 }
 

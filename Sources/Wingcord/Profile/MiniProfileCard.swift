@@ -73,6 +73,11 @@ struct MiniProfileCard: View {
     /// Whether the pointer is over the card, which fades the profile effect
     /// back so the name and banner under it can be read.
     @State private var isEffectFaded = false
+    /// Whether the reader said yes to "Show Profile?" on this card.
+    ///
+    /// **Per card, as Discord's is** — its `useState` lives and dies with the
+    /// popout, so the next card opened on a blocked person warns again.
+    @State private var isWarningPassed = false
     /// How wide the card is laid out.
     ///
     /// A parameter rather than a constant because the same card is the popover
@@ -80,6 +85,11 @@ struct MiniProfileCard: View {
     /// this view would be two places for a badge row, a role chip or a status
     /// bubble to drift.
     var width: CGFloat = 320
+    /// The tallest the card may stand — the window's height, less the
+    /// placement's margins. Past it the card scrolls inside its own rounded
+    /// edge rather than running off the bottom of the window. Nil where the
+    /// host already scrolls it (the DM column).
+    var maxHeight: CGFloat?
     /// Whether this is a floating card or a column that fills its pane.
     ///
     /// **The two are not the same object with a different width.** A popover is
@@ -147,6 +157,54 @@ struct MiniProfileCard: View {
 
 
     var body: some View {
+        if let warning = shownWarning {
+            warningCard(warning)
+        } else {
+            profileCard
+        }
+    }
+
+    /// The warning this card opens behind — see `AppModel.profileWarning`.
+    private var shownWarning: ProfileWarning? {
+        guard !profile.isSelf, !isWarningPassed else { return nil }
+        return model.profileWarning(for: profile.userID)
+    }
+
+    /// "Show Profile?" on the person's own ground, in the card's frame.
+    private func warningCard(_ warning: ProfileWarning) -> some View {
+        let warningForm: ProfileWarningView.Form = switch form {
+        case .card: .card
+        case .column: .column
+        case .embed: .embed
+        }
+        return ProfileWarningView(
+            warning: warning,
+            name: profile.displayName,
+            avatarURL: profile.avatarURL,
+            monogram: profile.monogram,
+            form: warningForm,
+            width: width,
+            reveal: { isWarningPassed = true },
+            skip: {
+                isWarningPassed = true
+                model.skipIgnoredProfileWarning()
+            }
+        )
+        .frame(width: width)
+        .modifier(ScrollsPastHeight(maxHeight: maxHeight))
+        .modifier(ProfileGroundFill(ground: ground, corner: corner, paints: form != .column))
+        .clipShape(.rect(cornerRadius: corner, style: .continuous))
+        .overlay {
+            if form != .column {
+                RoundedRectangle(cornerRadius: corner, style: .continuous)
+                    .strokeBorder(ground.borderStyle, lineWidth: ground.borderWidth)
+            }
+        }
+        .shadow(color: .black.opacity(form == .card ? 0.45 : 0), radius: 28, x: 0, y: 10)
+    }
+
+    @ViewBuilder
+    private var profileCard: some View {
         // Read once: the shadow and the frame's staples take the same value.
         let frameShadow = frameShadowOpacity
         VStack(alignment: .leading, spacing: 0) {
@@ -164,7 +222,7 @@ struct MiniProfileCard: View {
 
             if form == .embed {
                 if profile.isLoading { ProfileSkeleton(contentWidth: contentWidth) }
-                viewProfileButton
+                if !profile.isSystem { viewProfileButton }
             } else {
                 if profile.isLoading {
                     ProfileSkeleton(contentWidth: contentWidth)
@@ -203,7 +261,10 @@ struct MiniProfileCard: View {
                 // what they chose to show, not with what a server says about
                 // them.
                 activityStack
-                if !profile.isLoading, !profile.roles.isEmpty {
+                let roleEditing = profile.showsMainProfile
+                    ? nil
+                    : profile.guild.flatMap { model.roleEditing(for: profile.userID, in: $0.id) }
+                if !profile.isLoading, !profile.roles.isEmpty || roleEditing?.addable.isEmpty == false {
                     section("Roles") {
                         // **Two rows, then a count.** A card is a summary that opens
                         // beside a row; somebody holding forty-six roles would
@@ -213,7 +274,8 @@ struct MiniProfileCard: View {
                         RoleChipFlow(
                             roles: profile.roles,
                             maximumRows: form == .card ? 2 : nil,
-                            width: contentWidth
+                            width: contentWidth,
+                            editing: roleEditing
                         )
                     }
                 }
@@ -243,6 +305,7 @@ struct MiniProfileCard: View {
         // the proposal every child is offered, so no future child can move the
         // column again.
         .frame(width: width)
+        .modifier(ScrollsPastHeight(maxHeight: maxHeight))
         // **A column draws no ground of its own.** Its pane paints one that runs
         // the full height — see `DirectMessageProfilePane` — because a ground
         // that stops where the content stops leaves the lower half of the
@@ -284,7 +347,7 @@ struct MiniProfileCard: View {
         // in the corner is a different object: it names no action until it is
         // opened, so it cannot compete with the identity beside it.
         .overlay(alignment: .topTrailing) {
-            if !profile.isSelf {
+            if !profile.isSelf, model.offersProfileMenu(for: profile.userID) {
                 UserMenuButton(isOpen: $isMenuOpen)
                     .padding(Spacing.base)
                     .presentsUserMenu(
@@ -464,6 +527,7 @@ struct MiniProfileCard: View {
                 dotSide: 16,
                 openFullProfile: { openFullProfile(nil) }
             )
+            .allowsHitTesting(!profile.isSystem)
 
             // **On the reader's own card the bubble is ALWAYS there, and it is
             // a button.** Clicking what you wrote is how you change it — which
@@ -551,7 +615,7 @@ struct MiniProfileCard: View {
     /// A floor, so a card whose marks are wider than its content still gives
     /// the name something to wrap into rather than a negative width.
     private var nameWidth: CGFloat {
-        max(80, contentWidth - (profile.isBot ? 34 + Spacing.tight : 0))
+        max(80, contentWidth - (profile.nameTag.map { TagChip.width($0) + Spacing.tight } ?? 0))
     }
 
     private var identity: some View {
@@ -600,8 +664,10 @@ struct MiniProfileCard: View {
                 .buttonStyle(.plain)
                 .pointerStyle(.link)
                 .onHover { isHoveringName = $0 }
-                if profile.isBot {
-                    TagChip(text: AppBadge.label(isVerified: profile.isVerifiedBot))
+                // Discord's own account has no full profile behind its name.
+                .allowsHitTesting(!profile.isSystem)
+                if let tag = profile.nameTag {
+                    TagChip(text: tag)
                 }
                 Spacer(minLength: 0)
             }
@@ -616,6 +682,8 @@ struct MiniProfileCard: View {
                 .buttonStyle(.plain)
                 .pointerStyle(.link)
                 .onHover { isHoveringName = $0 }
+                // Discord's own account has no full profile behind its name.
+                .allowsHitTesting(!profile.isSystem)
                 if let pronouns = profile.pronouns, !pronouns.isEmpty {
                     // Separated by a bullet rather than put on its own line:
                     // it is part of how someone is addressed, not a fact about
@@ -705,15 +773,32 @@ struct MiniProfileCard: View {
     @ViewBuilder
     private var activityStack: some View {
         if !profile.isLoading {
-            let voice = model.profileVoice(for: profile.userID)
-            let cards = profile.activities.count + (voice == nil ? 0 : 1)
+            // Discord's cards in its order — the live activities, then the
+            // call — and no call on a profile its owner made private.
+            let stream = model.profileStream(for: profile.userID, inGuild: profile.guild?.id)
+            // A stream stands for the call it is in — Discord draws no voice
+            // card beside one.
+            let voice = profile.isProfilePrivate || stream != nil
+                ? nil
+                : model.profileVoice(for: profile.userID, inGuild: profile.guild?.id)
+            let cards = (stream == nil ? 0 : 1) + profile.activities.count + (voice == nil ? 0 : 1)
             if cards > 0 {
                 ProfileCardStack(
                     hasMore: cards > 1,
                     ground: ground,
                     expand: { openFullProfile(.activity) }
                 ) {
-                    if let first = profile.activities.first {
+                    if let stream {
+                        ProfileStreamCard(
+                            stream: stream,
+                            form: .card,
+                            ground: ground,
+                            watch: { model.watchStream(from: stream) },
+                            join: { model.joinVoice(from: stream) },
+                            openGuild: { model.openGuild($0) },
+                            viewAllActivity: form == .card ? { openFullProfile(.activity) } : nil
+                        )
+                    } else if let first = profile.activities.first {
                         CurrentActivityCard(
                             activity: first,
                             buttonURLs: profile.activityButtonURLs,
@@ -729,8 +814,19 @@ struct MiniProfileCard: View {
                     } else if let voice {
                         ProfileVoiceCard(
                             voice: voice,
-                            width: contentWidth,
-                            join: { model.joinVoice($0) }
+                            form: .card,
+                            ground: ground,
+                            open: { model.openVoice(from: voice) },
+                            openGuild: { model.openGuild($0) },
+                            setStatus: {
+                                // Discord's popout steps aside for the modal;
+                                // the column stays where it is.
+                                if form == .card { model.profileRequest = nil }
+                                model.editVoiceStatus(in: voice.channelID)
+                            },
+                            // The popout's one menu item; Discord's column
+                            // offers none.
+                            viewAllActivity: form == .card ? { openFullProfile(.activity) } : nil
                         )
                     }
                 }
@@ -780,5 +876,36 @@ struct MiniProfileCard: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.horizontal, Spacing.margin)
         .padding(.bottom, Spacing.snug)
+    }
+}
+
+/// Lets a card taller than its window scroll inside itself.
+///
+/// **Its own height until it reaches the cap**, and the cap after that: the
+/// frame asks the scroll view for its ideal height — its content's — and holds
+/// it to the cap, which is what keeps a short card exactly as it was.
+///
+/// **No scroller unless the content is past the cap.** Opening a card flashed
+/// one for a second over a card that fits; measured against the cap rather
+/// than the viewport, nothing in the card's arrival can raise it — and
+/// Discord's popout, whose scroller is invisible at rest, shows none either.
+private struct ScrollsPastHeight: ViewModifier {
+    var maxHeight: CGFloat?
+
+    @State private var contentHeight: CGFloat = 0
+
+    func body(content: Content) -> some View {
+        if let maxHeight {
+            ScrollView(.vertical) {
+                content
+                    .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { contentHeight = $0 }
+            }
+            .scrollBounceBehavior(.basedOnSize)
+            .scrollIndicators(contentHeight > maxHeight ? .automatic : .never)
+            .frame(maxHeight: maxHeight)
+            .fixedSize(horizontal: false, vertical: true)
+        } else {
+            content
+        }
     }
 }

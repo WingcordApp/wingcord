@@ -163,6 +163,53 @@ struct MessageActionPresenter: ViewModifier {
                 PollEditorSheet(request: request)
                     .environment(model)
             }
+            // Kick, Ban, Timeout and the rest — raised from the person menu,
+            // Mod View and the Members page alike.
+            .sheet(item: $model.moderationDialog) { dialog in
+                ModerationDialogView(dialog: dialog)
+                    .environment(model)
+            }
+            // Create Event and Edit Event, from the server's events.
+            .sheet(item: $model.eventEditor) { request in
+                EventEditorHost(request: request, model: model)
+            }
+            // A voice channel's status, from its menu or from the In voice
+            // card on a profile.
+            .sheet(item: $model.voiceStatusEditor) { request in
+                VoiceStatusSheet(request: request)
+                    .environment(model)
+            }
+            // Create Channel and Create Category, from the server menu, a
+            // category, or a channel's own menu.
+            .sheet(item: $model.channelCreation) { request in
+                CreateChannelSheet(request: request)
+                    .environment(model)
+            }
+            // Apply to Join — from a server's card, or an invite into a server
+            // that reviews who joins.
+            .sheet(
+                item: $model.joinApplicationRequest,
+                // A submitted application's coachmark waits for this.
+                onDismiss: { model.raiseQueuedApplicationCoachmark() }
+            ) { request in
+                JoinApplicationSheet(request: request)
+                    .environment(model)
+            }
+            // The other end of the same application: approved, and seen for
+            // the first time. Its only ways out — the button and Escape — both
+            // acknowledge.
+            .sheet(item: $model.approvedApplication) { notice in
+                ApplicationApprovedSheet(notice: notice)
+                    .environment(model)
+            }
+            // A new member's greeting, where the server still has a Welcome
+            // Screen — after the invite that brought them.
+            .sheet(item: $model.welcomeScreenNotice) { notice in
+                WelcomeScreenSheet(
+                    presentation: model.welcomeScreenPresentation(for: notice.guildID, screen: notice.screen),
+                    openChannel: { model.openWelcomeScreenChannel($0) }
+                )
+            }
             // Raised by a running activity asking for a grant, not by anything
             // in this file — it lives here because this is where the window's
             // sheets are presented from, and a second presenter would be a

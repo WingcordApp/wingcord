@@ -3,15 +3,52 @@ import WingcordCore
 
 // MARK: - Editing onboarding
 //
-// **The route merges per field**, which is what makes this page three
-// independent saves rather than one — see `DiscordREST.setOnboardingChannels`.
-// The Enable switch does not need to know what the question editor is holding,
-// and that is the whole reason it cannot race it.
+// The two editors behind Onboarding's rows (`OnboardingPane`): Default Channels
+// and Questions. Every word is Discord's (`1e901507`, the onboarding pages).
 //
-// This page used to be read-only, with a notice saying a save would erase the
-// server's questions. That was wrong; HANDOFF §SM.11 has the correction.
+// **The route merges per field**, which is what makes these independent saves
+// rather than one — see `DiscordREST.setOnboardingChannels`. The channel
+// toggles save as they flip; the questions are a draft under Discord's unsaved
+// bar, because a question is several fields that make sense only together.
 
-struct OnboardingEditor: View {
+/// Default Channels: the channels every new member is given.
+struct OnboardingDefaultChannelsEditor: View {
+    let store: ServerSettingsStore
+    var onboarding: GuildOnboarding
+
+    var body: some View {
+        SettingsGroup {
+            SettingsCard {
+                if store.textChannels.isEmpty {
+                    Text("Add some channels that all users will see!")
+                        .font(SettingsType.rowSubtitle)
+                        .foregroundStyle(Ink.secondary)
+                        .padding(SettingsMetrics.cardContentInset)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                ForEach(Array(store.textChannels.enumerated()), id: \.element.id) { index, channel in
+                    if index > 0 { CardDivider() }
+                    let isOn = onboarding.defaultChannelIDs.contains(channel.id)
+                    SettingsToggle(
+                        title: "#\(channel.name)",
+                        isOn: Binding(
+                            get: { isOn },
+                            set: { wanted in
+                                var ids = onboarding.defaultChannelIDs
+                                if wanted { ids.append(channel.id) } else { ids.removeAll { $0 == channel.id } }
+                                Task { await store.saveOnboardingChannels(ids) }
+                            }
+                        )
+                    )
+                }
+            }
+        }
+    }
+}
+
+/// Pre-join and Post-join Questions, each a list of question cards, saved
+/// together under Discord's unsaved bar.
+struct OnboardingQuestionsEditor: View {
     let store: ServerSettingsStore
     var onboarding: GuildOnboarding
 
@@ -23,28 +60,35 @@ struct OnboardingEditor: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            enableCard
-            defaultChannels
             questions(
-                "Pre-join questions",
-                detail: "Asked before somebody joins. These can assign channels and roles.",
+                "Pre-join Questions",
+                detail: "Members will be asked these questions before they join your server. Use them to assign channels and important roles. Pre-join Questions will also be available on the Channels & Roles page.",
                 prompts: working.preJoin,
                 isPreJoin: true
             )
             questions(
-                "Post-join questions",
-                detail: "Asked afterwards, on the Channels & Roles page. Good for "
-                    + "roles people pick later, like vanity roles.",
+                "Post-join Questions",
+                detail: "Members will be asked these questions after they join your server, on the Channels & Roles page. Use them to assign roles that members can pick later, like vanity roles.",
                 prompts: working.postJoin,
                 isPreJoin: false
             )
-            saveBar
+            if isDirty {
+                UnsavedChangesBar(
+                    canSave: working.isSavable,
+                    reset: { draft = nil },
+                    save: {
+                        let prompts = working.prompts
+                        Task {
+                            await store.saveOnboardingPrompts(prompts)
+                            draft = nil
+                        }
+                    }
+                )
+                .padding(.top, Spacing.margin)
+            }
         }
         .sheet(item: $editing) { prompt in
-            OnboardingPromptSheet(
-                prompt: prompt,
-                store: store
-            ) { edited in
+            OnboardingPromptSheet(prompt: prompt, store: store) { edited in
                 var next = working
                 if let index = next.prompts.firstIndex(where: { $0.id == edited.id }) {
                     next.prompts[index] = edited
@@ -56,73 +100,6 @@ struct OnboardingEditor: View {
         }
     }
 
-    private var enableCard: some View {
-        SettingsGroup {
-            SettingsCard {
-                SettingsToggle(
-                    title: "Onboarding is enabled",
-                    help: "New members are asked these questions before they can "
-                        + "see the server.",
-                    isOn: Binding(
-                        get: { onboarding.isEnabled },
-                        // Its own save, and independent of the questions — the
-                        // route merges, so this cannot clobber an edit in
-                        // progress.
-                        set: { isOn in Task { await store.setOnboardingEnabled(isOn) } }
-                    )
-                )
-            }
-            if !working.isSavable {
-                SettingsFootnote(
-                    "A question with no title or no answers will be refused.",
-                    symbolName: "exclamationmark.circle"
-                )
-            }
-        }
-    }
-
-    private var defaultChannels: some View {
-        SettingsGroup("Default channels") {
-            SettingsCard {
-                ForEach(store.textChannels) { channel in
-                    let isOn = onboarding.defaultChannelIDs.contains(channel.id)
-                    SettingsToggle(
-                        title: "#\(channel.name)",
-                        help: channel.isPublic
-                            ? nil
-                            : "Everyone cannot see this channel, so it will not "
-                                + "count toward onboarding's requirement.",
-                        isOn: Binding(
-                            get: { isOn },
-                            set: { wanted in
-                                var ids = onboarding.defaultChannelIDs
-                                if wanted { ids.append(channel.id) }
-                                else { ids.removeAll { $0 == channel.id } }
-                                Task { await store.saveOnboardingChannels(ids) }
-                            }
-                        )
-                    )
-                    CardDivider()
-                }
-            }
-            SettingsFootnote(
-                "Everybody gets these when they join. At least one must be a "
-                    + "channel @everyone can both read and send in — \(chattableCount) "
-                    + "of the \(onboarding.defaultChannelIDs.count) chosen "
-                    + (chattableCount == 1 ? "is." : "are.")
-            )
-        }
-    }
-
-    /// The count onboarding's own constraint is about. Computed from the
-    /// resident channel list, which already knows what `@everyone` can see.
-    private var chattableCount: Int {
-        onboarding.defaultChannelIDs.filter { id in
-            store.channels.first { $0.id == id }?.isPublic ?? false
-        }.count
-    }
-
-    @ViewBuilder
     private func questions(
         _ title: String,
         detail: String,
@@ -130,84 +107,87 @@ struct OnboardingEditor: View {
         isPreJoin: Bool
     ) -> some View {
         SettingsGroup(title) {
+            Text(detail)
+                .font(SettingsType.rowSubtitle)
+                .foregroundStyle(Ink.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+                .padding(.bottom, Spacing.snug)
             ForEach(prompts) { prompt in
-                SettingsCard {
-                    ObjectRow(
-                        title: prompt.title.isEmpty ? "Untitled question" : prompt.title,
-                        subtitle: qualifiers(prompt),
-                        badge: prompt.options.count == 1
-                            ? "1 answer"
-                            : "\(prompt.options.count) answers"
-                    ) {
-                        Image(systemName: "questionmark.circle")
-                            .font(.system(size: 13))
-                            .foregroundStyle(Ink.secondary)
-                            .frame(width: 28, height: 28)
-                    } trailing: {
-                        HStack(spacing: 2) {
-                            RowIconButton(symbolName: "pencil", label: "Edit question") {
-                                editing = prompt
-                            }
-                            RowIconButton(
-                                symbolName: "trash",
-                                label: "Remove question",
-                                role: .destructive
-                            ) {
-                                var next = working
-                                next.prompts.removeAll { $0.id == prompt.id }
-                                draft = next
-                            }
-                        }
-                    }
-                }
-                .padding(.bottom, Spacing.base)
+                questionCard(prompt)
+                    .padding(.bottom, Spacing.base)
             }
-
-            SettingsCard {
-                SettingsActionRow("Add a question", actionTitle: "Add") {
-                    editing = OnboardingDraft.Prompt(isPreJoin: isPreJoin)
-                }
+            Button {
+                editing = OnboardingDraft.Prompt(isPreJoin: isPreJoin)
+            } label: {
+                Label("Add a Question", systemImage: "plus")
+                    .font(SettingsType.rowLabel)
             }
-            SettingsFootnote(detail)
+            .buttonStyle(.glass)
+            .controlSize(.small)
         }
     }
 
-    private func qualifiers(_ prompt: OnboardingDraft.Prompt) -> String {
-        var parts = [prompt.isSingleSelect ? "One answer" : "Multiple answers"]
-        // **Required is meaningless after somebody is already in**, which is why
-        // Discord's own editor omits it from post-join questions.
-        if prompt.isPreJoin, prompt.isRequired { parts.append("required") }
-        if prompt.options.contains(where: \.grantsNothing) {
-            parts.append("an answer grants nothing")
-        }
-        return parts.joined(separator: " · ")
-    }
-
-    @ViewBuilder
-    private var saveBar: some View {
-        if isDirty {
-            HStack(spacing: Spacing.base) {
-                Spacer()
-                Button("Revert") { draft = nil }
-                    .buttonStyle(.plain)
-                    .font(.system(.caption))
-                    .foregroundStyle(Ink.tertiary)
-                Button("Save questions") {
-                    Task {
-                        await store.saveOnboardingPrompts(working.prompts)
-                        draft = nil
+    /// One question as Discord's card shows it: the question, its answers,
+    /// and the two switches it carries.
+    private func questionCard(_ prompt: OnboardingDraft.Prompt) -> some View {
+        SettingsCard {
+            VStack(alignment: .leading, spacing: Spacing.snug) {
+                HStack(alignment: .firstTextBaseline, spacing: Spacing.base) {
+                    Text(verbatim: prompt.title)
+                        .font(SettingsType.rowTitle)
+                        .foregroundStyle(Ink.primary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    RowIconButton(symbolName: "pencil", label: "Edit") { editing = prompt }
+                    RowIconButton(symbolName: "trash", label: "Delete this question", role: .destructive) {
+                        var next = working
+                        next.prompts.removeAll { $0.id == prompt.id }
+                        draft = next
                     }
                 }
-                .buttonStyle(.glassProminent)
-                .disabled(!working.isSavable)
+                AnswerChips(options: prompt.options)
+                HStack(spacing: Spacing.margin) {
+                    if !prompt.isSingleSelect { flag("Allow multiple answers") }
+                    if prompt.isPreJoin, prompt.isRequired { flag("Required") }
+                }
             }
-            .padding(.top, Spacing.margin)
+            .padding(SettingsMetrics.cardContentInset)
+        }
+    }
+
+    private func flag(_ text: String) -> some View {
+        Label(text, systemImage: "checkmark")
+            .font(.system(.caption))
+            .foregroundStyle(Ink.secondary)
+    }
+}
+
+/// A question's answers, each its emoji and its words.
+private struct AnswerChips: View {
+    var options: [OnboardingDraft.Option]
+
+    var body: some View {
+        FlowLayout(spacing: Spacing.tight) {
+            ForEach(options) { option in
+                HStack(spacing: Spacing.tight) {
+                    if let emoji = option.emoji {
+                        ExpressionGlyph(emoji: emoji, side: 14)
+                    }
+                    Text(verbatim: option.title)
+                        .font(.system(.caption))
+                        .foregroundStyle(Ink.primary)
+                }
+                .padding(.horizontal, Spacing.snug)
+                .padding(.vertical, 4)
+                .background(SettingsSurface.controlTrough, in: .capsule)
+            }
         }
     }
 }
 
 // MARK: - One question
 
+/// A question's own sheet: the question, its answers — each an emoji, its
+/// words, and the channels and roles it gives — and its two switches.
 struct OnboardingPromptSheet: View {
     var prompt: OnboardingDraft.Prompt
     let store: ServerSettingsStore
@@ -228,21 +208,17 @@ struct OnboardingPromptSheet: View {
 
     var body: some View {
         SheetFrame(
-            title: working.isPreJoin ? "Pre-join question" : "Post-join question",
-            confirmTitle: "Done",
+            title: prompt.title.isEmpty ? "Add a Question" : prompt.title,
+            subtitle: prompt.isPreJoin ? "Pre-join Questions" : "Post-join Questions",
+            confirmTitle: "Save",
             canConfirm: working.isComplete
         ) {
             commit(working)
         } content: {
-            SheetField(title: "Question", isRequired: true) {
-                TextField("What do you want to do in this community?", text: $working.title)
-                    .textFieldStyle(.roundedBorder)
-            }
+            TextField("Enter a question...", text: $working.title)
+                .textFieldStyle(.roundedBorder)
 
-            SheetField(
-                title: "Answers — \(working.options.count) of \(OnboardingDraft.maximumAnswers)",
-                isRequired: true
-            ) {
+            SheetField(title: "Answers", isRequired: true) {
                 VStack(alignment: .leading, spacing: Spacing.base) {
                     ForEach(Array(working.options.enumerated()), id: \.element.id) { index, _ in
                         OnboardingAnswerRow(
@@ -259,7 +235,7 @@ struct OnboardingPromptSheet: View {
                         Button {
                             working.options.append(OnboardingDraft.Option())
                         } label: {
-                            Label("Add an answer", systemImage: "plus")
+                            Label("Add an Answer", systemImage: "plus")
                                 .font(SettingsType.rowLabel)
                         }
                         .buttonStyle(.plain)
@@ -268,29 +244,26 @@ struct OnboardingPromptSheet: View {
                 }
             }
 
-            SheetField(title: "Behaviour") {
-                VStack(alignment: .leading, spacing: Spacing.base) {
-                    Toggle(
-                        "Allow multiple answers",
-                        isOn: Binding(
-                            get: { !working.isSingleSelect },
-                            set: { working.isSingleSelect = !$0 }
-                        )
+            VStack(alignment: .leading, spacing: Spacing.base) {
+                Toggle(
+                    "Allow multiple answers",
+                    isOn: Binding(
+                        get: { !working.isSingleSelect },
+                        set: { working.isSingleSelect = !$0 }
                     )
-                    // Omitted on a post-join question, exactly as Discord's own
-                    // editor does — requiring an answer from somebody who is
-                    // already in the server means nothing.
-                    if working.isPreJoin {
-                        Toggle("Required", isOn: $working.isRequired)
-                    }
-                }
-                .toggleStyle(.checkbox)
+                )
+                // Discord's own rule: a question asked after joining cannot
+                // be required.
+                Toggle("Required", isOn: $working.isRequired)
+                    .disabled(!working.isPreJoin)
+                    .help(working.isPreJoin ? "" : "Question must be asked before join to be Required")
             }
+            .toggleStyle(.checkbox)
         }
     }
 }
 
-/// One answer: an emoji, a label, and what choosing it grants.
+/// One answer: an emoji, its words, and the channels and roles it gives.
 private struct OnboardingAnswerRow: View {
     @Binding var option: OnboardingDraft.Option
     let store: ServerSettingsStore
@@ -299,22 +272,21 @@ private struct OnboardingAnswerRow: View {
     var body: some View {
         VStack(alignment: .leading, spacing: Spacing.tight) {
             HStack(spacing: Spacing.base) {
-                TextField(
-                    "🙂",
-                    text: Binding(
-                        get: { option.emojiName ?? "" },
-                        set: { option.emojiName = $0.isEmpty ? nil : $0 }
-                    )
+                // Discord's emoji button, which opens the picker — this was a
+                // text field with an emoji for a placeholder, which took a
+                // click as a cursor and could not be picked from.
+                EmojiSlotButton(
+                    emoji: $option.emoji,
+                    addLabel: "Select emoji",
+                    updateLabel: { "Select emoji, \($0.name)" },
+                    side: 28
                 )
-                .textFieldStyle(.plain)
-                .frame(width: 28)
-                .multilineTextAlignment(.center)
 
                 TextField("Answer", text: $option.title)
                     .textFieldStyle(.plain)
                     .font(SettingsType.rowLabel)
 
-                RowIconButton(symbolName: "xmark", label: "Remove answer", role: .destructive) {
+                RowIconButton(symbolName: "xmark", label: "Delete", role: .destructive) {
                     remove()
                 }
             }
@@ -343,14 +315,6 @@ private struct OnboardingAnswerRow: View {
                     else { option.roleIDs.append(id) }
                 }
                 Spacer()
-                // Discord allows an answer that grants nothing; it is still
-                // almost always a mistake, so the row says so rather than
-                // refusing it.
-                if option.grantsNothing {
-                    Text("grants nothing")
-                        .font(.system(.caption))
-                        .foregroundStyle(.orange)
-                }
             }
         }
         .padding(Spacing.base)

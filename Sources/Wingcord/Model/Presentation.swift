@@ -49,6 +49,43 @@ struct RailGuild: Hashable, Sendable, Identifiable {
     /// itself, which is the only thing on the rail that says a room is busy
     /// without hovering anything.
     var voiceMark: RailVoiceMark?
+    /// How the reader's application here stands, where Discord marks it on the
+    /// tile — see `RailApplicationMark`. Nil for every server without one,
+    /// which is all but a handful.
+    var applicationMark: RailApplicationMark?
+}
+
+/// Discord's mark for an application on a rail tile (`O`): a clock while it is
+/// reviewed, a cross once denied, a tick once approved, a pencil while it is
+/// still to be sent.
+///
+/// **Drawn where a mention count is not** — the count wins the corner, as in
+/// Discord's tile. A pending application's own tile in the folder carries only
+/// the cross (`rl`); the reader's own servers carry all four (`ir`).
+enum RailApplicationMark: Hashable, Sendable {
+    case inReview
+    case denied
+    case approved
+    case incomplete
+
+    init(_ status: OwnJoinRequest.Status) {
+        switch status {
+        case .submitted: self = .inReview
+        case .rejected: self = .denied
+        case .approved: self = .approved
+        case .started, .unknown: self = .incomplete
+        }
+    }
+
+    /// Discord's line under the server's name in its tooltip (`iJ`).
+    var membershipLine: String {
+        switch self {
+        case .inReview: "Membership In Review"
+        case .denied: "Membership Rejected"
+        case .approved: "Membership Approved"
+        case .incomplete: "Membership Incomplete"
+        }
+    }
 }
 
 /// What a rail tile's voice mark says.
@@ -205,6 +242,8 @@ struct SidebarHeader: Hashable, Sendable {
     var bannerURL: URL?
     /// The mark Discord draws before the name — see `GuildMark`.
     var mark: GuildMark? = nil
+    /// Whether the reader may create channels here — the "+" a category wears.
+    var canCreateChannels = false
     /// Whether the guild's own banner exists. Most do not — it is a boost perk —
     /// and a header that draws a placeholder block regardless is a permanent
     /// 168pt of chrome standing in for artwork that will never arrive.
@@ -500,6 +539,8 @@ enum GuildSurface: UInt64, Hashable, Sendable {
     case channelsAndRoles = 2
     case browseChannels = 3
     case gameServers = 4
+    /// The Members page — Discord's member-safety table, for moderators.
+    case members = 5
 
     var title: String {
         switch self {
@@ -507,6 +548,7 @@ enum GuildSurface: UInt64, Hashable, Sendable {
         case .channelsAndRoles: "Channels & Roles"
         case .browseChannels: "Browse Channels"
         case .gameServers: "Game Servers"
+        case .members: "Members"
         }
     }
 
@@ -518,6 +560,7 @@ enum GuildSurface: UInt64, Hashable, Sendable {
         case .serverGuide: "signpost.right.fill"
         case .channelsAndRoles, .browseChannels: "square.grid.2x2"
         case .gameServers: "gamecontroller.fill"
+        case .members: "person.2.fill"
         }
     }
 }
@@ -586,6 +629,18 @@ struct WorkspacePresentation: Hashable, Sendable {
         case discovery
         /// The Message Requests page, on the direct-message home.
         case messageRequests
+        /// An application's own page — Discord's `/member-verification/{id}`,
+        /// for a server the reader has applied to and is not in. A takeover,
+        /// for the gate's reason: there is no server here to sit beside.
+        case joinRequest(GuildID)
+
+        /// A server's own page, whose bar names it and carries nothing else —
+        /// no search and no inbox, as Discord's pass `hideSearch` and no
+        /// `toolbar` to their header.
+        var isServerPage: Bool {
+            if case .guildSurface = self { return true }
+            return false
+        }
     }
 
     enum Supplementary: Hashable, Sendable {
@@ -613,6 +668,10 @@ struct WorkspacePresentation: Hashable, Sendable {
         /// A message request read beside its page: the words, the media
         /// counted, and Discord's bar to accept it in place of a composer.
         case messageRequestPreview(ChannelID)
+        /// Mod View: a moderator's look at one person in the selected server.
+        case modView(UserID)
+        /// Discord's New Thread, beside the channel it will hang off.
+        case newThread(NewThreadRequest)
     }
 
     var primary: Primary
@@ -622,6 +681,14 @@ struct WorkspacePresentation: Hashable, Sendable {
 }
 
 /// The chrome across the top of the detail column.
+/// A channel named in passing, and the way to it — a thread's parent in the
+/// toolbar.
+struct ChannelCrumb: Hashable, Sendable {
+    var channelID: ChannelID
+    var name: String
+    var symbolName: String
+}
+
 struct ChannelChrome: Hashable, Sendable {
     /// A bar that draws nothing.
     ///
@@ -652,6 +719,12 @@ struct ChannelChrome: Hashable, Sendable {
 
     var channelID: ChannelID?
     var name: String
+    /// What a thread hangs off, named before it — Discord's thread header,
+    /// "parent › thread". Nil for anything that is not a thread.
+    var parent: ChannelCrumb? = nil
+    /// The thread open as the page — whose ⋯ the toolbar carries. Nil for
+    /// anything that is not a thread.
+    var threadID: ChannelID? { parent == nil ? nil : channelID }
     /// The glyph in the pill.
     ///
     /// **A resolved symbol, not the kind.** The pill names whatever the detail

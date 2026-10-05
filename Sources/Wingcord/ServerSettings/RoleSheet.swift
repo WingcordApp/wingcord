@@ -25,7 +25,7 @@ struct RoleSheet: View {
     var commit: (Role) -> Void
 
     @State private var draft: Role
-    @State private var tab: Tab = .display
+    @State private var tab: Tab
     @State private var query = ""
     @Environment(\.dismiss) private var dismiss
 
@@ -41,6 +41,9 @@ struct RoleSheet: View {
         self.allowsStyles = allowsStyles
         self.commit = commit
         _draft = State(initialValue: role)
+        // @everyone has no name, colour or hoist to edit — Discord opens it on
+        // its permissions.
+        _tab = State(initialValue: role.isEveryone(in: guildID) ? .permissions : .display)
     }
 
     private var isEveryone: Bool { role.isEveryone(in: guildID) }
@@ -48,13 +51,15 @@ struct RoleSheet: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             header
-            Picker("", selection: $tab) {
-                ForEach(Tab.allCases) { Text($0.rawValue).tag($0) }
+            if !isEveryone {
+                Picker("", selection: $tab) {
+                    ForEach(Tab.allCases) { Text($0.rawValue).tag($0) }
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+                .padding(.horizontal, Spacing.margin)
+                .padding(.bottom, Spacing.snug)
             }
-            .pickerStyle(.segmented)
-            .labelsHidden()
-            .padding(.horizontal, Spacing.margin)
-            .padding(.bottom, Spacing.snug)
 
             ScrollView {
                 switch tab {
@@ -74,7 +79,7 @@ struct RoleSheet: View {
     private var header: some View {
         HStack(spacing: Spacing.base) {
             RoleSwatch(role: draft)
-            Text(isEveryone ? "Default permissions" : "Edit role — \(draft.name)")
+            Text(verbatim: isEveryone ? "Default Permissions" : draft.name)
                 .font(.system(.headline))
                 .foregroundStyle(Ink.primary)
                 .lineLimit(1)
@@ -90,26 +95,15 @@ struct RoleSheet: View {
     @ViewBuilder
     private var display: some View {
         VStack(alignment: .leading, spacing: Spacing.snug) {
-            if isEveryone {
-                // @everyone has no name, no colour and no hoist — Discord
-                // refuses all three. A tab of dimmed controls says less than one
-                // sentence does. §5.5.
-                Text(
-                    "@everyone applies to every member. It cannot be renamed, "
-                        + "coloured, or shown separately in the member list."
-                )
-                .font(SettingsType.rowLabel)
-                .foregroundStyle(Ink.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-            } else {
-                SheetField(title: "Name", isRequired: true) {
-                    TextField("new role", text: $draft.name)
+            if !isEveryone {
+                SheetField(title: "Role name", isRequired: true) {
+                    TextField("", text: $draft.name)
                         .textFieldStyle(.roundedBorder)
                 }
 
                 SheetField(
-                    title: "Colour",
-                    detail: "Members take the colour of the highest role they hold that has one."
+                    title: "Role color",
+                    detail: "Members use the color of the highest role they have on the roles list."
                 ) {
                     HStack(spacing: Spacing.snug) {
                         ColorPicker(
@@ -133,7 +127,7 @@ struct RoleSheet: View {
                         )
                         .labelsHidden()
 
-                        Button("No colour") {
+                        Button("Default") {
                             draft.colorValue = 0
                             draft.colors = RoleColors(primary: 0)
                         }
@@ -151,7 +145,7 @@ struct RoleSheet: View {
                 // here, and keeps it through a save rather than being
                 // flattened, even where the picker cannot be used.
                 if allowsStyles || style != .solid {
-                    SheetField(title: "Style", detail: styleDetail) {
+                    SheetField(title: "Role Style", detail: styleDetail) {
                         VStack(alignment: .leading, spacing: Spacing.snug) {
                             SegmentedPicker(
                                 options: [
@@ -185,19 +179,17 @@ struct RoleSheet: View {
                     }
                 }
 
-                SheetField(title: "Display") {
-                    VStack(alignment: .leading, spacing: Spacing.base) {
-                        Toggle(
-                            "Show members with this role separately",
-                            isOn: $draft.isHoisted
-                        )
-                        Toggle(
-                            "Allow anyone to @mention this role",
-                            isOn: $draft.isMentionable
-                        )
-                    }
-                    .toggleStyle(.checkbox)
+                VStack(alignment: .leading, spacing: Spacing.base) {
+                    Toggle(
+                        "Display role members separately from online members",
+                        isOn: $draft.isHoisted
+                    )
+                    Toggle(
+                        "Allow anyone to @mention this role",
+                        isOn: $draft.isMentionable
+                    )
                 }
+                .toggleStyle(.checkbox)
             }
         }
         .padding(.horizontal, Spacing.margin)
@@ -208,11 +200,11 @@ struct RoleSheet: View {
 
     private var style: RoleColors.Style { draft.colors?.style ?? .solid }
 
-    private var styleDetail: String {
+    private var styleDetail: String? {
         switch style {
-        case .solid: "One colour."
-        case .gradient: "Two colours, the first above and the second here."
-        case .holographic: "The ‘Holographic’ role style doesn’t require you to select any colours."
+        case .solid: nil
+        case .gradient: "In light mode, gradient roles are automatically darkened for accessibility."
+        case .holographic: "The \u{2018}Holographic\u{2019} role style doesn\u{2019}t require you to select any colours."
         }
     }
 
@@ -280,50 +272,14 @@ struct RoleSheet: View {
                 }
                 .padding(.horizontal, Spacing.margin)
             }
-
-            unknownNotice
         }
         .padding(.bottom, Spacing.margin)
-    }
-
-    /// What this client cannot draw, said out loud.
-    ///
-    /// A role holding a permission newer than this build would otherwise show a
-    /// complete-looking list that is quietly missing one — and the reader would
-    /// have no way to know the save was preserving something. Saying so is the
-    /// difference between "kept" and "hidden".
-    @ViewBuilder
-    private var unknownNotice: some View {
-        let unknown = PermissionCatalog.unknownBits(in: role.permissions)
-        if !unknown.isEmpty {
-            HStack(alignment: .firstTextBaseline, spacing: Spacing.base) {
-                Image(systemName: "info.circle")
-                    .foregroundStyle(Ink.tertiary)
-                Text(
-                    "This role also holds permissions this version of Wingcord "
-                        + "does not know about. They are kept exactly as they are."
-                )
-                .font(.system(.caption))
-                .foregroundStyle(Ink.tertiary)
-                .fixedSize(horizontal: false, vertical: true)
-            }
-            .padding(.horizontal, Spacing.margin)
-            .padding(.top, Spacing.snug)
-        }
     }
 
     // MARK: Footer
 
     private var footer: some View {
         HStack(spacing: Spacing.base) {
-            if draft.permissions.contains(.administrator) {
-                Label(
-                    "Administrator grants everything.",
-                    systemImage: "exclamationmark.triangle.fill"
-                )
-                .font(.system(.caption))
-                .foregroundStyle(.orange)
-            }
             Spacer()
             Button("Cancel", role: .cancel) { dismiss() }
                 .buttonStyle(.glass)
@@ -370,7 +326,7 @@ private struct PermissionToggle: View {
                         Image(systemName: "exclamationmark.triangle.fill")
                             .font(.system(size: 9))
                             .foregroundStyle(.orange)
-                            .help("This grants more than it says.")
+                            .accessibilityHidden(true)
                     }
                 }
                 Text(entry.detail)

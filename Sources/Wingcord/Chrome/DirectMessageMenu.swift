@@ -111,9 +111,11 @@ struct DirectMessageMenu: View {
                 model.openProfile(userID, anchor: .zero, depth: .full)
             }
         }
-        row(id: "call", title: "Start a Call", symbolName: "phone") {
-            model.startCall(in: channelID)
-            close()
+        if model.canStartCall(in: channelID) {
+            row(id: "call", title: "Start a Call", symbolName: "phone") {
+                model.startCall(in: channelID)
+                close()
+            }
         }
         if actions.userID != nil {
             row(
@@ -169,7 +171,7 @@ struct DirectMessageMenu: View {
             }
             // What this row says is decided by the relationship, not here —
             // see `Relationship.friendActionTitle`.
-            if let title = person.relationship.friendActionTitle {
+            if person.offersFriendship, let title = person.relationship.friendActionTitle {
                 row(
                     id: "friend",
                     title: title,
@@ -430,7 +432,7 @@ struct DirectMessageMenu: View {
     ) -> some View {
         Button(action: act) {
             HStack(spacing: Spacing.snug) {
-                Image(systemName: symbolName)
+                Image(symbol: symbolName)
                     .font(.system(size: 12, weight: .medium))
                     .frame(width: 16)
                 VStack(alignment: .leading, spacing: 0) {

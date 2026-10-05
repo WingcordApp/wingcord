@@ -161,7 +161,7 @@ struct AppDataAccessSection: View {
                     .foregroundStyle(Ink.primary)
                 ForEach(access) { row in
                     HStack(alignment: .top, spacing: Spacing.snug) {
-                        Image(systemName: row.symbolName)
+                        Image(symbol: row.symbolName)
                             .font(.system(.callout))
                             .foregroundStyle(Ink.tertiary)
                             .frame(width: 20)

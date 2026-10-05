@@ -173,7 +173,7 @@ private struct AttachmentTile: View {
 
     private var glyph: some View {
         VStack(spacing: Spacing.hair) {
-            Image(systemName: attachment.symbolName)
+            Image(symbol: attachment.symbolName)
                 .font(.system(size: 20))
                 .foregroundStyle(Ink.secondary)
             Text(attachment.filename)

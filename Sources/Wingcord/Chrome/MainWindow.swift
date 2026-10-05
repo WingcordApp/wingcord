@@ -24,38 +24,6 @@ struct MainWindow: View {
     @Environment(AppModel.self) private var model
     @State private var columnVisibility: NavigationSplitViewVisibility = .all
 
-    /// The search field's text.
-    ///
-    /// **Opening the panel is a side effect of typing**, which is what the
-    /// native item implies: there is no separate "open search" control once the
-    /// field is in the toolbar, so the first character is what raises the
-    /// results column.
-    ///
-    /// **And closing it is a side effect of clearing**, which is the half that
-    /// was missing. Escape in an `NSSearchField` empties it — that is AppKit's
-    /// behaviour and the field never forwards the key — so a binding that only
-    /// ever opened left the reader pressing Escape at a column that had no way
-    /// of hearing it. There is a button on the panel too; this is the one the
-    /// keyboard reaches.
-    private var searchText: Binding<String> {
-        Binding(
-            get: { model.searchText },
-            set: { text in
-                // Emptying the field puts the transcript back, results and all:
-                // there is nothing left to have asked.
-                guard !text.isEmpty else {
-                    if model.isSearchDrafting { model.closeSearch() }
-                    return
-                }
-                // The first keystroke starts a DRAFT, not a search — the state
-                // is where the text lives. The results column waits for Return;
-                // see `MessageSearchState.isPresented`.
-                if !model.isSearchDrafting { model.toggleSearch() }
-                model.searchText = text
-            }
-        )
-    }
-
     var body: some View {
         NavigationSplitView(columnVisibility: $columnVisibility) {
             SidebarColumn()
@@ -80,41 +48,6 @@ struct MainWindow: View {
                 // other and nothing else. An empty title keeps the edge and
                 // shows no words.
                 .navigationTitle("")
-                // **The system's own search item, which is Finder's control.**
-                // `.searchable` in a window with a real toolbar becomes an
-                // `NSSearchToolbarItem`: a circular button that expands into a
-                // field, set apart from the other items by the toolbar itself.
-                //
-                // There is no `.searchToolbarBehavior(.minimize)` here on
-                // purpose — that value is `@available(macOS, unavailable)`, iOS
-                // only. On macOS the collapse-and-expand *is* the default, and
-                // asking for it explicitly does not compile.
-                .searchable(
-                    text: searchText,
-                    placement: .toolbar,
-                    prompt: Text("Search \(model.searchScopeTitle)")
-                )
-                .searchSuggestions {
-                    // Built from the store's own scope, so moving between
-                    // servers or conversations changes the list with no
-                    // invalidation of its own — see `searchSuggestions(for:)`.
-                    ForEach(model.searchSuggestions(for: model.searchText)) { suggestion in
-                        SearchSuggestionRow(suggestion: suggestion)
-                            // The whole field text, computed where the tokenizer
-                            // is. `.searchCompletion` takes a string, and
-                            // building it in the view would put the grammar in
-                            // two places.
-                            .searchCompletion(suggestion.completion)
-                    }
-                }
-                // Return runs it; typing alone does not. A request per keystroke
-                // against a route that indexes whole servers is a request per
-                // keystroke, and the field is where a filter grammar is typed.
-                //
-                // **And Return is also where the column appears.** It used to
-                // appear on the first keystroke — see
-                // `MessageSearchState.isPresented`.
-                .onSubmit(of: .search) { model.submitSearch() }
                 .toolbar {
                     // **The closures have to be passed.** They default to `{}`,
                     // so a toolbar built without them compiles, renders, and
@@ -124,6 +57,7 @@ struct MainWindow: View {
                         chrome: model.channelChrome,
                         toggleMemberList: { model.isMemberListShown.toggle() },
                         toggleUserProfile: { model.isDirectMessageProfileShown.toggle() },
+                        openParent: { model.selectChannel($0) },
                         openChannelDetails: {
                             guard let channelID = model.selectedChannelID else { return }
                             model.openTopicChannelID =
@@ -200,6 +134,7 @@ struct MainWindow: View {
                             )
                         },
                         toggleSummaries: { AppSettings.shared.showsSummaryBar.toggle() },
+                        isServerPage: model.workspacePresentation.primary.isServerPage,
                         isInboxShown: model.isInboxShown,
                         toggleInbox: { model.toggleInbox() },
                         inboxContent: {
@@ -215,6 +150,102 @@ struct MainWindow: View {
         }
         .navigationSplitViewStyle(.balanced)
         .capsWindowMinimumSize()
+    }
+}
+
+/// The toolbar's search item, on every surface but a server's own page.
+///
+/// **On the primary pane, not the column, so a page can go without it.**
+/// Discord's server pages draw their title and nothing else — their headers
+/// pass `hideSearch` and no `toolbar` — and `.searchable` is the only thing
+/// that puts this item in the bar: `toolbar(removing: .search)` leaves it in
+/// place on macOS (probed). Declared below the window's `.toolbar`, it still
+/// lands last in the bar, and the branch is free: the pane underneath changes
+/// type whenever it flips.
+struct ToolbarSearch: ViewModifier {
+    var isOffered: Bool
+
+    @Environment(AppModel.self) private var model
+
+    /// The toolbar's search field, put in focus by a thread's Search item —
+    /// see `AppModel.searchFocusRequest`.
+    @FocusState private var isFocused: Bool
+
+    /// The search field's text.
+    ///
+    /// **Opening the panel is a side effect of typing**, which is what the
+    /// native item implies: there is no separate "open search" control once the
+    /// field is in the toolbar, so the first character is what raises the
+    /// results column.
+    ///
+    /// **And closing it is a side effect of clearing**, which is the half that
+    /// was missing. Escape in an `NSSearchField` empties it — that is AppKit's
+    /// behaviour and the field never forwards the key — so a binding that only
+    /// ever opened left the reader pressing Escape at a column that had no way
+    /// of hearing it. There is a button on the panel too; this is the one the
+    /// keyboard reaches.
+    private var text: Binding<String> {
+        Binding(
+            get: { model.searchText },
+            set: { text in
+                // Emptying the field puts the transcript back, results and all:
+                // there is nothing left to have asked.
+                guard !text.isEmpty else {
+                    if model.isSearchDrafting { model.closeSearch() }
+                    return
+                }
+                // The first keystroke starts a DRAFT, not a search — the state
+                // is where the text lives. The results column waits for Return;
+                // see `MessageSearchState.isPresented`.
+                if !model.isSearchDrafting { model.toggleSearch() }
+                model.searchText = text
+            }
+        )
+    }
+
+    func body(content: Content) -> some View {
+        if isOffered {
+            content
+                // **The system's own search item, which is Finder's control.**
+                // `.searchable` in a window with a real toolbar becomes an
+                // `NSSearchToolbarItem`: a circular button that expands into a
+                // field, set apart from the other items by the toolbar itself.
+                //
+                // There is no `.searchToolbarBehavior(.minimize)` here on
+                // purpose — that value is `@available(macOS, unavailable)`, iOS
+                // only. On macOS the collapse-and-expand *is* the default, and
+                // asking for it explicitly does not compile.
+                .searchable(
+                    text: text,
+                    placement: .toolbar,
+                    prompt: Text("Search \(model.searchScopeTitle)")
+                )
+                .searchSuggestions {
+                    // Built from the store's own scope, so moving between
+                    // servers or conversations changes the list with no
+                    // invalidation of its own — see `searchSuggestions(for:)`.
+                    ForEach(model.searchSuggestions(for: model.searchText)) { suggestion in
+                        SearchSuggestionRow(suggestion: suggestion)
+                            // The whole field text, computed where the tokenizer
+                            // is. `.searchCompletion` takes a string, and
+                            // building it in the view would put the grammar in
+                            // two places.
+                            .searchCompletion(suggestion.completion)
+                    }
+                }
+                // Return runs it; typing alone does not. A request per keystroke
+                // against a route that indexes whole servers is a request per
+                // keystroke, and the field is where a filter grammar is typed.
+                //
+                // **And Return is also where the column appears.** It used to
+                // appear on the first keystroke — see
+                // `MessageSearchState.isPresented`.
+                .onSubmit(of: .search) { model.submitSearch() }
+                .searchFocused($isFocused)
+                .onChange(of: model.searchFocusRequest) { isFocused = true }
+        } else {
+            content
+        }
     }
 }
 
@@ -325,6 +356,7 @@ private struct GuildRailContainer: View {
         GuildRail(
             items: model.railItems,
             previewedGuild: model.previewRailGuild,
+            pendingApplications: model.pendingApplicationsRail,
             selectedGuildID: model.selectedGuildID,
             isHomeSelected: model.selectedGuildID == nil,
             homeMentionCount: 0,
@@ -335,6 +367,9 @@ private struct GuildRailContainer: View {
             toggleFolder: { model.toggleFolder($0) },
             openFolderMenu: { model.openFolderMenu($0, anchor: $1) },
             drop: { model.dropOnRail($0) },
+            togglePendingApplications: { model.togglePendingApplications() },
+            openJoinRequestMenu: { model.openJoinRequestMenu($0, anchor: $1) },
+            dismissApplicationCoachmark: { model.dismissApplicationCoachmark() },
             addServer: { model.joinServerSheet = JoinServerSheetState() },
             openDiscovery: { model.toggleDiscovery() },
             isDiscoveryShown: model.isDiscoveryShown
@@ -353,7 +388,10 @@ private struct ChannelSidebarContainer: View {
             connectedVoiceChannelID: model.connectedVoiceChannelID,
             liveEvent: model.selectedGuildID.flatMap(model.liveEventNotice(for:)),
             selectChannel: { model.selectChannel($0) },
-            openThread: { model.openThread($0) },
+            // The channel list's own row opens the thread as the page, as
+            // Discord's does — split view is for a thread reached from where
+            // it hangs.
+            openThread: { model.openThread($0, as: .fullView) },
             joinVoice: { channelID in
                 // The same control leaves the call it is already in. Pin and
                 // Unpin are one bit resolved two ways, and so is this — two rows
@@ -374,7 +412,8 @@ private struct ChannelSidebarContainer: View {
             openMessageRequests: { model.openMessageRequests() },
             openEvents: { model.openEvents(inGuild: $0, event: $1) },
             dismissLiveEvent: { model.dismissedEventNotices.insert($0) },
-            openMenu: { model.openDirectMessageMenu(for: $0, anchor: $1) },
+            openMenu: { model.openChannelMenu(for: $0, anchor: $1) },
+            createChannel: { model.openChannelCreation(inCategory: $0) },
         )
         .equatable()
     }

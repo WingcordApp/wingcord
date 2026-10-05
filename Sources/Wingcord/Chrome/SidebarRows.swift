@@ -497,7 +497,7 @@ private struct SidebarRowLeading: View {
                 }
             }
         default:
-            Image(systemName: channel.kind.symbolName)
+            Image(symbol: channel.kind.symbolName)
                 .font(.system(.caption))
                 .foregroundStyle(Ink.tertiary)
                 .frame(width: 16)
@@ -557,10 +557,46 @@ enum SidebarSelection {
 struct SidebarCategoryRow: View {
     var category: SidebarCategory
     var toggle: () -> Void
+    /// The category's own menu — `ChannelOptionsMenu`.
+    var openMenu: ((CGRect) -> Void)?
+    /// Discord's "+" on a category, for a reader who may create channels.
+    var createChannel: (() -> Void)?
 
     @Environment(\.motion) private var motion
+    @State private var isHovering = false
 
     var body: some View {
+        HStack(spacing: Spacing.tight) {
+            chip
+            Spacer(minLength: 0)
+            if let createChannel {
+                Button(action: createChannel) {
+                    Image(systemName: "plus")
+                        .font(.system(.caption, weight: .bold))
+                        .foregroundStyle(Ink.tertiary)
+                        .frame(width: 20, height: 20)
+                        .contentShape(.rect)
+                }
+                .buttonStyle(.plain)
+                // Discord shows it on hover; it stays reachable to the keyboard
+                // and to VoiceOver either way.
+                .opacity(isHovering ? 1 : 0)
+                .help("Create Channel")
+                .accessibilityLabel(Text("Create Channel"))
+            }
+        }
+        .padding(.horizontal, Spacing.base)
+        .padding(.top, Spacing.base)
+        .padding(.bottom, Spacing.tight)
+        // The row still spans, so the chip stays at the leading edge instead of
+        // centring itself across the column.
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .modifier(SecondaryClickModifier(openMenu: openMenu))
+        .onHover { isHovering = $0 }
+        .animation(motion.hover, value: isHovering)
+    }
+
+    private var chip: some View {
         Button(action: toggle) {
             HStack(spacing: Spacing.tight) {
                 Image(systemName: "chevron.right")
@@ -578,12 +614,6 @@ struct SidebarCategoryRow: View {
         .buttonStyle(.plain)
         .fixedSize()
         .floatingChrome()
-        .padding(.horizontal, Spacing.base)
-        .padding(.top, Spacing.base)
-        .padding(.bottom, Spacing.tight)
-        // The row still spans, so the chip stays at the leading edge instead of
-        // centring itself across the column.
-        .frame(maxWidth: .infinity, alignment: .leading)
         .animation(motion.standard, value: category.isExpanded)
         .accessibilityLabel(Text(category.name))
         .accessibilityAddTraits(.isButton)
@@ -614,7 +644,7 @@ struct SidebarActionRow: View {
     var body: some View {
         Button(action: action) {
             HStack(spacing: Spacing.base) {
-                Image(systemName: symbolName)
+                Image(symbol: symbolName)
                     .font(.system(.caption))
                     .foregroundStyle(isSelected ? AnyShapeStyle(Ink.secondary) : AnyShapeStyle(Ink.tertiary))
                     // The channel rows' glyph gutter, to the point: the two kinds
@@ -729,7 +759,7 @@ private struct RowAccessory: View {
 
     var body: some View {
         Button(action: action) {
-            Image(systemName: systemImage)
+            Image(symbol: systemImage)
                 .font(.system(size: 9, weight: .semibold))
                 .foregroundStyle(isHovering ? AnyShapeStyle(tint) : AnyShapeStyle(Ink.secondary))
                 .frame(width: 18, height: 18)
@@ -760,6 +790,8 @@ struct SidebarThreadRow: View {
     var isSelected: Bool
     var namespace: Namespace.ID
     var action: () -> Void
+    /// The thread's own menu — `ThreadOptionsMenu`.
+    var openMenu: ((CGRect) -> Void)?
 
     @Environment(\.motion) private var motion
     @State private var isHovering = false
@@ -818,6 +850,7 @@ struct SidebarThreadRow: View {
             isHovering = hovering
         }
         .animation(motion.fadeQuick, value: isHovering)
+        .modifier(SecondaryClickModifier(openMenu: openMenu))
         .accessibilityLabel(Text("Thread, \(thread.name)"))
         .accessibilityAddTraits(isSelected ? [.isButton, .isSelected] : .isButton)
     }

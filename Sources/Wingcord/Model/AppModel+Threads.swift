@@ -1,3 +1,4 @@
+import CoreGraphics
 import Foundation
 import WingcordCore
 import WingcordNet
@@ -35,7 +36,12 @@ struct ForumBoard {
     /// Posts whose preview line has been asked for, so a row scrolling in and
     /// out again does not re-request it.
     var detailsRequested: Set<ChannelID> = []
+    /// Posts `post-data` has answered for. One answered with no opening
+    /// message has lost it — Discord's "Original message was deleted" — where
+    /// one merely asked for is still loading.
+    var detailsAnswered: Set<ChannelID> = []
     var hasMore = false
+    /// How many posts the server says there are — the Threads browser's count.
     var totalResults = 0
     var isLoading = false
     /// Set when a page failed, so the board can offer a retry rather than
@@ -84,30 +90,62 @@ extension AppModel {
 
     // MARK: Opening one
 
-    /// Opens a thread, in the panel beside whatever it hangs off.
-    ///
-    /// **A post opens beside its board, not instead of it** — the same place a
-    /// thread opens beside its channel. Discord does this too, and the reason is
-    /// not symmetry: a post that *replaced* the board would strand the reader.
-    /// The post is not in the sidebar unless they follow it, and the forum row
-    /// would no longer be the selection, so there would be nothing lit to click
-    /// back to. Keeping the parent selected keeps the way back on screen.
-    ///
-    /// So both cases are one: select the parent, and put the thread in the
-    /// panel. `selectedThreadID` is its own property rather than a second
-    /// meaning for `selectedChannelID` precisely so the parent survives.
-    func openThread(_ threadID: ChannelID) {
-        guard let thread = channelIndex[threadID] else { return }
-        guard permissionGate.canView(threadID) else { return }
+    /// How a thread opens — Discord's `openThreadSidebarForViewing` and the
+    /// plain transition beside it.
+    enum ThreadOpening {
+        /// Where the reader's "Open threads in split view" says: in the panel
+        /// beside the channel or board it hangs off, or as the page. A thread
+        /// chip under a message, a post on its board and the Threads browser
+        /// all open this way.
+        case automatic
+        /// As the page — the channel list's own row, and "Open in Full View".
+        case fullView
+        /// Beside its parent — "Open in Split View".
+        case splitView
+    }
 
-        if let parentID = thread.parentID, selectedChannelID != parentID {
-            selectChannel(parentID)
+    /// Opens a thread, beside whatever it hangs off or as the page.
+    ///
+    /// **Split view keeps the parent selected.** A post opened beside its
+    /// board leaves the board lit in the sidebar — the way back on screen —
+    /// and `selectedThreadID` is its own property rather than a second meaning
+    /// for `selectedChannelID` precisely so the parent survives.
+    ///
+    /// **Full view selects the thread itself**, as Discord's channel list does:
+    /// the followed post or joined thread under its channel is lit, and the
+    /// toolbar names its parent before it.
+    func openThread(_ threadID: ChannelID, as opening: ThreadOpening = .automatic) {
+        guard let thread = channelIndex[threadID], permissionGate.canView(threadID) else { return }
+        let splits = switch opening {
+        case .fullView: false
+        case .splitView: true
+        // Mod View holds the column, and Discord opens a thread full-size
+        // where another sidebar already has it.
+        case .automatic: syncedPreferences.opensThreadsInSplitView && openModViewUserID == nil
         }
-        selectedThreadID = threadID
+        // A thread opened replaces a thread being written, as Discord's
+        // sidebar does — see `abandonNewThread`.
+        newThread = nil
+        if splits, let parentID = thread.parentID {
+            if selectedChannelID != parentID { selectChannel(parentID) }
+            selectedThreadID = threadID
+        } else {
+            selectedThreadID = nil
+            selectChannel(threadID)
+        }
         // Neither case has a transcript yet: a board holds only each post's
         // opening message, and a thread reached from a chip has never been
         // opened. Both need the newest page fetched.
         sessionController.openChannel(threadID)
+    }
+
+    /// Discord's "Open threads in split view", here at once and on the
+    /// account.
+    func setOpensThreadsInSplitView(_ opens: Bool) {
+        guard syncedPreferences.opensThreadsInSplitView != opens else { return }
+        let previous = syncedPreferences
+        syncedPreferences.opensThreadsInSplitView = opens
+        sessionController.writeSyncedPreference(.opensThreadsInSplitView(opens), restoring: previous)
     }
 
     /// Closes the thread panel, leaving the channel underneath it selected.
@@ -231,8 +269,25 @@ extension AppModel {
             && permissionGate.canReadHistory(channelID)
     }
 
-    /// Loads a forum's first page, unless it is already loaded or loading.
-    func openForum(_ channelID: ChannelID) { loadThreadList(channelID) }
+    /// Opens a board: its first page, unless it is already loaded or loading —
+    /// and Discord's read of it.
+    ///
+    /// **The forum's own read state is noted, then acknowledged**, as Discord's
+    /// is on selecting the channel (`ackMessageIdAtChannelSelect`, then the
+    /// automatic `ACK_FORUM_ACTIVE_THREADS`). The note is what "NEW" is measured
+    /// against for as long as the board is open — see `ForumOrder.isNew` — and
+    /// the acknowledgement is what makes the next visit's "NEW" only what
+    /// arrived since this one. It also clears the forum's unread mark in the
+    /// channel list, which nothing else ever did.
+    func openForum(_ channelID: ChannelID) {
+        forumReadMarks[channelID] = readStates[channelID]?.lastAcknowledgedID
+        if let forum = channelIndex[channelID], let newest = forum.lastMessageID,
+           unreadState(of: forum).unread
+        {
+            sessionController.acknowledge(newest, in: channelID)
+        }
+        loadThreadList(channelID)
+    }
 
     /// The shared loader behind the board and the flyout.
     private func loadThreadList(_ channelID: ChannelID) {
@@ -464,8 +519,11 @@ extension AppModel {
         threadRevision &+= 1
     }
 
+    /// - Parameter requested: every post asked about — answered for whether or
+    ///   not the reply carried its opening message.
     func applyForumPostDetails(
         _ details: [ChannelID: ForumPostDetail],
+        requested: [ChannelID],
         in channelID: ChannelID
     ) {
         var board = forumBoard(for: channelID)
@@ -474,6 +532,7 @@ extension AppModel {
             if let message = detail.firstMessage { board.firstMessages[postID] = message }
             if let author = detail.author { authors[author.id] = author }
         }
+        board.detailsAnswered.formUnion(requested)
         forumBoards[channelID] = board
         applyThreadPeople(users: authors, members: [:], guildID: channelIndex.guildID(of: channelID))
         threadRevision &+= 1
@@ -498,6 +557,192 @@ extension AppModel {
             memberRevision &+= 1
         }
         if !users.isEmpty { identityRevision &+= 1 }
+    }
+
+    // MARK: The head of a thread's transcript
+
+    /// Which of Discord's heads a transcript opens with (`aE`): a forum post's
+    /// title and tags, a thread's "Started by", or a channel's welcome.
+    func channelHead(for channel: Channel) -> ChannelHead {
+        switch channel.kind {
+        case .directMessage: return directMessageHead(channel)
+        case .groupDirectMessage:
+            return .groupDirectMessage(iconURL: channel.iconHash.flatMap {
+                CDN.channelIcon(channelID: channel.id, hash: $0, side: 80)
+            })
+        default: break
+        }
+        guard channel.kind.isThread else { return .channel }
+        let parent = channel.parentID.flatMap { channelIndex[$0] }
+        if ThreadGate.isForumPost(channel, parent: parent) {
+            let tagsByID = Dictionary(
+                (parent?.availableTags ?? []).map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first }
+            )
+            return .post(
+                tags: channel.appliedTags.compactMap { tagsByID[$0] },
+                openerDeleted: isOpenerDeleted(channel)
+            )
+        }
+        let owner = channel.ownerID.flatMap { ownerID -> String? in
+            let user = users[ownerID]
+            let member = channel.guildID.flatMap { members[$0]?[ownerID] }
+            return member?.resolvedName(user: user) ?? user?.preferredName
+        }
+        return .thread(startedBy: owner, isPrivate: channel.kind == .privateThread)
+    }
+
+    /// Discord's head of a direct message (`aS`, `sc`, `af`): the person,
+    /// the servers in common, and the controls their relationship calls for
+    /// (`au`, `ad`) — or Discord's own sentence for its system account.
+    private func directMessageHead(_ channel: Channel) -> ChannelHead {
+        guard let partner = channel.recipientIDs.first(where: { $0 != currentUserID }) else {
+            return .directMessage(DirectMessageHead(
+                avatarURL: nil, monogram: "?", username: nil, incomingRequestFrom: nil,
+                mutualIcons: [], mutualCount: 0, actions: []
+            ))
+        }
+        let user = users[partner]
+        let avatar = avatarURL(forUserID: partner, inGuild: nil, side: 80)
+        if user?.isSystem == true { return .systemDirectMessage(avatarURL: avatar) }
+
+        let relationship = isBlocked(partner) ? .blocked : relationship(with: partner)
+        let actions: [HeadAction] = if user?.isBot == true {
+            // An app is not befriended or blocked from here. Discord's own
+            // (`sJ`): Mute and Deauthorize on a grant the reader holds, and
+            // Report Spam on its first message.
+            appHeadActions(in: channel, app: partner)
+        } else {
+            switch relationship {
+            case .friend: [.removeFriend, .block]
+            case .blocked: [.unblock]
+            case .incomingRequest: [.acceptRequest, .ignoreRequest, .block]
+            case .outgoingRequest: [.friendRequestSent, .block]
+            case .none: [.addFriend, .block]
+            }
+        }
+        let mutual = user?.decoration?.mutualGuilds ?? []
+        let username = user?.username
+        return .directMessage(DirectMessageHead(
+            avatarURL: avatar,
+            monogram: user?.monogram ?? "?",
+            // Under the name — once, not twice for somebody with no other.
+            username: username == displayName(of: channel) ? nil : username,
+            incomingRequestFrom: relationship == .incomingRequest ? user?.preferredName : nil,
+            mutualIcons: mutual.prefix(3).compactMap { entry in
+                guard let guild = guilds[entry.id] else { return nil }
+                return DirectMessageHead.MutualMark(
+                    iconURL: guild.iconHash.flatMap { CDN.guildIcon(guildID: guild.id, hash: $0, side: 20) },
+                    monogram: guild.monogram
+                )
+            },
+            mutualCount: mutual.count,
+            actions: actions
+        ))
+    }
+
+    /// An app's controls under its DM head.
+    private func appHeadActions(in channel: Channel, app: UserID) -> [HeadAction] {
+        var actions: [HeadAction] = []
+        if appGrant(for: app) != nil {
+            actions = [unreadState(of: channel).muted ? .unmute : .mute, .deauthorize]
+        }
+        if firstMessage(from: app, in: channel.id) != nil { actions.append(.reportSpam) }
+        return actions
+    }
+
+    /// The reader's grant to the app behind a bot, if they hold one.
+    private func appGrant(for bot: UserID) -> AuthorizedApp? {
+        guard let application = users[bot]?.decoration?.application else { return nil }
+        return authorizedApps?.first { $0.applicationID == application.id }
+    }
+
+    /// The first message somebody sent here, once the history reaches it.
+    private func firstMessage(from userID: UserID, in channelID: ChannelID) -> Message? {
+        guard let box = messageBoxes[channelID], !box.hasMoreHistory else { return nil }
+        return box.messages.first { $0.authorID == userID }
+    }
+
+    /// One of a conversation head's controls.
+    func performHeadAction(_ action: HeadAction, in channelID: ChannelID, anchor: CGRect) {
+        switch action {
+        case .inviteToGroup: groupInvite = channelID; return
+        case .editGroup: groupRename = channelID; return
+        case .mute: setDirectMessageMuted(.untilTurnedBackOn, channelID: channelID); return
+        case .unmute: setDirectMessageMuted(nil, channelID: channelID); return
+        default: break
+        }
+        guard let channel = channelIndex[channelID],
+              let partner = channel.recipientIDs.first(where: { $0 != currentUserID })
+        else { return }
+        switch action {
+        case .addFriend, .acceptRequest, .removeFriend: toggleFriend(with: partner)
+        case .ignoreRequest: declineFriendRequest(partner)
+        case .block: setBlocked(true, userID: partner)
+        case .unblock: setBlocked(false, userID: partner)
+        case .mutualServers: openProfile(partner, anchor: anchor, depth: .full, tab: .mutuals)
+        case .deauthorize: headDeauthorization = appGrant(for: partner)
+        case .reportSpam:
+            guard let message = firstMessage(from: partner, in: channelID) else { return }
+            requestReport(of: message.id, in: channelID, isFirstDirectMessage: true)
+        case .friendRequestSent, .inviteToGroup, .editGroup, .mute, .unmute: break
+        }
+    }
+
+    /// Whether a post's opening message is known to be gone: `post-data`
+    /// answered without it, or the transcript reaches the post's start and it
+    /// is not there. Its id is the post's own.
+    func isOpenerDeleted(_ post: Channel) -> Bool {
+        if let forumID = post.parentID, let board = forumBoards[forumID],
+           board.detailsAnswered.contains(post.id)
+        {
+            return board.firstMessages[post.id] == nil
+        }
+        guard let box = messageBoxes[post.id], !box.hasMoreHistory, !box.messages.isEmpty else { return false }
+        return !box.messages.contains { $0.id.rawValue == post.id.rawValue }
+    }
+
+    // MARK: A post's bar
+
+    /// Discord's bar under a forum post's opening message (`rg`), or nil for
+    /// anything that is not a post.
+    func postActions(for channelID: ChannelID) -> PostActions? {
+        guard let post = channelIndex[channelID],
+              ThreadGate.isForumPost(post, parent: post.parentID.flatMap { channelIndex[$0] })
+        else { return nil }
+        let openerID = MessageID(rawValue: channelID.rawValue)
+        let opener = message(openerID, in: channelID)
+        return PostActions(
+            openerID: openerID,
+            openerDeleted: isOpenerDeleted(post),
+            isFollowing: threadMemberships[channelID] != nil,
+            offersFollow: guildPreview?.guildID != post.guildID,
+            // Discord's "React to Post" stands in for reactions the opening
+            // message does not have yet.
+            offersReaction: opener.map { opener in
+                opener.reactions.isEmpty && actions(for: openerID, in: channelID).contains(.addReaction)
+            } ?? false,
+            isLinkCopied: copiedPostLinkID == channelID
+        )
+    }
+
+    /// One of the bar's buttons. Copy Link says "Copied" for two seconds, as
+    /// Discord's does.
+    func performPostAction(_ action: PostActionsSlot.Action, postID: ChannelID, anchor: CGRect) {
+        switch action {
+        case .react:
+            openReactionPicker(for: MessageID(rawValue: postID.rawValue), in: postID, anchor: anchor)
+        case .follow:
+            setThreadFollowed(!followsThread(postID), threadID: postID, location: "Forum Toolbar")
+        case .copyLink:
+            guard let guildID = channelIndex.guildID(of: postID) else { return }
+            Self.copy("https://discord.com/channels/\(guildID.rawValue)/\(postID.rawValue)")
+            copiedPostLinkID = postID
+            Task { [weak self] in
+                try? await Task.sleep(for: .seconds(2))
+                guard let self, copiedPostLinkID == postID else { return }
+                copiedPostLinkID = nil
+            }
+        }
     }
 
     // MARK: Following, muting, notifying
@@ -615,7 +860,26 @@ extension AppModel {
         sidebarRevision &+= 1
     }
 
+    /// A post's opening message is gone — its id is the post's own. The card
+    /// then says so, as Discord's does, rather than keeping a preview of words
+    /// that no longer exist.
+    func applyOpenerDeleted(_ messageID: MessageID, in channelID: ChannelID) {
+        guard messageID.rawValue == channelID.rawValue,
+              let forumID = channelIndex[channelID]?.parentID,
+              var board = forumBoards[forumID]
+        else { return }
+        board.firstMessages[channelID] = nil
+        board.detailsAnswered.insert(channelID)
+        forumBoards[forumID] = board
+        threadRevision &+= 1
+    }
+
     func applyThreadRemoval(_ threadID: ChannelID) {
+        // A thread open as the page leaves the reader in the channel it hung
+        // off, not on a page that no longer resolves.
+        if selectedChannelID == threadID, let parentID = channelIndex[threadID]?.parentID {
+            selectChannel(parentID)
+        }
         channelIndex.remove(threadID)
         threadMemberships[threadID] = nil
         // A board holding it must forget it too, or the row stays on screen

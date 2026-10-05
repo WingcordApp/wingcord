@@ -55,6 +55,9 @@ struct ProfileSheet: View {
     /// state**; where the sheet opened is an input, so it needs no write after
     /// the first frame to take effect.
     @State private var chosenTab: ProfileTab?
+    /// Whether the reader said yes to "Show Profile?" — per sheet, as
+    /// Discord's is.
+    @State private var isWarningPassed = false
 
     /// Never shorter than this, whatever the content says. Below it the panel's
     /// own banner and avatar stop having room to be a portrait at all.
@@ -74,6 +77,51 @@ struct ProfileSheet: View {
     }
 
     var body: some View {
+        if let warning = shownWarning {
+            warningSheet(warning)
+        } else {
+            profileSheet
+        }
+    }
+
+    /// The warning this sheet opens behind — see `AppModel.profileWarning`.
+    private var shownWarning: ProfileWarning? {
+        guard editor == nil, !profile.isSelf, !isWarningPassed else { return nil }
+        return model.profileWarning(for: profile.userID)
+    }
+
+    /// Discord's restricted profile modal: "Show Profile?" alone on the
+    /// person's ground, at the identity panel's width, with the sheet's close.
+    private func warningSheet(_ warning: ProfileWarning) -> some View {
+        ProfileWarningView(
+            warning: warning,
+            name: shown.displayName,
+            avatarURL: shown.avatarURL,
+            monogram: shown.monogram,
+            form: .sheet,
+            width: ProfileIdentityPanel.width,
+            reveal: { isWarningPassed = true },
+            skip: {
+                isWarningPassed = true
+                model.skipIgnoredProfileWarning()
+            }
+        )
+        .frame(width: ProfileIdentityPanel.width)
+        .frame(minHeight: Self.minimumHeight)
+        .modifier(ProfileGroundFill(ground: ground, corner: Radius.card))
+        .clipShape(.rect(cornerRadius: Radius.card, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: Radius.card, style: .continuous)
+                .strokeBorder(ground.borderStyle, lineWidth: ground.borderWidth)
+        }
+        .overlay(alignment: .topTrailing) {
+            closeButton.padding(Spacing.base)
+        }
+        .shadow(color: .black.opacity(0.5), radius: 40, y: 16)
+        .presentationBackground(.clear)
+    }
+
+    private var profileSheet: some View {
         HStack(alignment: .top, spacing: 0) {
             if let editor {
                 ProfileEditRail(
@@ -255,7 +303,7 @@ struct ProfileSheet: View {
             // segment is a label that looks pressable.
             if tabs.count > 1 {
                 SegmentedPicker(
-                    options: tabs.map { SegmentedPicker.Option($0, $0.title) },
+                    options: tabs.map { SegmentedPicker.Option($0, $0.title(for: profile)) },
                     selection: Binding(
                         get: { currentTab },
                         set: { chosenTab = $0 }
@@ -277,7 +325,8 @@ struct ProfileSheet: View {
             // compress — which was the edit button, silently. On the reader's
             // own profile the count is also the least useful thing here: the
             // Mutuals tab is already titled with it.
-            if !profile.mutualServers.isEmpty, editor == nil, !profile.isSelf {
+            // An app's tab already counts them, in Discord's words.
+            if !profile.mutualServers.isEmpty, editor == nil, !profile.isSelf, !profile.isBot {
                 mutualCount
             }
             closeButton
@@ -379,6 +428,7 @@ struct ProfileSheet: View {
         case .board: boardPane
         case .activity: activityPane
         case .mutuals: mutualsPane
+        case .dataAccess: ProfileDataAccessPane(application: profile.application, ground: ground)
         }
     }
 
@@ -415,6 +465,21 @@ struct ProfileSheet: View {
     @ViewBuilder
     private var activityPane: some View {
         VStack(alignment: .leading, spacing: 14) {
+            // A stream first, as Discord lists it.
+            let stream = model.profileStream(for: profile.userID, inGuild: profile.guild?.id)
+            if let stream {
+                ProfileSlab(ground: ground) {
+                    ProfileStreamCard(
+                        stream: stream,
+                        form: .sheet,
+                        ground: ground,
+                        platesItself: false,
+                        watch: { model.watchStream(from: stream) },
+                        join: { model.joinVoice(from: stream) },
+                        openGuild: { model.openGuild($0) }
+                    )
+                }
+            }
             // **Every activity, in Discord's order** — `ActivityOrder` — one
             // slab each. Only the first one's buttons and store are fetched,
             // so the rest draw without them rather than with dead ones.
@@ -434,6 +499,23 @@ struct ProfileSheet: View {
                         traits: activity.ongoing.first { $0.records(current) }?.traits ?? [],
                         isOwn: profile.isSelf,
                         listenAlong: model.listenAlongOffer(for: profile.userID, activity: current)
+                    )
+                }
+            }
+            // The call last among what is happening now, as Discord lists it —
+            // and none where a stream already stands for it.
+            if !profile.isProfilePrivate, stream == nil,
+               let voice = model.profileVoice(for: profile.userID, inGuild: profile.guild?.id)
+            {
+                ProfileSlab(ground: ground) {
+                    ProfileVoiceCard(
+                        voice: voice,
+                        form: .sheet,
+                        ground: ground,
+                        platesItself: false,
+                        open: { model.openVoice(from: voice) },
+                        openGuild: { model.openGuild($0) },
+                        setStatus: { model.editVoiceStatus(in: voice.channelID) }
                     )
                 }
             }
@@ -523,7 +605,8 @@ struct ProfileSheet: View {
                 emptyPane(
                     profile.isLoading
                         ? "Loading…"
-                        : "No servers or friends in common."
+                        // An app has no friends to share: Discord's own line.
+                        : profile.isBot ? "No servers in common" : "No servers or friends in common."
                 )
             }
         }
@@ -573,17 +656,27 @@ struct ProfileSheet: View {
     }
 }
 
-/// The three things a profile's content column can be showing.
+/// The things a profile's content column can be showing.
 enum ProfileTab: Hashable, CaseIterable, Sendable {
     case board
     case activity
     case mutuals
+    /// An app's: what it can read beyond the baseline — Discord's Data Access.
+    case dataAccess
 
-    var title: String {
+    /// **An app's tabs are Discord's own** (`BotUserProfileModal`): its servers
+    /// in common counted in Discord's words (`186272`), and Data Access.
+    func title(for profile: ProfilePresentation) -> String {
         switch self {
         case .board: "Board"
         case .activity: "Activity"
-        case .mutuals: "Mutuals"
+        case .mutuals:
+            if !profile.isBot { "Mutuals" }
+            else if profile.isLoading { "Mutual Servers" }
+            else if profile.mutualServers.isEmpty { "No Mutual Servers" }
+            else if profile.mutualServers.count == 1 { "1 Mutual Server" }
+            else { "\(profile.mutualServers.count) Mutual Servers" }
+        case .dataAccess: "Data Access"
         }
     }
 
@@ -616,6 +709,9 @@ enum ProfileTab: Hashable, CaseIterable, Sendable {
         activity: ProfileActivityPresentation,
         isEditing: Bool = false
     ) -> [ProfileTab] {
+        // Discord's app profile has its Bio — the panel beside this column —
+        // its servers in common, and Data Access, and nothing else.
+        if profile.isBot { return [.mutuals, .dataAccess] }
         var tabs: [ProfileTab] = []
         if isEditing || board?.tiles.isEmpty == false { tabs.append(.board) }
         tabs.append(.activity)

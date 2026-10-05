@@ -22,6 +22,12 @@ struct GuildProfileCard: View {
     /// Joins, or opens the server's application form. Nil on a surface with
     /// nothing to join with, which draws the plain sentence instead — §5.5.
     var enterGuild: ((GuildID) -> Void)?
+    /// Whether the card ends in its way in. Off where the card is the header
+    /// of the act itself — the application form, Discord's `disableCTA`.
+    var showsEntry = true
+    /// "Unable to load server profile", pressed. Nil where nothing can ask
+    /// again, which draws the line without the press.
+    var retry: (() -> Void)? = nil
 
     @Environment(\.motion) private var motion
     @Environment(\.colorScheme) private var colorScheme
@@ -40,6 +46,7 @@ struct GuildProfileCard: View {
             header
             identity
             counts
+            refusalLine
             if let description = profile.description, !description.isEmpty {
                 Text(description)
                     .font(.system(.caption))
@@ -67,6 +74,34 @@ struct GuildProfileCard: View {
         .frame(width: Self.width)
         // No material of its own: the popover's glass is the body — §4.9.
         // The popover casts its own shadow; a second would double it.
+    }
+
+    /// Discord's words for a profile it would not show (`109026`): the
+    /// server limited who sees it, or it failed — in the warning ink, with
+    /// the line itself the way to try again.
+    @ViewBuilder
+    private var refusalLine: some View {
+        switch profile.refusal {
+        case .limited:
+            Text("The server has limited who can see this profile.")
+                .font(.system(.caption))
+                .foregroundStyle(InkColor.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+                .padding(.horizontal, Spacing.margin)
+                .padding(.top, Spacing.snug)
+        case .failed:
+            Button { retry?() } label: {
+                Label("Unable to load server profile", systemImage: "arrow.clockwise")
+                    .font(.system(.caption))
+                    .foregroundStyle(Palette.feedbackWarning)
+            }
+            .buttonStyle(.plain)
+            .disabled(retry == nil)
+            .padding(.horizontal, Spacing.margin)
+            .padding(.top, Spacing.snug)
+        case nil:
+            EmptyView()
+        }
     }
 
     // MARK: Header
@@ -261,7 +296,9 @@ struct GuildProfileCard: View {
 
     @ViewBuilder
     private var footer: some View {
-        if profile.isJoined {
+        if !showsEntry {
+            Color.clear.frame(height: Spacing.margin)
+        } else if profile.isJoined {
             Button { openGuild(profile.guildID) } label: {
                 Label("Open Server", systemImage: "arrow.forward")
                     .font(.system(.subheadline, weight: .semibold))

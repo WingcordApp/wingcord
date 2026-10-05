@@ -54,6 +54,8 @@ struct ChannelSidebar: View, Equatable {
     /// A secondary click on a conversation, with the row's own rect. Only the
     /// direct-message list passes one — see `SidebarChannelRow.openMenu`.
     var openMenu: (ChannelID, CGRect) -> Void = { _, _ in }
+    /// Create Channel inside a category — its "+".
+    var createChannel: (ChannelID) -> Void = { _ in }
 
     @Environment(\.motion) private var motion
     /// Shared namespace so the selection pill *flows* from row to row rather
@@ -179,7 +181,14 @@ struct ChannelSidebar: View, Equatable {
             // which the grouping above does not produce. Rendered anyway rather
             // than dropped: a row the model contains and the view silently skips
             // is a channel nobody can reach.
-            SidebarCategoryRow(category: category, toggle: { toggleCategory(category.id) })
+            SidebarCategoryRow(
+                category: category,
+                toggle: { toggleCategory(category.id) },
+                openMenu: { openMenu(category.id, $0) },
+                createChannel: presentation.header?.canCreateChannels == true
+                    ? { createChannel(category.id) }
+                    : nil
+            )
         case .channel(let channel):
             SidebarChannelRow(
                 channel: channel,
@@ -197,17 +206,17 @@ struct ChannelSidebar: View, Equatable {
                 openChat: channel.kind == .voice || channel.kind == .stage
                     ? { openVoiceChat(channel.id) }
                     : nil,
-                // A conversation has a menu; a server's channel does not, and
-                // handing it nil is what keeps the catcher out of a
-                // hundred-row list.
-                openMenu: channel.isPerson ? { openMenu(channel.id, $0) } : nil
+                // A conversation has its menu and a server channel its own
+                // (`ChannelOptionsMenu`); the model decides which.
+                openMenu: { openMenu(channel.id, $0) }
             )
         case .thread(let thread):
             SidebarThreadRow(
                 thread: thread,
                 isSelected: target == .channel(thread.id),
                 namespace: selectionNamespace,
-                action: { openThread(thread.id) }
+                action: { openThread(thread.id) },
+                openMenu: { openMenu(thread.id, $0) }
             )
         }
     }
@@ -358,7 +367,11 @@ struct ChannelSidebar: View, Equatable {
                         if let category = group.header {
                             SidebarCategoryRow(
                                 category: category,
-                                toggle: { toggleCategory(category.id) }
+                                toggle: { toggleCategory(category.id) },
+                                openMenu: { openMenu(category.id, $0) },
+                                createChannel: presentation.header?.canCreateChannels == true
+                                    ? { createChannel(category.id) }
+                                    : nil
                             )
                             // The header travels with the list until it reaches
                             // the top, then stays — so it needs a ground of its

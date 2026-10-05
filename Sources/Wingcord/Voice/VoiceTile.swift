@@ -277,7 +277,7 @@ struct VoiceTile: View {
         if !symbols.isEmpty {
             HStack(spacing: Spacing.tight) {
                 ForEach(symbols, id: \.self) { symbol in
-                    Image(systemName: symbol)
+                    Image(symbol: symbol)
                         .font(.system(.caption, weight: .semibold))
                         .foregroundStyle(
                             symbol == "rectangle.inset.filled.on.rectangle"

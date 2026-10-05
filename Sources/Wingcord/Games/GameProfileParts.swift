@@ -187,7 +187,7 @@ struct GameMediaStage: View {
         _ perform: @escaping () -> Void
     ) -> some View {
         Button(action: perform) {
-            Image(systemName: symbolName)
+            Image(symbol: symbolName)
                 .font(.system(size: 10, weight: .bold))
                 .foregroundStyle(InkColor.primary)
                 .frame(width: 26, height: 26)
@@ -846,7 +846,7 @@ struct GameDetailsSection: View {
             case .platforms(let groups):
                 HStack(spacing: Spacing.base) {
                     ForEach(groups, id: \.self) { group in
-                        Image(systemName: group.symbolName)
+                        Image(symbol: group.symbolName)
                             .font(.system(size: 12))
                             .foregroundStyle(InkColor.primary)
                             .help(group.title)

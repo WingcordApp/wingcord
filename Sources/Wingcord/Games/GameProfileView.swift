@@ -377,7 +377,7 @@ private struct GameHeaderBar: View {
         _ perform: @escaping () -> Void
     ) -> some View {
         Button(action: perform) {
-            Image(systemName: symbolName)
+            Image(symbol: symbolName)
                 .font(Typeface.controlGlyph)
                 .foregroundStyle(InkColor.primary)
                 .frame(width: Metrics.control + 6, height: Metrics.control + 6)

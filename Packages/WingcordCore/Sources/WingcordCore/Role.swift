@@ -175,6 +175,9 @@ public struct Member: Hashable, Sendable, Codable {
     /// member-list row — which reads as "never started onboarding", the answer
     /// that raises nothing.
     public var flags: MemberFlags
+    /// When Discord last flagged them for unusual DMs. Only a moderator is
+    /// told; nil for everybody else.
+    public var unusualDMActivityUntil: Date?
 
     public init(
         userID: UserID,
@@ -185,7 +188,8 @@ public struct Member: Hashable, Sendable, Codable {
         premiumSince: Date? = nil,
         communicationDisabledUntil: Date? = nil,
         isPending: Bool = false,
-        flags: MemberFlags = []
+        flags: MemberFlags = [],
+        unusualDMActivityUntil: Date? = nil
     ) {
         self.userID = userID
         self.nickname = nickname
@@ -196,6 +200,7 @@ public struct Member: Hashable, Sendable, Codable {
         self.communicationDisabledUntil = communicationDisabledUntil
         self.isPending = isPending
         self.flags = flags
+        self.unusualDMActivityUntil = unusualDMActivityUntil
     }
 
     public func isTimedOut(now: Date = .now) -> Bool {

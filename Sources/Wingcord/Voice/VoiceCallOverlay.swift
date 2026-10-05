@@ -208,7 +208,7 @@ struct VoiceCallOverlay: View {
         Button {
             isFullHeight.toggle()
         } label: {
-            Image(systemName: isFullHeight
+            Image(symbol: isFullHeight
                 ? "arrow.down.right.and.arrow.up.left"
                 : "arrow.up.left.and.arrow.down.right")
                 .font(.system(.footnote, weight: .semibold))

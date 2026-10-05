@@ -144,7 +144,7 @@ struct CurrentActivityCard: View {
             ) {
                 ZStack {
                     Rectangle().fill(ground.panelFill)
-                    Image(systemName: placeholder.symbolName)
+                    Image(symbol: placeholder.symbolName)
                         .font(.system(size: 20))
                         .foregroundStyle(InkColor.tertiary)
                 }
@@ -232,7 +232,7 @@ struct CurrentActivityCard: View {
 
     private func entry(symbol: String, text: String) -> some View {
         HStack(spacing: 3) {
-            Image(systemName: symbol)
+            Image(symbol: symbol)
                 .font(.system(size: 10, weight: .semibold))
             Text(text)
                 .font(.system(.caption))
@@ -401,7 +401,7 @@ private struct ActivityClock: View {
 
     var body: some View {
         HStack(spacing: 3) {
-            Image(systemName: glyph.symbolName)
+            Image(symbol: glyph.symbolName)
                 .font(.system(size: 10, weight: .semibold))
             SwiftUI.TimelineView(.periodic(from: .now, by: 1)) { context in
                 Text(ActivityCardContent.clock(Int(context.date.timeIntervalSince(start))))
@@ -537,7 +537,7 @@ struct RecentActivityRow: View {
             } else {
                 ZStack {
                     Rectangle().fill(ground.panelFill)
-                    Image(systemName: entry.subject.symbolName)
+                    Image(symbol: entry.subject.symbolName)
                         .font(.system(size: 15))
                         .foregroundStyle(InkColor.tertiary)
                 }
@@ -562,7 +562,7 @@ struct RecentActivityRow: View {
         HStack(spacing: Spacing.snug) {
             if let when = timestampLabel {
                 HStack(spacing: 4) {
-                    Image(systemName: entry.subject.symbolName)
+                    Image(symbol: entry.subject.symbolName)
                         .font(.system(size: 9))
                     Text(when)
                         .font(.system(.caption))
@@ -599,7 +599,7 @@ struct ActivityTraitChips: View {
             if let label = trait.label {
                 HStack(spacing: 4) {
                     if let symbolName = trait.symbolName {
-                        Image(systemName: symbolName)
+                        Image(symbol: symbolName)
                             .font(.system(size: 9))
                     }
                     Text(label)

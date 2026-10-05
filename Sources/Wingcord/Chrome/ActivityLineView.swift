@@ -18,7 +18,7 @@ struct ActivityLineView: View {
     var body: some View {
         HStack(spacing: Spacing.tight) {
             if let glyph = line.glyph {
-                Image(systemName: glyph.symbolName)
+                Image(symbol: glyph.symbolName)
                     .imageScale(.small)
                     .foregroundStyle(glyph.isLive ? AnyShapeStyle(Palette.presenceOnline) : AnyShapeStyle(ink))
             }

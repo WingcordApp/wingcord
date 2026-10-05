@@ -115,7 +115,11 @@ struct ComposerContainer: View {
             stickerPickerRequest: model.stickerPickerRequest?.channelID == channelID
                 ? model.stickerPickerRequest
                 : nil,
-            takeStickerPickerRequest: { model.stickerPickerRequest = nil }
+            takeStickerPickerRequest: { model.stickerPickerRequest = nil },
+            appLauncherRequest: model.appLauncherRequest?.channelID == channelID
+                ? model.appLauncherRequest
+                : nil,
+            takeAppLauncherRequest: { model.appLauncherRequest = nil }
         )
         // A shortcode the reader finished typing becomes its emoji — see
         // `applyClosedShortcode`. Keyed on the text so it runs once per change
@@ -180,6 +184,9 @@ struct ComposerContainer: View {
         return ComposerAttachActions(
             uploadFile: canAttach ? { isChoosingFiles = true } : nil,
             selectPhotos: canAttach ? { isPickingPhotos = true } : nil,
+            createThread: model.canStartThread(in: channelID)
+                ? { model.startThread(in: channelID, location: "Plus Button") }
+                : nil,
             createPoll: model.canPostPolls(in: channelID) ? { model.openPollEditor(in: channelID) } : nil,
             useApps: model.permissionGate.canUseCommands(in: channelID) ? { model.useApps(in: channelID) } : nil,
             listenAlong: model.listenAlongInvitationTitle(in: channelID).map { title in

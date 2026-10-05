@@ -48,24 +48,8 @@ struct ProseText: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: Spacing.tight) {
-            ForEach(Array(lines.enumerated()), id: \.offset) { _, line in
-                if line.isEmpty {
-                    // A blank line is a paragraph break somebody typed. It has
-                    // to take space, or the four-line bio they wrote collapses
-                    // into one block.
-                    Color.clear.frame(height: 1)
-                } else {
-                    ProseLine(
-                        segments: line,
-                        font: font,
-                        color: color,
-                        emojiSide: emojiSide,
-                        spacing: Self.spaceWidth(for: font),
-                        playsEmoji: animates,
-                        onEmoji: onEmoji,
-                        onLink: onLink
-                    )
-                }
+            ForEach(blocks) { block in
+                ProseBlockView(block: block, context: drawing)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -78,7 +62,20 @@ struct ProseText: View {
 
     private var document: MarkdownDocument { ProseCache.shared.document(for: markdown) }
 
-    private var lines: [[ProseSegment]] { ProseSegment.lines(of: document, mentions: mentions) }
+    private var blocks: [ProseBlock] { ProseBlock.blocks(of: document, mentions: mentions) }
+
+    /// What every block draws with, resolved once per body.
+    private var drawing: ProseDrawing {
+        ProseDrawing(
+            font: font,
+            color: color,
+            emojiSide: emojiSide,
+            spacing: Self.spaceWidth(for: font),
+            playsEmoji: animates,
+            onEmoji: onEmoji,
+            onLink: onLink
+        )
+    }
 
     /// A space's width in the drawn font, used as the flow's gap.
     ///
@@ -90,12 +87,8 @@ struct ProseText: View {
     }
 }
 
-/// One line of prose.
-///
-/// Its own view so `FlowLayout`'s measurement cache belongs to the line rather
-/// than to the whole block: a bio that changes one line re-measures one line.
-private struct ProseLine: View {
-    var segments: [ProseSegment]
+/// Everything a block needs to draw its words, handed down whole.
+private struct ProseDrawing {
     var font: Font
     var color: Color
     var emojiSide: CGFloat
@@ -103,31 +96,125 @@ private struct ProseLine: View {
     var playsEmoji: Bool
     var onEmoji: ((EmojiRef) -> Void)?
     var onLink: ((String) -> Void)?
+}
+
+// MARK: - Blocks
+
+/// One block, drawn the way the transcript draws it — **the same structure,
+/// not a flattening of it.** A quote has its rule and keeps its ink, a heading
+/// its size, a list its markers hung outside the words, a fenced block its box.
+/// The flat version drew a quote as grey text and a list as a line with a dot
+/// in it, which is what bios looked like until this.
+private struct ProseBlockView: View {
+    var block: ProseBlock
+    var context: ProseDrawing
 
     var body: some View {
-        FlowLayout(spacing: spacing) {
+        switch block.kind {
+        case .lines(let lines):
+            VStack(alignment: .leading, spacing: Spacing.tight) {
+                ForEach(Array(lines.enumerated()), id: \.offset) { _, line in
+                    if line.isEmpty {
+                        // A blank line is a paragraph break somebody typed. It
+                        // has to take space, or the four-line bio they wrote
+                        // collapses into one block.
+                        Color.clear.frame(height: 1)
+                    } else {
+                        ProseLine(segments: line, context: context)
+                    }
+                }
+            }
+        case .quote(let children):
+            // `.blockquoteContainer`: a 4-point rule, then the words 12 points
+            // in, in the text's own ink.
+            HStack(alignment: .top, spacing: 0) {
+                RoundedRectangle(cornerRadius: 2, style: .continuous)
+                    .fill(ProsePlates.quoteRule)
+                    .frame(width: MessageTextStyle.quoteRuleWidth)
+                VStack(alignment: .leading, spacing: Spacing.tight) {
+                    ForEach(children) { ProseBlockView(block: $0, context: context) }
+                }
+                .padding(.leading, MessageTextStyle.quoteIndent - MessageTextStyle.quoteRuleWidth)
+            }
+            .fixedSize(horizontal: false, vertical: true)
+        case .list(let markers, let items):
+            VStack(alignment: .leading, spacing: 2) {
+                ForEach(Array(items.enumerated()), id: \.offset) { index, item in
+                    HStack(alignment: .top, spacing: 6) {
+                        Text(verbatim: markers[index])
+                            .font(context.font)
+                            .foregroundStyle(InkColor.secondary)
+                            .frame(minWidth: 12, alignment: .trailing)
+                        VStack(alignment: .leading, spacing: 2) {
+                            ForEach(item) { ProseBlockView(block: $0, context: context) }
+                        }
+                    }
+                }
+            }
+            .padding(.leading, 4)
+        case .code(let code):
+            Text(verbatim: code)
+                .font(.system(size: NSFont.resolved(context.font).pointSize * 0.875, design: .monospaced))
+                .foregroundStyle(context.color)
+                .fixedSize(horizontal: false, vertical: true)
+                .padding(8)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(ProsePlates.codeFill, in: .rect(cornerRadius: 4, style: .continuous))
+                .overlay {
+                    RoundedRectangle(cornerRadius: 4, style: .continuous)
+                        .strokeBorder(ProsePlates.codeBorder, lineWidth: 1)
+                }
+        }
+    }
+}
+
+/// The transcript's plate colours, for prose — `TextPlateInk`, read once per
+/// draw so a bio and a message sit on the same greys.
+private enum ProsePlates {
+    static var quoteRule: Color { color(ThemeInk.current.plates.quoteRule) }
+    static var codeFill: Color { color(ThemeInk.current.plates.codeFill) }
+    static var codeBorder: Color { color(ThemeInk.current.plates.codeBorder) }
+    static var mentionFill: Color { color(ThemeInk.current.plates.mentionFill) }
+    static var timestampFill: Color { color(ThemeInk.current.plates.timestampFill) }
+    static var spoilerHidden: Color { color(ThemeInk.current.plates.spoilerHidden) }
+
+    private static func color(_ cgColor: CGColor) -> Color {
+        Color(nsColor: NSColor(cgColor: cgColor) ?? .clear)
+    }
+}
+
+/// One line of prose.
+///
+/// Its own view so `FlowLayout`'s measurement cache belongs to the line rather
+/// than to the whole block: a bio that changes one line re-measures one line.
+private struct ProseLine: View {
+    var segments: [ProseSegment]
+    var context: ProseDrawing
+
+    var body: some View {
+        FlowLayout(spacing: context.spacing) {
             ForEach(segments) { segment in
                 switch segment.kind {
                 case .word(let text, let style, let destination):
                     ProseWord(
                         text: text,
                         style: style,
-                        font: font,
-                        color: color,
+                        font: context.font,
+                        color: context.color,
                         // **Offered only where it can be honoured.** A run with
                         // no destination, or a surface with no opener, gets
                         // plain text and no pointer — an inert control that
                         // looks live is exactly what §5.5 forbids.
                         open: destination.flatMap { url in
-                            onLink.map { handler in { handler(url) } }
+                            context.onLink.map { handler in { handler(url) } }
                         }
                     )
                 case .emoji(let emoji):
                     ProseEmoji(
                         emoji: emoji,
-                        side: emojiSide,
-                        plays: playsEmoji,
-                        onTap: onEmoji
+                        side: context.emojiSide,
+                        plays: context.playsEmoji,
+                        onTap: context.onEmoji
                     )
                 }
             }
@@ -140,6 +227,10 @@ private struct ProseLine: View {
 /// **Two branches rather than one always-tappable view.** A `Button` per word
 /// would put a gesture responder behind every word of every bio in the app; the
 /// overwhelming majority of runs are prose, and prose costs a `Text`.
+///
+/// **A run on a plate keeps it**: a timestamp on the grey the transcript gives
+/// it, a mention on its tint, inline code in its box — and a spoiler under its
+/// cover. The plate is the run's, so a three-word date is one pill.
 private struct ProseWord: View {
     var text: String
     var style: ProseStyle
@@ -153,6 +244,19 @@ private struct ProseWord: View {
             .foregroundStyle(style.color(base: color))
             .strikethrough(style.inline.contains(.strikethrough))
             .underline(style.inline.contains(.underline))
+            .padding(.horizontal, style.plate == nil ? 0 : MessageTextStyle.chipPadding)
+            .background {
+                if let plate = style.plate {
+                    RoundedRectangle(cornerRadius: plate == .code ? 4 : 3, style: .continuous)
+                        .fill(plate.fill)
+                        .overlay {
+                            if plate == .code {
+                                RoundedRectangle(cornerRadius: 4, style: .continuous)
+                                    .strokeBorder(ProsePlates.codeBorder, lineWidth: 1)
+                            }
+                        }
+                }
+            }
 
         if let open {
             Button(action: open) { label.contentShape(.rect) }
@@ -194,6 +298,56 @@ private struct ProseEmoji: View {
 
 // MARK: - Segments
 
+/// A block of prose, as `MarkdownDocument` has it: lines of words, a quote of
+/// blocks, a list of items of blocks, or a fenced block.
+struct ProseBlock: Identifiable {
+    enum Kind {
+        /// Lines of words. An empty line is a break somebody typed.
+        case lines([[ProseSegment]])
+        case quote([ProseBlock])
+        /// Each item's marker — its number, or Discord's bullet — and its blocks.
+        case list(markers: [String], items: [[ProseBlock]])
+        case code(String)
+    }
+
+    let id: Int
+    let kind: Kind
+
+    /// The document's blocks, nested as it nests them. Everything the
+    /// transcript understands is understood here, because it is the same tree
+    /// — the only difference is what draws it.
+    static func blocks(of document: MarkdownDocument, mentions: MentionContext?) -> [ProseBlock] {
+        var counter = 0
+        func nextID() -> Int {
+            defer { counter += 1 }
+            return counter
+        }
+        func convert(_ block: BlockNode, style: ProseStyle) -> ProseBlock {
+            switch block {
+            case .paragraph(let nodes):
+                ProseBlock(id: nextID(), kind: .lines(ProseSegment.lines(of: nodes, style: style, mentions: mentions)))
+            case .heading(let level, let nodes):
+                ProseBlock(
+                    id: nextID(),
+                    kind: .lines(ProseSegment.lines(of: nodes, style: style.asHeading(level), mentions: mentions))
+                )
+            case .subtext(let nodes):
+                ProseBlock(id: nextID(), kind: .lines(ProseSegment.lines(of: nodes, style: style.asSubtext, mentions: mentions)))
+            case .codeBlock(_, let code):
+                ProseBlock(id: nextID(), kind: .code(code))
+            case .quote(let children):
+                ProseBlock(id: nextID(), kind: .quote(children.map { convert($0, style: style) }))
+            case .list(let ordered, let start, let items):
+                ProseBlock(id: nextID(), kind: .list(
+                    markers: items.indices.map { ordered ? "\(start + $0)." : "•" },
+                    items: items.map { item in item.map { convert($0, style: style) } }
+                ))
+            }
+        }
+        return document.blocks.map { convert($0, style: .body) }
+    }
+}
+
 /// One drawable piece of a line: a styled word, or a picture.
 struct ProseSegment: Identifiable {
     enum Kind {
@@ -212,12 +366,8 @@ struct ProseSegment: Identifiable {
     let id: Int
     let kind: Kind
 
-    /// Splits a document into lines of segments.
-    ///
-    /// Blocks become lines; a `lineBreak` inside one starts another. Everything
-    /// the transcript understands is understood here, because it is the same
-    /// tree — the only difference is what draws it.
-    static func lines(of document: MarkdownDocument, mentions: MentionContext?) -> [[ProseSegment]] {
+    /// Splits one block's words into lines; a `lineBreak` starts another.
+    static func lines(of nodes: [InlineNode], style: ProseStyle, mentions: MentionContext?) -> [[ProseSegment]] {
         var lines: [[ProseSegment]] = []
         var current: [ProseSegment] = []
         var counter = 0
@@ -293,52 +443,27 @@ struct ProseSegment: Identifiable {
                 case .gameMention(let id):
                     word(mentions?.gameNames[id] ?? "unknown-game", style.asMention)
                 case .staticRoute(let route, _):
-                    // A place in a server, named as its chip names it.
-                    for run in route.title.split(separator: " ") {
-                        word(String(run), style.asMention)
-                    }
+                    // A place in a server, named as its chip names it — one
+                    // plate, not one per word.
+                    word(route.title, style.asMention)
                 case .everyoneMention:
                     word("@everyone", style.asMention)
                 case .hereMention:
                     word("@here", style.asMention)
                 case .timestamp(let date, let timestampStyle):
-                    // A moment in the reader's own zone and locale, which is why
-                    // it is a node and not text.
-                    word(timestampStyle.format(date), style.asMention)
+                    // A moment in the reader's own zone and locale, which is
+                    // why it is a node and not text — and **one** run on the
+                    // transcript's grey plate, in the words' own ink. It was
+                    // drawn in the accent, as if it were a link.
+                    word(timestampStyle.format(date), style.asTimestamp)
                 case .lineBreak:
                     breakLine()
                 }
             }
         }
 
-        func append(_ block: BlockNode, style: ProseStyle) {
-            switch block {
-            case .paragraph(let nodes):
-                append(nodes, style: style)
-            case .heading(_, let nodes):
-                append(nodes, style: style.asHeading)
-            case .subtext(let nodes):
-                append(nodes, style: style.asSubtext)
-            case .codeBlock(_, let code):
-                for line in code.split(separator: "\n", omittingEmptySubsequences: false) {
-                    word(String(line), style.asCode)
-                    breakLine()
-                }
-            case .quote(let children):
-                for child in children { append(child, style: style.asQuote) }
-            case .list(let ordered, let start, let items):
-                for (offset, item) in items.enumerated() {
-                    word(ordered ? "\(start + offset)." : "•", style)
-                    for child in item { append(child, style: style) }
-                    breakLine()
-                }
-            }
-        }
-
-        for block in document.blocks {
-            append(block, style: .body)
-            breakLine()
-        }
+        append(nodes, style: style)
+        breakLine()
         // The trailing break always leaves one empty line behind it.
         if lines.last?.isEmpty == true { lines.removeLast() }
         return lines
@@ -352,12 +477,30 @@ struct ProseStyle: Equatable {
 
     enum Role: Equatable {
         case body
-        case heading
+        /// `#`, `##`, `###` — Discord's sizes, as the transcript scales them.
+        case heading(Int)
         case subtext
         case code
         case link
         case mention
-        case quote
+        case timestamp
+    }
+
+    /// What a run sits on, if anything.
+    enum Plate: Equatable {
+        case mention
+        case timestamp
+        case code
+        case spoiler
+
+        var fill: Color {
+            switch self {
+            case .mention: ProsePlates.mentionFill
+            case .timestamp: ProsePlates.timestampFill
+            case .code: ProsePlates.codeFill
+            case .spoiler: ProsePlates.spoilerHidden
+            }
+        }
     }
 
     static let body = ProseStyle()
@@ -371,9 +514,9 @@ struct ProseStyle: Equatable {
     var asCode: ProseStyle { withRole(.code) }
     var asLink: ProseStyle { withRole(.link) }
     var asMention: ProseStyle { withRole(.mention) }
-    var asHeading: ProseStyle { withRole(.heading) }
+    var asTimestamp: ProseStyle { withRole(.timestamp) }
     var asSubtext: ProseStyle { withRole(.subtext) }
-    var asQuote: ProseStyle { withRole(.quote) }
+    func asHeading(_ level: Int) -> ProseStyle { withRole(.heading(level)) }
 
     private func withRole(_ role: Role) -> ProseStyle {
         var copy = self
@@ -381,11 +524,25 @@ struct ProseStyle: Equatable {
         return copy
     }
 
+    var plate: Plate? {
+        if inline.contains(.spoiler) { return .spoiler }
+        switch role {
+        case .mention: return .mention
+        case .timestamp: return .timestamp
+        case .code: return .code
+        default: return nil
+        }
+    }
+
     func font(base: Font) -> Font {
+        let size = NSFont.resolved(base).pointSize
         var font = switch role {
-        case .code: Font.system(.caption, design: .monospaced)
-        case .heading: base.bold()
-        case .subtext: Font.system(.caption2)
+        case .code: Font.system(size: size * 0.875, design: .monospaced)
+        // The transcript's own scales (`MessageTextStyle.heading`).
+        case .heading(let level):
+            Font.system(size: size * (level == 1 ? 1.42 : level == 2 ? 1.24 : 1.10), weight: .bold)
+        case .subtext: Font.system(size: size * 0.8125)
+        case .mention: base.weight(.medium)
         default: base
         }
         if inline.contains(.bold) { font = font.bold() }
@@ -394,13 +551,13 @@ struct ProseStyle: Equatable {
     }
 
     func color(base: Color) -> Color {
+        // A spoiler in a bio is concealed the same way it is in a message:
+        // the text is there, under a cover, until the reader asks.
+        if inline.contains(.spoiler) { return .clear }
         switch role {
-        case .link, .mention: Palette.accent
-        case .subtext, .quote: InkColor.tertiary
-        default:
-            // A spoiler in a bio is concealed the same way it is in a message:
-            // the text is there and unreadable until the reader asks.
-            inline.contains(.spoiler) ? .clear : base
+        case .link, .mention: return Palette.accent
+        case .subtext: return InkColor.tertiary
+        default: return base
         }
     }
 }

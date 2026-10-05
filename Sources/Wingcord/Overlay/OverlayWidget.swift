@@ -462,7 +462,7 @@ private struct OverlayClipsWidget: View {
     var body: some View {
         if let state = controller.clipFeedback {
             HStack(spacing: Spacing.base) {
-                Image(systemName: state.symbolName)
+                Image(symbol: state.symbolName)
                     .font(.system(size: 13, weight: .semibold))
                     .foregroundStyle(state.isFailure ? Palette.destructive : Palette.presenceOnline)
                 Text(state.message)

@@ -17,6 +17,8 @@ import WingcordCore
 struct ForumPane: View {
     var presentation: ForumPresentation
     var open: (ChannelID) -> Void
+    /// A right-click on a post: its own menu, `ThreadOptionsMenu`.
+    var openMenu: (ChannelID, CGRect) -> Void
     var setQuery: (ForumQuery) -> Void
     var loadMore: () -> Void
     var reveal: ([ChannelID]) -> Void
@@ -29,6 +31,10 @@ struct ForumPane: View {
     @Binding var searchText: String
     var clearSearch: () -> Void
 
+    /// The board's width, for the gallery's column count. Moves on a resize,
+    /// never on a scroll.
+    @State private var boardWidth: CGFloat = 0
+
     var body: some View { board }
 
     private var board: some View {
@@ -38,14 +44,22 @@ struct ForumPane: View {
                     ForumGuidelines(text: guidelines)
                 }
 
-                // **Two layouts, two containers.** A gallery is not a list with
-                // the pictures taken out — which is all it was, and it made the
-                // control read as broken. It is a grid whose cards lead with the
-                // picture, so it needs its own container rather than a flag on a
-                // row.
-                switch presentation.query.layout {
-                case .list: rows
-                case .gallery: grid
+                if presentation.isSearching {
+                    ForumSearchSummary(
+                        isSearching: presentation.isLoading,
+                        count: presentation.posts.count,
+                        phrase: presentation.searchText.trimmingCharacters(in: .whitespacesAndNewlines),
+                        clear: clearSearch
+                    )
+                }
+
+                section(presentation.posts)
+
+                // Discord's "Older Posts", over the archived pages — and only
+                // under live posts, where it divides something.
+                if !presentation.olderPosts.isEmpty {
+                    if !presentation.posts.isEmpty { ForumOlderPostsDivider() }
+                    section(presentation.olderPosts)
                 }
 
                 footer
@@ -53,6 +67,7 @@ struct ForumPane: View {
             .padding(.horizontal, Spacing.margin)
             .padding(.bottom, Spacing.group)
         }
+        .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { boardWidth = $0 }
         .scrollBounceBehavior(.always)
         // **The board opens at its newest post, and stays there.**
         //
@@ -89,9 +104,21 @@ struct ForumPane: View {
         }
     }
 
-    private var rows: some View {
-        ForEach(presentation.posts) { post in
-            ForumPostRow(post: post) { open(post.id) }
+    /// **Two layouts, two containers.** A gallery is not a list with the
+    /// pictures taken out — which is all it was, and it made the control read
+    /// as broken. It is a grid whose cards lead with the picture, so it needs
+    /// its own container rather than a flag on a row.
+    @ViewBuilder
+    private func section(_ posts: [ForumPostPresentation]) -> some View {
+        switch presentation.query.layout {
+        case .list: rows(posts)
+        case .gallery: grid(posts)
+        }
+    }
+
+    private func rows(_ posts: [ForumPostPresentation]) -> some View {
+        ForEach(posts) { post in
+            ForumPostRow(post: post, open: { open(post.id) }, openMenu: { openMenu(post.id, $0) })
                 // **The batch is driven from the row appearing**, which is the
                 // only signal that says which posts are about to be drawn. The
                 // store filters out anything already asked for, so a list
@@ -101,18 +128,17 @@ struct ForumPane: View {
         }
     }
 
-    /// The gallery.
-    ///
-    /// `.adaptive` rather than a fixed column count: the board's width is the
-    /// window's minus whatever columns are open beside it, and a count chosen
-    /// here would be wrong the moment somebody opens a post or the roster.
-    private var grid: some View {
-        LazyVGrid(
-            columns: [GridItem(.adaptive(minimum: Metrics.forumCardMinimum), spacing: Spacing.snug)],
-            spacing: Spacing.snug
+    /// The gallery, in Discord's columns — see `ForumGallery`. Counted from
+    /// the board's own width, which is the window's minus whatever columns are
+    /// open beside it.
+    private func grid(_ posts: [ForumPostPresentation]) -> some View {
+        let columns = ForumGallery.columns(forWidth: boardWidth - 2 * Spacing.margin)
+        return LazyVGrid(
+            columns: Array(repeating: GridItem(.flexible(), spacing: ForumGallery.gap), count: columns),
+            spacing: ForumGallery.gap
         ) {
-            ForEach(presentation.posts) { post in
-                ForumPostCard(post: post) { open(post.id) }
+            ForEach(posts) { post in
+                ForumPostCard(post: post, open: { open(post.id) }, openMenu: { openMenu(post.id, $0) })
                     .onAppear { reveal([post.id]) }
             }
         }
@@ -130,17 +156,16 @@ struct ForumPane: View {
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, Spacing.margin)
                 .onAppear(perform: loadMore)
-        } else if presentation.posts.isEmpty, !presentation.isLoading {
+        } else if presentation.posts.isEmpty, presentation.olderPosts.isEmpty,
+                  !presentation.isLoading, !presentation.isSearching
+        {
+            // A search that found nothing says so in its own line above.
             ForumEmptyState(
-                isSearching: presentation.isSearching,
-                hasFilter: !presentation.query.tags.isEmpty
+                channelName: presentation.name,
+                filterCount: presentation.query.tags.count,
+                canPost: presentation.canPost,
+                newPost: newPost
             )
-        } else if !presentation.posts.isEmpty {
-            Text("^[\(presentation.totalResults) post](inflect: true)")
-                .font(.system(.caption))
-                .foregroundStyle(Ink.quaternary)
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, Spacing.margin)
         }
     }
 }
@@ -156,6 +181,7 @@ struct ForumPane: View {
 private struct ForumPostRow: View, Equatable {
     var post: ForumPostPresentation
     var open: () -> Void
+    var openMenu: (CGRect) -> Void
 
     @State private var isHovering = false
     @Environment(\.motion) private var motion
@@ -168,6 +194,7 @@ private struct ForumPostRow: View, Equatable {
         }
         .buttonStyle(.plain)
         .onHover { isHovering = $0 }
+        .onSecondaryClick(perform: openMenu)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(Text(accessibilityLabel))
         .accessibilityAddTraits(.isButton)
@@ -175,8 +202,8 @@ private struct ForumPostRow: View, Equatable {
 
     private var content: some View {
         VStack(alignment: .leading, spacing: Spacing.base) {
-            if !post.tags.isEmpty {
-                ForumTagRow(tags: post.tags)
+            if post.isPinned || !post.tags.isEmpty {
+                ForumPostTagRow(post: post)
             }
 
             HStack(alignment: .top, spacing: Spacing.snug) {
@@ -212,19 +239,18 @@ private struct ForumPostRow: View, Equatable {
 
     private var card: RoundedRectangle { .rect(cornerRadius: Radius.glass) }
 
+    /// The title, and Discord's "NEW" after it (`ej`). The pin is the tag
+    /// row's now, as Discord's is.
     private var title: some View {
-        HStack(spacing: Spacing.tight) {
-            if post.isPinned {
-                Image(systemName: "pin.fill")
-                    .font(.system(.caption2))
-                    .foregroundStyle(Ink.tertiary)
-                    .accessibilityHidden(true)
-            }
+        HStack(alignment: .firstTextBaseline, spacing: Spacing.base) {
             Text(post.title)
                 .font(.system(.headline, weight: .semibold))
                 .foregroundStyle(Ink.primary)
                 .lineLimit(2)
                 .multilineTextAlignment(.leading)
+            if post.isNew {
+                ForumNewBadge()
+            }
         }
     }
 
@@ -276,7 +302,7 @@ private struct ForumPostRow: View, Equatable {
     }
 
     private func stateGlyph(_ symbol: String, label: String) -> some View {
-        Image(systemName: symbol)
+        Image(symbol: symbol)
             .font(.system(.caption2))
             .foregroundStyle(Ink.quaternary)
             .help(label)
@@ -312,6 +338,7 @@ private struct ForumPostRow: View, Equatable {
 private struct ForumPostCard: View, Equatable {
     var post: ForumPostPresentation
     var open: () -> Void
+    var openMenu: (CGRect) -> Void
 
     @State private var isHovering = false
     @Environment(\.motion) private var motion
@@ -337,6 +364,7 @@ private struct ForumPostCard: View, Equatable {
         }
         .buttonStyle(.plain)
         .onHover { isHovering = $0 }
+        .onSecondaryClick(perform: openMenu)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(Text(accessibilityLabel))
         .accessibilityAddTraits(.isButton)
@@ -346,19 +374,20 @@ private struct ForumPostCard: View, Equatable {
 
     /// Who posted it and when it was *made* — not when it was last answered,
     /// which is what a list row says. See `ForumPostPresentation.postedAt`.
+    ///
+    /// Discord's "NEW" rides at its trailing end, as the gallery card's does.
     private var byline: some View {
         HStack(spacing: Spacing.tight) {
-            if post.isPinned {
-                Image(systemName: "pin.fill")
-                    .font(.system(.caption2))
-                    .foregroundStyle(Ink.tertiary)
-            }
             Text(post.authorName)
                 .foregroundStyle(post.authorColorValue.map(Color.init(hex:)) ?? InkColor.secondary)
                 .lineLimit(1)
             Text("Posted \(RelativeTime.compact(post.postedAt)) ago")
                 .foregroundStyle(Ink.quaternary)
                 .lineLimit(1)
+            if post.isNew {
+                Spacer(minLength: Spacing.tight)
+                ForumNewBadge()
+            }
         }
         .font(.system(.caption, weight: .medium))
     }
@@ -396,8 +425,8 @@ private struct ForumPostCard: View, Equatable {
                     .background(Palette.surfaceRaised)
             }
 
-            if !post.tags.isEmpty {
-                ForumTagRow(tags: post.tags)
+            if post.isPinned || !post.tags.isEmpty {
+                ForumPostTagRow(post: post)
                     .padding(Spacing.base)
             }
         }
@@ -434,7 +463,7 @@ private struct ForumPostCard: View, Equatable {
     }
 
     private func stateGlyph(_ symbol: String) -> some View {
-        Image(systemName: symbol)
+        Image(symbol: symbol)
             .font(.system(.caption2))
             .foregroundStyle(Ink.quaternary)
             .accessibilityHidden(true)
@@ -452,18 +481,108 @@ private struct ForumPostCard: View, Equatable {
 
 // MARK: - Tags
 
-private struct ForumTagRow: View {
-    var tags: [ForumTag]
+/// A post's tag row, as Discord's (`52933`): the pin, then three of its tags —
+/// the ones the board's filter lit drawn lit — then "+N" for the rest.
+///
+/// **Three and a count, not a wrapping list.** Five tags at a narrow width wrap
+/// to a second line that every other card then lacks; Discord caps the row and
+/// names the rest on hover.
+private struct ForumPostTagRow: View {
+    var post: ForumPostPresentation
+
+    private static let shown = 3
 
     var body: some View {
-        // Wrapping rather than scrolling: five tags at a narrow width is two
-        // lines, and a horizontal scroller inside a vertical list steals the
-        // trackpad gesture from the list it is in.
-        FlowLayout(spacing: Spacing.tight) {
-            ForEach(tags) { tag in
-                ForumTagChip(tag: tag, isOn: false, isCompact: true)
+        HStack(spacing: Spacing.base) {
+            if post.isPinned {
+                // Discord's `.pinIcon`: a 22-point circle in the brand colour,
+                // the pin white inside it, "Pinned" on hover.
+                Image(systemName: "pin.fill")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(.white)
+                    .frame(width: 22, height: 22)
+                    .background(Palette.accent, in: .circle)
+                    .help("Pinned")
+                    .accessibilityLabel(Text("Pinned"))
+            }
+            ForEach(post.tags.prefix(Self.shown)) { tag in
+                ForumTagChip(tag: tag, isOn: post.filteredTagIDs.contains(tag.id), isCompact: true)
+            }
+            if post.tags.count > Self.shown {
+                let rest = post.tags.dropFirst(Self.shown)
+                Text("+\(rest.count)")
+                    .font(.system(.caption2, weight: .semibold))
+                    .foregroundStyle(Ink.secondary)
+                    .padding(.horizontal, Spacing.base)
+                    .padding(.vertical, 3)
+                    .background(Palette.hoverFill, in: .capsule)
+                    .help(rest.map(\.name).joined(separator: ", "))
             }
         }
+        .frame(height: 24)
+    }
+}
+
+/// Discord's "NEW" on a post nobody has opened since it arrived — its text
+/// badge (`812993`) in `--brand-260` with `--brand-560` lettering, eyebrow
+/// type, 20 points tall.
+private struct ForumNewBadge: View {
+    var body: some View {
+        Text("new")
+            .textCase(.uppercase)
+            .font(.system(size: 11, weight: .bold))
+            .foregroundStyle(Palette.newBadgeInk)
+            .padding(.horizontal, Spacing.base)
+            .frame(height: 20)
+            .background(Palette.newBadgeFill, in: .rect(cornerRadius: 8, style: .continuous))
+            .fixedSize()
+    }
+}
+
+/// Discord's eyebrow over the archived pages.
+private struct ForumOlderPostsDivider: View {
+    var body: some View {
+        Text("Older Posts")
+            .textCase(.uppercase)
+            .font(.system(size: 11, weight: .semibold))
+            .foregroundStyle(Ink.tertiary)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .frame(height: 16)
+            .padding(.top, Spacing.margin)
+            .padding(.bottom, Spacing.base)
+            .accessibilityAddTraits(.isHeader)
+    }
+}
+
+/// The line under the search field while a search is showing (`ix`'s
+/// matching-posts row): "Searching...", "No matching posts", or how many
+/// posts matched — and Clear.
+private struct ForumSearchSummary: View {
+    var isSearching: Bool
+    var count: Int
+    var phrase: String
+    var clear: () -> Void
+
+    var body: some View {
+        HStack(spacing: Spacing.base) {
+            Text(summary)
+                .font(.system(.caption))
+                .foregroundStyle(Ink.secondary)
+                .lineLimit(1)
+            if !isSearching {
+                Button("Clear", action: clear)
+                    .buttonStyle(.plain)
+                    .font(.system(.caption, weight: .semibold))
+                    .foregroundStyle(Palette.accent)
+            }
+            Spacer(minLength: 0)
+        }
+    }
+
+    private var summary: String {
+        if isSearching { return "Searching..." }
+        if count == 0 { return "No matching posts" }
+        return count == 1 ? "1 post with \"\(phrase)\"" : "\(count) posts with \"\(phrase)\""
     }
 }
 
@@ -583,7 +702,7 @@ private struct ForumFilterBar: View {
                         .padding(.vertical, 1)
                         .background(Palette.accent, in: .capsule)
                 }
-                Image(systemName: isTagListOpen ? "chevron.up" : "chevron.down")
+                Image(symbol: isTagListOpen ? "chevron.up" : "chevron.down")
                     .font(.system(.caption2, weight: .semibold))
             }
             .font(.system(.caption, weight: .medium))
@@ -828,7 +947,7 @@ private struct ForumSortMenu: View {
                     .font(.system(.subheadline))
                     .foregroundStyle(Ink.primary)
                 Spacer(minLength: Spacing.base)
-                Image(systemName: isOn ? "largecircle.fill.circle" : "circle")
+                Image(symbol: isOn ? "largecircle.fill.circle" : "circle")
                     .font(.system(.subheadline))
                     .foregroundStyle(isOn ? AnyShapeStyle(Palette.accent) : AnyShapeStyle(Ink.quaternary))
             }
@@ -859,7 +978,7 @@ private struct ForumRetryRow: View {
 
     var body: some View {
         VStack(spacing: Spacing.base) {
-            Text("Could not load more posts.")
+            Text("Something went wrong.")
                 .font(.system(.subheadline))
                 .foregroundStyle(Ink.secondary)
             Button("Try again", action: retry)
@@ -872,42 +991,59 @@ private struct ForumRetryRow: View {
     }
 }
 
+/// Discord's empty board (`nw`), in its words: "Be the first to start the
+/// conversation!" and its question about the channel — or, under a tag filter,
+/// that nothing carries those tags yet — and Create a post for somebody who may.
 private struct ForumEmptyState: View {
-    var isSearching: Bool
-    var hasFilter: Bool
+    var channelName: String
+    /// How many tags the board is filtered by.
+    var filterCount: Int
+    var canPost: Bool
+    var newPost: () -> Void
 
     var body: some View {
         VStack(spacing: Spacing.base) {
-            Image(systemName: symbolName)
-                .font(.system(size: 34, weight: .light))
-                .foregroundStyle(Ink.quaternary)
             Text(title)
-                .font(.system(.headline))
-                .foregroundStyle(Ink.secondary)
+                .font(.system(.headline, weight: .semibold))
+                .foregroundStyle(Ink.primary)
             Text(detail)
-                .font(.system(.caption))
-                .foregroundStyle(Ink.tertiary)
+                .font(.system(.subheadline))
+                .foregroundStyle(Ink.secondary)
+                .multilineTextAlignment(.center)
+            if canPost {
+                MessageRequestButton(title: "Create a post", isProminent: false, isBusy: false, action: newPost)
+                    .padding(.top, Spacing.tight)
+            }
         }
         .frame(maxWidth: .infinity)
         .padding(.vertical, Spacing.section)
     }
 
-    // A search that found nothing and a tag filter that matched nothing are
-    // different situations with different ways out, so they say different
-    // things. The search is named first: it is the more recent act.
-    private var symbolName: String {
-        if isSearching { return "magnifyingglass" }
-        return hasFilter ? "line.3.horizontal.decrease.circle" : "bubble.left.and.bubble.right"
-    }
+    private var tagWords: String { filterCount == 1 ? "this tag" : "these tags" }
 
     private var title: String {
-        if isSearching { return "No posts match that" }
-        return hasFilter ? "No posts match those tags" : "No posts yet"
+        filterCount > 0 ? "There are no posts with \(tagWords) yet!" : "Be the first to start the conversation!"
     }
 
     private var detail: String {
-        if isSearching { return "Try a shorter phrase." }
-        return hasFilter ? "Try turning one off." : "Be the first to start one."
+        filterCount > 0
+            ? "Be the first to start a conversation with \(tagWords)"
+            : "What do you want to post about in #\(channelName)?"
+    }
+}
+
+/// Discord's gallery columns (`a33c78e7986fdb46`'s `sk`): between 320 and 450
+/// points wide, 16 apart — as many as the midpoint of what the two bounds
+/// would fit.
+enum ForumGallery {
+    static let minimumWidth: CGFloat = 320
+    static let maximumWidth: CGFloat = 450
+    static let gap: CGFloat = 16
+
+    static func columns(forWidth width: CGFloat) -> Int {
+        guard width > minimumWidth else { return 1 }
+        let widest = width / maximumWidth
+        return max(Int((widest + (width / minimumWidth - widest) / 2).rounded(.down)), 1)
     }
 }
 
@@ -926,6 +1062,7 @@ struct ForumContainer: View {
         ForumPane(
             presentation: model.forumPresentation(for: channelID),
             open: { model.openThread($0) },
+            openMenu: { model.openThreadMenu(for: $0, anchor: $1) },
             setQuery: { model.setForumQuery($0, in: channelID) },
             loadMore: { model.loadMoreForumPosts(in: channelID) },
             reveal: { model.requestForumPostDetails($0, in: channelID) },

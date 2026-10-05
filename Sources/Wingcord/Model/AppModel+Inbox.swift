@@ -31,7 +31,9 @@ extension AppModel {
     }
 
     func openInbox() {
-        guard !inbox.isShown else { return }
+        // A server's own page has no inbox in its bar — Discord's has none
+        // either — so the shortcut has nothing to open there.
+        guard !inbox.isShown, !workspacePresentation.primary.isServerPage else { return }
         dismissMessageSurfaces()
         inbox.isShown = true
         // The pane the reader was last on is *not* restored — a flyout that
@@ -1141,7 +1143,8 @@ extension AppModel {
     /// decline. `toggleFriend` sends it whenever the relationship is not one it
     /// would add to, and an incoming request is one it *would*, so declining
     /// cannot go through it and needs its own path.
-    private func declineFriendRequest(_ userID: UserID) {
+    /// Also a direct message head's Ignore Request — see `performHeadAction`.
+    func declineFriendRequest(_ userID: UserID) {
         let current = relationship(with: userID)
         guard current == .incomingRequest || current == .outgoingRequest else { return }
         guard relationshipsInFlight.insert(userID).inserted else { return }

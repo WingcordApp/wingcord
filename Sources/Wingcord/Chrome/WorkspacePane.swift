@@ -64,6 +64,7 @@ struct WorkspacePane: View {
         HStack(spacing: 0) {
             PrimaryPane(content: presentation.primary)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .modifier(ToolbarSearch(isOffered: !presentation.primary.isServerPage))
 
             if let supplementary = presentation.supplementary {
                 SupplementaryPane(content: supplementary, chromeHeight: chromeHeight)
@@ -147,6 +148,8 @@ private struct PrimaryPane: View {
                 ChannelsAndRolesContainer(surface: surface)
             case .gameServers:
                 GameServersContainer()
+            case .members:
+                MembersPageContainer()
             }
         case .joinGate:
             ServerJoinGateContainer()
@@ -154,6 +157,8 @@ private struct PrimaryPane: View {
             DiscoveryContainer()
         case .messageRequests:
             MessageRequestsPage()
+        case .joinRequest:
+            JoinRequestStatusContainer()
         }
     }
 }
@@ -214,6 +219,13 @@ private struct SupplementaryPane: View {
             ChannelPreviewContainer(channelID: channelID)
         case .messageRequestPreview(let channelID):
             MessageRequestPreviewPane(channelID: channelID)
+        case .modView:
+            ModViewPane()
+        case .newThread(let request):
+            // One panel per request, so a thread started from another message
+            // does not inherit the last one's fields.
+            NewThreadPanel(request: request)
+                .id(request.id)
         }
     }
 }
@@ -250,7 +262,7 @@ struct PlaceholderPane: View {
 
     var body: some View {
         VStack(spacing: Spacing.base) {
-            Image(systemName: symbol)
+            Image(symbol: symbol)
                 .font(.system(size: 34, weight: .light))
                 .foregroundStyle(Ink.quaternary)
             Text(title)

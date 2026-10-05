@@ -135,6 +135,12 @@ struct ProfilePresentation: Equatable, Sendable {
     var isBot: Bool
     /// A verified app's badge carries a check — `AppBadge`.
     var isVerifiedBot = false
+    /// Discord's own account, which wears OFFICIAL rather than APP.
+    var isSystem = false
+    /// An app's own facts — its intents, its install routes, its store and
+    /// its two links. Nil for a person, and for an app until its profile has
+    /// answered.
+    var application: ProfileApplication? = nil
     var badges: [ProfileBadge]
     /// The clan tag they wear: the letters, and the guild badge that goes with
     /// them. Half a tag is not a tag — the badge is the half people recognise.
@@ -218,6 +224,15 @@ struct ProfilePresentation: Equatable, Sendable {
 /// place, and without the id the chip can say a server exists and not which one.
 /// Nil where the id is not known — the member-list painter draws tags from a
 /// row snapshot that carries only what it needs to paint.
+extension ProfilePresentation {
+    /// The tag beside the name: Discord's own account is OFFICIAL, as its
+    /// messages are (`AuthorTag`); an app is APP.
+    var nameTag: String? {
+        if isSystem { return AuthorTag.official.label }
+        return isBot ? AppBadge.label(isVerified: isVerifiedBot) : nil
+    }
+}
+
 struct GuildTag: Equatable, Sendable {
     var text: String
     var badgeURL: URL?

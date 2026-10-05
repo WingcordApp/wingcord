@@ -407,7 +407,7 @@ private struct SettingsHistoryControl: View {
 
         var body: some View {
             Button(action: action) {
-                Image(systemName: symbol)
+                Image(symbol: symbol)
                     .font(.system(size: 13, weight: .medium))
                     // Quiet at rest, like the reference's. The affordance is
                     // carried by the hover, which costs nothing until the
@@ -491,7 +491,7 @@ private struct SettingsPaneAction: View {
     ) -> some View {
         Button(action: perform) {
             HStack(spacing: Spacing.tight + 2) {
-                Image(systemName: symbolName)
+                Image(symbol: symbolName)
                     .font(.system(size: 12, weight: .medium))
                 Text(title).font(SettingsType.toolbarLabel)
             }

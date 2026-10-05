@@ -388,4 +388,119 @@ struct TimelineReducerTests {
         #expect(items[0].isRunHead)
         #expect(items[lastIndex].isRunTail)
     }
+
+    // MARK: Folds — Discord's MESSAGE_GROUP_BLOCKED / _IGNORED / _SUSPENDED_USER
+
+    private func folds(_ rows: [TimelineItem]) -> [CollapsedGroup] {
+        rows.compactMap { if case .collapsedGroup(let group) = $0 { group } else { nil } }
+    }
+
+    @Test("A blocked author's run is one shut line, and its messages are not rows")
+    func blockedRunFolds() throws {
+        let rows = TimelineReducer.rows(
+            messages: [
+                message(1, author: 10, at: 0),
+                message(2, author: 66, at: 10),
+                message(3, author: 66, at: 20),
+                message(4, author: 10, at: 30),
+            ],
+            blockedUserIDs: [UserID(rawValue: 66)]
+        )
+        let fold = try #require(folds(rows).first)
+        #expect(folds(rows).count == 1)
+        #expect(fold.reason == .blocked && fold.count == 2 && !fold.isOpen)
+        #expect(messages(rows).map(\.message.authorID.rawValue) == [10, 10])
+        // The message after the fold starts a run of its own.
+        #expect(messages(rows)[1].isRunHead)
+    }
+
+    @Test("Blocked and ignored fold apart, and an ignore never outranks a block")
+    func reasonsDoNotMix() {
+        let rows = TimelineReducer.rows(
+            messages: [
+                message(1, author: 66, at: 0),
+                message(2, author: 77, at: 10),
+                message(3, author: 88, at: 20),
+            ],
+            blockedUserIDs: [UserID(rawValue: 66), UserID(rawValue: 88)],
+            ignoredUserIDs: [UserID(rawValue: 77), UserID(rawValue: 88)]
+        )
+        #expect(folds(rows).map(\.reason) == [.blocked, .ignored, .blocked])
+    }
+
+    @Test("A new day starts a new fold, as Discord's heading sits between them")
+    func dayBreaksFold() {
+        let day: Double = 86_400
+        let rows = TimelineReducer.rows(
+            messages: [
+                message(1, author: 66, at: 0),
+                message(2, author: 66, at: day * 2),
+            ],
+            blockedUserIDs: [UserID(rawValue: 66)],
+            calendar: {
+                var calendar = Calendar(identifier: .gregorian)
+                calendar.timeZone = TimeZone(identifier: "UTC")!
+                return calendar
+            }()
+        )
+        #expect(folds(rows).count == 2)
+    }
+
+    @Test("An AutoMod action never folds; a suspended account always does, and stays shut")
+    func automodAndSuspended() throws {
+        var suspended = message(2, author: 55, at: 10)
+        suspended.flags = [.hiddenSuspendedUser]
+        let rows = TimelineReducer.rows(
+            messages: [message(1, author: 66, at: 0, kind: .autoModerationAction), suspended],
+            blockedUserIDs: [UserID(rawValue: 66)],
+            openGroups: [suspended.id]
+        )
+        #expect(messages(rows).count == 1)
+        let fold = try #require(folds(rows).first)
+        #expect(fold.reason == .suspended && !fold.canOpen && !fold.isOpen)
+    }
+
+    @Test("The unread line goes above a shut fold, wherever in it the line falls")
+    func unreadAboveShutFold() throws {
+        let first = message(1, author: 66, at: 10)
+        let second = message(2, author: 66, at: 20)
+        let rows = TimelineReducer.rows(
+            messages: [message(3, author: 10, at: 0), first, second],
+            unreadAnchor: first.id,
+            blockedUserIDs: [UserID(rawValue: 66)]
+        )
+        let divider = try #require(rows.firstIndex(of: .unreadDivider))
+        let fold = try #require(rows.firstIndex { if case .collapsedGroup = $0 { true } else { false } })
+        #expect(divider == fold - 1)
+        #expect(rows.count { $0 == .unreadDivider } == 1)
+    }
+
+    @Test("An open fold puts its messages back under its line, on the fold's tint")
+    func openFold() {
+        let first = message(1, author: 66, at: 0)
+        let second = message(2, author: 66, at: 10)
+        let rows = TimelineReducer.rows(
+            messages: [first, second],
+            blockedUserIDs: [UserID(rawValue: 66)],
+            openGroups: [first.id]
+        )
+        #expect(folds(rows).first?.isOpen == true)
+        let shown = messages(rows)
+        #expect(shown.count == 2)
+        #expect(shown.allSatisfy { $0.flags.contains(.inOpenGroup) })
+        #expect(shown[0].isRunHead && shown[1].isRunTail)
+    }
+
+    @Test("A jump into a fold opens it — any of its messages is enough")
+    func jumpOpensFold() {
+        let first = message(1, author: 66, at: 0)
+        let target = message(2, author: 66, at: 10)
+        let rows = TimelineReducer.rows(
+            messages: [first, target],
+            blockedUserIDs: [UserID(rawValue: 66)],
+            openGroups: [target.id]
+        )
+        #expect(folds(rows).first?.isOpen == true)
+        #expect(messages(rows).contains { $0.id == target.id })
+    }
 }

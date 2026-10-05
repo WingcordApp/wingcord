@@ -546,7 +546,7 @@ private struct OptionChip: View {
 
                 Spacer(minLength: Spacing.tight)
 
-                Image(systemName: option.isSelected ? "checkmark.circle.fill" : "circle")
+                Image(symbol: option.isSelected ? "checkmark.circle.fill" : "circle")
                     .font(.system(size: 15))
                     .foregroundStyle(
                         option.isSelected ? AnyShapeStyle(Palette.accent) : AnyShapeStyle(Ink.quaternary)

@@ -138,7 +138,11 @@ extension DiscordREST {
     /// this is Discord's answer about its own storefront.
     public func applicationPublicInfo(
         _ id: ApplicationID
-    ) async throws -> (parameters: [IntegrationType: InstallParameters], hasStorefront: Bool) {
+    ) async throws -> (
+        parameters: [IntegrationType: InstallParameters],
+        installTypes: [IntegrationType],
+        hasStorefront: Bool
+    ) {
         let dto = try await get(
             "/applications/\(id.rawValue)/public",
             route: "applications/:id/public",
@@ -149,7 +153,7 @@ extension DiscordREST {
         for type in [IntegrationType.guildInstall, .userInstall] {
             result[type] = dto.parameters(for: type)
         }
-        return (result, dto.storefront_available ?? false)
+        return (result, dto.installTypes, dto.storefront_available ?? false)
     }
 
     /// What the capture sends where an application declares nothing.
@@ -214,6 +218,19 @@ struct InstallDTO: Decodable, Sendable {
         func parameters(for type: IntegrationType) -> InstallParameters? {
             integration_types_config?[String(type.rawValue)]?.oauth2_install_params?.domain
                 ?? install_params?.domain
+        }
+
+        /// Where it can be added, in the order Discord's picker offers them
+        /// (`991054`): each integration type it gives install parameters for,
+        /// the user's first — or, for an app that predates the per-type
+        /// config, the server alone, which is where its `install_params`
+        /// have always taken it (`692848.o`).
+        var installTypes: [IntegrationType] {
+            let declared = [IntegrationType.userInstall, .guildInstall].filter {
+                integration_types_config?[String($0.rawValue)]?.oauth2_install_params != nil
+            }
+            if declared.isEmpty, install_params != nil { return [.guildInstall] }
+            return declared
         }
     }
 

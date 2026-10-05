@@ -3,48 +3,50 @@ import WingcordCore
 
 // MARK: - The catalog
 //
-// Twenty sections in six groups. Same shape as `SettingsCatalog` and a different
-// list, because these are two different windows about two different things — and
-// the app's own settings list has no server in it to be scoped to.
+// **Discord's own list** — `generateSections` (`1e901507`) — in its order,
+// under its headers, each row on its own predicate:
 //
-// TWO RULES DECIDE WHAT APPEARS, and both are `INVARIANTS.md` §5.5:
+//   Server Profile · Server Tag · Server Theme · Engagement · Boost Perks
+//   EXPRESSION   Emoji · Stickers · Soundboard
+//   PEOPLE       Members ↗ · Roles · Invites · Access
+//   APPS         Integrations · App Directory ↗
+//   MODERATION   Safety Setup · Audit Log · Bans
+//   Community Overview · Onboarding · Server Insights · Welcome Screen
+//   Server Template · Delete Server
 //
-//   1. **A section is offered on the ANSWER, not on a flag that implies it.**
-//      Six of these exist only for a community server, and `COMMUNITY` is the
-//      one feature string that genuinely predicts something — without it Discord
-//      has not given the server a rules channel, onboarding, discovery or safety
-//      alerts, so the pages have nothing behind them rather than being empty.
-//      That is the exception that proves the rule the server *reader* pages
-//      follow: there, no flag worked, so each row waited on its own route.
-//   2. **A section the reader cannot act on is not drawn.** Every page here
-//      needs `MANAGE_GUILD` or better, and the window is not opened without it —
-//      but three sections need a *second* permission on top, and those are
-//      filtered rather than shown greyed.
+// **What is not here is not here in Discord either.** A channel's settings are
+// opened from the channel and have a sidebar of their own (`ChannelSettings`);
+// webhooks and followed channels are two rows on Integrations; the Server
+// Guide is a row on Onboarding; events are created from the server's events.
+//
+// Two rules decide what appears, and both are `INVARIANTS.md` §5.5: a row is
+// offered on what the server is (`isAvailable`) and on what the reader may do
+// (`isReachable`) — absent, never greyed.
 
 enum ServerSettingsSection: String, CaseIterable, Identifiable, Hashable, Codable, Sendable {
     // The server itself.
     case profile
     case tag
+    case serverTheme
     case engagement
-    case events
+    case boostPerks
 
-    // What it can say.
+    // Expression.
     case emoji
     case stickers
     case soundboard
 
-    // Who is in it.
-    case channels
+    // People.
     case members
     case roles
     case invites
     case access
 
-    // What is plugged into it.
+    // Apps.
     case integrations
-    case webhooks
+    case appDirectory
 
-    // Keeping order.
+    // Moderation.
     case safety
     case auditLog
     case bans
@@ -52,79 +54,101 @@ enum ServerSettingsSection: String, CaseIterable, Identifiable, Hashable, Codabl
     // Community.
     case community
     case onboarding
-    case serverGuide
+    case insights
+    case welcomeScreen
 
-    // The exits.
+    // The last two.
     case template
+    case deleteServer
 
     var id: String { rawValue }
 
+    /// Discord's label.
     var title: String {
         switch self {
         case .profile: "Server Profile"
         case .tag: "Server Tag"
+        case .serverTheme: "Server Theme"
         case .engagement: "Engagement"
-        case .events: "Events"
+        case .boostPerks: "Boost Perks"
         case .emoji: "Emoji"
         case .stickers: "Stickers"
         case .soundboard: "Soundboard"
-        case .channels: "Channels"
         case .members: "Members"
         case .roles: "Roles"
         case .invites: "Invites"
         case .access: "Access"
         case .integrations: "Integrations"
-        case .webhooks: "Webhooks"
+        case .appDirectory: "App Directory"
         case .safety: "Safety Setup"
         case .auditLog: "Audit Log"
         case .bans: "Bans"
         case .community: "Community Overview"
         case .onboarding: "Onboarding"
-        case .serverGuide: "Server Guide"
+        case .insights: "Server Insights"
+        case .welcomeScreen: "Welcome Screen"
         case .template: "Server Template"
+        case .deleteServer: "Delete Server"
         }
+    }
+
+    /// The label in this server: Community Overview is "Enable Community" on
+    /// a server that is not one yet.
+    func title(isCommunity: Bool) -> String {
+        self == .community && !isCommunity ? "Enable Community" : title
     }
 
     var symbolName: String {
         switch self {
         case .profile: "person.crop.square.fill"
         case .tag: "tag.fill"
+        case .serverTheme: "paintpalette.fill"
         case .engagement: "chart.line.uptrend.xyaxis"
-        case .events: "calendar"
+        case .boostPerks: "sparkles"
         case .emoji: "face.smiling.inverse"
         case .stickers: "seal.fill"
         case .soundboard: "speaker.wave.2.fill"
-        case .channels: "number"
         case .members: "person.2.fill"
         case .roles: "shield.fill"
         case .invites: "link"
         case .access: "lock.fill"
         case .integrations: "puzzlepiece.extension.fill"
-        case .webhooks: "arrow.triangle.branch"
+        case .appDirectory: "square.grid.2x2.fill"
         case .safety: "exclamationmark.shield.fill"
         case .auditLog: "list.bullet.rectangle"
         case .bans: "hand.raised.fill"
         case .community: "person.3.fill"
-        case .onboarding: "square.grid.2x2.fill"
-        case .serverGuide: "signpost.right.fill"
+        case .onboarding: "signpost.right.fill"
+        case .insights: "chart.bar.fill"
+        case .welcomeScreen: "hand.wave.fill"
         case .template: "doc.on.doc.fill"
+        case .deleteServer: "trash.fill"
         }
     }
 
-    /// The tile's tint. Grouped by *what the page is about* rather than one
-    /// colour per row: twenty distinct hues is a paint chart, and the groups are
-    /// what the eye actually uses to find a row it has been to before.
+    /// The tile's tint, one per group — the groups are what the eye uses to
+    /// find a row it has been to before.
     var tint: Color {
         switch self {
-        case .profile, .tag, .engagement, .events: Palette.accent
+        case .profile, .tag, .serverTheme, .engagement, .boostPerks: Palette.accent
         case .emoji, .stickers, .soundboard: .orange
-        case .channels, .members, .roles, .invites, .access: .teal
-        case .integrations, .webhooks: .indigo
+        case .members, .roles, .invites, .access: .teal
+        case .integrations, .appDirectory: .indigo
         case .safety, .auditLog, .bans: .pink
-        case .community, .onboarding, .serverGuide: .green
+        case .community, .onboarding, .insights, .welcomeScreen: .green
         case .template: .gray
+        case .deleteServer: Palette.destructive
         }
     }
+
+    /// A row that leaves rather than opens a page: Members and App Directory
+    /// go to the main window (Discord's ↗), Delete Server asks first.
+    var isAction: Bool {
+        self == .members || self == .appDirectory || self == .deleteServer
+    }
+
+    /// Whether the row wears Discord's ↗ — it takes the reader out of settings.
+    var leavesSettings: Bool { self == .members || self == .appDirectory }
 
     /// Extra words the search field matches on, so somebody looking for "nsfw"
     /// or "automod" finds the page that holds it rather than concluding this
@@ -133,174 +157,165 @@ enum ServerSettingsSection: String, CaseIterable, Identifiable, Hashable, Codabl
         switch self {
         case .profile: ["name", "icon", "banner", "description", "traits", "games", "about"]
         case .tag: ["badge", "clan", "letters"]
-        case .engagement: ["system messages", "welcome", "notifications", "afk", "inactive", "widget", "boost"]
-        case .events: ["scheduled", "calendar", "stage", "rsvp", "recurring"]
+        case .serverTheme: ["theme", "colors", "colours", "gradient", "presets", "appearance"]
+        case .engagement: ["system messages", "welcome", "notifications", "afk", "inactive", "widget"]
+        case .boostPerks: ["boost", "nitro", "level", "perks"]
         case .emoji: ["emote", "upload", "expression"]
         case .stickers: ["expression", "upload"]
         case .soundboard: ["sounds", "audio", "expression"]
-        case .channels: ["create channel", "category", "private", "topic", "slowmode", "permissions", "delete"]
         case .members: ["people", "kick", "ban", "timeout", "pending", "applications", "prune"]
         case .roles: ["permissions", "colour", "color", "hoist", "members"]
         case .invites: ["links", "join", "vanity"]
         case .access: ["privacy", "verification", "age", "nsfw", "application", "apply", "discovery", "discoverable"]
-        case .integrations: ["apps", "bots", "twitch", "youtube"]
-        case .webhooks: ["follow", "announcements"]
-        case .safety: ["automod", "moderation", "raid", "spam", "filter"]
+        case .integrations: ["apps", "bots", "twitch", "youtube", "webhooks", "followed channels", "announcements"]
+        case .appDirectory: ["apps", "bots", "discover"]
+        case .safety: ["automod", "moderation", "raid", "spam", "filter", "captcha", "2fa"]
         case .auditLog: ["history", "log", "who did"]
         case .bans: ["banned", "unban", "moderation"]
         case .community: ["rules channel", "updates", "locale", "language", "enable community"]
-        case .onboarding: ["questions", "prompts", "default channels", "customisation"]
-        case .serverGuide: ["welcome", "new member", "resources", "to do"]
+        case .onboarding: ["questions", "prompts", "default channels", "server guide", "welcome", "resources", "to do"]
+        case .insights: ["analytics", "statistics", "growth"]
+        case .welcomeScreen: ["welcome", "recommended channels", "new members", "top things to do"]
         case .template: ["share", "copy", "duplicate"]
+        case .deleteServer: ["delete", "remove"]
         }
     }
 
-    /// Whether this page exists at all for a server in this state.
+    /// Whether this row exists at all for a server in this state.
     ///
-    /// **Community pages are hidden, not disabled.** A non-community server has
-    /// not been given a rules channel, onboarding or discovery by Discord — so
-    /// the page would open on "this server has not set one up", which is the
-    /// inert surface §5.5 forbids. Community Overview stays, because it is where
-    /// somebody turns community *on*.
-    func isAvailable(in settings: GuildSettings) -> Bool {
+    /// **Discord's predicates on the server**: Onboarding where onboarding is
+    /// offered (a community server), Server Insights for a community server,
+    /// Server Tag where the server has tags, and Delete Server for its owner.
+    ///
+    /// The Welcome Screen is offered only where one exists and the Server
+    /// Guide has not replaced it — Discord's `!welcomeScreenEmpty &&
+    /// !GUILD_SERVER_GUIDE` — so it needs the route's answer as well.
+    func isAvailable(in settings: GuildSettings, isOwner: Bool, hasWelcomeScreen: Bool = false) -> Bool {
         switch self {
-        case .onboarding, .serverGuide:
-            settings.isCommunity
-        case .tag:
-            settings.canSetTag
-        default:
-            true
+        case .onboarding, .insights: settings.isCommunity
+        case .welcomeScreen:
+            settings.isCommunity && hasWelcomeScreen && !settings.features.contains("GUILD_SERVER_GUIDE")
+        case .tag: settings.canSetTag
+        // Discord's row is an experiment's; the page can only do anything for
+        // a server that may wear a theme, and that is the feature.
+        case .serverTheme: settings.features.contains("GUILD_THEME")
+        case .deleteServer: isOwner
+        default: true
         }
     }
 
-    /// Whether this reader may open this page at all.
+    /// Whether this reader may open this row — **Discord's own predicate per
+    /// page** (`getSectionDefinition`).
     ///
-    /// **`requiredPermission` is a permission needed *beyond* `MANAGE_GUILD`,
-    /// and nothing used to supply the `MANAGE_GUILD`.** A page with no extra
-    /// requirement therefore passed for everybody — so a reader who is just a
-    /// member of somebody else's server could open the window and find Server
-    /// Profile, Engagement, Onboarding and Server Template waiting for them,
-    /// with Invites answering "You do not have permission to do that here".
-    /// Every one of those is a page whose every write is a 403, which is exactly
-    /// what `INVARIANTS.md` §5.5 forbids.
-    ///
-    /// A moderator holding only `MANAGE_ROLES` still gets a window — with Roles
-    /// in it and nothing else — which is what Discord does and the reason this
-    /// is per page rather than one gate on the window.
+    /// Several are an *either*: Integrations opens for Manage Server or Manage
+    /// Webhooks, Bans for Ban Members or View Audit Log, the three expression
+    /// pages for Manage or Create Expressions. Boost Perks and App Directory
+    /// carry no predicate of their own.
     func isReachable(with permissions: Permissions) -> Bool {
         if permissions.contains(.administrator) { return true }
-        guard let required = requiredPermission else { return permissions.contains(.manageGuild) }
-        return permissions.contains(required)
+        func any(_ set: Permissions) -> Bool { !permissions.isDisjoint(with: set) }
+        switch self {
+        case .boostPerks, .appDirectory, .deleteServer:
+            return true
+        case .emoji, .stickers, .soundboard:
+            return any([.manageExpressions, .createExpressions])
+        case .members:
+            return any(.moderatorAccess)
+        case .roles:
+            return permissions.contains(.manageRoles)
+        case .integrations:
+            return any([.manageGuild, .manageWebhooks])
+        case .auditLog:
+            return permissions.contains(.viewAuditLog)
+        case .bans:
+            return any([.banMembers, .viewAuditLog])
+        case .insights:
+            // `canViewGuildAnalytics` — the analytics permission itself.
+            return permissions.contains(.viewGuildInsights)
+        case .profile, .tag, .serverTheme, .engagement, .invites, .access, .safety, .community,
+             .onboarding, .welcomeScreen, .template:
+            return permissions.contains(.manageGuild)
+        }
     }
 
     /// Every page this reader could open, ungrouped.
     ///
-    /// **Empty is not the gate.** Deriving "may this window open at all" from
-    /// the pages was wrong twice over: the Invites page asks for `createInvite`,
-    /// which `@everyone` holds, so every member of every server passed. The gate
-    /// is `Permissions.guildSettingsAccess` — Discord's own ten-permission mask
-    /// — and this list is what the sidebar draws once that gate is passed.
+    /// **Empty is not the gate.** The gate is `Permissions.guildSettingsAccess`
+    /// — Discord's own ten-permission mask — and this list is what the sidebar
+    /// draws once that gate is passed. Rows open to anybody past the gate
+    /// (Boost Perks, App Directory) are not what makes a window worth opening,
+    /// so they are not counted here.
     static func reachable(with permissions: Permissions) -> [ServerSettingsSection] {
         guard permissions.contains(.administrator)
             || !permissions.intersection(.guildSettingsAccess).isEmpty
         else { return [] }
-        return groups.flatMap(\.self).filter { $0.isReachable(with: permissions) }
-    }
-
-    /// The permission the page needs beyond the `MANAGE_GUILD` that opened the
-    /// window.
-    var requiredPermission: Permissions? {
-        switch self {
-        case .roles: .manageRoles
-        case .events: .createEvents
-        case .invites: .createInvite
-        case .auditLog: .viewAuditLog
-        case .bans: .banMembers
-        case .members: .kickMembers
-        case .channels: .manageChannels
-        case .emoji, .stickers, .soundboard: .manageExpressions
-        case .webhooks, .integrations: .manageWebhooks
-        default: nil
+        return groups.flatMap(\.sections).filter { section in
+            section.isReachable(with: permissions)
+                && (permissions.contains(.administrator)
+                    || ![.boostPerks, .appDirectory, .deleteServer].contains(section))
         }
     }
 
-    /// The groups, in order. Separated by space alone — no dividers and no
-    /// headers, which is what `SettingsSidebar` already does and the reason a
-    /// long source list stays scannable.
-    static let groups: [[ServerSettingsSection]] = [
-        [.profile, .tag, .engagement, .events],
-        [.emoji, .stickers, .soundboard],
-        [.channels, .members, .roles, .invites, .access],
-        [.integrations, .webhooks],
-        [.safety, .auditLog, .bans],
-        [.community, .onboarding, .serverGuide],
-        [.template],
+    /// One group of rows, under Discord's header where it has one.
+    struct Group: Hashable {
+        var header: String?
+        var sections: [ServerSettingsSection]
+    }
+
+    /// The groups, in Discord's order. Its headers are sentence case in the
+    /// strings and drawn in capitals.
+    static let groups: [Group] = [
+        Group(header: nil, sections: [.profile, .tag, .serverTheme, .engagement, .boostPerks]),
+        Group(header: "Expression", sections: [.emoji, .stickers, .soundboard]),
+        Group(header: "People", sections: [.members, .roles, .invites, .access]),
+        Group(header: "Apps", sections: [.integrations, .appDirectory]),
+        Group(header: "Moderation", sections: [.safety, .auditLog, .bans]),
+        Group(header: nil, sections: [.community, .onboarding, .insights, .welcomeScreen]),
+        Group(header: nil, sections: [.template, .deleteServer]),
     ]
 
-    /// The groups this reader may actually open, with unavailable rows and empty
-    /// groups removed.
-    ///
-    /// Empty groups are dropped so a hidden section never leaves a gap where a
-    /// group used to be — the same trim the app settings sidebar makes for a
-    /// search query.
+    /// The groups this reader may actually open, with unavailable rows and
+    /// empty groups removed — so a hidden row never leaves a gap or an orphan
+    /// header.
     static func groups(
         for settings: GuildSettings,
-        permissions: Permissions
-    ) -> [[ServerSettingsSection]] {
+        permissions: Permissions,
+        isOwner: Bool,
+        hasWelcomeScreen: Bool = false
+    ) -> [Group] {
         groups.compactMap { group in
-            let kept = group.filter { section in
-                section.isAvailable(in: settings) && section.isReachable(with: permissions)
+            let kept = group.sections.filter { section in
+                section.isAvailable(in: settings, isOwner: isOwner, hasWelcomeScreen: hasWelcomeScreen)
+                    && section.isReachable(with: permissions)
             }
-            return kept.isEmpty ? nil : kept
+            // A group of only the always-open rows is not a group this reader
+            // came for — Discord shows Apps to everyone past the gate, and so
+            // does this; it never shows a lone Delete Server to a non-owner.
+            return kept.isEmpty ? nil : Group(header: group.header, sections: kept)
         }
     }
 
-    /// A short line under the page's title. What the page is *for*, which the
-    /// sidebar row has no room to say.
-    var detail: String {
+    /// Discord's line under the page's title, where its page has one — and
+    /// nothing where it has none: a sentence Discord never wrote is not
+    /// written here.
+    var detail: String? {
         switch self {
         case .profile:
-            "How your server appears in invite links and, if enabled, in Server Discovery."
-        case .tag:
-            "The two-to-four letters members can wear beside their name."
-        case .engagement:
-            "Settings that help keep your server active."
-        case .events:
-            "What is happening here, and when."
-        case .emoji:
-            "Custom emoji anyone in this server can use."
-        case .stickers:
-            "Custom stickers anyone in this server can send."
-        case .soundboard:
-            "Custom sound reactions anyone in this server can play in voice."
-        case .channels:
-            "Create, rename and remove the rooms this server is made of."
-        case .members:
-            "Everyone here, how they got in, and who is still waiting."
+            "Customize how your server appears in invite links and, if enabled, in Server Discovery and Announcement Channel messages"
         case .roles:
-            "Group your members and give them permissions."
-        case .invites:
-            "The links that let people in, and who made them."
-        case .access:
-            "How people join, and what they agree to first."
+            "Use roles to group your server members and assign permissions."
+        case .soundboard:
+            "Upload custom sound reactions that anyone in this server can use. Nitro members will be able to access these sounds in any server on Discord."
         case .integrations:
-            "Apps and services connected to this server."
-        case .webhooks:
-            "Endpoints that post into your channels, and the channels you follow."
-        case .safety:
-            "The automatic rules that act before a moderator has to."
-        case .auditLog:
-            "Everything administrators and moderators have done here."
-        case .bans:
-            "Everyone who cannot come back."
-        case .community:
-            "The channels Discord uses to reach your moderators, and the language it uses."
+            "Customize your server with integrations. Manage webhooks, followed channels, and apps, as well as Twitch and YouTube settings for creators."
         case .onboarding:
-            "The questions and default channels a new member starts with."
-        case .serverGuide:
-            "The welcome, the first tasks and the pages you point new members at."
-        case .template:
-            "Share this server's setup so anyone can create one like it."
+            "Give your members a simple starting experience with custom channels, roles, and first steps."
+        case .serverTheme:
+            "Pick a preset theme or build your own. Every member sees this theme when they open the server, and it adapts to their light or dark mode."
+        case .engagement:
+            "Manage settings that help keep your server active."
+        default:
+            nil
         }
     }
 }

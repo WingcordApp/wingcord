@@ -296,7 +296,7 @@ private struct RoomSwatch: View {
     @ViewBuilder
     private var cornerGlyph: some View {
         if let glyph {
-            Image(systemName: glyph)
+            Image(symbol: glyph)
                 .font(.system(size: 11, weight: .semibold))
                 .foregroundStyle((ground.appearance == .light ? Color.black : Color.white).opacity(0.55))
                 .padding(ThemeMetrics.accentBarInset)

@@ -162,23 +162,23 @@ extension DiscordREST {
 
 extension DiscordREST {
 
-    /// Every server the reader has applied to and not yet heard back from.
+    /// The servers the reader has applications out to, to draw them with.
     ///
     /// `GET /users/@me/join-request-guilds` — captured, and the answer is a
     /// **bare array of partial guilds**: id, name, icon, description, the two
     /// splashes and the feature list, with no request object beside them. So
-    /// it says *which* servers are outstanding and nothing about when or why;
-    /// the request itself is `GET /guilds/{id}/member-verification`.
-    ///
-    /// This is what puts a server back in front of the reader after a relaunch.
-    /// Without it a submitted application is invisible until they happen to
-    /// open the invite again.
+    /// it says nothing about how an application stands; that is
+    /// `OwnJoinRequest`, off READY and the socket. Discord asks this when the
+    /// Pending Applications folder opens (`USER_JOIN_REQUEST_GUILDS_FETCH`),
+    /// which is the request `withdraw application1.har` caught.
     public func joinRequestGuilds() async throws -> [JoinRequestGuild] {
         struct DTO: Decodable {
             var id: GuildID
             var name: String?
             var icon: String?
             var description: String?
+            var splash: String?
+            var features: [String]?
         }
         return try await get(
             "/users/@me/join-request-guilds",
@@ -189,9 +189,43 @@ extension DiscordREST {
                 id: $0.id,
                 name: $0.name ?? "Unknown",
                 iconHash: $0.icon,
-                description: $0.description.flatMap { $0.isEmpty ? nil : $0 }
+                description: $0.description.flatMap { $0.isEmpty ? nil : $0 },
+                splashHash: $0.splash,
+                features: Set($0.features ?? [])
             )
         }
+    }
+
+    /// Acknowledges an approval — Discord's `ackUserGuildJoinRequest`, sent
+    /// by the "Let's Go!" on its "You are now a member of" (`624458`).
+    ///
+    /// `POST /guilds/{id}/requests/{requestID}/ack`. Discord ignores the
+    /// answer and forgets the request either way, and so does this.
+    public func acknowledgeJoinRequest(inGuild guildID: GuildID, requestID: JoinRequestID) async throws {
+        _ = try await requestData(
+            method: "POST",
+            path: "/guilds/\(guildID.rawValue)/requests/\(requestID.rawValue)/ack",
+            route: "guilds/{id}/requests/{id}/ack",
+            body: Optional<String>.none
+        )
+    }
+
+    /// Opens a denied application again — Discord's Reapply,
+    /// `resetGuildJoinRequest` (`624458`).
+    ///
+    /// `POST /guilds/{id}/requests/@me`, the path the submit `PUT`s to and the
+    /// withdraw `DELETE`s. Discord stores what it answers as the reader's
+    /// request and then opens the form. Not captured: the answer is read as the
+    /// request object the submit returns, and nil where it is not one — the
+    /// socket's `GUILD_JOIN_REQUEST_UPDATE` settles it either way.
+    public func resetJoinRequest(inGuild guildID: GuildID) async throws -> OwnJoinRequest? {
+        let data = try await requestData(
+            method: "POST",
+            path: "/guilds/\(guildID.rawValue)/requests/@me",
+            route: "guilds/{id}/requests/@me",
+            body: Optional<String>.none
+        )
+        return (try? Self.decoder.decode(OwnJoinRequestDTO.self, from: data))?.domain
     }
 
     /// Takes an application back.

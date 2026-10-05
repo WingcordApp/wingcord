@@ -58,8 +58,17 @@ struct UserDTO: Decodable, Sendable {
         CurrentAccount(
             user: domain,
             premiumType: premium_type,
-            ageVerificationStatus: age_verification_status
+            ageVerificationStatus: age_verification_status,
+            verification: accountVerification
         )
+    }
+
+    /// Whether the reader has confirmed an e-mail and holds a phone — nil on
+    /// an object that is not the reader's own private one. **`verified` is
+    /// the test for private**: every public user object leaves it out, so a
+    /// missing `phone` beside it is no phone rather than an unknown.
+    var accountVerification: AccountVerification? {
+        verified.map { AccountVerification(isEmailVerified: $0, isPhoneVerified: phone != nil) }
     }
 
     var domain: User {
@@ -254,9 +263,9 @@ struct MemberDTO: Decodable, Sendable {
     var premium_since: Date?
     var communication_disabled_until: Date?
     var pending: Bool?
-    /// `GuildMemberFlags` — the onboarding pair is what is read. See
-    /// `MemberFlags`.
+    /// `GuildMemberFlags` — see `MemberFlags`.
     var flags: Int?
+    var unusual_dm_activity_until: Date?
 
     func domain(userID: UserID) -> Member {
         Member(
@@ -268,7 +277,8 @@ struct MemberDTO: Decodable, Sendable {
             premiumSince: premium_since,
             communicationDisabledUntil: communication_disabled_until,
             isPending: pending ?? false,
-            flags: MemberFlags(rawValue: flags ?? 0)
+            flags: MemberFlags(rawValue: flags ?? 0),
+            unusualDMActivityUntil: unusual_dm_activity_until
         )
     }
 }
@@ -348,6 +358,9 @@ struct ChannelDTO: Decodable, Sendable {
     var default_thread_rate_limit_per_user: Int?
     var template: String?
     var flags: Int?
+    var rtc_region: String?
+    var video_quality_mode: Int?
+    var default_auto_archive_duration: Int?
     var member_count: Int?
     var member_ids_preview: [UserID]?
     var total_message_sent: Int?
@@ -392,6 +405,9 @@ struct ChannelDTO: Decodable, Sendable {
             defaultThreadRateLimitPerUser: default_thread_rate_limit_per_user,
             template: template,
             flags: ChannelFlags(rawValue: flags ?? 0),
+            rtcRegion: rtc_region,
+            videoQualityMode: video_quality_mode,
+            defaultAutoArchiveDuration: default_auto_archive_duration,
             memberCount: member_count,
             memberIDsPreview: member_ids_preview ?? [],
             totalMessageSent: total_message_sent,
@@ -621,6 +637,7 @@ struct GuildDTO: Decodable, Sendable {
     var features: [String]?
     var member_count: Int?
     var rules_channel_id: ChannelID?
+    var public_updates_channel_id: ChannelID?
     var afk_channel_id: ChannelID?
     var large: Bool?
     /// What the server tells a member who has set nothing. 0 all, 1 mentions.
@@ -677,6 +694,8 @@ struct GuildDTO: Decodable, Sendable {
     /// 0 default, 1 explicit, 2 safe, 3 age-restricted — Discord's
     /// `GuildNSFWContentLevel`. Only "is it 1 or 3" is kept.
     var owner_configured_content_level: Int?
+    /// What the server asks of an account before it may talk or apply.
+    var verification_level: Int?
 
     /// Discord moved a guild's own fields into a nested `properties` object on
     /// the READY payload while leaving them at the top level everywhere else.
@@ -691,6 +710,7 @@ struct GuildDTO: Decodable, Sendable {
         var premium_tier: Int?
         var features: [String]?
         var rules_channel_id: ChannelID?
+        var public_updates_channel_id: ChannelID?
         /// Nested here on READY with everything else — §5.9.
         var afk_channel_id: ChannelID?
         /// **The server's own notification floor, and READY is the only place
@@ -718,6 +738,8 @@ struct GuildDTO: Decodable, Sendable {
         /// §5.9: a type with a nested form reads every field from both.
         var theme: GuildThemeField?
         var owner_configured_content_level: Int?
+        /// Nested here on READY, like every field beside it — §5.9.
+        var verification_level: Int?
     }
 
     /// Whether this payload said anything about the theme at all.
@@ -749,6 +771,7 @@ struct GuildDTO: Decodable, Sendable {
             tagBadgeHash: profile?.badge ?? properties?.profile?.badge,
             memberCount: member_count,
             rulesChannelID: rules_channel_id ?? properties?.rules_channel_id,
+            publicUpdatesChannelID: public_updates_channel_id ?? properties?.public_updates_channel_id,
             afkChannelID: afk_channel_id ?? properties?.afk_channel_id,
             isLarge: large ?? false,
             defaultMessageNotifications: NotificationLevel(
@@ -760,7 +783,9 @@ struct GuildDTO: Decodable, Sendable {
             theme: (theme ?? properties?.theme)?.domain,
             isAgeRestricted: (owner_configured_content_level
                 ?? properties?.owner_configured_content_level)
-                .map { $0 == 1 || $0 == 3 } ?? false
+                .map { $0 == 1 || $0 == 3 } ?? false,
+            verificationLevel: (verification_level ?? properties?.verification_level)
+                .map(VerificationLevel.init(rawValue:))
         )
     }
 }
@@ -1206,6 +1231,8 @@ struct MessageDTO: Decodable, Sendable {
         var type: Int?
         var message_id: MessageID?
         var channel_id: ChannelID?
+        /// The referenced message's server — a crosspost's source.
+        var guild_id: GuildID?
     }
 
     /// Only what the reply header draws.
@@ -1324,6 +1351,7 @@ struct MessageDTO: Decodable, Sendable {
         return MessageReference(
             messageID: message_reference.message_id,
             channelID: message_reference.channel_id,
+            guildID: message_reference.guild_id,
             authorID: quoted?.author?.id,
             isAuthorBot: quoted?.author?.bot ?? false,
             // Flattened here, once, rather than per row per frame. A quoted
@@ -1617,6 +1645,9 @@ public struct ClientSettings: Sendable {
     public var serverThemes = ServerThemePreferences()
     /// The unread groups folded in the inbox. See `InboxCollapse`.
     public var inboxCollapse = InboxCollapse()
+    /// Split view for threads, and the ignored-profile warning. See
+    /// `SyncedPreferences`.
+    public var preferences = SyncedPreferences()
 
     public init(
         folders: [GuildFolder],
@@ -1628,7 +1659,8 @@ public struct ClientSettings: Sendable {
         privacyRaw: Data? = nil,
         statusRaw: Data? = nil,
         serverThemes: ServerThemePreferences = ServerThemePreferences(),
-        inboxCollapse: InboxCollapse = InboxCollapse()
+        inboxCollapse: InboxCollapse = InboxCollapse(),
+        preferences: SyncedPreferences = SyncedPreferences()
     ) {
         self.folders = folders
         self.guildPositions = guildPositions
@@ -1640,6 +1672,7 @@ public struct ClientSettings: Sendable {
         self.statusRaw = statusRaw
         self.serverThemes = serverThemes
         self.inboxCollapse = inboxCollapse
+        self.preferences = preferences
     }
 }
 
@@ -1685,6 +1718,8 @@ struct UserProfileDTO: Decodable, Sendable {
     /// no `GET /users/{id}/widgets`; the tiles come down beside the banner and
     /// the bio, in a key this client ignored until the board was built.
     var widgets: [ProfileWidgetDTO]?
+    /// An app's own facts, beside a bot — see `ProfileApplicationDTO`.
+    var application: ProfileApplicationDTO?
 
     struct ConnectionDTO: Decodable, Sendable {
         var id: String?
@@ -1906,7 +1941,8 @@ struct UserProfileDTO: Decodable, Sendable {
             isProfilePrivate: `private` ?? false,
             primaryGuildTag: base.decoration?.primaryGuildTag,
             primaryGuildBadgeHash: base.decoration?.primaryGuildBadgeHash,
-            primaryGuildID: base.decoration?.primaryGuildID
+            primaryGuildID: base.decoration?.primaryGuildID,
+            application: application?.domain
         )
         return User(
             id: base.id,
@@ -1918,6 +1954,60 @@ struct UserProfileDTO: Decodable, Sendable {
             isBot: base.isBot,
             isSystem: base.isSystem,
             decoration: decoration.isEmpty ? nil : decoration
+        )
+    }
+}
+
+/// The `application` a bot's profile carries — the fields Discord's profile
+/// store keeps (`id`, `flags`, `custom_install_url`, `install_params`,
+/// `integration_types_config`, `storefront_available` and the two policy
+/// links).
+///
+/// **Decoded field by field, and it cannot throw.** It rides inside the whole
+/// profile, and a free-form object typed strictly is how one unexpected value
+/// once took a profile's badges, bio and theme with it.
+struct ProfileApplicationDTO: Decodable, Sendable {
+    var id: ApplicationID?
+    var flags: UInt64?
+    var custom_install_url: String?
+    var install_params: InstallDTO.ApplicationDTO.ParamsDTO?
+    var integration_types_config: [String: InstallDTO.ApplicationDTO.ConfigDTO]?
+    var storefront_available: Bool?
+    var terms_of_service_url: String?
+    var privacy_policy_url: String?
+
+    private enum Keys: String, CodingKey {
+        case id, flags, custom_install_url, install_params, integration_types_config
+        case storefront_available, terms_of_service_url, privacy_policy_url
+    }
+
+    init(from decoder: Decoder) throws {
+        guard let container = try? decoder.container(keyedBy: Keys.self) else { return }
+        id = try? container.decodeIfPresent(ApplicationID.self, forKey: .id)
+        flags = try? container.decodeIfPresent(UInt64.self, forKey: .flags)
+        custom_install_url = try? container.decodeIfPresent(String.self, forKey: .custom_install_url)
+        install_params = try? container.decodeIfPresent(InstallDTO.ApplicationDTO.ParamsDTO.self, forKey: .install_params)
+        integration_types_config = try? container.decodeIfPresent(
+            [String: InstallDTO.ApplicationDTO.ConfigDTO].self, forKey: .integration_types_config
+        )
+        storefront_available = try? container.decodeIfPresent(Bool.self, forKey: .storefront_available)
+        terms_of_service_url = try? container.decodeIfPresent(String.self, forKey: .terms_of_service_url)
+        privacy_policy_url = try? container.decodeIfPresent(String.self, forKey: .privacy_policy_url)
+    }
+
+    var domain: ProfileApplication? {
+        guard let id else { return nil }
+        return ProfileApplication(
+            id: id,
+            flags: flags ?? 0,
+            customInstallURL: custom_install_url.flatMap(URL.init(string:)),
+            // Discord's `Ie`: `install_params`, or any integration type that
+            // carries `oauth2_install_params`.
+            declaresInstall: install_params != nil
+                || (integration_types_config?.values.contains { $0.oauth2_install_params != nil } ?? false),
+            hasStorefront: storefront_available ?? false,
+            termsOfServiceURL: terms_of_service_url.flatMap(URL.init(string:)),
+            privacyPolicyURL: privacy_policy_url.flatMap(URL.init(string:))
         )
     }
 }

@@ -43,7 +43,9 @@ nonisolated extension TimelineRowPainter {
         isPlayingPreview: Bool = false
     ) {
         let frame = slot.rect.offsetBy(dx: offset.x, dy: offset.y)
-        let corner = EmbedLayoutEngine.corner
+        // A link's card is Discord's `.embed`, rounded 4; a Components V2
+        // container keeps its own 8.
+        let corner = slot.isLinkCard ? EmbedLayoutEngine.cardCorner : EmbedLayoutEngine.corner
 
         // A bare image, and a loose Components V2 text display, have no card:
         // one IS the picture and the other is prose. Filling a ground behind

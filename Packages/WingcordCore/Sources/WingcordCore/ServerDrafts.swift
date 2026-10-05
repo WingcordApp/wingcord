@@ -89,6 +89,9 @@ public struct OnboardingDraft: Hashable, Sendable {
         public var detail: String?
         public var emojiName: String?
         public var emojiID: EmojiID?
+        /// A custom emoji's `animated` — sent as Discord's `D` sends it, or an
+        /// animated answer goes back still.
+        public var isEmojiAnimated: Bool
         public var roleIDs: [RoleID]
         public var channelIDs: [ChannelID]
 
@@ -98,6 +101,7 @@ public struct OnboardingDraft: Hashable, Sendable {
             detail: String? = nil,
             emojiName: String? = nil,
             emojiID: EmojiID? = nil,
+            isEmojiAnimated: Bool = false,
             roleIDs: [RoleID] = [],
             channelIDs: [ChannelID] = []
         ) {
@@ -106,6 +110,7 @@ public struct OnboardingDraft: Hashable, Sendable {
             self.detail = detail
             self.emojiName = emojiName
             self.emojiID = emojiID
+            self.isEmojiAnimated = isEmojiAnimated
             self.roleIDs = roleIDs
             self.channelIDs = channelIDs
         }
@@ -116,8 +121,21 @@ public struct OnboardingDraft: Hashable, Sendable {
             detail = option.detail
             emojiName = option.emojiName
             emojiID = option.emojiID
+            isEmojiAnimated = option.isEmojiAnimated
             roleIDs = option.roleIDs
             channelIDs = option.channelIDs
+        }
+
+        /// The answer's emoji as one value — what the emoji slot edits.
+        public var emoji: EmojiRef? {
+            get {
+                emojiName.map { EmojiRef(id: emojiID, name: $0, isAnimated: isEmojiAnimated) }
+            }
+            set {
+                emojiName = newValue?.name
+                emojiID = newValue?.id
+                isEmojiAnimated = newValue?.isAnimated ?? false
+            }
         }
 
         /// An answer that grants nothing is a control that does nothing —
@@ -459,15 +477,20 @@ public enum ChannelVisibility: Hashable, Sendable, CaseIterable, Identifiable {
         }
     }
 
+    /// Discord's own lines (`a5/7hX`, `ddWXHa`, `9eUgwR`), the age gate's
+    /// slip included — it is the sentence Discord shows.
     public var detail: String {
         switch self {
         case .default:
             "Channel content is always visible."
         case .spoiler:
-            "Content is hidden until somebody chooses to view it."
+            "Mark this channel as containing spoilers, so that plot twists, heavy "
+                + "topics, or other sensitive discussions are hidden until users "
+                + "choose to view."
         case .ageRestricted:
-            "Members confirm they are over the legal age. Age-restricted "
-                + "channels are exempt from the explicit content filter."
+            "Users will need to confirm they are of over the legal age to view in "
+                + "the content in this channel.\nAge-restricted channels are exempt "
+                + "from the explicit content filter."
         }
     }
 }
@@ -503,18 +526,37 @@ public enum ChannelDeleteGate {
     public enum Refusal: Hashable, Sendable {
         /// The channel is the target of a Server Guide To Do.
         case guideTask(title: String)
+        /// The channel is one of the Server Guide's resources.
+        case guideResource
         /// Removing it would leave onboarding with no channel `@everyone` can
         /// both read and send in.
         case lastDefaultChannel
+        /// A community server's rules channel.
+        case rulesChannel
+        /// A community server's Community Updates channel.
+        case updatesChannel
 
+        /// Discord's two dialogs, word for word (`HANDOFF.md` §SM.14).
         public var message: String {
             switch self {
-            case .guideTask(let title):
-                "Remove or replace the “\(title)” task in the Server Guide before "
-                    + "this channel can be deleted."
+            case .guideTask:
+                "You must remove or replace the To Do in Server Settings > "
+                    + "Community > Onboarding before this channel can be deleted."
+            case .guideResource:
+                "You must remove or replace the Resource in Server Settings > "
+                    + "Community > Onboarding before this channel can be deleted."
             case .lastDefaultChannel:
-                "Deleting this channel would leave onboarding with no default "
-                    + "channel everyone can read and send in."
+                "Deleting this channel will make your server incompatible with "
+                    + "Community Onboarding."
+            case .rulesChannel:
+                "Community Servers are required to have a rules channel. You must designate "
+                    + "another inside Server Settings > Community > Overview before this "
+                    + "channel can be deleted."
+            case .updatesChannel:
+                "Community Servers are required to have a Community Updates channel where "
+                    + "Discord can send important community server updates. You must designate "
+                    + "another inside Server Settings > Community > Overview before this "
+                    + "channel can be deleted."
             }
         }
     }
@@ -524,20 +566,31 @@ public enum ChannelDeleteGate {
     /// `chattableDefaults` is the count of default channels `@everyone` can send
     /// in — the page already knows it, and computing it here would need a
     /// permission walk this type has no business doing.
+    ///
+    /// The rules and updates channels refuse only in a community server, which
+    /// is the only kind that requires them (`572874`).
     public static func refusal(
         for channelID: ChannelID,
         guide: ServerGuide?,
         onboarding: GuildOnboarding?,
-        chattableDefaults: Int
+        chattableDefaults: Int,
+        community: (rules: ChannelID?, updates: ChannelID?)? = nil
     ) -> Refusal? {
         if let task = guide?.actions.first(where: { $0.channelID == channelID }) {
             return .guideTask(title: task.title)
+        }
+        if guide?.resources.contains(where: { $0.channelID == channelID }) == true {
+            return .guideResource
         }
         if let onboarding, onboarding.isEnabled,
            onboarding.defaultChannelIDs.contains(channelID),
            chattableDefaults <= 1
         {
             return .lastDefaultChannel
+        }
+        if let community {
+            if community.rules == channelID { return .rulesChannel }
+            if community.updates == channelID { return .updatesChannel }
         }
         return nil
     }

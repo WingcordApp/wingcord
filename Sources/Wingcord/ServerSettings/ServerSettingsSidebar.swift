@@ -20,8 +20,12 @@ struct ServerSettingsSidebar: View {
     let store: ServerSettingsStore
     var guildName: String
     var guildIconURL: URL?
+    var isOwner: Bool
     @Binding var selection: ServerSettingsSection
     @Binding var query: String
+    /// A row that acts rather than opens — Members, App Directory, Delete
+    /// Server. See `ServerSettingsSection.isAction`.
+    var act: (ServerSettingsSection) -> Void
 
     @Namespace private var pill
     @Environment(\.motion) private var motion
@@ -37,17 +41,33 @@ struct ServerSettingsSidebar: View {
 
             ScrollView(.vertical) {
                 let groups = visibleGroups
+                let isCommunity = store.settings.value?.isCommunity ?? false
                 VStack(alignment: .leading, spacing: SettingsMetrics.sidebarGroupSpacing) {
-                    ForEach(groups.indices, id: \.self) { index in
+                    ForEach(groups, id: \.self) { group in
                         VStack(alignment: .leading, spacing: SettingsMetrics.sidebarRowSpacing) {
-                            ForEach(groups[index]) { section in
+                            if let header = group.header {
+                                // Discord's header: its own word, in capitals.
+                                Text(header.uppercased())
+                                    .font(.system(.caption2, weight: .semibold))
+                                    .foregroundStyle(Ink.tertiary)
+                                    .padding(.leading, SettingsMetrics.sidebarRowLeading)
+                                    .padding(.bottom, 2)
+                                    .accessibilityAddTraits(.isHeader)
+                            }
+                            ForEach(group.sections) { section in
                                 ServerSettingsSidebarRow(
                                     section: section,
+                                    title: section.title(isCommunity: isCommunity),
+                                    decoration: decoration(for: section),
                                     isSelected: section == selection,
                                     hasKeyboardFocus: isListFocused,
                                     pill: pill
                                 ) {
-                                    selection = section
+                                    if section.isAction {
+                                        act(section)
+                                    } else {
+                                        selection = section
+                                    }
                                 }
                             }
                         }
@@ -89,9 +109,17 @@ struct ServerSettingsSidebar: View {
         // that turns out not to have `GUILD_TAGS` loses its Server Tag row a beat
         // later. Landing on the first row that survived is better than a blank
         // detail pane with a highlighted row that is no longer in the list.
-        .onChange(of: visibleGroups.flatMap(\.self)) { _, sections in
-            guard !sections.isEmpty, !sections.contains(selection) else { return }
-            selection = sections[0]
+        .onChange(of: visibleGroups.flatMap(\.sections)) { _, sections in
+            let pages = sections.filter { !$0.isAction }
+            guard !pages.isEmpty, !pages.contains(selection) else { return }
+            selection = pages[0]
+        }
+        // Onboarding's ON or OFF is read off the sidebar before its page is
+        // opened, as Discord's is — and the Welcome Screen is asked beside it,
+        // because whether its row exists is the answer.
+        .task {
+            store.load(.onboarding)
+            store.load(.welcomeScreen)
         }
     }
 
@@ -116,8 +144,14 @@ struct ServerSettingsSidebar: View {
         .accessibilityLabel("Settings for \(guildName)")
     }
 
+    /// Discord's decoration on a row: Onboarding's "ON" or "OFF".
+    private func decoration(for section: ServerSettingsSection) -> String? {
+        guard section == .onboarding, let onboarding = store.onboarding.value else { return nil }
+        return onboarding.isEnabled ? "ON" : "OFF"
+    }
+
     private func step(_ offset: Int) {
-        let visible = visibleGroups.flatMap(\.self)
+        let visible = visibleGroups.flatMap(\.sections).filter { !$0.isAction }
         guard let index = visible.firstIndex(of: selection) else {
             selection = offset >= 0 ? (visible.first ?? selection) : (visible.last ?? selection)
             return
@@ -132,22 +166,30 @@ struct ServerSettingsSidebar: View {
     /// them.** A window that showed no rows for the first two hundred
     /// milliseconds would read as broken; showing every row and then trimming
     /// one reads as the page finishing loading, which is what it is.
-    private var visibleGroups: [[ServerSettingsSection]] {
-        let base: [[ServerSettingsSection]] = if let settings = store.settings.value {
-            ServerSettingsSection.groups(for: settings, permissions: store.permissions)
+    private var visibleGroups: [ServerSettingsSection.Group] {
+        let base: [ServerSettingsSection.Group] = if let settings = store.settings.value {
+            ServerSettingsSection.groups(
+                for: settings,
+                permissions: store.permissions,
+                isOwner: isOwner,
+                hasWelcomeScreen: store.welcomeScreen.value.map { !$0.isEmpty } ?? false
+            )
         } else {
-            ServerSettingsSection.groups
+            ServerSettingsSection.groups.compactMap { group in
+                let kept = group.sections.filter { $0.isReachable(with: store.permissions) && $0 != .deleteServer }
+                return kept.isEmpty ? nil : .init(header: group.header, sections: kept)
+            }
         }
         guard !query.isEmpty else { return base }
         let trimmed = query.trimmingCharacters(in: .whitespaces)
         guard !trimmed.isEmpty else { return base }
         let needle = trimmed.lowercased()
         return base.compactMap { group in
-            let kept = group.filter { section in
+            let kept = group.sections.filter { section in
                 section.title.lowercased().contains(needle)
                     || section.keywords.contains { $0.contains(needle) }
             }
-            return kept.isEmpty ? nil : kept
+            return kept.isEmpty ? nil : .init(header: group.header, sections: kept)
         }
     }
 }
@@ -156,6 +198,8 @@ struct ServerSettingsSidebar: View {
 
 private struct ServerSettingsSidebarRow: View {
     var section: ServerSettingsSection
+    var title: String
+    var decoration: String?
     var isSelected: Bool
     var hasKeyboardFocus: Bool
     var pill: Namespace.ID
@@ -173,11 +217,22 @@ private struct ServerSettingsSidebarRow: View {
                     side: SettingsMetrics.sidebarIconSide,
                     radius: SettingsMetrics.sidebarIconRadius
                 )
-                Text(section.title)
+                Text(title)
                     .font(.system(.subheadline))
-                    .foregroundStyle(Ink.primary)
+                    .foregroundStyle(section == .deleteServer ? AnyShapeStyle(Palette.destructive) : AnyShapeStyle(Ink.primary))
                     .lineLimit(1)
                 Spacer(minLength: 0)
+                if let decoration {
+                    Text(decoration)
+                        .font(.system(.caption2, weight: .bold))
+                        .foregroundStyle(decoration == "ON" ? AnyShapeStyle(Palette.affirmative) : AnyShapeStyle(Ink.tertiary))
+                }
+                if section.leavesSettings {
+                    Image(systemName: "arrow.up.right")
+                        .font(.system(size: 9, weight: .bold))
+                        .foregroundStyle(Ink.tertiary)
+                        .accessibilityHidden(true)
+                }
             }
             .padding(.leading, SettingsMetrics.sidebarRowLeading)
             .padding(.trailing, Spacing.tight)

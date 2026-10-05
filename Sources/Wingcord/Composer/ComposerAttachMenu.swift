@@ -10,6 +10,8 @@ import WingcordCore
 struct ComposerAttachActions {
     var uploadFile: (() -> Void)?
     var selectPhotos: (() -> Void)?
+    /// Discord's Create Thread — New Thread beside the channel.
+    var createThread: (() -> Void)?
     var createPoll: (() -> Void)?
     var useApps: (() -> Void)?
     /// "Invite #general to Listen to Spotify", while the reader's Spotify is
@@ -24,14 +26,14 @@ struct ComposerAttachActions {
     }
 
     var isEmpty: Bool {
-        uploadFile == nil && selectPhotos == nil && createPoll == nil && useApps == nil
+        uploadFile == nil && selectPhotos == nil && createThread == nil && createPoll == nil && useApps == nil
             && listenAlong == nil && schedule == nil
     }
 }
 
-/// The `+` menu — Discord's `channel-attach`, in its order: files, a poll,
-/// apps, an invitation to what the reader is listening to, and a time to send
-/// at.
+/// The `+` menu — Discord's `channel-attach`, in its order: files, a thread,
+/// a poll, apps, an invitation to what the reader is listening to, and a time
+/// to send at.
 ///
 /// **One surface that swaps its contents**, as `ServerOptionsMenu` does:
 /// Schedule Message leads to Discord's suggested times, and Custom… to the time
@@ -72,6 +74,9 @@ struct ComposerAttachMenu: View {
         }
         if let selectPhotos = actions.selectPhotos {
             FlyoutRow(title: "Select from Photos", symbolName: "photo.on.rectangle.angled") { run(selectPhotos) }
+        }
+        if let createThread = actions.createThread {
+            FlyoutRow(title: "Create Thread", symbolName: DiscordGlyph.newThread) { run(createThread) }
         }
         if let createPoll = actions.createPoll {
             FlyoutRow(title: "Create Poll", symbolName: "chart.bar.horizontal.page") { run(createPoll) }

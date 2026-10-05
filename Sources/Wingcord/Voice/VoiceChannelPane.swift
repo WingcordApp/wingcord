@@ -91,7 +91,7 @@ struct VoiceChannelPane: View {
                 Circle()
                     .fill(Palette.selectionFill)
                     .frame(width: 96, height: 96)
-                Image(systemName: chips.isEmpty ? "speaker.wave.2" : "person.2.wave.2.fill")
+                Image(symbol: chips.isEmpty ? "speaker.wave.2" : "person.2.wave.2.fill")
                     .font(.system(size: 38, weight: .light))
                     .foregroundStyle(Ink.secondary)
                     .contentTransition(.symbolEffect(.replace))

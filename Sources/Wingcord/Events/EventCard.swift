@@ -172,7 +172,7 @@ struct EventPlaceLabel: View {
                 model.joinEventRoom(event)
             } label: {
                 HStack(spacing: 6) {
-                    Image(systemName: channel?.kind.symbolName ?? event.location.symbolName)
+                    Image(symbol: channel?.kind.symbolName ?? event.location.symbolName)
                         .accessibilityHidden(true)
                     Text(channel.map(model.displayName(of:)) ?? "Unknown channel")
                         .lineLimit(1)

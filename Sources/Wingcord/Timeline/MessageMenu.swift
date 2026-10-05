@@ -163,7 +163,7 @@ struct MessageMenu: View {
             }
         } label: {
             HStack(spacing: Spacing.snug) {
-                Image(systemName: kind.symbolName)
+                Image(symbol: kind.symbolName)
                     .font(.system(size: 12, weight: .medium))
                     .frame(width: 16)
                 Text(kind.title)

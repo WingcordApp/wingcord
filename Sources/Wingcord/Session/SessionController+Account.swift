@@ -39,6 +39,7 @@ extension SessionController {
                 premiumType: answer.account.premiumType,
                 ageVerificationStatus: answer.account.ageVerificationStatus
             )
+            if let verification = answer.account.verification { model.accountVerification = verification }
         } catch {
             Self.trace("account details failed: \(Self.describe(error))")
         }

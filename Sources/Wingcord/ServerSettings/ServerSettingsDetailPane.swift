@@ -1,4 +1,5 @@
 import SwiftUI
+import WingcordCore
 
 // MARK: - The detail pane
 //
@@ -18,10 +19,17 @@ import SwiftUI
 //      which is internal `_ConditionalContent` under a stable outer type, not a
 //      structural swap.
 
+/// What the detail pane shows: a page of the server's settings, or a page of
+/// one channel's — Discord's two settings layers, in one window.
+enum ServerSettingsPage: Hashable {
+    case server(ServerSettingsSection)
+    case channel(ChannelID, ChannelSettingsTab)
+}
+
 struct ServerSettingsDetailPane: View {
     let store: ServerSettingsStore
     let model: AppModel
-    var section: ServerSettingsSection
+    var page: ServerSettingsPage
     var isSidebarCollapsed: Bool
     var toggleSidebar: () -> Void
 
@@ -31,7 +39,7 @@ struct ServerSettingsDetailPane: View {
 
     var body: some View {
         ScrollView(.vertical) {
-            ServerSettingsPaneContent(store: store, model: model, section: section)
+            ServerSettingsPaneContent(store: store, model: model, page: page)
                 .padding(.horizontal, SettingsMetrics.cardInset)
                 .padding(.bottom, SettingsMetrics.cardInset)
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -39,7 +47,7 @@ struct ServerSettingsDetailPane: View {
         .scrollBounceBehavior(.basedOnSize)
         .floatingTopBar {
             ServerSettingsToolbar(
-                title: isScrolled ? section.title : nil,
+                title: isScrolled ? title : nil,
                 save: store.save,
                 isSidebarCollapsed: isSidebarCollapsed,
                 toggleSidebar: toggleSidebar
@@ -55,10 +63,22 @@ struct ServerSettingsDetailPane: View {
         .clipShape(.settingsRect(SettingsMetrics.paneRadius))
         .padding(.vertical, SettingsMetrics.paneInset)
         .padding(.trailing, SettingsMetrics.paneInset)
-        .animation(motion.standard, value: section)
+        .animation(motion.standard, value: page)
         // The page's own fetch, started when it appears and cancelled with it.
-        // Keyed on the section so switching pages starts the next one's.
-        .task(id: section) { store.load(section) }
+        // Keyed on the page so switching pages starts the next one's.
+        .task(id: page) {
+            switch page {
+            case .server(let section): store.load(section)
+            case .channel: store.loadChannelSettings()
+            }
+        }
+    }
+
+    private var title: String {
+        switch page {
+        case .server(let section): section.title(isCommunity: store.settings.value?.isCommunity ?? false)
+        case .channel(_, let tab): tab.title
+        }
     }
 
     private var scrollEdgeBand: some View {
@@ -165,51 +185,78 @@ private struct SaveIndicator: View {
 private struct ServerSettingsPaneContent: View {
     let store: ServerSettingsStore
     let model: AppModel
-    var section: ServerSettingsSection
+    var page: ServerSettingsPage
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            heading
-            switch section {
-            case .profile: ServerProfilePane(store: store)
-            case .tag: ServerTagPane(store: store)
-            case .engagement: EngagementPane(store: store)
-            case .events: EventsPane(store: store)
-            case .emoji: EmojiPane(store: store, model: model)
-            case .stickers: StickersPane(store: store, model: model)
-            case .soundboard: SoundboardPane(store: store, model: model)
-            case .channels: ChannelsPane(store: store)
-            case .members: MembersPane(store: store, model: model)
-            case .roles: RolesPane(store: store)
-            case .invites: InvitesPane(store: store, model: model)
-            case .access: AccessPane(store: store)
-            case .integrations: IntegrationsPane(store: store, model: model)
-            case .webhooks: WebhooksPane(store: store, model: model)
-            case .safety: SafetyPane(store: store)
-            case .auditLog: AuditLogPane(store: store)
-            case .bans: BansPane(store: store)
-            case .community: CommunityPane(store: store)
-            case .onboarding: OnboardingPane(store: store)
-            case .serverGuide: GuideSettingsPane(store: store)
-            case .template: TemplatePane(store: store)
+            switch page {
+            case .server(let section):
+                heading(
+                    section.title(isCommunity: store.settings.value?.isCommunity ?? false),
+                    detail: section.detail
+                )
+                serverPage(section)
+            case .channel(let channelID, let tab):
+                if let channel = model.channelIndex[channelID] {
+                    // The Permissions page heads itself, as Discord's does —
+                    // "Channel Permissions" or "Category Settings" over its
+                    // own line.
+                    if tab != .permissions { heading(tab.title, detail: nil) }
+                    ChannelSettingsContent(store: store, model: model, channel: channel, tab: tab)
+                } else {
+                    // Deleted underneath the page — from here or anywhere else.
+                    Color.clear
+                        .frame(height: 1)
+                        .onAppear { store.openChannelID = nil }
+                }
             }
         }
     }
 
-    /// The page's name and what it is for.
+    @ViewBuilder
+    private func serverPage(_ section: ServerSettingsSection) -> some View {
+        switch section {
+        case .profile: ServerProfilePane(store: store, model: model)
+        case .tag: ServerTagPane(store: store)
+        case .serverTheme: ServerThemePane(store: store, model: model)
+        case .engagement: EngagementPane(store: store, memberCount: model.guilds[store.guildID]?.memberCount)
+        case .boostPerks: BoostPerksPane(store: store, model: model)
+        case .emoji: EmojiPane(store: store, model: model)
+        case .stickers: StickersPane(store: store, model: model)
+        case .soundboard: SoundboardPane(store: store, model: model)
+        case .roles: RolesPane(store: store)
+        case .invites: InvitesPane(store: store, model: model)
+        case .access: AccessPane(store: store, model: model)
+        case .integrations: IntegrationsPane(store: store, model: model)
+        case .safety: SafetyPane(store: store, model: model)
+        case .auditLog: AuditLogPane(store: store)
+        case .bans: BansPane(store: store)
+        case .community: CommunityPane(store: store)
+        case .onboarding: OnboardingPane(store: store)
+        case .insights: ServerInsightsPane(guildID: store.guildID)
+        case .welcomeScreen: WelcomeScreenPane(store: store, model: model)
+        case .template: TemplatePane(store: store)
+        // Rows that act rather than open — see `ServerSettingsSection.isAction`.
+        case .members, .appDirectory, .deleteServer: EmptyView()
+        }
+    }
+
+    /// The page's name, and Discord's line under it where it has one.
     ///
-    /// Drawn here rather than by each pane, so eighteen panes cannot disagree
-    /// about the gap under a title — the same argument `SurfaceHeading` makes
-    /// for the reader's server pages.
-    private var heading: some View {
+    /// Drawn here rather than by each pane, so the panes cannot disagree about
+    /// the gap under a title — the same argument `SurfaceHeading` makes for the
+    /// reader's server pages.
+    private func heading(_ title: String, detail: String?) -> some View {
         VStack(alignment: .leading, spacing: Spacing.tight) {
-            Text(section.title)
+            Text(title)
                 .font(.system(.title2, weight: .bold))
                 .foregroundStyle(Ink.primary)
-            Text(section.detail)
-                .font(.system(.subheadline))
-                .foregroundStyle(Ink.secondary)
-                .fixedSize(horizontal: false, vertical: true)
+            if let detail {
+                Text(detail)
+                    .font(.system(.subheadline))
+                    .foregroundStyle(Ink.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.bottom, SettingsMetrics.cardToHeader)

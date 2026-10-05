@@ -134,7 +134,7 @@ private struct ActivityCardPopout: View {
             RemoteImage(url: card.artURL, side: 64, bucket: .thumbnail) {
                 ZStack {
                     Rectangle().fill(Palette.hoverFill)
-                    Image(systemName: card.artSymbol)
+                    Image(symbol: card.artSymbol)
                         .font(.system(size: 20))
                         .foregroundStyle(InkColor.tertiary)
                 }
@@ -185,7 +185,7 @@ private struct ActivityCardPopout: View {
             ForEach(Array(card.badges.enumerated()), id: \.offset) { _, badge in
                 let (symbol, text, isPositive) = MemberActivityPainter.resolve(badge, card: card, now: now)
                 HStack(spacing: 4) {
-                    Image(systemName: symbol)
+                    Image(symbol: symbol)
                         .font(.system(size: 9, weight: .semibold))
                     Text(text)
                         .font(.system(.caption))

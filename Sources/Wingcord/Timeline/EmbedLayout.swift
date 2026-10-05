@@ -190,6 +190,27 @@ nonisolated enum EmbedLayoutEngine {
     /// How many inline fields share a row, which is Discord's own.
     static let fieldsPerRow = 3
 
+    /// Discord's `.gridContainer { max-width: 516px }`: a link's card's
+    /// content, the rule outside it.
+    static let maxWidth: CGFloat = 516
+    /// `.grid`'s padding past the rule's 12: 16 at the trailing edge and the
+    /// foot, and 2 at the top — where every part's own `embedMargin` of 8
+    /// stands above it, so the first sits 10 down.
+    static let trailingPadding: CGFloat = 16
+    static let topPadding: CGFloat = 10
+    static let bottomPadding: CGFloat = 16
+    /// `.embedFull .embedMedia { margin-top: 16px }`.
+    static let mediaGap: CGFloat = 16
+    /// `.embed { border-radius: 4px }`, and its pictures'.
+    static let cardCorner: CGFloat = 4
+    /// `.embedAuthorIcon`: 24, round, 8 before the name.
+    static let authorIconSide: CGFloat = 24
+    /// `.embedThumbnail { margin-inline-start: 16px }`.
+    static let thumbnailGap: CGFloat = 16
+    /// Discord's `text-sm` against its 16 px body — an embed's author, its
+    /// description and its fields.
+    static let smallScale: CGFloat = 0.875
+
     /// The square cover on a music card.
     static let coverSide: CGFloat = 76
     /// A chip on one, and the `E` badge beside it.
@@ -209,7 +230,8 @@ nonisolated enum EmbedLayoutEngine {
         style: MessageTextStyle,
         mentions: MentionContext,
         parser: MarkdownParser,
-        spotify: SpotifyUnfurl? = nil
+        spotify: SpotifyUnfurl? = nil,
+        footerStamp: String? = nil
     ) -> EmbedSlot {
         if let spotify {
             return musicCard(spotify, origin: origin, availableWidth: availableWidth, style: style)
@@ -222,7 +244,8 @@ nonisolated enum EmbedLayoutEngine {
             return bareImage(media, in: embed, origin: origin, availableWidth: availableWidth)
         }
 
-        var cardWidth = min(Metrics.embedMaxWidth, availableWidth)
+        var cardWidth = min(ruleWidth + maxWidth, availableWidth)
+        let small = style.scaled(smallScale)
         // **Discord's normaliser decides which picture is which** (module
         // `659674`'s `L`): an article's thumbnail is its picture, drawn large
         // under the text — Qwertykeys' logo — where any other kind keeps it in
@@ -237,23 +260,31 @@ nonisolated enum EmbedLayoutEngine {
         let file = player == nil ? Self.videoFile(of: embed, isArticle: isArticle) : nil
         let videoPoster = player != nil ? (embed.thumbnail ?? embed.image) : nil
         let hasMedia = videoPoster != nil || file != nil
-        let hasThumbnail = !isArticle && embed.thumbnail != nil && !hasMedia
+        // Fitted inside Discord's 80 by 80, never cropped to it — and the
+        // whole square for one whose shape the unfurl did not say.
+        let thumbnailBox = (!isArticle && !hasMedia ? embed.thumbnail : nil).map { thumbnail in
+            thumbnail.pixelSize == nil
+                ? CGSize(width: thumbnailSide, height: thumbnailSide)
+                : TimelineLayoutEngine.mediaBox(
+                    width: thumbnail.width, height: thumbnail.height,
+                    availableWidth: thumbnailSide, maximumHeight: thumbnailSide
+                )
+        }
         let contentX = origin.x + ruleWidth + padding
-        let fullContentWidth = max(40, cardWidth - ruleWidth - padding * 2)
-        let contentWidth = hasThumbnail
-            ? max(40, fullContentWidth - thumbnailSide - gap)
-            : fullContentWidth
+        let fullContentWidth = max(40, cardWidth - ruleWidth - padding - trailingPadding)
+        let contentWidth = thumbnailBox.map { max(40, fullContentWidth - $0.width - thumbnailGap) } ?? fullContentWidth
 
         var texts: [EmbedText] = []
         var images: [EmbedImage] = []
-        var y = origin.y + padding
+        var y = origin.y + topPadding
 
         // The site, over everything — Discord's `embedProvider`: "Blip",
         // "Qwertykeys", "YouTube".
         if let provider = embed.providerName, !provider.isEmpty {
+            // `text-xs/normal`.
             let block = plainBlock(
                 provider,
-                font: NSFont.systemFont(ofSize: style.metadataFont.pointSize, weight: .medium),
+                font: style.metadataFont,
                 color: style.secondaryColor,
                 width: contentWidth,
                 link: nil,
@@ -266,38 +297,43 @@ nonisolated enum EmbedLayoutEngine {
         // The author row: a circular mark and a name, on one line.
         if let author = embed.author {
             var textX = contentX
+            var markHeight: CGFloat = 0
             if let icon = author.iconURL.flatMap(URL.init(string:)) {
                 images.append(EmbedImage(
-                    rect: CGRect(x: contentX, y: y, width: markSide, height: markSide),
+                    rect: CGRect(x: contentX, y: y, width: authorIconSide, height: authorIconSide),
                     url: icon,
                     isCircle: true,
-                    corner: markSide / 2,
-                    decodeWidth: markSide,
+                    corner: authorIconSide / 2,
+                    decodeWidth: authorIconSide,
                     isArtwork: false
                 ))
-                textX += markSide + 6
+                textX += authorIconSide + 8
+                markHeight = authorIconSide
             }
+            // `.embedAuthorName`: `.875rem`, semibold.
             let block = plainBlock(
                 author.name,
-                font: NSFont.systemFont(ofSize: style.metadataFont.pointSize, weight: .semibold),
+                font: NSFont.systemFont(ofSize: small.bodyFont.pointSize, weight: .semibold),
                 color: style.primaryColor,
                 width: max(20, contentWidth - (textX - contentX)),
                 link: author.url,
                 style: style
             )
-            // Centred on the mark rather than sharing its top edge: the mark is
-            // twenty points and the name is one line of about fourteen.
+            // Centred on the mark rather than sharing its top edge, as
+            // `.embedAuthor`'s `align-items: center` sets it.
+            let rowHeight = max(markHeight, block.size.height)
             texts.append(EmbedText(
                 block: block,
-                origin: CGPoint(x: textX, y: y + (markSide - block.size.height) / 2)
+                origin: CGPoint(x: textX, y: y + (rowHeight - block.size.height) / 2)
             ))
-            y += max(markSide, block.size.height) + gap
+            y += rowHeight + gap
         }
 
         if let title = embed.title, !title.isEmpty {
+            // `.embedTitle`: `1rem`, semibold.
             let block = plainBlock(
                 title,
-                font: NSFont.systemFont(ofSize: style.bodyFont.pointSize, weight: .bold),
+                font: NSFont.systemFont(ofSize: style.bodyFont.pointSize, weight: .semibold),
                 // A titled embed with a URL is a link, and its title is the
                 // thing you click. Without one it is a heading.
                 color: embed.url == nil ? style.primaryColor : style.linkColor,
@@ -313,10 +349,11 @@ nonisolated enum EmbedLayoutEngine {
         // title — the picture is the content.
         if !["image", "video", "gifv"].contains(embed.kind),
            let description = embed.description.map(Self.preLine), !description.isEmpty {
+            // `embedDescription text-sm/normal`.
             let block = markdownBlock(
                 description,
                 width: contentWidth,
-                style: style,
+                style: small,
                 mentions: mentions,
                 parser: parser
             )
@@ -328,24 +365,27 @@ nonisolated enum EmbedLayoutEngine {
         // which is why the content above was narrowed rather than the picture
         // placed after it.
         var thumbnailIndex: Int?
-        if hasThumbnail, let thumbnail = embed.thumbnail {
+        if let box = thumbnailBox, let thumbnail = embed.thumbnail {
             // A bot's GIF moves where Discord's does, in the corner as in the
             // card's body.
             let moves = thumbnail.playsAsAnimated
             thumbnailIndex = images.count
             images.append(EmbedImage(
                 rect: CGRect(
-                    x: origin.x + cardWidth - padding - thumbnailSide,
-                    y: origin.y + padding,
-                    width: thumbnailSide,
-                    height: thumbnailSide
+                    x: origin.x + cardWidth - trailingPadding - box.width,
+                    y: origin.y + topPadding,
+                    width: box.width,
+                    height: box.height
                 ),
                 url: CDN.resizedAttachment(
-                    proxyURL: thumbnail.proxyURL ?? thumbnail.url, width: thumbnailSide, animated: moves
+                    proxyURL: thumbnail.proxyURL ?? thumbnail.url,
+                    width: box.width,
+                    height: box.height,
+                    animated: moves
                 ),
                 isCircle: false,
-                corner: corner,
-                decodeWidth: thumbnailSide,
+                corner: cardCorner,
+                decodeWidth: box.width,
                 isArtwork: true,
                 isAnimated: moves,
                 placeholder: thumbnail.placeholder
@@ -357,11 +397,14 @@ nonisolated enum EmbedLayoutEngine {
             contentX: contentX,
             y: y,
             width: fullContentWidth,
-            style: style,
+            style: small,
             mentions: mentions,
             parser: parser,
             texts: &texts
         )
+
+        // The media's own 16 above it, where every other part has 8.
+        if videoPoster != nil || file != nil || picture != nil { y += mediaGap - gap }
 
         if let poster = videoPoster, let player, let page = embed.url.flatMap(URL.init(string:)) {
             let source = poster.proxyURL ?? poster.url
@@ -375,7 +418,7 @@ nonisolated enum EmbedLayoutEngine {
                 rect: rect,
                 url: CDN.resizedAttachment(proxyURL: source, width: width, height: width / aspect),
                 isCircle: false,
-                corner: corner,
+                corner: cardCorner,
                 decodeWidth: width,
                 isArtwork: true,
                 video: .player(player),
@@ -391,7 +434,7 @@ nonisolated enum EmbedLayoutEngine {
                 rect: rect,
                 url: file.posterURL(box.width, box.height),
                 isCircle: false,
-                corner: corner,
+                corner: cardCorner,
                 decodeWidth: box.width,
                 isArtwork: true,
                 video: .file(file.url),
@@ -424,7 +467,7 @@ nonisolated enum EmbedLayoutEngine {
                         animated: moves
                     ),
                     isCircle: false,
-                    corner: corner,
+                    corner: cardCorner,
                     decodeWidth: decode,
                     isArtwork: true,
                     isAnimated: moves,
@@ -446,7 +489,7 @@ nonisolated enum EmbedLayoutEngine {
                     proxyURL: source, width: box.width, height: box.height, animated: moves
                 ),
                 isCircle: false,
-                corner: corner,
+                corner: cardCorner,
                 decodeWidth: box.width,
                 isArtwork: true,
                 isAnimated: moves,
@@ -455,7 +498,7 @@ nonisolated enum EmbedLayoutEngine {
             y += box.height + gap
         }
 
-        if let footer = footerLine(embed) {
+        if let footer = footerLine(embed, stamp: footerStamp) {
             var textX = contentX
             if let icon = embed.footer?.iconURL.flatMap(URL.init(string:)) {
                 images.append(EmbedImage(
@@ -466,12 +509,13 @@ nonisolated enum EmbedLayoutEngine {
                     decodeWidth: markSide,
                     isArtwork: false
                 ))
-                textX += markSide + 6
+                textX += markSide + 8
             }
+            // `embedFooterText text-xs/medium` in `--text-default`.
             let block = plainBlock(
                 footer,
-                font: style.metadataFont,
-                color: style.tertiaryColor,
+                font: NSFont.systemFont(ofSize: style.metadataFont.pointSize, weight: .medium),
+                color: style.primaryColor,
                 width: max(20, fullContentWidth - (textX - contentX)),
                 link: nil,
                 style: style
@@ -485,7 +529,7 @@ nonisolated enum EmbedLayoutEngine {
 
         // The last part contributed a trailing gap; the card's bottom padding
         // replaces it.
-        var height = max(padding * 2, y - gap - origin.y + padding)
+        var height = max(topPadding + bottomPadding, y - gap - origin.y + bottomPadding)
         // **And the card has to be tall enough for the PICTURE, which no part of
         // `y` knows about.** The thumbnail is placed against the card's own top
         // edge rather than after the text — that is the whole point of it — so a
@@ -497,7 +541,7 @@ nonisolated enum EmbedLayoutEngine {
         // what a transcript actually contains. The older enclosure test missed
         // it because its fixture had twenty lines of description — a fixture
         // unlike the caller's input guards the bug rather than catching it.
-        if hasThumbnail { height = max(height, padding * 2 + thumbnailSide) }
+        if let box = thumbnailBox { height = max(height, topPadding + box.height + bottomPadding) }
         // **As wide as what is in it** — Discord's card is `max-width:
         // max-content`, so VIA's is its two lines and its chip rather than the
         // column. A field grid is laid across the whole width, so a card with
@@ -532,8 +576,8 @@ nonisolated enum EmbedLayoutEngine {
         for (index, image) in images.enumerated() where index != thumbnailIndex {
             extent = max(extent, image.rect.maxX - contentX)
         }
-        if thumbnailIndex != nil { extent += gap + thumbnailSide }
-        return min(cap, ceil(ruleWidth + padding * 2 + extent))
+        if let thumbnailIndex { extent += thumbnailGap + images[thumbnailIndex].rect.width }
+        return min(cap, ceil(ruleWidth + padding + trailingPadding + extent))
     }
 
     /// A block's `max-content` width: how far its lines reach where none was
@@ -977,7 +1021,8 @@ nonisolated enum EmbedLayoutEngine {
     ) -> CGFloat {
         guard !fields.isEmpty else { return startY }
         var y = startY
-        let nameFont = NSFont.systemFont(ofSize: style.metadataFont.pointSize, weight: .bold)
+        // `embedFieldName text-sm/semibold` — `style` is the embed's small one.
+        let nameFont = NSFont.systemFont(ofSize: style.bodyFont.pointSize, weight: .semibold)
         var index = 0
 
         while index < fields.count {
@@ -1027,11 +1072,10 @@ nonisolated enum EmbedLayoutEngine {
     }
 
     /// The footer's one line: its text, its timestamp, or both joined the way
-    /// Discord joins them.
-    private static func footerLine(_ embed: Embed) -> String? {
-        let stamp = embed.timestamp.map {
-            $0.formatted(.dateTime.day().month().year().hour().minute(.twoDigits))
-        }
+    /// Discord joins them — the time in the transcript's own calendar words
+    /// (`58703.mk`), which the caller hands in as `stamp`.
+    private static func footerLine(_ embed: Embed, stamp: String?) -> String? {
+        let stamp = embed.timestamp == nil ? nil : stamp
         // A `switch` expression cannot infer `String?` from a bare `nil` here,
         // and the explicit returns read better than annotating one anyway.
         if let text = embed.footer?.text, !text.isEmpty {

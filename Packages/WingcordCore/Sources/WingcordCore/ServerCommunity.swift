@@ -19,8 +19,7 @@ import Foundation
 //      "enabled":true}
 //
 // So the *editor* is real, and this file is the type behind it. The reader's
-// side stays exactly as it was: it still decodes only `TERMS`, because agreeing
-// is still the only thing a member does with this form.
+// side is `JoinApplication` — the same fields, answered.
 
 /// A server's application form, as its administrator edits it.
 public struct JoinApplicationForm: Hashable, Sendable {
@@ -100,21 +99,32 @@ public struct JoinApplicationForm: Hashable, Sendable {
             case textInput
             case paragraph
             case multipleChoice([String])
-            case terms
+            /// The rules, with the rules themselves — `values` on the wire.
+            ///
+            /// **Carried, not just named.** A save sends every field back, and a
+            /// `TERMS` field sent without its `values` is a rules list emptied
+            /// by somebody who only edited a question.
+            case terms([String])
             /// A field type this client has not seen. Rendered as an unwritable
             /// row that states its own name, and **carried through a save
             /// untouched** — dropping it would silently delete a question the
             /// administrator built in Discord's own client.
             case unrecognised(String)
 
-            public init(wireName: String, choices: [String] = []) {
+            public init(wireName: String, choices: [String] = [], values: [String] = []) {
                 self = switch wireName {
                 case "TEXT_INPUT": .textInput
                 case "PARAGRAPH": .paragraph
                 case "MULTIPLE_CHOICE": .multipleChoice(choices)
-                case "TERMS": .terms
+                case "TERMS": .terms(values)
                 default: .unrecognised(wireName)
                 }
+            }
+
+            /// The rules agreement rather than a question — Discord's `i7`.
+            public var isTerms: Bool {
+                if case .terms = self { return true }
+                return false
             }
 
             public var wireName: String {
@@ -367,7 +377,7 @@ public struct GuildTemplate: Hashable, Sendable, Identifiable {
     public static let doesNotCopy = [
         "Messages or any content",
         "Members or bots",
-        "Your server icon, boosts, or other perks",
+        "Your server icon, Boosts, or other perks",
     ]
 }
 
@@ -385,7 +395,10 @@ public struct GuildMemberRow: Hashable, Sendable, Identifiable {
     public var username: String
     public var displayName: String?
     public var nickname: String?
+    /// The account's own avatar.
     public var avatarHash: String?
+    /// The avatar they wear in this server, which wins where it is set.
+    public var guildAvatarHash: String?
     public var joinedAt: Date?
     public var roleIDs: [RoleID]
     /// Whether they have yet to agree to the rules. READY carries the same flag
@@ -395,6 +408,17 @@ public struct GuildMemberRow: Hashable, Sendable, Identifiable {
     /// this is compared rather than tested for presence.
     public var timedOutUntil: Date?
     public var joinSource: JoinSource
+    /// A pre-pomelo account's tag, "9576" — drawn as `name#9576` the way
+    /// Discord's table draws it. Nil or "0" for everybody else.
+    public var discriminator: String?
+    public var isBot: Bool
+    public var flags: MemberFlags
+    /// When Discord last flagged them for unusual DMs, or nil. A signal for
+    /// `MemberSearchQuery.unusualDMWindow` after it.
+    public var unusualDMActivityUntil: Date?
+    /// Discord's own `SPAMMER` flag on the account — "Engaged in suspected
+    /// spam activity".
+    public var isSpammer: Bool
 
     public init(
         id: UserID,
@@ -402,22 +426,47 @@ public struct GuildMemberRow: Hashable, Sendable, Identifiable {
         displayName: String? = nil,
         nickname: String? = nil,
         avatarHash: String? = nil,
+        guildAvatarHash: String? = nil,
         joinedAt: Date? = nil,
         roleIDs: [RoleID] = [],
         isPending: Bool = false,
         timedOutUntil: Date? = nil,
-        joinSource: JoinSource = .unspecified
+        joinSource: JoinSource = .unspecified,
+        discriminator: String? = nil,
+        isBot: Bool = false,
+        flags: MemberFlags = [],
+        unusualDMActivityUntil: Date? = nil,
+        isSpammer: Bool = false
     ) {
         self.id = id
         self.username = username
         self.displayName = displayName
         self.nickname = nickname
         self.avatarHash = avatarHash
+        self.guildAvatarHash = guildAvatarHash
         self.joinedAt = joinedAt
         self.roleIDs = roleIDs
         self.isPending = isPending
         self.timedOutUntil = timedOutUntil
         self.joinSource = joinSource
+        self.discriminator = discriminator
+        self.isBot = isBot
+        self.flags = flags
+        self.unusualDMActivityUntil = unusualDMActivityUntil
+        self.isSpammer = isSpammer
+    }
+
+    /// `username#1234` for a pre-pomelo account, the bare username otherwise —
+    /// Discord's `getUserTag`.
+    public var tag: String {
+        guard let discriminator, discriminator != "0", !discriminator.isEmpty else { return username }
+        return "\(username)#\(discriminator)"
+    }
+
+    /// Whether the unusual-DM signal still stands.
+    public func hasUnusualDMActivity(asOf now: Date = .now) -> Bool {
+        guard let unusualDMActivityUntil else { return false }
+        return unusualDMActivityUntil > now.addingTimeInterval(-MemberSearchQuery.unusualDMWindow)
     }
 
     /// What this server calls them.
@@ -428,7 +477,7 @@ public struct GuildMemberRow: Hashable, Sendable, Identifiable {
         return timedOutUntil > now
     }
 
-    /// How somebody got in.
+    /// How somebody got in — Discord's `JoinSourceType` (`11541`).
     public enum JoinSource: Hashable, Sendable {
         case unspecified
         case bot
@@ -436,8 +485,8 @@ public struct GuildMemberRow: Hashable, Sendable, Identifiable {
         case discovery
         case hub
         case invite(code: String?, inviterID: UserID?)
-        case vanityURL
-        case application
+        case vanityURL(code: String?)
+        case manualVerification(code: String?)
         case linkedChannel
         case unrecognised(Int)
 
@@ -449,28 +498,50 @@ public struct GuildMemberRow: Hashable, Sendable, Identifiable {
             case 3: self = .discovery
             case 4: self = .hub
             case 5: self = .invite(code: code, inviterID: inviterID)
-            case 6: self = .vanityURL
-            case 7: self = .application
+            case 6: self = .vanityURL(code: code)
+            case 7: self = .manualVerification(code: code)
             case 8: self = .linkedChannel
             case let other?: self = .unrecognised(other)
             }
         }
 
-        /// What the column says. **"Unknown", not blank**, for the unspecified
-        /// case: Discord genuinely does not record how most old members
-        /// arrived, and an empty cell reads as a page that failed to load.
+        /// The wire number, for the Join Method filter.
+        public var rawValue: Int {
+            switch self {
+            case .unspecified: 0
+            case .bot: 1
+            case .integration: 2
+            case .discovery: 3
+            case .hub: 4
+            case .invite: 5
+            case .vanityURL: 6
+            case .manualVerification: 7
+            case .linkedChannel: 8
+            case .unrecognised(let value): value
+            }
+        }
+
+        /// What the column says — Discord's own labels (`f` in `11541`). An
+        /// invite shows its code, as Discord's chip does.
         public var title: String {
             switch self {
-            case .unspecified: "Unknown"
-            case .bot: "Added by a bot"
+            case .unspecified, .unrecognised: "Unknown"
+            case .bot: "Bot Invite"
             case .integration: "Integration"
             case .discovery: "Server Discovery"
-            case .hub: "Student hub"
-            case .invite(let code, _): code.map { "Invite \($0)" } ?? "Invite"
-            case .vanityURL: "Vanity URL"
-            case .application: "Approved application"
-            case .linkedChannel: "Linked lobby"
-            case .unrecognised(let value): "Source \(value)"
+            case .hub: "Student Hub"
+            case .invite(let code, _): code ?? "Server Invite"
+            case .vanityURL(let code): code.map { "\($0) (Vanity)" } ?? "Vanity URL"
+            case .manualVerification(let code): code.map { "Manual Verification (\($0))" } ?? "Manual Verification"
+            case .linkedChannel: "Linked Channel"
+            }
+        }
+
+        /// Whether the chip carries a link mark — an invite or a vanity code.
+        public var isLink: Bool {
+            switch self {
+            case .invite, .vanityURL: true
+            default: false
             }
         }
 
@@ -489,12 +560,13 @@ public struct GuildMemberRow: Hashable, Sendable, Identifiable {
 
         public var id: Int { rawValue }
 
+        /// Discord's sort menu (`779662`).
         public var title: String {
             switch self {
-            case .joinedNewest: "Newest members"
-            case .joinedOldest: "Oldest members"
-            case .accountNewest: "Newest accounts"
-            case .accountOldest: "Oldest accounts"
+            case .joinedNewest: "Member Since (Newest first)"
+            case .joinedOldest: "Member Since (Oldest first)"
+            case .accountNewest: "Joined Discord (Newest first)"
+            case .accountOldest: "Joined Discord (Oldest first)"
             }
         }
     }
@@ -512,6 +584,13 @@ public struct GuildJoinRequest: Hashable, Sendable, Identifiable {
     /// Their answers, in the form's own order.
     public var answers: [Answer]
     public var rejectionReason: String?
+    /// The conversation a moderator opened with the applicant — Discord's
+    /// Interview. Nil until somebody has.
+    public var interviewChannelID: ChannelID?
+    /// When a moderator approved or rejected it, and who — Discord's "By
+    /// {name}" under the verdict.
+    public var actionedAt: Date?
+    public var actionedByName: String?
 
     public init(
         id: UInt64,
@@ -522,7 +601,10 @@ public struct GuildJoinRequest: Hashable, Sendable, Identifiable {
         createdAt: Date? = nil,
         status: Status = .submitted,
         answers: [Answer] = [],
-        rejectionReason: String? = nil
+        rejectionReason: String? = nil,
+        interviewChannelID: ChannelID? = nil,
+        actionedAt: Date? = nil,
+        actionedByName: String? = nil
     ) {
         self.id = id
         self.userID = userID
@@ -533,6 +615,9 @@ public struct GuildJoinRequest: Hashable, Sendable, Identifiable {
         self.status = status
         self.answers = answers
         self.rejectionReason = rejectionReason
+        self.interviewChannelID = interviewChannelID
+        self.actionedAt = actionedAt
+        self.actionedByName = actionedByName
     }
 
     public struct Answer: Hashable, Sendable, Identifiable {

@@ -150,7 +150,7 @@ struct MentionAutocompleteList: View {
         case .avatar(let url, let monogram):
             AvatarView(url: url, monogram: monogram, side: Self.artSide)
         case .symbol(let name):
-            Image(systemName: name)
+            Image(symbol: name)
                 .font(.system(size: 13, weight: .medium))
                 .foregroundStyle(Ink.tertiary)
                 .frame(width: Self.artSide, height: Self.artSide)

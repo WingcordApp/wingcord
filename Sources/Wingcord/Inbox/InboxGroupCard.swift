@@ -88,7 +88,7 @@ struct InboxGroupCard: View {
                     VStack(alignment: .leading, spacing: 1) {
                         HStack(spacing: Spacing.tight + 1) {
                             if let symbolName = group.symbolName {
-                                Image(systemName: symbolName)
+                                Image(symbol: symbolName)
                                     .font(.system(size: 11, weight: .semibold))
                                     .foregroundStyle(Ink.tertiary)
                                     .accessibilityHidden(true)
@@ -551,7 +551,7 @@ struct InboxMessageRow: View {
         perform: @escaping () -> Void
     ) -> some View {
         Button(action: perform) {
-            Image(systemName: systemImage)
+            Image(symbol: systemImage)
                 .font(.system(size: 11, weight: .semibold))
                 .frame(width: 24, height: 24)
                 .contentShape(.rect)

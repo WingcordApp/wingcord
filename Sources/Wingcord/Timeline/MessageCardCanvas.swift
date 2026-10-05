@@ -126,9 +126,10 @@ struct MessageCard: Identifiable, Sendable {
             case .message, .daySeparator, .unreadDivider: true
             // `conversationStart`, the skeletons, the loading row and the
             // failure row are all statements about a whole channel's history.
-            // In an excerpt they are false.
+            // In an excerpt they are false. A fold is the transcript's: an
+            // excerpt is asked for by name and draws what it was asked for.
             case .conversationStart, .historySkeleton, .loadingFirstPage,
-                 .historyUnavailable, .marker: false
+                 .historyUnavailable, .marker, .collapsedGroup: false
             }
         }
         guard !items.isEmpty else { return nil }

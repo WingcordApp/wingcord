@@ -37,6 +37,9 @@ struct GuildProfilePresentation: Equatable, Sendable {
     var isLoading: Bool
     /// What the card offers somebody who is not in this server.
     var entry: Entry
+    /// Why the profile is not there, when Discord refused or failed it — the
+    /// card then says so in Discord's words (`109026`).
+    var refusal: GuildProfileRefusal? = nil
 
     /// The way in, decided by the server's own feature list.
     ///
@@ -74,4 +77,12 @@ struct GuildProfileGame: Equatable, Sendable, Identifiable {
     var iconURL: URL?
     /// Whether it wears the little flame — see `GuildGameActivity.isHot`.
     var isHot: Bool
+}
+
+/// Why a server's profile could not be shown.
+enum GuildProfileRefusal: Equatable, Sendable {
+    /// Discord's 50001: "The server has limited who can see this profile."
+    case limited
+    /// Anything else: "Unable to load server profile", and another try.
+    case failed
 }

@@ -83,7 +83,7 @@ struct ScreenSharePicker: View {
                 ZStack {
                     RoundedRectangle(cornerRadius: Radius.row, style: .continuous)
                         .fill(Palette.surfaceRaised)
-                    Image(systemName: isDisplay(target) ? "display" : "macwindow")
+                    Image(symbol: isDisplay(target) ? "display" : "macwindow")
                         .font(.system(size: 26, weight: .light))
                         .foregroundStyle(Ink.tertiary)
                 }

@@ -117,7 +117,7 @@ struct VoiceHUD: View {
         }
         .overlay(alignment: .bottomTrailing) {
             if participant.isDeafened || participant.isSilenced {
-                Image(systemName: participant.isDeafened ? "headphones.slash" : "mic.slash.fill")
+                Image(symbol: participant.isDeafened ? "headphones.slash" : "mic.slash.fill")
                     .font(.system(size: 8, weight: .bold))
                     .foregroundStyle(InkColor.primary)
                     .frame(width: 14, height: 14)

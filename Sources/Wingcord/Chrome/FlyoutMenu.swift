@@ -1,4 +1,5 @@
 import SwiftUI
+import WingcordCore
 
 // MARK: - The vocabulary every glass flyout in this app is built from
 //
@@ -55,6 +56,12 @@ struct FlyoutRow: View {
     /// `ConnectionMark`, which falls back to a symbol for a brand it has none
     /// for. Wins over `symbolName`.
     var brandService: String?
+    /// A role's colour, as the dot Discord puts before a role's name. Wins over
+    /// `symbolName`; loses to `brandService`.
+    var dotColor: Color?
+    /// A forum tag's own emoji, in the glyph's place — Discord's Edit Tags.
+    /// Wins over `symbolName`; loses to `dotColor`.
+    var emoji: EmojiRef?
     var accessory: FlyoutAccessory = .none
     var isDestructive = false
     var isEnabled = true
@@ -71,8 +78,15 @@ struct FlyoutRow: View {
             HStack(spacing: Spacing.snug) {
                 if let brandService {
                     ConnectionMark(service: brandService, side: 16)
+                } else if let dotColor {
+                    Circle()
+                        .fill(dotColor)
+                        .frame(width: 10, height: 10)
+                        .frame(width: 16)
+                } else if let emoji {
+                    ExpressionGlyph(emoji: emoji, side: 16)
                 } else if let symbolName {
-                    Image(systemName: symbolName)
+                    Image(symbol: symbolName)
                         .font(.system(size: 12, weight: .medium))
                         .frame(width: 16)
                 }

@@ -269,23 +269,24 @@ public struct GuildOnboarding: Hashable, Sendable {
     }
 }
 
-// MARK: - Server rules
+// MARK: - Server rules, and the application
 
-/// `GET /guilds/{id}/member-verification` — the rules a server makes people
-/// agree to before they can speak.
+/// `GET /guilds/{id}/member-verification` — what a server asks of somebody
+/// before they can talk: its rules to agree to (`TERMS`), and where it reviews
+/// applications, up to five questions.
 ///
-/// **Only the `TERMS` field is decoded**, and that is a decision rather than an
-/// omission: the other field types (`TEXT_INPUT`, `PARAGRAPH`,
-/// `MULTIPLE_CHOICE`) belong to an application form, and this client has no
-/// route that submits one. Decoding a question nobody can answer would be
-/// building half of a control that cannot work.
+/// **Every field is kept, in the server's order.** This type used to decode
+/// only `TERMS`, on the reading that this client could not submit an answer
+/// to anything else — and that is exactly why Apply to Join did nothing: a
+/// server that asks questions had a form nobody here could see. The answers
+/// are `JoinApplication`; the route that takes them is the same one the rules
+/// always went through.
 public struct MemberVerification: Hashable, Sendable {
     public var guildID: GuildID
-    /// The server's own line above the rules.
+    /// The server's own line above the form.
     public var detail: String?
-    public var rules: [String]
 
-    /// The version the reader's agreement is recorded against, **kept as the
+    /// The version the reader's answers are recorded against, **kept as the
     /// raw string Discord sent**.
     ///
     /// It looks like a timestamp — `2020-12-28T20:15:57.529000+00:00` — and
@@ -293,26 +294,73 @@ public struct MemberVerification: Hashable, Sendable {
     /// string for the same instant. The server matches on the *string*, so this
     /// is echoed byte for byte or the agreement is recorded against nothing.
     public var version: String?
-    /// The label and the required flag on the `TERMS` field, kept for the same
-    /// reason: the submission echoes the whole field back.
-    public var termsLabel: String?
-    public var isTermsRequired: Bool
+    /// The rules and the questions, as the server ordered them. The submission
+    /// echoes each one back whole, with its answer added.
+    public var fields: [JoinApplicationForm.Field]
+    /// The server as the route describes it to somebody outside it
+    /// (`with_guild=true`) — the application's header. Nil for a member, who
+    /// is not sent it.
+    public var guild: JoinApplicationGuild?
 
     public init(
         guildID: GuildID,
         detail: String? = nil,
-        rules: [String] = [],
+        version: String? = nil,
+        fields: [JoinApplicationForm.Field] = [],
+        guild: JoinApplicationGuild? = nil
+    ) {
+        self.guildID = guildID
+        self.detail = detail
+        self.version = version
+        self.fields = fields
+        self.guild = guild
+    }
+
+    /// A rules-only form: one `TERMS` field.
+    public init(
+        guildID: GuildID,
+        detail: String? = nil,
+        rules: [String],
         version: String? = nil,
         termsLabel: String? = nil,
         isTermsRequired: Bool = true
     ) {
-        self.guildID = guildID
-        self.detail = detail
-        self.rules = rules
-        self.version = version
-        self.termsLabel = termsLabel
-        self.isTermsRequired = isTermsRequired
+        self.init(
+            guildID: guildID,
+            detail: detail,
+            version: version,
+            fields: [
+                JoinApplicationForm.Field(
+                    kind: .terms(rules),
+                    label: termsLabel ?? "",
+                    isRequired: isTermsRequired
+                )
+            ]
+        )
     }
+
+    /// The rules agreement, where the form has one.
+    public var termsField: JoinApplicationForm.Field? {
+        fields.first { $0.kind.isTerms }
+    }
+
+    /// The rules, numbered on screen in this order.
+    public var rules: [String] {
+        guard case .terms(let values)? = termsField?.kind else { return [] }
+        return values.filter { !$0.isEmpty }
+    }
+
+    public var termsLabel: String? { termsField?.label.isEmpty == false ? termsField?.label : nil }
+    public var isTermsRequired: Bool { termsField?.isRequired ?? true }
+
+    /// The application's questions — every field that is not the rules.
+    public var questions: [JoinApplicationForm.Field] {
+        fields.filter { !$0.kind.isTerms }
+    }
+
+    /// Whether this is an application rather than a rules agreement —
+    /// Discord's `j5`, which picks the modal's title and its two notes.
+    public var asksQuestions: Bool { fields.contains { !$0.kind.isTerms } }
 
     public var isEmpty: Bool { rules.isEmpty }
 
@@ -320,6 +368,51 @@ public struct MemberVerification: Hashable, Sendable {
     /// nothing to record it against, and a button that submits a null version
     /// is a button that reports success and changes nothing.
     public var canSubmit: Bool { version != nil && !rules.isEmpty }
+}
+
+/// The server, as the form's route describes it to somebody outside it.
+///
+/// **Not a `Guild`**, for the reason `InvitePreview` gives: a name, the artwork
+/// and two counts, and none of a server's contents.
+public struct JoinApplicationGuild: Hashable, Sendable {
+    public var id: GuildID
+    public var name: String
+    public var iconHash: String?
+    public var bannerHash: String?
+    public var splashHash: String?
+    public var description: String?
+    public var features: Set<String>
+    /// `approximate_member_count`, nil where the route sent none.
+    public var memberCount: Int?
+    /// `approximate_presence_count`.
+    public var onlineCount: Int?
+    /// What the server asks of an account — the form's verification row is
+    /// chosen by it. Nil where the answer did not say.
+    public var verificationLevel: VerificationLevel?
+
+    public init(
+        id: GuildID,
+        name: String,
+        iconHash: String? = nil,
+        bannerHash: String? = nil,
+        splashHash: String? = nil,
+        description: String? = nil,
+        features: Set<String> = [],
+        memberCount: Int? = nil,
+        onlineCount: Int? = nil,
+        verificationLevel: VerificationLevel? = nil
+    ) {
+        self.verificationLevel = verificationLevel
+        self.id = id
+        self.name = name
+        self.iconHash = iconHash
+        self.bannerHash = bannerHash
+        self.splashHash = splashHash
+        self.description = description
+        self.features = features
+        self.memberCount = memberCount
+        self.onlineCount = onlineCount
+    }
 }
 
 /// The reader's per-channel opt-in, as `user_guild_settings` records it.
@@ -593,33 +686,39 @@ public struct GameServerProduct: Hashable, Sendable {
     public var isEmpty: Bool { instructions.isEmpty }
 }
 
-/// A server the reader has applied to and not yet heard back from.
+/// A server the reader has an application out to, as the reader can see it
+/// from outside.
 ///
 /// `GET /users/@me/join-request-guilds` answers a **bare array of partial
 /// guilds** — captured — with no request object beside them: an id, a name, an
-/// icon and a description, and nothing about when the application went in or
-/// what it said. So this says *which* servers are outstanding and the
-/// application itself is still `GET /guilds/{id}/member-verification`.
-///
-/// It is what puts a submitted application back in front of the reader after a
-/// relaunch. Without it the request is invisible until they happen to open the
-/// invite again.
+/// icon, a description, the splash and the feature list. **This is what to draw
+/// the server with; whether and how the application stands is
+/// `OwnJoinRequest`**, which READY and the socket carry. Discord keeps the two in
+/// one store as two tables for the same reason (`212455`): the requests arrive
+/// at connect, and the servers are fetched when somebody opens the folder.
 public struct JoinRequestGuild: Hashable, Sendable, Identifiable {
     public var id: GuildID
     public var name: String
     public var iconHash: String?
     public var description: String?
+    /// The invite splash — what Discord's status page is drawn over.
+    public var splashHash: String?
+    public var features: Set<String>
 
     public init(
         id: GuildID,
         name: String,
         iconHash: String? = nil,
-        description: String? = nil
+        description: String? = nil,
+        splashHash: String? = nil,
+        features: Set<String> = []
     ) {
         self.id = id
         self.name = name
         self.iconHash = iconHash
         self.description = description
+        self.splashHash = splashHash
+        self.features = features
     }
 
     public var iconURL: URL? {
@@ -628,5 +727,86 @@ public struct JoinRequestGuild: Hashable, Sendable, Identifiable {
 
     public var monogram: String {
         String(name.split(separator: " ").prefix(2).compactMap(\.first)).uppercased()
+    }
+
+    /// Whether the server still takes applications — Discord's `canReapply`
+    /// on the denied page (`995198`), which is this feature and nothing else.
+    public var acceptsApplications: Bool {
+        features.contains("MEMBER_VERIFICATION_MANUAL_APPROVAL")
+    }
+}
+
+/// The reader's own application to a server — an entry in Discord's
+/// `UserGuildJoinRequestStore` (`212455`).
+///
+/// **READY carries these** as `guild_join_requests` (Discord's `CONNECTION_OPEN`
+/// reads `e.guild_join_requests ?? []`), and `GUILD_JOIN_REQUEST_CREATE` /
+/// `UPDATE` / `DELETE` keep them current. A submit, a withdraw and a reapply
+/// each answer with the request itself, which is what Discord's client stores.
+/// The object is the one the submit's `PUT` answered with, captured:
+/// `{"join_request_id":…, "guild_id":…, "user_id":…, "application_status":
+/// "SUBMITTED", "rejection_reason":null, "last_seen":null, …}`.
+public struct OwnJoinRequest: Hashable, Sendable, Identifiable {
+    public var guildID: GuildID
+    /// The request's own id — what acknowledging an approval names. Nil for
+    /// one filed from an answer that carried none.
+    public var requestID: JoinRequestID?
+    public var status: Status
+    /// The moderator's words, on a denial. Nil when they gave none.
+    public var rejectionReason: String?
+    /// Whether the reader has looked at the outcome — Discord's `last_seen`,
+    /// read only for being there.
+    public var isOutcomeSeen: Bool
+
+    public var id: GuildID { guildID }
+
+    public init(
+        guildID: GuildID,
+        requestID: JoinRequestID? = nil,
+        status: Status,
+        rejectionReason: String? = nil,
+        isOutcomeSeen: Bool = false
+    ) {
+        self.guildID = guildID
+        self.requestID = requestID
+        self.status = status
+        self.rejectionReason = rejectionReason
+        self.isOutcomeSeen = isOutcomeSeen
+    }
+
+    /// Discord's four (`513461`'s `B5`). STARTED is a reapply that has not
+    /// been sent yet: the request exists and the form is still open.
+    public enum Status: Hashable, Sendable {
+        case started
+        case submitted
+        case rejected
+        case approved
+        /// A status this client has not seen — drawn as Discord's own
+        /// fallthrough draws it, as an application still to finish.
+        case unknown(String)
+
+        public init(rawValue: String?) {
+            switch rawValue?.uppercased() {
+            case "STARTED": self = .started
+            case "SUBMITTED": self = .submitted
+            case "REJECTED": self = .rejected
+            case "APPROVED": self = .approved
+            case let other?: self = .unknown(other)
+            case nil: self = .unknown("")
+            }
+        }
+    }
+
+    /// Discord's `NK`: an approval the reader has already seen is finished
+    /// with, and leaves the store rather than being kept.
+    public var isSettled: Bool {
+        status == .approved && isOutcomeSeen
+    }
+
+    /// An approval nobody has acknowledged yet — what raises Discord's "You
+    /// are now a member of" (`renderMemberVerificationSuccessModal`), whose
+    /// button is the acknowledgement.
+    public var isUnseenApproval: Bool {
+        status == .approved && !isOutcomeSeen
     }
 }

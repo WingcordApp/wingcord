@@ -227,7 +227,7 @@ struct SurfaceGlyphView: View {
                 Text(character)
                     .font(.system(size: 15))
             case .symbol(let name):
-                Image(systemName: name)
+                Image(symbol: name)
                     .font(.system(.callout))
                     .foregroundStyle(isEmphasised ? AnyShapeStyle(Palette.accent) : AnyShapeStyle(Ink.tertiary))
             }
@@ -290,7 +290,7 @@ struct SurfaceNavigationRow: View {
 
                     if let destination {
                         HStack(spacing: 3) {
-                            Image(systemName: destinationSymbolName)
+                            Image(symbol: destinationSymbolName)
                                 .font(.system(.caption2))
                             Text(destination)
                                 .font(.system(.caption))
@@ -440,7 +440,7 @@ struct SurfaceEmptyState: View {
 
     var body: some View {
         VStack(spacing: Spacing.base) {
-            Image(systemName: symbol)
+            Image(symbol: symbol)
                 .font(.system(size: 30, weight: .light))
                 .foregroundStyle(Ink.quaternary)
             Text(title)
@@ -486,7 +486,7 @@ struct SurfaceFilledButton: View {
         Button(action: action) {
             HStack(spacing: Spacing.tight) {
                 if let systemImage {
-                    Image(systemName: systemImage)
+                    Image(symbol: systemImage)
                         .font(.system(.caption, weight: .semibold))
                 }
                 Text(title)
@@ -520,7 +520,7 @@ struct SurfaceQuietButton: View {
         Button(action: action) {
             HStack(spacing: Spacing.tight) {
                 if let systemImage {
-                    Image(systemName: systemImage)
+                    Image(symbol: systemImage)
                         .font(.system(.caption, weight: .semibold))
                 }
                 Text(title)

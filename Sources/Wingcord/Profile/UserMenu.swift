@@ -1,24 +1,29 @@
+import AppKit
 import SwiftUI
 import WingcordCore
 
 /// What a reader can do about a person.
 ///
-/// **One list, two levels, one surface.** Inviting somebody needs a server
-/// picked, and a nested popover for it would be a second window pointing at a
-/// row inside the first. The list swaps its contents instead — the same
-/// arrangement the report flow uses, for the same reason — so there is exactly
+/// **Two menus behind one view.** From a profile's ⋯ it is the profile's own
+/// list — the profile switches, Share Profile, Report. Right-clicked on a name,
+/// a face or a roster row it is Discord's member menu
+/// (`GuildChannelUserContextMenu`, `415073c3`): the person, then who they are
+/// to you, then their roles and their voice channel, then moderation — each
+/// group only where it has something in it.
+///
+/// **One list, several levels, one surface.** Inviting somebody needs a server
+/// picked, Roles is a list of checkboxes and Move to a list of channels; a
+/// nested popover for any of them would be a second window pointing at a row
+/// inside the first. The list swaps its contents instead, so there is exactly
 /// one glass body over the transcript at any moment.
 ///
 /// **The popover's own glass is its body**, and nothing is painted on it —
-/// `INVARIANTS.md` §4.9. A SwiftUI glass drawn on popover content samples
-/// the popover's own window, where nothing sits behind it, and comes out as
-/// a flat slab; the system's glass samples the app behind the window.
+/// `INVARIANTS.md` §4.9.
 struct UserMenu: View {
     /// What the menu can offer at the top, when it was opened from a profile.
     ///
     /// **Nil everywhere else**, which is the transcript, the roster and the
-    /// rail — those already open the profile by clicking the row, so an item
-    /// offering to do it again says nothing.
+    /// rail — those get Discord's member menu instead.
     struct ProfileOptions: Equatable {
         /// "View Full Profile", from the card. Nil on the full profile, which
         /// is already it.
@@ -47,278 +52,425 @@ struct UserMenu: View {
         case perServerProfile
     }
 
+    /// Which list is showing: the menu, or one of the three it leads to.
+    private enum Level: Hashable {
+        case root
+        case invite
+        case roles
+        case moveTo
+    }
+
     @Environment(AppModel.self) private var model
     @Environment(\.motion) private var motion
-    @State private var isPickingServer = false
-    @State private var hovered: String?
+    @State private var level = Level.root
 
     static let width: CGFloat = 236
-    private static let rowHeight: CGFloat = 30
 
     var body: some View {
-        // Read at the top, so an arriving relationship change or a profile's
-        // mutual-guild list invalidates this body rather than only the branch
-        // that happened to consult it.
+        // Read at the top, so an arriving relationship change, role write or
+        // voice state invalidates this body rather than only the branch that
+        // happened to consult it.
         let actions = model.userActions(for: userID)
-        let invitable = isPickingServer ? model.invitableGuilds(for: userID) : []
+        let server = guildID.flatMap { model.guildPersonMenu(for: userID, in: $0) }
 
         VStack(alignment: .leading, spacing: 0) {
-            if let actions {
-                if isPickingServer {
-                    serverPicker(invitable)
+            switch level {
+            case .root:
+                if profileOptions != nil {
+                    profileMenu(actions)
                 } else {
-                    rootMenu(actions)
+                    personMenu(actions, server: server)
                 }
-            } else {
-                // The reader's own card. Blocking, ignoring and reporting
-                // yourself are three controls with nothing behind them.
-                Text("Nothing to do here.")
-                    .font(.system(.subheadline))
-                    .foregroundStyle(Ink.tertiary)
-                    .padding(.horizontal, Spacing.snug)
-                    .frame(height: Self.rowHeight)
+            case .invite:
+                invitePicker
+            case .roles:
+                roleList
+            case .moveTo:
+                moveList(server?.moveTargets ?? [])
             }
         }
         .padding(.vertical, Spacing.tight)
         .frame(width: Self.width)
         // No material of its own: the popover's glass is the body — §4.9.
-        .animation(motion.fadeQuick, value: hovered)
-        .animation(motion.standard, value: isPickingServer)
+        .animation(motion.standard, value: level)
     }
 
-    // MARK: The list
+    // MARK: From a profile
 
     @ViewBuilder
-    private func rootMenu(_ actions: UserActions) -> some View {
-        if let options = profileOptions, options.opensFullProfile || options.alternateName != nil {
-            // Discord's own order: the profile items sit above everything, and
-            // they are the only items here that change what you are looking at
-            // rather than acting on the person.
-            if options.opensFullProfile {
-                row(
-                    id: "full-profile",
-                    title: "View Full Profile",
-                    symbolName: "person.crop.square",
-                    opensSurface: true
-                ) { onProfileOption?(.fullProfile) }
+    private func profileMenu(_ actions: UserActions?) -> some View {
+        if model.users[userID]?.isSystem == true {
+            // Discord's own account: its ID, for a developer, and nothing else.
+            FlyoutRow(title: "Copy User ID", symbolName: "number") {
+                AppModel.copy(userID.description)
+                model.userMenu = nil
             }
-            if let alternate = options.alternateName {
-                row(
-                    id: "switch-profile",
-                    title: options.showsMainProfile
-                        ? "View Per-server Profile"
-                        : "View Main Profile",
-                    subtitle: "AKA \(alternate)",
-                    symbolName: options.showsMainProfile
-                        ? "person.2"
-                        : "person",
-                    opensSurface: true
-                ) {
-                    onProfileOption?(
-                        options.showsMainProfile ? .perServerProfile : .mainProfile
-                    )
+        } else if let actions {
+            if let options = profileOptions, options.opensFullProfile || options.alternateName != nil {
+                // Discord's own order: the profile items sit above everything,
+                // and they are the only items here that change what you are
+                // looking at rather than acting on the person.
+                if options.opensFullProfile {
+                    FlyoutRow(title: "View Full Profile", symbolName: "person.crop.square", accessory: .disclosure) {
+                        onProfileOption?(.fullProfile)
+                    }
+                }
+                if let alternate = options.alternateName {
+                    FlyoutRow(
+                        title: options.showsMainProfile ? "View Per-server Profile" : "View Main Profile",
+                        subtitle: "AKA \(alternate)",
+                        symbolName: options.showsMainProfile ? "person.2" : "person",
+                        accessory: .disclosure
+                    ) {
+                        onProfileOption?(options.showsMainProfile ? .perServerProfile : .mainProfile)
+                    }
+                }
+                FlyoutDivider()
+            }
+            // Discord's own item (`share-profile`): the Share Profile sheet,
+            // which sends the profile's link wherever the reader picks.
+            FlyoutRow(title: "Share Profile", symbolName: "square.and.arrow.up", accessory: .disclosure) {
+                model.userMenu = nil
+                model.shareProfileRequest = ShareProfileRequest(userID: userID)
+            }
+            FlyoutDivider()
+            relationshipRows(actions)
+            FlyoutDivider()
+            FlyoutRow(
+                title: "Report User Profile",
+                symbolName: "flag",
+                accessory: .disclosure,
+                isDestructive: true
+            ) {
+                model.userMenu = nil
+                model.requestReport(of: userID, inGuild: guildID)
+            }
+            copyIDRow
+        } else {
+            // The reader's own card. Blocking, ignoring and reporting yourself
+            // are three controls with nothing behind them.
+            Text("Nothing to do here.")
+                .font(.system(.subheadline))
+                .foregroundStyle(Ink.tertiary)
+                .padding(.horizontal, Spacing.snug)
+                .frame(height: FlyoutMetrics.rowHeight)
+        }
+    }
+
+    // MARK: Right-clicked
+
+    @ViewBuilder
+    private func personMenu(_ actions: UserActions?, server: GuildPersonMenu?) -> some View {
+        let isSelf = userID == model.currentUserID
+        // Discord's own account has no full profile to open, or a note on it.
+        let isSystem = model.users[userID]?.isSystem == true
+        if !isSystem {
+            FlyoutRow(title: "Profile", symbolName: "person.crop.circle") { openFullProfile() }
+        }
+        if !isSelf {
+            FlyoutRow(title: "Message", symbolName: "bubble.left") {
+                model.userMenu = nil
+                model.messagePerson(userID)
+            }
+            if !isSystem {
+                FlyoutRow(
+                    title: model.note(for: userID).isEmpty ? "Add Note" : "Edit Note",
+                    subtitle: "Only visible to you",
+                    symbolName: "note.text"
+                ) { openFullProfile() }
+            }
+        }
+        if server?.nickname != nil || actions != nil {
+            FlyoutDivider()
+            if let guildID, let nickname = server?.nickname {
+                switch nickname {
+                case .change:
+                    FlyoutRow(title: "Change Nickname", symbolName: "pencil") {
+                        model.presentModeration(.nickname(userID, guildID))
+                    }
+                case .editOwnProfile:
+                    FlyoutRow(title: "Edit Per-server Profile", symbolName: "pencil") {
+                        model.userMenu = nil
+                        model.editPerServerProfile(in: guildID)
+                    }
                 }
             }
-            divider
+            if let actions {
+                relationshipRows(actions)
+            }
         }
-        // Discord's own item (`share-profile`): the Share Profile sheet, which
-        // sends the profile's link wherever the reader picks.
-        row(
-            id: "share-profile",
-            title: "Share Profile",
-            symbolName: "square.and.arrow.up",
-            opensSurface: true
-        ) {
-            model.userMenu = nil
-            model.shareProfileRequest = ShareProfileRequest(userID: userID)
+        if let server, server.roleCount != nil || !server.moveTargets.isEmpty {
+            FlyoutDivider()
+            if let count = server.roleCount {
+                FlyoutRow(title: count == 1 ? "Role" : "Roles", symbolName: "tag", accessory: .disclosure) {
+                    level = .roles
+                }
+            }
+            if !server.moveTargets.isEmpty {
+                FlyoutRow(title: "Move to", symbolName: "arrow.right.circle", accessory: .disclosure) {
+                    level = .moveTo
+                }
+            }
         }
-        divider
+        if let server, let guildID, server.hasModeration {
+            FlyoutDivider()
+            moderationRows(server, in: guildID)
+        }
+        copyIDRow
+    }
+
+    /// Discord's moderation group (`291247`), in its order.
+    @ViewBuilder
+    private func moderationRows(_ server: GuildPersonMenu, in guildID: GuildID) -> some View {
+        let moderation = server.moderation
+        if moderation.canOpenModView {
+            FlyoutRow(title: "Open in Mod View", symbolName: "shield.lefthalf.filled") {
+                model.openModView(for: userID, in: guildID)
+            }
+        }
+        if moderation.canVerify {
+            FlyoutRow(
+                title: moderation.isVerified ? "Unverify Member" : "Verify Member",
+                symbolName: moderation.isVerified ? "checkmark.seal.fill" : "checkmark.seal"
+            ) {
+                model.setVerified(!moderation.isVerified, of: userID, in: guildID)
+            }
+        }
+        if let voice = server.voice {
+            if voice.canMute {
+                FlyoutRow(
+                    title: "Server Mute",
+                    symbolName: "mic.slash",
+                    accessory: .checkbox(voice.isMuted),
+                    isDestructive: true
+                ) {
+                    model.moderateVoice(.mute(!voice.isMuted), of: userID, in: guildID)
+                }
+            }
+            if voice.canDeafen {
+                FlyoutRow(
+                    title: "Server Deafen",
+                    symbolName: "headphones",
+                    accessory: .checkbox(voice.isDeafened),
+                    isDestructive: true
+                ) {
+                    model.moderateVoice(.deafen(!voice.isDeafened), of: userID, in: guildID)
+                }
+            }
+            if voice.canDisconnect {
+                FlyoutRow(title: "Disconnect", symbolName: "phone.down", isDestructive: true) {
+                    model.moderateVoice(.disconnect, of: userID, in: guildID)
+                }
+            }
+        }
+        if moderation.canTimeout {
+            if moderation.isTimedOut {
+                FlyoutRow(
+                    title: "Remove Timeout From \(server.handle)",
+                    symbolName: "clock.badge.xmark",
+                    isDestructive: true
+                ) {
+                    model.presentModeration(.removeTimeout(userID, guildID))
+                }
+            } else {
+                FlyoutRow(title: "Timeout \(server.handle)", symbolName: "clock.badge.exclamationmark", isDestructive: true) {
+                    // Discord's shortcut: ⌘-click times out for sixty seconds
+                    // without asking.
+                    if NSEvent.modifierFlags.contains(.command) {
+                        model.quickTimeout(userID, in: guildID)
+                    } else {
+                        model.presentModeration(.timeout(userID, guildID))
+                    }
+                }
+            }
+        }
+        if moderation.canKick {
+            FlyoutRow(title: "Kick \(server.handle)", symbolName: "person.fill.xmark", isDestructive: true) {
+                model.presentModeration(.kick(userID, guildID))
+            }
+        }
+        if moderation.canBan {
+            FlyoutRow(title: "Ban \(server.handle)", symbolName: "hammer", isDestructive: true) {
+                model.presentModeration(.ban(userID, guildID))
+            }
+        }
+    }
+
+    // MARK: Shared rows
+
+    /// Invite to Server, the friend row, Ignore and Block.
+    @ViewBuilder
+    private func relationshipRows(_ actions: UserActions) -> some View {
         if actions.canInvite {
-            row(
-                id: "invite",
-                title: "Invite to Server",
-                symbolName: "person.badge.plus",
-                opensSurface: true
-            ) { isPickingServer = true }
-            divider
+            FlyoutRow(title: "Invite to Server", symbolName: "person.badge.plus", accessory: .disclosure) {
+                level = .invite
+            }
         }
         // **What this row says is decided by the relationship, not by the
         // caller.** Sending, accepting, withdrawing and unfriending are one
         // route and one slot — see `Relationship.friendActionTitle`.
-        if let title = actions.relationship.friendActionTitle {
-            row(
-                id: "friend",
+        if actions.offersFriendship, let title = actions.relationship.friendActionTitle {
+            FlyoutRow(
                 title: title,
                 symbolName: actions.relationship.friendActionSymbol,
-                isDestructive: actions.relationship.friendActionIsDestructive,
-                isBusy: actions.isBusy
+                accessory: actions.isBusy ? .busy : .none,
+                isDestructive: actions.relationship.friendActionIsDestructive
             ) { model.toggleFriend(with: userID) }
-            divider
         }
-        row(
-            id: "ignore",
+        FlyoutRow(
             title: actions.isIgnored ? "Stop Ignoring" : "Ignore",
             symbolName: actions.isIgnored ? "speaker.wave.2" : "speaker.slash",
-            isBusy: actions.isBusy
+            accessory: actions.isBusy ? .busy : .none
         ) { model.setIgnored(!actions.isIgnored, userID: userID) }
-        row(
-            id: "block",
+        FlyoutRow(
             title: actions.isBlocked ? "Unblock" : "Block",
             symbolName: "hand.raised",
-            isDestructive: !actions.isBlocked,
-            isBusy: actions.isBusy
+            accessory: actions.isBusy ? .busy : .none,
+            isDestructive: !actions.isBlocked
         ) { model.setBlocked(!actions.isBlocked, userID: userID) }
-        divider
-        row(
-            id: "report",
-            title: "Report User Profile",
-            symbolName: "flag",
-            isDestructive: true,
-            opensSurface: true
-        ) {
-            model.userMenu = nil
-            model.requestReport(of: userID, inGuild: guildID)
-        }
-        if actions.developerMode {
-            divider
-            row(id: "id", title: "Copy User ID", symbolName: "number") {
+    }
+
+    @ViewBuilder
+    private var copyIDRow: some View {
+        if AppSettings.shared.developerMode {
+            FlyoutDivider()
+            FlyoutRow(title: "Copy User ID", symbolName: "number") {
                 AppModel.copy(userID.description)
                 model.userMenu = nil
             }
         }
     }
 
+    private func openFullProfile() {
+        let anchor = model.userMenu?.anchor ?? .zero
+        model.userMenu = nil
+        model.openProfile(userID, anchor: anchor, depth: .full)
+    }
+
+    // MARK: The levels
+
     @ViewBuilder
-    private func serverPicker(_ guilds: [InvitableGuild]) -> some View {
-        row(id: "back", title: "Back", symbolName: "chevron.left") {
-            isPickingServer = false
-        }
-        divider
+    private var invitePicker: some View {
+        let guilds = model.invitableGuilds(for: userID)
+        FlyoutBackRow(title: "Invite to Server") { level = .root }
+        FlyoutDivider()
         if guilds.isEmpty {
             Text("No server you can invite to.")
                 .font(.system(.subheadline))
                 .foregroundStyle(Ink.tertiary)
                 .padding(.horizontal, Spacing.snug)
-                .frame(height: Self.rowHeight)
+                .frame(height: FlyoutMetrics.rowHeight)
         } else {
             // Capped, and scrollable past the cap: an account with ninety-seven
             // servers would otherwise draw a menu taller than the window.
             ScrollView {
                 VStack(spacing: 0) {
                     ForEach(guilds) { guild in
-                        serverRow(guild)
+                        InviteServerRow(guild: guild) {
+                            model.invite(userID, to: guild)
+                            model.userMenu = nil
+                        }
                     }
                 }
             }
-            .frame(maxHeight: 260)
+            .frame(maxHeight: FlyoutMetrics.listHeight)
+            .fixedSize(horizontal: false, vertical: true)
             .scrollBounceBehavior(.basedOnSize)
         }
     }
 
-    private func serverRow(_ guild: InvitableGuild) -> some View {
-        let id = "guild-\(guild.id.rawValue)"
-        return Button {
-            model.invite(userID, to: guild)
-            model.userMenu = nil
-        } label: {
+    /// Discord's Roles submenu (`180798`): every role the reader can give or
+    /// take, ticked where they hold it; a role they hold that the reader cannot
+    /// touch is listed and locked. Without Manage Roles, the roles they hold.
+    @ViewBuilder
+    private var roleList: some View {
+        FlyoutBackRow(title: "Roles") { level = .root }
+        FlyoutDivider()
+        if let guildID {
+            let roles = model.assignableRoles(for: userID, in: guildID)
+            let held = Set(model.members[guildID]?[userID]?.roleIDs ?? [])
+            let canEdit = model.moderationActions(for: userID, in: guildID).canManageRoles
+            ScrollView {
+                VStack(spacing: 0) {
+                    ForEach(roles, id: \.role.id) { entry in
+                        FlyoutRow(
+                            title: entry.role.name,
+                            dotColor: model.roleDotColor(entry.role),
+                            accessory: canEdit ? .checkbox(held.contains(entry.role.id)) : .none,
+                            isEnabled: canEdit && entry.isEnabled
+                        ) {
+                            model.setRole(entry.role.id, held: !held.contains(entry.role.id), of: userID, in: guildID)
+                        }
+                    }
+                }
+            }
+            .frame(maxHeight: FlyoutMetrics.listHeight)
+            .fixedSize(horizontal: false, vertical: true)
+            .scrollBounceBehavior(.basedOnSize)
+        }
+    }
+
+    @ViewBuilder
+    private func moveList(_ targets: [ChannelID]) -> some View {
+        FlyoutBackRow(title: "Move to") { level = .root }
+        FlyoutDivider()
+        if let guildID {
+            ScrollView {
+                VStack(spacing: 0) {
+                    ForEach(targets, id: \.self) { channelID in
+                        let channel = model.channelIndex[channelID]
+                        FlyoutRow(
+                            title: channel.map(model.displayName(of:)) ?? "",
+                            symbolName: channel?.kind.symbolName ?? "speaker.wave.2"
+                        ) {
+                            model.move(userID, to: channelID, in: guildID)
+                        }
+                    }
+                }
+            }
+            .frame(maxHeight: FlyoutMetrics.listHeight)
+            .fixedSize(horizontal: false, vertical: true)
+            .scrollBounceBehavior(.basedOnSize)
+        }
+    }
+}
+
+/// One server in the invite level: its icon, its name, and its own hover.
+private struct InviteServerRow: View {
+    var guild: InvitableGuild
+    var act: () -> Void
+
+    @Environment(\.motion) private var motion
+    @State private var isHovering = false
+
+    var body: some View {
+        Button(action: act) {
             HStack(spacing: Spacing.snug) {
                 AvatarView(url: guild.iconURL, monogram: guild.monogram, side: 20)
                 Text(guild.name)
                     .font(.system(.subheadline))
-                    .foregroundStyle(hovered == id ? Ink.primary : Ink.secondary)
+                    .foregroundStyle(isHovering ? Ink.primary : Ink.secondary)
                     .lineLimit(1)
                 Spacer(minLength: 0)
             }
             .padding(.horizontal, Spacing.snug)
-            .frame(height: Self.rowHeight)
+            .frame(minHeight: FlyoutMetrics.rowHeight)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background { highlight(id, isDestructive: false) }
-            .contentShape(.rect)
-        }
-        .buttonStyle(.plain)
-        .onHover { track(id, $0) }
-    }
-
-    private var divider: some View {
-        Rectangle()
-            .fill(Ink.quaternary)
-            .frame(height: 0.5)
-            .padding(.horizontal, Spacing.base)
-            .padding(.vertical, Spacing.tight)
-    }
-
-    private func row(
-        id: String,
-        title: String,
-        /// The quiet second line Discord puts under a profile-switch item —
-        /// "AKA Corvin KQZRA-TMWB". Nil for every ordinary row, which is all but
-        /// one of them, and the row then keeps its single-line height.
-        subtitle: String? = nil,
-        symbolName: String,
-        isDestructive: Bool = false,
-        isBusy: Bool = false,
-        opensSurface: Bool = false,
-        act: @escaping () -> Void
-    ) -> some View {
-        Button(action: act) {
-            HStack(spacing: Spacing.snug) {
-                Image(systemName: symbolName)
-                    .font(.system(size: 12, weight: .medium))
-                    .frame(width: 16)
-                VStack(alignment: .leading, spacing: 1) {
-                    Text(title)
-                        .font(.system(.subheadline))
-                        .lineLimit(1)
-                    if let subtitle {
-                        Text(subtitle)
-                            .font(.system(.caption))
-                            .foregroundStyle(Ink.tertiary)
-                            .lineLimit(1)
-                    }
-                }
-                Spacer(minLength: Spacing.base)
-                if isBusy {
-                    ProgressView().controlSize(.small)
-                } else if opensSurface {
-                    Image(systemName: "chevron.right")
-                        .font(.system(size: 9, weight: .semibold))
-                        .foregroundStyle(Ink.tertiary)
+            .background {
+                if isHovering {
+                    ConcentricRectangle()
+                        .fill(Palette.hoverFill)
+                        .padding(.horizontal, Spacing.tight)
                 }
             }
-            .foregroundStyle(
-                isDestructive
-                    ? AnyShapeStyle(Palette.destructive)
-                    : AnyShapeStyle(hovered == id ? Ink.primary : Ink.secondary)
-            )
-            .padding(.horizontal, Spacing.snug)
-            // **A minimum rather than a fixed height**, because one row carries
-            // two lines. A fixed 30 clips the subtitle to a sliver, which reads
-            // as a rendering fault; every single-line row is shorter than the
-            // minimum anyway, so none of them moves.
-            .padding(.vertical, subtitle == nil ? 0 : 4)
-            .frame(minHeight: Self.rowHeight)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background { highlight(id, isDestructive: isDestructive) }
             .contentShape(.rect)
         }
         .buttonStyle(.plain)
-        .disabled(isBusy)
-        .onHover { track(id, $0) }
-    }
-
-    @ViewBuilder
-    private func highlight(_ id: String, isDestructive: Bool) -> some View {
-        if hovered == id {
-            RoundedRectangle(cornerRadius: Radius.row, style: .continuous)
-                .fill(isDestructive ? Palette.destructive.opacity(0.18) : Palette.hoverFill)
-                .padding(.horizontal, Spacing.tight)
+        .onHover { hovering in
+            guard isHovering != hovering else { return }
+            isHovering = hovering
         }
-    }
-
-    private func track(_ id: String, _ isInside: Bool) {
-        let next = isInside ? id : (hovered == id ? nil : hovered)
-        guard next != hovered else { return }
-        hovered = next
+        .animation(motion.fadeQuick, value: isHovering)
     }
 }
 

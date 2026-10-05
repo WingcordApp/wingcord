@@ -53,7 +53,7 @@ struct ConnectionMark: View {
                         .fill(foreground)
                         .padding(side * 0.21)
                 } else {
-                    Image(systemName: fallbackSymbol)
+                    Image(symbol: fallbackSymbol)
                         .font(.system(size: side * 0.52, weight: .semibold))
                         .foregroundStyle(foreground)
                 }

@@ -413,7 +413,7 @@ struct ActivityDetailPage: View {
     private func chip(_ text: String, systemImage: String?) -> some View {
         HStack(spacing: Spacing.tight) {
             if let systemImage {
-                Image(systemName: systemImage).font(.system(.caption2))
+                Image(symbol: systemImage).font(.system(.caption2))
             }
             Text(text).font(.system(.caption, weight: .medium))
         }
@@ -564,7 +564,11 @@ struct ActivityDetailPage: View {
         } else if app.isLaunchable {
             let entryPoint = model.appEntryPoint(for: applicationID)
             HStack(spacing: Spacing.base) {
-                launchButton(app, entryPoint: entryPoint, inDirectMessage: false)
+                if isRunningHere {
+                    leaveButton
+                } else {
+                    launchButton(app, entryPoint: entryPoint, inDirectMessage: false)
+                }
                 if canLaunchInDirectMessage(entryPoint) {
                     launchButton(app, entryPoint: entryPoint, inDirectMessage: true)
                 }
@@ -687,6 +691,30 @@ struct ActivityDetailPage: View {
 
     /// `BOT_DM` in Discord's interaction-context enum.
     private static let botDirectMessageContext = 1
+
+    /// The reader is in this app's activity, here — where Discord's launch
+    /// button becomes Leave (`482030`'s `LEAVE`).
+    private var isRunningHere: Bool {
+        guard let running = model.runningActivity, let channelID else { return false }
+        return running.applicationID == applicationID && running.instance.location.channelID == channelID
+    }
+
+    /// Discord's Leave, in its critical variant — the stage's own leave.
+    private var leaveButton: some View {
+        Button {
+            Task { await model.sessionController.leaveActivity() }
+        } label: {
+            Text("Leave")
+                .font(.system(.subheadline, weight: .semibold))
+                .lineLimit(1)
+                .frame(maxWidth: .infinity)
+                .frame(height: Metrics.control)
+                .contentShape(.capsule)
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(.white)
+        .emphasisChrome(Palette.destructive)
+    }
 
     private func launchButton(
         _ app: ActivityApp,

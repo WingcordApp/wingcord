@@ -105,7 +105,7 @@ struct PinnedMessagesPane: View {
 
     private func notice(_ text: String, symbolName: String) -> some View {
         HStack(alignment: .top, spacing: Spacing.snug) {
-            Image(systemName: symbolName)
+            Image(symbol: symbolName)
                 .font(.system(size: 13))
                 .foregroundStyle(Ink.tertiary)
             Text(text)

@@ -175,6 +175,22 @@ public struct GuildSettings: Hashable, Sendable, Identifiable {
     /// been given any of them.
     public var isCommunity: Bool { features.contains("COMMUNITY") }
 
+    /// Whether the Engagement page offers Channel Summaries — Discord's
+    /// `432371`: the server is in the general release.
+    public var offersChannelSummaries: Bool { features.contains("SUMMARIES_ENABLED_GA") }
+
+    /// Whether an administrator has turned them on.
+    public var hasChannelSummaries: Bool { features.contains("SUMMARIES_ENABLED_BY_USER") }
+
+    /// Whether the Activity Feed shows here — Discord's `376261`: what an
+    /// administrator chose, and where nobody has, on for a server of fewer than
+    /// ten thousand members. An unknown count is off.
+    public func showsActivityFeed(memberCount: Int?) -> Bool {
+        if features.contains("ACTIVITY_FEED_ENABLED_BY_USER") { return true }
+        if features.contains("ACTIVITY_FEED_DISABLED_BY_USER") { return false }
+        return memberCount.map { $0 < 10_000 } ?? false
+    }
+
     /// Whether the tag pages may be offered at all.
     public var canSetTag: Bool { features.contains("GUILD_TAGS") }
 
@@ -206,6 +222,8 @@ public struct SystemChannelFlags: OptionSet, Hashable, Sendable {
     public static let suppressJoinNotificationReplies = SystemChannelFlags(rawValue: 1 << 3)
     public static let suppressRoleSubscriptionPurchaseNotifications = SystemChannelFlags(rawValue: 1 << 4)
     public static let suppressRoleSubscriptionPurchaseNotificationReplies = SystemChannelFlags(rawValue: 1 << 5)
+    /// "A voice hangout has started" — Discord's `512`.
+    public static let suppressVoiceSessionNotifications = SystemChannelFlags(rawValue: 1 << 9)
 
     /// The four the Engagement page offers, in the order it draws them.
     ///
@@ -218,6 +236,39 @@ public struct SystemChannelFlags: OptionSet, Hashable, Sendable {
         (.suppressPremiumSubscriptions, "Send a message when someone boosts this server."),
         (.suppressGuildReminderNotifications, "Send helpful tips for server setup."),
     ]
+
+    /// Every switch the Engagement page offers this server, in Discord's order
+    /// (`1e901507`'s `pF`): the four, the two about Server Subscriptions where
+    /// the server can sell them or one is already off, and the voice hangout.
+    ///
+    /// **The hangout's row is always offered.** Discord's waits on an
+    /// experiment or on the flag being set; neither is anything this client
+    /// can evaluate, and a row that appears only once its message is off is
+    /// one that cannot be put back.
+    public static func engagementRows(
+        features: Set<String>,
+        flags: SystemChannelFlags
+    ) -> [(flag: SystemChannelFlags, label: String)] {
+        // Discord's `936555`: it can sell subscriptions unless that was
+        // switched off.
+        let isMonetizable = !features.contains("CREATOR_MONETIZABLE_DISABLED")
+            && (features.contains("CREATOR_MONETIZABLE") || features.contains("CREATOR_MONETIZABLE_PROVISIONAL"))
+        var rows = engagementOrder
+        if isMonetizable || flags.contains(.suppressRoleSubscriptionPurchaseNotifications) {
+            rows.append((
+                .suppressRoleSubscriptionPurchaseNotifications,
+                "Send a message when someone purchases a Server Product or Server Subscription"
+            ))
+        }
+        if isMonetizable || flags.contains(.suppressRoleSubscriptionPurchaseNotificationReplies) {
+            rows.append((
+                .suppressRoleSubscriptionPurchaseNotificationReplies,
+                "Prompt members to reply to Server Subscription congratulation messages with a sticker"
+            ))
+        }
+        rows.append((.suppressVoiceSessionNotifications, "Send a message when a voice hangout has started."))
+        return rows
+    }
 
     /// Whether the message this flag suppresses is being sent.
     ///
@@ -244,7 +295,9 @@ public struct SystemChannelFlags: OptionSet, Hashable, Sendable {
 // first time an administrator saved any unrelated field on the same page.
 
 /// Who may talk in a server.
-public enum VerificationLevel: Hashable, Sendable {
+///
+/// `Codable` as the wire's integer, because `Guild` carries one.
+public enum VerificationLevel: Hashable, Sendable, Codable {
     case none
     case low
     case medium
@@ -272,6 +325,15 @@ public enum VerificationLevel: Hashable, Sendable {
         case .veryHigh: 4
         case .unrecognised(let value): value
         }
+    }
+
+    public init(from decoder: any Decoder) throws {
+        self.init(rawValue: try decoder.singleValueContainer().decode(Int.self))
+    }
+
+    public func encode(to encoder: any Encoder) throws {
+        var container = encoder.singleValueContainer()
+        try container.encode(rawValue)
     }
 
     public var title: String {
@@ -467,9 +529,9 @@ public enum GuildAccessMode: Hashable, Sendable, CaseIterable, Identifiable {
 
     public var detail: String {
         switch self {
-        case .inviteOnly: "People can join your server directly with an invite."
-        case .applyToJoin: "People must submit an application and be approved to join."
-        case .discoverable: "Anyone can join your server directly through Server Discovery."
+        case .inviteOnly: "People can join your server directly with an invite"
+        case .applyToJoin: "People must submit an application and be approved to join"
+        case .discoverable: "Anyone can join your server directly through Server Discovery"
         }
     }
 
@@ -481,16 +543,23 @@ public enum GuildAccessMode: Hashable, Sendable, CaseIterable, Identifiable {
         }
     }
 
-    /// What the server is currently set to.
+    /// What the server is currently set to — Discord's `N` (`816e9b48`),
+    /// read off the features alone.
     ///
-    /// Discovery wins over an application form, because a discoverable server
-    /// that also has a form is still one anybody can find — and the tile that
-    /// reads as selected should be the one describing how most people will
-    /// actually arrive.
-    public init(features: Set<String>, hasJoinForm: Bool) {
-        if features.contains("DISCOVERABLE") { self = .discoverable }
-        else if hasJoinForm { self = .applyToJoin }
-        else { self = .inviteOnly }
+    /// **An enabled form is not an application.** Rules Screening on an
+    /// invite-only server is an enabled form too, with one `TERMS` field; what
+    /// makes a server one that reviews who joins is the gate together with
+    /// `MEMBER_VERIFICATION_MANUAL_APPROVAL`. Discovery wins over both.
+    public init(features: Set<String>) {
+        if features.contains("DISCOVERABLE") {
+            self = .discoverable
+        } else if features.contains("MEMBER_VERIFICATION_GATE_ENABLED"),
+                  features.contains("MEMBER_VERIFICATION_MANUAL_APPROVAL")
+        {
+            self = .applyToJoin
+        } else {
+            self = .inviteOnly
+        }
     }
 }
 

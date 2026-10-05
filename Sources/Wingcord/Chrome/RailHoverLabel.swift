@@ -50,6 +50,9 @@ private struct RailHoverChip: View {
     var label: String
     /// Discord's mark before the name, for a server that wears one.
     var mark: GuildMark?
+    /// Discord's line under the name while the reader's application to the
+    /// server is not settled — "Membership In Review" and its siblings (`iJ`).
+    var membership: String?
     /// Who is in voice here. Empty for every tile that is not a server, and for
     /// every server with nobody in one — which is the common case and draws
     /// exactly the chip this has always drawn.
@@ -58,12 +61,14 @@ private struct RailHoverChip: View {
     /// The name's own band. **Unchanged**, so a chip with no rows is the same
     /// object it always was.
     static let height: CGFloat = 32
+    /// The band with the membership line under the name.
+    static let membershipHeight: CGFloat = 44
     /// One row of faces. Derived rather than measured, so the host can centre
     /// the chip on its tile with arithmetic — §2.
     static let rowHeight: CGFloat = 28
 
-    static func height(rows: Int) -> CGFloat {
-        height + CGFloat(rows) * rowHeight
+    static func height(rows: Int, hasMembership: Bool = false) -> CGFloat {
+        (hasMembership ? membershipHeight : height) + CGFloat(rows) * rowHeight
     }
 
     var body: some View {
@@ -113,13 +118,21 @@ private struct RailHoverChip: View {
             if let mark {
                 GuildMarkBadge(mark: mark, side: 20)
             }
-            Text(label)
-                .font(.system(.subheadline, weight: .semibold))
-                .foregroundStyle(Ink.primary)
-                .lineLimit(1)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(label)
+                    .font(.system(.subheadline, weight: .semibold))
+                    .foregroundStyle(Ink.primary)
+                    .lineLimit(1)
+                if let membership {
+                    Text(membership)
+                        .font(.system(.caption))
+                        .foregroundStyle(Ink.secondary)
+                        .lineLimit(1)
+                }
+            }
         }
         .padding(.horizontal, Spacing.snug)
-        .frame(height: Self.height, alignment: .leading)
+        .frame(height: membership == nil ? Self.height : Self.membershipHeight, alignment: .leading)
     }
 
     /// One row: what it is about, then the faces.
@@ -137,7 +150,7 @@ private struct RailHoverChip: View {
         listeners: Int? = nil
     ) -> some View {
         HStack(spacing: Spacing.base) {
-            Image(systemName: symbol)
+            Image(symbol: symbol)
                 .font(.system(size: 12, weight: .semibold))
                 .foregroundStyle(Ink.secondary)
                 .frame(width: 16)
@@ -249,14 +262,20 @@ private struct RailHoverLabelHost: ViewModifier {
                     // tiles in a memo that rebuilds on every message.
                     let presence = item.guildID.map(model.railHoverPresence(for:))
                         ?? RailHoverPresence()
+                    let membership = item.guildID
+                        .flatMap(model.railApplicationMark(for:))?.membershipLine
                     RailHoverChip(
                         label: item.label,
                         mark: item.guildID.flatMap { model.guilds[$0]?.mark },
+                        membership: membership,
                         presence: presence
                     )
                         .offset(
                             x: rect.maxX + Spacing.base,
-                            y: rect.midY - RailHoverChip.height(rows: presence.rowCount) / 2
+                            y: rect.midY - RailHoverChip.height(
+                                rows: presence.rowCount,
+                                hasMembership: membership != nil
+                            ) / 2
                         )
                         // Enter and exit along the same path — it grows out of
                         // the tile it names.

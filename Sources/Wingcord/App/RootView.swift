@@ -182,9 +182,9 @@ private struct ActionNoticeView: View {
         Group {
             if let notice {
                 HStack(spacing: Spacing.base) {
-                    Image(systemName: notice.kind == .failure ? "exclamationmark.triangle.fill" : "clock.fill")
+                    Image(symbol: Self.symbol(for: notice.kind))
                         .font(.system(.caption))
-                        .foregroundStyle(notice.kind == .failure ? AnyShapeStyle(Palette.destructive) : AnyShapeStyle(Ink.secondary))
+                        .foregroundStyle(Self.tint(for: notice.kind))
                     Text(notice.text)
                         .font(.system(.caption, weight: .medium))
                         .foregroundStyle(Ink.primary)
@@ -207,6 +207,22 @@ private struct ActionNoticeView: View {
         }
         .animation(motion.panel, value: notice)
         .allowsHitTesting(false)
+    }
+
+    private static func symbol(for kind: ActionNotice.Kind) -> String {
+        switch kind {
+        case .failure: "exclamationmark.triangle.fill"
+        case .scheduling: "clock.fill"
+        case .success: "checkmark.circle.fill"
+        }
+    }
+
+    private static func tint(for kind: ActionNotice.Kind) -> AnyShapeStyle {
+        switch kind {
+        case .failure: AnyShapeStyle(Palette.destructive)
+        case .scheduling: AnyShapeStyle(Ink.secondary)
+        case .success: AnyShapeStyle(Palette.affirmative)
+        }
     }
 }
 

@@ -17,6 +17,10 @@ struct ThreadBrowserPane: View {
 
     @Environment(AppModel.self) private var model
     @Environment(\.motion) private var motion
+    /// A right-click on a row. Presented once, at this pane's root — the rule
+    /// the window keeps (§2), for a list that lives in a popover of its own and
+    /// whose rows' rects are in that popover's space.
+    @State private var menuRequest: ThreadOptionsRequest?
 
     private static let width: CGFloat = 380
     private static let maximumHeight: CGFloat = 460
@@ -53,13 +57,31 @@ struct ThreadBrowserPane: View {
         .animation(motion.standard, value: presentation.rows.count)
         // The popover supplies the material; this must not add a second.
         .presentationBackground(.clear)
+        .popover(
+            item: $menuRequest,
+            attachmentAnchor: .rect(.rect(menuRequest?.anchor ?? .zero)),
+            arrowEdge: .trailing
+        ) { request in
+            ThreadOptionsMenu(threadID: request.threadID, place: .list, close: { menuRequest = nil })
+                .environment(model)
+                .presentationBackground(.clear)
+        }
     }
 
     private var header: some View {
         VStack(alignment: .leading, spacing: Spacing.base) {
-            Text("Threads")
-                .font(.system(.headline))
-                .foregroundStyle(Ink.primary)
+            HStack {
+                Text("Threads")
+                    .font(.system(.headline))
+                    .foregroundStyle(Ink.primary)
+                Spacer(minLength: 0)
+                // Discord's toolbar Create, for somebody who may start one.
+                if model.canStartThread(in: channelID) {
+                    MessageRequestButton(title: "Create", isProminent: true, isBusy: false) {
+                        startThread(location: "Thread Browser Toolbar")
+                    }
+                }
+            }
 
             // Asks the server, debounced. The route searches the whole channel
             // rather than the pages loaded — see `AppModel.setThreadSearch`.
@@ -90,30 +112,60 @@ struct ThreadBrowserPane: View {
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, Spacing.group)
         } else if presentation.loadFailed {
-            notice(
-                presentation.isFiltered
-                    ? "Could not search this channel's threads."
-                    : "Could not load this channel's threads.",
-                symbolName: "exclamationmark.triangle"
-            )
+            notice("Something went wrong.", symbolName: "exclamationmark.triangle")
         } else {
-            notice(
-                presentation.isFiltered
-                    ? "No thread here matches that."
-                    : "No threads here yet. Start one from a message's menu and it will show up.",
-                symbolName: presentation.isFiltered ? "magnifyingglass" : "text.bubble"
-            )
+            emptyState
         }
+    }
+
+    /// Discord's empty popout (`k`), for a channel with no threads and a
+    /// search that found none alike: the glyph, "There are no threads.", what
+    /// a thread is for, and Create Thread for somebody who may start one.
+    private var emptyState: some View {
+        VStack(spacing: Spacing.base) {
+            Image(symbol: DiscordGlyph.thread)
+                .font(.system(size: 36))
+                .foregroundStyle(Ink.tertiary)
+                .accessibilityHidden(true)
+            Text("There are no threads.")
+                .font(.system(.title3, weight: .semibold))
+                .foregroundStyle(Ink.primary)
+            Text("Stay focused on a conversation with a thread - a temporary text channel.")
+                .font(.system(.subheadline))
+                .foregroundStyle(Ink.secondary)
+                .multilineTextAlignment(.center)
+                .fixedSize(horizontal: false, vertical: true)
+            // Flat, as everything in a popover is — §4.9.
+            if model.canStartThread(in: channelID) {
+                MessageRequestButton(title: "Create Thread", isProminent: true, isBusy: false) {
+                    startThread(location: "Thread Browser Empty State")
+                }
+                .padding(.top, Spacing.tight)
+            }
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.horizontal, Spacing.margin)
+        .padding(.vertical, Spacing.group)
+    }
+
+    /// Discord closes the popout and opens New Thread beside the channel.
+    private func startThread(location: String) {
+        model.closeThreadBrowser()
+        model.startThread(in: channelID, location: location)
     }
 
     private func list(_ presentation: ThreadBrowserPresentation) -> some View {
         ScrollView {
             LazyVStack(spacing: Spacing.tight) {
                 ForEach(presentation.rows) { row in
-                    ThreadBrowserRowView(row: row) {
-                        model.closeThreadBrowser()
-                        model.openThread(row.id)
-                    }
+                    ThreadBrowserRowView(
+                        row: row,
+                        open: {
+                            model.closeThreadBrowser()
+                            model.openThread(row.id)
+                        },
+                        openMenu: { menuRequest = ThreadOptionsRequest(threadID: row.id, anchor: $0) }
+                    )
                 }
 
                 if presentation.hasMore {
@@ -136,7 +188,7 @@ struct ThreadBrowserPane: View {
 
     private func notice(_ text: String, symbolName: String) -> some View {
         HStack(alignment: .top, spacing: Spacing.snug) {
-            Image(systemName: symbolName)
+            Image(symbol: symbolName)
                 .font(.system(size: 13))
                 .foregroundStyle(Ink.tertiary)
             Text(text)
@@ -163,7 +215,7 @@ private struct ThreadSearchField: View {
             Image(systemName: "magnifyingglass")
                 .font(.system(.caption, weight: .medium))
                 .foregroundStyle(Ink.tertiary)
-            TextField("Search for a thread", text: $text)
+            TextField("Search for Thread Name", text: $text)
                 .textFieldStyle(.plain)
                 .font(.system(.subheadline))
             if !text.isEmpty {
@@ -191,6 +243,7 @@ private struct ThreadSearchField: View {
 private struct ThreadBrowserRowView: View {
     var row: ThreadBrowserRow
     var open: () -> Void
+    var openMenu: (CGRect) -> Void
 
     @Environment(\.motion) private var motion
     @State private var isHovered = false
@@ -221,6 +274,7 @@ private struct ThreadBrowserRowView: View {
             isHovered = hovering
         }
         .animation(motion.fadeQuick, value: isHovered)
+        .onSecondaryClick(inPopover: true, perform: openMenu)
         // One node with a plain label — §2. `.combine` still has to resolve
         // every descendant in order to merge it.
         .accessibilityElement(children: .ignore)
@@ -262,7 +316,7 @@ private struct ThreadBrowserRowView: View {
     }
 
     private func stateGlyph(_ symbol: String) -> some View {
-        Image(systemName: symbol)
+        Image(symbol: symbol)
             .font(.system(.caption2))
             .foregroundStyle(Ink.quaternary)
             .accessibilityHidden(true)

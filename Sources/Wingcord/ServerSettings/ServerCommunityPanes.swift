@@ -13,94 +13,154 @@ import WingcordNet
 struct CommunityPane: View {
     let store: ServerSettingsStore
 
+    @State private var isDisabling = false
+
+    /// Discord's Community Overview (`cw`) for a Community server, and its
+    /// Enable Community page (`cL`) for one that is not yet. Every word is
+    /// Discord's; each control saves as it changes.
     var body: some View {
         LoadableContent(store.settings) { settings in
             VStack(alignment: .leading, spacing: 0) {
                 if settings.isCommunity {
-                    channels(settings)
-                    language(settings)
-                    description(settings)
+                    communitySettings(settings)
+                    disableCommunity(settings)
                 } else {
-                    notCommunity
+                    EnableCommunityPitch()
+                    EnableCommunityCard(store: store)
                 }
             }
         }
     }
 
-    /// What this client will not do.
-    ///
-    /// Turning community on — see `EnableCommunityCard`.
-    private var notCommunity: some View {
-        EnableCommunityCard(store: store)
-    }
+    // MARK: Community Settings
 
-    private func channels(_ settings: GuildSettings) -> some View {
-        SettingsGroup("Channels Discord uses") {
-            SettingsCard {
-                picker(
-                    "Rules or guidelines",
-                    help: "Where your rules are written. New members are pointed at it.",
-                    selection: settings.rulesChannelID
-                ) { saveCommunity(settings, rules: .some($0)) }
-                CardDivider()
-                picker(
-                    "Community updates",
-                    help: "Where Discord posts notices for admins and moderators. "
-                        + "Worth making this one role-restricted.",
-                    selection: settings.publicUpdatesChannelID
-                ) { saveCommunity(settings, updates: .some($0)) }
-                CardDivider()
-                picker(
-                    "Safety notices",
-                    help: "Where Discord posts safety alerts about this server.",
-                    selection: settings.safetyAlertsChannelID
-                ) { saveCommunity(settings, safety: .some($0)) }
-            }
-        }
-    }
-
-    private func language(_ settings: GuildSettings) -> some View {
-        SettingsGroup("Primary language") {
-            SettingsCard {
-                SettingsPickerRow(
-                    title: "Language",
-                    help: "Used in discovery and in the notices Discord sends you.",
-                    options: GuildLocale.all.map { .init($0.code, $0.title) },
-                    selection: Binding(
-                        get: { settings.preferredLocale },
-                        set: { saveCommunity(settings, locale: $0) }
-                    )
-                )
-            }
-        }
-    }
-
-    private func description(_ settings: GuildSettings) -> some View {
-        SettingsGroup("Description") {
-            SettingsCard {
-                CommunityDescriptionField(settings: settings) { text in
-                    saveCommunity(settings, description: .some(text))
+    private func communitySettings(_ settings: GuildSettings) -> some View {
+        let isAdmin = store.permissions.contains(.administrator)
+        return VStack(alignment: .leading, spacing: 0) {
+            SettingsGroup("Community Settings") {
+                SettingsCard {
+                    DescribedRow(
+                        "Rules or guidelines channel",
+                        detail: Text("Please select the channel that hosts your rules. This channel will by default start from the top and will feature a special header.")
+                    ) {
+                        channelPicker(settings.rulesChannelID, title: "Rules or guidelines channel") {
+                            saveCommunity(settings, rules: .some($0))
+                        }
+                    }
+                    CardDivider()
+                    DescribedRow(
+                        "Community Updates Channel",
+                        detail: Text("This is the channel where Discord will send relevant updates for Community admins and moderators. As some info might be sensitive, we recommend selecting a role-restricted channel.")
+                    ) {
+                        // Discord lets only an administrator move it.
+                        channelPicker(settings.publicUpdatesChannelID, title: "Community Updates Channel", isEnabled: isAdmin) {
+                            saveCommunity(settings, updates: .some($0))
+                        }
+                    }
+                    CardDivider()
+                    DescribedRow(
+                        "Safety Notifications Channel",
+                        detail: Text("This is the channel where Discord will send you important safety updates about your server. As some info might be sensitive, we recommend selecting a role-restricted channel.")
+                    ) {
+                        channelPicker(settings.safetyAlertsChannelID, title: "Safety Notifications Channel") {
+                            saveCommunity(settings, safety: .some($0))
+                        }
+                    }
+                    CardDivider()
+                    DescribedRow(
+                        "Server Primary Language",
+                        detail: Text("This helps Discord customize features for you and your members.")
+                    ) {
+                        FlyoutPicker(
+                            selection: Binding(
+                                get: { settings.preferredLocale },
+                                set: { saveCommunity(settings, locale: $0) }
+                            ),
+                            options: GuildLocale.all.map(\.code),
+                            title: { code in GuildLocale.all.first { $0.code == code }?.title ?? code },
+                            accessibilityTitle: "Server Primary Language"
+                        )
+                    }
                 }
             }
-            SettingsFootnote(
-                "Shown on your server's listing and in invite previews. This is the "
-                    + "same description as the one on Server Profile."
+            SettingsGroup("Server Description") {
+                Text("Describe your community. This description will be displayed in external embeds of this server\u{2019}s invite link.")
+                    .font(SettingsType.rowSubtitle)
+                    .foregroundStyle(Ink.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.bottom, Spacing.snug)
+                SettingsCard {
+                    CommunityDescriptionField(settings: settings) { text in
+                        saveCommunity(settings, description: .some(text))
+                    }
+                }
+            }
+        }
+    }
+
+    private func disableCommunity(_ settings: GuildSettings) -> some View {
+        let isAdmin = store.permissions.contains(.administrator)
+        return SettingsGroup {
+            SettingsCard {
+                DescribedRow(
+                    "Disable Community",
+                    detail: Text("This will remove specific features for Community Servers, like Server Discovery and Server Insights.")
+                ) {
+                    Button("Disable Community", role: .destructive) {
+                        // Discord asks only where it would also leave Discovery.
+                        if settings.features.contains("DISCOVERABLE") {
+                            isDisabling = true
+                        } else {
+                            disable(settings)
+                        }
+                    }
+                    .buttonStyle(.glass)
+                    .controlSize(.small)
+                    .tint(Palette.destructive)
+                    .disabled(!isAdmin)
+                    .help(isAdmin ? "" : "Only server administrators are allowed to do this")
+                }
+            }
+        }
+        .confirmationDialog("Are you sure?", isPresented: $isDisabling) {
+            Button("Confirm", role: .destructive) { disable(settings) }
+            Button("Never Mind", role: .cancel) {}
+        } message: {
+            Text("Disabling Community will also remove your server from Server Discovery.")
+        }
+    }
+
+    /// Discord's `r`: the community features off, and the two channels it
+    /// set up released.
+    private func disable(_ settings: GuildSettings) {
+        var features = settings.features
+        features.remove("COMMUNITY")
+        features.remove("DISCOVERABLE")
+        features.remove("PREVIEW_ENABLED")
+        Task {
+            await store.saveCommunitySettings(
+                description: settings.description,
+                features: features,
+                preferredLocale: settings.preferredLocale,
+                rulesChannelID: nil,
+                publicUpdatesChannelID: nil,
+                safetyAlertsChannelID: settings.safetyAlertsChannelID
             )
         }
     }
 
-    private func picker(
-        _ title: String,
-        help: String,
-        selection: ChannelID?,
+    private func channelPicker(
+        _ selection: ChannelID?,
+        title: String,
+        isEnabled: Bool = true,
         set: @escaping @MainActor (ChannelID?) -> Void
     ) -> some View {
-        SettingsPickerRow(
-            title: title,
-            help: help,
-            options: [SettingsPickerRow<ChannelID?>.Option(nil, "None")]
-                + store.textChannels.map { .init($0.id, "#\($0.name)") },
-            selection: Binding(get: { selection }, set: set)
+        FlyoutPicker(
+            selection: Binding(get: { selection }, set: set),
+            options: [nil] + store.textChannels.filter { $0.kind == .text }.map { Optional($0.id) },
+            title: { id in id.flatMap { store.channelName($0) }.map { "#\($0)" } ?? "Select..." },
+            accessibilityTitle: title,
+            isEnabled: isEnabled
         )
     }
 
@@ -132,6 +192,52 @@ struct CommunityPane: View {
     }
 }
 
+/// Discord's Enable Community page (`cL`): what a Community Server is and
+/// what it gives, in its words, over the wizard that turns it on.
+private struct EnableCommunityPitch: View {
+    var body: some View {
+        VStack(alignment: .leading, spacing: Spacing.snug) {
+            Text("Are you building a Community?")
+                .font(.system(.title3, weight: .semibold))
+                .foregroundStyle(Ink.primary)
+            Text("Convert to a Community Server to access additional administrative tools that help you moderate and grow your server. [Learn more.](https://support.discord.com/hc/en-us/articles/14078261239831)")
+                .font(SettingsType.rowSubtitle)
+                .foregroundStyle(Ink.secondary)
+                .tint(Palette.accent)
+                .fixedSize(horizontal: false, vertical: true)
+            Text("Community Servers are larger spaces where people with shared interests can come together.")
+                .font(SettingsType.rowSubtitle)
+                .foregroundStyle(Ink.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            Text("Enabling Community does not make your server visible on Server Discovery. [Learn more here.](https://support.discord.com/hc/en-us/articles/360047132851)")
+                .font(SettingsType.rowSubtitle)
+                .foregroundStyle(Ink.secondary)
+                .tint(Palette.accent)
+                .fixedSize(horizontal: false, vertical: true)
+            SettingsCard {
+                benefit("Grow your community", Text("Apply to be in \(Text("Server Discovery").bold()) so more people can find your server directly on Discord."), tint: .green)
+                CardDivider()
+                benefit("Keep members engaged", Text("Access tools like \(Text("Server Insights").bold()) that can better help you moderate and keep your server engaged."), tint: .purple)
+                CardDivider()
+                benefit("Stay informed", Text("Get direct updates about new features built for communities from Discord."), tint: .red)
+            }
+            .padding(.top, Spacing.snug)
+        }
+        .padding(.bottom, SettingsMetrics.cardToHeader)
+    }
+
+    private func benefit(_ title: String, _ detail: Text, tint: Color) -> some View {
+        DescribedRow(title, detail: detail) {
+            Image(systemName: "checkmark.circle.fill")
+                .font(.system(size: 18))
+                .foregroundStyle(tint)
+                .accessibilityHidden(true)
+        } trailing: {
+            EmptyView()
+        }
+    }
+}
+
 /// Its own view so the draft text has somewhere to live across redraws.
 private struct CommunityDescriptionField: View {
     var settings: GuildSettings
@@ -141,7 +247,7 @@ private struct CommunityDescriptionField: View {
 
     var body: some View {
         EditableTextBlock(
-            placeholder: "What is this server about?",
+            placeholder: "Tell the world a bit about this server.",
             text: $text,
             committed: settings.description ?? "",
             characterLimit: 300
@@ -149,59 +255,6 @@ private struct CommunityDescriptionField: View {
             commit(text.isEmpty ? nil : text)
         }
         .task(id: settings.description) { text = settings.description ?? "" }
-    }
-}
-
-// MARK: - Onboarding
-
-/// The questions and default channels a new member starts with.
-///
-/// **`in_onboarding` is the pre-join / post-join split**, which nothing in the
-/// payload is named for. The capture has two prompts — one `true`, one `false` —
-/// and Discord's editor shows exactly those two under "Pre-join Questions" and
-/// "Post-join Questions" in that order. Read as "show this during the join flow"
-/// the flag is the same fact said in a way that does not tell you where the
-/// editor puts it.
-///
-/// The editor is `OnboardingEditor`. This page was read-only for two releases
-/// on a reason that turned out to be wrong: it said the PUT "replaces the whole
-/// ballot" and that a partial save would erase a server's questions.
-/// `community and onboarding.har` shows it **merges per field** — one request
-/// carrying only `default_channel_ids` left the prompts alone, one carrying only
-/// `prompts` left the channels alone, and one carrying only `enabled` left both.
-/// HANDOFF §SM.11 has the correction and the two things a new prompt needs: a
-/// client-minted millisecond-timestamp id, and its emoji sent twice.
-struct OnboardingPane: View {
-    let store: ServerSettingsStore
-
-    var body: some View {
-        LoadableContent(store.onboarding) { onboarding in
-            OnboardingEditor(store: store, onboarding: onboarding)
-        }
-    }
-}
-
-// MARK: - Server Guide
-
-/// The welcome, the first tasks and the pages new members are pointed at.
-///
-/// Read-only because the editor is not written. The route **is** captured, and
-/// unlike onboarding it really is a whole-object replace — the second captured
-/// PUT re-sends both tasks to add one. `guild_id` goes in the body and an absent
-/// emoji is `{}`. HANDOFF §SM.11.
-///
-/// **The welcome line carries `[@username]`**, which `ServerGuide.Welcome`
-/// already substitutes — the reader's side of this client has done that since
-/// the guide pages landed, and the editor confirms it from the other end: the
-/// stored string is `"Hey [@username] hope you will enjoy the server!"` and
-/// Discord's own editor renders "Hey @alex".
-struct GuideSettingsPane: View {
-    let store: ServerSettingsStore
-
-    var body: some View {
-        LoadableContent(store.serverGuide) { guide in
-            GuideEditor(store: store, guide: guide)
-        }
     }
 }
 
@@ -222,11 +275,11 @@ struct TemplatePane: View {
             VStack(alignment: .leading, spacing: 0) {
                 copies
 
-                SettingsGroup(template == nil ? "Create a template" : "Your template") {
+                SettingsGroup {
                     SettingsCard {
                         EditableTextRow(
-                            title: "Title",
-                            placeholder: "My server",
+                            title: "Template Title",
+                            placeholder: "Who is this server for? E.g. School Club, Artists\u{2019} Community",
                             text: $name,
                             committed: template?.name ?? ""
                         ) {
@@ -234,7 +287,7 @@ struct TemplatePane: View {
                         }
                         CardDivider()
                         EditableTextBlock(
-                            placeholder: "What is this template for?",
+                            placeholder: "What can people do in this server?",
                             text: $detail,
                             committed: template?.description ?? "",
                             characterLimit: 120
@@ -249,7 +302,7 @@ struct TemplatePane: View {
                 } else {
                     HStack {
                         Spacer()
-                        Button("Generate template") { commit(nil) }
+                        Button("Generate Template") { commit(nil) }
                             .buttonStyle(.glassProminent)
                             .disabled(name.trimmingCharacters(in: .whitespaces).isEmpty)
                     }
@@ -267,8 +320,8 @@ struct TemplatePane: View {
         SettingsGroup {
             SettingsCard {
                 HStack(alignment: .top, spacing: Spacing.group) {
-                    list("Templates copy", items: GuildTemplate.copies, symbol: "checkmark.circle.fill", tint: Palette.affirmative)
-                    list("They do not copy", items: GuildTemplate.doesNotCopy, symbol: "xmark.circle.fill", tint: Palette.destructive)
+                    list("Templates will copy:", items: GuildTemplate.copies, symbol: "checkmark.circle.fill", tint: Palette.affirmative)
+                    list("Templates will not copy:", items: GuildTemplate.doesNotCopy, symbol: "xmark.circle.fill", tint: Palette.destructive)
                 }
                 .padding(SettingsMetrics.cardContentInset)
             }
@@ -282,7 +335,7 @@ struct TemplatePane: View {
                 .foregroundStyle(Ink.tertiary)
             ForEach(items, id: \.self) { item in
                 HStack(alignment: .firstTextBaseline, spacing: Spacing.base) {
-                    Image(systemName: symbol)
+                    Image(symbol: symbol)
                         .font(.system(size: 11))
                         .foregroundStyle(tint)
                     Text(item)
@@ -296,16 +349,16 @@ struct TemplatePane: View {
     }
 
     private func link(_ template: GuildTemplate) -> some View {
-        SettingsGroup("Link") {
+        SettingsGroup {
             SettingsCard {
-                SettingsControlRow("Template link") {
+                SettingsControlRow("Template Link") {
                     HStack(spacing: Spacing.base) {
                         Text(template.url?.absoluteString ?? template.id)
                             .font(SettingsType.rowLabel.monospaced())
                             .foregroundStyle(Ink.secondary)
                             .lineLimit(1)
                             .truncationMode(.middle)
-                        Button(copied ? "Copied" : "Copy") {
+                        Button(copied ? "Copied!" : "Copy") {
                             guard let url = template.url else { return }
                             NSPasteboard.general.clearContents()
                             NSPasteboard.general.setString(url.absoluteString, forType: .string)
@@ -315,11 +368,6 @@ struct TemplatePane: View {
                         .controlSize(.small)
                     }
                 }
-                CardDivider()
-                SettingsValueRow(
-                    title: "Used",
-                    value: template.usageCount == 1 ? "once" : "\(template.usageCount) times"
-                )
                 // `is_dirty` is three-state: null means in step, true means
                 // behind, and there is no false on the wire. So Sync is offered
                 // on `true` alone rather than on "not false", which would offer
@@ -327,16 +375,16 @@ struct TemplatePane: View {
                 if template.isDirty == true {
                     CardDivider()
                     SettingsActionRow(
-                        "This template is behind your server",
-                        actionTitle: "Sync"
+                        "* You have unsynced changes. Update the channels, roles, and permissions in your template by syncing.",
+                        actionTitle: "Sync Template"
                     ) {
                         Task { await store.syncTemplate(template.id) }
                     }
                 }
                 CardDivider()
                 SettingsActionRow(
-                    "Delete this template",
-                    actionTitle: "Delete",
+                    "Delete Template",
+                    actionTitle: "Delete Template",
                     role: .destructive
                 ) {
                     deleting = true
@@ -345,9 +393,9 @@ struct TemplatePane: View {
         }
         .destructiveConfirmation(
             isPresented: $deleting,
-            title: "Delete this template?",
-            message: "The link stops working for everybody who has it.",
-            confirmTitle: "Delete"
+            title: "Delete Template",
+            message: "Are you sure you want to delete your template? This will prevent anyone with the link from using it.",
+            confirmTitle: "Delete Template"
         ) {
             Task { await store.deleteTemplate(template.id) }
         }
@@ -365,149 +413,6 @@ struct TemplatePane: View {
             }
         }
     }
-}
-
-// MARK: - The join application
-
-/// The questions somebody answers before they are let in.
-///
-/// Turning "Apply to Join" on sent `PATCH /guilds/{id}/member-verification` with
-/// `form_fields` and `enabled`. This was the first page on the surface to become
-/// editable when its capture arrived, which is `INVARIANTS.md` §5.5's rule that
-/// dimming has to be re-earned; onboarding and the guide followed later for the
-/// same reason.
-struct JoinFormEditor: View {
-    var form: JoinApplicationForm
-    var commit: (JoinApplicationForm) -> Void
-
-    @State private var draft: JoinApplicationForm?
-
-    private var working: JoinApplicationForm { draft ?? form }
-
-    var body: some View {
-        SettingsGroup("Join application") {
-            SettingsCard {
-                ForEach(Array(working.fields.enumerated()), id: \.element.id) { index, field in
-                    if index > 0 { CardDivider() }
-                    row(field, at: index)
-                }
-                if working.fields.count < JoinApplicationForm.maximumQuestions {
-                    CardDivider()
-                    SettingsActionRow(
-                        "Add a question",
-                        actionTitle: "Add"
-                    ) {
-                        var next = working
-                        next.fields.append(JoinApplicationForm.Field(label: ""))
-                        draft = next
-                    }
-                }
-            }
-
-            HStack(spacing: Spacing.base) {
-                Text("\(working.fields.count) of \(JoinApplicationForm.maximumQuestions) questions")
-                    .font(.system(.caption).monospacedDigit())
-                    .foregroundStyle(Ink.tertiary)
-                Spacer()
-                if isDirty {
-                    Button("Revert") { draft = nil }
-                        .buttonStyle(.plain)
-                        .font(.system(.caption))
-                        .foregroundStyle(Ink.tertiary)
-                    Button("Save questions") {
-                        var next = working
-                        next.fields.removeAll {
-                            $0.label.trimmingCharacters(in: .whitespaces).isEmpty
-                        }
-                        commit(next)
-                        draft = nil
-                    }
-                    .buttonStyle(.glass)
-                    .controlSize(.small)
-                }
-            }
-            .padding(.top, Spacing.base)
-
-            if !working.canEnable {
-                SettingsFootnote(
-                    "An application with no questions cannot be turned on.",
-                    symbolName: "exclamationmark.circle"
-                )
-            }
-            if working.fields.isEmpty {
-                exampleQuestions
-            }
-        }
-    }
-
-    private func row(_ field: JoinApplicationForm.Field, at index: Int) -> some View {
-        VStack(alignment: .leading, spacing: Spacing.base) {
-            HStack(spacing: Spacing.base) {
-                TextField(
-                    "Ask something…",
-                    text: Binding(
-                        get: { index < working.fields.count ? working.fields[index].label : "" },
-                        set: { text in
-                            var next = working
-                            guard index < next.fields.count else { return }
-                            next.fields[index].label = text
-                            draft = next
-                        }
-                    )
-                )
-                .textFieldStyle(.plain)
-                .font(SettingsType.rowLabel)
-                .disabled(!field.kind.isEditable)
-
-                Text(field.kind.title)
-                    .font(.system(.caption))
-                    .foregroundStyle(Ink.tertiary)
-
-                RowIconButton(symbolName: "trash", label: "Remove question", role: .destructive) {
-                    var next = working
-                    guard index < next.fields.count else { return }
-                    next.fields.remove(at: index)
-                    draft = next
-                }
-            }
-            if !field.kind.isEditable {
-                // A field type this client has not seen is shown and carried
-                // through a save untouched — dropping it would silently delete a
-                // question somebody built in Discord's own client.
-                Text("This question type is not editable here. It is kept as it is.")
-                    .font(.system(.caption))
-                    .foregroundStyle(Ink.tertiary)
-            }
-        }
-        .padding(.horizontal, SettingsMetrics.cardContentInset)
-        .padding(.vertical, Spacing.snug)
-    }
-
-    private var exampleQuestions: some View {
-        VStack(alignment: .leading, spacing: Spacing.base) {
-            Text("EXAMPLE QUESTIONS")
-                .font(.system(.caption, weight: .semibold))
-                .foregroundStyle(Ink.tertiary)
-            ForEach(JoinApplicationForm.exampleQuestions, id: \.self) { example in
-                Button {
-                    var next = working
-                    next.fields.append(JoinApplicationForm.Field(label: example))
-                    draft = next
-                } label: {
-                    Text(example)
-                        .font(SettingsType.rowSubtitle)
-                        .foregroundStyle(Ink.secondary)
-                        .padding(.horizontal, Spacing.snug)
-                        .padding(.vertical, 6)
-                        .background(SettingsSurface.controlTrough, in: .capsule)
-                }
-                .buttonStyle(.plain)
-            }
-        }
-        .padding(.top, Spacing.snug)
-    }
-
-    private var isDirty: Bool { draft != nil && draft?.fields != form.fields }
 }
 
 // MARK: - Turning Community on
@@ -530,6 +435,8 @@ struct EnableCommunityCard: View {
     @State private var rules: DiscordREST.CommunityChannel = .createForMe
     @State private var updates: DiscordREST.CommunityChannel = .createForMe
     @State private var hasAgreed = false
+    @State private var mentionsOnly = true
+    @State private var removesRiskyPermissions = true
 
     /// Discord requires both before it will convert. They are checkboxes rather
     /// than an implicit part of the save, because turning them on changes what
@@ -538,80 +445,113 @@ struct EnableCommunityCard: View {
     @State private var requiresVerifiedEmail = true
     @State private var scansAllMedia = true
 
+    /// Discord's three steps (`416def23`), in its words, on one page: Safety
+    /// checks, Setting up the basics, Finishing touches.
     var body: some View {
+        let settings = store.settings.value
         VStack(alignment: .leading, spacing: 0) {
-            SettingsGroup {
-                SettingsCard {
-                    VStack(alignment: .leading, spacing: Spacing.base) {
-                        Text("This server is not a Community server.")
-                            .font(SettingsType.rowTitle)
-                            .foregroundStyle(Ink.primary)
-                        Text(
-                            "Community brings a rules channel, onboarding, a Server "
-                                + "Guide and Discord's safety notices. It does not put "
-                                + "your server in Server Discovery."
-                        )
-                        .font(SettingsType.rowSubtitle)
-                        .foregroundStyle(Ink.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                    }
-                    .padding(SettingsMetrics.cardContentInset)
-                }
-            }
-
             SettingsGroup("Safety checks") {
+                Text("To ensure user safety, Community Servers must have the following moderation settings enabled.")
+                    .font(SettingsType.rowSubtitle)
+                    .foregroundStyle(Ink.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.bottom, Spacing.snug)
                 SettingsCard {
-                    SettingsToggle(
-                        title: "Members must have a verified email",
-                        help: "Members with a role are exempt.",
-                        isOn: $requiresVerifiedEmail
-                    )
+                    DescribedRow(
+                        "Verified email required.",
+                        detail: Text((settings?.verificationLevel.rawValue ?? 0) >= VerificationLevel.low.rawValue
+                            ? "Your server already meets or exceeds the verification level requirement."
+                            : "To minimize spam, members of the server must have a verified email before they can send messages. This does not apply to members with roles.")
+                    ) {
+                        Toggle("Verified email required.", isOn: $requiresVerifiedEmail)
+                            .toggleStyle(.checkbox)
+                            .labelsHidden()
+                    }
                     CardDivider()
-                    SettingsToggle(
-                        title: "Scan media from all members",
-                        help: "Discord deletes explicit media. Age-restricted "
-                            + "channels are exempt.",
-                        isOn: $scansAllMedia
-                    )
+                    DescribedRow(
+                        "Explicit Media Content Filter",
+                        detail: Text(settings?.explicitContentFilter == .allMembers
+                            ? "Your server already meets the media content filter requirement."
+                            : "Discord will automatically scan and delete media sent in this server that contain explicit content (excludes age-restricted channels).")
+                    ) {
+                        Toggle("Scan media content from all members.", isOn: $scansAllMedia)
+                            .toggleStyle(.checkbox)
+                    }
                 }
-                SettingsFootnote("Discord requires both before a server can convert.")
             }
 
-            SettingsGroup("Channels") {
+            SettingsGroup("Setting up the basics") {
+                Text("Tell us which channel has your server rules and which channel we should send announcements to!")
+                    .font(SettingsType.rowSubtitle)
+                    .foregroundStyle(Ink.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.bottom, Spacing.snug)
                 SettingsCard {
-                    channelPicker("Rules or guidelines", selection: $rules)
+                    DescribedRow(
+                        "Rules or Guidelines Channel",
+                        detail: Text("Community Servers must have clearly posted server rules and/or guidelines for members. Please select the channel that hosts this.")
+                    ) {
+                        channelPicker("Rules or Guidelines Channel", selection: $rules)
+                    }
                     CardDivider()
-                    channelPicker("Community updates", selection: $updates)
+                    DescribedRow(
+                        "Community Updates Channel",
+                        detail: Text("This is the channel where Discord will send relevant updates for Community admins and moderators. As some info might be sensitive, we recommend selecting a role-restricted channel.")
+                    ) {
+                        channelPicker("Community Updates Channel", selection: $updates)
+                    }
                 }
-                SettingsFootnote(
-                    "Choosing “Create one for me” has Discord make the channel and "
-                        + "link it — that is a real option on the route, not this "
-                        + "client filling in a blank."
-                )
             }
 
-            SettingsGroup("Agree") {
+            SettingsGroup("Finishing touches") {
+                Text("You\u{2019}re almost there! Here are some suggestions to help create a better experience for your members.")
+                    .font(SettingsType.rowSubtitle)
+                    .foregroundStyle(Ink.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.bottom, Spacing.snug)
                 SettingsCard {
-                    SettingsToggle(
-                        title: "This server follows Discord's Community Guidelines",
-                        isOn: $hasAgreed
-                    )
+                    Toggle(isOn: $mentionsOnly) {
+                        HStack(spacing: Spacing.tight) {
+                            Text("Set default settings to Mentions Only")
+                            InfoGlyph(help: "Because Community Servers tend to have a lot of people talking at once, defaulting Server Notifications for members to Mentions Only can help reduce members leaving. Members can always override this option.")
+                        }
+                    }
+                    .toggleStyle(.checkbox)
+                    .padding(SettingsMetrics.cardContentInset)
+                    CardDivider()
+                    Toggle(isOn: $removesRiskyPermissions) {
+                        HStack(spacing: Spacing.tight) {
+                            Text("Remove moderation permissions from @everyone")
+                            InfoGlyph(help: "This will remove the following permissions from the @everyone role: Administrator, Manage Server, Manage Channels, Manage Roles, Kick Members, Ban Members, Manage Messages, and Mention @everyone, @here, and All Roles.")
+                        }
+                    }
+                    .toggleStyle(.checkbox)
+                    .padding(SettingsMetrics.cardContentInset)
+                    CardDivider()
+                    DescribedRow(
+                        "Follow the rules",
+                        detail: Text("By setting your server as a Community Server, you agree that your server complies with our [Community Server Guidelines](https://support.discord.com/hc/en-us/articles/360035969312). Learn more about [Community Servers](https://support.discord.com/hc/en-us/articles/14078261239831).")
+                    ) {
+                        Toggle("I agree and understand", isOn: $hasAgreed)
+                            .toggleStyle(.checkbox)
+                    }
                 }
             }
 
             HStack {
                 Spacer()
-                Button("Enable Community") {
+                Button("Finish Setup") {
                     Task {
+                        if removesRiskyPermissions { await store.removeRiskyPermissions() }
                         await store.enableCommunity(
                             rules: rules,
                             updates: updates,
-                            // The two checkboxes above, in the values Discord's
-                            // own wizard sends: a verified email is verification
+                            // The checkboxes above, in the values Discord's own
+                            // wizard sends: a verified email is verification
                             // level 1, and scanning everybody is filter 2.
-                            verification: requiresVerifiedEmail ? .low : .none,
-                            notifications: .onlyMentions,
-                            explicitContent: scansAllMedia ? .allMembers : .disabled
+                            verification: requiresVerifiedEmail ? atLeastLow(settings?.verificationLevel) : (settings?.verificationLevel ?? .none),
+                            notifications: mentionsOnly ? .onlyMentions : (settings?.defaultMessageNotifications ?? .allMessages),
+                            explicitContent: scansAllMedia ? .allMembers : (settings?.explicitContentFilter ?? .disabled)
                         )
                     }
                 }
@@ -622,32 +562,29 @@ struct EnableCommunityCard: View {
         }
     }
 
+    /// A verified email at the least — a stricter level the server already
+    /// has is kept, as Discord's wizard keeps it.
+    private func atLeastLow(_ current: VerificationLevel?) -> VerificationLevel {
+        guard let current, current.rawValue > VerificationLevel.low.rawValue else { return .low }
+        return current
+    }
+
     private func channelPicker(
         _ title: String,
         selection: Binding<DiscordREST.CommunityChannel>
     ) -> some View {
-        SettingsControlRow(title) {
-            Menu {
-                Button("Create one for me") { selection.wrappedValue = .createForMe }
-                Divider()
-                ForEach(store.textChannels) { channel in
-                    Button("#\(channel.name)") {
-                        selection.wrappedValue = .existing(channel.id)
-                    }
-                }
-            } label: {
-                Text(label(selection.wrappedValue))
-                    .font(SettingsType.rowLabel)
-            }
-            .menuStyle(.borderlessButton)
-            .fixedSize()
-        }
+        FlyoutPicker(
+            selection: selection,
+            options: [.createForMe] + store.textChannels.filter { $0.kind == .text }.map { .existing($0.id) },
+            title: label,
+            accessibilityTitle: title
+        )
     }
 
     private func label(_ channel: DiscordREST.CommunityChannel) -> String {
         switch channel {
         case .createForMe: "Create one for me"
-        case .existing(let id): store.channelName(id).map { "#\($0)" } ?? "Choose"
+        case .existing(let id): store.channelName(id).map { "#\($0)" } ?? "Select..."
         }
     }
 }

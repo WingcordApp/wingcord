@@ -84,8 +84,16 @@ struct ProfileIdentityPanel: View {
                     .padding(.bottom, Spacing.snug)
                 }
                 bioSection
-                memberSince
-                roles
+                // An app's in Discord's Bio order: its links, its roles, when
+                // it was made, the note.
+                if profile.isBot {
+                    applicationLinks
+                    roles
+                    memberSince
+                } else {
+                    memberSince
+                    roles
+                }
                 connections
                 note
             }
@@ -444,11 +452,11 @@ struct ProfileIdentityPanel: View {
                         // long name reported its whole measured width and took
                         // the card out of the window with it, and with one it
                         // truncated where Discord wraps.
-                        maximumWidth: contentWidth - (profile.isBot ? 44 : 0),
+                        maximumWidth: contentWidth - (profile.nameTag.map { TagChip.width($0) + Spacing.base } ?? 0),
                         maximumLines: 2
                     )
                 }
-                if profile.isBot { TagChip(text: AppBadge.label(isVerified: profile.isVerifiedBot)) }
+                if let tag = profile.nameTag { TagChip(text: tag) }
                 Spacer(minLength: 0)
             }
 
@@ -510,7 +518,8 @@ struct ProfileIdentityPanel: View {
     /// ends of a rule, which reads as a life where two label/value rows read as
     /// a form.
     private var memberSince: some View {
-        section("Member Since", topGap: 22) {
+        // An app was made, not a member — Discord's "Created On".
+        section(profile.isBot ? "Created On" : "Member Since", topGap: 22) {
             ProfileDateSpan(moments: moments, pair: ground.accentPair)
         }
     }
@@ -550,15 +559,48 @@ struct ProfileIdentityPanel: View {
         return moments.sorted { $0.date < $1.date }
     }
 
+    /// An app's Terms of Service and Privacy Policy — Discord's "Links"
+    /// (`ea`), each with its glyph, and only where the app gave one.
+    @ViewBuilder
+    private var applicationLinks: some View {
+        let links = [
+            profile.application?.termsOfServiceURL.map { ("Terms of Service", "doc.text", $0) },
+            profile.application?.privacyPolicyURL.map { ("Privacy Policy", "lock.fill", $0) },
+        ].compactMap { $0 }
+        if !links.isEmpty {
+            section("Links", topGap: 22) {
+                VStack(alignment: .leading, spacing: Spacing.base) {
+                    ForEach(links, id: \.0) { title, symbol, url in
+                        Button { model.openExternal(url) } label: {
+                            Label {
+                                Text(title).font(.system(.subheadline, weight: .medium))
+                            } icon: {
+                                Image(symbol: symbol).frame(width: 20)
+                            }
+                            .foregroundStyle(InkColor.primary)
+                            .contentShape(.rect)
+                        }
+                        .buttonStyle(.plain)
+                        .help(url.absoluteString)
+                    }
+                }
+            }
+        }
+    }
+
     @ViewBuilder
     private var roles: some View {
-        if !profile.roles.isEmpty {
+        let editing = profile.showsMainProfile
+            ? nil
+            : profile.guild.flatMap { model.roleEditing(for: profile.userID, in: $0.id) }
+        if !profile.roles.isEmpty || editing?.addable.isEmpty == false {
             section("Roles", topGap: 22) {
                 RoleChipFlow(
                     roles: profile.roles,
                     maximumRows: nil,
                     width: contentWidth,
-                    size: .comfortable
+                    size: .comfortable,
+                    editing: editing
                 )
             }
         }
@@ -666,7 +708,11 @@ struct ProfileIdentityPanel: View {
                 .allowsHitTesting(false)
 
                 HStack(spacing: Spacing.base) {
-                    friendButton
+                    if profile.isBot {
+                        applicationButtons
+                    } else {
+                        friendButton
+                    }
                     // **Always drawn, never gated on an existing DM.** Opening
                     // one is `POST /users/@me/channels`, it is idempotent, and
                     // it is what this control has always meant — see
@@ -674,23 +720,25 @@ struct ProfileIdentityPanel: View {
                     circle("Message", "envelope.fill") {
                         model.messagePerson(profile.userID)
                     }
-                    circle("More actions", "ellipsis") { isMenuOpen.toggle() }
-                        .presentsUserMenu(
-                            for: profile.userID,
-                            inGuild: profile.guild?.id,
-                            profileOptions: .init(
-                                alternateName: profile.alternateName,
-                                showsMainProfile: profile.showsMainProfile
-                            ),
-                            onProfileOption: { option in
-                                switch option {
-                                case .fullProfile: break
-                                case .mainProfile: model.showMainProfile(true)
-                                case .perServerProfile: model.showMainProfile(false)
-                                }
-                            },
-                            isPresented: $isMenuOpen
-                        )
+                    if model.offersProfileMenu(for: profile.userID) {
+                        circle("More actions", "ellipsis") { isMenuOpen.toggle() }
+                            .presentsUserMenu(
+                                for: profile.userID,
+                                inGuild: profile.guild?.id,
+                                profileOptions: .init(
+                                    alternateName: profile.alternateName,
+                                    showsMainProfile: profile.showsMainProfile
+                                ),
+                                onProfileOption: { option in
+                                    switch option {
+                                    case .fullProfile: break
+                                    case .mainProfile: model.showMainProfile(true)
+                                    case .perServerProfile: model.showMainProfile(false)
+                                    }
+                                },
+                                isPresented: $isMenuOpen
+                            )
+                    }
                 }
                 .padding(6)
                 .glassEffect(.clear.tint(Palette.flyoutTint), in: .capsule)
@@ -698,6 +746,50 @@ struct ProfileIdentityPanel: View {
                 .padding(.bottom, 20)
             }
         }
+    }
+
+    /// An app's own verbs, in Discord's (`BotUserProfileModal`): Open App in a
+    /// conversation with an app, Add App anywhere else — only where the app has
+    /// somewhere to be added (`Ie`) — and Store where it has one.
+    @ViewBuilder
+    private var applicationButtons: some View {
+        if let application = profile.application {
+            if application.isInstallable {
+                let opens = model.isInDirectMessageWithApp
+                pill(opens ? "Open App" : "Add App", symbol: opens ? "square.grid.2x2" : "plus.app") {
+                    if opens {
+                        model.openApplicationLauncher(application.id)
+                    } else {
+                        model.addApplication(from: profile)
+                    }
+                }
+            }
+            if application.hasStorefront {
+                pill("Store", symbol: "bag") { model.openApplicationStore(application.id) }
+            }
+        }
+    }
+
+    /// One of the dock's labelled pills, in the friend pill's shape and ink.
+    private func pill(_ title: String, symbol: String, _ perform: @escaping () -> Void) -> some View {
+        Button(action: perform) {
+            HStack(spacing: 7) {
+                Image(symbol: symbol)
+                    .font(.system(size: 12, weight: .semibold))
+                Text(title)
+                    .font(.system(.subheadline, weight: .semibold))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.85)
+            }
+            .foregroundStyle(ground.buttonFill == nil ? AnyShapeStyle(InkColor.primary) : AnyShapeStyle(Color.white))
+            .frame(maxWidth: .infinity)
+            .frame(height: Metrics.profileDockControl)
+            .contentShape(.capsule)
+        }
+        .buttonStyle(.plain)
+        .background(ground.buttonFill.map { AnyShapeStyle($0) } ?? AnyShapeStyle(Color.clear), in: .capsule)
+        .modifier(NeutralFriendGlass(isPlain: ground.accentPair == nil))
+        .accessibilityLabel(Text(title))
     }
 
     /// Add Friend, Accept, Cancel or Remove — one control, because they are one
@@ -716,7 +808,7 @@ struct ProfileIdentityPanel: View {
         if let title = profile.relationship.friendActionTitle {
             Button { model.toggleFriend(with: profile.userID) } label: {
                 HStack(spacing: 7) {
-                    Image(systemName: profile.relationship.friendActionSymbol)
+                    Image(symbol: profile.relationship.friendActionSymbol)
                         .font(.system(size: 12, weight: .semibold))
                     Text(title)
                         .font(.system(.subheadline, weight: .semibold))
@@ -779,7 +871,7 @@ struct ProfileIdentityPanel: View {
         _ perform: @escaping () -> Void
     ) -> some View {
         Button(action: perform) {
-            Image(systemName: symbolName)
+            Image(symbol: symbolName)
                 .font(.system(size: 13, weight: .semibold))
                 .foregroundStyle(InkColor.primary)
                 .frame(width: Metrics.profileDockControl, height: Metrics.profileDockControl)
@@ -1039,7 +1131,7 @@ struct ProfileDateSpan: View {
                 ConnectionMark(service: symbolName, side: 13)
             }
         } else if let symbolName = moment.symbolName {
-            Image(systemName: symbolName)
+            Image(symbol: symbolName)
                 .font(.system(size: 9))
                 .foregroundStyle(InkColor.tertiary)
                 .frame(width: 13, height: 13)

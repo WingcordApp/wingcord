@@ -410,6 +410,9 @@ public final class UserDecoration: Hashable, Sendable, Codable {
     public let primaryGuildTag: String?
     public let primaryGuildBadgeHash: String?
     public let primaryGuildID: GuildID?
+    /// An app's own facts, which its profile carries and no other route —
+    /// nil for a person, and for an app until its profile has answered.
+    public let application: ProfileApplication?
 
     public init(
         avatarDecorationHash: String? = nil,
@@ -433,7 +436,8 @@ public final class UserDecoration: Hashable, Sendable, Codable {
         isProfilePrivate: Bool = false,
         primaryGuildTag: String? = nil,
         primaryGuildBadgeHash: String? = nil,
-        primaryGuildID: GuildID? = nil
+        primaryGuildID: GuildID? = nil,
+        application: ProfileApplication? = nil
     ) {
         self.avatarDecorationHash = avatarDecorationHash
         self.avatarDecorationSKU = avatarDecorationSKU
@@ -457,6 +461,7 @@ public final class UserDecoration: Hashable, Sendable, Codable {
         self.primaryGuildTag = primaryGuildTag
         self.primaryGuildBadgeHash = primaryGuildBadgeHash
         self.primaryGuildID = primaryGuildID
+        self.application = application
     }
 
     /// The fuller of two decorations, field by field.
@@ -516,7 +521,8 @@ public final class UserDecoration: Hashable, Sendable, Codable {
                 : existing.primaryGuildBadgeHash,
             primaryGuildID: incoming.primaryGuildTag != nil
                 ? incoming.primaryGuildID
-                : existing.primaryGuildID
+                : existing.primaryGuildID,
+            application: incoming.application ?? existing.application
         )
         return merged.isEmpty ? nil : merged
     }
@@ -532,7 +538,7 @@ public final class UserDecoration: Hashable, Sendable, Codable {
             && profileEffectSKU == nil && profileFrameSKU == nil && pronouns == nil
             && connectedAccounts.isEmpty && premiumTier == .none
             && legacyUsername == nil && mutualGuilds.isEmpty && mutualFriends.isEmpty
-            && !isProfilePrivate
+            && !isProfilePrivate && application == nil
     }
 
     public static func == (lhs: UserDecoration, rhs: UserDecoration) -> Bool {
@@ -557,7 +563,8 @@ public final class UserDecoration: Hashable, Sendable, Codable {
                 && lhs.isProfilePrivate == rhs.isProfilePrivate
                 && lhs.primaryGuildTag == rhs.primaryGuildTag
                 && lhs.primaryGuildBadgeHash == rhs.primaryGuildBadgeHash
-                && lhs.primaryGuildID == rhs.primaryGuildID)
+                && lhs.primaryGuildID == rhs.primaryGuildID
+                && lhs.application == rhs.application)
     }
 
     public func hash(into hasher: inout Hasher) {

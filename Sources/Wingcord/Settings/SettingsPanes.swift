@@ -436,6 +436,7 @@ private struct ServerThemePreferenceCard: View {
 // MARK: - Messages
 
 private struct MessagesPane: View {
+    @Environment(AppModel.self) private var model
     @State private var settings = AppSettings.shared
 
     var body: some View {
@@ -462,6 +463,16 @@ private struct MessagesPane: View {
                     title: "Load images automatically",
                     help: "Turn this off to fetch attachments only when you open them.",
                     isOn: $settings.loadsImagesAutomatically
+                )
+                CardDivider()
+                // Discord's own setting (`CHAT_THREADS_SPLIT_VIEW`), synced
+                // with the account — see `SyncedPreferences`.
+                SettingsToggle(
+                    title: "Open threads in split view",
+                    isOn: Binding(
+                        get: { model.syncedPreferences.opensThreadsInSplitView },
+                        set: { model.setOpensThreadsInSplitView($0) }
+                    )
                 )
             }
         }

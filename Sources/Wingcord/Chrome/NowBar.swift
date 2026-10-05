@@ -277,7 +277,7 @@ private struct NowBarControl: View {
 
     var body: some View {
         Button(action: action) {
-            Image(systemName: systemImage)
+            Image(symbol: systemImage)
                 .font(.system(.footnote, weight: .medium))
                 .foregroundStyle(isActive ? AnyShapeStyle(accent) : AnyShapeStyle(Ink.primary))
                 .frame(width: Metrics.compactControl, height: Metrics.compactControl)

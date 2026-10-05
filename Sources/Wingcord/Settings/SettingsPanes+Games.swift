@@ -109,7 +109,7 @@ struct ActivityPane: View {
                         model.applyActivityPrivacy(.sharingScope(scope))
                     } label: {
                         SettingsControlRow(scope.title) {
-                            Image(systemName: isSelected(scope)
+                            Image(symbol: isSelected(scope)
                                 ? "largecircle.fill.circle" : "circle")
                                 .font(.system(size: 15))
                                 .foregroundStyle(
@@ -470,7 +470,7 @@ private struct WidgetRow: View {
             layout.setPinned(!isPinned, for: kind)
             controller.layout = layout
         } label: {
-            Image(systemName: isPinned ? "pin.fill" : "pin.slash")
+            Image(symbol: isPinned ? "pin.fill" : "pin.slash")
                 .font(.system(size: 12))
                 // Secondary rather than tertiary when unpinned: measured
                 // against the card it sat on, tertiary was too close to the

@@ -173,6 +173,8 @@ enum UserSettingsProto {
         // to do both would put the splice's safety argument in the middle of the
         // folder decode.
         let privacy = ActivityPrivacyProto.decode(data)
+        var preferences = SyncedPreferences()
+        preferences.apply(SyncedPreferencesProto.decode(data))
         return ClientSettings(
             folders: folders,
             guildPositions: guildPositions,
@@ -187,7 +189,8 @@ enum UserSettingsProto {
             privacyRaw: privacy.raw,
             statusRaw: privacy.statusRaw,
             serverThemes: serverThemes,
-            inboxCollapse: inboxCollapse
+            inboxCollapse: inboxCollapse,
+            preferences: preferences
         )
     }
 

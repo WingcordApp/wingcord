@@ -83,10 +83,10 @@ struct EmbedLayoutTests {
     /// (`max-content`), so only a long one shows where the cap is.
     private let notes = String(repeating: "Everything that changed in this release, and why. ", count: 6)
 
-    @Test("A card is capped at the embed width, never the column's")
+    @Test("A card is capped at Discord's 516 and its rule, never the column's")
     func widthIsCapped() {
         let slot = layout(Embed(title: "Release", description: notes), width: 900)
-        #expect(slot.rect.width == Metrics.embedMaxWidth)
+        #expect(slot.rect.width == EmbedLayoutEngine.ruleWidth + EmbedLayoutEngine.maxWidth)
     }
 
     @Test("A narrow column shrinks the card rather than overflowing it")
@@ -452,5 +452,61 @@ struct EmbedLayoutTests {
         let narrowTitle = withThumb.texts[0].block.size.width
         #expect(narrowTitle < wideTitle)
     }
-}
 
+    // MARK: Discord's measures (`198496`)
+
+    @Test("A thumbnail is fitted inside 80 by 80, never cropped; one of no known shape is the square")
+    func thumbnailKeepsItsShape() throws {
+        let wide = layout(Embed(
+            title: "Wide",
+            thumbnail: Embed.Media(url: "https://example.test/w.png", width: 1600, height: 900)
+        ), width: 600)
+        let box = try #require(wide.images.first?.rect)
+        #expect(box.size == CGSize(width: 80, height: 45))
+        let unknown = layout(Embed(title: "Unknown", thumbnail: Embed.Media(url: "https://example.test/u.png")))
+        #expect(unknown.images.first?.rect.size == CGSize(width: 80, height: 80))
+    }
+
+    @Test("Ten above the first part, sixteen under the last, and sixteen above the media")
+    func padding() throws {
+        let titled = layout(Embed(title: "Release"))
+        let title = try #require(titled.texts.first)
+        #expect(title.origin.y == origin.y + 10)
+        #expect(titled.rect.maxY == title.origin.y + title.block.size.height + 16)
+
+        let pictured = layout(Embed(
+            title: "Release",
+            image: Embed.Media(url: "https://example.test/i.png", width: 800, height: 400)
+        ), width: 600)
+        let heading = try #require(pictured.texts.first)
+        let picture = try #require(pictured.images.first)
+        #expect(picture.rect.minY == heading.origin.y + heading.block.size.height + 16)
+        #expect(picture.corner == EmbedLayoutEngine.cardCorner)
+    }
+
+    @Test("The description is Discord's text-sm, the title its 1rem")
+    func typeSizes() throws {
+        let slot = layout(Embed(title: "Release", description: "What changed"))
+        func size(_ index: Int) throws -> CGFloat {
+            let text = slot.texts[index].block.text.attributed
+            let font = try #require(text.attribute(.font, at: 0, effectiveRange: nil) as? NSFont)
+            return font.pointSize
+        }
+        #expect(try size(0) == style.bodyFont.pointSize)
+        #expect(abs(try size(1) - style.bodyFont.pointSize * EmbedLayoutEngine.smallScale) < 0.01)
+    }
+
+    @Test("The footer's time is in the transcript's calendar words")
+    func footerStamp() {
+        let slot = EmbedLayoutEngine.layout(
+            Embed(timestamp: Date(timeIntervalSince1970: 0), footer: Embed.Footer(text: "Bot")),
+            origin: origin,
+            availableWidth: 400,
+            style: style,
+            mentions: MentionContext(),
+            parser: MarkdownParser(),
+            footerStamp: "Today at 4:21 AM"
+        )
+        #expect(slot.texts.last?.block.text.attributed.string == "Bot \u{2022} Today at 4:21 AM")
+    }
+}

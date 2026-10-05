@@ -476,6 +476,7 @@ final class SessionController {
         model.drafts.close()
         model.currentUserID = nil
         model.entitlements = AccountEntitlements()
+        model.accountVerification = nil
         model.mentionableIDs = []
         model.guilds = [:]
         model.channelIndex = ChannelIndex()
@@ -537,6 +538,17 @@ final class SessionController {
         model.notesInFlight = []
         model.relationshipsInFlight = []
         model.suppressedAckChannelID = nil
+        // Applications are the account's, and so is everything drawn of them.
+        model.ownJoinRequests = [:]
+        model.joinRequestGuilds = []
+        model.isPendingApplicationsOpen = false
+        model.showsApplicationCoachmark = false
+        model.isApplicationCoachmarkQueued = false
+        model.reapplyingGuildIDs = []
+        model.joinRequestMenu = nil
+        model.withdrawApplicationRequest = nil
+        model.approvedApplication = nil
+        model.welcomeScreenNotice = nil
         // A call does not survive a sign-out: the media session belongs to the
         // account whose token opened it.
         voice.leave()
@@ -689,10 +701,16 @@ final class SessionController {
             "ready: premium_type=\(snapshot.premiumType.map(String.init) ?? "absent") "
             + "age_status=\(snapshot.ageVerificationStatus.map(String.init) ?? "absent")"
         )
+        // **Also worth keeping: never captured off a real READY.** Discord's
+        // client reads `guild_join_requests` from it; an account with an
+        // application out that reads `join_requests=0` here means the list
+        // arrives some other way.
+        Self.trace("ready: join_requests=\(snapshot.joinRequests.count)")
         model.entitlements = model.entitlements.updated(
             premiumType: snapshot.premiumType,
             ageVerificationStatus: snapshot.ageVerificationStatus
         )
+        if let verification = snapshot.accountVerification { model.accountVerification = verification }
 
         var readStates = snapshot.readStates
         for channelID in snapshot.mutedChannelIDs {
@@ -756,6 +774,7 @@ final class SessionController {
         // Whose theme a themed server is drawn in. See `GuildThemeSource`.
         model.serverThemePreferences = snapshot.settings.serverThemes
         model.inboxCollapse = snapshot.settings.inboxCollapse
+        model.syncedPreferences = snapshot.settings.preferences
         // A new session may have missed summaries while it was away.
         model.markSummariesStale()
         model.mutedGuildIDs = snapshot.mutedGuildIDs
@@ -784,11 +803,12 @@ final class SessionController {
         model.presenceRevision &+= 1
         model.identityRevision &+= 1
         model.connectionState = .ready
-        // **Nothing in READY mentions an outstanding application**, so this is
-        // the one fetch that has to follow it: without it a submitted
-        // application is invisible across a relaunch and the tag card offers
-        // to apply again. See `JoinRequestGuild`.
-        loadJoinRequestGuilds()
+        // **READY carries the reader's applications** — `guild_join_requests`,
+        // which Discord's `CONNECTION_OPEN` files whole. The servers they are
+        // to are asked for when the folder that draws them opens, as Discord's
+        // are; an open folder is asked for now.
+        model.ownJoinRequests = snapshot.joinRequests
+        if model.isPendingApplicationsOpen { loadJoinRequestGuildsIfNeeded() }
         voice.gatewayDidReconnect()
 
         // A new gateway session starts with no lists and no subscriptions —
@@ -985,6 +1005,7 @@ final class SessionController {
         case .messageDeleted(let messageID, let channelID):
             model.mutateBox(channelID) { $0.remove(messageID) }
             model.messageContentRevision &+= 1
+            model.applyOpenerDeleted(messageID, in: channelID)
 
         case .voiceStateChanged(let state, let member, let user):
             voice.apply(state: state, member: member, user: user)
@@ -1162,6 +1183,8 @@ final class SessionController {
 
         case .guildRemoved(let guildID, let wasLeft):
             guard wasLeft else { return }
+            // Discord's applicant store forgets a server it is removed from.
+            model.ownJoinRequests[guildID] = nil
             model.guildEmojis[guildID] = nil
             model.guildStickers[guildID] = nil
             model.expressionRevision &+= 1
@@ -1227,6 +1250,21 @@ final class SessionController {
         case .membersChunk(let guildID, let members, let users, let presences):
             ingestMembers(members, users: users, presences: presences, inGuild: guildID)
 
+        case .memberRemoved(let guildID, let userID):
+            // A kick, a ban or a leave. The roster's own list op takes them out
+            // of the drawn list; this takes them out of the member table every
+            // gate and profile reads.
+            removeMember(userID, from: guildID)
+
+        case .bulkBanFinished(let guildID, let banned, let failed):
+            applyBulkBanOutcome(in: guildID, banned: banned, failed: failed)
+
+        case .joinRequestChanged(let request, let userID):
+            applyJoinRequestEvent(request, userID: userID)
+
+        case .joinRequestRemoved(let guildID, let userID):
+            removeJoinRequest(guildID, userID: userID)
+
         case .memberListUpdated(let update):
             ingestMembers(
                 update.members, users: update.users, presences: update.presences,
@@ -1254,12 +1292,15 @@ final class SessionController {
             model.sidebarRevision &+= 1
             model.railRevision &+= 1
 
-        case .currentUserUpdated(let user, let premiumType, let ageVerificationStatus):
+        case .currentUserUpdated(let user, let premiumType, let ageVerificationStatus, let verification):
             model.users[user.id] = user.merged(over: model.users[user.id])
             model.entitlements = model.entitlements.updated(
                 premiumType: premiumType,
                 ageVerificationStatus: ageVerificationStatus
             )
+            // Confirming an e-mail from its link lands here, which is what lets
+            // an open application form take its row's tick without reopening.
+            if let verification { model.accountVerification = verification }
             model.identityRevision &+= 1
 
         case .friendNicknameChanged(let userID, let nickname):
@@ -1275,10 +1316,11 @@ final class SessionController {
             if let nonce = modal.nonce { model.pendingInteractions[nonce] = nil }
             model.interactionModal = InteractionModalState(modal: modal, answers: modal.initialAnswers)
 
-        case .guildFoldersChanged(let settings):
+        case .userSettingsChanged(let folders, let preferences):
             // The rail rearranged in another client — or the echo of this
             // one's own write, which changes nothing it has not already drawn.
-            applyFolderSettings(settings)
+            if let folders { applyFolderSettings(folders) }
+            model.syncedPreferences.apply(preferences)
 
         case .guildSettingsChanged(let guildID, let pinned, let muted, let settings):
             // **Only the private-channel entry carries pins**, and it is the
@@ -1834,7 +1876,7 @@ final class SessionController {
     /// **Merged, never replaced.** A roster user carries no bio, no banner and
     /// no badges, so writing one straight over a profile-fetched record wipes
     /// the card the reader is looking at.
-    private func ingestMembers(
+    func ingestMembers(
         _ members: [UserID: Member],
         users: [UserID: User],
         presences: [UserID: Presence],
@@ -1994,6 +2036,15 @@ final class SessionController {
                 if !missing.isEmpty { await loadGames(ids: missing) }
             } catch {
                 Self.trace("guild profile \(guildID) failed: \(Self.describe(error))")
+                // Discord's two answers (`109026`): 50001 is a server that
+                // limited who sees its profile; anything else is a failure
+                // the card offers to try again.
+                let isLimited = switch error as? DiscordREST.Failure {
+                case .forbidden(let code): code == 50001 || code == nil
+                case .api(_, let code, _): code == 50001
+                default: false
+                }
+                model.guildProfileRefusals[guildID] = isLimited ? .limited : .failed
             }
         }
     }
@@ -2053,6 +2104,45 @@ final class SessionController {
             model.requestJump(to: messageID, in: channelID, highlights: highlights)
             return
         }
+        reanchor(channelID, at: .message(messageID), highlights: highlights)
+    }
+
+    /// Discord's Jump To Top: a thread's first message, fetched from the very
+    /// start of the channel — Discord's own target is message "0".
+    ///
+    /// **Not a jump to the thread's own id.** A forum post's opening message
+    /// shares the post's id, but a thread started from a message does not: its
+    /// id is that message's, in the parent, and nothing in the thread has it.
+    func jumpToStart(of channelID: ChannelID) {
+        if let box = model.messages(in: channelID), !box.hasMoreHistory, let first = box.messages.first {
+            model.requestJump(to: first.id, in: channelID, highlights: false)
+            return
+        }
+        reanchor(channelID, at: .start, highlights: false)
+    }
+
+    /// Discord's Jump to Surrounding, on an AutoMod alert: the member's
+    /// channel at the moment AutoMod acted, which is the alert's own id — and
+    /// no message in that channel has it, so the transcript lands on the one
+    /// nearest it, unlit.
+    func jumpToSurrounding(_ moment: MessageID, in channelID: ChannelID) {
+        model.selectChannel(channelID)
+        reanchor(channelID, at: .near(moment), highlights: false)
+    }
+
+    /// Where a re-anchored transcript is centred.
+    private enum JumpAnchor {
+        /// Around one message — a link, a reply, a search result.
+        case message(MessageID)
+        /// Around a moment no message has, landing on the nearest one.
+        case near(MessageID)
+        /// The channel's first page.
+        case start
+    }
+
+    /// Replaces a transcript with one page fetched where the reader is going,
+    /// then lands on it.
+    private func reanchor(_ channelID: ChannelID, at anchor: JumpAnchor, highlights: Bool) {
         guard jumpFetches.insert(channelID).inserted else { return }
         model.mutateBox(channelID) { box in
             box.isLoadingHistory = true
@@ -2062,18 +2152,30 @@ final class SessionController {
             guard let self else { return }
             defer { jumpFetches.remove(channelID) }
             do {
-                let page = try await rest.messages(in: channelID, around: messageID)
+                let page = switch anchor {
+                case .message(let messageID), .near(let messageID):
+                    try await rest.messages(in: channelID, around: messageID)
+                case .start: try await rest.messages(in: channelID, after: MessageID(rawValue: 0))
+                }
                 absorb(page)
-                // **A jump can leave the transcript cut off from the present**,
-                // and this is where it finds out: Discord's own arithmetic over
-                // where the target landed in the page.
-                let edges = TranscriptWindow.edges(
-                    ofAround: page.messages.map(\.id),
-                    wireCount: page.wireCount,
-                    target: messageID,
-                    limit: DiscordREST.historyPageSize,
-                    newestInChannel: model.channelIndex[channelID]?.lastMessageID
-                )
+                let newest = model.channelIndex[channelID]?.lastMessageID
+                let edges: (older: Bool, newer: Bool) = switch anchor {
+                case .message(let messageID), .near(let messageID):
+                    // **A jump can leave the transcript cut off from the
+                    // present**, and this is where it finds out: Discord's own
+                    // arithmetic over where the target landed in the page.
+                    TranscriptWindow.edges(
+                        ofAround: page.messages.map(\.id),
+                        wireCount: page.wireCount,
+                        target: messageID,
+                        limit: DiscordREST.historyPageSize,
+                        newestInChannel: newest
+                    )
+                case .start:
+                    // Nothing is older than the first page. A full one stops
+                    // short of the present unless it holds the newest message.
+                    (false, page.wireCount >= DiscordREST.historyPageSize && page.messages.last?.id != newest)
+                }
                 model.mutateBox(channelID) { box in
                     box.receiveAround(page.messages, edges: edges)
                     box.isLoadingHistory = false
@@ -2085,9 +2187,19 @@ final class SessionController {
                 resolveInvites(in: page.messages)
                 resolveUserCards(in: page.messages, inGuild: model.channelIndex.guildID(of: channelID))
                 resolveMessageMembers(in: page.messages, channelID: channelID)
-                model.requestJump(to: messageID, in: channelID, highlights: highlights)
+                let target: MessageID? = switch anchor {
+                case .message(let messageID): messageID
+                // The first at or after the moment, else the last before it.
+                case .near(let moment):
+                    page.messages.filter { $0.id >= moment }.min { $0.id < $1.id }?.id
+                        ?? page.messages.max { $0.id < $1.id }?.id
+                case .start: page.messages.first?.id
+                }
+                if let target {
+                    model.requestJump(to: target, in: channelID, highlights: highlights)
+                }
             } catch {
-                Self.trace("jump \(messageID) failed: \(Self.describe(error))")
+                Self.trace("jump in \(channelID) failed: \(Self.describe(error))")
                 model.mutateBox(channelID) { box in
                     box.isLoadingHistory = false
                     box.historyFailure = Self.describe(error)
@@ -2730,6 +2842,13 @@ extension SessionController {
     /// about a page nobody looked at is a request spent on nothing.
     func guildDidOpen(_ guildID: GuildID) {
         guildPrefetchTask?.cancel()
+        // A server the reader is not in — an application's page — has nothing
+        // here to ask about, and every one of these routes would refuse.
+        guard model.guilds[guildID] != nil else {
+            if model.isJoinRequestShown { loadJoinRequestGuildsIfNeeded() }
+            return
+        }
+        model.offerApprovedApplicationIfNeeded(guildID)
         guildPrefetchTask = Task { [weak self] in
             // Long enough that stepping through the rail asks about nothing,
             // short enough that stopping on a server has its rows before the
@@ -2917,7 +3036,7 @@ extension SessionController {
             guard let self else { return }
             defer { rulesSubmissions.remove(guildID) }
             do {
-                let outcome = try await rest.agreeToRules(verification, inGuild: guildID)
+                let outcome = try await rest.submitJoinApplication(.agreeing(to: verification))
                 switch outcome {
                 case .approved:
                     if let userID = model.currentUserID {

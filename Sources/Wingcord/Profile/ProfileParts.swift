@@ -181,7 +181,7 @@ struct BadgeRow: View {
     }
 
     private func symbol(_ badge: ProfileBadge) -> some View {
-        Image(systemName: badge.symbolName)
+        Image(symbol: badge.symbolName)
             .font(.system(.caption))
             .foregroundStyle(InkColor.secondary)
     }
@@ -392,7 +392,7 @@ struct ConnectionChip: View {
                 // looked like a link and opened nothing is the inert control
                 // §5.5 is about. An arrow means "this leaves the app"; a
                 // document means "this goes on the pasteboard".
-                Image(systemName: affordance)
+                Image(symbol: affordance)
                     .font(.system(size: 7.5, weight: .bold))
                     .foregroundStyle(InkColor.tertiary)
                     .opacity(isHovering ? 1 : 0.5)
@@ -731,6 +731,11 @@ struct MutualFriendsList: View {
 struct TagChip: View {
     var text: String
 
+    /// What the chip takes beside a name, so the name can leave it room.
+    static func width(_ text: String) -> CGFloat {
+        (TimelineLayoutEngine.measure(text, font: AppBadge.font) + 12).rounded(.up)
+    }
+
     var body: some View {
         Text(text)
             .font(.system(size: 9, weight: .bold))
@@ -816,7 +821,10 @@ struct GuildTagChip: View {
                             isOpen = false
                             model.openGameProfile($0)
                         },
-                        enterGuild: { model.enterGuild($0) }
+                        enterGuild: {
+                            isOpen = false
+                            model.enterGuild($0)
+                        }
                     )
                     // The card supplies its own ground, so the popover must
                     // supply none — two materials in series read as frost.
@@ -881,6 +889,10 @@ struct RoleChipFlow: View {
     /// panel under a 26-point name wants the handoff's own capsule — 13-point
     /// label, nine-point dot, a full round. One shape, one number.
     var size: Size = .compact
+    /// The × on each role the reader may take off and the + after them —
+    /// nil for everybody without Manage Roles, and on every surface that only
+    /// shows.
+    var editing: RoleEditing?
 
     enum Size: Equatable {
         case compact
@@ -937,7 +949,7 @@ struct RoleChipFlow: View {
         let shown = visibleCount
         FlowLayout(spacing: Spacing.tight) {
             ForEach(roles.prefix(shown)) { role in
-                chip(role)
+                RoleChip(role: role, size: size, remove: removal(of: role))
             }
             // **The count is a button, and so is the arrow that puts it back.**
             // `+8` used to be a label: a card holding forty-six roles said so
@@ -951,6 +963,9 @@ struct RoleChipFlow: View {
             } else if isExpanded, maximumRows != nil {
                 RoleCollapseChip { isExpanded = false }
             }
+            if let editing, !editing.addable.isEmpty {
+                RoleAddChip(roles: editing.addable, showsLabel: roles.isEmpty, size: size, add: editing.add)
+            }
         }
         .animation(motion.standard, value: isExpanded)
         // A new person is a new set of roles, and an expansion the reader made
@@ -958,21 +973,59 @@ struct RoleChipFlow: View {
         .onChange(of: roles) { isExpanded = false }
     }
 
-    private func chip(_ role: ProfileRole) -> some View {
+    private func removal(of role: ProfileRole) -> (() -> Void)? {
+        guard let editing, editing.removable.contains(role.id) else { return nil }
+        return { editing.remove(role.id) }
+    }
+}
+
+/// One role, as a chip.
+///
+/// **Where the reader may take it off, the dot becomes a × under the
+/// pointer** — Discord's own arrangement (`f935efd0`), which keeps a list of
+/// forty roles from carrying forty buttons nobody asked to see. VoiceOver gets
+/// the same act as a named action, because a control that exists only under a
+/// hovering pointer does not exist for it.
+struct RoleChip: View {
+    var role: ProfileRole
+    var size: RoleChipFlow.Size
+    /// Takes the role off. Nil where the reader cannot.
+    var remove: (() -> Void)?
+
+    @Environment(\.motion) private var motion
+    @State private var isHovering = false
+
+    var body: some View {
         // **The enhanced role style, which a boosted server buys.** Discord
         // paints the name with `linear-gradient(to right, c1, c2, c1)` clipped
         // to the glyphs, and gives the dot the same stops. Every field it needs
         // has been on `Role` since the role editor was written and nothing has
         // ever drawn it.
         let stops = role.gradientStops
-        return HStack(spacing: RoleChipFit.dotGap) {
-            Group {
-                if let stops {
-                    Circle().fill(LinearGradient(
-                        colors: stops, startPoint: .leading, endPoint: .trailing
-                    ))
-                } else {
-                    Circle().fill(role.colorValue.map { Color(hex: $0) } ?? Palette.presenceOffline)
+        let showsRemove = remove != nil && isHovering
+        HStack(spacing: RoleChipFit.dotGap) {
+            ZStack {
+                Group {
+                    if let stops {
+                        Circle().fill(LinearGradient(
+                            colors: stops, startPoint: .leading, endPoint: .trailing
+                        ))
+                    } else {
+                        Circle().fill(role.colorValue.map { Color(hex: $0) } ?? Palette.presenceOffline)
+                    }
+                }
+                .opacity(showsRemove ? 0 : 1)
+                if showsRemove, let remove {
+                    Button(action: remove) {
+                        Image(systemName: "xmark")
+                            .font(.system(size: size.dotSide, weight: .heavy))
+                            .foregroundStyle(InkColor.primary)
+                    }
+                    .buttonStyle(.plain)
+                    // The glyph is the dot's size; the target is not.
+                    .contentShape(.rect.inset(by: -4))
+                    .help("Remove Role")
+                    .transition(.opacity)
                 }
             }
             .frame(width: size.dotSide, height: size.dotSide)
@@ -1006,6 +1059,106 @@ struct RoleChipFlow: View {
             .clear.tint(Palette.flyoutTint),
             in: size == .compact ? AnyShape(.rect(cornerRadius: 7)) : AnyShape(.capsule)
         )
+        .onHover { hovering in
+            guard remove != nil, isHovering != hovering else { return }
+            isHovering = hovering
+        }
+        .animation(motion.fadeQuick, value: isHovering)
+        .accessibilityElement(children: .combine)
+        .accessibilityActions {
+            if let remove {
+                Button("Remove role \(role.name)", action: remove)
+            }
+        }
+    }
+}
+
+/// The + after somebody's roles — Discord's "Add role" (`$` in `f935efd0`),
+/// spelled out when they hold none, opening the roles the reader could give.
+struct RoleAddChip: View {
+    var roles: [ProfileRole]
+    var showsLabel: Bool
+    var size: RoleChipFlow.Size
+    var add: (RoleID) -> Void
+
+    @State private var isPicking = false
+
+    var body: some View {
+        Button { isPicking = true } label: {
+            HStack(spacing: RoleChipFit.dotGap) {
+                Image(systemName: "plus")
+                    .font(.system(size: size.dotSide + 1, weight: .bold))
+                if showsLabel {
+                    Text("Add role").font(size.font)
+                }
+            }
+            .foregroundStyle(InkColor.secondary)
+            .padding(.horizontal, size.horizontalPadding)
+            .padding(.vertical, size.verticalPadding)
+            .contentShape(.rect)
+        }
+        .buttonStyle(.plain)
+        .glassEffect(
+            .clear.tint(Palette.flyoutTint),
+            in: size == .compact ? AnyShape(.rect(cornerRadius: 7)) : AnyShape(.capsule)
+        )
+        .help("Add role")
+        .accessibilityLabel(Text("Add role"))
+        .popover(isPresented: $isPicking, arrowEdge: .bottom) {
+            RolePickerList(roles: roles) { roleID in
+                isPicking = false
+                add(roleID)
+            }
+        }
+    }
+}
+
+/// Discord's role picker (`465738`): a field that filters as it is typed,
+/// over the roles on offer, each with its dot. Picking one is the act.
+struct RolePickerList: View {
+    var roles: [ProfileRole]
+    var pick: (RoleID) -> Void
+
+    @State private var query = ""
+    @FocusState private var isFocused: Bool
+
+    private var matches: [ProfileRole] {
+        let needle = query.trimmingCharacters(in: .whitespaces).lowercased()
+        guard !needle.isEmpty else { return roles }
+        return roles.filter { $0.name.lowercased().contains(needle) }
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            TextField("Role", text: $query)
+                .textFieldStyle(.plain)
+                .font(.system(.subheadline))
+                .focused($isFocused)
+                .onSubmit {
+                    if let first = matches.first { pick(first.id) }
+                }
+                .padding(.horizontal, Spacing.snug)
+                .frame(height: FlyoutMetrics.rowHeight)
+                .accessibilityLabel(Text("Add Role"))
+            FlyoutDivider()
+            ScrollView {
+                VStack(spacing: 0) {
+                    ForEach(matches) { role in
+                        FlyoutRow(
+                            title: role.name,
+                            dotColor: role.colorValue.map { Color(hex: $0) } ?? Palette.presenceOffline
+                        ) { pick(role.id) }
+                    }
+                }
+                .padding(.bottom, Spacing.tight)
+            }
+            .scrollBounceBehavior(.basedOnSize)
+            .frame(maxHeight: FlyoutMetrics.listHeight)
+            .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(.top, Spacing.tight)
+        .frame(width: 240)
+        .onAppear { isFocused = true }
     }
 }
 

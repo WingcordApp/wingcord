@@ -191,7 +191,7 @@ struct VoiceControl: View {
 
     var body: some View {
         Button(action: action) {
-            Image(systemName: systemImage)
+            Image(symbol: systemImage)
                 .font(.system(isCompact ? .footnote : .subheadline, weight: .medium))
                 .foregroundStyle(isActive ? AnyShapeStyle(accent) : AnyShapeStyle(Ink.primary))
                 .frame(width: side, height: side)
@@ -238,7 +238,7 @@ struct VoiceQualityLine: View {
 
     var body: some View {
         HStack(spacing: Spacing.base) {
-            Image(systemName: symbol)
+            Image(symbol: symbol)
                 .font(.system(.caption, weight: .bold))
                 .foregroundStyle(tint)
                 .contentTransition(.symbolEffect(.replace))
@@ -258,7 +258,7 @@ struct VoiceQualityLine: View {
             // waveform says how well the call is carrying; this says who else
             // can hear it. Folding the two into one symbol would mean a poor
             // connection and an unencrypted one looked alike.
-            Image(systemName: encryptionSymbol)
+            Image(symbol: encryptionSymbol)
                 .font(.system(.caption, weight: .semibold))
                 .foregroundStyle(encryptionTint)
                 .contentTransition(.symbolEffect(.replace))

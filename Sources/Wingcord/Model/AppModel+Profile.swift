@@ -93,6 +93,8 @@ extension AppModel {
             bio: decoration?.bio,
             isBot: user.isBot,
             isVerifiedBot: user.flags.contains(.verifiedBot),
+            isSystem: user.isSystem,
+            application: user.isBot ? decoration?.application : nil,
             badges: AccountBadges.resolve(flags: user.flags, decoration: decoration),
             guildTag: decoration?.primaryGuildTag.map { tag in
                 GuildTag(
@@ -116,27 +118,7 @@ extension AppModel {
                     return role.id.rawValue != guildID.rawValue
                 }
                 .sorted(by: Role.seniorityOrder)
-                .map { role in
-                    ProfileRole(
-                        id: role.id, name: role.name,
-                        colorValue: userColor(role.displayColorValue) ?? 0,
-                        // **Desaturated through the same projection as every
-                        // other user colour**, so the accessibility slider
-                        // reaches a gradient role as well as a flat one —
-                        // §"User colour is turned down at the PROJECTION".
-                        colors: role.colors.map { stops in
-                            RoleColors(
-                                primary: userColor(stops.primary) ?? stops.primary,
-                                secondary: stops.secondary.flatMap { userColor($0) },
-                                tertiary: stops.tertiary.flatMap { userColor($0) }
-                            )
-                        },
-                        iconURL: role.iconHash.flatMap { hash in
-                            CDN.roleIcon(roleID: role.id, hash: hash, side: 16)
-                        },
-                        unicodeEmoji: role.unicodeEmoji
-                    )
-                },
+                .map(profileRole),
             memberSince: member?.joinedAt,
             // Derived from the snowflake rather than fetched: the id already
             // carries a millisecond timestamp, so there is nothing to request.
@@ -469,6 +451,29 @@ extension AppModel {
         profileRequest = request
     }
 
+    /// A role as a chip draws it.
+    func profileRole(_ role: Role) -> ProfileRole {
+        ProfileRole(
+            id: role.id, name: role.name,
+            colorValue: userColor(role.displayColorValue) ?? 0,
+            // **Desaturated through the same projection as every other user
+            // colour**, so the accessibility slider reaches a gradient role as
+            // well as a flat one — §"User colour is turned down at the
+            // PROJECTION".
+            colors: role.colors.map { stops in
+                RoleColors(
+                    primary: userColor(stops.primary) ?? stops.primary,
+                    secondary: stops.secondary.flatMap { userColor($0) },
+                    tertiary: stops.tertiary.flatMap { userColor($0) }
+                )
+            },
+            iconURL: role.iconHash.flatMap { hash in
+                CDN.roleIcon(roleID: role.id, hash: hash, side: 16)
+            },
+            unicodeEmoji: role.unicodeEmoji
+        )
+    }
+
     /// Opens someone's profile from any surface.
     ///
     /// The card is raised *first* and the fetch started after, so it appears on
@@ -481,6 +486,8 @@ extension AppModel {
         depth: ProfileRequest.Depth = .mini,
         tab: ProfileTab? = nil
     ) {
+        // Discord's own account has a card and nothing behind it.
+        guard depth != .full || users[userID]?.isSystem != true else { return }
         profileRequest = ProfileRequest(
             userID: userID,
             guildID: selectedGuildID,

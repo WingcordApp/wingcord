@@ -53,6 +53,51 @@ public struct AccountDetails: Hashable, Sendable {
     }
 }
 
+/// Whether the account has confirmed an e-mail and holds a phone — what a
+/// server's verification level asks before somebody may talk, or apply.
+///
+/// **Two booleans and nothing else**, kept for the whole session where
+/// `AccountDetails` is not: the address and the number are secrets the account
+/// page asks for when it opens, and these are what every application form
+/// needs. READY's own `user`, `USER_UPDATE` and `GET /users/@me` all carry
+/// `verified` and `phone` for the reader.
+public struct AccountVerification: Hashable, Sendable {
+    public var isEmailVerified: Bool
+    public var isPhoneVerified: Bool
+
+    public init(isEmailVerified: Bool, isPhoneVerified: Bool) {
+        self.isEmailVerified = isEmailVerified
+        self.isPhoneVerified = isPhoneVerified
+    }
+
+    /// What a server at this level asks for — Discord's application form
+    /// (`823591`): a phone for the highest level, an e-mail for the three
+    /// below it, and nothing at none.
+    public enum Requirement: Hashable, Sendable {
+        case email
+        case phone
+    }
+
+    public static func requirement(for level: VerificationLevel) -> Requirement? {
+        switch level {
+        case .none: nil
+        case .veryHigh: .phone
+        case .low, .medium, .high: .email
+        // A level this client does not know asks for nothing it can name.
+        case .unrecognised: nil
+        }
+    }
+
+    /// Discord's submit gate (`eS`): a phone satisfies an e-mail requirement
+    /// as well, and nothing satisfies a phone one but a phone.
+    public func meets(_ requirement: Requirement) -> Bool {
+        switch requirement {
+        case .email: isEmailVerified || isPhoneVerified
+        case .phone: isPhoneVerified
+        }
+    }
+}
+
 /// One place the account is signed in.
 ///
 /// **Not a device, a SESSION** — the same Mac signed in through the app and

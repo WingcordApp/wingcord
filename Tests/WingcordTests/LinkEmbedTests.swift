@@ -112,9 +112,9 @@ struct LinkEmbedTests {
         ))
         let thumbnail = try #require(slot.images.first)
         #expect(thumbnail.rect.width == EmbedLayoutEngine.thumbnailSide)
-        #expect(slot.rect.width < Metrics.embedMaxWidth - 60)
-        // Still inside its card, against its trailing edge.
-        #expect(thumbnail.rect.maxX == slot.rect.maxX - EmbedLayoutEngine.padding)
+        #expect(slot.rect.width < EmbedLayoutEngine.maxWidth - 60)
+        // Still inside its card, against its trailing edge — Discord's 16.
+        #expect(thumbnail.rect.maxX == slot.rect.maxX - EmbedLayoutEngine.trailingPadding)
         #expect(slot.isLinkCard)
     }
 

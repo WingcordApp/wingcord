@@ -411,7 +411,7 @@ private struct SearchChipFlow: View {
                 let isOn = selection.contains(option.id)
                 Button { toggle(option.id) } label: {
                     HStack(spacing: Spacing.tight) {
-                        Image(systemName: option.symbolName)
+                        Image(symbol: option.symbolName)
                             .font(.system(.caption))
                         Text(option.title)
                             .font(.system(.callout))

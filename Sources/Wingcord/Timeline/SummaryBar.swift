@@ -125,7 +125,7 @@ struct SummaryBar: View {
             guard let target, summaries.indices.contains(target) else { return }
             model.openSummary(summaries[target], in: channelID)
         } label: {
-            Image(systemName: glyph)
+            Image(symbol: glyph)
                 .font(Typeface.controlGlyph)
                 .foregroundStyle(InkColor.solid.opacity(target == nil ? 0.35 : 1))
                 .frame(width: Self.pillHeight, height: Self.pillHeight)

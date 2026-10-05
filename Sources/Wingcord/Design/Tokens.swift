@@ -166,6 +166,16 @@ nonisolated enum Palette {
     /// make the two impossible to retune apart.
     static let unreadBadge = Color(hex: 0xF23F43)
 
+    /// Discord's "NEW" on a forum post: `--brand-260` behind `--brand-560`,
+    /// the same pair in both themes (`hsl(235.2 86.2% 88.6%)` and
+    /// `hsl(234.7 51.4% 52.4%)`).
+    static let newBadgeFill = Color(hex: 0xC9CDFB)
+    static let newBadgeInk = Color(hex: 0x4752C4)
+
+    /// Discord's `--text-feedback-warning` — the amber of a line that failed
+    /// and can be tried again.
+    static let feedbackWarning = Color(hex: 0xF0B232)
+
     // MARK: Presence
     //
     // Discord's presence vocabulary. Content colours, not chrome: they describe
@@ -473,10 +483,6 @@ nonisolated enum Metrics {
     /// their own screenshot is a grid with ragged rows, and the picture is a
     /// hint about the post rather than the post.
     static let forumCardArtHeight: CGFloat = 150
-    /// The narrowest a gallery card is allowed to get before the grid drops a
-    /// column. Wide enough for a two-line title and three tag chips.
-    static let forumCardMinimum: CGFloat = 260
-
     /// The picture on a forum post's row.
     ///
     /// Square, and small enough that the title beside it still gets two lines at

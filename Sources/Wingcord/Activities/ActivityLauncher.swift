@@ -204,7 +204,7 @@ struct ActivityLauncher: View {
     private var emptyState: some View {
         VStack(spacing: Spacing.base) {
             Spacer()
-            Image(systemName: model.activityQuery.isEmpty ? "square.grid.2x2" : "magnifyingglass")
+            Image(symbol: model.activityQuery.isEmpty ? "square.grid.2x2" : "magnifyingglass")
                 .font(.system(size: 26))
                 .foregroundStyle(Ink.quaternary)
             Text(emptyMessage)

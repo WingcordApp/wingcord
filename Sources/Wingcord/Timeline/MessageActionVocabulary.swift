@@ -14,6 +14,8 @@ enum MessageActionKind: Hashable, Sendable, Identifiable, CaseIterable {
     case viewReactions
     case reply
     case forward
+    /// Discord's Create Thread — a thread hanging off this message.
+    case createThread
     case edit
     case copyText
     case pin
@@ -43,6 +45,7 @@ enum MessageActionKind: Hashable, Sendable, Identifiable, CaseIterable {
         case .viewReactions: "View Reactions"
         case .reply: "Reply"
         case .forward: "Forward"
+        case .createThread: "Create Thread"
         case .edit: "Edit Message"
         case .copyText: "Copy Text"
         case .pin: "Pin Message"
@@ -67,6 +70,7 @@ enum MessageActionKind: Hashable, Sendable, Identifiable, CaseIterable {
         case .viewReactions: "person.2"
         case .reply: "arrowshape.turn.up.left"
         case .forward: "arrowshape.turn.up.right"
+        case .createThread: DiscordGlyph.thread
         case .edit: "pencil"
         case .copyText: "doc.on.doc"
         case .pin: "pin"
@@ -107,6 +111,7 @@ enum MessageActionKind: Hashable, Sendable, Identifiable, CaseIterable {
         case .viewReactions: .viewReactions
         case .reply: .reply
         case .forward: .forward
+        case .createThread: .createThread
         case .edit: .edit
         case .copyText: .copyText
         case .pin: .pin
@@ -165,7 +170,8 @@ extension MessageActions {
             [.resend],
             // Discord's own grouping: who reacted sits with reacting.
             [.react, .viewReactions],
-            [.reply, .forward, .edit],
+            // Create Thread rides with Reply and Forward, as in Discord's menu.
+            [.reply, .forward, .createThread, .edit],
             [.copyText, .pin, .unpin, .bookmark, .unbookmark, .remindMe, .markUnread, .copyLink],
             [.report],
             [.delete],

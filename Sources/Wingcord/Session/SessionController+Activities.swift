@@ -236,12 +236,19 @@ extension SessionController {
     /// **A bot's user id is its application id**, which is what makes the DM
     /// resolvable without a directory lookup — the same identity the component
     /// press already leans on.
+    ///
+    /// **And the reader goes with it, as Discord's does.** The stage is drawn
+    /// only in the channel an instance runs in (`ActivityStageContainer`), so a
+    /// launch that left the reader on the directory, or in the channel the
+    /// launcher was opened over, started the app where nobody could see it —
+    /// which is what "Launch in DM does nothing" was.
     func launchActivityInDirectMessage(_ app: ActivityApp) async {
         do {
             let channel = try await rest.openDirectMessage(
                 with: UserID(rawValue: app.id.rawValue)
             )
             model.channelIndex.upsert(channel)
+            model.openDirectMessage(channel.id)
             await launchActivity(app, in: channel.id, section: nil)
         } catch {
             model.reportActionFailure(

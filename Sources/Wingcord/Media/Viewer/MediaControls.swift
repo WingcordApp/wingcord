@@ -26,7 +26,7 @@ struct MediaGlassButton: View {
 
     var body: some View {
         Button(action: action) {
-            Image(systemName: systemImage)
+            Image(symbol: systemImage)
                 .font(Typeface.controlGlyph)
                 .foregroundStyle(isActive ? AnyShapeStyle(Palette.accent) : AnyShapeStyle(InkColor.primary))
                 .frame(width: Self.side, height: Self.side)
@@ -69,7 +69,7 @@ struct MediaBarControl: View {
 
     var body: some View {
         Button(action: action) {
-            Image(systemName: systemImage)
+            Image(symbol: systemImage)
                 .font(Typeface.controlGlyph)
                 .foregroundStyle(foreground)
                 .frame(width: Metrics.control, height: Metrics.control)

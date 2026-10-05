@@ -30,8 +30,6 @@ struct SettingsFlyoutRow<Value: Hashable & Identifiable>: View {
     var symbolFor: (Value) -> String?
     var detailFor: (Value) -> String?
 
-    @State private var isShowing = false
-
     init(
         _ title: String,
         help: String? = nil,
@@ -52,47 +50,15 @@ struct SettingsFlyoutRow<Value: Hashable & Identifiable>: View {
 
     var body: some View {
         SettingsControlRow(title, help: help) {
-            Button { isShowing.toggle() } label: {
-                HStack(spacing: Spacing.tight) {
-                    if let symbol = symbolFor(selection) {
-                        Image(systemName: symbol)
-                            .font(.system(size: 11))
-                            .foregroundStyle(Ink.secondary)
-                    }
-                    Text(titleFor(selection))
-                        .font(SettingsType.controlLabel)
-                        .foregroundStyle(Ink.primary)
-                        .lineLimit(1)
-                    Image(systemName: "chevron.up.chevron.down")
-                        .font(.system(size: 9, weight: .semibold))
-                        .foregroundStyle(Ink.tertiary)
-                }
-                .padding(.horizontal, Spacing.base)
-                .frame(minHeight: SettingsMetrics.controlRowHeight - Spacing.base)
-                .background(SettingsSurface.controlTrough, in: .rect(cornerRadius: Radius.row))
-                .contentShape(.rect(cornerRadius: Radius.row))
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel(Text(title))
-            .accessibilityValue(Text(titleFor(selection)))
-            .popover(isPresented: $isShowing, arrowEdge: .bottom) {
-                VStack(spacing: 0) {
-                    ForEach(options) { option in
-                        FlyoutRow(
-                            title: titleFor(option),
-                            subtitle: detailFor(option),
-                            symbolName: symbolFor(option),
-                            accessory: .tick(option == selection),
-                            isSelected: option == selection
-                        ) {
-                            selection = option
-                            isShowing = false
-                        }
-                    }
-                }
-                .padding(.vertical, Spacing.tight)
-                .frame(width: Self.flyoutWidth)
-            }
+            FlyoutPicker(
+                selection: $selection,
+                options: options,
+                title: titleFor,
+                symbol: symbolFor,
+                detail: detailFor,
+                accessibilityTitle: title,
+                flyoutWidth: Self.flyoutWidth
+            )
         }
     }
 

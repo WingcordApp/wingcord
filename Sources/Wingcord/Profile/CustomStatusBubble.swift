@@ -387,7 +387,7 @@ private struct StatusAnswerControls: View {
         act: @escaping () -> Void
     ) -> some View {
         Button(action: act) {
-            Image(systemName: symbol)
+            Image(symbol: symbol)
                 // Scaled with the button, so a shrunken control holds a
                 // proportionate glyph rather than the same one in a smaller box.
                 .font(.system(size: side * 0.42, weight: .medium))

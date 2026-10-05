@@ -88,6 +88,10 @@ public struct AuditLogEntry: Hashable, Sendable, Identifiable {
     public var targetID: UInt64?
     public var reason: String?
     public var changes: [Change]
+    /// The entry's `options`, rendered — an overwrite's role, a prune's count,
+    /// an AutoMod rule's name, a message's channel. Discord compares them when
+    /// it merges a run of entries (`AuditLogMerge`), so they are kept whole.
+    public var options: [String: String]
 
     public init(
         id: UInt64,
@@ -95,7 +99,8 @@ public struct AuditLogEntry: Hashable, Sendable, Identifiable {
         userID: UserID? = nil,
         targetID: UInt64? = nil,
         reason: String? = nil,
-        changes: [Change] = []
+        changes: [Change] = [],
+        options: [String: String] = [:]
     ) {
         self.id = id
         self.action = action
@@ -103,6 +108,7 @@ public struct AuditLogEntry: Hashable, Sendable, Identifiable {
         self.targetID = targetID
         self.reason = reason
         self.changes = changes
+        self.options = options
     }
 
     /// When it happened, from the entry's own snowflake. Nothing to fetch and
@@ -582,6 +588,77 @@ public struct AutoModRule: Hashable, Sendable, Identifiable {
             case ..<86400: "\(seconds / 3600) hours"
             default: "\(seconds / 86400) days"
             }
+        }
+    }
+}
+
+// MARK: - Safety Setup's counts
+
+/// "3 of 5 enabled" — what Discord's Safety Setup overview (`uP`, `uM`) says
+/// under each of its four rows.
+public enum SafetyCounts {
+    /// Raid Protection and CAPTCHA: Activity Alerts, and Discord's two CAPTCHA
+    /// statements, which are always on.
+    public static func raidProtection(features: Set<String>) -> (enabled: Int, total: Int) {
+        (features.contains("RAID_ALERTS_DISABLED") ? 2 : 3, 3)
+    }
+
+    /// DM and Spam Protection: the Verification Level row and four always-on
+    /// statements — five, all enabled.
+    public static let dmAndSpam = (enabled: 5, total: 5)
+
+    /// AutoMod: every kind of rule Discord offers counts once even with no
+    /// rule of it, and every rule of a kind counts once — enabled ones as
+    /// enabled. A kind this client cannot name does not count.
+    public static func autoMod(_ rules: [AutoModRule]) -> (enabled: Int, total: Int) {
+        var enabled = 0
+        var total = 0
+        for kind in AutoModRule.Trigger.offeredKinds {
+            let ofKind = rules.filter { $0.trigger.kind == kind }
+            if ofKind.isEmpty {
+                total += 1
+            } else {
+                total += ofKind.count
+                enabled += ofKind.filter(\.isEnabled).count
+            }
+        }
+        return (enabled, total)
+    }
+
+    /// Permissions: two-factor for moderators, member prune for admins only,
+    /// and no risky permissions on `@everyone`.
+    public static func permissions(
+        mfaLevel: Int,
+        features: Set<String>,
+        everyonePermissions: Permissions?
+    ) -> (enabled: Int, total: Int) {
+        var enabled = 0
+        if mfaLevel == 1 { enabled += 1 }
+        if features.contains("PRUNE_REQUIRES_ADMIN") { enabled += 1 }
+        if let everyonePermissions, everyonePermissions.isDisjoint(with: .risky) { enabled += 1 }
+        return (enabled, 3)
+    }
+
+    /// Discord's sentence: "{enabled} of {total} enabled".
+    public static func sentence(_ count: (enabled: Int, total: Int)) -> String {
+        "\(count.enabled) of \(count.total) enabled"
+    }
+}
+
+extension AutoModRule.Trigger {
+    /// The rule kinds Safety Setup counts — Discord's own, in its order:
+    /// keyword, spam, keyword preset, mention spam, member profile.
+    public static let offeredKinds = [1, 3, 4, 5, 6]
+
+    /// The trigger's wire type, or nil for one this client cannot name.
+    public var kind: Int? {
+        switch self {
+        case .keyword: 1
+        case .spam: 3
+        case .keywordPreset: 4
+        case .mentionSpam: 5
+        case .userProfile: 6
+        case .guildPolicy, .unrecognised: nil
         }
     }
 }

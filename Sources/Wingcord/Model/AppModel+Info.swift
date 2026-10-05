@@ -282,6 +282,12 @@ extension AppModel {
         sessionController.loadGuildProfile(guildID)
     }
 
+    /// The card's "Unable to load server profile", pressed: ask again.
+    func retryGuildProfile(_ guildID: GuildID) {
+        guildProfileRefusals[guildID] = nil
+        sessionController.loadGuildProfile(guildID)
+    }
+
     /// Everything the tag card draws, merged from what has arrived and what was
     /// already resident.
     ///
@@ -370,7 +376,8 @@ extension AppModel {
             createdAt: guildID.timestamp,
             isJoined: resident != nil,
             isLoading: guildProfilesLoading.contains(guildID),
-            entry: guildEntry(for: guildID, profile: profile, isJoined: resident != nil)
+            entry: guildEntry(for: guildID, profile: profile, isJoined: resident != nil),
+            refusal: profile == nil && resident == nil ? guildProfileRefusals[guildID] : nil
         )
     }
 
@@ -389,6 +396,9 @@ extension AppModel {
     /// the request value is unchanged, the representable sees no difference, and
     /// the second click reads as a broken link.
     func requestJump(to messageID: MessageID, in channelID: ChannelID, highlights: Bool = true) {
+        // A jump into a fold opens it — Discord's `hasJumpTarget` — or there
+        // would be no row to land on.
+        openCollapsedGroups[channelID, default: []].insert(messageID)
         jumpToken &+= 1
         pendingJump = MessageJump(
             channelID: channelID,

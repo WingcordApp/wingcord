@@ -111,21 +111,27 @@ struct ServerSettingsTests {
     //
     // Three routes behind one segmented control, resolved in one place.
 
-    @Test("Discovery wins over an application form")
+    @Test("Discovery wins over an application")
     func accessModeDiscovery() {
-        let mode = GuildAccessMode(features: ["COMMUNITY", "DISCOVERABLE"], hasJoinForm: true)
+        let mode = GuildAccessMode(features: [
+            "COMMUNITY", "DISCOVERABLE", "MEMBER_VERIFICATION_GATE_ENABLED", "MEMBER_VERIFICATION_MANUAL_APPROVAL",
+        ])
         #expect(mode == .discoverable)
     }
 
-    @Test("A form without discovery is Apply to Join")
+    @Test("The gate with manual approval is Apply to Join")
     func accessModeApply() {
-        #expect(GuildAccessMode(features: ["COMMUNITY"], hasJoinForm: true) == .applyToJoin)
+        #expect(GuildAccessMode(features: [
+            "MEMBER_VERIFICATION_GATE_ENABLED", "MEMBER_VERIFICATION_MANUAL_APPROVAL",
+        ]) == .applyToJoin)
     }
 
-    @Test("Neither is Invite Only")
+    /// Rules Screening is an enabled form with one `TERMS` field, and the
+    /// server is still invite-only.
+    @Test("Rules alone are Invite Only")
     func accessModeInvite() {
-        #expect(GuildAccessMode(features: [], hasJoinForm: false) == .inviteOnly)
-        #expect(GuildAccessMode(features: ["COMMUNITY"], hasJoinForm: false) == .inviteOnly)
+        #expect(GuildAccessMode(features: []) == .inviteOnly)
+        #expect(GuildAccessMode(features: ["COMMUNITY", "MEMBER_VERIFICATION_GATE_ENABLED"]) == .inviteOnly)
     }
 
     // MARK: Discovery requirements
@@ -307,7 +313,8 @@ struct ServerSettingsTests {
         let inviter = UserID(rawValue: 7)
         let source = GuildMemberRow.JoinSource(rawValue: 5, code: "DbSUmAEB6", inviterID: inviter)
         #expect(source == .invite(code: "DbSUmAEB6", inviterID: inviter))
-        #expect(source.title == "Invite DbSUmAEB6")
+        // Discord's chip shows the code itself (`11541`).
+        #expect(source.title == "DbSUmAEB6")
         #expect(source.inviterID == inviter)
     }
 
@@ -775,7 +782,7 @@ struct ServerDraftTests {
         )
     }
 
-    @Test("A channel carrying a guide task cannot be deleted, and the reason names it")
+    @Test("A channel carrying a guide task cannot be deleted, in Discord's words")
     func deleteGateGuideTask() {
         let channelID = ChannelID(rawValue: 42)
         let refusal = ChannelDeleteGate.refusal(
@@ -785,7 +792,31 @@ struct ServerDraftTests {
             chattableDefaults: 5
         )
         #expect(refusal == .guideTask(title: "Say hello"))
-        #expect(refusal?.message.contains("Say hello") == true)
+        #expect(refusal?.message.hasPrefix("You must remove or replace the To Do") == true)
+    }
+
+    @Test("A guide resource, and a community's rules or updates channel, cannot be deleted")
+    func deleteGateCommunityChannels() {
+        let channelID = ChannelID(rawValue: 42)
+        let guide = ServerGuide(
+            guildID: guildID,
+            isEnabled: true,
+            resources: [ServerGuide.Resource(id: 0, channelID: channelID, title: "Links")]
+        )
+        #expect(ChannelDeleteGate.refusal(
+            for: channelID, guide: guide, onboarding: nil, chattableDefaults: 5
+        ) == .guideResource)
+        #expect(ChannelDeleteGate.refusal(
+            for: channelID, guide: nil, onboarding: nil, chattableDefaults: 5,
+            community: (rules: channelID, updates: nil)
+        ) == .rulesChannel)
+        #expect(ChannelDeleteGate.refusal(
+            for: channelID, guide: nil, onboarding: nil, chattableDefaults: 5,
+            community: (rules: nil, updates: channelID)
+        ) == .updatesChannel)
+        #expect(ChannelDeleteGate.refusal(
+            for: channelID, guide: nil, onboarding: nil, chattableDefaults: 5
+        ) == nil)
     }
 
     @Test("The last chattable default channel cannot be deleted")

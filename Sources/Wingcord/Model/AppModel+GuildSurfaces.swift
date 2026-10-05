@@ -296,6 +296,9 @@ extension AppModel {
     /// Opens one of the server's own pages.
     func openSurface(_ surface: GuildSurface) {
         guard openGuildSurface != surface else { return }
+        if surface == .members, let guildID = selectedGuildID {
+            prepareMemberSafety(for: guildID)
+        }
         openGuildSurface = surface
         // A preview belongs to the page that raised it, so moving to another
         // page takes it away rather than leaving somebody else's resource open
@@ -305,6 +308,8 @@ extension AppModel {
         // are anchored to rects in a view that is about to be replaced.
         profileRequest = nil
         expressionInfoRequest = nil
+        // The page's bar has no inbox for the flyout to hang from.
+        closeInbox()
     }
 
     /// Opens a channel *beside* the page rather than instead of it.
@@ -354,6 +359,12 @@ extension AppModel {
         // route answers, the honest name is the one that is always true.
         let asksQuestions = guildOnboardings[guildID]?.answerablePrompts.isEmpty == false
         rows.append(asksQuestions ? .channelsAndRoles : .browseChannels)
+        // Discord's order: after the channel browser, before the game servers.
+        if let guild = guilds[guildID],
+           ModerationPolicy.showsMembersRow(permissionGate.permissions(inGuild: guildID), features: guild.features)
+        {
+            rows.append(.members)
+        }
         if gameServers[guildID]?.isEmpty == false {
             rows.append(.gameServers)
         }
@@ -778,6 +789,12 @@ extension AppModel {
         guard let guildID = serverRulesGuildID,
               let rules = memberVerifications[guildID], rules.canSubmit
         else { return }
+        // Questions too: the whole form is answered in the application.
+        if rules.asksQuestions {
+            serverRulesGuildID = nil
+            openJoinApplication(guildID)
+            return
+        }
         sessionController.agreeToRules(rules, inGuild: guildID)
     }
 

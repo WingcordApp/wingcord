@@ -184,6 +184,22 @@ nonisolated struct ServerTheme: Equatable, Sendable {
         var baseMix: Double
     }
 
+    /// Each preset's name, by its id — Discord's own words for them
+    /// (`976665`).
+    static let presetNames: [Int: String] = [
+        1: "Twilight", 2: "Plum", 3: "Fire", 4: "Gold Dust", 5: "Moss",
+        6: "Jade", 7: "Obsidian", 8: "Ocean", 9: "Denim", 10: "Blurple",
+    ]
+
+    /// The order Discord's picker lays them out in (`476931`'s `E`), which is
+    /// not the order of their ids. The first is what switching a theme on
+    /// with nothing chosen selects (`Qy`).
+    static let pickerOrder = [1, 9, 8, 10, 7, 2, 3, 4, 5, 6]
+
+    /// A new custom theme's colour and intensity — Discord's `a0` and `BC`.
+    static let defaultCustomColor: UInt32 = 0x58_65_F2
+    static let defaultCustomBaseMix: Double = 74
+
     /// Discord's ten, by its own ids.
     static let presets: [Int: (dark: Version, light: Version)] = [
         1: (Version(from: 0x69_42_6A, to: 0x11_17_31, baseMix: 100),   // Twilight

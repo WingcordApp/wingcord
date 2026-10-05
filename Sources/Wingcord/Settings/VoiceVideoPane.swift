@@ -410,7 +410,7 @@ private struct DevicePickerRow: View {
                     Text("Not connected").tag(String?.some(selection))
                 }
             } label: {
-                Image(systemName: systemImage)
+                Image(symbol: systemImage)
                     .font(.system(size: 11))
                     .foregroundStyle(Ink.secondary)
             }
@@ -595,7 +595,7 @@ private struct PermissionDeniedState: View {
 
     var body: some View {
         VStack(spacing: Spacing.base) {
-            Image(systemName: symbolName)
+            Image(symbol: symbolName)
                 .font(.system(size: 22, weight: .light))
                 .foregroundStyle(Ink.quaternary)
             Text(message)

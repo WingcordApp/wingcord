@@ -166,7 +166,7 @@ struct GIFBoard: View {
                 .overlay {
                     HStack(spacing: Spacing.tight) {
                         if let icon {
-                            Image(systemName: icon)
+                            Image(symbol: icon)
                                 .font(.system(.caption, weight: .semibold))
                         }
                         Text(title)

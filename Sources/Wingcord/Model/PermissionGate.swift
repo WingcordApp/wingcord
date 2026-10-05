@@ -216,6 +216,12 @@ final class PermissionGate {
         }
 
         if channel.kind.isThread {
+            // **A lock is for everyone but the moderators** — Discord's
+            // "Only moderators can send messages." A moderator still writes
+            // in a locked thread.
+            if channel.threadMetadata?.isLocked == true, !resolved.contains(.manageThreads) {
+                return false
+            }
             return resolved.contains(.sendMessagesInThreads)
         }
         if channel.kind == .announcement {
@@ -317,7 +323,10 @@ final class PermissionGate {
                 isBookmarked: model.bookmarkedMessageIDs.contains(message.id),
                 developerMode: AppSettings.shared.developerMode,
                 hasReactions: !message.reactions.isEmpty,
-                isInLockedArchive: channel?.threadMetadata.map { $0.isArchived && $0.isLocked } ?? false
+                isInLockedArchive: channel?.threadMetadata.map { $0.isArchived && $0.isLocked } ?? false,
+                canStartThread: channel.map {
+                    ThreadCreation.canCreatePublic(in: $0, permissions: permissions(in: message.channelID), from: message)
+                } ?? false
             )
         )
     }

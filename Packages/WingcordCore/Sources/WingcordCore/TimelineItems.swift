@@ -13,6 +13,9 @@ public enum TimelineItem: Hashable, Sendable {
     case unreadDivider
     /// A message, plus everything about its neighbours that the painter needs.
     case message(TimelineMessage)
+    /// Messages folded into one line — from somebody the reader blocked or
+    /// ignored, or from a suspended account. See `CollapsedGroup`.
+    case collapsedGroup(CollapsedGroup)
     /// The channel's beginning — the "this is the start of #general" block.
     case conversationStart
     /// A placeholder group while a page of history is in flight.
@@ -91,10 +94,73 @@ public struct TimelineMessage: Hashable, Sendable, Identifiable {
         public static let pending = RunFlags(rawValue: 1 << 4)
         /// A send that failed and is offering a retry.
         public static let failed = RunFlags(rawValue: 1 << 5)
+        /// The message is in a fold the reader opened, and sits on its tint.
+        public static let inOpenGroup = RunFlags(rawValue: 1 << 6)
     }
 
     public var isRunHead: Bool { flags.contains(.head) }
     public var isRunTail: Bool { flags.contains(.tail) }
+}
+
+/// Messages Discord folds into one line: "3 blocked messages — Show".
+///
+/// **Discord's `MESSAGE_GROUP_*`, by its own stream builder's rule.** Consecutive
+/// messages folded for the same reason are one fold; a day's heading or a mark
+/// between two of them starts another, because both are pushed between the
+/// stream's items and a fold only ever grows from the item before it. An unread
+/// line does not split one — Discord keeps it inside, and draws it above the
+/// fold while the fold is shut. An AutoMod action never folds: Discord's
+/// `NON_COLLAPSIBLE` is that one type.
+///
+/// Shut, a fold's messages are not rows at all. Open, they follow it as ordinary
+/// rows on the pointer's tint, the fold's own line still above them saying Hide.
+public struct CollapsedGroup: Hashable, Sendable {
+    public enum Reason: Hashable, Sendable {
+        /// Somebody the reader blocked — "{count} blocked messages".
+        case blocked
+        /// Somebody the reader ignored — "{count} ignored messages".
+        case ignored
+        /// A suspended account — "Some messages removed from a suspended
+        /// account." Discord gives this fold no Show.
+        case suspended
+    }
+
+    public var reason: Reason
+    /// Its messages, oldest first. The first is the fold's identity.
+    public var messageIDs: [MessageID]
+    public var isOpen: Bool
+
+    public init(reason: Reason, messageIDs: [MessageID], isOpen: Bool) {
+        self.reason = reason
+        self.messageIDs = messageIDs
+        self.isOpen = isOpen
+    }
+
+    public var id: MessageID { messageIDs[0] }
+    public var count: Int { messageIDs.count }
+    /// Whether the reader may open it — Discord's `canUncollapse`.
+    public var canOpen: Bool { reason != .suspended }
+
+    /// Why Discord folds a message, if it does — its `eg`, in its order: a
+    /// suspended account's flag first, then a block, then an ignore, each
+    /// tested against the author and against whoever ran the command the
+    /// message answers.
+    public static func reason(
+        for message: Message,
+        blocked: Set<UserID>,
+        ignored: Set<UserID>
+    ) -> Reason? {
+        if message.kind == .autoModerationAction { return nil }
+        if message.flags.contains(.hiddenSuspendedUser) { return .suspended }
+        let invoker = message.interaction?.userID
+        if blocked.contains(message.authorID) || invoker.map(blocked.contains) == true {
+            return .blocked
+        }
+        if ignored.contains(message.authorID) || invoker.map(ignored.contains) == true {
+            return .ignored
+        }
+        return nil
+    }
 }
 
 /// A stretch of the channel marked in its transcript, above the message it
@@ -185,6 +251,11 @@ public enum TimelineReducer {
     ///     when two begin at one message.
     ///   - sending: the reader's own messages Discord has not answered yet.
     ///   - failed: the ones it refused, or that never reached it.
+    ///   - blockedUserIDs: whose messages fold as blocked — see `CollapsedGroup`.
+    ///   - ignoredUserIDs: whose fold as ignored.
+    ///   - openGroups: messages whose fold the reader opened, or jumped into.
+    ///     A fold is open while any of its messages is here, so a jump target
+    ///     opens the fold it lands in without knowing where that fold begins.
     ///   - calendar: Injected so a test can pin a time zone.
     public static func rows(
         messages: [Message],
@@ -197,6 +268,9 @@ public enum TimelineReducer {
         failure: String? = nil,
         sending: Set<MessageID> = [],
         failed: Set<MessageID> = [],
+        blockedUserIDs: Set<UserID> = [],
+        ignoredUserIDs: Set<UserID> = [],
+        openGroups: Set<MessageID> = [],
         skeletonDepth: Int = 20,
         calendar: Calendar = .current
     ) -> [TimelineItem] {
@@ -225,37 +299,53 @@ public enum TimelineReducer {
             rows.append(.conversationStart)
         }
 
+        // Where the unread line goes, found once: a fold that is shut draws it
+        // above itself, which is before the message that earns it is reached.
+        let unreadIndex = messages.indices.first { index in
+            Self.isFirstUnread(
+                message: messages[index],
+                previous: index > 0 ? messages[index - 1] : nil,
+                anchor: unreadAnchor
+            )
+        }
+        let folds = Self.folds(
+            of: messages,
+            blocked: blockedUserIDs,
+            ignored: ignoredUserIDs,
+            open: openGroups,
+            marks: marks,
+            calendar: calendar
+        )
+
         var previous: Message?
+        var previousFold: Int?
         var runLength = 0
         var dividerPlaced = false
-        // The index in `rows` of the run head currently open, so its tail flag
-        // can be set when the run closes. Nil while no run is open.
-        var openHeadIndex: Int?
         var lastMessageRowIndex: Int?
 
-        for message in messages {
+        for (index, message) in messages.enumerated() {
             let startsDay = previous.map {
                 !calendar.isDate($0.sentAt, inSameDayAs: message.sentAt)
             } ?? true
-
-            let isUnreadBoundary = !dividerPlaced && Self.isFirstUnread(
-                message: message,
-                previous: previous,
-                anchor: unreadAnchor
-            )
+            let isUnreadBoundary = !dividerPlaced && index == unreadIndex
 
             // No allocation per message: the list is one or two marks at most,
             // and a filter here would build an empty array for every message
             // of a three-hundred-message window.
             let startsMark = marks.contains { $0.starts(at: message.id) }
 
+            let foldIndex = folds.byMessage[index]
+            let fold = foldIndex.map { folds.list[$0] }
+            let opensFold = fold?.start == index
+
             // A day change, an unread divider, a mark, a different author, a
-            // system event, a reply, or too long a gap all break the run. Each
-            // of these puts something between the two messages, and a run whose
-            // members are not adjacent is not a run.
+            // system event, a reply, too long a gap, or a fold's edge all break
+            // the run. Each of these puts something between the two messages,
+            // and a run whose members are not adjacent is not a run.
             let breaksRun = startsDay
                 || isUnreadBoundary
                 || startsMark
+                || foldIndex != previousFold
                 || previous?.authorID != message.authorID
                 || message.kind == .reply
                 || message.isSystemEvent
@@ -265,13 +355,18 @@ public enum TimelineReducer {
 
             if breaksRun, let index = lastMessageRowIndex {
                 Self.setTail(in: &rows, at: index)
-                openHeadIndex = nil
             }
 
             if startsDay {
                 rows.append(.daySeparator(calendar.startOfDay(for: message.sentAt)))
             }
-            if isUnreadBoundary {
+            // A shut fold's unread line goes above it, wherever in it the line
+            // falls — Discord's `hasUnread`.
+            var unreadInShutFold = false
+            if opensFold, let fold, !fold.group.isOpen, let unreadIndex {
+                unreadInShutFold = (fold.start...fold.end).contains(unreadIndex)
+            }
+            if isUnreadBoundary || (!dividerPlaced && unreadInShutFold) {
                 rows.append(.unreadDivider)
                 dividerPlaced = true
             }
@@ -280,10 +375,23 @@ public enum TimelineReducer {
                     rows.append(.marker(mark.kind, id: mark.id, title: mark.title))
                 }
             }
+            if opensFold, let fold {
+                rows.append(.collapsedGroup(fold.group))
+            }
+
+            previous = message
+            previousFold = foldIndex
+            if let fold, !fold.group.isOpen {
+                // Shut: the fold's line stands for it, and its messages are
+                // not rows at all.
+                runLength = 0
+                continue
+            }
 
             var flags: TimelineMessage.RunFlags = []
             if breaksRun { flags.insert(.head) }
             if isUnreadBoundary { flags.insert(.firstUnread) }
+            if fold != nil { flags.insert(.inOpenGroup) }
             if Self.mentions(message, ids: mentionedIDs, everyoneCounts: mentionsEveryoneCountsAsMention) {
                 flags.insert(.mentionsMe)
             }
@@ -294,18 +402,11 @@ public enum TimelineReducer {
 
             rows.append(.message(TimelineMessage(message: message, flags: flags)))
             lastMessageRowIndex = rows.count - 1
-            if breaksRun {
-                openHeadIndex = rows.count - 1
-                runLength = 1
-            } else {
-                runLength += 1
-            }
-            previous = message
+            runLength = breaksRun ? 1 : runLength + 1
         }
 
         // The newest message always closes its run.
         if let index = lastMessageRowIndex { Self.setTail(in: &rows, at: index) }
-        _ = openHeadIndex
 
         if hasMoreNewer {
             for index in skeletonDepth..<(skeletonDepth * 2) {
@@ -314,6 +415,66 @@ public enum TimelineReducer {
         }
 
         return rows
+    }
+
+    /// The folds in a page, and which fold each message is in.
+    struct Folds {
+        struct Fold {
+            var group: CollapsedGroup
+            var start: Int
+            var end: Int
+        }
+        var list: [Fold] = []
+        /// Indexed like `messages`; nil for a message that does not fold.
+        var byMessage: [Int?]
+    }
+
+    /// Decides every fold before a row is written: whether one is open depends
+    /// on all of its messages, and its line comes before the first of them.
+    ///
+    /// Cheap where nobody is blocked or ignored, which is nearly everywhere —
+    /// one flag test per message and no allocation beyond the index.
+    static func folds(
+        of messages: [Message],
+        blocked: Set<UserID>,
+        ignored: Set<UserID>,
+        open: Set<MessageID>,
+        marks: [TimelineMark],
+        calendar: Calendar
+    ) -> Folds {
+        var folds = Folds(byMessage: Array(repeating: nil, count: messages.count))
+        var previous: Message?
+        for (index, message) in messages.enumerated() {
+            defer { previous = message }
+            guard let reason = CollapsedGroup.reason(for: message, blocked: blocked, ignored: ignored) else {
+                continue
+            }
+            let startsDay = previous.map {
+                !calendar.isDate($0.sentAt, inSameDayAs: message.sentAt)
+            } ?? true
+            let startsMark = marks.contains { $0.starts(at: message.id) }
+            if let last = folds.list.indices.last,
+               folds.list[last].end == index - 1,
+               folds.list[last].group.reason == reason,
+               !startsDay, !startsMark
+            {
+                folds.list[last].end = index
+                folds.list[last].group.messageIDs.append(message.id)
+            } else {
+                folds.list.append(Folds.Fold(
+                    group: CollapsedGroup(reason: reason, messageIDs: [message.id], isOpen: false),
+                    start: index,
+                    end: index
+                ))
+            }
+            folds.byMessage[index] = folds.list.count - 1
+        }
+        if !open.isEmpty {
+            for index in folds.list.indices where folds.list[index].group.canOpen {
+                folds.list[index].group.isOpen = folds.list[index].group.messageIDs.contains(where: open.contains)
+            }
+        }
+        return folds
     }
 
     /// Whether `message` is the first one the reader has not seen.

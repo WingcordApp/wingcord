@@ -290,10 +290,13 @@ struct JoinApplicationFormDTO: Decodable, Sendable {
         var description: String?
         var placeholder: String?
         var choices: [String]?
+        /// The rules, on the `TERMS` field — read so a save sends them back.
+        var values: [String]?
         /// Always null on the captures and its shape is unsettled. Read only as
         /// "was there anything here", so a form carrying one is not silently
-        /// simplified by a client that cannot express it.
-        var automations: [String]?
+        /// simplified by a client that cannot express it — and read as any
+        /// JSON, so an object here cannot sink the whole form's decode.
+        var automations: JSONTree?
     }
 
     func domain(guildID: GuildID) -> JoinApplicationForm {
@@ -304,12 +307,22 @@ struct JoinApplicationFormDTO: Decodable, Sendable {
             fields: (form_fields ?? []).compactMap { field in
                 guard let label = field.label, !label.isEmpty else { return nil }
                 return JoinApplicationForm.Field(
-                    kind: .init(wireName: field.field_type ?? "", choices: field.choices ?? []),
+                    kind: .init(
+                        wireName: field.field_type ?? "",
+                        choices: field.choices ?? [],
+                        values: field.values ?? []
+                    ),
                     label: label,
                     isRequired: field.required ?? true,
                     detail: field.description.nonEmpty,
                     placeholder: field.placeholder.nonEmpty,
-                    hasAutomations: !(field.automations ?? []).isEmpty
+                    hasAutomations: {
+                        switch field.automations {
+                        case nil, .null?: false
+                        case .array(let items)?: !items.isEmpty
+                        default: true
+                        }
+                    }()
                 )
             },
             version: version
@@ -329,6 +342,12 @@ struct GuildIntegrationDTO: Decodable, Sendable {
     var account: AccountDTO?
     var scopes: [String]?
     var application: AppDTO?
+    var expire_behavior: Int?
+    var expire_grace_period: Int?
+    var enable_emoticons: Bool?
+    var subscriber_count: Int?
+    var synced_at: Date?
+    var revoked: Bool?
 
     struct AccountDTO: Decodable, Sendable {
         var id: String?
@@ -366,7 +385,19 @@ struct GuildIntegrationDTO: Decodable, Sendable {
             application: app,
             scopes: scopes ?? [],
             roleID: role_id,
-            accountName: account?.name.nonEmpty
+            accountName: account?.name.nonEmpty,
+            expiry: expire_behavior.flatMap { raw in
+                GuildIntegration.Expiry.Behavior(rawValue: raw).map {
+                    GuildIntegration.Expiry(
+                        behavior: $0,
+                        gracePeriod: expire_grace_period ?? 1,
+                        enablesEmoticons: enable_emoticons ?? false
+                    )
+                }
+            },
+            subscriberCount: subscriber_count,
+            syncedAt: synced_at,
+            isRevoked: revoked ?? false
         )
     }
 }
@@ -554,6 +585,7 @@ struct AuditLogPageDTO: Decodable, Sendable {
         var target_id: WireID?
         var reason: String?
         var changes: [ChangeDTO]?
+        var options: [String: AuditValue]?
     }
 
     struct ChangeDTO: Decodable, Sendable {
@@ -604,7 +636,8 @@ struct AuditLogPageDTO: Decodable, Sendable {
                         before: change.old_value?.rendered,
                         after: change.new_value?.rendered
                     )
-                }
+                },
+                options: (entry.options ?? [:]).compactMapValues(\.rendered)
             )
         }
 
@@ -706,5 +739,16 @@ struct WireID: Decodable, Sendable, Hashable {
         } else {
             value = try? container.decode(UInt64.self)
         }
+    }
+}
+
+// MARK: - The Custom Invite Link
+
+struct VanityURLDTO: Decodable, Sendable {
+    var code: String?
+    var uses: Int?
+
+    var domain: VanityURL {
+        VanityURL(code: code.nonEmpty, uses: uses ?? 0)
     }
 }

@@ -29,6 +29,16 @@ public struct GuildIntegration: Hashable, Sendable, Identifiable {
     public var roleID: RoleID?
     /// The account on the other service.
     public var accountName: String?
+    /// A Twitch or YouTube sync's own settings — what happens to somebody
+    /// whose subscription lapses, after how many days, and whether a Twitch
+    /// channel's emotes come with the role. Nil on every other kind.
+    public var expiry: Expiry?
+    /// How many are synced, and when it last ran — the platform page's
+    /// "N subscribers" and "Last synced:".
+    public var subscriberCount: Int?
+    public var syncedAt: Date?
+    /// The link to the other service was taken back; a sync cannot run.
+    public var isRevoked: Bool
 
     public init(
         id: UInt64,
@@ -39,8 +49,16 @@ public struct GuildIntegration: Hashable, Sendable, Identifiable {
         application: App? = nil,
         scopes: [String] = [],
         roleID: RoleID? = nil,
-        accountName: String? = nil
+        accountName: String? = nil,
+        expiry: Expiry? = nil,
+        subscriberCount: Int? = nil,
+        syncedAt: Date? = nil,
+        isRevoked: Bool = false
     ) {
+        self.expiry = expiry
+        self.subscriberCount = subscriberCount
+        self.syncedAt = syncedAt
+        self.isRevoked = isRevoked
         self.id = id
         self.kind = kind
         self.name = name
@@ -50,6 +68,38 @@ public struct GuildIntegration: Hashable, Sendable, Identifiable {
         self.scopes = scopes
         self.roleID = roleID
         self.accountName = accountName
+    }
+
+    /// A sync's expiry settings — Discord's three fields, always written
+    /// together (`updateIntegration`).
+    public struct Expiry: Hashable, Sendable {
+        public var behavior: Behavior
+        /// Days: Discord offers 1, 3, 7, 14 and 30.
+        public var gracePeriod: Int
+        /// Twitch only: subscribers may use the channel's emotes.
+        public var enablesEmoticons: Bool
+
+        public init(behavior: Behavior, gracePeriod: Int, enablesEmoticons: Bool) {
+            self.behavior = behavior
+            self.gracePeriod = gracePeriod
+            self.enablesEmoticons = enablesEmoticons
+        }
+
+        /// Discord's grace periods, in days.
+        public static let gracePeriods = [1, 3, 7, 14, 30]
+
+        /// What happens when a subscription lapses — `0` and `1` on the wire.
+        public enum Behavior: Int, Hashable, Sendable, CaseIterable {
+            case removeRole = 0
+            case kick = 1
+
+            public var title: String {
+                switch self {
+                case .removeRole: "Remove Role"
+                case .kick: "Kick"
+                }
+            }
+        }
     }
 
     public enum Kind: Hashable, Sendable {

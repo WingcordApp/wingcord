@@ -433,7 +433,7 @@ private struct OverlayEmptyNote: View {
 
     var body: some View {
         VStack(spacing: Spacing.base) {
-            Image(systemName: symbol)
+            Image(symbol: symbol)
                 .font(.system(size: 26, weight: .light))
                 .foregroundStyle(Ink.quaternary)
             Text(title)

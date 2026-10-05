@@ -79,6 +79,14 @@ public struct ChannelUserSettings: Hashable, Sendable {
     public func isMuted(at date: Date = .now) -> Bool {
         isMuted && (muteConfig?.isActive(at: date) ?? true)
     }
+
+    /// The duration a channel's menu ticks — the server's rule
+    /// (`GuildUserSettings.muteDuration`), for one channel.
+    public func muteDuration(at date: Date = .now) -> MuteDuration? {
+        guard isMuted(at: date) else { return nil }
+        guard let window = muteConfig?.selectedTimeWindow else { return .untilTurnedBackOn }
+        return MuteDuration(rawValue: window) ?? .untilTurnedBackOn
+    }
 }
 
 /// Everything the reader has said about one server, as one record.

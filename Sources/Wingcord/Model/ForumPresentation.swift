@@ -57,6 +57,12 @@ struct ForumPostPresentation: Hashable, Sendable, Identifiable {
     var isLocked: Bool
     var isFollowed: Bool
     var isMuted: Bool
+    /// Discord's "NEW" — see `ForumOrder.isNew`.
+    var isNew: Bool
+    /// The post's tags the board's filter has lit, drawn emphasised as
+    /// Discord's are. Carried on the post so a row comparing only its post
+    /// still redraws when the filter changes.
+    var filteredTagIDs: Set<ForumTagID>
     /// The reaction Discord offers on every post here, when the forum sets one.
     var defaultReaction: EmojiRef?
 }
@@ -70,11 +76,15 @@ struct ForumPresentation: Hashable, Sendable {
     var guidelines: String?
     var query: ForumQuery
     var availableTags: [ForumTag]
+    /// The live posts in Discord's order — the pinned post first — or a
+    /// search's results.
     var posts: [ForumPostPresentation]
+    /// The archived pages, under Discord's "Older Posts". Empty while
+    /// searching: a search's results are one list.
+    var olderPosts: [ForumPostPresentation]
     var isLoading: Bool
     var loadFailed: Bool
     var hasMore: Bool
-    var totalResults: Int
     /// Whether the reader may open a post here at all.
     var canPost: Bool
     var requiresTag: Bool
@@ -91,10 +101,10 @@ struct ForumPresentation: Hashable, Sendable {
             query: ForumQuery(),
             availableTags: [],
             posts: [],
+            olderPosts: [],
             isLoading: false,
             loadFailed: false,
             hasMore: false,
-            totalResults: 0,
             canPost: false,
             requiresTag: false,
             searchText: "",
@@ -127,6 +137,13 @@ struct ForumMemoKey: Hashable, Sendable {
     var searchText: String
     var isSearchingThreads: Bool
     var threadSearchFailed: Bool
+    /// "NEW" goes when a post is first opened, which is when it first has a
+    /// read state — and against the forum's mark as the board opened.
+    var readStateCount: Int
+    var readMark: MessageID?
+    /// An opening message from somebody blocked or ignored is not previewed.
+    var blockedUserIDs: Set<UserID>
+    var ignoredUserIDs: Set<UserID>
 }
 
 extension AppModel {
@@ -153,7 +170,11 @@ extension AppModel {
             roleRevision: roleRevision,
             searchText: threadSearchText,
             isSearchingThreads: isSearchingThreads,
-            threadSearchFailed: threadSearchFailed
+            threadSearchFailed: threadSearchFailed,
+            readStateCount: readStates.count,
+            readMark: forumReadMarks[channelID],
+            blockedUserIDs: blockedUserIDs,
+            ignoredUserIDs: ignoredUserIDs
         )
         if let forumCache, forumCache.key == key { return forumCache.value }
 
@@ -182,13 +203,15 @@ extension AppModel {
         // reached — see `DiscordREST.searchThreads`.
         let phrase = threadSearchText.trimmingCharacters(in: .whitespacesAndNewlines)
         let isSearching = !phrase.isEmpty
-        let postIDs = isSearching ? threadSearchResults : browseOrder(of: channelID, board: board)
+        let sections = isSearching
+            ? (live: threadSearchResults, older: [])
+            : browseSections(of: channelID, board: board)
 
-        var posts: [ForumPostPresentation] = []
-        posts.reserveCapacity(postIDs.count)
+        let readMark = forumReadMarks[channelID]
+        let joinedAt = guildID.flatMap { guilds[$0]?.joinedAt }
 
-        for postID in postIDs {
-            guard let post = channelIndex[postID] else { continue }
+        func present(_ postID: ChannelID) -> ForumPostPresentation? {
+            guard let post = channelIndex[postID] else { return nil }
             let firstMessage = board.firstMessages[postID]
             let authorID = firstMessage?.authorID ?? post.ownerID
             let user = authorID.flatMap { users[$0] }
@@ -200,42 +223,59 @@ extension AppModel {
             let color = member.map {
                 RoleResolver.nameColorValue(of: $0.roleIDs, in: guildRoles)
             }?.map { UserColor.desaturated($0, by: saturation) }
+            // Discord's card (`ep`): an opening message from somebody blocked
+            // or ignored is not shown, and one that is gone says so.
+            let opener: Opener = if let firstMessage {
+                blockedUserIDs.contains(firstMessage.authorID) ? .blocked
+                    : ignoredUserIDs.contains(firstMessage.authorID) ? .ignored
+                    : .shown(firstMessage)
+            } else if board.detailsAnswered.contains(postID) {
+                .deleted
+            } else {
+                .loading
+            }
+            // An applied tag the forum no longer defines is dropped: a deleted
+            // tag leaves its id on every post that had it.
+            let tags = post.appliedTags.compactMap { tagsByID[$0] }
 
-            posts.append(
-                ForumPostPresentation(
-                    id: postID,
-                    title: post.name,
-                    // An applied tag the forum no longer defines is dropped:
-                    // a deleted tag leaves its id on every post that had it.
-                    tags: post.appliedTags.compactMap { tagsByID[$0] },
-                    authorName: name,
-                    authorColorValue: color,
-                    avatarURL: authorID.map {
-                        avatarURL(forUserID: $0, inGuild: guildID, side: Metrics.avatarRow)
-                    } ?? nil,
-                    monogram: user?.monogram ?? "",
-                    preview: Self.previewLine(
-                        author: name,
-                        colorValue: color,
-                        message: firstMessage
-                    ),
-                    thumbnailURL: firstMessage.flatMap(Self.thumbnailURL),
-                    messageCount: post.threadMessageCount ?? 0,
-                    // `lastMessageID` is a snowflake, so its own timestamp is the
-                    // last activity — there is no separate date field, and the
-                    // post's id is the fallback for one that has never been
-                    // replied to.
-                    lastActivity: post.lastMessageID?.timestamp ?? postID.timestamp,
-                    postedAt: post.threadMetadata?.createdAt ?? postID.timestamp,
-                    isPinned: post.isPinnedPost,
-                    isArchived: post.threadMetadata?.isArchived ?? false,
-                    isLocked: post.threadMetadata?.isLocked ?? false,
-                    isFollowed: threadMemberships[postID] != nil,
-                    isMuted: threadMemberships[postID]?.isMutedNow() ?? false,
-                    defaultReaction: channel.defaultReaction
-                )
+            return ForumPostPresentation(
+                id: postID,
+                title: post.name,
+                tags: tags,
+                authorName: name,
+                authorColorValue: color,
+                avatarURL: authorID.map {
+                    avatarURL(forUserID: $0, inGuild: guildID, side: Metrics.avatarRow)
+                } ?? nil,
+                monogram: user?.monogram ?? "",
+                preview: Self.previewLine(author: name, colorValue: color, opener: opener),
+                thumbnailURL: firstMessage.flatMap { message in
+                    // Nothing of a hidden author's message is drawn — its
+                    // picture least of all.
+                    if case .shown = opener { Self.thumbnailURL(message) } else { nil }
+                },
+                messageCount: post.threadMessageCount ?? 0,
+                // `lastMessageID` is a snowflake, so its own timestamp is the
+                // last activity — there is no separate date field, and the
+                // post's id is the fallback for one that has never been
+                // replied to.
+                lastActivity: post.lastMessageID?.timestamp ?? postID.timestamp,
+                postedAt: post.threadMetadata?.createdAt ?? postID.timestamp,
+                isPinned: post.isPinnedPost,
+                isArchived: post.threadMetadata?.isArchived ?? false,
+                isLocked: post.threadMetadata?.isLocked ?? false,
+                isFollowed: threadMemberships[postID] != nil,
+                isMuted: threadMemberships[postID]?.isMutedNow() ?? false,
+                isNew: ForumOrder.isNew(
+                    post, readMark: readMark, isOpened: readStates[postID] != nil, joinedAt: joinedAt
+                ),
+                filteredTagIDs: board.query.tags.intersection(tags.map(\.id)),
+                defaultReaction: channel.defaultReaction
             )
         }
+
+        let posts = sections.live.compactMap(present)
+        let olderPosts = sections.older.compactMap(present)
 
         return ForumPresentation(
             channelID: channelID,
@@ -244,13 +284,13 @@ extension AppModel {
             query: board.query,
             availableTags: channel.availableTags,
             posts: posts,
+            olderPosts: olderPosts,
             isLoading: isSearching ? isSearchingThreads : board.isLoading,
             loadFailed: isSearching ? threadSearchFailed : board.loadFailed,
             // A search does not page: its query carries no offset to advance,
             // and running the browse pager underneath results it did not fetch
             // would splice the two lists together.
             hasMore: board.hasMore && !isSearching,
-            totalResults: isSearching ? posts.count : board.totalResults,
             canPost: permissionGate.canSend(in: channelID),
             requiresTag: channel.requiresTag,
             searchText: threadSearchText,
@@ -258,31 +298,49 @@ extension AppModel {
         )
     }
 
-    /// The author, then the opening message reduced to one line.
-    private static func previewLine(
-        author: String,
-        colorValue: UInt32?,
-        message: Message?
-    ) -> AttributedString {
+    /// What the card can say about a post's opening message.
+    private enum Opener {
+        case shown(Message)
+        /// Not here yet — `post-data` has not answered.
+        case loading
+        /// Discord's "Original message was deleted".
+        case deleted
+        case blocked
+        case ignored
+    }
+
+    /// The author, then the opening message reduced to one line — or Discord's
+    /// words for why it is not there (`ep`): "Post contains a blocked message"
+    /// alone, without the name; an ignored author named before "Post contains
+    /// an ignored message"; "Original message was deleted".
+    private static func previewLine(author: String, colorValue: UInt32?, opener: Opener) -> AttributedString {
+        let words: String? = switch opener {
+        case .shown(let message): Self.excerpt(message)
+        case .loading: nil
+        case .deleted: "Original message was deleted"
+        case .blocked: "Post contains a blocked message"
+        case .ignored: "Post contains an ignored message"
+        }
         var line = AttributedString()
-        if !author.isEmpty {
+        if case .blocked = opener {} else if !author.isEmpty {
             var name = AttributedString(author)
             name.foregroundColor = colorValue.map { Color(hex: $0) } ?? InkColor.secondary
             line.append(name)
-            if message != nil {
+            if words != nil {
                 var separator = AttributedString(": ")
                 separator.foregroundColor = InkColor.tertiary
                 line.append(separator)
             }
         }
-        guard let message else { return line }
-        var body = AttributedString(Self.excerpt(message))
+        guard let words else { return line }
+        var body = AttributedString(words)
         body.foregroundColor = InkColor.tertiary
         line.append(body)
         return line
     }
 
-    /// A board's posts: the live ones, then the archived pages.
+    /// A board's two sections: the live posts in Discord's order, then the
+    /// archived pages under "Older Posts".
     ///
     /// **`threads/search?archived=true` returns only the archived**, which is
     /// half a board — `forums.har` proves it: every thread the search answered
@@ -291,24 +349,24 @@ extension AppModel {
     /// posts, and the client already had them, because active threads arrive
     /// over the gateway rather than on any route.
     ///
-    /// So the live ones come out of the index — where READY, GUILD_CREATE and
-    /// THREAD_LIST_SYNC put them — and go in front. `ChannelIndex` already keeps
-    /// a parent's threads in most-recent-first order, which is the order a board
-    /// wants, so there is nothing to sort here.
+    /// So the live ones come out of the index — where READY, GUILD_CREATE,
+    /// THREAD_LIST_SYNC and the active fetch put them — and are filtered and
+    /// sorted here, on the client, as Discord's are: the server never saw the
+    /// board's question about them. See `ForumOrder`.
     ///
-    /// A thread in both is kept once, in its live position: a post archived
-    /// between the gateway announcing it and the page being fetched would
-    /// otherwise appear twice.
-    private func browseOrder(of channelID: ChannelID, board: ForumBoard) -> [ChannelID] {
+    /// A thread in both is kept once, as live: a post opened again since its
+    /// archived page was fetched belongs at the top, and one the tag filter
+    /// leaves out belongs nowhere.
+    private func browseSections(of channelID: ChannelID, board: ForumBoard) -> (live: [ChannelID], older: [ChannelID]) {
         // `!= true`, not `== false`: a thread whose payload carried no
         // `thread_metadata` is one nothing has told us is archived, and reading
         // that as archived would drop it off the board entirely.
-        let live = channelIndex.threadIDs(inParent: channelID).filter {
-            channelIndex[$0]?.threadMetadata?.isArchived != true
-        }
-        guard !live.isEmpty else { return board.postIDs }
-        let seen = Set(live)
-        return live + board.postIDs.filter { !seen.contains($0) }
+        let liveThreads = channelIndex.threadIDs(inParent: channelID)
+            .compactMap { channelIndex[$0] }
+            .filter { $0.threadMetadata?.isArchived != true }
+        let live = ForumOrder.livePosts(liveThreads, query: board.query)
+        let liveIDs = Set(liveThreads.map(\.id))
+        return (live, board.postIDs.filter { !liveIDs.contains($0) })
     }
 
     /// The opening message reduced to one line.

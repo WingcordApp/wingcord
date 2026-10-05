@@ -21,6 +21,9 @@ struct ImageWell: View {
     var detail: String
     var url: URL?
     var isCircular: Bool
+    /// Whether a GIF is offered at all — an animated icon is a Level 1 perk,
+    /// and a GIF picked for a server without it uploads as a still.
+    var allowsAnimated = true
     var onPick: (ImageData) -> Void
     /// Nil where there is nothing to remove.
     var onRemove: (() -> Void)?
@@ -81,86 +84,126 @@ struct ImageWell: View {
     }
 
     private func pick() {
-        let panel = NSOpenPanel()
-        panel.allowsMultipleSelection = false
-        panel.canChooseDirectories = false
-        panel.allowedContentTypes = [.png, .jpeg, .gif]
-        guard panel.runModal() == .OK, let chosen = panel.url else { return }
-        do {
-            let bytes = try Data(contentsOf: chosen)
-            // GIF goes up as GIF — an animated icon re-encoded to PNG is a
-            // still, and the reader would have uploaded an animation and got a
-            // frame. Everything else is normalised to PNG, which is what the
-            // reference client does when it crops.
-            let isGIF = chosen.pathExtension.lowercased() == "gif"
+        Task {
+            // Through the shared encoder: a still goes up as PNG and a GIF
+            // keeps its frames — what the reference does when it crops.
+            guard let file = await ExpressionUpload.pickImages(allowsAnimated: allowsAnimated).first
+            else { return }
             failure = nil
-            onPick(isGIF ? .gif(bytes) : ImageData(mimeType: mimeType(for: chosen), bytes: bytes))
-        } catch {
-            failure = "That file could not be read."
-        }
-    }
-
-    private func mimeType(for url: URL) -> String {
-        switch url.pathExtension.lowercased() {
-        case "jpg", "jpeg": "image/jpeg"
-        case "gif": "image/gif"
-        default: "image/png"
+            onPick(file.image)
         }
     }
 }
 
 // MARK: - The banner swatch
 
-/// The colours the Server Profile page offers for `brand_color_primary`.
+/// The colours Discord's Server Profile page offers for `brand_color_primary`.
 ///
-/// **One of these is captured and the rest are this client's own.** Choosing the
-/// pink tile in the reference sent `"#ff1c90"`, which is the second entry below;
-/// the other nine tiles' exact values were never in a request, and inventing
-/// nine hex codes and presenting them as Discord's would be a fact stated
-/// confidently and wrong.
+/// **Discord's own nine** (`aA` in module `282435`), by name and in its order.
+/// Choosing Soul sent `"#ff1c90"` in the capture, and the other eight are read
+/// out of the same table.
 ///
-/// So the grid is a spread of hues this client picked, and the colour well
-/// beside it takes **any** value — which the route accepts, being a free hex
-/// string. That is strictly more than the reference offers, and it is honest:
-/// nothing here claims to be Discord's palette.
+/// **There are ten tiles, and the first is not one of these.** "Server Icon
+/// Color" is the icon's first swatch through the same quantiser a profile's
+/// colours come from, and choosing it sends `brand_color_primary: null` — the
+/// absence of a brand colour, from which every card then derives one
+/// (`updateGuildProfile(id, {brandColorPrimary: null, customBanner: null})`).
 enum BrandColor {
-    /// The captured one. Kept named so the comment above stays checkable.
-    static let capturedPink: UInt32 = 0xFF1C90
+    struct Preset: Hashable, Identifiable {
+        var name: String
+        var value: UInt32
+        var id: UInt32 { value }
+    }
 
-    static let swatches: [UInt32] = [
-        0x1F1F23, capturedPink, 0xE0344B, 0xF0883B,
-        0xF5C518, 0xA855C7, 0x2DA8F0, 0x3CD6B4,
-        0x5A9E36, 0x6E6E78,
+    static let presets: [Preset] = [
+        Preset(name: "Soul", value: 0xFF1C90),
+        Preset(name: "Volcano", value: 0xE81D1E),
+        Preset(name: "Marsh", value: 0xE86E1D),
+        Preset(name: "Thunder", value: 0xE8C02F),
+        Preset(name: "Rising", value: 0x71368A),
+        Preset(name: "Zephyr", value: 0x029FFC),
+        Preset(name: "Cascade", value: 0x4FE2CA),
+        Preset(name: "Earth", value: 0x406601),
+        Preset(name: "Boulder", value: 0x272727),
     ]
 }
 
+/// One banner tile, drawn exactly as the cards draw the banner it chooses:
+/// Discord's `n6` glow, the colour brightened at the foot — `GuildBannerArt`.
 struct BrandSwatch: View {
-    var value: UInt32
+    var colour: UInt32
+    var name: String
     var isSelected: Bool
+    var isEnabled = true
     var choose: () -> Void
 
     var body: some View {
         Button(action: choose) {
-            RoundedRectangle(cornerRadius: 6, style: .continuous)
-                .fill(
-                    LinearGradient(
-                        colors: [Color(hex: value).opacity(0.55), Color(hex: value)],
-                        startPoint: .top,
-                        endPoint: .bottom
-                    )
-                )
-                .frame(height: 38)
-                .overlay {
-                    RoundedRectangle(cornerRadius: 6, style: .continuous)
-                        .strokeBorder(
-                            isSelected ? InkColor.solid : swatchRing,
-                            lineWidth: isSelected ? 2 : 1
-                        )
+            Canvas { context, size in
+                context.withCGContext { cg in
+                    GuildBannerArt.drawGlow(colour, in: CGRect(origin: .zero, size: size), context: cg)
                 }
+            }
+            .frame(height: 38)
+            .clipShape(.rect(cornerRadius: 6, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .strokeBorder(
+                        isSelected ? InkColor.solid : swatchRing,
+                        lineWidth: isSelected ? 2 : 1
+                    )
+            }
+            .contentShape(.rect(cornerRadius: 6))
         }
         .buttonStyle(.plain)
-        .accessibilityLabel("Banner colour")
+        .disabled(!isEnabled)
+        .help(name)
+        .accessibilityLabel(Text(name))
         .accessibilityAddTraits(isSelected ? [.isSelected, .isButton] : .isButton)
+    }
+}
+
+/// A discoverable server's own banner artwork, as the grid's last tile —
+/// Discord's `Is`. Clicking it uploads; choosing any colour tile clears it.
+struct CustomBannerTile: View {
+    var url: URL?
+    var isSelected: Bool
+    var onPick: (ImageData) -> Void
+
+    var body: some View {
+        Button(action: pick) {
+            ZStack {
+                if let url {
+                    RemoteImage(url: url, side: 120) { SettingsSurface.controlTrough }
+                        .scaledToFill()
+                } else {
+                    SettingsSurface.controlTrough
+                }
+                Image(systemName: "pencil")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(.white)
+                    .shadow(radius: 2)
+            }
+            .frame(height: 38)
+            .frame(maxWidth: .infinity)
+            .clipShape(.rect(cornerRadius: 6, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .strokeBorder(isSelected ? InkColor.solid : swatchRing, lineWidth: isSelected ? 2 : 1)
+            }
+            .contentShape(.rect(cornerRadius: 6))
+        }
+        .buttonStyle(.plain)
+        .help("Upload Banner")
+        .accessibilityLabel(Text("Custom banner"))
+        .accessibilityAddTraits(isSelected ? [.isSelected, .isButton] : .isButton)
+    }
+
+    private func pick() {
+        Task {
+            guard let file = await ExpressionUpload.pickImages(allowsAnimated: false).first else { return }
+            onPick(file.image)
+        }
     }
 }
 
@@ -169,70 +212,129 @@ struct BrandSwatch: View {
 enum GuildTraitLimits {
     /// Discord's own cap, stated on the page.
     static let maximum = 5
+    /// A trait's label, at most — Discord's field caps it at 24.
+    static let labelLength = 24
 }
 
-/// Up to five words, each with an optional emoji.
+/// Discord's five trait slots, each an emoji and up to twenty-four characters.
 ///
-/// **Position is the array index and is written as such** — see
-/// `updateGuildProfile`, which renumbers on every save. A list that echoed a
-/// stored position would send 0, 2, 3 after a middle entry was deleted.
+/// **Five fields, always** — Discord's page draws all five whether or not they
+/// hold anything, and an empty one is simply not sent (`updateGuildProfile`
+/// drops it). Position is the index of what is kept, which is what the
+/// captured body sends.
+///
+/// **A Unicode emoji goes up as its shortcode**, `fire` rather than 🔥 — see
+/// `GuildTrait` — so a glyph picked from the picker is turned back into its
+/// name before it is stored. A server's custom emoji goes up as its id.
 struct TraitEditor: View {
     @Binding var traits: [GuildTrait]
+    var isEnabled: Bool
     var commit: () -> Void
 
     var body: some View {
-        VStack(alignment: .leading, spacing: Spacing.base) {
-            ForEach(Array(traits.enumerated()), id: \.offset) { index, trait in
-                HStack(spacing: Spacing.base) {
-                    Text(trait.glyph ?? "•")
-                        .font(.system(size: 14))
-                        .frame(width: 20)
-                    TextField(
-                        "Trait",
-                        text: Binding(
-                            get: { index < traits.count ? traits[index].label : "" },
-                            set: { if index < traits.count { traits[index].label = $0 } }
-                        )
-                    )
-                    .textFieldStyle(.plain)
-                    .font(SettingsType.rowLabel)
-                    .foregroundStyle(Ink.primary)
-                    .onSubmit(commit)
-                    RowIconButton(symbolName: "xmark", label: "Remove trait", role: .destructive) {
-                        guard index < traits.count else { return }
-                        traits.remove(at: index)
-                        commit()
-                    }
-                }
-                .padding(.horizontal, Spacing.base)
-                .padding(.vertical, 6)
-                .background(SettingsSurface.controlTrough, in: .settingsRect(7))
-            }
-
-            if traits.count < GuildTraitLimits.maximum {
-                Button {
-                    // Position is assigned at save, so a new trait takes the
-                    // count as a placeholder and nothing depends on it.
-                    traits.append(GuildTrait(id: traits.count, label: ""))
-                } label: {
-                    Label("Add a trait", systemImage: "plus")
-                        .font(SettingsType.rowLabel)
-                }
-                .buttonStyle(.plain)
-                .foregroundStyle(Palette.accent)
-            }
-
-            // A save button, because a trait list has no single field to blur
-            // out of — deleting a row commits immediately, and typing into one
-            // has to be finished deliberately.
-            HStack {
-                Spacer()
-                Button("Save traits", action: commit)
-                    .buttonStyle(.glass)
-                    .controlSize(.small)
+        VStack(spacing: Spacing.base) {
+            ForEach(0..<GuildTraitLimits.maximum, id: \.self) { index in
+                TraitSlot(
+                    trait: slot(index),
+                    number: index + 1,
+                    isEnabled: isEnabled,
+                    commit: commit
+                )
             }
         }
         .padding(SettingsMetrics.cardContentInset)
+    }
+
+    /// Slot `index` of five, over a list that may hold fewer.
+    private func slot(_ index: Int) -> Binding<GuildTrait> {
+        Binding(
+            get: { index < traits.count ? traits[index] : GuildTrait(id: index, label: "") },
+            set: { value in
+                while traits.count <= index {
+                    traits.append(GuildTrait(id: traits.count, label: ""))
+                }
+                traits[index] = value
+            }
+        )
+    }
+}
+
+private struct TraitSlot: View {
+    @Binding var trait: GuildTrait
+    var number: Int
+    var isEnabled: Bool
+    var commit: () -> Void
+
+    @FocusState private var isFocused: Bool
+    /// The label as it stood when the field took focus, so leaving it unchanged
+    /// writes nothing.
+    @State private var labelOnFocus = ""
+
+    private var isEmpty: Bool { trait.label.isEmpty && trait.emoji == nil && trait.emojiName == nil }
+
+    var body: some View {
+        HStack(spacing: Spacing.base) {
+            EmojiSlotButton(
+                emoji: Binding(
+                    get: { trait.emoji },
+                    set: { picked in
+                        apply(picked)
+                        commit()
+                    }
+                ),
+                addLabel: "Add emoji, trait \(number)",
+                updateLabel: { "Change emoji, \($0.name), trait \(number)" },
+                side: 26,
+                isEnabled: isEnabled
+            )
+            TextField(
+                "Trait \(number)",
+                text: Binding(
+                    get: { trait.label },
+                    set: { trait.label = String($0.prefix(GuildTraitLimits.labelLength)) }
+                )
+            )
+            .textFieldStyle(.plain)
+            .font(SettingsType.rowLabel)
+            .foregroundStyle(Ink.primary)
+            .focused($isFocused)
+            .disabled(!isEnabled)
+            .onSubmit { isFocused = false }
+            .onChange(of: isFocused) { _, focused in
+                if focused {
+                    labelOnFocus = trait.label
+                } else if trait.label != labelOnFocus {
+                    commit()
+                }
+            }
+            if !isEmpty && isEnabled {
+                RowIconButton(symbolName: "xmark", label: "Clear trait \(number)") {
+                    trait = GuildTrait(id: trait.id, label: "")
+                    commit()
+                }
+            }
+        }
+        .padding(.horizontal, Spacing.base)
+        .padding(.vertical, 4)
+        .background(SettingsSurface.controlTrough, in: .settingsRect(7))
+    }
+
+    private func apply(_ picked: EmojiRef?) {
+        guard let picked else {
+            trait.emojiID = nil
+            trait.emojiName = nil
+            trait.emojiAnimated = false
+            return
+        }
+        if let id = picked.id {
+            trait.emojiID = id
+            trait.emojiName = picked.name
+            trait.emojiAnimated = picked.isAnimated
+        } else {
+            trait.emojiID = nil
+            trait.emojiName = UnicodeEmoji.shortcode(for: picked.name) ?? picked.name
+            trait.emojiAnimated = false
+        }
     }
 }
 
@@ -296,7 +398,7 @@ struct GamePickerSheet: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack {
-                Text("Add a game")
+                Text("Games")
                     .font(.system(.headline))
                     .foregroundStyle(Ink.primary)
                 Spacer()
@@ -306,7 +408,7 @@ struct GamePickerSheet: View {
             }
             .padding(Spacing.margin)
 
-            TextField("Search for a game…", text: $query)
+            TextField("Search for a game...", text: $query)
                 .textFieldStyle(.roundedBorder)
                 .padding(.horizontal, Spacing.margin)
 
@@ -315,7 +417,7 @@ struct GamePickerSheet: View {
                     if isSearching {
                         LoadingRow()
                     } else if results.isEmpty, !query.isEmpty {
-                        Text("No games matched.")
+                        Text("No games match your search")
                             .font(SettingsType.rowLabel)
                             .foregroundStyle(Ink.secondary)
                             .padding(Spacing.margin)
@@ -399,7 +501,7 @@ struct BadgePicker: View {
                     }
                     if !isUnlocked {
                         SettingsFootnote(
-                            "This pack is not unlocked for this server.",
+                            "Use Boosts to unlock special, themed badge packs for your Server Tag!",
                             symbolName: "lock.fill"
                         )
                     }
@@ -418,7 +520,7 @@ private struct BadgeTile: View {
     var body: some View {
         Button(action: choose) {
             VStack(spacing: 2) {
-                Image(systemName: badge.symbolName)
+                Image(symbol: badge.symbolName)
                     .font(.system(size: 18))
                     .foregroundStyle(isEnabled ? Ink.primary : Ink.tertiary)
                     .frame(height: 24)

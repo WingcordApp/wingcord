@@ -191,10 +191,8 @@ struct EventMoreMenu: View {
             Button("Start Event", systemImage: "play") { confirm(.start) }
         }
         if canManage {
-            // Every field of an event is edited in Server Settings.
             Button("Edit Event", systemImage: "pencil") {
-                model.eventsPanel = nil
-                ServerSettingsWindow.open(event.guildID, section: .events)
+                model.openEventEditor(inGuild: event.guildID, event: event)
             }
         }
         if canManage, offersCancel(isActive: isActive, date: date) {

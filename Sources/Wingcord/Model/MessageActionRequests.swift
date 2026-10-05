@@ -215,6 +215,14 @@ struct GuildMarkHover: Hashable, Sendable {
     var frame: CGRect
 }
 
+/// The mark of something a moderator did on an AutoMod alert, under the
+/// pointer, and where it is in the transcript's clip view — the space its
+/// tooltip is laid out in, for the reason `ReactionHover.chipFrame` is.
+struct AutoModActionHover: Hashable, Sendable {
+    var action: AutoModExecutedAction
+    var frame: CGRect
+}
+
 /// One chip's reactors, as the tooltip asks for them.
 struct ReactorKey: Hashable, Sendable {
     var messageID: MessageID

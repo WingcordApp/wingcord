@@ -202,7 +202,11 @@ struct PollEditorSheet: View {
     private func answerRow(_ answer: Binding<PollDraft.Answer>, number: Int) -> some View {
         let id = answer.wrappedValue.id
         return HStack(spacing: Spacing.base) {
-            PollAnswerEmojiButton(emoji: answer.emoji, number: number)
+            EmojiSlotButton(
+                emoji: answer.emoji,
+                addLabel: "Add emoji, answer \(number)",
+                updateLabel: { "Update emoji, \($0.name), answer \(number)" }
+            )
             TextField("Type your answer", text: answer.text)
                 .textFieldStyle(.plain)
                 .font(.system(.body))
@@ -269,7 +273,7 @@ struct PollEditorSheet: View {
     /// The clock beside Post: Discord's Schedule Poll, lit while a time is set.
     private var scheduleControl: some View {
         Button { isScheduling = true } label: {
-            Image(systemName: draft.scheduledAt == nil ? "clock" : "clock.fill")
+            Image(symbol: draft.scheduledAt == nil ? "clock" : "clock.fill")
                 .font(.system(size: 14, weight: .semibold))
                 .frame(width: Metrics.composerControlHeight, height: Metrics.composerControlHeight)
                 .background(
@@ -377,64 +381,3 @@ struct PollEditorSheet: View {
     }
 }
 
-/// An answer's emoji: the picker when there is none, and Discord's Replace
-/// Emoji / Remove Emoji when there is — one popover that swaps its contents.
-private struct PollAnswerEmojiButton: View {
-    @Binding var emoji: EmojiRef?
-    var number: Int
-
-    @State private var isOpen = false
-    @State private var isPicking = false
-
-    var body: some View {
-        Button {
-            isPicking = emoji == nil
-            isOpen = true
-        } label: {
-            Group {
-                if let emoji {
-                    ExpressionGlyph(emoji: emoji, side: 20)
-                } else {
-                    Image(systemName: "face.smiling")
-                        .font(.system(size: 15, weight: .medium))
-                        .foregroundStyle(Ink.secondary)
-                }
-            }
-            .frame(width: 30, height: 30)
-            .contentShape(.circle)
-        }
-        .buttonStyle(.plain)
-        .accessibilityLabel(Text(label))
-        .popover(isPresented: $isOpen, arrowEdge: .bottom) {
-            if isPicking {
-                ExpressionPicker(
-                    mode: .emoji,
-                    onPick: { item in
-                        guard case .insert(let token) = item.pick, let picked = EmojiRef(messageToken: token)
-                        else { return }
-                        emoji = picked
-                        isOpen = false
-                    },
-                    // A poll answer cannot be a GIF; the picker's signature
-                    // asks for the closure all the same.
-                    onPickGIF: { _ in }
-                )
-            } else {
-                VStack(spacing: 0) {
-                    FlyoutRow(title: "Replace Emoji", symbolName: "face.smiling") { isPicking = true }
-                    FlyoutRow(title: "Remove Emoji", symbolName: "trash", isDestructive: true) {
-                        emoji = nil
-                        isOpen = false
-                    }
-                }
-                .padding(.vertical, Spacing.tight)
-                .frame(width: 200)
-            }
-        }
-    }
-
-    private var label: String {
-        guard let emoji else { return "Add emoji, answer \(number)" }
-        return "Update emoji, \(emoji.name), answer \(number)"
-    }
-}

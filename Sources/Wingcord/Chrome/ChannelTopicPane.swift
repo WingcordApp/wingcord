@@ -27,7 +27,7 @@ struct ChannelTopicPane: View {
     var body: some View {
         VStack(alignment: .leading, spacing: Spacing.base) {
             HStack(spacing: Spacing.tight) {
-                Image(systemName: symbolName)
+                Image(symbol: symbolName)
                     .font(.system(size: 12))
                     .foregroundStyle(Ink.tertiary)
                 Text(name)

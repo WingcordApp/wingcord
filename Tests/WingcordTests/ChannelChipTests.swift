@@ -110,7 +110,7 @@ struct ChannelChipTests {
     func post() {
         let chip = text("https://discord.com/channels/1/12/threads/13/5")
         #expect(chip.attributed.string == "\(Self.mark) help \(Self.mark) \(Self.mark) Why")
-        #expect(symbols(chip) == ["list.bullet.rectangle", "chevron.compact.right", "text.bubble"])
+        #expect(symbols(chip) == ["list.bullet.rectangle", "chevron.compact.right", "discord.thread"])
     }
 
     @Test("A channel of another kind leads with its own mark")

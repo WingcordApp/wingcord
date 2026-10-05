@@ -127,17 +127,48 @@ public struct InviteAcceptance: Hashable, Sendable {
     /// server you are already in succeeds, and treating that as a fresh join is
     /// how a client ends up asking a three-year member to read the rules again.
     public var isNewMember: Bool
+    /// Whether the server reviews applications — `MEMBER_VERIFICATION_GATE_ENABLED`
+    /// and `MEMBER_VERIFICATION_MANUAL_APPROVAL` on the invite's guild, Discord's
+    /// `h` in `610101`.
+    ///
+    /// **Such an accept joins nobody.** It opens a join request, no
+    /// `GUILD_CREATE` follows, and what comes next is the application form —
+    /// Discord's `transitionToInvite` opens it for a new member of one.
+    public var isApplication: Bool
+    /// The request such an accept opened, where the answer carried one, and
+    /// the server as the invite describes it — what Discord's store files on
+    /// `INVITE_ACCEPT_SUCCESS`, so the application is in the Pending
+    /// Applications folder before it has been sent.
+    public var joinRequest: OwnJoinRequest?
+    public var applicationGuild: JoinRequestGuild?
+    /// The server's Welcome Screen, where the invite's guild carried one —
+    /// Discord's store files `guild.welcome_screen` off the accept and greets
+    /// the new member with it.
+    public var welcomeScreen: WelcomeScreen?
+    /// The invite's guild's features — whether Onboarding has replaced the
+    /// Welcome Screen is one of them.
+    public var features: Set<String>
 
     public init(
         guildID: GuildID,
         channelID: ChannelID? = nil,
         requiresVerification: Bool = false,
-        isNewMember: Bool = false
+        isNewMember: Bool = false,
+        isApplication: Bool = false,
+        joinRequest: OwnJoinRequest? = nil,
+        applicationGuild: JoinRequestGuild? = nil,
+        welcomeScreen: WelcomeScreen? = nil,
+        features: Set<String> = []
     ) {
         self.guildID = guildID
         self.channelID = channelID
+        self.joinRequest = joinRequest
+        self.applicationGuild = applicationGuild
+        self.welcomeScreen = welcomeScreen
+        self.features = features
         self.requiresVerification = requiresVerification
         self.isNewMember = isNewMember
+        self.isApplication = isApplication
     }
 }
 

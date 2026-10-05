@@ -197,7 +197,7 @@ private struct OverlayChatHeader: View {
         action: @escaping () -> Void
     ) -> some View {
         Button(action: action) {
-            Image(systemName: symbol)
+            Image(symbol: symbol)
                 .font(.system(size: 12, weight: .medium))
                 .foregroundStyle(tint ?? Color(nsColor: .secondaryLabelColor))
                 .frame(width: 24, height: 24)
@@ -255,6 +255,7 @@ private struct OverlayChatBody: View {
             .overlay { MessageActionBarOverlay(channelID: channelID) }
             .overlay { ReactionTooltipOverlay(channelID: channelID) }
             .overlay { GuildMarkTooltipOverlay() }
+            .overlay { AutoModActionTooltipOverlay(channelID: channelID) }
             // **The transcript runs to the panel's foot, UNDER the composer**,
             // and this one modifier is the whole of "the composer floats".
             //
@@ -398,7 +399,7 @@ struct OverlayRestingSlot: View {
 
     var body: some View {
         HStack(spacing: Spacing.snug) {
-            Image(systemName: symbol)
+            Image(symbol: symbol)
                 .font(.system(size: 18, weight: .light))
                 .foregroundStyle(Ink.tertiary)
             VStack(alignment: .leading, spacing: 1) {

@@ -98,7 +98,7 @@ extension SessionController {
                 let details = try await rest.forumPostData(
                     in: channelID, threadIDs: postIDs
                 )
-                model.applyForumPostDetails(details, in: channelID)
+                model.applyForumPostDetails(details, requested: postIDs, in: channelID)
             } catch {
                 Self.trace("post-data \(channelID) failed: \(Self.describe(error))")
             }

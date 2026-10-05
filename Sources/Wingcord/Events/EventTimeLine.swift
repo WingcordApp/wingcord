@@ -56,7 +56,7 @@ struct EventTimeLine: View {
                 .frame(height: 16)
                 .background(Capsule().fill(Palette.accent))
         } else {
-            Image(systemName: state == .ended ? "clock" : "calendar")
+            Image(symbol: state == .ended ? "clock" : "calendar")
                 .font(.system(.subheadline, weight: .semibold))
                 .foregroundStyle(markColor(state))
         }

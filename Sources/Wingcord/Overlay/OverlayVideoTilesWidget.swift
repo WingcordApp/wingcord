@@ -150,7 +150,7 @@ private struct OverlayVideoTile: View {
     /// The reference's own control, and the one that decides the decode.
     private var checkbox: some View {
         Button(action: toggle) {
-            Image(systemName: isShown ? "checkmark.square.fill" : "square")
+            Image(symbol: isShown ? "checkmark.square.fill" : "square")
                 .font(.system(size: 13, weight: .semibold))
                 .foregroundStyle(isShown ? Palette.accent : Color.white.opacity(0.8))
                 // **A shadow rather than a plate.** The mark sits over a moving

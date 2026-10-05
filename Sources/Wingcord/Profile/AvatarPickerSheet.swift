@@ -89,7 +89,7 @@ struct AvatarPickerSheet: View {
     ) -> some View {
         Button(action: action) {
             VStack(spacing: Spacing.base) {
-                Image(systemName: symbol)
+                Image(symbol: symbol)
                     .font(.system(size: 22, weight: .regular))
                     .foregroundStyle(InkColor.secondary)
                 Text(title)

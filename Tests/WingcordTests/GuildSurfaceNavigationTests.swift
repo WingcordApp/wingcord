@@ -55,7 +55,7 @@ struct GuildSurfaceNavigationTests {
     @Test("A server nothing is known about offers only its channel list")
     func unknownServerOffersOnlyBrowse() {
         let model = model()
-        #expect(model.guildSurfaceRows(for: guildID) == [.browseChannels])
+        #expect(model.guildSurfaceRows(for: guildID) == [.browseChannels, .members])
     }
 
     /// The row **upgrades in place** once the questions land. A label changing
@@ -74,7 +74,7 @@ struct GuildSurfaceNavigationTests {
                 )
             ]
         )
-        #expect(model.guildSurfaceRows(for: guildID) == [.channelsAndRoles])
+        #expect(model.guildSurfaceRows(for: guildID) == [.channelsAndRoles, .members])
     }
 
     /// A community server whose onboarding is configured but empty must not
@@ -83,7 +83,7 @@ struct GuildSurfaceNavigationTests {
     func emptyOnboardingKeepsBrowse() {
         let model = model()
         model.guildOnboardings[guildID] = GuildOnboarding(guildID: guildID, isEnabled: true)
-        #expect(model.guildSurfaceRows(for: guildID) == [.browseChannels])
+        #expect(model.guildSurfaceRows(for: guildID) == [.browseChannels, .members])
     }
 
     /// A guide that answered `enabled: false`, or answered with nothing in it,
@@ -92,14 +92,14 @@ struct GuildSurfaceNavigationTests {
     func emptyGuideGetsNoRow() {
         let model = model()
         model.serverGuides[guildID] = ServerGuide(guildID: guildID, isEnabled: true)
-        #expect(model.guildSurfaceRows(for: guildID) == [.browseChannels])
+        #expect(model.guildSurfaceRows(for: guildID) == [.browseChannels, .members])
 
         model.serverGuides[guildID] = ServerGuide(
             guildID: guildID,
             isEnabled: false,
             resources: [ServerGuide.Resource(id: 0, channelID: ChannelID(rawValue: 2001), title: "Links")]
         )
-        #expect(model.guildSurfaceRows(for: guildID) == [.browseChannels])
+        #expect(model.guildSurfaceRows(for: guildID) == [.browseChannels, .members])
     }
 
     @Test("A guide with something in it comes first")
@@ -113,8 +113,9 @@ struct GuildSurfaceNavigationTests {
         model.gameServers[guildID] = [
             GameServer(id: 5, skuID: "s", name: "Server", status: .online)
         ]
-        // Order is the server's own: the front page, the way in, the extras.
-        #expect(model.guildSurfaceRows(for: guildID) == [.serverGuide, .browseChannels, .gameServers])
+        // Order is the server's own: the front page, the way in, the
+        // moderators' Members, the extras.
+        #expect(model.guildSurfaceRows(for: guildID) == [.serverGuide, .browseChannels, .members, .gameServers])
     }
 
     /// 403, 404 and `[]` all mean the same thing to this row, and all three are
@@ -123,7 +124,24 @@ struct GuildSurfaceNavigationTests {
     func noGameServersNoRow() {
         let model = model()
         model.gameServers[guildID] = []
-        #expect(model.guildSurfaceRows(for: guildID) == [.browseChannels])
+        #expect(model.guildSurfaceRows(for: guildID) == [.browseChannels, .members])
+    }
+
+    /// **The fixture's reader owns a community server**, which is a moderator
+    /// by Discord's rule — so every list above carries Members. Somebody with
+    /// no moderator permission, or a server that is neither community nor
+    /// given the moderation experience, does not.
+    @Test("The Members row is a moderator's, in a community server")
+    func membersRowIsGated() {
+        let plain = model()
+        plain.guilds[guildID]?.features = []
+        #expect(plain.guildSurfaceRows(for: guildID) == [.browseChannels])
+
+        let member = model()
+        member.guilds[guildID]?.ownerID = UserID(rawValue: 77)
+        member.members[guildID] = [readerID: Member(userID: readerID)]
+        member.permissionGate.invalidate()
+        #expect(member.guildSurfaceRows(for: guildID) == [.browseChannels])
     }
 
     // MARK: Selection
@@ -857,19 +875,43 @@ struct ServerSettingsAccessTests {
     @Test("An administrator gets every page, whatever else they hold")
     func administratorGetsEverything() {
         let pages = ServerSettingsSection.reachable(with: .administrator)
-        #expect(pages.count == ServerSettingsSection.groups.flatMap(\.self).count)
+        #expect(pages.count == ServerSettingsSection.groups.flatMap(\.sections).count)
     }
 
     /// A moderator holding one of the ten gets a window — with the pages that
     /// permission reaches and nothing else. That is Discord's behaviour and the
     /// reason the gate is a mask rather than `MANAGE_GUILD` alone.
+    ///
+    /// **Discord's per-page predicates, not one bit each**: Manage Roles also
+    /// reaches Members (the moderator mask), and View Audit Log also reaches
+    /// Bans (`canManageBans || canViewAuditLog`).
     @Test("One moderation permission opens a window of just its own pages")
     func moderatorGetsTheirOwnPages() {
         let pages = ServerSettingsSection.reachable(with: .manageRoles)
-        #expect(pages == [.roles])
+        #expect(pages == [.members, .roles])
 
         let auditor = ServerSettingsSection.reachable(with: .viewAuditLog)
-        #expect(auditor == [.auditLog])
+        #expect(auditor == [.auditLog, .bans])
+    }
+
+    /// Invites asked for Create Invite, which `@everyone` holds — so anybody who
+    /// could open the window for any other reason found the Invites page too.
+    @Test("Invites needs Manage Server, not Create Invite")
+    func invitesNeedManageServer() {
+        #expect(!ServerSettingsSection.invites.isReachable(with: [.createInvite, .manageRoles]))
+        #expect(ServerSettingsSection.invites.isReachable(with: .manageGuild))
+    }
+
+    @Test("Integrations opens for Manage Server or Manage Webhooks")
+    func integrationsEither() {
+        #expect(ServerSettingsSection.integrations.isReachable(with: .manageGuild))
+        #expect(ServerSettingsSection.integrations.isReachable(with: .manageWebhooks))
+    }
+
+    @Test("Creating expressions alone reaches the three expression pages")
+    func createExpressionsReachesExpressions() {
+        let pages = ServerSettingsSection.reachable(with: .createExpressions)
+        #expect(pages == [.emoji, .stickers, .soundboard])
     }
 
     /// Kicking is not on the mask: Discord gates its Members page separately.

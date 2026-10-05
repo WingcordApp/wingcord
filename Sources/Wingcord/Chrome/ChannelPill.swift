@@ -85,7 +85,7 @@ struct ChannelPill: View {
     /// spaced like the pill's own edges.
     private var label: some View {
         HStack(spacing: Spacing.tight) {
-            Image(systemName: symbolName)
+            Image(symbol: symbolName)
                 .foregroundStyle(Ink.tertiary)
             Text(name)
                 .fontWeight(.semibold)
