@@ -51,14 +51,17 @@ enum StickerLookup: Equatable, Sendable {
     case failed
 }
 
-/// The composer's sticker picker, asked for at one pack.
+/// One of the composer's pickers, asked for from outside it — Discord's ⌘E,
+/// ⌘G and ⌘S, which toggle, or "View More Stickers" on a sticker's card,
+/// which opens at one pack.
 ///
-/// A token beside the pack, for `ExpressionJump`'s reason: asking for the same
-/// pack twice is two requests, not one state.
-struct StickerPickerRequest: Equatable, Sendable {
+/// A token beside the rest, for `ExpressionJump`'s reason: asking twice is two
+/// requests, not one state.
+struct ComposerControlRequest: Equatable, Sendable {
     var channelID: ChannelID
-    /// The picker section to open at — `ExpressionSection.id`.
-    var sectionID: String
+    var control: ComposerControl
+    /// The sticker section to open at — `ExpressionSection.id`. Nil for a key.
+    var stickerSectionID: String?
     var token: Int
 }
 

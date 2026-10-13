@@ -21,11 +21,19 @@ import Foundation
 // all rather than a plain reorder queue. A client that does not hold the delay
 // has FEC switched on in its encoder and can never use anybody else's.
 //
-// **The depth is adaptive.** A fixed depth is either too shallow for a bad path
-// — where it drops packets that would have arrived — or too deep for a good
-// one, where it adds latency nobody needed. The target follows the observed
-// inter-arrival jitter and moves slowly, because a depth that chases every
-// spike is a depth that is always resizing, and resizing is audible.
+// **The delay is taken at the start of every talkspurt, and only there.** A
+// talker's packets stop when they stop talking — Discord's gate and Opus's DTX
+// both see to that — so each burst of speech begins with an empty buffer. It
+// gathers its target depth before it plays a frame, and then plays straight
+// through: the delay is in place for the jitter that follows, and it is
+// changed between sentences, never inside one, where a change is audible. An
+// earlier version handed out each packet the moment it existed, which held no
+// delay at all and turned ordinary jitter into concealment.
+//
+// **The depth follows the path.** Twice the measured inter-arrival jitter,
+// rounded up to whole frames, plus the one packet FEC needs — and a packet
+// that arrives after its turn has gone grows it, because that is a path the
+// estimate has not caught up with yet.
 
 /// One speaker's packets, waiting.
 ///
@@ -87,7 +95,16 @@ public final class JitterBuffer: @unchecked Sendable {
     /// decides where the stream starts.
     private var nextSequence: UInt16?
     private var targetDepth = JitterBuffer.minimumDepth
+    /// The depth the late packets have asked for, on top of the jitter's.
+    private var lateAllowance = 0
     private var statistics = Statistics()
+    /// Whether the stream is gathering its depth before it plays — at its
+    /// start, after each silence, and after it ran dry mid-word.
+    private var isGathering = true
+    /// When the talkspurt's first packet arrived, so a burst shorter than the
+    /// target depth — one word — plays once it has had the time it would have
+    /// taken, rather than waiting for packets that are not coming.
+    private var gatheringSince: TimeInterval?
 
     /// Inter-arrival jitter state — RFC 3550 §6.4.1.
     private var lastTransit: Double?
@@ -119,6 +136,7 @@ public final class JitterBuffer: @unchecked Sendable {
         lastTransit = transit
         statistics.jitter = smoothedJitter
 
+        if isGathering, gatheringSince == nil { gatheringSince = arrival }
         guard let expected = nextSequence else {
             nextSequence = sequence
             packets[sequence] = payload
@@ -139,10 +157,10 @@ public final class JitterBuffer: @unchecked Sendable {
                 statistics.duplicates += 1
             } else {
                 statistics.arrivedTooLate += 1
-                // A stream that is late this often is a stream whose buffer is
-                // too shallow. This is the only thing that grows the depth, and
-                // it grows it one packet at a time.
-                targetDepth = min(JitterBuffer.maximumDepth, targetDepth + 1)
+                // A path the jitter estimate has not caught up with yet. The
+                // allowance grows a packet at a time and is spent at the next
+                // talkspurt, when the depth is set.
+                lateAllowance = min(JitterBuffer.maximumDepth, lateAllowance + 1)
             }
             return
         }
@@ -164,30 +182,37 @@ public final class JitterBuffer: @unchecked Sendable {
     // MARK: Reading
 
     /// What to feed the decoder for this tick. Called once per 20 ms per
-    /// speaker, from the mix pump.
-    public func pull() -> Frame {
+    /// speaker, from the mix pump, on the output device's clock.
+    ///
+    /// - Parameter now: the local clock, in seconds — the same clock arrivals
+    ///   were stamped with.
+    public func pull(at now: TimeInterval) -> Frame {
         lock.lock()
         defer { lock.unlock() }
 
         guard let expected = nextSequence else { return .idle }
 
-        // Fill first. Handing out a packet before the buffer has reached its
-        // target depth spends the delay the FEC path needs and never gets it
-        // back — the stream then runs permanently one packet too shallow.
-        if packets.count < targetDepth, !packets.isEmpty, packets[expected] == nil {
-            statistics.depth = packets.count
-            return .conceal
+        if isGathering {
+            // **The delay, taken here and nowhere else.** The depth is set for
+            // this talkspurt from the jitter so far and the late packets since
+            // the last one; then the stream waits for it — or for a burst
+            // shorter than it to have had the time it would have taken.
+            targetDepth = min(
+                JitterBuffer.maximumDepth,
+                max(JitterBuffer.minimumDepth, Self.depth(forJitter: smoothedJitter) + lateAllowance)
+            )
+            let waited = gatheringSince.map { now - $0 } ?? 0
+            guard packets.count >= targetDepth || waited >= Double(targetDepth) * 0.02 else {
+                statistics.depth = packets.count
+                return .idle
+            }
+            isGathering = false
+            lateAllowance = 0
         }
 
         if let payload = packets.removeValue(forKey: expected) {
             nextSequence = expected &+ 1
             statistics.depth = packets.count
-            // A buffer that stays comfortably full on a quiet path is a buffer
-            // holding latency for nothing. Shrink, slowly, and never below the
-            // one packet FEC needs.
-            if packets.count > targetDepth + 2 {
-                targetDepth = max(JitterBuffer.minimumDepth, targetDepth - 1)
-            }
             return .packet(payload)
         }
 
@@ -201,10 +226,14 @@ public final class JitterBuffer: @unchecked Sendable {
             return .forwardCorrection(successor)
         }
 
-        // Nothing at all. If the buffer is empty the speaker has simply stopped
-        // — silence rather than a hole, and no loss to report.
+        // Nothing at all. If the buffer is empty the speaker has stopped — or
+        // the stream ran dry mid-word, which from here is the same thing — and
+        // the next packet starts a talkspurt that gathers its depth again.
+        // Silence rather than a hole, and no loss to report.
         if packets.isEmpty {
             statistics.depth = 0
+            isGathering = true
+            gatheringSince = nil
             return .idle
         }
 
@@ -235,6 +264,18 @@ public final class JitterBuffer: @unchecked Sendable {
         lastTransit = nil
         smoothedJitter = 0
         targetDepth = JitterBuffer.minimumDepth
+        lateAllowance = 0
+        isGathering = true
+        gatheringSince = nil
+    }
+
+    /// Twice the jitter, in whole 20 ms frames, plus the one FEC needs.
+    ///
+    /// - Parameter jitter: RFC 3550's smoothed inter-arrival jitter, in 48 kHz
+    ///   timestamp units.
+    static func depth(forJitter jitter: Double) -> Int {
+        let frames = 2 * jitter / Double(OpusFormat.frameSize)
+        return Int(frames.rounded(.up)) + 1
     }
 
     public var snapshot: Statistics {

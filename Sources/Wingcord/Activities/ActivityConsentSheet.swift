@@ -33,13 +33,6 @@ struct ActivityConsentSheet: View {
             footer
         }
         .frame(width: Self.width)
-        .background(Palette.surface)
-        .clipShape(.rect(cornerRadius: Radius.card, style: .continuous))
-        .overlay {
-            RoundedRectangle(cornerRadius: Radius.card, style: .continuous)
-                .strokeBorder(Ink.quaternary, lineWidth: 1)
-        }
-        .presentationBackground(.clear)
         // Every path out of here answers the request. **Including this one** —
         // a sheet closed with Escape or by clicking away still has a frame
         // behind it waiting for a code.
@@ -175,11 +168,7 @@ struct ActivityConsentSheet: View {
                 request.answer(nil)
                 dismiss()
             }
-            .buttonStyle(.plain)
-            .foregroundStyle(Ink.primary)
-            .padding(.horizontal, Spacing.margin)
-            .frame(height: Metrics.control)
-            .interactiveChrome()
+            .keyboardShortcut(.cancelAction)
 
             Button {
                 authorize()
@@ -192,14 +181,12 @@ struct ActivityConsentSheet: View {
                     }
                 }
                 .frame(minWidth: 84)
-                .frame(height: Metrics.control)
-                .contentShape(.capsule)
             }
-            .buttonStyle(.plain)
-            .foregroundStyle(.white)
-            .emphasisChrome(Palette.accent)
+            .buttonStyle(.borderedProminent)
+            .keyboardShortcut(.defaultAction)
             .disabled(isAuthorizing)
         }
+        .controlSize(.large)
         .padding(Spacing.group)
     }
 

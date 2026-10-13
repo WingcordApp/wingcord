@@ -16,6 +16,15 @@ struct ReplyBody: Encodable {
     }
 }
 
+/// A reply that does not ping its author — Discord's mention toggle off
+/// (`getSendMessageOptionsForReply`): every kind of mention parsed as usual,
+/// only the replied-to author left out. Absent from a reply that pings, which
+/// is how Discord sends one.
+struct QuietReplyMentions: Encodable {
+    var parse = ["users", "roles", "everyone"]
+    var replied_user = false
+}
+
 /// A file already put up through `createUploadSlots` and `upload(_:to:)`.
 ///
 /// **`uploaded_filename` is the object; `filename` is the label.** Sending the
@@ -26,12 +35,14 @@ struct AttachmentBody: Encodable {
     var filename: String
     var uploaded_filename: String
     var description: String?
+    var original_content_type: String?
 
     init(_ attachment: UploadedAttachment) {
         id = attachment.id
         filename = attachment.filename
         uploaded_filename = attachment.uploadedFilename
         description = attachment.altText
+        original_content_type = attachment.originalContentType
     }
 }
 

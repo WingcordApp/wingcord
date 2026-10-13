@@ -1,14 +1,13 @@
 import SwiftUI
 import WingcordCore
 
-// MARK: - The three call surfaces raised at the window root
+// MARK: - The call surfaces raised at the window root
 //
 // **Presented once, here, and never from a row.** §2: a `.popover`, a `.sheet`
 // or a `.confirmationDialog` written inline in a list row is evaluated as part
-// of that row's body — titles included — by every row on every pass. The
-// soundboard is opened from three places, the screen picker from two, and a
-// call rings while the reader is anywhere in the app; all three route through
-// the store and are presented at the root.
+// of that row's body — titles included — by every row on every pass. Go Live is
+// opened from two places and a call rings while the reader is anywhere in the
+// app; both route through the store and are presented at the root.
 
 private struct VoiceRootPresenter: ViewModifier {
     @Environment(AppModel.self) private var model
@@ -16,15 +15,7 @@ private struct VoiceRootPresenter: ViewModifier {
 
     func body(content: Content) -> some View {
         content
-            // A sheet rather than a popover: choosing what to share is a
-            // decision with a Cancel and a default action, and it anchors to
-            // nothing in particular.
-            .sheet(isPresented: screenPickerBinding) {
-                ScreenSharePicker(
-                    start: { model.startScreenShare(target: $0) },
-                    dismiss: { model.isScreenSharePickerOpen = false }
-                )
-            }
+            .overlay { GoLiveLayer() }
             .overlay(alignment: .top) { incomingCall }
             .animation(motion.panel, value: model.incomingCallChannelID)
     }
@@ -43,18 +34,6 @@ private struct VoiceRootPresenter: ViewModifier {
                 decline: { model.declineCall(in: channelID) }
             )
         }
-    }
-
-    /// **The setter may only clear when the store is still showing this one.**
-    /// Clearing unconditionally lets a dismissal that arrives while a second
-    /// presentation is opening take the new one down with it.
-    private var screenPickerBinding: Binding<Bool> {
-        Binding(
-            get: { model.isScreenSharePickerOpen },
-            set: {
-                if !$0, model.isScreenSharePickerOpen { model.isScreenSharePickerOpen = false }
-            }
-        )
     }
 }
 
@@ -85,6 +64,8 @@ private struct PushToTalkMonitor: ViewModifier {
     @State private var settings = AppSettings.shared
     @State private var monitor: Any?
     @State private var isHeld = false
+    /// Discord's Push to Talk (Priority), held.
+    @State private var isPriorityHeld = false
 
     func body(content: Content) -> some View {
         content
@@ -94,14 +75,16 @@ private struct PushToTalkMonitor: ViewModifier {
             .onDisappear { remove() }
     }
 
+    /// In a call, with a key to watch: push to talk's in its own mode, and the
+    /// priority key in either.
     private var shouldWatch: Bool {
         model.connectedVoiceChannelID != nil
-            && settings.inputMode == .pushToTalk
-            && settings.pushToTalkKey != nil
+            && ((settings.inputMode == .pushToTalk && settings.pushToTalkKey != nil)
+                || settings.priorityPushToTalkKey != nil)
     }
 
     private func install() {
-        guard monitor == nil, let key = settings.pushToTalkKey else { return }
+        guard monitor == nil else { return }
         monitor = NSEvent.addLocalMonitorForEvents(
             matching: [.keyDown, .keyUp, .flagsChanged]
         ) { event in
@@ -109,30 +92,42 @@ private struct PushToTalkMonitor: ViewModifier {
             // bound to a modifier or a function key that other things in the
             // window also answer to, and eating every one of them would break
             // the composer.
-            handle(event, key: key)
+            handle(event)
             return event
         }
     }
 
-    private func handle(_ event: NSEvent, key: Hotkey) {
+    /// The keys are read as each event arrives, so a binding changed while the
+    /// call runs is the one that works.
+    private func handle(_ event: NSEvent) {
+        if settings.inputMode == .pushToTalk, let key = settings.pushToTalkKey,
+           let held = Self.held(after: event, key: key, wasHeld: isHeld) {
+            isHeld = held
+            model.setPushToTalkHeld(held)
+        }
+        if let key = settings.priorityPushToTalkKey,
+           let held = Self.held(after: event, key: key, wasHeld: isPriorityHeld) {
+            isPriorityHeld = held
+            model.setPriorityHeld(held)
+        }
+    }
+
+    /// Whether `key` is held after `event`, when that changed.
+    private static func held(after event: NSEvent, key: Hotkey, wasHeld: Bool) -> Bool? {
         let matches = event.keyCode == key.keyCode
         switch event.type {
-        case .keyDown where matches && !isHeld:
-            isHeld = true
-            model.setPushToTalkHeld(true)
-        case .keyUp where matches && isHeld:
-            isHeld = false
-            model.setPushToTalkHeld(false)
+        case .keyDown where matches && !wasHeld:
+            return true
+        case .keyUp where matches && wasHeld:
+            return false
         case .flagsChanged:
             // A modifier-only binding has no key-up: the flags simply stop
             // carrying it, which is the only signal there is.
             let held = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
                 .contains(key.modifiers)
-            guard held != isHeld else { return }
-            isHeld = held
-            model.setPushToTalkHeld(held)
+            return held == wasHeld ? nil : held
         default:
-            break
+            return nil
         }
     }
 
@@ -143,6 +138,10 @@ private struct PushToTalkMonitor: ViewModifier {
         if isHeld {
             isHeld = false
             model.setPushToTalkHeld(false)
+        }
+        if isPriorityHeld {
+            isPriorityHeld = false
+            model.setPriorityHeld(false)
         }
     }
 }

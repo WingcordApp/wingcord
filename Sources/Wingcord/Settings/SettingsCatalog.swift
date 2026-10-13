@@ -211,11 +211,8 @@ extension EnvironmentValues {
 // is what keeps that true when one of them is retuned.
 
 nonisolated enum SettingsType {
-    /// A source-list row.
-    static let sidebarRow = Font.body
-    /// The same row, selected. Weight, not colour: the pill already carries the
-    /// selection and a second mark for one state is noise.
-    static let sidebarRowSelected = Font.body.weight(.medium)
+    /// The text in a pane's search field — the size of a sidebar row.
+    static let searchField = Font.body
     /// The heading above a card.
     ///
     /// **Not `.headline`.** On macOS 27 `.headline` resolves to 13 *bold*, and
@@ -232,8 +229,6 @@ nonisolated enum SettingsType {
     static let rowSubtitle = Font.subheadline
     /// A cell in a segmented control.
     static let controlLabel = Font.callout
-    /// A toolbar item that carries words.
-    static let toolbarLabel = Font.callout.weight(.semibold)
     /// The explanatory paragraph under a card.
     static let footnote = Font.subheadline
     /// A hero's name.
@@ -246,16 +241,9 @@ nonisolated enum SettingsType {
 
 /// The settings window's navigation history.
 ///
-/// Every way into a section goes through `go(to:)` — the source list, a
-/// navigation row, the search results — so the back arrow is the inverse of
-/// whatever the reader just did, whichever of the three it was.
-///
-/// **Back and forward are the ONLY consumers of the two arrows**, and that is a
-/// correction rather than a refinement: the leading arrow used to toggle the
-/// source list and the trailing one did nothing at all, which is a control that
-/// lies twice in one capsule. The source list's toggle now appears only when
-/// the list is away, where it is the one thing a reader wants from a button in
-/// that position.
+/// Every way into a section goes through `go(to:)` — the sidebar, a
+/// navigation row, a caller outside the window — so the toolbar's Back is the
+/// inverse of whatever the reader just did, whichever of them it was.
 ///
 /// A class rather than a value in `@State`, because the panes reach it through
 /// the environment and a struct copied into a closure would push onto a stack

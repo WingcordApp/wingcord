@@ -29,6 +29,9 @@ final class AppModel {
     /// by every route that carries a user object, and the fields that decide a
     /// perk arrive on only three of them — see `AccountEntitlements`.
     var entitlements = AccountEntitlements()
+    /// What Discord holds back by age in the reader's region, off READY. With
+    /// the age status above, the stage microphone's gate — `stageAgeGate`.
+    var ageGatedFeatures: AgeGatedFeatures = []
     /// Every role the reader holds anywhere, plus their own id, as one flat set.
     /// A mention test is then one lookup rather than a scan over roles per
     /// message per evaluation.
@@ -274,8 +277,11 @@ final class AppModel {
             if let selectedSummary, selectedSummary.channelID != selectedChannelID {
                 self.selectedSummary = nil
             }
+            refreshMenuContext()
         }
     }
+    /// Where the reader is, as the menu bar reads it — see `MenuContext`.
+    var menuContext = MenuContext()
     /// The server page the detail column is showing instead of a transcript.
     ///
     /// **Beside the channel rather than instead of it**, so leaving the page
@@ -356,7 +362,28 @@ final class AppModel {
     var selfCustomStatus: CustomStatus?
     var isSelfMuted = false
     var isSelfDeafened = false
-    var connectedVoiceChannelID: ChannelID?
+    var connectedVoiceChannelID: ChannelID? {
+        didSet {
+            guard connectedVoiceChannelID != oldValue else { return }
+            voiceConnectedSince = connectedVoiceChannelID == nil ? nil : .now
+            if let oldValue { lastVoiceChannelID = oldValue }
+            // Discord forgets both as the reader moves: Unmute Music on
+            // `VOICE_CHANNEL_SELECT`, the start screen put away once they are
+            // no longer in that stage — Continue puts it away *before* the join.
+            stageMusicRequested = false
+            if stageStartScreenDismissedIn != connectedVoiceChannelID { stageStartScreenDismissedIn = nil }
+        }
+    }
+    /// The voice channel the reader was last in — Voice › Rejoin Last Voice
+    /// Channel.
+    var lastVoiceChannelID: ChannelID?
+    /// The server the reader left for the direct messages — where Discord's
+    /// ⌥⌘→ goes back to.
+    @ObservationIgnored var guildBeforeDirectMessages: GuildID?
+    /// When the reader joined the call they are in, which is what the HUD's
+    /// timer counts from. Moved by the channel changing, never by the
+    /// connection: a reconnect inside the same call keeps counting.
+    var voiceConnectedSince: Date?
 
     // MARK: Voice
     //
@@ -411,14 +438,16 @@ final class AppModel {
     /// decode, so it lasts exactly as long as somebody is looking at it.
     var watchedStreamUserID: UserID?
 
-    /// People the reader has silenced for this call.
-    ///
-    /// **Local, and only for as long as the call lasts.** Discord stores a
-    /// per-user volume on the account; this is the cheaper half of that idea and
-    /// the half a stream tile's speaker button actually means — "not this
-    /// person, not right now". Cleared on leaving, so nothing has to be
-    /// re-applied to a session that has not been built yet.
-    var locallyMutedUserIDs: Set<UserID> = []
+    /// Which kind of client each person in the call is on, as the voice server
+    /// says — the mark beside their name. See `VoicePlatform`.
+    var voicePlatforms: [UserID: VoicePlatform] = [:]
+    /// Discord's Show Non-Video Participants, for the call on screen: off
+    /// hides the tiles of people without a picture.
+    var showsNonVideoParticipants = true
+    /// Each person's volume and mute — for their voice and their stream — as
+    /// the account keeps them on every device: Discord's synced
+    /// `audio_context_settings`. See `AudioContextSettings`.
+    var audioContext = AudioContextSettings()
     /// The newest thumbnail of somebody's screen share, by stream key.
     ///
     /// **A URL, not a picture.** Discord answers the preview route with an
@@ -433,11 +462,16 @@ final class AppModel {
     var streamPreviews: [String: URL] = [:]
     /// Who the reader pinned to the stage. A share fills it by itself.
     var spotlightUserID: UserID?
+    /// Discord's camera preview, open — see `CameraPreviewSheet`.
+    var isCameraPreviewOpen = false
     var voiceQuality: VoiceQuality = .idle
     /// Our own microphone level, for the meter and for nothing else.
     var selfInputLevel: Float = 0
     /// True while the voice processor is hearing speech through a muted input.
     var isTalkingWhileMuted = false
+    /// True while the microphone gives nothing but silence, unmuted — what
+    /// Discord's "isn't detecting any input from your mic" is about.
+    var isMicSilent = false
     /// Direct-message calls, by conversation. A call exists here before anybody
     /// has joined it — that is what ringing is.
     var directCalls: [ChannelID: DirectCall] = [:]
@@ -445,14 +479,25 @@ final class AppModel {
     var incomingCallChannelID: ChannelID?
     /// Whether the voice channel's own text chat is showing beside the stage.
     var isVoiceChatShown = false
-    /// The screen picker.
+    /// The Go Live sheet.
     ///
-    /// A window-level flag because it is a *sheet*: it anchors to nothing, it
-    /// is modal, and it is raised from two control clusters that are never both
-    /// on screen. The soundboard is the opposite case and is deliberately not
-    /// here — it is a popover that has to point at the button that opened it,
-    /// so it lives on that button.
-    var isScreenSharePickerOpen = false
+    /// A window-level flag because it is a layer over the window: it anchors
+    /// to nothing, it is modal, and it is raised from two control clusters
+    /// that are never both on screen. The soundboard is the opposite case and
+    /// is deliberately not here — it is a popover that has to point at the
+    /// button that opened it, so it lives on that button.
+    var isGoLiveSheetOpen = false
+    /// Discord's Full Screen for a call: the window given to the tiles and
+    /// the controls — see `AppModel.enterCallFullScreen()`.
+    var isCallFullScreen = false
+    /// Whether entering it is what put the window into full screen, so that
+    /// leaving it takes the window back out — and only then.
+    @ObservationIgnored var callFullScreenTookWindow = false
+    /// What the sheet's surface is showing.
+    var goLivePreview: GoLivePreview = .empty
+    /// What is picked for a share — previewing in the sheet, or live — and
+    /// nil when nothing is.
+    var screenShareSource: ScreenShareSourceSummary?
 
     // MARK: The soundboard
 
@@ -461,6 +506,14 @@ final class AppModel {
     var defaultSoundboardSounds: [SoundboardSound] = []
     var guildSoundboardSounds: [GuildID: [SoundboardSound]] = [:]
     var soundboardRevision: UInt64 = 0
+    /// The sounds the account starred — synced, read when the picker opens.
+    var soundboardFavorites = SoundboardFavorites()
+    /// The ids of the sounds the account plays most, most first — synced
+    /// frecency, for Discord's Frequently Used.
+    var soundboardFrequentSoundIDs: [String] = []
+    /// The account's plays as Discord scores them, once read — what a press
+    /// is tracked into. Nil until the soundboard has been opened.
+    @ObservationIgnored var soundFrecency: SoundFrecency?
     /// The sound somebody just pressed, and who pressed it. Drawn as a chip
     /// over their tile for a beat, then cleared.
     var soundboardEffects: [UserID: String] = [:]
@@ -493,7 +546,9 @@ final class AppModel {
         }
     }
 
-    var connectionState: ConnectionState = .signedOut
+    var connectionState: ConnectionState = .signedOut {
+        didSet { if connectionState != oldValue { refreshMenuContext() } }
+    }
 
     // MARK: Window-level presentations
     //
@@ -503,6 +558,10 @@ final class AppModel {
     // every row on every evaluation.
 
     var profileRequest: ProfileRequest?
+    /// Where the now bar's identity row is, in the window root's space — the
+    /// reader's own card opens beside it, from a click there or from User ›
+    /// Set Status…. Ignored: nothing is drawn from it.
+    @ObservationIgnored var ownCardAnchor: CGRect = .zero
     /// Add App, raised from an app's profile and presented over it — see
     /// `AppModel.addApplication(from:)`.
     var profileApplicationInstall: ApplicationInstallRequest?
@@ -560,11 +619,13 @@ final class AppModel {
     /// not say — see `SessionController.resolveSticker`. Observed, because the
     /// card is already open while it resolves.
     var stickerLookups: [UInt64: StickerLookup] = [:]
-    /// The composer's sticker picker, asked for at one pack — "View More
-    /// Stickers" on a stock sticker's card. Taken by the composer of the
-    /// channel it names.
-    var stickerPickerRequest: StickerPickerRequest?
-    @ObservationIgnored var stickerPickerToken = 0
+    /// One of the composer's pickers, asked for from outside it — see
+    /// `ComposerControlRequest`. Taken by the composer of the channel it names.
+    var composerControlRequest: ComposerControlRequest?
+    /// A channel whose composer should open its file picker — the menu bar's
+    /// Upload a File…, taken by that composer.
+    var fileImportRequest: ChannelID?
+    @ObservationIgnored var composerControlToken = 0
     /// The message the transcript is being sent to, if any. Consumed by the
     /// timeline coordinator, which clears it once it has scrolled.
     var pendingJump: MessageJump?
@@ -618,6 +679,8 @@ final class AppModel {
     @ObservationIgnored var reactorCache: [ReactorKey: (count: Int, users: [UserID])] = [:]
     var messageMenu: MessageMenuRequest?
     var reactionPicker: ReactionPickerRequest?
+    /// The traits behind an invite card's "+ N more", open beside it.
+    var traitsFlyout: TraitsFlyoutRequest?
     var reactionsList: ReactionsListRequest?
     var selectMenu: SelectMenuRequest?
     /// A form an application asked for — `InteractionModalLayer`.
@@ -649,6 +712,10 @@ final class AppModel {
     /// title or a right-click in the rail. One property for all three: they are
     /// one menu, and two of them open at once is a state with no meaning.
     var serverOptionsMenu: ServerOptionsRequest?
+    /// A menu-bar command's ask for the open server's menu on one of its
+    /// pages, answered by whichever of the name pill and the toolbar title is
+    /// showing — from its own control, where the menu always hangs.
+    var serverMenuPageRequest: ServerMenuPageRequest?
     /// A folder's right-click menu — see `FolderOptionsMenu`.
     var folderMenu: FolderMenuRequest?
     /// A pending application's right-click menu — see `JoinRequestMenu`.
@@ -664,6 +731,15 @@ final class AppModel {
     /// A channel the reader asked to delete, with Discord's refusal or
     /// confirmation.
     var channelDeletion: ChannelDeletionRequest?
+    /// A live stage the reader asked to end from its channel menu — Discord's
+    /// "Do you want to end the Stage?" first.
+    var stageEnding: ChannelID?
+    /// A Fake Nitro send or edit waiting on "Hold on!" — see
+    /// `needsFakeNitroEmbedPrompt`.
+    var fakeNitroEmbedPrompt: FakeNitroEmbedPrompt?
+    /// The plugin's refusal of an animated Fake Nitro sticker where files may
+    /// not be attached.
+    var fakeNitroStickerRefused = false
     /// A right-click on a thread — see `ThreadOptionsMenu`. The ⋯ over a
     /// thread raises the same menu from its own button.
     var threadOptionsMenu: ThreadOptionsRequest?
@@ -1371,6 +1447,16 @@ final class AppModel {
     /// that the roster, the profile card and the presence write all see the
     /// same value in the same frame.
     var detectedGame: DetectedGame?
+    /// What the apps connected to the local RPC server are doing, in the order
+    /// they first said — Discord's LocalActivityStore's `G`. See
+    /// `AppModel+LocalRPC`.
+    var localRPCActivities: [LocalRPCActivity] = []
+    /// The Rich Presence builder's pictures as their application resolved them
+    /// — `mp:` ids for links, asset ids for keys — by "application key".
+    @ObservationIgnored var customPresenceAssets: [String: String] = [:]
+    /// When the card that is on went on — "Since discord open".
+    @ObservationIgnored var customPresenceTurnedOnAt = Date.now
+    @ObservationIgnored var customPresenceWrite: Task<Void, Never>?
 
     /// Everything this client is broadcasting, in the order Discord's own
     /// client sends it.
@@ -1387,8 +1473,20 @@ final class AppModel {
     /// Registered Games pane can show it.
     var publishedActivities: [RichPresenceActivity] {
         var list: [RichPresenceActivity] = []
-        if AppSettings.shared.sharesGameActivity, let detectedGame {
-            list.append(detectedGame.activity)
+        if AppSettings.shared.sharesGameActivity {
+            // Every connected app's own activity first, as Discord's
+            // LocalActivityStore lists them (`480595`).
+            let local = localRPCActivities.map(\.activity)
+            list += local
+            // A presence the reader made **replaces** the detected game while
+            // it is on (DESIGN-NOTES §11), and rides the same sharing switch:
+            // Discord's own local activities do. A game whose own app already
+            // says what it is doing is not said twice.
+            if let custom = customPresenceActivity {
+                list.append(custom)
+            } else if let detectedGame, !Self.isAnnounced(detectedGame.activity, by: local) {
+                list.append(detectedGame.activity)
+            }
         }
         if let publishedActivity { list.append(publishedActivity) }
         if let spotifyActivity { list.append(spotifyActivity) }
@@ -1444,7 +1542,6 @@ final class AppModel {
     @ObservationIgnored var mentionCache: (key: MentionMemoKey, value: MentionContext)?
     /// The channel chips' table. See `linkChannelTable()`.
     @ObservationIgnored var linkTableCache: (key: LinkTableKey, value: LinkChannelTable)?
-    @ObservationIgnored
     /// Every stage that is live right now, keyed by its channel.
     ///
     /// **Keyed by channel and not by the instance's own id**, because that is
@@ -1452,6 +1549,16 @@ final class AppModel {
     /// channel, and there is at most one stage per channel. See
     /// `StageInstance`.
     var stageInstances: [ChannelID: StageInstance] = [:]
+    /// The stage the reader is in whose start screen is put away — by
+    /// Continue without starting, or by the stage going live. Discord's
+    /// `isOnStartStageScreen` (module 571909), which stays put away until they
+    /// leave the channel.
+    var stageStartScreenDismissedIn: ChannelID?
+    /// Discord's Unmute Music pressed while the room was not waiting — the
+    /// music played over everything but a deafen, forgotten on leaving.
+    var stageMusicRequested = false
+    /// Stages whose "This Video Stage is maxed out." a moderator dismissed.
+    var dismissedStageCapacityNotices: Set<ChannelID> = []
     /// The application whose own page is open as a sheet, if any.
     ///
     /// **A third place the page is drawn, and a sheet rather than a flyout.**
@@ -1463,6 +1570,7 @@ final class AppModel {
     /// Applications a resolve is already in flight for, so a strip of eight
     /// rows asks once rather than eight times as each of them appears.
     var applicationsResolving: Set<ApplicationID> = []
+    @ObservationIgnored
     var voicePresentationCache: (key: VoiceMemoKey, value: VoicePresentation?)?
     @ObservationIgnored
     var soundboardCache: (key: SoundboardMemoKey, value: SoundboardPresentation)?
@@ -1541,9 +1649,20 @@ final class AppModel {
     /// Read by the transcript's layout; moved together with `cardRevision`,
     /// which is what tells the transcript to read it again.
     @ObservationIgnored var expandedInviteCards: Set<InviteCardFold> = []
-    /// What each profile card in a message measured, by person and server —
-    /// the space the transcript reserves for it. See `UserCardHosts`.
-    @ObservationIgnored var userCardSizes: [UserCardKey: CGSize] = [:]
+    /// What each hosted card in a message measured — a profile card by person
+    /// and server, an event card by event — the space the transcript reserves
+    /// for it. See `HostedCardHosts`.
+    @ObservationIgnored var hostedCardSizes: [HostedCardKey: HostedCardMeasure] = [:]
+    /// Each text file's preview, by attachment: what was fetched and how its
+    /// card is set — kept here rather than in the card, which is taken down
+    /// whenever its row scrolls a screen away. See `PlaintextPreviewCard`.
+    var plaintextPreviews: [AttachmentID: PlaintextPreviewState] = [:]
+    /// The previews whose fetch has begun, so a card mounted twice asks once.
+    @ObservationIgnored var plaintextFetches: Set<AttachmentID> = []
+    /// Events an event card fetched because the store does not hold them — a
+    /// server the reader is not in, or one that is over. See
+    /// `AppModel.knownEvent(for:)`.
+    var linkedEvents: [UInt64: ScheduledEvent] = [:]
     /// The preview clip currently playing, if any. Drawn by the card whose chip
     /// started it, so the chip can offer to stop it.
     var spotifyPreviewURL: URL?
@@ -1951,6 +2070,10 @@ struct MessageBox: Sendable {
     var draft: String = ""
     /// A message being replied to. Survives eviction.
     var replyingTo: MessageID?
+    /// Whether that reply pings its author — Discord's @ ON / OFF. Set when the
+    /// reply starts (off for the reader's own message, or with ⇧ held, as
+    /// Discord's `shouldMention: !shiftKey && !isMe`) and flipped by the bar.
+    var replyPings = true
     /// When the next message goes, while the composer is scheduling —
     /// Discord's `ScheduledMessage` draft. Cleared once Discord has taken one;
     /// a refusal keeps it, as Discord's does.
@@ -1970,9 +2093,12 @@ struct MessageBox: Sendable {
     /// draft — dropping a video and then switching channels to check something
     /// must not throw the video away.
     var attachments: [PendingAttachment] = []
-    /// Why the last file was refused, in the reader's words. Cleared by the
+    /// Why the last file was refused, in Discord's words. Cleared by the
     /// next successful staging or by dismissing it.
     var attachmentRefusal: AttachmentRefusal?
+    /// Files being compressed to fit, which join `attachments` when done —
+    /// "Compressing files..." in the tray until then.
+    var compressingFiles = 0
     /// The reader's own sends Discord has not answered, oldest first. See
     /// `OutgoingMessage`. Survives eviction, as Discord's own sending and
     /// failed messages survive a reload of the channel.

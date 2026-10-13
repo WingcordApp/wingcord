@@ -27,7 +27,9 @@ struct VoiceChannelPane: View {
         Group {
             if let presentation = model.voicePresentation,
                presentation.channelID == channelID {
-                connected(presentation)
+                // Full screen draws the call's tiles itself, and one person's
+                // video can be attached to one view at a time.
+                if !model.isCallFullScreen { connected(presentation) }
             } else {
                 lobby
             }
@@ -42,19 +44,25 @@ struct VoiceChannelPane: View {
     // MARK: In the room
 
     private func connected(_ presentation: VoicePresentation) -> some View {
-        VoiceTileGrid(
-            participants: presentation.participants,
-            spotlightUserID: presentation.spotlightUserID,
-            effects: effectNames,
-            cameraSession: cameraSession,
-            selfUserID: model.currentUserID,
-            attachVideo: model.attachVideo,
-            watch: model.toggleWatchingStream,
-            spotlight: model.spotlight
-        )
+        VStack(spacing: Spacing.snug) {
+            VoiceTileGrid(
+                participants: presentation.participants,
+                spotlightUserID: presentation.spotlightUserID,
+                effects: model.soundboardEffectNames,
+                cameraSession: cameraSession,
+                selfUserID: model.currentUserID,
+                attachVideo: model.attachVideo,
+                watch: model.toggleWatchingStream,
+                spotlight: model.spotlight
+            )
+            if showsActivitySuggestion(presentation) {
+                ActivitySuggestionCard(channelID: presentation.channelID)
+                    .id(presentation.channelID)
+            }
+        }
         .padding(Spacing.margin)
         .safeAreaBar(edge: .bottom, spacing: 0) {
-            VoiceControlBar(
+            CallControlRow(
                 presentation: presentation,
                 toggleMute: model.toggleVoiceMute,
                 toggleDeafen: model.toggleVoiceDeafen,
@@ -62,16 +70,22 @@ struct VoiceChannelPane: View {
                 toggleScreenShare: model.toggleScreenShare,
                 leave: model.leaveVoice
             )
+            .frame(maxWidth: .infinity)
+            .overlay(alignment: .trailing) { CallFullScreenButton() }
+            .padding(.horizontal, Spacing.margin)
             .padding(.bottom, Spacing.margin)
         }
     }
 
-    private var effectNames: [UserID: String] {
-        var names: [UserID: String] = [:]
-        for (userID, soundID) in model.soundboardEffects {
-            names[userID] = model.soundboardSound(id: soundID)?.name ?? "sound"
-        }
-        return names
+    /// Discord's condition for its activity suggestion: a server's call with
+    /// two or more people in it, not the AFK channel, nothing already running
+    /// here, and Use Activities — "Don't show again" and × are the card's own.
+    private func showsActivitySuggestion(_ presentation: VoicePresentation) -> Bool {
+        guard presentation.canLaunchActivities, presentation.participants.count >= 2,
+              let guildID = model.channelIndex[presentation.channelID]?.guildID,
+              model.guilds[guildID]?.afkChannelID != presentation.channelID
+        else { return false }
+        return model.runningActivity?.instance.location.channelID != presentation.channelID
     }
 
     // MARK: Looking in
@@ -110,21 +124,12 @@ struct VoiceChannelPane: View {
                 waitingFaces(chips)
             }
 
-            Button {
+            Button("Join Voice", systemImage: "phone.fill") {
                 model.joinVoice(channelID)
-            } label: {
-                HStack(spacing: Spacing.base) {
-                    Image(systemName: "phone.fill")
-                    Text("Join Voice")
-                        .font(.system(.body, weight: .semibold))
-                }
-                .foregroundStyle(InkColor.primary)
-                .padding(.horizontal, Spacing.group)
-                .frame(height: 40)
-                .contentShape(.capsule)
             }
-            .buttonStyle(.plain)
-            .emphasisChrome(Palette.presenceOnline)
+            .buttonStyle(.borderedProminent)
+            .tint(Palette.presenceOnline)
+            .controlSize(.extraLarge)
             .keyboardShortcut(.return, modifiers: [])
 
             Spacer(minLength: 0)

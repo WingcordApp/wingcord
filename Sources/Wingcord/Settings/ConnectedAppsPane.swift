@@ -405,10 +405,8 @@ private struct PolicyLinksRow: View {
 
 // MARK: - Search
 
-/// The same visual recipe as the source list's own search field — a capsule,
-/// a glyph and a clear button — kept local rather than shared: the sidebar's
-/// version is wired to that list's keyboard focus and its own metrics, and
-/// this one has neither.
+/// A filter for the one list on this pane: a glyph, the field and a clear
+/// button. The window's own search is the system's, in the sidebar.
 private struct ConnectedAppsSearchField: View {
     @Binding var query: String
     @FocusState private var isFocused: Bool
@@ -421,7 +419,7 @@ private struct ConnectedAppsSearchField: View {
                 .frame(width: 12, height: 12)
             TextField("Search installed apps", text: $query)
                 .textFieldStyle(.plain)
-                .font(SettingsType.sidebarRow)
+                .font(SettingsType.searchField)
                 .foregroundStyle(Ink.primary)
                 .focused($isFocused)
             if !query.isEmpty {

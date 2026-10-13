@@ -3,19 +3,22 @@ import WingcordCore
 
 // MARK: - The call, wherever you are in the app
 //
-// A floating glass panel above the now bar. It is the answer to "I joined a
-// voice channel and then went to read something else": the call has to stay
-// reachable from every screen, and the sidebar's foot is the one place that is
-// on every screen.
+// A card at the sidebar's foot, above the now bar. It answers "I joined a voice
+// channel and then went to read something else": the call has to stay
+// reachable from every screen, and the sidebar's foot is on every screen.
 //
-// **`.clear` here, and `.regular` would be wrong.** This sits on the sidebar
-// column, which AppKit paints with behind-window vibrancy — the wallpaper and
-// the menu-bar accent come through it. A frosted panel over that throws the
-// bleed away and leaves a grey slab down the side of the window; clear glass
-// lenses it, which is the whole reason this app uses the material.
+// **Alex's design, exactly** (references 09, 09b and 10): the connection's
+// glyph, "Voice Connected", where the call is and how long it has run, then
+// five controls spread evenly across the card — camera, screen, microphone,
+// headphones, leave. Who is in the call lives on the call's own surface; at
+// the sidebar's width a row of faces only crowds the controls.
+//
+// **Opaque, below the list.** It was clear glass floating over the channel
+// list, so channel names read through it; see `SidebarCardBackground`.
 struct VoiceHUD: View {
     var presentation: VoicePresentation
-    var speakingUserIDs: Set<UserID>
+    /// Discord's silent-mic warning, under the controls.
+    var isMicSilent = false
 
     var toggleMute: () -> Void = {}
     var toggleDeafen: () -> Void = {}
@@ -24,179 +27,98 @@ struct VoiceHUD: View {
     var openChannel: () -> Void = {}
     var leave: () -> Void = {}
 
-    @Environment(\.motion) private var motion
-    @State private var isExpanded = true
-    /// Local, for the reason `VoiceControlBar`'s is — see the note there.
-    @State private var isSoundboardOpen = false
-
     var body: some View {
         VStack(alignment: .leading, spacing: Spacing.snug) {
-            header
+            Button(action: openChannel) {
+                VoiceHUDHeader(presentation: presentation)
+                    .contentShape(.rect)
+            }
+            .buttonStyle(.plain)
 
-            if isExpanded {
-                faces
-                controls
+            HStack(spacing: 0) {
+                CallButton(kind: .camera, isActive: presentation.isCameraOn, action: toggleCamera)
+                    .frame(maxWidth: .infinity)
+                CallButton(kind: .screenShare, isActive: presentation.isScreenSharing, action: toggleScreenShare)
+                    .frame(maxWidth: .infinity)
+                CallButton(kind: .microphone, isActive: presentation.isMuted, action: toggleMute)
+                    .frame(maxWidth: .infinity)
+                CallButton(kind: .headphones, isActive: presentation.isDeafened, action: toggleDeafen)
+                    .frame(maxWidth: .infinity)
+                CallButton(kind: .leave, isActive: false, action: leave)
+                    .frame(maxWidth: .infinity)
+            }
+
+            if isMicSilent {
+                Label {
+                    Text("Discord isn\u{2019}t detecting any input from your mic.")
+                } icon: {
+                    Image(systemName: "mic.badge.xmark")
+                }
+                .font(.system(.caption, weight: .medium))
+                .foregroundStyle(.orange)
+                .fixedSize(horizontal: false, vertical: true)
+                .transition(.opacity)
             }
         }
         .padding(Spacing.snug)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .glassEffect(
-            .clear.tint(Palette.flyoutTint),
-            in: .rect(cornerRadius: Radius.glass)
-        )
+        .sidebarCard(cornerRadius: Radius.glass)
         .padding(.horizontal, Spacing.base)
-        .animation(motion.panel, value: isExpanded)
-        .animation(motion.standard, value: presentation.participants.count)
     }
+}
 
-    // MARK: The line that says where you are
+/// The connection, where the call is, and how long it has run.
+private struct VoiceHUDHeader: View {
+    var presentation: VoicePresentation
 
-    private var header: some View {
-        HStack(spacing: Spacing.base) {
-            Button(action: openChannel) {
-                VoiceQualityLine(
-                    quality: presentation.quality,
-                    channelName: presentation.channelName,
-                    guildName: presentation.guildName
-                )
-                .contentShape(.rect)
-            }
-            .buttonStyle(.plain)
-            .help("Open the call")
+    @Environment(\.motion) private var motion
 
-            Button { isExpanded.toggle() } label: {
-                Image(systemName: "chevron.down")
-                    .font(.system(.caption2, weight: .bold))
-                    .foregroundStyle(Ink.tertiary)
-                    // Rotates rather than swapping glyphs: the same mark
-                    // pointing a different way says "this opens and closes",
-                    // where two glyphs say "this is two controls".
-                    .rotationEffect(.degrees(isExpanded ? 0 : -90))
-                    .frame(width: 18, height: 18)
-                    .contentShape(.rect)
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel(Text(isExpanded ? "Collapse the call" : "Expand the call"))
-        }
-    }
+    var body: some View {
+        HStack(spacing: Spacing.snug) {
+            Image(symbol: glyph)
+                .font(.system(.title2, weight: .semibold))
+                .foregroundStyle(tint)
+                .contentTransition(.symbolEffect(.replace))
 
-    // MARK: Who is in it
-
-    /// A row of faces rather than tiles. At the sidebar's width a tile is
-    /// smaller than the face inside it, so the tile is dropped and the face
-    /// keeps the speaking ring — which is the part that carries the information.
-    private var faces: some View {
-        ScrollView(.horizontal) {
-            HStack(spacing: Spacing.base) {
-                ForEach(presentation.participants) { participant in
-                    face(participant)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(presentation.quality.label)
+                    .font(.system(.title3, weight: .semibold))
+                    .foregroundStyle(tint)
+                Text(place)
+                    .font(.body)
+                    .foregroundStyle(Ink.primary)
+                    .lineLimit(1)
+                if let since = presentation.connectedSince {
+                    // Drawn by the system, which updates the digits without
+                    // invalidating this view once a second.
+                    Text(timerInterval: since...Date.distantFuture, countsDown: false)
+                        .font(.callout.monospacedDigit())
+                        .foregroundStyle(Ink.secondary)
                 }
             }
-            .padding(.vertical, 2)
+            Spacer(minLength: 0)
         }
-        .scrollIndicators(.never)
-        // A call of four fits without scrolling, and a scroll view that
-        // rubber-bands over content that already fits reads as broken.
-        .scrollBounceBehavior(.basedOnSize)
-        .frame(height: 40)
+        .animation(motion.standard, value: presentation.quality.grade)
+        .accessibilityElement(children: .combine)
     }
 
-    private func face(_ participant: VoiceParticipant) -> some View {
-        AvatarView(
-            url: participant.avatarURL,
-            monogram: participant.monogram,
-            side: 32
-        )
-        .overlay {
-            Circle()
-                .strokeBorder(
-                    participant.isSpeaking ? Palette.presenceOnline : .clear,
-                    lineWidth: 2
-                )
-                .padding(-2.5)
-        }
-        .overlay(alignment: .bottomTrailing) {
-            if participant.isDeafened || participant.isSilenced {
-                Image(symbol: participant.isDeafened ? "headphones.slash" : "mic.slash.fill")
-                    .font(.system(size: 8, weight: .bold))
-                    .foregroundStyle(InkColor.primary)
-                    .frame(width: 14, height: 14)
-                    .background { Circle().fill(Palette.destructive) }
-                    .offset(x: 2, y: 2)
-            }
-        }
-        .opacity(participant.isSpeaking ? 1 : 0.72)
-        .animation(motion.standard, value: participant.isSpeaking)
-        .transition(.scale(scale: 0.7).combined(with: .opacity))
-        .help(participant.displayName)
-        .accessibilityLabel(Text(participant.displayName))
+    private var place: String {
+        presentation.guildName.map { "\(presentation.channelName) / \($0)" } ?? presentation.channelName
     }
 
-    // MARK: The controls
+    private var glyph: String {
+        switch presentation.quality.grade {
+        case .connecting, .good: "wifi"
+        case .fair, .poor: "wifi.exclamationmark"
+        }
+    }
 
-    /// The same six as the stage, at the compact size, with the hang-up
-    /// carrying the tint. One vocabulary in both places — a control that means
-    /// something different in the HUD than on the stage is a control nobody
-    /// trusts.
-    private var controls: some View {
-        HStack(spacing: Spacing.tight) {
-            VoiceControl(
-                systemImage: presentation.isMuted ? "mic.slash.fill" : "mic.fill",
-                label: presentation.isMuted ? "Unmute" : "Mute",
-                isActive: presentation.isMuted,
-                accent: Palette.destructive,
-                isCompact: true,
-                action: toggleMute
-            )
-            VoiceControl(
-                systemImage: presentation.isDeafened ? "headphones.slash" : "headphones",
-                label: presentation.isDeafened ? "Undeafen" : "Deafen",
-                isActive: presentation.isDeafened,
-                accent: Palette.destructive,
-                isCompact: true,
-                action: toggleDeafen
-            )
-            VoiceControl(
-                systemImage: presentation.isCameraOn ? "video.fill" : "video.slash.fill",
-                label: presentation.isCameraOn ? "Turn Off Camera" : "Turn On Camera",
-                isActive: presentation.isCameraOn,
-                accent: Palette.accent,
-                isCompact: true,
-                action: toggleCamera
-            )
-            VoiceControl(
-                systemImage: "rectangle.inset.filled.on.rectangle",
-                label: presentation.isScreenSharing ? "Stop Sharing" : "Share Screen",
-                isActive: presentation.isScreenSharing,
-                accent: Palette.presenceOnline,
-                isCompact: true,
-                action: toggleScreenShare
-            )
-            VoiceControl(
-                systemImage: "music.note.list",
-                label: "Soundboard",
-                isActive: isSoundboardOpen,
-                accent: Palette.accent,
-                isCompact: true,
-                action: { isSoundboardOpen.toggle() }
-            )
-            .popover(isPresented: $isSoundboardOpen, arrowEdge: .top) {
-                SoundboardPickerContainer { isSoundboardOpen = false }
-            }
-
-            Spacer(minLength: Spacing.tight)
-
-            Button(action: leave) {
-                Image(systemName: "phone.down.fill")
-                    .font(.system(.footnote, weight: .semibold))
-                    .foregroundStyle(InkColor.primary)
-                    .frame(width: Metrics.compactControl, height: Metrics.compactControl)
-                    .background { Circle().fill(Palette.destructive) }
-                    .contentShape(.circle)
-            }
-            .buttonStyle(.plain)
-            .help("Leave the call")
-            .accessibilityLabel(Text("Leave the call"))
+    private var tint: Color {
+        switch presentation.quality.grade {
+        case .connecting: InkColor.secondary
+        case .good: Palette.presenceOnline
+        case .fair: Palette.presenceIdle
+        case .poor: Palette.destructive
         }
     }
 }
@@ -214,7 +136,10 @@ struct VoiceHUDContainer: View {
             if let presentation = model.voicePresentation {
                 VoiceHUD(
                     presentation: presentation,
-                    speakingUserIDs: model.speakingUserIDs,
+                    // Unmuted and silent, and the reader still wants to hear
+                    // about it — Discord's own setting, on by default.
+                    isMicSilent: model.isMicSilent && !presentation.isMuted
+                        && AppSettings.shared.showsSilentMicWarning,
                     toggleMute: model.toggleVoiceMute,
                     toggleDeafen: model.toggleVoiceDeafen,
                     toggleCamera: model.toggleCamera,
@@ -222,12 +147,9 @@ struct VoiceHUDContainer: View {
                     openChannel: { model.selectChannel(presentation.channelID) },
                     leave: model.leaveVoice
                 )
-                // Glass materialises rather than fading, and it arrives from the
-                // edge it lives on — the sidebar's foot. Spatial symmetry: it
+                // It arrives from the edge it lives on, the sidebar's foot, and
                 // leaves the same way.
-                .transition(
-                    .move(edge: .bottom).combined(with: .materialize(from: .bottom))
-                )
+                .transition(.move(edge: .bottom).combined(with: .opacity))
             }
         }
         .animation(motion.panel, value: model.connectedVoiceChannelID)

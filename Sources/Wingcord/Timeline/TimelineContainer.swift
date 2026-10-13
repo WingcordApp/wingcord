@@ -94,6 +94,17 @@ struct TimelineContainer: View {
             canAddReactions: model.permissionGate.canAddReaction(in: channelID),
             hidesMedia: model.channelIndex[channelID]?.messageRequest != nil,
             listenAlongCards: model.listenAlongCards(in: channelID),
+            // Read here so a stage chat observes the hands: Invite to Speak
+            // under a request is drawn, and a drawn canvas only hears what
+            // SwiftUI re-evaluates.
+            stageInvitations: model.openStageRequests(in: channelID),
+            // And the stickers other Fake Nitro users' GIF uploads stand for,
+            // which a server's stickers arriving can change.
+            fakeGIFStickers: model.fakeGIFStickers(in: channelID),
+            // And the event on now here, whose card a stage start wears.
+            liveEvent: model.liveEvent(in: channelID).map {
+                TimelineLayoutEngine.LiveEvent(guildID: $0.guildID, id: $0.id, name: $0.name)
+            },
             model: model
         )
         // **Over the transcript's own corner, lifted clear of the composer** —

@@ -85,6 +85,43 @@ nonisolated enum DiscordTheme: String, CaseIterable, Identifiable, Hashable, Sen
         }
     }
 
+    /// Discord's id for the preset — its `BackgroundGradientPresetId`, which
+    /// the account's settings carry. **Not the case's position**: Discord's
+    /// enum numbers Sepia 19 and Strawberry Lemonade 20, and keeps 16 for the
+    /// Easter Egg no picker shows and 23 for a Hexagon with no table entry.
+    var presetID: Int {
+        switch self {
+        case .mintApple: 0
+        case .citrusSherbert: 1
+        case .retroRaincloud: 2
+        case .hanami: 3
+        case .sunrise: 4
+        case .cottonCandy: 5
+        case .lofiVibes: 6
+        case .desertKhaki: 7
+        case .sunset: 8
+        case .chromaGlow: 9
+        case .forest: 10
+        case .crimsonMoon: 11
+        case .midnightBlurple: 12
+        case .mars: 13
+        case .dusk: 14
+        case .underTheSea: 15
+        case .retroStorm: 17
+        case .neonNights: 18
+        case .sepia: 19
+        case .strawberryLemonade: 20
+        case .aurora: 21
+        case .blurpleTwilight: 22
+        }
+    }
+
+    /// The theme an account's preset id names, where it is one of these.
+    init?(presetID: Int) {
+        guard let theme = Self.allCases.first(where: { $0.presetID == presetID }) else { return nil }
+        self = theme
+    }
+
     /// Which of Discord's bases the theme sits on — and so which room the
     /// window turns into when it is chosen.
     var base: ThemeAppearance {

@@ -350,11 +350,14 @@ public actor DiscordREST {
     ///   these, which is the second place empty content is legitimate.
     /// - Parameter poll: A poll, which Discord's editor posts with empty
     ///   content (`sendPollMessage`) — the third.
+    /// - Parameter pingsRepliedAuthor: false sends Discord's quiet reply — see
+    ///   `QuietReplyMentions`.
     public func sendMessage(
         in channelID: ChannelID,
         content: String,
         nonce: String,
         replyingTo: MessageID? = nil,
+        pingsRepliedAuthor: Bool = true,
         stickerIDs: [UInt64] = [],
         attachments: [UploadedAttachment] = [],
         poll: PollDraft? = nil,
@@ -366,6 +369,7 @@ public actor DiscordREST {
             var nonce: String
             var tts = false
             var message_reference: ReplyBody?
+            var allowed_mentions: QuietReplyMentions?
             var flags: Int?
             /// Omitted entirely when empty: the route rejects an empty array
             /// where it accepts a missing key.
@@ -396,6 +400,7 @@ public actor DiscordREST {
             content: content,
             nonce: nonce,
             message_reference: replyingTo.map(ReplyBody.init),
+            allowed_mentions: replyingTo != nil && !pingsRepliedAuthor ? QuietReplyMentions() : nil,
             flags: nil,
             sticker_ids: stickerIDs.isEmpty ? nil : stickerIDs.map(String.init),
             attachments: attachments.isEmpty ? nil : attachments.map(AttachmentBody.init),
@@ -424,17 +429,24 @@ public actor DiscordREST {
         return ["x-context-properties": json.base64EncodedString()]
     }()
 
+    /// - Parameter keepsReplyQuiet: true for a reply that did not ping its
+    ///   author — Discord's `editMessage` sends the quiet reply's
+    ///   `allowed_mentions` again, or the edit would ping them after all.
     public func editMessage(
         _ messageID: MessageID,
         in channelID: ChannelID,
-        content: String
+        content: String,
+        keepsReplyQuiet: Bool = false
     ) async throws -> Message {
-        struct Body: Encodable { var content: String }
+        struct Body: Encodable {
+            var content: String
+            var allowed_mentions: QuietReplyMentions?
+        }
         return try await request(
             method: "PATCH",
             path: "/channels/\(channelID.rawValue)/messages/\(messageID.rawValue)",
             route: "channels/\(channelID.rawValue)/messages/:id",
-            body: Body(content: content),
+            body: Body(content: content, allowed_mentions: keepsReplyQuiet ? QuietReplyMentions() : nil),
             as: MessageDTO.self
         ).domain
     }

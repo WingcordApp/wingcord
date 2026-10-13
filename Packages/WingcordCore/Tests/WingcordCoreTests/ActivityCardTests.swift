@@ -110,4 +110,21 @@ struct ActivityCardTests {
     func clock(seconds: Int, text: String) {
         #expect(ActivityCardContent.clock(seconds) == text)
     }
+
+    /// Discord's `isStreaming` (module 960076): a Streaming activity whose link
+    /// is a Twitch channel or a YouTube video has Watch.
+    @Test("Watch is a Twitch channel or a YouTube video, on a Streaming activity")
+    func watch() {
+        func stream(_ link: String, kind: Activity.Kind = .streaming) -> URL? {
+            Activity(kind: kind, name: "Twitch", url: URL(string: link)).watchURL
+        }
+        #expect(stream("https://www.twitch.tv/somebody") == URL(string: "https://www.twitch.tv/somebody"))
+        #expect(stream("https://youtube.com/watch?v=abc") != nil)
+        #expect(stream("http://twitch.tv/x") != nil)
+        // A channel page, another site, or not streaming: no Watch.
+        #expect(stream("https://www.youtube.com/channel/abc") == nil)
+        #expect(stream("https://twitch.tv/") == nil)
+        #expect(stream("https://example.com/twitch.tv/x") == nil)
+        #expect(stream("https://www.twitch.tv/somebody", kind: .playing) == nil)
+    }
 }

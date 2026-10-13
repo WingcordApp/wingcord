@@ -582,8 +582,16 @@ final class ExpressionGridCoordinator: NSObject {
             // one chrome height off its own rest position. That is what put the
             // grid a section into itself and drew the pinned heading and the
             // canvas's own copy of it at two different heights.
+            //
+            // **Read where the reader was before the insets change.** AppKit
+            // moves a clip view that has its size along with its inset, and
+            // one that has none not at all; moving by the delta from wherever
+            // AppKit left it moved a sized picker twice, and it opened a whole
+            // chrome above its first section — Alex's image 49, "open to a
+            // space", whenever the size landed before the measured inset.
             let delta = topInset - self.topInset
             self.topInset = topInset
+            let origin = scrollView?.contentView.bounds.origin ?? .zero
             scrollView?.contentInsets = NSEdgeInsets(
                 top: topInset, left: 0, bottom: Spacing.base, right: 0
             )
@@ -592,7 +600,6 @@ final class ExpressionGridCoordinator: NSObject {
                 top: topInset, left: 0, bottom: 0, right: 0
             )
             if let scrollView {
-                let origin = scrollView.contentView.bounds.origin
                 scrollView.contentView.scroll(to: NSPoint(x: 0, y: origin.y - delta))
                 scrollView.reflectScrolledClipView(scrollView.contentView)
             }

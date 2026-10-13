@@ -1,3 +1,4 @@
+import AppKit
 import AVFoundation
 import CoreMedia
 import SwiftUI
@@ -16,9 +17,10 @@ import WingcordCore
 // the material alone lands four steps from the ground and an edgeless card reads
 // as a lighter region rather than as an object.
 //
-// **What floats over a tile carrying VIDEO is a fixed scrim, not a material.**
-// Also §4: a sampled material over moving pictures churns its blur every frame
-// and cannot promise the name stays legible from one to the next.
+// **What floats over a tile is a fixed scrim, not a material** — Discord's own
+// overlay chip, black at about half with white ink in every theme. Also §4: a
+// sampled material over moving pictures churns its blur every frame, and over
+// a ground that is somebody's colour nothing else is legible on all of them.
 struct VoiceTile: View {
     var participant: VoiceParticipant
     /// The sound they just pressed, drawn as a chip for a beat.
@@ -26,14 +28,24 @@ struct VoiceTile: View {
     /// Nil unless this is the reader's own tile with a camera on.
     var cameraSession: AVCaptureSession?
     var attachVideo: (UserID, (@Sendable (CMSampleBuffer) -> Void)?) -> Void
+    /// Told how big their picture is drawn — `VoiceVideoView.reportPixels`.
+    var reportVideoPixels: ((UserID, Int) -> Void)?
     /// Opens or closes this person's screen share. Nil where watching cannot
     /// work at all — §5.5: a control that cannot work must not be drawn.
     var watch: ((UserID) -> Void)?
+    /// Raises the person menu from the tile's ⋯, at the button's frame.
+    var openMenu: ((CGRect) -> Void)?
     /// How big the face is drawn, as a fraction of the tile's short side.
     var isCompact = false
 
     @Environment(\.motion) private var motion
+    /// A full-screen call at rest: the name chips fade with the controls.
+    @Environment(\.isCallIdle) private var isCallIdle
     @State private var isHovering = false
+    /// The watched stream's Stream Volume, opened from its hover controls.
+    @State private var isStreamVolumeOpen = false
+    /// Where the ⋯ sits, for the menu it raises.
+    @State private var menuAnchor: CGRect = .zero
     /// Drives the ring's breathing. A repeating animation on one number, and
     /// only while somebody is actually talking.
     @State private var isBreathing = false
@@ -47,8 +59,32 @@ struct VoiceTile: View {
             .frame(width: proxy.size.width, height: proxy.size.height)
             .clipShape(.rect(cornerRadius: radius))
             .overlay { edge }
-            .overlay(alignment: .bottomLeading) { namePill }
-            .overlay(alignment: .topTrailing) { marks }
+            .overlay(alignment: .bottomLeading) {
+                HStack(spacing: Spacing.tight) {
+                    namePill
+                    if let game = participant.game { gameChip(game) }
+                }
+                .padding(isCompact ? Spacing.tight : Spacing.snug)
+                .opacity(isCallIdle ? 0 : 1)
+                .animation(motion.standard, value: isCallIdle)
+            }
+            .overlay(alignment: .topTrailing) {
+                HStack(spacing: Spacing.tight) {
+                    marks
+                    // Discord's ⋯ on hover: the person's menu.
+                    if isHovering, let openMenu {
+                        Button { openMenu(menuAnchor) } label: {
+                            Image(systemName: "ellipsis")
+                                .modifier(TileCapsule(isCompact: isCompact))
+                        }
+                        .buttonStyle(.plain)
+                        .help("More")
+                        .accessibilityLabel(Text("More"))
+                        .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { menuAnchor = $0 }
+                        .padding(isCompact ? Spacing.tight : Spacing.snug)
+                    }
+                }
+            }
             .overlay(alignment: .top) { effectChip }
             .overlay { watchAction }
         }
@@ -57,15 +93,11 @@ struct VoiceTile: View {
             isHovering = hovering
         }
         // **The hover animation is scoped to the edge, which is the only thing
-        // that reads it.** Applied here it animated the whole tile — the
-        // `.ultraThinMaterial` ground included — and a material inside an
-        // animated, rasterized subtree has no backdrop to sample and paints
-        // **black**. §4: glass is composited against what is behind it, so
-        // anything that forces it offscreen turns it into a black rectangle.
-        // It was also invalidation nobody asked for: one bool that moves a
-        // stroke from 0.08 to 0.16 opacity, re-running a tile carrying video.
+        // that reads it.** Applied here it re-ran a tile carrying video for
+        // one bool that moves a stroke from 0.08 to 0.16 opacity.
         .animation(motion.standard, value: participant.isSpeaking)
         .animation(motion.standard, value: participant.showsVideo)
+        .animation(motion.standard, value: participant.ground)
         .animation(motion.standard, value: participant.isWatched)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(Text(accessibilityLabel))
@@ -90,11 +122,11 @@ struct VoiceTile: View {
                 ProgressView().controlSize(.small)
                 Text("Opening share…")
                     .font(.system(isCompact ? .caption2 : .subheadline, weight: .medium))
-                    .foregroundStyle(Ink.secondary)
             }
+            .foregroundStyle(tileInk)
             .padding(.horizontal, Spacing.base)
             .padding(.vertical, Spacing.tight + 1)
-            .background { Capsule().fill(Palette.selectionFill) }
+            .background { Capsule().fill(tileScrim) }
             .padding(.bottom, isCompact ? Spacing.tight : Spacing.snug)
             .transition(.materialize(from: .bottom, blurring: false))
             .accessibilityHidden(true)
@@ -113,35 +145,33 @@ struct VoiceTile: View {
     /// like that is not something to incur by clicking near something. The tile
     /// keeps its double-click for the stage.
     ///
-    /// **A capsule, not a second glass body.** In the call overlay this tile
-    /// already sits inside the panel's one `glassEffect`, and §4's rule is one
-    /// body per surface — glass on glass has nothing left to lens. `marks` next
-    /// to it makes the same choice for the same reason.
+    /// **A plain capsule**, like the name pill and `marks` beside it.
     @ViewBuilder
     private var watchAction: some View {
-        if let watch, participant.canWatch, isHovering {
-            Button {
-                watch(participant.id)
-            } label: {
-                Label(watchLabel, systemImage: participant.isWatched
-                    ? "eye.slash.fill" : "play.rectangle.fill")
-                    .font(.system(isCompact ? .caption2 : .subheadline, weight: .semibold))
-                    .foregroundStyle(InkColor.primary)
-                    .padding(.horizontal, isCompact ? Spacing.tight + 2 : Spacing.base)
-                    .padding(.vertical, isCompact ? 2 : Spacing.tight + 1)
-                    .background {
-                        // Over a picture the ground is a fixed scrim, because a
-                        // sampled material over moving frames re-blurs every one
-                        // of them and cannot promise the label stays legible.
-                        Capsule().fill(
-                            participant.showsVideo
-                                ? AnyShapeStyle(Color.black.opacity(0.55))
-                                : AnyShapeStyle(Palette.selectionFill)
-                        )
+        if let watch, participant.canWatch, isHovering || isStreamVolumeOpen {
+            HStack(spacing: Spacing.tight) {
+                Button {
+                    watch(participant.id)
+                } label: {
+                    Label(watchLabel, systemImage: participant.isWatched
+                        ? "eye.slash.fill" : "play.rectangle.fill")
+                        .modifier(TileCapsule(isCompact: isCompact))
+                }
+                .labelStyle(.titleAndIcon)
+                // The stream's own sound has its own level, as Discord's does.
+                if participant.isWatched, participant.showsVideo {
+                    Button { isStreamVolumeOpen.toggle() } label: {
+                        Image(systemName: "speaker.wave.2.fill")
+                            .modifier(TileCapsule(isCompact: isCompact))
                     }
+                    .help("Stream Volume")
+                    .accessibilityLabel(Text("Stream Volume"))
+                    .popover(isPresented: $isStreamVolumeOpen, arrowEdge: .bottom) {
+                        StreamVolumeFlyout(owner: participant.id)
+                    }
+                }
             }
             .buttonStyle(.plain)
-            .labelStyle(.titleAndIcon)
             .transition(.materialize(from: .center, blurring: false))
         }
     }
@@ -150,16 +180,24 @@ struct VoiceTile: View {
 
     // MARK: The ground
 
+    /// **Solid, always.** The ground was a material that switched to black
+    /// when video started, inside the call panel's own glass, with badges
+    /// blurring in over it — a material forced offscreen has no backdrop to
+    /// sample and paints black, which is the tile that flickered. Black under
+    /// video; otherwise the person's own colour (`VoiceTileGround`), and the
+    /// raised surface until it is known.
     @ViewBuilder
     private var ground: some View {
         if participant.showsVideo {
-            // Video runs edge to edge with nothing behind it. A material under
-            // an opaque picture is a material nobody can see, drawn every frame.
             Color.black
+        } else if let ground = participant.ground {
+            LinearGradient(
+                colors: [Color(hex: ground.top), Color(hex: ground.bottom)],
+                startPoint: .top,
+                endPoint: .bottom
+            )
         } else {
-            Rectangle()
-                .fill(.ultraThinMaterial)
-                .background(Palette.surface)
+            Palette.surfaceRaised
         }
     }
 
@@ -207,7 +245,7 @@ struct VoiceTile: View {
             if let cameraSession {
                 CameraPreviewView(session: cameraSession)
             } else {
-                VoiceVideoView(userID: participant.id, attach: attachVideo)
+                VoiceVideoView(userID: participant.id, attach: attachVideo, reportPixels: reportVideoPixels)
             }
         } else {
             let side = min(size.width, size.height) * (isCompact ? 0.5 : 0.34)
@@ -235,35 +273,57 @@ struct VoiceTile: View {
     /// other thing that is true about somebody already goes.
     private var namePill: some View {
         HStack(spacing: Spacing.tight) {
+            // Discord's chip (its `CallTileOverlay`): the one sound state that
+            // matters most, the blocked and ignored marks, the platform, then
+            // the name.
+            ForEach(chipMarks, id: \.symbol) { mark in
+                Image(systemName: mark.symbol)
+                    .font(.system(isCompact ? .caption2 : .caption, weight: .semibold))
+                    .foregroundStyle(mark.isAlarm ? Palette.destructive : tileInk)
+                    .accessibilityHidden(true)
+            }
             Text(participant.isSelf ? "\(participant.displayName) (You)" : participant.displayName)
-                .font(.system(isCompact ? .caption2 : .subheadline, weight: .semibold))
-                .foregroundStyle(nameStyle)
+                .font(nameFont)
+                .foregroundStyle(tileInk)
                 .lineLimit(1)
         }
         .padding(.horizontal, isCompact ? Spacing.tight + 2 : Spacing.base)
         .padding(.vertical, isCompact ? 2 : Spacing.tight + 1)
-        .background {
-            // Over video a fixed scrim; over the tile's own material a region
-            // inside it. Two grounds, one control — a material here would be
-            // glass on glass in one case and a blur over moving pictures in the
-            // other, and §4 forbids both.
-            Capsule().fill(
-                participant.showsVideo
-                    ? AnyShapeStyle(Color.black.opacity(0.55))
-                    : AnyShapeStyle(Palette.selectionFill)
-            )
-        }
-        .padding(isCompact ? Spacing.tight : Spacing.snug)
+        .background { Capsule().fill(tileScrim) }
     }
 
-    private var nameStyle: AnyShapeStyle {
-        // A role colour a server chose beats the default, and over video the
-        // fixed ink wins over the hierarchy — vibrancy composites against a
-        // picture nobody chose.
-        if let value = participant.nameColor { return AnyShapeStyle(Color(hex: value)) }
-        return participant.showsVideo
-            ? AnyShapeStyle(InkColor.primary)
-            : AnyShapeStyle(Ink.primary)
+    /// The face they chose for their name, at the chip's size — or the
+    /// system's, which is nearly everybody.
+    private var nameFont: Font {
+        let textStyle: Font.TextStyle = isCompact ? .caption2 : .subheadline
+        let size = NSFont.preferredFont(forTextStyle: textStyle.nsTextStyle).pointSize
+        return participant.nameFont
+            .flatMap { DisplayNameFontRegistry.font($0, size: size) }
+            .map(Font.init)
+            ?? .system(textStyle, weight: .semibold)
+    }
+
+    /// Discord's game chip: the game's icon, and its name where the tile has
+    /// room for it (its `hideApplicationName` on narrow tiles).
+    private func gameChip(_ game: VoiceGame) -> some View {
+        HStack(spacing: Spacing.tight) {
+            RemoteImage(url: game.iconURL, side: 32, bucket: .artwork) {
+                Image(systemName: "gamecontroller.fill").foregroundStyle(Ink.tertiary)
+            }
+            .frame(width: isCompact ? 12 : 16, height: isCompact ? 12 : 16)
+            .clipShape(.rect(cornerRadius: 4, style: .continuous))
+            if !isCompact {
+                Text(game.name)
+                    .font(.system(.subheadline, weight: .semibold))
+                    .foregroundStyle(tileInk)
+                    .lineLimit(1)
+            }
+        }
+        .padding(.horizontal, isCompact ? Spacing.tight + 2 : Spacing.base)
+        .padding(.vertical, isCompact ? 2 : Spacing.tight + 1)
+        .background { Capsule().fill(tileScrim) }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(Text(game.name))
     }
 
     // MARK: Marks
@@ -288,25 +348,36 @@ struct VoiceTile: View {
             }
             .padding(.horizontal, Spacing.base - 2)
             .padding(.vertical, Spacing.tight + 1)
-            .background {
-                Capsule().fill(
-                    participant.showsVideo
-                        ? AnyShapeStyle(Color.black.opacity(0.55))
-                        : AnyShapeStyle(Palette.selectionFill)
-                )
-            }
+            .background { Capsule().fill(tileScrim) }
             .padding(isCompact ? Spacing.tight : Spacing.snug)
-            .transition(.materialize(from: .topTrailing))
+            .transition(.materialize(from: .topTrailing, blurring: false))
         }
+    }
+
+    /// Discord's order for the chip: server-deafened, then server-muted, then
+    /// deafened, then muted by the reader, then muted — one of them — and the
+    /// blocked and ignored marks and the platform after it.
+    private var chipMarks: [(symbol: String, isAlarm: Bool)] {
+        var marks: [(symbol: String, isAlarm: Bool)] = []
+        if participant.isServerDeafened {
+            marks.append(("headphones.slash", true))
+        } else if participant.isServerMuted {
+            marks.append(("mic.slash.fill", true))
+        } else if participant.isDeafened {
+            marks.append(("headphones.slash", false))
+        } else if participant.isLocallyMuted {
+            marks.append(("speaker.slash.fill", false))
+        } else if participant.isSelfMuted {
+            marks.append(("mic.slash.fill", false))
+        }
+        if participant.isBlocked { marks.append(("nosign", true)) }
+        if participant.isIgnored { marks.append(("eye.slash", false)) }
+        if let symbol = participant.platform?.symbolName { marks.append((symbol, false)) }
+        return marks
     }
 
     private var markSymbols: [String] {
         var symbols: [String] = []
-        if participant.isDeafened {
-            symbols.append("headphones.slash")
-        } else if participant.isSilenced {
-            symbols.append("mic.slash.fill")
-        }
         if participant.isStreaming {
             symbols.append("rectangle.inset.filled.on.rectangle")
         }
@@ -333,7 +404,7 @@ struct VoiceTile: View {
             .padding(.vertical, Spacing.tight + 1)
             .background { Capsule().fill(Palette.accent.opacity(0.85)) }
             .padding(.top, Spacing.snug)
-            .transition(.materialize(from: .top))
+            .transition(.materialize(from: .top, blurring: false))
         }
     }
 
@@ -352,3 +423,24 @@ struct VoiceTile: View {
 /// light in a dark room, shade in a light one.
 private let voiceTileResting = Color.relative(dark: 0.08, light: 0.05)
 private let voiceTileHovered = Color.relative(dark: 0.16, light: 0.10)
+
+/// Discord's overlay chip, the same in every theme:
+/// `--control-overlay-secondary-background-default` is black at 0.52–0.56 and
+/// `--control-overlay-secondary-text-default` is white — over video, and over
+/// a ground that is somebody's colour, which may be anything.
+private let tileScrim = Color.black.opacity(0.55)
+private let tileInk = Color.white
+
+/// A control floating over a tile: a plain capsule, like the name pill.
+private struct TileCapsule: ViewModifier {
+    var isCompact: Bool
+
+    func body(content: Content) -> some View {
+        content
+            .font(.system(isCompact ? .caption2 : .subheadline, weight: .semibold))
+            .foregroundStyle(tileInk)
+            .padding(.horizontal, isCompact ? Spacing.tight + 2 : Spacing.base)
+            .padding(.vertical, isCompact ? 2 : Spacing.tight + 1)
+            .background { Capsule().fill(tileScrim) }
+    }
+}

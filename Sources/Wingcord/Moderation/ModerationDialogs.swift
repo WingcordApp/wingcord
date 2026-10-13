@@ -320,7 +320,7 @@ struct NicknameDialog: View {
                         .padding(.horizontal, Spacing.snug)
                         .frame(height: Metrics.composerControlHeight)
                         .background(Palette.surfaceRaised, in: .rect(cornerRadius: Radius.chip))
-                        .specularEdge(in: RoundedRectangle(cornerRadius: Radius.chip))
+                        .overlay { RoundedRectangle(cornerRadius: Radius.chip).strokeBorder(Palette.edge) }
                     if let refusal {
                         Text(verbatim: refusal)
                             .font(.system(.caption))
@@ -447,7 +447,7 @@ struct PruneDialog: View {
             .contentShape(.rect(cornerRadius: Radius.chip))
         }
         .buttonStyle(.plain)
-        .specularEdge(in: RoundedRectangle(cornerRadius: Radius.chip))
+        .overlay { RoundedRectangle(cornerRadius: Radius.chip).strokeBorder(Palette.edge) }
         .disabled(roles.isEmpty)
         .accessibilityLabel(Text("Also include members with these roles"))
         .popover(isPresented: $isChoosingRoles, arrowEdge: .bottom) {

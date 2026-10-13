@@ -226,7 +226,7 @@ struct EditableTextBlock: View {
                         .font(.system(.caption))
                         .foregroundStyle(Ink.tertiary)
                     Button("Save", action: commit)
-                        .buttonStyle(.glass)
+                        .buttonStyle(.bordered)
                         .controlSize(.small)
                 }
                 Spacer(minLength: 0)

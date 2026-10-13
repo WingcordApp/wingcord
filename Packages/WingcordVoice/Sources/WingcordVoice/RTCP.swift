@@ -1,4 +1,5 @@
 import Foundation
+import QuartzCore
 import Synchronization
 
 // MARK: - What the far end says about what we sent it
@@ -81,6 +82,11 @@ public enum RTCP {
         public var fullIntraRequests = 0
         /// Packets a receiver says it never got, from a generic NACK.
         public var negativeAcknowledgements = 0
+        /// Transport-wide congestion control reports. Counted and not yet read:
+        /// they are what a delay-based estimator would run on, and whether the
+        /// server sends them at all is the first thing that estimator needs to
+        /// know.
+        public var transportFeedback = 0
         /// The receiver's estimate of what the path will carry, in bits per
         /// second.
         public var bitrateEstimate: Int?
@@ -95,6 +101,13 @@ public enum RTCP {
         /// announces both and transmits only the second of them, so `lost=0%`
         /// on its own has been saying nothing at all.
         public var reportedSources: Set<UInt32> = []
+        /// The worst `fraction_lost` reported about each of our streams, out of
+        /// 256 — what the bitrate controller reads for the one it drives.
+        public var fractionLost: [UInt32: UInt8] = [:]
+        /// The middle 32 bits of the NTP time in each sender report, by the
+        /// stream it describes — what our own report blocks echo back as LSR,
+        /// which is how the far end measures the round trip.
+        public var senderReportTimes: [UInt32: UInt32] = [:]
 
         public var isEmpty: Bool { packets == 0 }
 
@@ -121,9 +134,12 @@ public enum RTCP {
             pictureLossIndications += other.pictureLossIndications
             fullIntraRequests += other.fullIntraRequests
             negativeAcknowledgements += other.negativeAcknowledgements
+            transportFeedback += other.transportFeedback
             if let estimate = other.bitrateEstimate { bitrateEstimate = estimate }
             unnamed.formUnion(other.unnamed)
             reportedSources.formUnion(other.reportedSources)
+            fractionLost.merge(other.fractionLost) { max($0, $1) }
+            senderReportTimes.merge(other.senderReportTimes) { $1 }
         }
 
         /// One line, or an empty string when nothing came back.
@@ -150,6 +166,7 @@ public enum RTCP {
             if pictureLossIndications > 0 { line += " PLI=\(pictureLossIndications)" }
             if fullIntraRequests > 0 { line += " FIR=\(fullIntraRequests)" }
             if negativeAcknowledgements > 0 { line += " nack=\(negativeAcknowledgements)" }
+            if transportFeedback > 0 { line += " twcc=\(transportFeedback)" }
             if let bitrateEstimate { line += " remb=\(bitrateEstimate / 1_000)kbit" }
             if !unnamed.isEmpty {
                 line += " other=[" + unnamed.sorted().map(String.init).joined(separator: " ") + "]"
@@ -187,14 +204,32 @@ public enum RTCP {
         return offset == packet.count
     }
 
+    /// What a receiver asked one of our streams for. Handed over the moment it
+    /// is read, because both are answered on the next frame or not in time.
+    public enum Request: Sendable, Equatable {
+        /// These packets never arrived; resend them.
+        case retransmit(ssrc: UInt32, sequences: [UInt16])
+        /// A receiver that has our packets and cannot start from them.
+        case keyframe(ssrc: UInt32)
+    }
+
+    /// Reads one compound packet, accumulating what it says and dropping what
+    /// it asks for.
+    public static func read(_ packet: [UInt8], into feedback: inout Feedback) {
+        read(packet, into: &feedback) { _ in }
+    }
+
     /// Reads one compound packet — several records back to back, each with its
-    /// own length — accumulating what it says.
+    /// own length — accumulating what it says and handing each request to
+    /// `requests` as it is read.
     ///
     /// Forgiving by design. A record this client does not understand is skipped
     /// by its own length field, which is what makes the format extensible; a
     /// length that runs past the end stops the walk rather than failing the
     /// packet, because the records before it were still true.
-    public static func read(_ packet: [UInt8], into feedback: inout Feedback) {
+    public static func read(
+        _ packet: [UInt8], into feedback: inout Feedback, requests: (Request) -> Void
+    ) {
         guard isRTCP(packet) else { return }
         feedback.packets += 1
 
@@ -213,6 +248,13 @@ public enum RTCP {
             switch Kind(rawValue: kind) {
             case .senderReport:
                 feedback.senderReports += 1
+                if offset + 16 <= end {
+                    // The NTP time is the eight bytes after the sender's SSRC;
+                    // LSR is its middle thirty-two bits.
+                    feedback.senderReportTimes[word(packet, at: offset + 4)] =
+                        UInt32(packet[offset + 10]) << 24 | UInt32(packet[offset + 11]) << 16
+                        | UInt32(packet[offset + 12]) << 8 | UInt32(packet[offset + 13])
+                }
                 // Header, sender SSRC, then twenty bytes of sender info before
                 // the report blocks begin.
                 readReportBlocks(packet, from: offset + 28, count: count, end: end, into: &feedback)
@@ -223,20 +265,42 @@ public enum RTCP {
 
             case .transportFeedback:
                 // `count` is the feedback message type: 1 is a generic NACK,
-                // whose every FCI word names a lost packet and a bitmask of
-                // sixteen more behind it.
-                guard count == 1 else { break }
+                // whose every FCI word names a lost packet and a bitmask of the
+                // sixteen behind it — bit `i` is packet `PID + i + 1` — and 15
+                // is transport-wide congestion control.
+                if count == 15 { feedback.transportFeedback += 1 }
+                guard count == 1, offset + 12 <= end else { break }
+                var lost: [UInt16] = []
                 var fci = offset + 12
                 while fci + 4 <= end {
+                    let first = UInt16(packet[fci]) << 8 | UInt16(packet[fci + 1])
                     let mask = UInt16(packet[fci + 2]) << 8 | UInt16(packet[fci + 3])
-                    feedback.negativeAcknowledgements += 1 + mask.nonzeroBitCount
+                    lost.append(first)
+                    for bit in 0..<16 where mask & (1 << bit) != 0 {
+                        lost.append(first &+ UInt16(bit) &+ 1)
+                    }
                     fci += 4
+                }
+                feedback.negativeAcknowledgements += lost.count
+                if !lost.isEmpty {
+                    requests(.retransmit(ssrc: word(packet, at: offset + 8), sequences: lost))
                 }
 
             case .payloadFeedback:
                 switch count {
-                case 1: feedback.pictureLossIndications += 1
-                case 4: feedback.fullIntraRequests += 1
+                case 1:
+                    // The stream is the record's media source.
+                    feedback.pictureLossIndications += 1
+                    if offset + 12 <= end { requests(.keyframe(ssrc: word(packet, at: offset + 8))) }
+                case 4:
+                    // A full intra request names its streams in its entries
+                    // instead: eight bytes each, the SSRC and a sequence number.
+                    feedback.fullIntraRequests += 1
+                    var entry = offset + 12
+                    while entry + 8 <= end {
+                        requests(.keyframe(ssrc: word(packet, at: entry)))
+                        entry += 8
+                    }
                 case 15: readBitrateEstimate(packet, from: offset + 12, end: end, into: &feedback)
                 default: break
                 }
@@ -265,15 +329,131 @@ public enum RTCP {
         var packet: [UInt8] = [
             2 << 6 | 1,                                     // version 2, feedback type 1
             Kind.payloadFeedback.rawValue,
-            0, 2,                                           // three words after the first
+            0, 2,                                           // two words after the first
         ]
-        for value in [sender, media] {
-            packet.append(UInt8(truncatingIfNeeded: value >> 24))
-            packet.append(UInt8(truncatingIfNeeded: value >> 16))
-            packet.append(UInt8(truncatingIfNeeded: value >> 8))
-            packet.append(UInt8(truncatingIfNeeded: value))
+        for value in [sender, media] { appendWord(value, to: &packet) }
+        return packet
+    }
+
+    /// A generic NACK — RFC 4585 §6.2.1 — for packets of `media` that never
+    /// arrived, from `sender`.
+    ///
+    /// Each entry names one lost packet and a bitmask of the sixteen after it,
+    /// so a run of losses costs one word rather than one each. `sequences` are
+    /// taken in the order given, which for a receive buffer is ascending in
+    /// sequence space.
+    public static func negativeAcknowledgement(
+        from sender: UInt32, about media: UInt32, sequences: [UInt16]
+    ) -> [UInt8] {
+        var entries: [(first: UInt16, mask: UInt16)] = []
+        var index = sequences.startIndex
+        while index < sequences.endIndex {
+            let first = sequences[index]
+            var mask: UInt16 = 0
+            index += 1
+            while index < sequences.endIndex {
+                let distance = sequences[index] &- first
+                guard (1...16).contains(distance) else { break }
+                mask |= 1 << (distance - 1)
+                index += 1
+            }
+            entries.append((first, mask))
+        }
+        let words = 2 + entries.count
+        var packet: [UInt8] = [
+            2 << 6 | 1,                                     // version 2, generic NACK
+            Kind.transportFeedback.rawValue,
+            UInt8(truncatingIfNeeded: words >> 8), UInt8(truncatingIfNeeded: words),
+        ]
+        for value in [sender, media] { appendWord(value, to: &packet) }
+        for entry in entries {
+            appendWord(UInt32(entry.first) << 16 | UInt32(entry.mask), to: &packet)
         }
         return packet
+    }
+
+    /// One received stream, as a report block describes it — RFC 3550 §6.4.1.
+    public struct ReportBlock: Sendable, Equatable {
+        public var ssrc: UInt32
+        /// Lost since the last report, out of 256.
+        public var fractionLost: UInt8
+        /// Lost in all, which duplicates can make negative. Twenty-four bits.
+        public var cumulativeLost: Int32
+        /// The highest sequence number received, with its wraps in the high
+        /// sixteen bits.
+        public var highestSequence: UInt32
+        /// In the stream's own clock units.
+        public var jitter: UInt32
+        /// LSR: the middle 32 bits of the last sender report's NTP time.
+        public var lastSenderReport: UInt32
+        /// DLSR: how long ago it arrived, in units of 1/65536 s.
+        public var delaySinceLastSenderReport: UInt32
+    }
+
+    /// What a sender report says about the stream that sends it.
+    public struct SenderInfo: Sendable, Equatable {
+        /// Seconds since 1900 in the high thirty-two bits, the fraction below.
+        public var ntpTime: UInt64
+        /// The same instant on the stream's own RTP clock.
+        public var rtpTimestamp: UInt32
+        public var packets: UInt32
+        public var octets: UInt32
+    }
+
+    /// A sender report — or, with no sender information, a receiver report —
+    /// from `ssrc`, carrying a block for each stream received (at most
+    /// thirty-one, the five bits the count has).
+    public static func report(
+        from ssrc: UInt32, sender: SenderInfo?, blocks: [ReportBlock]
+    ) -> [UInt8] {
+        let blocks = blocks.prefix(31)
+        let words = 1 + (sender == nil ? 0 : 5) + 6 * blocks.count
+        var packet: [UInt8] = [
+            2 << 6 | UInt8(blocks.count),
+            (sender == nil ? Kind.receiverReport : Kind.senderReport).rawValue,
+            UInt8(truncatingIfNeeded: words >> 8), UInt8(truncatingIfNeeded: words),
+        ]
+        appendWord(ssrc, to: &packet)
+        if let sender {
+            appendWord(UInt32(truncatingIfNeeded: sender.ntpTime >> 32), to: &packet)
+            appendWord(UInt32(truncatingIfNeeded: sender.ntpTime), to: &packet)
+            appendWord(sender.rtpTimestamp, to: &packet)
+            appendWord(sender.packets, to: &packet)
+            appendWord(sender.octets, to: &packet)
+        }
+        for block in blocks {
+            appendWord(block.ssrc, to: &packet)
+            appendWord(
+                UInt32(block.fractionLost) << 24
+                    | UInt32(bitPattern: block.cumulativeLost) & 0x00FF_FFFF,
+                to: &packet
+            )
+            appendWord(block.highestSequence, to: &packet)
+            appendWord(block.jitter, to: &packet)
+            appendWord(block.lastSenderReport, to: &packet)
+            appendWord(block.delaySinceLastSenderReport, to: &packet)
+        }
+        return packet
+    }
+
+    /// Now, as NTP counts it: seconds since 1900, and a binary fraction.
+    public static func ntpTime(_ date: Date = Date()) -> UInt64 {
+        let seconds = date.timeIntervalSince1970 + 2_208_988_800
+        let whole = UInt64(seconds)
+        let fraction = UInt64((seconds - Double(whole)) * 4_294_967_296)
+        return whole << 32 | fraction
+    }
+
+    private static func word(_ packet: [UInt8], at offset: Int) -> UInt32 {
+        UInt32(packet[offset]) << 24 | UInt32(packet[offset + 1]) << 16
+            | UInt32(packet[offset + 2]) << 8 | UInt32(packet[offset + 3])
+    }
+
+    private static func appendWord(_ value: UInt32, to packet: inout [UInt8]) {
+        packet.append(UInt8(truncatingIfNeeded: value >> 24))
+        packet.append(UInt8(truncatingIfNeeded: value >> 16))
+        packet.append(UInt8(truncatingIfNeeded: value >> 8))
+        packet.append(UInt8(truncatingIfNeeded: value))
     }
 
     /// The twenty-four byte blocks a sender or receiver report carries, one per
@@ -284,11 +464,10 @@ public enum RTCP {
         var offset = start
         for _ in 0..<count {
             guard offset + 24 <= end else { return }
-            feedback.reportedSources.insert(
-                UInt32(packet[offset]) << 24 | UInt32(packet[offset + 1]) << 16
-                    | UInt32(packet[offset + 2]) << 8 | UInt32(packet[offset + 3])
-            )
+            let source = word(packet, at: offset)
+            feedback.reportedSources.insert(source)
             feedback.worstFractionLost = max(feedback.worstFractionLost, packet[offset + 4])
+            feedback.fractionLost[source] = max(feedback.fractionLost[source] ?? 0, packet[offset + 4])
             // Twenty-four bits, two's complement: a receiver that got more
             // packets than were sent — duplicates — reports a negative.
             let raw = Int32(packet[offset + 5]) << 16
@@ -329,25 +508,16 @@ public enum RTCP {
 
 /// Accumulates what the far end says, from whichever queue the socket runs on.
 ///
-/// A reference type holding the mutex, for the reason `StreamPreview` is one:
-/// `Mutex` is non-copyable, so a `@Sendable` closure cannot capture one out of
-/// an enclosing type without consuming it.
+/// A reference type holding the mutex: `Mutex` is non-copyable, so a
+/// `@Sendable` closure cannot capture one out of an enclosing type without
+/// consuming it.
 final class RTCPListener: Sendable {
     private let state = Mutex(State())
 
     private struct State {
         var feedback = RTCP.Feedback()
-        var datagrams = 0
         /// Datagrams that were neither RTCP in the clear nor RTCP once opened.
         var unreadable = 0
-        /// How many unreadable datagrams are still to be printed as themselves.
-        ///
-        /// **Printed, because the alternative is a theory.** Whether the server
-        /// encrypts its reports, and under which header length, is a fact about
-        /// the wire that nothing in the documentation settles — and a client
-        /// that guesses wrong counts every reply as noise and concludes the
-        /// server is silent.
-        var probesRemaining = VoiceTrace.isOn ? 3 : 0
         /// Which shape the reports arrive in, once one has. Once a session:
         /// it is a fact about the server, not an event.
         var shape: Shape?
@@ -355,29 +525,54 @@ final class RTCPListener: Sendable {
         /// asks on every tick while the answer is in flight makes a congested
         /// path carry keyframes nobody needed.
         var lastAsk: ContinuousClock.Instant?
+        /// The last sender report about each stream, and when it arrived — what
+        /// our receiver reports echo back so the far end can time the round
+        /// trip.
+        var senderReports: [UInt32: (ntp: UInt32, arrival: TimeInterval)] = [:]
+
+        /// One packet's worth of what the far end said, folded in.
+        mutating func absorb(_ feedback: RTCP.Feedback, at arrival: TimeInterval) {
+            self.feedback.merge(feedback)
+            for (ssrc, ntp) in feedback.senderReportTimes {
+                senderReports[ssrc] = (ntp, arrival)
+            }
+        }
     }
 
     /// Set once the session is keyed, when the server's reports stop being
     /// readable in the clear.
     private let sealer = Mutex<VoiceSealer?>(nil)
 
+    /// Where a request about one of our own streams goes, on the socket's
+    /// queue. Fixed for the listener's life — §1.5, a handler a real-time
+    /// thread reads is never swapped under it.
+    private let requests: @Sendable (RTCP.Request) -> Void
+
+    init(requests: @escaping @Sendable (RTCP.Request) -> Void) {
+        self.requests = requests
+    }
+
     func setSealer(_ value: VoiceSealer?) { sealer.withLock { $0 = value } }
 
     /// Called on the socket's own queue, once per datagram.
     func accept(_ packet: [UInt8]) {
+        // Collected under the lock and answered after it: an answer is a
+        // retransmission or a keyframe, and neither may wait on this lock.
+        var asked: [RTCP.Request] = []
+        defer { asked.forEach(requests) }
         guard RTCP.isRTCP(packet) else {
-            state.withLock { state in
-                state.datagrams += 1
-                state.unreadable += 1
-                probe(&state, packet, "not rtcp")
-            }
+            state.withLock { $0.unreadable += 1 }
             return
         }
+        let arrival = CACurrentMediaTime()
         if RTCP.isPlaintext(packet) {
-            state.withLock { state in
-                state.datagrams += 1
+            asked = state.withLock { state in
                 announce(&state, .clear)
-                RTCP.read(packet, into: &state.feedback)
+                var feedback = RTCP.Feedback()
+                var asked: [RTCP.Request] = []
+                RTCP.read(packet, into: &feedback) { asked.append($0) }
+                state.absorb(feedback, at: arrival)
+                return asked
             }
             return
         }
@@ -386,20 +581,19 @@ final class RTCPListener: Sendable {
         // that identify it are the associated data that opens it.
         let opened = sealer.withLock { $0 }?
             .open(packet, headerLength: RTCP.clearPrefixLength)
-        state.withLock { state in
-            state.datagrams += 1
+        asked = state.withLock { state in
             guard let opened, case let rebuilt = Self.rejoin(packet, body: opened),
                   RTCP.isPlaintext(rebuilt)
             else {
                 state.unreadable += 1
-                probe(
-                    &state, packet,
-                    opened == nil ? "would not open" : "opened=\(opened?.count ?? 0)B, not rtcp"
-                )
-                return
+                return []
             }
             announce(&state, .sealed)
-            RTCP.read(rebuilt, into: &state.feedback)
+            var feedback = RTCP.Feedback()
+            var asked: [RTCP.Request] = []
+            RTCP.read(rebuilt, into: &feedback) { asked.append($0) }
+            state.absorb(feedback, at: arrival)
+            return asked
         }
     }
 
@@ -412,23 +606,12 @@ final class RTCPListener: Sendable {
     /// something has been.
     enum Shape: Sendable { case clear, sealed }
 
-    var shape: Shape? { state.withLock { $0.shape } }
-
     /// Says once, per session, which of the two shapes the server actually
     /// sends — so the next reader does not have to re-derive it.
     private func announce(_ state: inout State, _ shape: Shape) {
         guard state.shape == nil else { return }
         state.shape = shape
         VoiceTrace.write("rtcp readable, \(shape == .clear ? "clear" : "sealed")")
-    }
-
-    private func probe(_ state: inout State, _ packet: [UInt8], _ reason: String) {
-        guard state.probesRemaining > 0 else { return }
-        state.probesRemaining -= 1
-        VoiceTrace.write(
-            "rtcp unreadable \(packet.count)B (\(reason)) head="
-            + Self.hex(packet.prefix(16))
-        )
     }
 
     /// Puts the clear header back in front of the decrypted body, so the reader
@@ -440,16 +623,8 @@ final class RTCPListener: Sendable {
         Array(packet.prefix(RTCP.clearPrefixLength)) + body
     }
 
-    private static func hex(_ bytes: ArraySlice<UInt8>) -> String {
-        bytes.map { String(format: "%02x", $0) }.joined()
-    }
-
     /// Sends one picture loss indication per stream that cannot start, at most
     /// once a second however often this is called.
-    ///
-    /// **Shaped like what the server sends us.** See `Shape`: nothing goes out
-    /// before something has come in, so this client never invents a control
-    /// format for a server that uses another one.
     func askForKeyframes(on transport: VoiceTransport, from sender: UInt32, about streams: [UInt32]) {
         guard !streams.isEmpty else { return }
         let shape = state.withLock { state -> Shape? in
@@ -460,44 +635,75 @@ final class RTCPListener: Sendable {
             return shape
         }
         guard let shape else { return }
-
-        let sealer = self.sealer.withLock { $0 }
         for ssrc in streams {
-            let request = RTCP.pictureLossIndication(from: sender, about: ssrc)
-            switch shape {
-            case .clear:
-                transport.send(Data(request))
-            case .sealed:
-                // The same split the server uses on the way in: eight bytes of
-                // header in the clear and authenticated, the rest sealed.
-                guard let sealer, let packet = try? request
-                    .suffix(from: RTCP.clearPrefixLength)
-                    .withUnsafeBytes({ body in
-                        try sealer.seal(
-                            payload: body,
-                            header: RTPHeaderBytes(
-                                clear: Array(request.prefix(RTCP.clearPrefixLength))
-                            )
-                        )
-                    })
-                else { continue }
-                transport.send(packet)
-            }
+            send(RTCP.pictureLossIndication(from: sender, about: ssrc), shape: shape, on: transport)
         }
         VoiceTrace.write("rtcp asked for a keyframe on \(streams.count) stream(s)")
     }
 
+    /// Asks for packets of one stream that never arrived — a generic NACK.
+    ///
+    /// Not rate limited here: the receive buffer decides when a hole is asked
+    /// about again, and how many times.
+    func askForRetransmission(
+        on transport: VoiceTransport, from sender: UInt32, about media: UInt32, sequences: [UInt16]
+    ) {
+        guard !sequences.isEmpty, let shape = state.withLock({ $0.shape }) else { return }
+        send(
+            RTCP.negativeAcknowledgement(from: sender, about: media, sequences: sequences),
+            shape: shape, on: transport
+        )
+    }
+
+    /// LSR and DLSR for a stream: the last sender report about it, and how
+    /// long ago that arrived in 1/65536 s — or zeros with none.
+    func lastSenderReport(about ssrc: UInt32, at now: TimeInterval)
+        -> (lastSenderReport: UInt32, delay: UInt32)
+    {
+        guard let report = state.withLock({ $0.senderReports[ssrc] }) else { return (0, 0) }
+        return (report.ntp, UInt32(min(Double(UInt32.max), max(0, now - report.arrival) * 65_536)))
+    }
+
+    /// Sends one of our periodic reports.
+    ///
+    /// **The one thing sent before anything has come in**, because it is also
+    /// what keeps the NAT mapping open on a call where nobody is talking and
+    /// nothing else leaves. Until the server's own reports have shown their
+    /// shape it is sealed, which is the shape they were measured in.
+    func sendReport(_ report: [UInt8], on transport: VoiceTransport) {
+        send(report, shape: state.withLock({ $0.shape }) ?? .sealed, on: transport)
+    }
+
+    /// **Shaped like what the server sends us.** See `Shape`: a request goes out
+    /// only in the shape the server's own reports arrived in, so this client
+    /// never invents a control format for a server that uses another one.
+    private func send(_ request: [UInt8], shape: Shape, on transport: VoiceTransport) {
+        switch shape {
+        case .clear:
+            transport.send(Data(request))
+        case .sealed:
+            // The same split the server uses on the way in: eight bytes of
+            // header in the clear and authenticated, the rest sealed.
+            guard let sealer = sealer.withLock({ $0 }), let packet = try? request
+                .suffix(from: RTCP.clearPrefixLength)
+                .withUnsafeBytes({ body in
+                    try sealer.seal(
+                        payload: body,
+                        header: RTPHeaderBytes(clear: Array(request.prefix(RTCP.clearPrefixLength)))
+                    )
+                })
+            else { return }
+            transport.send(packet)
+        }
+    }
+
     /// What came back since the last call, and the last call resets it.
-    func drain() -> (feedback: RTCP.Feedback, datagrams: Int, unreadable: Int) {
+    func drain() -> (feedback: RTCP.Feedback, unreadable: Int) {
         state.withLock { state in
-            let value = (state.feedback, state.datagrams, state.unreadable)
+            let value = (state.feedback, state.unreadable)
             state.feedback = RTCP.Feedback()
             state.unreadable = 0
             return value
         }
     }
-
-    /// Every datagram the socket has handed over, for the line that only wants
-    /// to know whether the server is saying anything at all.
-    var datagrams: Int { state.withLock { $0.datagrams } }
 }

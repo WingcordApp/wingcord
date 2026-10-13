@@ -118,6 +118,96 @@ private struct GeneralPane: View {
                 "The items are absent rather than greyed out when this is off — a menu a third longer for nobody's benefit is worse than a shorter one.",
                 symbolName: "number"
             )
+
+            // Vencord's Fake Nitro (decision 9). Discord has no words for it,
+            // so its switches carry the plugin's own descriptions.
+            SettingsCard {
+                SettingsToggle(title: "Fake Nitro", isOn: $settings.fakeNitro)
+                if settings.fakeNitro {
+                    CardDivider()
+                    SettingsToggle(
+                        title: "Emoji",
+                        help: "Allows sending fake emojis (also bypasses missing permission to use custom emojis)",
+                        isOn: $settings.fakeNitroEmoji
+                    )
+                    CardDivider()
+                    SettingsToggle(
+                        title: "Stickers",
+                        help: "Allows sending fake stickers (also bypasses missing permission to use stickers)",
+                        isOn: $settings.fakeNitroStickers
+                    )
+                    CardDivider()
+                    SettingsToggle(
+                        title: "Stream quality",
+                        help: "Allow streaming in nitro quality",
+                        isOn: $settings.fakeNitroStreamQuality
+                    )
+                    CardDivider()
+                    SettingsToggle(
+                        title: "Disable embed permission check",
+                        help: "Whether to disable the embed permission check when sending fake emojis and stickers",
+                        isOn: $settings.fakeNitroSkipsEmbedCheck
+                    )
+                }
+            }
+            .padding(.top, SettingsMetrics.cardToHeader)
+            SettingsFootnote(
+                "Emoji and stickers go as links to their pictures, which anybody without Fake Nitro sees as a link. Discord can act on accounts that use it.",
+                symbolName: "sparkles"
+            )
+
+            // Vencord's AnonymiseFileNames (decision 11), in the plugin's words:
+            // its name and description on the switch, each setting's own
+            // description under it, and the two that belong to one method
+            // dimmed under the others, as the plugin's are.
+            SettingsCard {
+                SettingsToggle(
+                    title: "Anonymise File Names",
+                    help: "Anonymise uploaded file names",
+                    isOn: $settings.anonymisesFileNames
+                )
+                if settings.anonymisesFileNames {
+                    CardDivider()
+                    SettingsToggle(
+                        title: "Anonymise by default",
+                        help: "Whether to anonymise file names by default",
+                        isOn: $settings.anonymisesByDefault
+                    )
+                    CardDivider()
+                    SettingsFlyoutRow(
+                        "Method",
+                        help: "Anonymising method",
+                        selection: $settings.anonymisingMethod,
+                        options: FileNameAnonymiser.Method.allCases,
+                        title: \.title
+                    )
+                    CardDivider()
+                    SettingsControlRow("Randomised length", help: "Random characters length") {
+                        HStack(spacing: Spacing.tight) {
+                            TextField("", value: $settings.randomisedLength, format: .number)
+                                .textFieldStyle(.roundedBorder)
+                                .multilineTextAlignment(.trailing)
+                                .frame(width: 48)
+                            Stepper("", value: $settings.randomisedLength, in: AppSettings.randomisedLengths)
+                                .labelsHidden()
+                        }
+                        .controlSize(.small)
+                        .accessibilityElement(children: .contain)
+                        .accessibilityLabel(Text("Randomised length"))
+                    }
+                    .disabled(settings.anonymisingMethod != .randomCharacters)
+                    CardDivider()
+                    SettingsControlRow("Consistent", help: "Consistent filename") {
+                        TextField("", text: $settings.consistentFileName)
+                            .textFieldStyle(.roundedBorder)
+                            .controlSize(.small)
+                            .frame(width: 140)
+                            .accessibilityLabel(Text("Consistent"))
+                    }
+                    .disabled(settings.anonymisingMethod != .consistent)
+                }
+            }
+            .padding(.top, SettingsMetrics.cardToHeader)
         }
 
         SettingsGroup("Language") {
@@ -172,7 +262,7 @@ private struct AppearancePane: View {
                         if editing { theme.beginAdjusting() } else { theme.endAdjusting() }
                     }
                 )
-                .disabled(theme.choice.preset?.isStated == true)
+                .disabled(theme.choice.isStated)
             }
             SettingsFootnote(
                 "A theme colours the ground the app is read on and the one accent it spends — "
@@ -212,6 +302,9 @@ private struct AppearancePane: View {
                 symbolName: "swatchpalette"
             )
         }
+
+        ThemeSyncCard()
+            .padding(.top, SettingsMetrics.cardToHeader)
 
         SettingsGroup("Server Themes") {
             ServerThemePreferenceCard()
@@ -401,6 +494,39 @@ private struct AppearancePane: View {
     }
 }
 
+/// Appearance → Discord's two theme switches, in its words (DESIGN-NOTES §15).
+///
+/// "Sync theme across my devices" is off-limits while the theme follows the
+/// computer, as Discord's is; turning it on sends the theme chosen here, as
+/// Discord's does. "Apply theme to other users' profiles" draws a themed
+/// profile in the reader's own light or dark.
+private struct ThemeSyncCard: View {
+    @Environment(AppModel.self) private var model
+    @State private var settings = AppSettings.shared
+    @State private var theme = ThemeStore.shared
+
+    var body: some View {
+        SettingsCard {
+            SettingsToggle(
+                title: "Sync theme across my devices",
+                isOn: Binding(
+                    get: { settings.syncsThemeAcrossDevices },
+                    set: { syncs in
+                        settings.syncsThemeAcrossDevices = syncs
+                        if syncs { model.sessionController.writeAccountTheme(for: theme.choice) }
+                    }
+                )
+            )
+            .disabled(theme.choice == .system)
+            CardDivider()
+            SettingsToggle(
+                title: "Apply theme to other users' profiles",
+                isOn: $settings.appliesThemeToProfiles
+            )
+        }
+    }
+}
+
 /// Appearance → "Default theme in servers": Discord's own setting, and its own
 /// two answers.
 ///
@@ -542,6 +668,18 @@ private struct MediaPane: View {
                 help: "Repeat a clip when it reaches the end.",
                 isOn: $settings.loopsVideo
             )
+        }
+
+        // Discord's own switch and words (its mobile client's): a picture
+        // over the limit is compressed to fit as it is added.
+        SettingsGroup("Image compression") {
+            SettingsCard {
+                SettingsToggle(
+                    title: "Auto-compress Images",
+                    help: "When this is on, images sent will be compressed. Get Nitro to send a crystal clear image!",
+                    isOn: $settings.autoCompressesImages
+                )
+            }
         }
     }
 }

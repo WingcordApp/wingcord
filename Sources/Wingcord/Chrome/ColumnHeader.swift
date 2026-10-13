@@ -35,7 +35,8 @@ struct ColumnHeaderIdentity<Glyph: View, Accessory: View>: View {
         }
         .padding(.horizontal, Spacing.snug)
         .frame(height: ColumnHeaderControl.side)
-        .chromeOverMedia(tinted: Palette.flyoutTint)
+        // Navigation chrome over the column: `.regular`, the HIG's default.
+        .glassEffect(.regular, in: .capsule)
         .help(help)
     }
 }

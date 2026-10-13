@@ -127,19 +127,19 @@ struct WelcomeScreenPane: View {
                     // Nothing to preview without a channel in it.
                     if !screen.isEmpty {
                         Button("Preview") { isPreviewing = true }
-                            .buttonStyle(.glass)
+                            .buttonStyle(.bordered)
                             .controlSize(.small)
                     }
                     if isEnabled {
                         Button("Disable", role: .destructive) {
                             Task { await store.disableWelcomeScreen() }
                         }
-                        .buttonStyle(.glassProminent)
+                        .buttonStyle(.borderedProminent)
                         .tint(Palette.destructive)
                         .controlSize(.small)
                     } else {
                         Button("Enable") {}
-                            .buttonStyle(.glassProminent)
+                            .buttonStyle(.borderedProminent)
                             .controlSize(.small)
                             .disabled(true)
                     }

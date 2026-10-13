@@ -76,6 +76,46 @@ struct SystemMessageTextTests {
         #expect(removed?.suffix.contains("removed") == true)
     }
 
+    /// Types 27–31 used to fall through to `unknown` and draw as "Message"
+    /// beside an empty circle — Alex's images 20 and 21.
+    @Test("The five stage kinds are recognised")
+    func stageKinds() {
+        #expect(MessageKind(rawValue: 27) == .stageStart)
+        #expect(MessageKind(rawValue: 28) == .stageEnd)
+        #expect(MessageKind(rawValue: 29) == .stageSpeaker)
+        #expect(MessageKind(rawValue: 30) == .stageRaiseHand)
+        #expect(MessageKind(rawValue: 31) == .stageTopic)
+    }
+
+    /// Discord's `Rv+TSM` / `zla/ux` / `Yy6vLs`: the topic is the message's
+    /// content, set in bold after the verb.
+    @Test("A stage's start, end and topic change carry the topic in bold")
+    func stageTopicSentences() {
+        func sentence(_ kind: MessageKind) -> SystemSentence? {
+            var message = message(kind)
+            message.content = "Friday Q&A"
+            return SystemMessageText.sentence(for: message, name: "ada")
+        }
+        let start = sentence(.stageStart)
+        #expect(start?.suffix == " started ")
+        #expect(start?.emphasis == "Friday Q&A")
+        #expect(start?.tint == .affirmative)
+        #expect(sentence(.stageEnd)?.suffix == " ended ")
+        #expect(sentence(.stageEnd)?.emphasis == "Friday Q&A")
+        #expect(sentence(.stageTopic)?.suffix == " changed the Stage topic: ")
+        #expect(sentence(.stageTopic)?.emphasis == "Friday Q&A")
+    }
+
+    @Test("A new speaker and a raised hand are plain sentences")
+    func stageMemberSentences() {
+        let speaker = SystemMessageText.sentence(for: message(.stageSpeaker), name: "ada")
+        let hand = SystemMessageText.sentence(for: message(.stageRaiseHand), name: "ada")
+        #expect(speaker?.suffix == " is now a speaker.")
+        #expect(speaker?.emphasis.isEmpty == true)
+        #expect(hand?.suffix == " requested to speak.")
+        #expect(hand?.symbolName == "hand.raised.fill")
+    }
+
     /// Anything somebody actually typed must fall through to the ordinary row.
     @Test(
         "A real message has no composed sentence",

@@ -108,6 +108,9 @@ enum DrawnCardAction: Hashable, Sendable {
     /// violation's detail, the Account Standing page.
     case accountStanding
     case openURL(URL)
+    /// Invite to Speak under a stage's "requested to speak." line — the
+    /// person whose hand it is.
+    case inviteToSpeak(UserID)
 }
 
 /// Lays a card's parts out, one line at a time.

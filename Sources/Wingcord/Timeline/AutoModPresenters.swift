@@ -67,7 +67,7 @@ struct AutoModActionTooltipOverlay: View {
                             .padding(.horizontal, Spacing.base * 1.5)
                             .padding(.vertical, Spacing.base)
                             .glassEffect(
-                                .clear.tint(Palette.flyoutTint),
+                                .regular,
                                 in: .rect(cornerRadius: Radius.glass, style: .continuous)
                             )
                             .fixedSize()

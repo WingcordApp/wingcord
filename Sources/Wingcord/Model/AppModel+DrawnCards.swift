@@ -45,6 +45,13 @@ extension AppModel {
             SettingsWindow.open(.account)
         case .openURL(let url):
             openExternal(url)
+        case .inviteToSpeak(let userID):
+            // Discord's: the invitation, then the line leaves the reader's own
+            // chat and nobody else's (`deleteMessage(…, local)`).
+            guard permissionGate.permissions(in: channelID).contains(.muteMembers) else { return }
+            setStageSpeaker(userID, isSpeaker: true, inChannel: channelID)
+            mutateBox(channelID) { $0.remove(messageID) }
+            messageContentRevision &+= 1
         }
     }
 

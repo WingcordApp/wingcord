@@ -31,6 +31,19 @@ struct ServerOptionsRequest: Identifiable, Hashable, Sendable {
     var id: GuildID { guildID }
 }
 
+/// The open server's menu on one of its pages, asked for from the menu bar.
+///
+/// **No anchor, unlike `ServerOptionsRequest`**: the menu bar has no control to
+/// point at, so the server's name answers it — the pill on the banner or the
+/// toolbar title, whichever is showing — and opens its own menu, where a click
+/// on it would have. An id of its own, so asking twice is asking twice.
+struct ServerMenuPageRequest: Equatable {
+    var guildID: GuildID
+    var page: ServerOptionsMenu.Surface
+    var inviteChannelID: ChannelID?
+    let id = UUID()
+}
+
 extension AppModel {
 
     // MARK: Opening and closing

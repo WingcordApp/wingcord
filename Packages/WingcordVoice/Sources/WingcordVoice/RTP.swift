@@ -169,6 +169,40 @@ public struct RTPWriter: Sendable {
         marker: Bool = false,
         extensions: [UInt8] = []
     ) -> RTPHeaderBytes {
+        let place = claim(advancingClockBy: samples)
+        return Self.header(
+            ssrc: ssrc, payloadType: payloadType, sequence: place.sequence,
+            timestamp: place.timestamp, marker: marker, extensions: extensions
+        )
+    }
+
+    /// A packet's place in the stream — its sequence number and timestamp —
+    /// taken now, with the header written later by `header(…)`.
+    ///
+    /// **For a packet that leaves later than it is made.** Its order and its
+    /// clock are decided when the frame is packetised; its send time and its
+    /// transport-wide sequence are facts about leaving, and a pacer that wrote
+    /// them at packetisation would tell the far end's estimator the burst it
+    /// exists to avoid.
+    public mutating func claim(advancingClockBy samples: UInt32 = 0)
+        -> (sequence: UInt16, timestamp: UInt32)
+    {
+        defer {
+            sequence &+= 1
+            timestamp &+= samples
+        }
+        return (sequence, timestamp)
+    }
+
+    /// One header, for a packet whose place in its stream is already decided.
+    public static func header(
+        ssrc: UInt32,
+        payloadType: UInt8,
+        sequence: UInt16,
+        timestamp: UInt32,
+        marker: Bool,
+        extensions: [UInt8]
+    ) -> RTPHeaderBytes {
         var header = [UInt8]()
         header.reserveCapacity(RTP.headerLength + (extensions.isEmpty ? 0 : 4))
 
@@ -194,13 +228,10 @@ public struct RTPWriter: Sendable {
             body.append(contentsOf: extensions)
             body.append(contentsOf: repeatElement(0, count: padded - extensions.count))
         }
-
-        sequence &+= 1
-        timestamp &+= samples
         return RTPHeaderBytes(clear: header, encrypted: body)
     }
 
-    private func append32(_ value: UInt32, to bytes: inout [UInt8]) {
+    private static func append32(_ value: UInt32, to bytes: inout [UInt8]) {
         bytes.append(UInt8(truncatingIfNeeded: value >> 24))
         bytes.append(UInt8(truncatingIfNeeded: value >> 16))
         bytes.append(UInt8(truncatingIfNeeded: value >> 8))
@@ -279,39 +310,6 @@ public enum RTPExtension {
             UInt8(truncatingIfNeeded: fixed >> 8),
             UInt8(truncatingIfNeeded: fixed),
         ]
-    }
-
-    /// Every element in an RFC 8285 one-byte block, as `id:value` in hex.
-    ///
-    /// **The ids on this connection are not negotiated anywhere this client can
-    /// read them.** Discord's READY carries no `header_extensions` on a call or
-    /// on a stream — measured, twice — so the only description of what the
-    /// server expects is what a working client puts on the wire. A stream that
-    /// arrives and decodes is that description, and this is how it is read.
-    ///
-    /// Text rather than a parse into named elements, because naming them would
-    /// mean deciding what they are, which is the assumption this exists to
-    /// avoid making.
-    public static func describe(_ block: ArraySlice<UInt8>) -> String {
-        var parts: [String] = []
-        var index = block.startIndex
-        while index < block.endIndex {
-            let byte = block[index]
-            // Zero is RFC 8285's no-op, written to pad to a word boundary.
-            if byte == 0 { index += 1; continue }
-            let id = byte >> 4
-            let length = Int(byte & 0x0F) + 1
-            guard index + 1 + length <= block.endIndex else {
-                parts.append("truncated")
-                break
-            }
-            let value = block[(index + 1)..<(index + 1 + length)]
-                .map { String(format: "%02x", $0) }
-                .joined()
-            parts.append("\(id):\(value)")
-            index += 1 + length
-        }
-        return parts.joined(separator: " ")
     }
 
     /// `http://www.ietf.org/id/draft-holmer-rmcat-transport-wide-cc-extensions-01`.

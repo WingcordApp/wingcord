@@ -51,6 +51,17 @@ struct ChannelOptionsMenu: View {
         let override = model.guildSettings(for: guildID).channelOverrides[channel.id]
         let isMuted = override?.isMuted() ?? false
 
+        // Discord's first group on a live stage, for its moderators (`M` in
+        // the voice and stage menu).
+        if channel.kind == .stage, model.stageInstances[channel.id] != nil,
+           permissions.contains(AppModel.stageModerator)
+        {
+            FlyoutRow(title: "End Stage", symbolName: "xmark.circle", isDestructive: true) {
+                close()
+                model.stageEnding = channel.id
+            }
+            FlyoutDivider()
+        }
         FlyoutRow(title: "Mark As Read", symbolName: "checkmark.circle") {
             markRead(channel, guildID: guildID)
             close()
@@ -101,7 +112,7 @@ struct ChannelOptionsMenu: View {
                 surface = .mute
             }
         }
-        if channel.kind != .voice {
+        if !Self.levels(for: channel.kind).isEmpty {
             FlyoutRow(
                 title: "Notification Settings",
                 subtitle: levelTitle(override?.messageNotifications ?? .inherit, channel: channel),
@@ -118,6 +129,13 @@ struct ChannelOptionsMenu: View {
                 FlyoutRow(title: isCategory ? "Edit Category" : "Edit Channel", symbolName: "gearshape") {
                     close()
                     ServerSettingsWindow.open(guildID, channel: channel.id)
+                }
+            }
+            // Discord's `clone-channel`, for a channel and not a category.
+            if permissions.contains(.manageChannels), !isCategory {
+                FlyoutRow(title: "Duplicate Channel", symbolName: "plus.square.on.square") {
+                    close()
+                    model.openChannelDuplication(of: channel.id)
                 }
             }
             // Discord's "Create Text Channel" — in the category, or beside
@@ -214,7 +232,7 @@ struct ChannelOptionsMenu: View {
         ) {
             model.applyGuildSetting(.channelLevel(channel.id, .inherit), in: guildID)
         }
-        ForEach([MessageNotificationLevel.allMessages, .onlyMentions, .nothing], id: \.self) { candidate in
+        ForEach(ChannelOptionsMenu.levels(for: channel.kind), id: \.self) { candidate in
             FlyoutRow(
                 title: levelTitle(candidate, channel: channel),
                 accessory: .tick(level == candidate),
@@ -225,12 +243,27 @@ struct ChannelOptionsMenu: View {
         }
     }
 
+    /// Discord's levels past the default (`288104`): a stage's are "All Live
+    /// Stages" — its mentions level — and Nothing; a voice channel has none.
+    static func levels(for kind: ChannelKind) -> [MessageNotificationLevel] {
+        switch kind {
+        case .voice: []
+        case .stage: [.onlyMentions, .nothing]
+        default: [.allMessages, .onlyMentions, .nothing]
+        }
+    }
+
     private func levelTitle(_ level: MessageNotificationLevel, channel: Channel) -> String {
+        Self.levelTitle(level, kind: channel.kind, inCategory: channel.parentID != nil)
+    }
+
+    /// A level's words for a kind of channel — the menu bar's too.
+    static func levelTitle(_ level: MessageNotificationLevel, kind: ChannelKind, inCategory: Bool) -> String {
         switch level {
         case .allMessages: "All Messages"
-        case .onlyMentions: "Only @mentions"
+        case .onlyMentions: kind == .stage ? "All Live Stages" : "Only @mentions"
         case .nothing: "Nothing"
-        case .inherit: channel.parentID == nil ? "Use Server Default" : "Use Category Default"
+        case .inherit: inCategory ? "Use Category Default" : "Use Server Default"
         }
     }
 
@@ -281,6 +314,20 @@ struct ChannelOptionsPresenter: ViewModifier {
                 }
             } message: { request in
                 Text(request.message)
+            }
+            // Discord's End Stage from the channel menu.
+            .alert(
+                "Do you want to end the Stage?",
+                isPresented: Binding(
+                    get: { model.stageEnding != nil },
+                    set: { if !$0 { model.stageEnding = nil } }
+                ),
+                presenting: model.stageEnding
+            ) { channelID in
+                Button("End Stage", role: .destructive) { model.endStage(inChannel: channelID) }
+                Button("Cancel", role: .cancel) { model.stageEnding = nil }
+            } message: { _ in
+                Text("A Stage with no speakers will automatically end after a few minutes.")
             }
     }
 }

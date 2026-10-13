@@ -40,7 +40,8 @@ struct TextSelectionTests {
             canSuperReact: false,
             canAddReactions: true,
             hidesMedia: false,
-            listenAlongCards: [:]
+            listenAlongCards: [:],
+            stageInvitations: []
         )
         RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.05))
         let canvas = try #require(

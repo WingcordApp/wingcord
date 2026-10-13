@@ -21,10 +21,12 @@ import Synchronization
 // next packet suspends the thing that would deliver it. Packets are decrypted
 // and handed to a sink synchronously.
 
+/// **Unchecked, and the promise is narrow**: every stored property is either
+/// immutable or behind its own lock. The one exception the compiler would have
+/// to take on trust is the send completion, which captures only a counter.
 public final class VoiceTransport: @unchecked Sendable {
 
     public enum Failure: Error, Sendable {
-        case notReady
         case discoveryTimedOut
         case discoveryMalformed
     }
@@ -32,14 +34,13 @@ public final class VoiceTransport: @unchecked Sendable {
     private let connection: NWConnection
     private let queue = DispatchQueue(label: "dev.wingcord.voice.udp", qos: .userInteractive)
     private let readyGate = Gate()
-
-    /// Called for every datagram that arrives, on the socket's own queue.
-    ///
-    /// Set once, before `start`. A property rather than a stream: an
-    /// `AsyncStream` puts a scheduling hop between the packet and the jitter
-    /// buffer, which on a burst is exactly where reordering gets manufactured
-    /// by the client that is supposed to be fixing it.
-    public var onDatagram: (@Sendable ([UInt8]) -> Void)?
+    /// Whether the receive loop is running. The flow can report itself ready
+    /// more than once — a path that wobbles goes to waiting and back — and a
+    /// second loop would have two reads outstanding on one socket.
+    private let isReceiving = Atomic<Bool>(false)
+    /// Where a discovery reply goes while an address discovery is waiting for
+    /// one, and `nil` the rest of the time.
+    private let discovery = Mutex<Inbox?>(nil)
 
     public init(host: String, port: UInt16) {
         let parameters = NWParameters.udp
@@ -58,14 +59,38 @@ public final class VoiceTransport: @unchecked Sendable {
             port: NWEndpoint.Port(rawValue: port) ?? .any,
             using: parameters
         )
+        // Built once and reused. `.contentProcessed` costs a completion per
+        // datagram where `.idempotent` costs none, which on a path carrying a
+        // hundred and fifty packets a second is worth caring about — but not
+        // nearly as much as knowing whether they left.
+        let failures = SendFailures()
+        self.failures = failures
+        completion = .contentProcessed { error in
+            guard let error else { return }
+            failures.note(error)
+        }
     }
 
-    public func start() {
+    /// Brings the flow up and hands every datagram that arrives to `receive`,
+    /// on the socket's own queue.
+    ///
+    /// **The handler is fixed for the life of the socket.** It used to be a
+    /// property that address discovery swapped and swapped back while
+    /// datagrams were already being delivered on the socket's queue — one
+    /// closure read on one thread and written on another, with nothing between
+    /// them. A discovery reply is now told apart where it arrives; see
+    /// `takeDiscoveryReply`.
+    ///
+    /// A handler rather than a stream: an `AsyncStream` puts a scheduling hop
+    /// between the packet and the jitter buffer, which on a burst is exactly
+    /// where reordering gets manufactured by the client that is supposed to be
+    /// fixing it.
+    public func start(receiving receive: @escaping @Sendable ([UInt8]) -> Void) {
         connection.stateUpdateHandler = { [weak self] state in
             switch state {
             case .ready:
                 self?.readyGate.open()
-                self?.receiveLoop()
+                self?.beginReceiving(receive)
             case .failed(let error):
                 VoiceTrace.fault("udp failed: \(error.localizedDescription)")
                 self?.readyGate.open()
@@ -83,17 +108,40 @@ public final class VoiceTransport: @unchecked Sendable {
         connection.cancel()
     }
 
-    private func receiveLoop() {
+    private func beginReceiving(_ receive: @escaping @Sendable ([UInt8]) -> Void) {
+        guard !isReceiving.exchange(true, ordering: .relaxed) else { return }
+        receiveLoop(receive)
+    }
+
+    private func receiveLoop(_ receive: @escaping @Sendable ([UInt8]) -> Void) {
         // `receiveMessage`, not `receive(minimum:maximum:)`. The latter is a
         // byte-stream read and will happily hand back two datagrams glued
         // together; on a message protocol that is a packet nobody can parse and
         // a stream that never recovers.
         connection.receiveMessage { [weak self] data, _, _, error in
             guard let self else { return }
-            if let data, !data.isEmpty { onDatagram?([UInt8](data)) }
+            if let data, !data.isEmpty {
+                let bytes = [UInt8](data)
+                if !takeDiscoveryReply(bytes) { receive(bytes) }
+            }
             guard error == nil else { return }
-            receiveLoop()
+            receiveLoop(receive)
         }
+    }
+
+    /// Hands a discovery reply to the discovery waiting for it.
+    ///
+    /// **Only a reply, and media never takes the lock.** The shape is checked
+    /// first — seventy-four bytes, type word two — and an RTP or RTCP packet's
+    /// first octet is never zero. Media can already be arriving by the time the
+    /// probe is answered, and a discovery that took the first datagram of any
+    /// kind would parse an RTP header as an address.
+    private func takeDiscoveryReply(_ bytes: [UInt8]) -> Bool {
+        guard bytes.count >= 74, bytes[0] == 0x00, bytes[1] == 0x02,
+              let inbox = discovery.withLock({ $0 })
+        else { return false }
+        inbox.deliver(bytes)
+        return true
     }
 
     /// Datagrams the stack refused, and the first reason it gave.
@@ -105,17 +153,8 @@ public final class VoiceTransport: @unchecked Sendable {
     /// perfectly healthy send count while nothing crosses the wire. That is one
     /// of the four ways a black screen share looks identical from this end, and
     /// it was the only one with no counter at all.
-    private let failures = SendFailures()
-
-    /// Built once and reused. `.contentProcessed` costs a completion per
-    /// datagram where `.idempotent` costs none, which on a path carrying a
-    /// hundred and fifty packets a second is worth caring about — but not
-    /// nearly as much as knowing whether they left.
-    private lazy var completion: NWConnection.SendCompletion = .contentProcessed {
-        [failures] error in
-        guard let error else { return }
-        failures.note(error)
-    }
+    private let failures: SendFailures
+    private let completion: NWConnection.SendCompletion
 
     /// How many datagrams the stack refused since the last call, and why the
     /// first of them was refused.
@@ -166,18 +205,8 @@ public final class VoiceTransport: @unchecked Sendable {
         probe[7] = UInt8(truncatingIfNeeded: ssrc)
 
         let inbox = Inbox()
-        let previous = onDatagram
-        onDatagram = { bytes in
-            // Only the reply. Media can already be arriving on this socket by
-            // the time the probe is answered, and a discovery that accepts the
-            // first datagram of any kind parses an RTP header as an address.
-            if bytes.count >= 74, bytes[0] == 0x00, bytes[1] == 0x02 {
-                inbox.deliver(bytes)
-            } else {
-                previous?(bytes)
-            }
-        }
-        defer { onDatagram = previous }
+        discovery.withLock { $0 = inbox }
+        defer { discovery.withLock { $0 = nil } }
 
         // Sent more than once. The probe is a single UDP datagram on a path
         // that has never carried one, and a lost probe is a call that fails to

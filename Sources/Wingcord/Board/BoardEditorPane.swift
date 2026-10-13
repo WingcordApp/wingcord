@@ -236,10 +236,8 @@ private struct WidgetEditCard: View {
         }
         .padding(Spacing.margin)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .glassEffect(
-            .clear.tint(Palette.flyoutTint),
-            in: .rect(cornerRadius: Radius.glass, style: .continuous)
-        )
+        // A card on a profile: the profile's own panel, not glass.
+        .background(ground.panelFill, in: .rect(cornerRadius: Radius.glass))
         .overlay {
             RoundedRectangle(cornerRadius: Radius.glass, style: .continuous)
                 .strokeBorder(ground.borderStyle, lineWidth: ground.borderWidth)
@@ -259,7 +257,7 @@ private struct WidgetEditCard: View {
                 }
                 if let limit = kind?.gameLimit {
                     Text(limit == 1 ? "Choose 1 game" : "Add up to \(limit) games")
-                        .font(.system(size: 11))
+                        .font(.system(.subheadline))
                         .foregroundStyle(InkColor.tertiary)
                 }
             }
@@ -420,7 +418,7 @@ private struct GameEditRow: View {
             }
             Button { isTagging = true } label: {
                 Text("+ Tags")
-                    .font(.system(size: 11, weight: .medium))
+                    .font(.system(.subheadline, weight: .medium))
                     .foregroundStyle(InkColor.tertiary)
                     .padding(.horizontal, 9)
                     .padding(.vertical, 4)
@@ -475,7 +473,7 @@ private struct RemovableTagChip: View {
                 .font(.system(size: 8, weight: .semibold))
                 .foregroundStyle(InkColor.tertiary)
             Text(tag.title)
-                .font(.system(size: 11, weight: .medium))
+                .font(.system(.subheadline, weight: .medium))
                 .foregroundStyle(InkColor.primary)
                 .lineLimit(1)
             Button(action: remove) {
@@ -489,6 +487,6 @@ private struct RemovableTagChip: View {
         }
         .padding(.horizontal, 9)
         .padding(.vertical, 4)
-        .glassEffect(.clear.tint(Palette.flyoutTint), in: .capsule)
+        .plainChip(in: .capsule)
     }
 }

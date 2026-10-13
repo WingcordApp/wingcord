@@ -190,7 +190,8 @@ enum UserSettingsProto {
             statusRaw: privacy.statusRaw,
             serverThemes: serverThemes,
             inboxCollapse: inboxCollapse,
-            preferences: preferences
+            preferences: preferences,
+            audioContext: AudioContextProto.decode(data) ?? AudioContextSettings()
         )
     }
 

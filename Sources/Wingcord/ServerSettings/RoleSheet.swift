@@ -131,7 +131,7 @@ struct RoleSheet: View {
                             draft.colorValue = 0
                             draft.colors = RoleColors(primary: 0)
                         }
-                        .buttonStyle(.glass)
+                        .buttonStyle(.bordered)
                         .controlSize(.small)
                         .disabled(draft.colorValue == 0)
 
@@ -282,7 +282,7 @@ struct RoleSheet: View {
         HStack(spacing: Spacing.base) {
             Spacer()
             Button("Cancel", role: .cancel) { dismiss() }
-                .buttonStyle(.glass)
+                .buttonStyle(.bordered)
                 .keyboardShortcut(.cancelAction)
             Button("Save") {
                 var next = draft
@@ -293,7 +293,7 @@ struct RoleSheet: View {
                 commit(next)
                 dismiss()
             }
-            .buttonStyle(.glassProminent)
+            .buttonStyle(.borderedProminent)
             .keyboardShortcut(.defaultAction)
             .disabled(!isDirty || draft.name.trimmingCharacters(in: .whitespaces).isEmpty)
         }

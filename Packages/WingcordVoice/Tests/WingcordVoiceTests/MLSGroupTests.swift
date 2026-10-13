@@ -178,7 +178,7 @@ struct MLSGroupTests {
     @Test("Two members reach the same epoch, and export the same media secrets")
     func twoPartyCall() throws {
         let gateway = FakeGateway()
-        var alice = FakeMember(userID: 111)
+        let alice = FakeMember(userID: 111)
         var bob = FakeMember(userID: 222)
         let recognised: Set<UInt64> = [alice.userID, bob.userID]
 
@@ -217,7 +217,7 @@ struct MLSGroupTests {
     @Test("A third member joins and a member leaves, and the rest stay in step")
     func threePartyCall() throws {
         let gateway = FakeGateway()
-        var alice = FakeMember(userID: 111)
+        let alice = FakeMember(userID: 111)
         var bob = FakeMember(userID: 222)
         var carol = FakeMember(userID: 333)
         let recognised: Set<UInt64> = [alice.userID, bob.userID, carol.userID]
@@ -303,7 +303,7 @@ struct MLSGroupTests {
     @Test("A commit whose confirmation tag was altered is refused")
     func tamperedCommit() throws {
         let gateway = FakeGateway()
-        var alice = FakeMember(userID: 111)
+        let alice = FakeMember(userID: 111)
         var bob = FakeMember(userID: 222)
         let recognised: Set<UInt64> = [alice.userID, bob.userID]
 
@@ -351,7 +351,7 @@ struct MLSGroupTests {
     @Test("An add for somebody the call never announced is refused")
     func unannouncedMember() throws {
         let gateway = FakeGateway()
-        var alice = FakeMember(userID: 111)
+        let alice = FakeMember(userID: 111)
         var stranger = FakeMember(userID: 999)
 
         var group = try alice.createGroup(
@@ -373,7 +373,7 @@ struct MLSGroupTests {
     func forgedProposal() throws {
         let real = FakeGateway()
         let impostor = FakeGateway()
-        var alice = FakeMember(userID: 111)
+        let alice = FakeMember(userID: 111)
         var bob = FakeMember(userID: 222)
 
         var group = try alice.createGroup(

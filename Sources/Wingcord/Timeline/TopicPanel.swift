@@ -102,8 +102,7 @@ private struct TopicPanelCard: View {
                 withTransaction(transaction) { width = newWidth }
             }
         }
-        .glassEffect(.clear.tint(Palette.flyoutTint), in: .rect(cornerRadius: Radius.card))
-        .specularEdge(in: RoundedRectangle(cornerRadius: Radius.card, style: .continuous))
+        .modalPanel(in: RoundedRectangle(cornerRadius: Radius.card))
         .task(id: cards.map(\.id)) {
             if await MessageCardArtwork.prefetch(cards) { artworkGeneration &+= 1 }
         }

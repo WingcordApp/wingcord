@@ -3,7 +3,7 @@ import WingcordCore
 
 /// The composer's app launcher, asked for at one app's page.
 ///
-/// A token beside the app, for `StickerPickerRequest`'s reason: asking for the
+/// A token beside the app, for `ComposerControlRequest`'s reason: asking for the
 /// same app twice is two requests, not one state.
 struct AppLauncherRequest: Equatable, Sendable {
     var channelID: ChannelID

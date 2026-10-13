@@ -88,15 +88,12 @@ struct SummaryBar: View {
             .foregroundStyle(InkColor.solid)
             .padding(.horizontal, Spacing.snug)
             .frame(height: Self.pillHeight)
-            // Inside the glass's content, which is the one place a container
-            // draws over its material — §4 rule 4.
-            .specularEdge(in: Capsule())
             .contentShape(.capsule)
         }
         .buttonStyle(.plain)
-        // Over the transcript, so what passes under it is content: `.clear`,
-        // untinted, as every in-window control here is.
-        .glassEffect(.clear.interactive(), in: .capsule)
+        // A control over the transcript: `.regular` glass, the HIG's default
+        // for a control over content — `.clear` is for media.
+        .glassEffect(.regular.interactive(), in: .capsule)
         .animation(motion.standard, value: isListShown)
         .help("All summaries")
         .accessibilityLabel(Text("Current summary"))
@@ -129,11 +126,10 @@ struct SummaryBar: View {
                 .font(Typeface.controlGlyph)
                 .foregroundStyle(InkColor.solid.opacity(target == nil ? 0.35 : 1))
                 .frame(width: Self.pillHeight, height: Self.pillHeight)
-                .specularEdge(in: Circle())
                 .contentShape(.circle)
         }
         .buttonStyle(.plain)
-        .glassEffect(target == nil ? .clear : .clear.interactive(), in: .circle)
+        .glassEffect(target == nil ? .regular : .regular.interactive(), in: .circle)
         .disabled(target == nil)
         .help(label)
         .accessibilityLabel(Text(label))

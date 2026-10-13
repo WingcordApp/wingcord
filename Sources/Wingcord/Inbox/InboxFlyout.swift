@@ -8,9 +8,9 @@ import WingcordCore
 /// there is one of it, and it is not a row in a list. It is also the only way a
 /// panel can point at the control that opened it.
 ///
-/// Being a presentation is what lets the surfaces inside stay glass. A popover
-/// paints its own backdrop behind the whole of its content — §1 again — and
-/// that backdrop is the ground everything here lenses. The corollary is the
+/// Being a presentation is what gives the panel its material: a popover paints
+/// its own backdrop behind the whole of its content — §1 again — and nothing
+/// inside paints glass over it (INVARIANTS §4.9). The corollary is the
 /// constraint that shapes the layout: **nothing may leave a transparent
 /// margin**, because a hole in the content is where that backdrop stops reading
 /// as a design choice and starts reading as a grey panel. The content fills the
@@ -172,7 +172,7 @@ struct InboxFlyout: View {
                     Label("Mark All As Read", systemImage: "checkmark.circle")
                         .labelStyle(.iconOnly)
                 }
-                .buttonStyle(.glass)
+                .buttonStyle(.bordered)
                 .help("Mark everything as read")
                 .disabled(!model.canMarkAllInboxRead)
             }
@@ -212,7 +212,7 @@ struct InboxFlyout: View {
                 }
             }
         }
-        .buttonStyle(.glass)
+        .buttonStyle(.bordered)
         .help(showing ? "Back to the inbox" : "View friend requests")
         // Spoken as one thing. Without this VoiceOver reads the label and then
         // the badge as two unrelated nodes.
@@ -353,7 +353,7 @@ struct CountBadge: View {
 
     var body: some View {
         Text(count > 99 ? "99+" : String(count))
-            .font(.system(size: 10, weight: .bold))
+            .font(.system(.caption, weight: .bold))
             .monospacedDigit()
             .foregroundStyle(.white)
             .padding(.horizontal, Spacing.tight + 1)
@@ -388,7 +388,7 @@ struct InboxNotice: View {
                 .fixedSize(horizontal: false, vertical: true)
             if let retry {
                 Button("Try Again", action: retry)
-                    .buttonStyle(.glass)
+                    .buttonStyle(.bordered)
                     .padding(.top, Spacing.tight)
             }
         }

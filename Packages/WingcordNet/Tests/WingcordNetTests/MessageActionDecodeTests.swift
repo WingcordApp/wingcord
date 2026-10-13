@@ -39,7 +39,7 @@ struct MessageActionDecodeTests {
         #expect(!reference.hasAttachment)
     }
 
-    @Test("A reference with no message behind it says so")
+    @Test("A target sent as null is deleted")
     func deletedTarget() throws {
         let decoded = try message(
             """
@@ -53,7 +53,28 @@ struct MessageActionDecodeTests {
         )
         let reference = try #require(decoded.reference)
         #expect(reference.isUnavailable)
+        #expect(reference.isDeleted)
         #expect(reference.excerpt.isEmpty)
+    }
+
+    @Test("A target the payload left out is unknown, not deleted")
+    func unloadedTarget() throws {
+        // Discord's contract: an absent `referenced_message` is a server that
+        // did not look the message up. Read as deleted, every unfetched quote
+        // said "Original message was deleted" about a message still there.
+        let decoded = try message(
+            """
+            {
+              "id": "2", "channel_id": "9", "type": 19, "content": "hey",
+              "author": {"id": "5", "username": "alex"},
+              "message_reference": {"message_id": "1", "channel_id": "9"}
+            }
+            """
+        )
+        let reference = try #require(decoded.reference)
+        #expect(reference.isUnavailable)
+        #expect(!reference.isDeleted)
+        #expect(reference.messageID == MessageID(rawValue: 1))
     }
 
     @Test("A quoted picture with no words is still quotable")

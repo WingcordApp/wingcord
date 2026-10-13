@@ -491,6 +491,21 @@ public enum CDN {
         URL(string: "\(host)/app-assets/\(id.rawValue)/store/\(assetID).mp4")
     }
 
+    /// A trailer's poster: the same store asset asked for as `.webp` — what
+    /// Discord's game profile hands its `<video>` as `poster`, and its tray as
+    /// the thumbnail (module `371794`, `YE(app, asset, width, "webp")`).
+    public static func gameTrailerPoster(
+        id: ApplicationID,
+        assetID: String,
+        width: CGFloat,
+        scale: CGFloat = 2
+    ) -> URL? {
+        URL(
+            string: "\(host)/app-assets/\(id.rawValue)/store/\(assetID).webp"
+                + "?size=\(rung(forSide: width, scale: scale))"
+        )
+    }
+
     public static func roleIcon(
         roleID: RoleID,
         hash: String,

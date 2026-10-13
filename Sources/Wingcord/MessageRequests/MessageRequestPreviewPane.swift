@@ -66,6 +66,6 @@ private struct SpamQuestion: View {
         }
         .padding(Spacing.snug)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .glassEffect(.clear, in: .rect(cornerRadius: Radius.glass))
+        .glassEffect(.regular, in: .rect(cornerRadius: Radius.glass))
     }
 }

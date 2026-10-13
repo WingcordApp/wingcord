@@ -41,6 +41,9 @@ struct GamePresentation: Equatable, Sendable {
     var accountLink: GameAccountLink?
     var community: GameCommunityCard?
     var reviews: GameReviews?
+    /// The game's Steam page, which the Reviews card's Steam lines open — and
+    /// which decides whether there are any.
+    var steamURL: URL?
     var openCriticURL: URL?
     var announcements: [GameAnnouncementCard]
     /// Where "View All" goes: the game's own announcements channel.
@@ -66,6 +69,7 @@ struct GamePresentation: Equatable, Sendable {
             && lhs.accountLink == rhs.accountLink
             && lhs.community == rhs.community
             && lhs.reviews == rhs.reviews
+            && lhs.steamURL == rhs.steamURL
             && lhs.openCriticURL == rhs.openCriticURL
             && lhs.announcements == rhs.announcements
             && lhs.announcementsChannel?.channelID == rhs.announcementsChannel?.channelID
@@ -81,12 +85,21 @@ struct GamePresentation: Equatable, Sendable {
 /// page whose thumbnail needs a mark saying so. Folding it into the URL list
 /// is how a page ends up trying to decode an `.mp4` as a picture.
 enum GameMediaItem: Hashable, Sendable, Identifiable {
-    case trailer(URL)
+    /// The video, and its poster — the same store asset as a `.webp`.
+    case trailer(video: URL, poster: URL?)
     case still(URL)
 
     var id: URL {
         switch self {
-        case .trailer(let url), .still(let url): url
+        case .trailer(let url, _), .still(let url): url
+        }
+    }
+
+    /// What a thumbnail draws: a still itself, a trailer's poster.
+    var picture: URL? {
+        switch self {
+        case .trailer(_, let poster): poster
+        case .still(let url): url
         }
     }
 

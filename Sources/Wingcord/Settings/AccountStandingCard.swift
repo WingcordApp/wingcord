@@ -90,7 +90,7 @@ private struct StandingStepper: View {
             HStack(spacing: 0) {
                 ForEach(Array(Self.rungs.enumerated()), id: \.offset) { index, rung in
                     Text(rung.label)
-                        .font(.system(size: 10, weight: .medium))
+                        .font(.system(.caption, weight: .medium))
                         .foregroundStyle(index <= currentRank ? Ink.secondary : Ink.tertiary)
                         .lineLimit(1)
                         .minimumScaleFactor(0.7)

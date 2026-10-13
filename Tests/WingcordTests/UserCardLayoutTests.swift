@@ -13,7 +13,7 @@ struct UserCardLayoutTests {
     private let person = UserID(rawValue: 732_280_746_023_186_586)
     private let guildID = GuildID(rawValue: 7)
 
-    private func laidOut(sizes: [UserCardKey: CGSize]) -> MessageRow? {
+    private func laidOut(sizes: [HostedCardKey: CGSize]) -> MessageRow? {
         let items: [TimelineItem] = [.message(TimelineMessage(
             message: Message(
                 id: MessageID(rawValue: 1),
@@ -35,7 +35,11 @@ struct UserCardLayoutTests {
                 authors: [:],
                 calendar: .current,
                 settings: .comfortable,
-                userCardSizes: sizes,
+                hostedCardSizes: sizes.mapValues { size in
+                    var measure = HostedCardMeasure()
+                    _ = measure.note(size)
+                    return measure
+                },
                 guildID: guildID
             ),
             cache: &cache
@@ -47,24 +51,24 @@ struct UserCardLayoutTests {
     @Test("Until the card has measured itself, the link is only a link")
     func unmeasured() throws {
         let row = try #require(laidOut(sizes: [:]))
-        #expect(row.userCards.isEmpty)
+        #expect(row.hostedCards.isEmpty)
         #expect(row.embeds.count == 1)
     }
 
     @Test("A measured card takes its size, and the unfurl gives way")
     func measured() throws {
-        let key = UserCardKey(userID: person, guildID: guildID)
+        let key = HostedCardKey.user(UserCardKey(userID: person, guildID: guildID))
         let row = try #require(laidOut(sizes: [key: CGSize(width: 300, height: 380)]))
-        #expect(row.userCards.count == 1)
-        #expect(row.userCards.first?.rect.size == CGSize(width: 300, height: 380))
+        #expect(row.hostedCards.count == 1)
+        #expect(row.hostedCards.first?.rect.size == CGSize(width: 300, height: 380))
         #expect(row.embeds.isEmpty)
     }
 
     /// The same person's card in another server is a different card.
     @Test("A card measured in another server is not this one")
     func otherServer() throws {
-        let key = UserCardKey(userID: person, guildID: GuildID(rawValue: 8))
+        let key = HostedCardKey.user(UserCardKey(userID: person, guildID: GuildID(rawValue: 8)))
         let row = try #require(laidOut(sizes: [key: CGSize(width: 300, height: 380)]))
-        #expect(row.userCards.isEmpty)
+        #expect(row.hostedCards.isEmpty)
     }
 }

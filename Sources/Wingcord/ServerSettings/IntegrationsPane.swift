@@ -94,7 +94,7 @@ struct IntegrationsPane: View {
             PlatformMark(platform: platform)
         } trailing: {
             Button(isConnected ? "Manage" : platform.connectTitle) { page = .platform(platform) }
-                .buttonStyle(.glass)
+                .buttonStyle(.bordered)
                 .controlSize(.small)
         }
     }
@@ -149,7 +149,7 @@ struct IntegrationsPane: View {
                             .font(.system(size: 9, weight: .bold))
                     }
                 }
-                .buttonStyle(.glass)
+                .buttonStyle(.bordered)
                 .controlSize(.small)
             }
         }
@@ -324,7 +324,7 @@ private struct PlatformIntegrationPage: View {
                         Button(platform.connectTitle) {
                             model.sessionController.beginLinkingConnection(type: platform.rawValue)
                         }
-                        .buttonStyle(.glassProminent)
+                        .buttonStyle(.borderedProminent)
                         .controlSize(.small)
                     }
                 }
@@ -336,7 +336,7 @@ private struct PlatformIntegrationPage: View {
                         Button(platform.connectTitle) {
                             Task { await store.enableIntegration(type: platform.rawValue, accountID: account.id) }
                         }
-                        .buttonStyle(.glassProminent)
+                        .buttonStyle(.borderedProminent)
                         .controlSize(.small)
                     }
                 }
@@ -383,7 +383,7 @@ private struct PlatformIntegrationPage: View {
             PlatformMark(platform: platform)
         } trailing: {
             Button("Sync") { Task { await store.syncIntegration(sync.id) } }
-                .buttonStyle(.glass)
+                .buttonStyle(.bordered)
                 .controlSize(.small)
                 .disabled(sync.isRevoked)
         }
@@ -453,7 +453,7 @@ private struct PlatformIntegrationPage: View {
                     disabling = sync
                 }
             }
-            .buttonStyle(.glass)
+            .buttonStyle(.bordered)
             .controlSize(.small)
             .tint(Palette.destructive)
         }
@@ -514,7 +514,7 @@ private struct AppIntegrationPage: View {
                 }
             }
             Button("Remove App", role: .destructive) { isRemoving = true }
-                .buttonStyle(.glass)
+                .buttonStyle(.bordered)
                 .controlSize(.small)
                 .tint(Palette.destructive)
         }

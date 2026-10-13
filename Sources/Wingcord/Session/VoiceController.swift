@@ -1,3 +1,4 @@
+import AppKit
 import AVFoundation
 import CoreMedia
 import Foundation
@@ -25,7 +26,9 @@ final class VoiceController {
     private let rest: DiscordREST
     private weak var socket: GatewaySocket?
 
-    private var engine: VoiceEngine?
+    /// The call's media session. The share and the watch below are the same
+    /// type, each its own session on the wire — see `MediaSession`.
+    private var engine: MediaSession?
     private var engineTask: Task<Void, Never>?
     /// The two halves of the credential, as they arrive.
     private var pendingSession: String?
@@ -43,11 +46,18 @@ final class VoiceController {
     // `VOICE_STATE_UPDATE` and `VOICE_SERVER_UPDATE` do — the two arrive in no
     // guaranteed order. These are that latch.
 
-    private var stream: StreamSession?
+    private var stream: MediaSession?
     private var streamTask: Task<Void, Never>?
-    /// What the reader asked to share, held from the moment opcode 18 goes out
-    /// until both halves have arrived and the session can be built.
-    private var pendingShare: (target: ShareableTarget, quality: ScreenShareCapture.Quality)?
+    /// The capture behind the Go Live sheet, picked and previewing, sending
+    /// nothing. See `startDraft`.
+    private var draftShare: ScreenShareCapture?
+    /// The sheet's preview surface, kept because it attaches before anything
+    /// has been picked.
+    private var goLivePreviewSink: (@Sendable (CMSampleBuffer) -> Void)?
+    /// The capture that went live, and what it runs at — held from Go Live,
+    /// through opcode 18 and both halves of the credential, until the share
+    /// ends. The stream's session takes it over once it exists.
+    private var liveShare: (capture: ScreenShareCapture, quality: ScreenShareCapture.Quality)?
     private var pendingStreamKey: String?
     private var pendingStreamSession: GoLiveSession?
     private var pendingStreamServer: GoLiveServer?
@@ -62,7 +72,7 @@ final class VoiceController {
     // viewer is told about the stream it asked for in exactly the frames its
     // owner was.
 
-    private var watch: StreamViewSession?
+    private var watch: MediaSession?
     private var watchTask: Task<Void, Never>?
     /// Whose stream opcode 20 has been sent for, and under which key. Held from
     /// the moment we ask until both halves have arrived.
@@ -82,8 +92,18 @@ final class VoiceController {
     /// works exactly once per stream.
     private var watchCredentials: [UserID: (session: GoLiveSession, server: GoLiveServer)] = [:]
 
+    /// Each person's voice settings as last applied to the call. See
+    /// `applyAudioContext`.
+    private var appliedAudio: [UserID: AudioContextSettings.Entry] = [:]
+
     /// Soundboards being fetched, so a picker opened twice asks once.
     private var soundboardFetches: Set<GuildID> = []
+    /// Servers asked for by op 31 and not answered yet.
+    private var soundboardRequests: Set<GuildID> = []
+    /// The reader's plays not yet written into the account's frecency —
+    /// Discord's pending usage, put back on top of whatever is read meanwhile.
+    private var pendingSoundPlays: [(soundID: String, at: Date)] = []
+    private var soundPlayWrite: Task<Void, Never>?
     /// Clips already fetched, by sound id. A soundboard press is a download,
     /// and pressing the same sound twice in a session must not be two.
     private var clipCache: [String: [Float]] = [:]
@@ -93,6 +113,12 @@ final class VoiceController {
 
     /// The blips a call makes.
     private let sounds = VoiceSoundPlayer()
+    /// Discord's stage waiting music, looped under the call — made the first
+    /// time a stage plays it and kept for the session (`LoopedTrack`).
+    private var stageMusic: LoopedTrack?
+    /// Follows `AppModel.stageMusicPlayback`, so the music answers the room
+    /// wherever the reader is looking — not only while a stage is on screen.
+    private var stageMusicFollower: Task<Void, Never>?
     /// Who is watching our own screen share, as of the last `STREAM_UPDATE`.
     /// The sounds are the **delta** against this — the event carries the whole
     /// set every time.
@@ -100,6 +126,17 @@ final class VoiceController {
     /// True between pressing call and somebody answering. What the ringback
     /// runs on, and what stops it running for a call that was never started.
     private var isRingingOut = false
+    /// Discord's Start Video Call: the camera goes on once the call's own
+    /// session is up, never before there is somewhere to send it.
+    private var startsWithCamera = false
+    /// Follows `AppModel.focusedCameraUserID` into the call, whose spotlit
+    /// picture is asked for whole.
+    private var videoFocusFollower: Task<Void, Never>?
+    /// Whether incoming video is wanted: false once every window has been
+    /// hidden thirty seconds — Discord's `WindowVisibilityVideoManager`.
+    private var isIncomingVideoEnabled = true
+    private var hiddenWindowsClock: Task<Void, Never>?
+    private var occlusionObserver: (any NSObjectProtocol)?
 
     /// Watches the handshake and does something about it when it does not
     /// finish. See `armWatchdog`.
@@ -116,6 +153,68 @@ final class VoiceController {
     init(model: AppModel, rest: DiscordREST) {
         self.model = model
         self.rest = rest
+        ScreenSourcePicker.shared.onEvent = { [weak self] event in self?.pickerDidAnswer(event) }
+        stageMusicFollower = Task { [weak self, weak model] in
+            for await playback in Observations({ @MainActor in model?.stageMusicPlayback ?? .stopped }) {
+                self?.playStageMusic(playback)
+            }
+        }
+        videoFocusFollower = Task { [weak self, weak model] in
+            for await focus in Observations({ @MainActor in model?.focusedCameraUserID }) {
+                self?.engine?.setFocusedVideoUser(focus?.rawValue)
+            }
+        }
+        occlusionObserver = NotificationCenter.default.addObserver(
+            forName: NSApplication.didChangeOcclusionStateNotification, object: nil, queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated { self?.windowsDidChangeVisibility() }
+        }
+    }
+
+    /// Discord's `WindowVisibilityVideoManager`: with every window hidden —
+    /// minimised, covered, on another Space, the app hidden — for thirty
+    /// seconds, no incoming picture is asked for; a window showing asks again
+    /// at once.
+    private func windowsDidChangeVisibility() {
+        hiddenWindowsClock?.cancel()
+        if NSApp.occlusionState.contains(.visible) {
+            setIncomingVideoEnabled(true)
+        } else {
+            hiddenWindowsClock = Task { [weak self] in
+                try? await Task.sleep(for: .seconds(30))
+                guard !Task.isCancelled else { return }
+                self?.setIncomingVideoEnabled(false)
+            }
+        }
+    }
+
+    private func setIncomingVideoEnabled(_ enabled: Bool) {
+        guard isIncomingVideoEnabled != enabled else { return }
+        isIncomingVideoEnabled = enabled
+        engine?.setIncomingVideoEnabled(enabled)
+    }
+
+    /// How big a tile draws somebody's camera. Not our own, and not a share
+    /// being watched — those are other sessions' pictures.
+    func setDrawnPixels(_ pixels: Int, for userID: UserID) {
+        guard userID != model.currentUserID, userID != model.watchedStreamUserID else { return }
+        engine?.setDrawnPixels(pixels, for: userID.rawValue)
+    }
+
+    /// Plays, pauses or stops the waiting music. Made on its first play — a
+    /// reader who never sits in a quiet stage never opens the file.
+    private func playStageMusic(_ playback: StageMusic.Playback) {
+        if stageMusic == nil {
+            // Discord's volume is the output volume over four hundred; the
+            // call's render applies the output volume, so this is the quarter.
+            guard playback != .stopped,
+                  let url = VoiceSound.stageWaitingURL,
+                  let track = LoopedTrack(url: url, gain: 0.25)
+            else { return }
+            stageMusic = track
+            engine?.setLoopedTrack(track)
+        }
+        stageMusic?.setPlayback(playback)
     }
 
     func attach(socket: GatewaySocket) {
@@ -132,6 +231,8 @@ final class VoiceController {
     func join(channelID: ChannelID, guildID: GuildID?) {
         guard model.connectedVoiceChannelID != channelID else { return }
         Self.log.info("joining voice channel")
+        // A video call says so after joining; any other join starts without.
+        startsWithCamera = false
 
         // The old session's media stops before the new one is asked for.
         // Leaving it running gives two engines one output device and one
@@ -163,7 +264,9 @@ final class VoiceController {
                 channelID: channelID,
                 guildID: guildID,
                 isSelfMuted: model.isSelfMuted,
-                isSelfDeafened: model.isSelfDeafened
+                isSelfDeafened: model.isSelfDeafened,
+                // A stage seats everybody in the audience, moderators too.
+                isSuppressed: model.channelIndex[channelID]?.kind == .stage
             )
             model.voiceRevision &+= 1
         }
@@ -185,9 +288,11 @@ final class VoiceController {
         loadSoundboard(forGuild: guildID)
     }
 
-    /// Starts a direct-message call and rings the other side.
-    func startDirectCall(channelID: ChannelID) {
+    /// Starts a direct-message call and rings the other side — with the
+    /// camera, for Start Video Call.
+    func startDirectCall(channelID: ChannelID, withCamera: Bool = false) {
         join(channelID: channelID, guildID: nil)
+        startsWithCamera = withCamera
         // The ringback, until they answer, decline, or we give up. All three
         // stop it: a ringtone that outlives its call is the one sound bug
         // everybody notices.
@@ -207,6 +312,7 @@ final class VoiceController {
         Self.log.info("leaving voice")
 
         stopRinging()
+        startsWithCamera = false
         sounds.play(.voiceDisconnected)
         disarmWatchdog()
         teardownEngine()
@@ -214,6 +320,7 @@ final class VoiceController {
         model.connectedVoiceChannelID = nil
         model.speakingUserIDs = []
         model.liveVideoUserIDs = []
+        model.voicePlatforms = [:]
         model.isSelfSpeaking = false
         model.isCameraOn = false
         model.isScreenSharing = false
@@ -431,10 +538,13 @@ final class VoiceController {
     func apply(effect: VoiceChannelEffect) {
         guard effect.channelID == model.connectedVoiceChannelID else { return }
         guard let soundID = effect.soundID else { return }
+        // Discord's Mute Soundboard: their sounds are not played here.
+        guard model.audioContext.users[effect.userID]?.isSoundboardMuted != true else { return }
 
         showEffect(soundID, from: effect.userID)
+        let volume = Float(effect.soundVolume) * model.syncedPreferences.soundboardVolume / 100
         Task { [weak self] in
-            await self?.playClip(id: soundID, volume: Float(effect.soundVolume))
+            await self?.playClip(id: soundID, volume: volume)
         }
     }
 
@@ -478,7 +588,10 @@ final class VoiceController {
 
     func applySoundboard(guildID: GuildID?, sounds catalog: [SoundboardSound]) {
         if let guildID {
-            model.guildSoundboardSounds[guildID] = catalog.isEmpty ? nil : catalog
+            // An empty answer is kept as an empty array: absent means "not
+            // asked", and a server with no sounds would be asked every open.
+            model.guildSoundboardSounds[guildID] = catalog
+            soundboardRequests.remove(guildID)
         } else {
             model.defaultSoundboardSounds = catalog
         }
@@ -587,45 +700,66 @@ final class VoiceController {
         SessionController.trace("voice handshake starting")
 
         let channel = joiningChannelID.flatMap { model.channelIndex[$0] }
-        var preferences = VoiceEngine.AudioPreferences()
-        let settings = AppSettings.shared
-        preferences.inputDeviceUniqueID = settings.voiceInputDeviceID
-        preferences.outputDeviceUniqueID = settings.voiceOutputDeviceID
-        preferences.inputVolume = Float(settings.voiceInputVolume)
-        preferences.outputVolume = Float(settings.voiceOutputVolume)
-        preferences.inputMode = settings.resolvedInputMode
-
-        let engine = VoiceEngine(
-            connection: VoiceEngine.Connection(
+        let engine = MediaSession(
+            connection: MediaSession.Connection(
                 endpoint: server.endpoint,
                 token: server.token,
                 serverID: server.serverID,
+                userID: userID.rawValue,
+                sessionID: session
+            ),
+            kind: .call(
                 // The MLS group DAVE builds is keyed by the **channel**, which
                 // in a guild is not the same snowflake as `serverID`.
                 channelID: joiningChannelID?.rawValue ?? 0,
-                userID: userID.rawValue,
-                sessionID: session,
                 // The channel's own ceiling, never a constant. Discord's mixer
                 // drops what exceeds it rather than transcoding, so a client
                 // that always encodes at 96k is silent in every unboosted
                 // server — which is most of them.
-                audioBitrate: channel?.bitrate ?? 64_000
-            ),
-            preferences: preferences
+                audioBitrate: channel?.bitrate ?? 64_000,
+                preferences: Self.audioPreferences()
+            )
         )
         self.engine = engine
+        // What the call asks to receive — VOICE-VIDEO-NOTES §5.5b.
+        engine.setIsStage(channel?.kind == .stage)
+        engine.setFocusedVideoUser(model.focusedCameraUserID?.rawValue)
+        engine.setIncomingVideoEnabled(isIncomingVideoEnabled)
+        // **The system's own picker offers this app while there is a call to
+        // stream into**, as Discord keeps its picker active in a voice channel —
+        // which is also what lets the reader start a share from the menu bar.
+        ScreenSourcePicker.shared.isActive = true
+        // A new session knows nobody's settings: all of them, once.
+        appliedAudio = [:]
+        applyAudioContext()
+        for userID in AppSettings.shared.disabledVideoUserIDs {
+            Task { await engine.setVideoDisabled(true, for: userID) }
+        }
 
         engineTask = Task { [weak self] in
-            await engine.connect()
-            guard let stream = await engine.events else { return }
-            for await event in stream {
+            await engine.start()
+            for await event in engine.events {
                 guard let self else { return }
                 self.apply(event)
             }
         }
     }
 
-    private func apply(_ event: VoiceEngine.Event) {
+    /// The call's audio settings, as the settings window holds them now.
+    private static func audioPreferences() -> MediaSession.AudioPreferences {
+        let settings = AppSettings.shared
+        var preferences = MediaSession.AudioPreferences()
+        preferences.inputDeviceUniqueID = settings.voiceInputDeviceID
+        preferences.outputDeviceUniqueID = settings.voiceOutputDeviceID
+        preferences.inputVolume = Float(settings.voiceInputVolume)
+        preferences.outputVolume = Float(settings.voiceOutputVolume)
+        preferences.inputMode = settings.resolvedInputMode
+        preferences.processing = settings.resolvedProcessing
+        preferences.streamAttenuation = settings.resolvedStreamAttenuation
+        return preferences
+    }
+
+    private func apply(_ event: MediaSession.Event) {
         switch event {
         case .state(let state):
             switch state {
@@ -638,6 +772,12 @@ final class VoiceController {
                 // canceller's reference so the far end does not hear it back.
                 sounds.callSink = { [weak self] samples, volume in
                     Task { await self?.engine?.playLocalClip(samples, volume: volume) }
+                }
+                // The waiting music mixes into the call it plays under.
+                engine?.setLoopedTrack(stageMusic)
+                if startsWithCamera {
+                    startsWithCamera = false
+                    setCameraOn(true)
                 }
             case .failed(let reason):
                 Self.log.error("voice failed: \(reason, privacy: .public)")
@@ -722,6 +862,24 @@ final class VoiceController {
             }
             guard model.voiceQuality.encryption != encryption else { return }
             model.voiceQuality.encryption = encryption
+
+        case .captureEnded:
+            // A call captures no screen; a share is a session of its own.
+            break
+
+        case .priorityRequested(let userID):
+            let may = joiningChannelID.map { model.mayHavePriority(UserID(rawValue: userID), in: $0) } ?? false
+            Task { [engine] in await engine?.setMayHavePriority(may, for: userID) }
+
+        case .inputSilent(let isSilent):
+            guard model.isMicSilent != isSilent else { return }
+            model.isMicSilent = isSilent
+
+        case .platform(let userID, let raw):
+            let id = UserID(rawValue: userID)
+            guard let platform = VoicePlatform(rawValue: raw), model.voicePlatforms[id] != platform else { return }
+            model.voicePlatforms[id] = platform
+            model.voiceRevision &+= 1
         }
     }
 
@@ -740,6 +898,7 @@ final class VoiceController {
         model.connectedVoiceChannelID = nil
         model.speakingUserIDs = []
         model.liveVideoUserIDs = []
+        model.voicePlatforms = [:]
         model.isSelfSpeaking = false
         model.isCameraOn = false
         model.isScreenSharing = false
@@ -758,13 +917,15 @@ final class VoiceController {
         // Silent here: the caller has already played the one sound this event
         // gets.
         teardownStream()
+        discardDraft()
         stopWatchingStream()
+        ScreenSourcePicker.shared.isActive = false
         // A stream's credential is only good for the media session it was
         // issued in, and that session goes with the call.
         watchCredentials.removeAll()
         guard let engine else { return }
         self.engine = nil
-        Task { await engine.disconnect() }
+        Task { await engine.stop() }
     }
 
     // MARK: Switches
@@ -787,8 +948,11 @@ final class VoiceController {
         // somebody who was muted before they deafened stays muted, which is
         // what every voice client does.
         if deafened { model.isSelfMuted = true }
-        Task { [engine, model] in
+        Task { [engine, watch, model] in
             await engine?.setDeafened(deafened)
+            // A watched stream's sound is not decoded for a reader who has
+            // deafened, any more than the call's is.
+            await watch?.setDeafened(deafened)
             if deafened { await engine?.setMuted(true) }
             _ = model
         }
@@ -797,6 +961,10 @@ final class VoiceController {
 
     func setPushToTalkHeld(_ held: Bool) {
         Task { [engine] in await engine?.setPushToTalkHeld(held) }
+    }
+
+    func setPriorityHeld(_ held: Bool) {
+        Task { [engine] in await engine?.setPriorityHeld(held) }
     }
 
     /// Republishes the switches so everybody else's roster shows them.
@@ -829,13 +997,13 @@ final class VoiceController {
 
     func setCameraOn(_ on: Bool) {
         guard let engine else { return }
-        var video = VoiceEngine.VideoPreferences()
-        let settings = AppSettings.shared
-        video.cameraDeviceID = settings.cameraDeviceID
-        video.framerate = settings.videoFramerate
-        video.width = settings.videoWidth
-        video.height = settings.videoHeight
-        video.bitrate = settings.videoQuality.bitrate
+        var video = MediaSession.VideoPreferences()
+        video.cameraDeviceID = AppSettings.shared.cameraDeviceID
+        // **The channel's Video Quality, not a setting of ours.** Discord's
+        // camera is 720p scaled to what the room wants ("Auto"), or 720p
+        // whatever it wants ("720p"), and a moderator chooses which.
+        video.isFullQuality = joiningChannelID
+            .flatMap { model.channelIndex[$0]?.videoQualityMode } == VideoQualityMode.full
         Task { [weak self] in
             let ok = await engine.setCameraOn(on, preferences: video)
             guard let self else { return }
@@ -849,16 +1017,173 @@ final class VoiceController {
         }
     }
 
-    /// Asks Discord for a stream, and waits for the two halves of its
-    /// credential.
-    ///
-    /// **Nothing is captured yet.** The screen is not read until there is a
-    /// media session to send it to — a capture running against no session is
-    /// somebody's screen being read for nothing, which is the one thing a share
-    /// must not do speculatively.
-    func startScreenShare(target: ShareableTarget, quality: ScreenShareCapture.Quality) {
-        guard engine != nil, stream == nil, let channelID = joiningChannelID else { return }
-        pendingShare = (target, quality)
+    // MARK: Going live
+    //
+    // **Picked, previewed, then sent.** The reader picks what to share in the
+    // system's picker; the capture starts at once, so the Go Live sheet shows
+    // the picture that will be sent; Go Live asks Discord for a stream, and the
+    // capture is handed to the stream's session once both halves of its
+    // credential are in. Nothing is captured before a pick, and closing the
+    // sheet without going live stops the capture — a preview nobody is
+    // looking at is somebody's screen being read for nothing.
+
+    /// Opens the Go Live sheet.
+    func openGoLive() {
+        guard engine != nil, liveShare == nil else { return }
+        model.isGoLiveSheetOpen = true
+    }
+
+    /// Closes the sheet. A capture that did not go live stops with it.
+    func closeGoLive() {
+        model.isGoLiveSheetOpen = false
+        discardDraft()
+    }
+
+    /// The system's picker, for a new share or for the one running.
+    func pickScreenSource() {
+        ScreenSourcePicker.shared.present(changing: draftShare ?? liveShare?.capture)
+    }
+
+    /// Where the sheet's preview draws.
+    func setGoLivePreviewSink(_ sink: (@Sendable (CMSampleBuffer) -> Void)?) {
+        goLivePreviewSink = sink
+        guard let draftShare else { return }
+        draftShare.route(draftOutputs(for: draftShare))
+    }
+
+    /// Discord's Stream Quality and Share Audio, before going live or during.
+    func updateGoLive(_ settings: GoLiveSettings) {
+        AppSettings.shared.goLive = settings
+        let quality = shareQuality()
+        if let stream {
+            liveShare?.quality = quality
+            Task { await stream.updateShare(quality: quality) }
+        } else if let capture = liveShare?.capture ?? draftShare {
+            liveShare?.quality = quality
+            Task {
+                do {
+                    try await capture.update(quality: quality)
+                } catch {
+                    SessionController.trace("share quality refused: \(error)")
+                }
+            }
+        }
+    }
+
+    private func pickerDidAnswer(_ event: ScreenSourcePicker.Event) {
+        switch event {
+        case .picked(let source, _):
+            model.screenShareSource = ScreenShareSourceSummary(source)
+            if let stream {
+                // Discord's Change Windows, on a share that is live.
+                Task { await stream.changeShare(source: source) }
+            } else if let capture = liveShare?.capture ?? draftShare {
+                Task { [weak self] in
+                    do {
+                        try await capture.update(source: source)
+                    } catch {
+                        self?.model.goLivePreview = .failed(error.localizedDescription)
+                    }
+                }
+            } else {
+                // **A pick from the menu bar, with no sheet open, goes live at
+                // once** — Discord's own answer to a pick its picker reported
+                // while its Go Live modal was closed.
+                startDraft(source, goesLive: !model.isGoLiveSheetOpen)
+            }
+        case .cancelled:
+            break
+        case .failed(let message):
+            if model.isGoLiveSheetOpen {
+                model.goLivePreview = .failed(message)
+            } else {
+                model.reportActionFailure(message)
+            }
+        }
+    }
+
+    /// Starts capturing a picked source for the sheet's preview.
+    private func startDraft(_ source: ShareSource, goesLive: Bool) {
+        guard engine != nil, liveShare == nil, draftShare == nil else { return }
+        let capture = ScreenShareCapture()
+        draftShare = capture
+        model.goLivePreview = .starting
+        capture.route(draftOutputs(for: capture))
+        let quality = shareQuality()
+        Task { [weak self] in
+            do {
+                try await capture.start(source: source, quality: quality)
+            } catch {
+                guard let self, self.draftShare === capture else { return }
+                self.draftShare = nil
+                self.model.goLivePreview = .failed(error.localizedDescription)
+                return
+            }
+            guard let self, self.draftShare === capture else {
+                // Closed while it was starting.
+                await capture.stop()
+                return
+            }
+            self.model.goLivePreview = .previewing
+            if goesLive { self.goLive() }
+        }
+    }
+
+    /// The draft's outputs: the sheet's preview, and word if it stops.
+    private func draftOutputs(for capture: ScreenShareCapture) -> ScreenShareCapture.Outputs {
+        ScreenShareCapture.Outputs(
+            preview: goLivePreviewSink,
+            stopped: { [weak self] reason in
+                Task { @MainActor in self?.draftDidStop(capture, reason: reason) }
+            }
+        )
+    }
+
+    private func draftDidStop(_ capture: ScreenShareCapture, reason: String) {
+        guard draftShare === capture else { return }
+        draftShare = nil
+        model.screenShareSource = nil
+        model.goLivePreview = .empty
+        SessionController.trace("share preview stopped: \(reason)")
+    }
+
+    private func discardDraft() {
+        if let draftShare { Task { await draftShare.stop() } }
+        draftShare = nil
+        model.goLivePreview = .empty
+        if liveShare == nil { model.screenShareSource = nil }
+    }
+
+    /// The Go Live choices this account and this server allow, as the capture
+    /// takes them.
+    private func shareQuality() -> ScreenShareCapture.Quality {
+        let settings = model.goLiveGate.admit(AppSettings.shared.goLive)
+        let box = settings.resolution.box
+        return ScreenShareCapture.Quality(
+            width: box.width, height: box.height,
+            framerate: settings.frameRate.rawValue,
+            capturesAudio: settings.sharesAudio
+        )
+    }
+
+    /// Asks Discord for a stream for the previewed capture, and waits for the
+    /// two halves of its credential.
+    func goLive() {
+        guard let capture = draftShare, engine != nil, stream == nil,
+              let channelID = joiningChannelID
+        else { return }
+        draftShare = nil
+        model.isGoLiveSheetOpen = false
+        model.goLivePreview = .empty
+        // The sheet's preview goes with the sheet; the self tile takes the
+        // picture once the session routes it.
+        capture.route(ScreenShareCapture.Outputs(stopped: { [weak self] reason in
+            Task { @MainActor in
+                SessionController.trace("stream capture ended: \(reason)")
+                self?.stopScreenShare()
+            }
+        }))
+        liveShare = (capture, shareQuality())
         pendingStreamKey = nil
         pendingStreamSession = nil
         pendingStreamServer = nil
@@ -891,7 +1216,13 @@ final class VoiceController {
     /// **somebody's screen still being read** with nothing on screen saying so.
     private func teardownStream() {
         let key = pendingStreamKey
-        pendingShare = nil
+        let share = liveShare
+        liveShare = nil
+        if stream == nil, let share {
+            // Asked for and never connected: nothing took the capture over.
+            Task { await share.capture.stop() }
+        }
+        model.screenShareSource = nil
         pendingStreamKey = nil
         pendingStreamSession = nil
         pendingStreamServer = nil
@@ -913,7 +1244,7 @@ final class VoiceController {
     /// asked to watch. Nothing else about the frame distinguishes them.
     func applyStreamCreated(owner: UserID, key: String, session: GoLiveSession?) {
         if owner == model.currentUserID {
-            guard pendingShare != nil else { return }
+            guard liveShare != nil else { return }
             pendingStreamKey = key
             if let session { pendingStreamSession = session }
             startStreamIfReady()
@@ -936,7 +1267,7 @@ final class VoiceController {
             startWatchIfReady()
             return
         }
-        guard pendingShare != nil else { return }
+        guard liveShare != nil else { return }
         pendingStreamServer = server
         pendingStreamKey = server.streamKey
         startStreamIfReady()
@@ -979,6 +1310,7 @@ final class VoiceController {
         watchTask?.cancel(); watchTask = nil
         let session = watch
         watch = nil
+        engine?.setStreamAudio(nil)
         // **The credentials outlive this, on purpose** — see
         // `watchCredentials`. They are cleared with the call, in `teardownEngine`.
         model.watchedStreamUserID = nil
@@ -1001,37 +1333,41 @@ final class VoiceController {
               watch == nil
         else { return }
 
-        let session = StreamViewSession(
-            connection: StreamViewSession.Connection(
+        let session = MediaSession(
+            connection: MediaSession.Connection(
                 endpoint: server.endpoint,
                 token: server.token,
                 // The same pairing a stream we publish uses: the RTC server
                 // identifies the session, the RTC channel keys its group.
                 serverID: String(created.rtcServerID),
-                mediaSessionID: created.rtcChannelID,
                 userID: userID.rawValue,
-                sessionID: sessionID,
-                ownerID: pending.owner.rawValue
-            )
+                sessionID: sessionID
+            ),
+            kind: .watch(mediaSessionID: created.rtcChannelID, owner: pending.owner.rawValue)
         )
         watch = session
-        session.setVideoSink(watchSink)
+        session.setVideoSink(watchSink, for: pending.owner.rawValue)
+        // **Its sound plays through the call**, on the reader's device and
+        // inside the echo canceller's reference — see `MediaSession.streamAudio`.
+        engine?.setStreamAudio(session.streamAudio)
+        engine?.setStreamVolume(streamGain(of: pending.owner))
+        if model.isSelfDeafened { Task { await session.setDeafened(true) } }
 
         watchTask = Task { [weak self] in
             await session.start()
-            guard let stream = await session.events else { return }
-            for await event in stream {
+            for await event in session.events {
                 guard let self else { return }
                 self.apply(watchEvent: event, owner: pending.owner)
             }
         }
     }
 
-    private func apply(watchEvent event: StreamViewSession.Event, owner: UserID) {
+    private func apply(watchEvent event: MediaSession.Event, owner: UserID) {
         switch event {
-        case .pictureArrived:
+        case .videoAvailability(_, hasVideo: true):
             // **Announced is not arriving.** The tile switches to video on the
-            // first frame that actually decoded, never on the connection.
+            // first packet of the picture that actually arrived, never on the
+            // connection.
             guard !model.liveVideoUserIDs.contains(owner) else { return }
             model.liveVideoUserIDs.insert(owner)
             model.voiceRevision &+= 1
@@ -1041,13 +1377,15 @@ final class VoiceController {
             model.reportActionFailure(reason)
             stopWatchingStream()
 
-        case .state(.connecting), .state(.watching):
+        default:
+            // A watch has no microphone and no roster the app keeps; the rest
+            // is the call's to report.
             break
         }
     }
 
     private func startStreamIfReady() {
-        guard let share = pendingShare,
+        guard let share = liveShare,
               let server = pendingStreamServer,
               let created = pendingStreamSession,
               let userID = model.currentUserID,
@@ -1055,7 +1393,7 @@ final class VoiceController {
               stream == nil
         else {
             SessionController.trace(
-                "stream not ready: share=\(pendingShare != nil) "
+                "stream not ready: share=\(liveShare != nil) "
                 + "server=\(pendingStreamServer != nil) create=\(pendingStreamSession != nil)"
             )
             return
@@ -1066,34 +1404,36 @@ final class VoiceController {
         // and the two fields turn out to be named for exactly what they are, in
         // the same pairing the call uses: a call identifies with its *server*
         // and keys its group on its *channel*.
-        let session = StreamSession(
-            connection: StreamSession.Connection(
+        let session = MediaSession(
+            connection: MediaSession.Connection(
                 endpoint: server.endpoint,
                 token: server.token,
                 serverID: String(created.rtcServerID),
-                mediaSessionID: created.rtcChannelID,
                 userID: userID.rawValue,
                 sessionID: sessionID
             ),
-            target: share.target,
-            quality: share.quality
+            kind: .stream(
+                mediaSessionID: created.rtcChannelID,
+                capture: share.capture,
+                quality: share.quality,
+                audioBitrate: joiningChannelID.flatMap { model.channelIndex[$0]?.bitrate } ?? 64_000
+            )
         )
         stream = session
-        session.setPreviewSink(streamPreviewSink)
+        session.setVideoSink(streamPreviewSink, for: userID.rawValue)
 
         streamTask = Task { [weak self] in
             await session.start()
-            guard let stream = await session.events else { return }
-            for await event in stream {
+            for await event in session.events {
                 guard let self else { return }
                 self.apply(streamEvent: event)
             }
         }
     }
 
-    private func apply(streamEvent event: StreamSession.Event) {
+    private func apply(streamEvent event: MediaSession.Event) {
         switch event {
-        case .state(.live):
+        case .state(.connected):
             guard !model.isScreenSharing else { return }
             sounds.play(.streamStart)
             model.isScreenSharing = true
@@ -1107,9 +1447,6 @@ final class VoiceController {
             model.reportActionFailure(reason)
             stopScreenShare()
 
-        case .state(.connecting):
-            break
-
         case .encryption(let state):
             // **The stream's own group, and therefore its own code**, which is
             // not the call's — showing the call's shield beside a share would
@@ -1121,9 +1458,14 @@ final class VoiceController {
             // answered until a shield of its own exists.
             SessionController.trace("stream encryption: \(state)")
 
-        case .ended(let reason):
+        case .captureEnded(let reason):
             SessionController.trace("stream capture ended: \(reason)")
             stopScreenShare()
+
+        default:
+            // A share sends a picture and nothing else: no voice, no roster the
+            // app keeps, nobody's picture to show.
+            break
         }
     }
 
@@ -1144,7 +1486,7 @@ final class VoiceController {
         // tile attaches before a share exists.
         guard userID != model.currentUserID else {
             streamPreviewSink = sink
-            stream?.setPreviewSink(sink)
+            stream?.setVideoSink(sink, for: userID.rawValue)
             return
         }
         // Somebody whose **stream** we are watching is on a media session of
@@ -1152,25 +1494,56 @@ final class VoiceController {
         // at once, and the stream is what the tile was opened to show.
         if userID == model.watchedStreamUserID {
             watchSink = sink
-            watch?.setVideoSink(sink)
+            watch?.setVideoSink(sink, for: userID.rawValue)
             return
         }
         engine?.setVideoSink(sink, for: userID.rawValue)
     }
 
-    func setVolume(_ volume: Float, forUser userID: UserID) {
-        Task { [engine] in await engine?.setVolume(volume, forUser: userID.rawValue) }
+    // MARK: Each person's sound
+
+    /// The account's per-person settings, onto the call as it stands: every
+    /// voice's volume and mute, and the watched stream's own level.
+    ///
+    /// **Diffed against what was last applied**, so a person put back to the
+    /// default — whose entry Discord removes rather than writes — is put back
+    /// in the call too.
+    func applyAudioContext() {
+        guard let engine else { return }
+        let settings = model.audioContext
+        let everybody = Set(settings.users.keys).union(appliedAudio.keys)
+        for userID in everybody {
+            let entry = settings.users[userID]
+            guard entry != appliedAudio[userID] else { continue }
+            let volume = Float(entry?.volume ?? AudioContextSettings.Context.user.defaultVolume)
+            let isMuted = entry?.isMuted ?? false
+            Task {
+                await engine.setVolume(volume, forUser: userID.rawValue)
+                await engine.setLocallyMuted(isMuted, for: userID.rawValue)
+            }
+        }
+        appliedAudio = settings.users
+        // The tiles draw who is muted by the reader.
+        model.voiceRevision &+= 1
+        if let owner = model.watchedStreamUserID {
+            engine.setStreamVolume(streamGain(of: owner))
+        }
+    }
+
+    /// A stream's own level: its volume, or nothing while it is muted.
+    private func streamGain(of owner: UserID) -> Float {
+        let settings = model.audioContext
+        return settings.isMuted(owner, in: .stream) ? 0 : Float(settings.volume(of: owner, in: .stream))
+    }
+
+    /// Discord's Disable Video, for one person.
+    func setVideoDisabled(_ disabled: Bool, userID: UserID) {
+        Task { [engine] in await engine?.setVideoDisabled(disabled, for: userID.rawValue) }
     }
 
     /// Applies a change made in the settings window to a call already running.
     func applyPreferences() {
-        var preferences = VoiceEngine.AudioPreferences()
-        let settings = AppSettings.shared
-        preferences.inputDeviceUniqueID = settings.voiceInputDeviceID
-        preferences.outputDeviceUniqueID = settings.voiceOutputDeviceID
-        preferences.inputVolume = Float(settings.voiceInputVolume)
-        preferences.outputVolume = Float(settings.voiceOutputVolume)
-        preferences.inputMode = settings.resolvedInputMode
+        let preferences = Self.audioPreferences()
         Task { [engine] in await engine?.updatePreferences(preferences) }
         // The blips follow the device too, or a reader who moved Wingcord's
         // output to a headset still hears them out of the laptop.
@@ -1185,11 +1558,115 @@ final class VoiceController {
         guard SoundboardGate.canPlay(
             sound,
             playsEverywhere: model.entitlements.has(.soundboardEverywhere),
-            inGuild: home
+            inGuild: home,
+            mayUseExternalSounds: model.permissionGate.permissions(in: channelID).contains(.useExternalSounds)
         ) else {
             return
         }
         Task { [rest] in try? await rest.sendSoundboardSound(sound, in: channelID) }
+        trackSoundPlay(sound.id)
+    }
+
+    /// Discord's `SOUNDBOARD_TRACK_USAGE`: Frequently Used moves at once, and
+    /// the play is written into the account's frecency ten seconds after the
+    /// last one, so a run of presses is one write.
+    private func trackSoundPlay(_ soundID: String) {
+        let now = Date.now
+        pendingSoundPlays.append((soundID, now))
+        if var played = model.soundFrecency {
+            played.track(soundID, at: now)
+            model.soundFrecency = played
+            model.soundboardFrequentSoundIDs = played.frequently
+        }
+        soundPlayWrite?.cancel()
+        soundPlayWrite = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(10))
+            guard !Task.isCancelled, let self else { return }
+            let plays = pendingSoundPlays
+            pendingSoundPlays.removeAll()
+            do {
+                let played = try await rest.recordPlayedSounds(plays)
+                model.soundFrecency = played
+                model.soundboardFrequentSoundIDs = played.frequently
+            } catch {
+                // Kept for the next write, as Discord keeps its pending usage
+                // until a save lands.
+                pendingSoundPlays = plays + pendingSoundPlays
+                SessionController.trace("played-sound frecency write failed: \(error)")
+            }
+        }
+    }
+
+    /// Discord's Preview: the sound played here and nowhere else, at the
+    /// reader's Soundboard Volume.
+    func preview(_ sound: SoundboardSound) {
+        let volume = Float(sound.volume) * model.syncedPreferences.soundboardVolume / 100
+        Task { [weak self] in await self?.playClip(id: sound.id, volume: volume) }
+    }
+
+    /// What the picker draws that is not here yet, asked for as Discord's
+    /// picker asks when it opens:
+    ///
+    /// - Discord's own sounds;
+    /// - every server's soundboard not yet read, in **one** op 31
+    ///   (`REQUEST_SOUNDBOARD_SOUNDS`), answered per server by
+    ///   `SOUNDBOARD_SOUNDS` — the call's own server by REST as well, so its
+    ///   section never waits on the gateway;
+    /// - the account's favourites and its most-played sounds.
+    func soundboardDidOpen() {
+        Task { [weak self] in await self?.loadDefaultSounds() }
+        if let home = model.connectedVoiceChannelID.flatMap({ model.channelIndex[$0] })?.guildID {
+            loadSoundboard(inGuild: home)
+        }
+        let wanted = model.orderedGuildIDs.filter {
+            model.guildSoundboardSounds[$0] == nil
+                && !soundboardFetches.contains($0) && !soundboardRequests.contains($0)
+        }
+        if !wanted.isEmpty, let socket {
+            soundboardRequests.formUnion(wanted)
+            Task { await socket.requestSoundboardSounds(guildIDs: wanted) }
+        }
+        Task { [weak self, rest] in
+            guard let frecency = try? await rest.soundboardFrecency(), let self else { return }
+            model.soundboardFavorites = frecency.favorites
+            // Plays not yet written go back on top, as Discord's do.
+            var played = frecency.played
+            for play in pendingSoundPlays { played.track(play.soundID, at: play.at) }
+            model.soundFrecency = played
+            model.soundboardFrequentSoundIDs = played.frequently
+        }
+    }
+
+    /// Discord's star. The model moves first; the write is applied to the
+    /// blob as it stands, and a refusal puts the star back.
+    func setFavoriteSound(_ soundID: String, favorite: Bool) {
+        guard let id = UInt64(soundID) else { return }
+        let previous = model.soundboardFavorites
+        var next = previous
+        if favorite {
+            guard next.add(id) else {
+                model.reportActionFailure("You cannot have more than \(SoundboardFavorites.limit) favorites.")
+                return
+            }
+        } else {
+            next.remove(id)
+        }
+        model.soundboardFavorites = next
+        Task { [weak self, rest] in
+            do {
+                let written = try await rest.setFavoriteSound(id, favorite: favorite)
+                guard let self else { return }
+                if let written {
+                    model.soundboardFavorites = written
+                } else {
+                    // Another client filled the list since this one read it.
+                    model.soundboardFavorites = previous
+                    model.reportActionFailure("You cannot have more than \(SoundboardFavorites.limit) favorites.")
+                }
+            } catch {
+                self?.model.soundboardFavorites = previous
+            }
+        }
     }
 
     private func loadDefaultSounds() async {
@@ -1199,19 +1676,14 @@ final class VoiceController {
         model.soundboardRevision &+= 1
     }
 
-    /// Fetches one server's soundboard, once.
+    /// Fetches one server's soundboard by REST, once — the call's own server
+    /// when the picker opens, so its section never waits on the gateway.
     ///
-    /// **By REST, per server, when its section is actually looked at.** There is
-    /// an undocumented gateway op that takes a list of guilds and answers with
-    /// all of them at once, and this used to use it — until a stuck connection
-    /// made the cost obvious: an opcode nobody has captured is a frame the
-    /// gateway may close the socket over, and closing the socket takes the
-    /// messages, the presences and the call down with it. A picker section is
-    /// not worth that.
-    ///
-    /// Per server and on demand rather than all of them up front, because a
-    /// ninety-server account has ninety soundboards and a reader opens two.
-    func loadSoundboard(inGuild guildID: GuildID) {
+    /// Every other server comes in the one op 31 `soundboardDidOpen` sends,
+    /// which is Discord's own picker's request. An earlier note here blamed
+    /// that opcode for a stuck socket; its payload had not been read out of
+    /// Discord's client then, and now is (`GatewaySocket.requestSoundboardSounds`).
+    private func loadSoundboard(inGuild guildID: GuildID) {
         guard model.guildSoundboardSounds[guildID] == nil,
               !soundboardFetches.contains(guildID) else { return }
         soundboardFetches.insert(guildID)
@@ -1234,7 +1706,7 @@ final class VoiceController {
                 return
             }
             guard let sounds = try? await rest.soundboardSounds(inGuild: guildID) else { return }
-            model.guildSoundboardSounds[guildID] = sounds.isEmpty ? nil : sounds
+            model.guildSoundboardSounds[guildID] = sounds
             model.soundboardRevision &+= 1
         }
     }

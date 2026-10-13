@@ -57,7 +57,8 @@ struct HistoryRunwayTests {
             canSuperReact: false,
             canAddReactions: true,
             hidesMedia: false,
-            listenAlongCards: [:]
+            listenAlongCards: [:],
+            stageInvitations: []
         )
     }
 

@@ -358,9 +358,10 @@ struct VoiceDeviceChevron: View {
         case output
         case camera
 
+        /// The flyout's heading, in Discord's words.
         var title: String {
             switch self {
-            case .input: "Microphone"
+            case .input: "Input"
             case .output: "Output"
             case .camera: "Camera"
             }
@@ -370,7 +371,6 @@ struct VoiceDeviceChevron: View {
     var kind: Kind
     var isCompact: Bool
 
-    @Environment(AppModel.self) private var model
     @State private var isOpen = false
     @State private var isHovering = false
     @Environment(\.motion) private var motion
@@ -391,114 +391,17 @@ struct VoiceDeviceChevron: View {
         }
         .animation(motion.hover, value: isHovering)
         .popover(isPresented: $isOpen, arrowEdge: .top) {
-            VoiceDeviceList(kind: kind) { isOpen = false }
-                // The list carries its own ground; a second material here would
-                // be glass on glass.
+            // The call band's own flyout — one implementation of Discord's
+            // device and level, wherever a call control has a ▾.
+            CallDeviceFlyout(kind: kind)
                 .presentationBackground(.clear)
         }
-        .help("Choose a \(kind.title.lowercased())")
-        .accessibilityLabel(Text("Choose a \(kind.title.lowercased())"))
+        .help(kind.deviceTitle)
+        .accessibilityLabel(Text(kind.deviceTitle))
     }
 
     private var side: CGFloat {
         isCompact ? Metrics.compactControl : Metrics.control + 4
-    }
-}
-
-/// What the chevron opens: the machine's devices, and which one is in use.
-///
-/// **"System default" is a row, not the absence of one.** A preference of nil
-/// means "follow whatever the Mac is doing", which is a different answer from
-/// naming the device the Mac happens to be using right now — unplug a headset
-/// and the two diverge. A list that only named devices could not express it.
-private struct VoiceDeviceList: View {
-    var kind: VoiceDeviceChevron.Kind
-    var dismiss: () -> Void
-
-    @Environment(AppModel.self) private var model
-    @State private var settings = AppSettings.shared
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            Text(kind.title.uppercased())
-                .font(Typeface.categoryHeader)
-                .foregroundStyle(Ink.tertiary)
-                .padding(.horizontal, Spacing.snug)
-                .padding(.vertical, Spacing.base)
-
-            row(title: "System default", isSelected: selection == nil) { choose(nil) }
-            ForEach(devices, id: \.id) { device in
-                row(title: device.name, isSelected: selection == device.id) {
-                    choose(device.id)
-                }
-            }
-        }
-        .padding(.bottom, Spacing.base)
-        .frame(width: 240, alignment: .leading)
-        // No material of its own: the popover's glass is the body — §4.9.
-    }
-
-    /// One device. Resolved to `(id, name)` here so the three kinds share one
-    /// row rather than growing three copies of it.
-    private var devices: [(id: String, name: String)] {
-        switch kind {
-        case .input:
-            AudioDeviceCatalog.inputs().map { ($0.uniqueID, $0.name) }
-        case .output:
-            AudioDeviceCatalog.outputs().map { ($0.uniqueID, $0.name) }
-        case .camera:
-            CameraCapture.devices().map { ($0.id, $0.name) }
-        }
-    }
-
-    private var selection: String? {
-        switch kind {
-        case .input: settings.voiceInputDeviceID
-        case .output: settings.voiceOutputDeviceID
-        case .camera: settings.cameraDeviceID
-        }
-    }
-
-    /// Writes the choice and hands it to a call already running.
-    ///
-    /// **Applied live, which is the whole reason this control is on the
-    /// overlay.** A device picker that only takes effect on the next call is a
-    /// picker nobody would open mid-game.
-    private func choose(_ id: String?) {
-        switch kind {
-        case .input: settings.voiceInputDeviceID = id
-        case .output: settings.voiceOutputDeviceID = id
-        case .camera: settings.cameraDeviceID = id
-        }
-        model.voicePreferencesChanged()
-        dismiss()
-    }
-
-    private func row(
-        title: String,
-        isSelected: Bool,
-        action: @escaping () -> Void
-    ) -> some View {
-        Button(action: action) {
-            HStack(spacing: Spacing.base) {
-                Image(systemName: "checkmark")
-                    .font(.system(size: 10, weight: .bold))
-                    .foregroundStyle(Palette.accent)
-                    .opacity(isSelected ? 1 : 0)
-                    .frame(width: 12)
-                Text(title)
-                    .font(.system(size: 12))
-                    .foregroundStyle(Ink.primary)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-                Spacer(minLength: 0)
-            }
-            .padding(.horizontal, Spacing.snug)
-            .frame(height: Metrics.rowMinHeight)
-            .contentShape(.rect)
-        }
-        .buttonStyle(.plain)
-        .accessibilityAddTraits(isSelected ? [.isSelected, .isButton] : .isButton)
     }
 }
 

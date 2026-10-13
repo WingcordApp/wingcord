@@ -106,7 +106,7 @@ struct PersonalWidgetCard: View {
                     .lineLimit(1)
                 if !field.description.isEmpty {
                     Text(field.description)
-                        .font(.system(size: 11))
+                        .font(.system(.subheadline))
                         .foregroundStyle(InkColor.secondary)
                         .lineLimit(1)
                 }

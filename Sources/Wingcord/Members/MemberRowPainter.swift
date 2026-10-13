@@ -345,7 +345,7 @@ nonisolated enum MemberRowPainter {
         if let glyph = line.glyph {
             TimelineRowPainter.drawSymbol(
                 glyph.symbolName,
-                tint: glyph.isLive ? NSColor(Palette.presenceOnline) : ink,
+                tint: NSColor(Palette.presenceOnline),
                 in: CGRect(x: x, y: capCenter - glyphSide / 2, width: glyphSide, height: glyphSide),
                 context: context
             )

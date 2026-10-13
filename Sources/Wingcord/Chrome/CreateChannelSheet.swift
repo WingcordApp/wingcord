@@ -26,22 +26,37 @@ struct CreateChannelSheet: View {
     init(request: ChannelCreationRequest) {
         self.request = request
         _kind = State(initialValue: request.kind)
+        _name = State(initialValue: request.duplicating?.name ?? "")
     }
 
     private var isCategory: Bool { request.kind == .category }
 
+    private var title: String {
+        if request.duplicating != nil { return "Duplicate Channel" }
+        return isCategory ? "Create Category" : "Create Channel"
+    }
+
     var body: some View {
         FormSheet(
-            title: isCategory ? "Create Category" : "Create Channel",
+            title: title,
             subtitle: categoryName.map { Text(verbatim: "in \($0)") },
             confirmTitle: isCategory ? "Create Category" : "Create Channel",
             isWorking: isWorking,
             canConfirm: !name.trimmingCharacters(in: .whitespaces).isEmpty,
             confirm: create
         ) {
-            if !isCategory { typePicker }
+            // A duplicate's type is the original's, and its permissions are
+            // copied: no type list and no privacy switch, as in Discord's.
+            if request.duplicating == nil, !isCategory { typePicker }
             nameField
-            if ChannelCreation.offersPrivacy(kind) { privacySwitch }
+            if let source = request.duplicating {
+                // The name field's helper line in Discord's.
+                Text("A new channel will be created with the same permissions, user limit and bitrate as **\(source.name)**.")
+                    .font(.system(.caption))
+                    .foregroundStyle(Ink.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            if request.duplicating == nil, ChannelCreation.offersPrivacy(kind) { privacySwitch }
             if kind == .announcement {
                 Text("Users can Follow this channel in their own servers. Posts you \u{201C}Publish\u{201D} from this channel will appear in those servers. [Learn more.](https://support.discord.com/hc/en-us/articles/360032008192)")
                     .font(.system(.caption))
@@ -94,7 +109,7 @@ struct CreateChannelSheet: View {
             .padding(.horizontal, Spacing.snug)
             .frame(height: Metrics.composerControlHeight)
             .background(Palette.surfaceRaised, in: .rect(cornerRadius: Radius.chip))
-            .specularEdge(in: RoundedRectangle(cornerRadius: Radius.chip))
+            .overlay { RoundedRectangle(cornerRadius: Radius.chip).strokeBorder(Palette.edge) }
         }
     }
 
@@ -148,6 +163,7 @@ struct CreateChannelSheet: View {
                 kind: kind,
                 parentID: request.parentID,
                 isPrivate: isPrivate,
+                duplicating: request.duplicating,
                 in: request.guildID
             )
             isWorking = false

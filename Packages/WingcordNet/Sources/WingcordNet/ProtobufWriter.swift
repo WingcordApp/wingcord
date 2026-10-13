@@ -55,6 +55,13 @@ struct ProtobufWriter {
         withUnsafeBytes(of: value.littleEndian) { data.append(contentsOf: $0) }
     }
 
+    /// A `float` — wire type 5, four little-endian bytes. Discord's
+    /// descriptor marks the volumes `T:2`.
+    mutating func float(field: Int, _ value: Float) {
+        tag(field: field, wireType: 5)
+        withUnsafeBytes(of: value.bitPattern.littleEndian) { data.append(contentsOf: $0) }
+    }
+
     mutating func string(field: Int, _ value: String) {
         message(field: field, Data(value.utf8))
     }
@@ -68,6 +75,14 @@ struct ProtobufWriter {
             withUnsafeBytes(of: value.littleEndian) { payload.append(contentsOf: $0) }
         }
         message(field: field, payload)
+    }
+
+    /// A packed `repeated` varint — how a frecency item's millisecond uses
+    /// are written (`ProtobufReader.packedVarints` reads them back).
+    mutating func packedVarints(field: Int, _ values: [UInt64]) {
+        var payload = ProtobufWriter()
+        for value in values { payload.varint(value) }
+        message(field: field, payload.data)
     }
 
     var base64: String { data.base64EncodedString() }

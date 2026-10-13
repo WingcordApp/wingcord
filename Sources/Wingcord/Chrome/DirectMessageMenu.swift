@@ -20,6 +20,10 @@ import WingcordCore
 /// `DirectMessageActions.person` is an optional rather than a flag.
 struct DirectMessageMenu: View {
     var channelID: ChannelID
+    /// Whose tile raised it, in this conversation's call: the menu is then
+    /// about them — themselves, or the reader — and carries the call's items,
+    /// as Discord's does (its `showMediaItems` and `showChannelCallItems`).
+    var callUserID: UserID?
 
     @Environment(AppModel.self) private var model
     @Environment(\.motion) private var motion
@@ -105,19 +109,24 @@ struct DirectMessageMenu: View {
         }
 
         divider
-        if let userID = actions.userID {
+        // The person the menu is about: the tile's, from a call.
+        let subject = callUserID ?? actions.userID
+        // In the call, the rows about the conversation's other person go
+        // only on their own tile — the reader's own carries none of them.
+        let isAboutOtherPerson = callUserID == nil || callUserID == actions.userID
+        if let subject {
             row(id: "profile", title: "Profile", symbolName: "person.crop.circle") {
                 close()
-                model.openProfile(userID, anchor: .zero, depth: .full)
+                model.openProfile(subject, anchor: .zero, depth: .full)
             }
         }
-        if model.canStartCall(in: channelID) {
+        if callUserID == nil, model.canStartCall(in: channelID) {
             row(id: "call", title: "Start a Call", symbolName: "phone") {
                 model.startCall(in: channelID)
                 close()
             }
         }
-        if actions.userID != nil {
+        if actions.userID != nil, isAboutOtherPerson {
             row(
                 id: "note",
                 title: actions.note == nil ? "Add Note" : "Edit Note",
@@ -144,12 +153,32 @@ struct DirectMessageMenu: View {
                 }
             }
         }
-        row(id: "close", title: "Close DM", symbolName: "xmark.circle") {
-            model.closeDirectMessage(channelID)
+        if callUserID == nil {
+            row(id: "close", title: "Close DM", symbolName: "xmark.circle") {
+                model.closeDirectMessage(channelID)
+            }
         }
 
-        if let person = actions.person, let userID = actions.userID {
+        // The other person's tile: their level, before their switches.
+        if let callUserID, callUserID != model.currentUserID {
             divider
+            CallVolumeItems(userID: callUserID)
+        }
+        // The reader's own tile: the conversation's apps, then their own
+        // Mute and Deafen.
+        if let callUserID, callUserID == model.currentUserID {
+            divider
+            if !model.contextCommandGroups(.user, in: channelID).isEmpty {
+                row(id: "apps", title: "Apps", symbolName: "square.grid.2x2", opensSurface: true) {
+                    surface = .apps
+                }
+            }
+            CallSwitchItems(userID: callUserID)
+        }
+
+        if let person = actions.person, let userID = actions.userID, isAboutOtherPerson {
+            divider
+            if let callUserID { CallSwitchItems(userID: callUserID) }
             // **Offered only when an app actually has something for a
             // person.** No permission gates it — the question is whether the
             // command index holds a USER command that applies here.
@@ -222,11 +251,16 @@ struct DirectMessageMenu: View {
             }
         }
 
+        if callUserID != nil {
+            divider
+            CallLayoutItems()
+        }
+
         if actions.developerMode {
             divider
-            if let userID = actions.userID {
+            if let subject {
                 row(id: "user-id", title: "Copy User ID", symbolName: "number") {
-                    AppModel.copy(userID.description)
+                    AppModel.copy(subject.description)
                     close()
                 }
             }
@@ -512,7 +546,7 @@ struct DirectMessageMenuPresenter: ViewModifier {
             attachmentAnchor: .rect(.rect(model.directMessageMenu?.anchor ?? .zero)),
             arrowEdge: .trailing
         ) { request in
-            DirectMessageMenu(channelID: request.channelID)
+            DirectMessageMenu(channelID: request.channelID, callUserID: request.callUserID)
                 .environment(model)
                 .presentationBackground(.clear)
         }

@@ -49,12 +49,15 @@ final class VoiceTestRig {
         }
     }
 
+    /// Five seconds of digital silence from the microphone since the test
+    /// began, or since it last heard anything — Discord's "isn\u{2019}t
+    /// detecting any input from your mic.", on the call's own five seconds.
+    private(set) var isSilent = false
+
     @ObservationIgnored private let engine = VoiceAudioEngine()
-    /// A player node into the chosen output and nothing else. It stops itself
-    /// once nothing has played for a few seconds, so a reader who presses Play
-    /// twice does not hold the device open for the pane's life.
-    @ObservationIgnored private let tones = NotificationAudioEngine()
     @ObservationIgnored private var meterTask: Task<Void, Never>?
+    /// When the input last carried anything at all.
+    @ObservationIgnored private var lastHeard = ContinuousClock.now
 
     /// Brings the engine up on the devices the settings currently name.
     ///
@@ -68,7 +71,8 @@ final class VoiceTestRig {
         if isRunning {
             engine.reconfigure(
                 inputUniqueID: settings.voiceInputDeviceID,
-                outputUniqueID: settings.voiceOutputDeviceID
+                outputUniqueID: settings.voiceOutputDeviceID,
+                processing: settings.resolvedProcessing
             )
             return
         }
@@ -80,9 +84,11 @@ final class VoiceTestRig {
         }
         isDenied = false
         do {
+            // The call's processing, so the test hears what the far end would.
             try engine.start(
                 inputUniqueID: settings.voiceInputDeviceID,
-                outputUniqueID: settings.voiceOutputDeviceID
+                outputUniqueID: settings.voiceOutputDeviceID,
+                processing: settings.resolvedProcessing
             )
         } catch {
             DiagnosticLog.trace("voice", "mic check engine would not start: \(error)")
@@ -105,8 +111,10 @@ final class VoiceTestRig {
         let settings = AppSettings.shared
         engine.reconfigure(
             inputUniqueID: settings.voiceInputDeviceID,
-            outputUniqueID: settings.voiceOutputDeviceID
+            outputUniqueID: settings.voiceOutputDeviceID,
+            processing: settings.resolvedProcessing
         )
+        isVoiceProcessing = engine.isVoiceProcessing
     }
 
     func stop() {
@@ -116,82 +124,12 @@ final class VoiceTestRig {
         engine.stop()
         isRunning = false
         level = 0
+        isSilent = false
     }
-
-    /// Plays a short chime through the **chosen** output device.
-    ///
-    /// Synthesised rather than handed to `NSSound`: a speaker test that plays on
-    /// the system's default output tests the wrong device, which is exactly the
-    /// case somebody opening this pane is trying to diagnose.
-    ///
-    /// **Through the notification engine, never through the voice engine.**
-    /// §1.5: a sound that is not part of a call must not open the microphone,
-    /// and `VoiceAudioEngine` turns on the voice processing unit, which does.
-    /// Routed through this one, the speaker test also works without the
-    /// microphone test being on — it used to `guard isRunning`, so testing the
-    /// speakers silently required opening the microphone first.
-    func playTestTone() {
-        guard let buffer = Self.chimeBuffer else { return }
-        tones.play(
-            buffer,
-            volume: 1,
-            loops: false,
-            outputUniqueID: AppSettings.shared.voiceOutputDeviceID
-        )
-    }
-
-    /// Two short notes a fifth apart, with a raised-cosine envelope on each.
-    ///
-    /// The envelope is the whole reason this is not a bare sine: a tone that
-    /// starts and stops at full amplitude clicks at both ends, and on a speaker
-    /// test the click is the loudest thing in it.
-    private static let chime: [Float] = {
-        let rate = Float(OpusFormat.sampleRate)
-        let channels = Int(OpusFormat.channels)
-        var samples: [Float] = []
-        for (frequency, seconds) in [(Float(660), Float(0.14)), (Float(990), Float(0.20))] {
-            let count = Int(rate * seconds)
-            samples.reserveCapacity(samples.count + count * channels)
-            for index in 0..<count {
-                let phase = 2 * Float.pi * frequency * Float(index) / rate
-                let progress = Float(index) / Float(count)
-                let envelope = 0.5 - 0.5 * cos(2 * Float.pi * progress)
-                let value = sin(phase) * envelope * 0.28
-                for _ in 0..<channels { samples.append(value) }
-            }
-        }
-        return samples
-    }()
-
-    /// The same chime, in the notification engine's own format.
-    ///
-    /// Built once. That format is `standardFormatWithSampleRate`, which is
-    /// **non-interleaved**, so the stereo pairs above have to be split into the
-    /// per-channel planes rather than copied straight in — a memcpy here plays
-    /// the left channel at double speed and drops the right.
-    private static let chimeBuffer: AVAudioPCMBuffer? = {
-        let format = NotificationAudioEngine.format
-        let sourceChannels = Int(OpusFormat.channels)
-        let frames = chime.count / sourceChannels
-        guard frames > 0,
-              let buffer = AVAudioPCMBuffer(
-                  pcmFormat: format,
-                  frameCapacity: AVAudioFrameCount(frames)
-              ),
-              let planes = buffer.floatChannelData
-        else { return nil }
-        buffer.frameLength = AVAudioFrameCount(frames)
-        for channel in 0..<Int(format.channelCount) {
-            let source = min(channel, sourceChannels - 1)
-            for frame in 0..<frames {
-                planes[channel][frame] = chime[frame * sourceChannels + source]
-            }
-        }
-        return buffer
-    }()
 
     private func startMeter() {
         meterTask?.cancel()
+        lastHeard = .now
         meterTask = Task { [weak self] in
             while !Task.isCancelled {
                 // Twenty a second. The meter is a bar a few points tall and
@@ -201,11 +139,26 @@ final class VoiceTestRig {
                 try? await Task.sleep(for: .milliseconds(50))
                 guard let self else { return }
                 let next = engine.currentInputLevel
+                noteSilence(next)
                 guard abs(level - next) > 0.005 else { continue }
                 level = next
             }
         }
     }
+
+    /// Digital silence is nothing at all — a quiet room still moves the level.
+    private func noteSilence(_ level: Float) {
+        let now = ContinuousClock.now
+        if level > Self.digitalSilence {
+            lastHeard = now
+            if isSilent { isSilent = false }
+        } else if !isSilent, now - lastHeard >= Self.silenceWindow {
+            isSilent = true
+        }
+    }
+
+    private static let digitalSilence: Float = 0.000_01
+    private static let silenceWindow: Duration = .seconds(5)
 
     /// The engine reads the input's own volume live, so the whole rig can be
     /// left running while a slider moves.

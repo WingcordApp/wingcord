@@ -163,6 +163,111 @@ struct RTCPTests {
         #expect(read(packet).negativeAcknowledgements == 4)
     }
 
+    private func requests(in packet: [UInt8]) -> (RTCP.Feedback, [RTCP.Request]) {
+        var feedback = RTCP.Feedback()
+        var asked: [RTCP.Request] = []
+        RTCP.read(packet, into: &feedback) { asked.append($0) }
+        return (feedback, asked)
+    }
+
+    /// The bitmask names the sixteen packets after the first, least
+    /// significant bit first — RFC 4585 §6.2.1 — and the request names the
+    /// stream, because a sequence number means nothing outside one.
+    @Test("A NACK becomes a request to resend exactly the packets it names")
+    func negativeAcknowledgementRequest() {
+        let packet = record(
+            count: 1, kind: 205,
+            body: word(1) + word(4242)
+                + [0x10, 0x00, 0b0000_0001, 0b0000_0011]
+        )
+        let (_, asked) = requests(in: packet)
+        #expect(asked == [.retransmit(ssrc: 4242, sequences: [0x1000, 0x1001, 0x1002, 0x1009])])
+    }
+
+    /// The one this client sends, read back by the rules it reads everything
+    /// by — across a sequence wrap, and with a run longer than one mask.
+    @Test("The NACK this client sends reads back as the packets it asked for")
+    func ourOwnNegativeAcknowledgementRoundTrips() {
+        let lost: [UInt16] = [65_534, 65_535, 0, 3, 17, 18, 40]
+        let packet = RTCP.negativeAcknowledgement(from: 1_000, about: 2_000, sequences: lost)
+        #expect(RTCP.isPlaintext(packet), "the length field has to describe it exactly")
+        #expect(packet.count == 12 + 4 * 3, "65534 carries 3 and 17; 18 and 40 their own")
+        let (feedback, asked) = requests(in: packet)
+        #expect(asked == [.retransmit(ssrc: 2_000, sequences: [65_534, 65_535, 0, 3, 17, 18, 40])])
+        #expect(feedback.negativeAcknowledgements == 7)
+    }
+
+    @Test("A picture loss names its stream, and a full intra request each of its entries")
+    func keyframeRequests() {
+        let (_, pli) = requests(in: record(count: 1, kind: 206, body: word(1) + word(4242)))
+        #expect(pli == [.keyframe(ssrc: 4242)])
+        let fir = record(
+            count: 4, kind: 206,
+            body: word(1) + word(0) + word(4242) + [3, 0, 0, 0] + word(4343) + [9, 0, 0, 0]
+        )
+        let (_, asked) = requests(in: fir)
+        #expect(asked == [.keyframe(ssrc: 4242), .keyframe(ssrc: 4343)])
+    }
+
+    /// What the bitrate controller reads for the stream it drives — the audio
+    /// beside it may be losing nothing.
+    @Test("Loss is kept for each stream reported on")
+    func lossPerStream() {
+        let packet = record(
+            count: 2, kind: 201,
+            body: word(1)
+                + reportBlock(source: 10, fractionLost: 3, cumulativeLost: 1, jitter: 0)
+                + reportBlock(source: 11, fractionLost: 40, cumulativeLost: 9, jitter: 0)
+        )
+        let feedback = read(packet)
+        #expect(feedback.fractionLost == [10: 3, 11: 40])
+        #expect(feedback.worstFractionLost == 40)
+    }
+
+    @Test("Transport-wide feedback is counted, and read as nothing else")
+    func transportWideFeedback() {
+        let packet = record(count: 15, kind: 205, body: word(1) + word(4242) + word(0) + word(0))
+        let (feedback, asked) = requests(in: packet)
+        #expect(feedback.transportFeedback == 1)
+        #expect(feedback.negativeAcknowledgements == 0)
+        #expect(asked.isEmpty)
+    }
+
+    /// Our own reports, read back by the rules this client reads everybody's
+    /// by: the sender information, the blocks, and the NTP time a receiver
+    /// echoes back to time the round trip.
+    @Test("The reports this client sends read back as what they say")
+    func ourOwnReportsRoundTrip() {
+        let block = RTCP.ReportBlock(
+            ssrc: 4242, fractionLost: 26, cumulativeLost: -3, highestSequence: 0x0001_0005,
+            jitter: 480, lastSenderReport: 0xA1B2_C3D4, delaySinceLastSenderReport: 65_536
+        )
+        let sender = RTCP.SenderInfo(
+            ntpTime: 0x1122_3344_5566_7788, rtpTimestamp: 960_000, packets: 50, octets: 4_000
+        )
+        let report = RTCP.report(from: 1_000, sender: sender, blocks: [block])
+        #expect(report.count == 4 + 4 + 20 + 24)
+        #expect(RTCP.isPlaintext(report))
+        let feedback = read(report)
+        #expect(feedback.senderReports == 1)
+        #expect(feedback.reportedSources == [4242])
+        #expect(feedback.fractionLost == [4242: 26])
+        #expect(feedback.cumulativeLost == -3)
+        #expect(feedback.worstJitter == 480)
+        #expect(feedback.senderReportTimes == [1_000: 0x3344_5566], "LSR is the NTP time's middle")
+
+        let receiverOnly = RTCP.report(from: 1_000, sender: nil, blocks: [])
+        #expect(receiverOnly.count == 8)
+        #expect(read(receiverOnly).receiverReports == 1)
+    }
+
+    @Test("NTP time counts from 1900")
+    func ntpEpoch() {
+        #expect(RTCP.ntpTime(Date(timeIntervalSince1970: 0)) == UInt64(2_208_988_800) << 32)
+        let half = RTCP.ntpTime(Date(timeIntervalSince1970: 0.5))
+        #expect(half & 0xFFFF_FFFF == 0x8000_0000)
+    }
+
     /// A mantissa scaled by a power of two, which is how one word covers
     /// kilobits to gigabits.
     @Test("A bandwidth estimate is a mantissa and an exponent")
@@ -327,5 +432,64 @@ struct RecoveryPacerTests {
         _ = pacer.request(at: start)
         let later = start.advanced(by: RecoveryPacer.interval + .milliseconds(1))
         #expect(pacer.request(at: later) == .now)
+    }
+}
+
+// MARK: - What one received stream looked like
+
+@Suite("Reception statistics")
+struct ReceptionStatisticsTests {
+
+    private func block(_ statistics: inout ReceptionStatistics) -> RTCP.ReportBlock? {
+        statistics.block(for: 7, lastSenderReport: 0, delaySinceLastSenderReport: 0)
+    }
+
+    @Test("A clean stream reports nothing lost")
+    func clean() throws {
+        var statistics = ReceptionStatistics(clockRate: 48_000)
+        for index in 0..<10 {
+            statistics.record(sequence: 100 + UInt16(index), timestamp: UInt32(index) * 960, arrival: Double(index) * 0.02)
+        }
+        let report = try #require(block(&statistics))
+        #expect(report.fractionLost == 0)
+        #expect(report.cumulativeLost == 0)
+        #expect(report.highestSequence == 109)
+        #expect(report.jitter == 0, "a constant transit is no jitter")
+    }
+
+    /// RFC 3550 A.3: lost is expected less received, and the fraction is the
+    /// window's own — so a window with no new loss reports none.
+    @Test("Loss is counted overall and per report")
+    func loss() throws {
+        var statistics = ReceptionStatistics(clockRate: 48_000)
+        for sequence: UInt16 in [0, 1, 2, 3, 4, 7, 8, 9] {
+            statistics.record(sequence: sequence, timestamp: UInt32(sequence) * 960, arrival: Double(sequence) * 0.02)
+        }
+        let first = try #require(block(&statistics))
+        #expect(first.cumulativeLost == 2)
+        #expect(first.fractionLost == 51, "two of ten, out of 256")
+        for sequence: UInt16 in 10...14 {
+            statistics.record(sequence: sequence, timestamp: UInt32(sequence) * 960, arrival: Double(sequence) * 0.02)
+        }
+        let second = try #require(block(&statistics))
+        #expect(second.cumulativeLost == 2)
+        #expect(second.fractionLost == 0)
+    }
+
+    @Test("A wrap of the sequence counts as a cycle")
+    func wrap() throws {
+        var statistics = ReceptionStatistics(clockRate: 90_000)
+        for (index, sequence) in [UInt16(65_534), 65_535, 0, 1].enumerated() {
+            statistics.record(sequence: sequence, timestamp: 0, arrival: Double(index) * 0.01)
+        }
+        let report = try #require(block(&statistics))
+        #expect(report.highestSequence == 1 << 16 | 1)
+        #expect(report.cumulativeLost == 0)
+    }
+
+    @Test("A stream nothing has arrived on has no block")
+    func empty() {
+        var statistics = ReceptionStatistics(clockRate: 48_000)
+        #expect(block(&statistics) == nil)
     }
 }

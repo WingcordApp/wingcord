@@ -121,6 +121,23 @@ extension AppModel {
         }
     }
 
+    /// Channel › Recents: this session's visits, as the switcher names them —
+    /// only this session's, so that Clear Recents visibly clears; the
+    /// account's own history stays the switcher's — and the conversations
+    /// with drafts waiting.
+    func recentsForMenu() -> (channels: [QuickSwitchRow], drafts: [QuickSwitchRow]) {
+        let channels = recentChannelIDs
+            .filter { $0 != selectedChannelID }
+            .compactMap(channelRow)
+        return (channels, draftRows(excluding: []))
+    }
+
+    /// Channel › Recents › Clear Recents.
+    func clearRecents() {
+        recentChannelIDs.removeAll()
+        refreshMenuContext()
+    }
+
     // MARK: What the panel draws
 
     /// The sections, for whatever is in the field.

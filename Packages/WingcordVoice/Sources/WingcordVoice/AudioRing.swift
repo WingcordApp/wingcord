@@ -12,13 +12,18 @@ import Synchronization
 // The invariant that makes it safe with two plain atomics: **the writer only
 // ever advances `written` and the reader only ever advances `read`**, both
 // monotonically, and each side derives everything it needs from its own index
-// plus one acquire-load of the other's. Neither index is ever written by both.
+// plus one acquire-load of the other's. Neither index is ever written by both —
+// which is why a flush is a request the reader carries out, never a store from
+// whoever asked.
 
 public final class AudioRing: @unchecked Sendable {
     private let capacity: Int
     private let storage: UnsafeMutablePointer<Float>
     private let written = Atomic<Int>(0)
     private let read = Atomic<Int>(0)
+    /// Set by whoever wants the queue emptied, cleared by the reader when it
+    /// does so. See `flush`.
+    private let flushRequested = Atomic<Bool>(false)
 
     /// - Parameter capacity: in samples, and it must be a power of two so the
     ///   wrap is a mask rather than a division. A division in a render callback
@@ -39,8 +44,6 @@ public final class AudioRing: @unchecked Sendable {
     public var count: Int {
         written.load(ordering: .acquiring) - read.load(ordering: .acquiring)
     }
-
-    public var available: Int { capacity - count }
 
     /// Writer side. Drops the whole block rather than a part of it when there
     /// is no room: half a frame in a stereo ring swaps the channels for every
@@ -66,8 +69,16 @@ public final class AudioRing: @unchecked Sendable {
     /// something, and the alternative to silence is whatever was in the buffer
     /// last time, which is a buzz.
     public func read(into destination: UnsafeMutablePointer<Float>, count wanted: Int) -> Int {
-        let tail = read.load(ordering: .relaxed)
+        var tail = read.load(ordering: .relaxed)
         let head = written.load(ordering: .acquiring)
+        // A flush asked for since the last read: everything written so far is
+        // let go by moving this side's own index, which nothing else moves.
+        // One relaxed load on the path that finds nothing asked.
+        if flushRequested.load(ordering: .relaxed),
+           flushRequested.exchange(false, ordering: .relaxed) {
+            tail = head
+            read.store(head, ordering: .releasing)
+        }
         let ready = min(wanted, head - tail)
         guard ready > 0 else {
             destination.update(repeating: 0, count: wanted)
@@ -88,9 +99,16 @@ public final class AudioRing: @unchecked Sendable {
         return ready
     }
 
-    /// Throws away everything queued. For a device change, where the samples in
-    /// flight belong to a clock that no longer exists.
-    public func drain() {
-        read.store(written.load(ordering: .acquiring), ordering: .releasing)
+    /// Throws away everything queued — on deafen, and when the device goes,
+    /// because the samples in flight belong to a clock that no longer exists.
+    ///
+    /// **A request, carried out by the reader on its next call.** This used to
+    /// store the reader's index from the thread that asked while the render
+    /// callback was storing it too: either store could undo the other, and a
+    /// reader moved back past a flush replays a region the writer has already
+    /// started overwriting. Safe from any thread, and from no thread at all —
+    /// with the engine stopped, the first render after it starts does it.
+    public func flush() {
+        flushRequested.store(true, ordering: .relaxed)
     }
 }

@@ -83,15 +83,10 @@ struct MessageActionBar: View {
         // it the material has no specular response at all and reads as a flat
         // tinted capsule rather than as glass.
         //
-        // **Untinted.** The flyout tint is a white wash *in* the material, and
-        // over the transcript's near-black it is the grey — the thing that made
-        // this read as an opaque slab rather than as glass the row shows
-        // through. The rim below keeps it findable on an empty stretch.
-        .glassEffect(.clear.interactive(), in: .capsule)
-        // A fixed sheen along the upper edge. Moving glass picks the system's
-        // own specular up as it travels; this pill is placed rather than
-        // dragged, so it has none of its own.
-        .specularEdge(in: .capsule)
+        // **`.regular`, untinted**: the HIG's default for a control over
+        // content, which frosts the row behind enough to read the glyphs
+        // without a hand-drawn rim.
+        .glassEffect(.regular.interactive(), in: .capsule)
         // The hover fill is the only thing that moves here, and it is a fill —
         // a spring would describe physics that are not happening.
         .animation(motion.fadeQuick, value: hovered)

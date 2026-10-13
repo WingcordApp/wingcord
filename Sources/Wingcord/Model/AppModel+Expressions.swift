@@ -19,6 +19,9 @@ struct ExpressionMemoKey: Hashable, Sendable {
     /// `USER_UPDATE` over both, and a memo blind to it would serve a catalog
     /// computed while the answer was still "no" for the rest of the launch.
     var entitlements: AccountEntitlements
+    /// Fake Nitro's switch for this kind of expression, which unlocks the
+    /// picker the way the subscription does. See `AppSettings.fakeNitro`.
+    var isFakeNitro = false
 }
 
 extension AppModel {
@@ -80,11 +83,13 @@ extension AppModel {
     /// The key deliberately excludes anything that moves on a message arriving.
     /// An emoji set changes on a gateway event, not on a frame.
     var emojiCatalog: ExpressionCatalog {
+        let isFakeNitro = AppSettings.shared.sendsFakeEmoji
         let key = ExpressionMemoKey(
             channelID: selectedChannelID,
             expressionRevision: expressionRevision,
             skinTone: AppSettings.shared.skinTone,
-            entitlements: entitlements
+            entitlements: entitlements,
+            isFakeNitro: isFakeNitro
         )
         // Read every observable input before the early return: a memo that
         // returns its cache without touching them registers no dependency, and
@@ -97,12 +102,14 @@ extension AppModel {
         }
 
         var sections: [ExpressionSection] = []
-        let allowsExternal = selectedChannelID.map(canUseExternalEmoji(in:)) ?? true
+        // Fake Nitro sends what is locked as a link, so nothing is — the
+        // permission included, as the plugin bypasses it too.
+        let allowsExternal = isFakeNitro || selectedChannelID.map(canUseExternalEmoji(in:)) ?? true
         // An animated emoji is the subscription's in its own server too.
-        let allowsAnimated = entitlements.has(.animatedEmoji)
+        let allowsAnimated = isFakeNitro || entitlements.has(.animatedEmoji)
         let home = selectedGuildID
 
-        for guildID in orderedGuildIDs where emojiTable[guildID] != nil {
+        for guildID in Self.homeFirst(orderedGuildIDs, home: home) where emojiTable[guildID] != nil {
             guard let guild = guildTable[guildID], let emojis = emojiTable[guildID] else { continue }
             var items: [ExpressionItem] = []
             items.reserveCapacity(emojis.count)
@@ -150,11 +157,13 @@ extension AppModel {
     /// Servers with none are absent rather than empty — a rail icon that opens
     /// onto nothing is a server you have to click to learn is irrelevant.
     var stickerCatalog: ExpressionCatalog {
+        let isFakeNitro = AppSettings.shared.sendsFakeStickers
         let key = ExpressionMemoKey(
             channelID: selectedChannelID,
             expressionRevision: expressionRevision,
             skinTone: .default,
-            entitlements: entitlements
+            entitlements: entitlements,
+            isFakeNitro: isFakeNitro
         )
         let stickerTable = guildStickers
         let guildTable = guilds
@@ -164,10 +173,10 @@ extension AppModel {
         }
 
         var sections: [ExpressionSection] = []
-        let allowsExternal = selectedChannelID.map(canUseExternalStickers(in:)) ?? true
+        let allowsExternal = isFakeNitro || selectedChannelID.map(canUseExternalStickers(in:)) ?? true
         let home = selectedGuildID
 
-        for guildID in orderedGuildIDs where stickerTable[guildID] != nil {
+        for guildID in Self.homeFirst(orderedGuildIDs, home: home) where stickerTable[guildID] != nil {
             guard let guild = guildTable[guildID], let stickers = stickerTable[guildID] else { continue }
             var items: [ExpressionItem] = []
             items.reserveCapacity(stickers.count)
@@ -284,6 +293,17 @@ extension AppModel {
     /// the inbox's quotas ask. Everything else asks `entitlements.has(_:)` for
     /// its own perk, because the tiers do not nest.
     var hasNitro: Bool { entitlements.isPremium }
+
+    /// The servers in the rail's order — **the one being read first**, as
+    /// Discord's picker leads with the server you are in: its own emoji are the
+    /// ones you can always use there.
+    static func homeFirst(_ order: [GuildID], home: GuildID?) -> [GuildID] {
+        guard let home, let index = order.firstIndex(of: home) else { return order }
+        var reordered = order
+        reordered.remove(at: index)
+        reordered.insert(home, at: 0)
+        return reordered
+    }
 
     /// Whether another server's emoji may be used in this channel.
     ///

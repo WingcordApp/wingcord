@@ -50,6 +50,9 @@ struct ProfileRequest: Equatable, Identifiable {
     /// opened from four places and only one of them is asking for the controls:
     /// clicking your own name in a transcript opens the card to *read*.
     var showsOwnActions = false
+    /// Where those controls open: on the custom-status editor for User › Set
+    /// Status…, on their own list for everything else.
+    var ownSurface: OwnProfileSurface = .root
     /// The tab the full profile opens on. **Set by a peek**: the edge of a
     /// second card under an activity opens Activity, under a widget opens the
     /// board — Discord's own destinations. Nil is the sheet's own default.

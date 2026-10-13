@@ -10,9 +10,8 @@ import WingcordCore
 /// both stack above it in the same window (the profiles' presenter is applied
 /// after this one), and Escape closes whichever is on top: `EscapeLayer`.
 ///
-/// Clear glass over `Palette.modalScrim`: the quick switcher's recipe, for its
-/// reason — a list of names over a transcript is unreadable through clear glass
-/// alone, and frosting it is the slab §4 exists to avoid.
+/// A solid panel over `Palette.modalScrim` — `ModalPanelBackground`. It was
+/// clear glass, and a list of names over a transcript read through it.
 struct ReactionsListLayer: View {
     @Environment(AppModel.self) private var model
     @Environment(\.motion) private var motion
@@ -88,8 +87,7 @@ private struct ReactionsListPanel: View {
                 }
             }
         }
-        .glassEffect(.clear.tint(Palette.flyoutTint), in: .rect(cornerRadius: Radius.card))
-        .specularEdge(in: RoundedRectangle(cornerRadius: Radius.card, style: .continuous))
+        .modalPanel(in: RoundedRectangle(cornerRadius: Radius.card))
         // **Discord closes the list when nothing is left in it** — the last
         // reaction taken off, or the message gone.
         .onChange(of: entries.isEmpty, initial: true) { _, isEmpty in

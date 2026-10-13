@@ -17,6 +17,11 @@ enum MessageActionKind: Hashable, Sendable, Identifiable, CaseIterable {
     /// Discord's Create Thread — a thread hanging off this message.
     case createThread
     case edit
+    /// The words the reader has selected — Discord's "Copy" (⌘C), first in
+    /// the menu whenever a right-click comes with a selection.
+    case copySelection
+    /// The selected words in a Google search — Discord's, beside Copy.
+    case searchWithGoogle
     case copyText
     case pin
     case unpin
@@ -47,6 +52,9 @@ enum MessageActionKind: Hashable, Sendable, Identifiable, CaseIterable {
         case .forward: "Forward"
         case .createThread: "Create Thread"
         case .edit: "Edit Message"
+        // Discord's `OpuAlK` and `Rd/Mko`.
+        case .copySelection: "Copy"
+        case .searchWithGoogle: "Search with Google"
         case .copyText: "Copy Text"
         case .pin: "Pin Message"
         case .unpin: "Unpin Message"
@@ -72,6 +80,8 @@ enum MessageActionKind: Hashable, Sendable, Identifiable, CaseIterable {
         case .forward: "arrowshape.turn.up.right"
         case .createThread: DiscordGlyph.thread
         case .edit: "pencil"
+        case .copySelection: "doc.on.doc"
+        case .searchWithGoogle: "magnifyingglass"
         case .copyText: "doc.on.doc"
         case .pin: "pin"
         case .unpin: "pin.slash"
@@ -113,6 +123,9 @@ enum MessageActionKind: Hashable, Sendable, Identifiable, CaseIterable {
         case .forward: .forward
         case .createThread: .createThread
         case .edit: .edit
+        // **Gated on a selection, not a permission** — the presenter offers
+        // them only when the right-click carried one.
+        case .copySelection, .searchWithGoogle: nil
         case .copyText: .copyText
         case .pin: .pin
         case .unpin: .unpin

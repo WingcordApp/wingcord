@@ -34,7 +34,7 @@ struct QuickSwitchState: Hashable, Sendable {
 /// **Four cases and no "row id", because the id *is* the destination.** A row
 /// built from a target can be diffed, and a click on it needs nothing looked up
 /// to act.
-enum QuickSwitchTarget: Hashable, Sendable {
+nonisolated enum QuickSwitchTarget: Hashable, Sendable {
     case channel(ChannelID)
     case guild(GuildID)
     /// Picking a person opens the conversation with them, making one if there is
@@ -72,7 +72,7 @@ struct QuickSwitchCandidate: Hashable, Sendable {
 /// reference client's own rows show: a handle sits beside a name at the name's
 /// own size, and a category or a kind is set small and in caps. One slot drawn
 /// two ways would mean uppercasing somebody's handle.
-struct QuickSwitchRow: Hashable, Sendable, Identifiable {
+nonisolated struct QuickSwitchRow: Hashable, Sendable, Identifiable {
     var target: QuickSwitchTarget
     var title: String
     /// A person's handle, beside their name.

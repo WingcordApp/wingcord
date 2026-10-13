@@ -49,8 +49,7 @@ struct NewMessagesPill: View {
         }
         .foregroundStyle(InkColor.solid)
         .frame(height: SummaryBar.pillHeight)
-        .specularEdge(in: Capsule())
-        .glassEffect(.clear.interactive(), in: .capsule)
+        .glassEffect(.regular.interactive(), in: .capsule)
         .animation(motion.fadeQuick, value: banner.count)
     }
 }

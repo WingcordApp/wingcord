@@ -165,7 +165,7 @@ struct GameProfileView: View {
                         .foregroundStyle(InkColor.secondary)
                         .padding(.horizontal, 10)
                         .padding(.vertical, 5)
-                        .glassEffect(.clear.tint(Palette.flyoutTint), in: .capsule)
+                        .plainChip(in: .capsule)
                 }
             }
             .padding(.horizontal, Spacing.tight)
@@ -217,10 +217,9 @@ struct GameProfileView: View {
         .scrollIndicators(.never)
         .softScrollEdgesVertical()
         .frame(width: Self.asideWidth)
-        .glassEffect(
-            .clear.tint(Palette.flyoutTint),
-            in: .rect(cornerRadius: 26, style: .continuous)
-        )
+        // Content over the game's artwork: a standard material, which keeps
+        // the art showing through — glass is for controls, not panels.
+        .background(.thinMaterial, in: .rect(cornerRadius: 26))
         .overlay {
             RoundedRectangle(cornerRadius: 26, style: .continuous)
                 .strokeBorder(Color.white.opacity(0.14), lineWidth: 1)
@@ -237,9 +236,11 @@ struct GameProfileView: View {
             if let community = game.community {
                 GameCommunitySection(community: community)
             }
-            if let reviews = game.reviews, !reviews.isEmpty {
-                GameReviewsSection(reviews: reviews, openCriticURL: game.openCriticURL)
-            }
+            GameReviewsSection(
+                reviews: game.reviews ?? GameReviews(),
+                steamURL: game.steamURL,
+                openCriticURL: game.openCriticURL
+            )
             if !game.details.isEmpty || !game.links.isEmpty {
                 GameDetailsSection(rows: game.details, links: game.links)
             }
@@ -360,10 +361,7 @@ private struct GameHeaderBar: View {
         .padding(.vertical, isCondensed ? Spacing.base : Self.padding)
         .frame(height: isCondensed ? 54 : Self.cover / GameArt.coverAspect + Self.padding * 2)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .glassEffect(
-            .clear.tint(Palette.flyoutTint),
-            in: .rect(cornerRadius: isCondensed ? 20 : 26, style: .continuous)
-        )
+        .background(.thinMaterial, in: .rect(cornerRadius: isCondensed ? 20 : 26))
         .overlay {
             RoundedRectangle(cornerRadius: isCondensed ? 20 : 26, style: .continuous)
                 .strokeBorder(Color.white.opacity(0.16), lineWidth: 1)

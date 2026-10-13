@@ -4,7 +4,7 @@ import SwiftUI
 // MARK: - The row that opens the recorder
 //
 // The trigger, in the settings window's own vocabulary — a `SettingsControlRow`
-// with two glass buttons — rather than a second replica of the reference's row.
+// with two bordered buttons — rather than a second replica of the reference's row.
 // The flyout is the thing being copied; the row it hangs from belongs to this
 // window and has to look like the eleven rows above it.
 
@@ -29,7 +29,7 @@ struct HotkeyRecorderRow: View {
                         .monospacedDigit()
                         .frame(minWidth: 58)
                 }
-                .buttonStyle(.glass)
+                .buttonStyle(.bordered)
                 .controlSize(.small)
                 .background { ScreenAnchor(handle: anchor) }
                 .help("Record a new shortcut for showing Wingcord.")
@@ -40,7 +40,7 @@ struct HotkeyRecorderRow: View {
                     Image(systemName: "arrow.counterclockwise")
                         .font(.system(size: 11, weight: .semibold))
                 }
-                .buttonStyle(.glass)
+                .buttonStyle(.bordered)
                 .controlSize(.small)
                 .disabled(hotkey == Hotkey.default)
                 .help("Reset to the default hotkey.")

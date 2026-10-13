@@ -25,18 +25,26 @@ extension AppModel {
         return AttachmentLimits.bytes(forPremium: entitlements.premiumTier, guildBoostTier: boost)
     }
 
-    /// Stages files for a channel, refusing the ones this account cannot send.
+    /// Stages files for a channel, refusing the ones this account cannot send
+    /// in Discord's words.
     ///
     /// **Partial success is the answer, not all-or-nothing.** Somebody who drags
     /// six photographs and one video that is over the limit wants the six
     /// photographs; refusing the whole drop because one member of it failed
     /// makes them do the selection again by hand.
+    ///
+    /// **A picture or a video over the limit is offered Send Compressed**
+    /// rather than only refused — or, with Auto-compress Images on, a picture
+    /// is compressed at once, without asking.
     func stageAttachments(_ urls: [URL], in channelID: ChannelID) {
         guard permissionGate.canAttachFiles(in: channelID) else { return }
         let limit = uploadLimit(in: channelID)
+        let box = messages(in: channelID)
         var refusal: AttachmentRefusal?
         var staged: [PendingAttachment] = []
-        var room = Self.attachmentCountLimit - (messages(in: channelID)?.attachments.count ?? 0)
+        var oversized: [URL] = []
+        var room = Self.attachmentCountLimit - (box?.attachments.count ?? 0) - (box?.compressingFiles ?? 0)
+        var total = box?.attachments.reduce(0) { $0 + $1.size } ?? 0
 
         for url in urls {
             guard room > 0 else {
@@ -44,33 +52,88 @@ extension AppModel {
                 break
             }
             // A directory dropped from the Finder is not a file, and neither is
-            // a symlink to one that has gone. `isRegularFile` answers both.
+            // a symlink to one that has gone: Discord reads both as empty.
             guard let values = try? url.resourceValues(forKeys: [.isRegularFileKey]),
                   values.isRegularFile == true
             else {
-                refusal = .unreadable(filename: url.lastPathComponent)
+                refusal = .empty
                 continue
             }
             let attachment = PendingAttachment(url: url)
             guard attachment.size > 0 else {
-                refusal = .unreadable(filename: attachment.filename)
+                refusal = .empty
                 continue
             }
             guard attachment.size <= limit else {
-                refusal = .tooLarge(
-                    filename: attachment.filename, size: attachment.size, limit: limit
-                )
+                if MediaCompressor.canCompress(attachment.contentType) {
+                    oversized.append(url)
+                    room -= 1
+                } else {
+                    refusal = .tooLarge(limit: limit, premium: entitlements.premiumTier, compressible: [])
+                }
+                continue
+            }
+            guard total + attachment.size <= AttachmentLimits.messageTotal else {
+                refusal = .totalTooLarge
                 continue
             }
             staged.append(attachment)
+            total += attachment.size
             room -= 1
         }
 
-        guard !staged.isEmpty || refusal != nil else { return }
-        mutateBox(channelID) { box in
-            box.attachments.append(contentsOf: staged)
-            box.attachmentRefusal = refusal
+        // Auto-compress Images speaks for pictures; a video is still asked about.
+        let compressesNow = AppSettings.shared.autoCompressesImages
+            ? oversized.filter { MediaCompressor.isPicture($0) }
+            : []
+        let offered = oversized.filter { !compressesNow.contains($0) }
+        if !offered.isEmpty {
+            refusal = .tooLarge(limit: limit, premium: entitlements.premiumTier, compressible: offered)
         }
+        if !staged.isEmpty || refusal != nil {
+            mutateBox(channelID) { box in
+                box.attachments.append(contentsOf: staged)
+                box.attachmentRefusal = refusal
+            }
+        }
+        compressAttachments(compressesNow, in: channelID)
+    }
+
+    /// Send Compressed: each picture or video made small enough, then staged
+    /// — "Compressing files..." in the tray meanwhile, and Discord's refusal
+    /// for any that cannot be made to fit.
+    func compressAttachments(_ urls: [URL], in channelID: ChannelID) {
+        guard !urls.isEmpty else { return }
+        let limit = uploadLimit(in: channelID)
+        let premium = entitlements.premiumTier
+        mutateBox(channelID) { box in
+            if !(box.attachmentRefusal?.compressible.isEmpty ?? true) { box.attachmentRefusal = nil }
+            box.compressingFiles += urls.count
+        }
+        Task {
+            var compressed: [PendingAttachment] = []
+            for url in urls {
+                if let copy = await MediaCompressor.compress(url, toFit: limit) {
+                    compressed.append(PendingAttachment(url: copy))
+                }
+            }
+            let failed = compressed.count < urls.count
+            mutateBox(channelID) { box in
+                box.compressingFiles -= urls.count
+                let room = max(0, Self.attachmentCountLimit - box.attachments.count - box.compressingFiles)
+                box.attachments.append(contentsOf: compressed.prefix(room))
+                if failed {
+                    box.attachmentRefusal = .tooLarge(limit: limit, premium: premium, compressible: [])
+                }
+            }
+        }
+    }
+
+    /// Always Compress Images: Auto-compress Images on from now, and these
+    /// compressed now.
+    func alwaysCompressAttachments(_ urls: [URL], in channelID: ChannelID) {
+        AppSettings.shared.autoCompressesImages = true
+        compressAttachments(urls, in: channelID)
     }
 
     func removeAttachment(_ id: PendingAttachment.ID, in channelID: ChannelID) {
@@ -84,11 +147,34 @@ extension AppModel {
         }
     }
 
-    func setAttachmentAltText(_ text: String?, for id: PendingAttachment.ID, in channelID: ChannelID) {
-        let trimmed = text?.trimmingCharacters(in: .whitespacesAndNewlines)
+    /// Modify Attachment's Save: the name, the description and the spoiler
+    /// at once, as Discord's `UPLOAD_ATTACHMENT_UPDATE_FILE` takes them. An
+    /// empty name keeps the old one, where Discord's would store the empty
+    /// string and upload a file with no name.
+    func modifyAttachment(
+        _ id: PendingAttachment.ID,
+        in channelID: ChannelID,
+        filename: String,
+        altText: String?,
+        isSpoiler: Bool
+    ) {
+        let name = filename.trimmingCharacters(in: .whitespacesAndNewlines)
+        let description = altText?.trimmingCharacters(in: .whitespacesAndNewlines)
         mutateBox(channelID) { box in
             guard let index = box.attachments.firstIndex(where: { $0.id == id }) else { return }
-            box.attachments[index].altText = (trimmed?.isEmpty ?? true) ? nil : trimmed
+            if !name.isEmpty { box.attachments[index].filename = name }
+            box.attachments[index].altText = (description?.isEmpty ?? true) ? nil : description
+            box.attachments[index].isSpoiler = isSpoiler
+        }
+    }
+
+    /// AnonymiseFileNames' button on a tile: the opposite of what it shows,
+    /// kept on the file — the plugin's `upload[ANONYMISE_UPLOAD_SYMBOL] = !anonymise`.
+    func toggleAttachmentAnonymise(_ id: PendingAttachment.ID, in channelID: ChannelID) {
+        let byDefault = AppSettings.shared.anonymisesByDefault
+        mutateBox(channelID) { box in
+            guard let index = box.attachments.firstIndex(where: { $0.id == id }) else { return }
+            box.attachments[index].anonymise = !(box.attachments[index].anonymise ?? byDefault)
         }
     }
 

@@ -70,12 +70,13 @@ struct LiveEventCard: View {
                     .font(.subheadline.weight(.semibold))
                     .frame(maxWidth: .infinity)
             }
-            .buttonStyle(.glassProminent)
+            .buttonStyle(.borderedProminent)
             .tint(Palette.presenceOnline)
             .padding(.top, 2)
         }
         .padding(Spacing.snug)
-        .glassEffect(.clear, in: .rect(cornerRadius: Radius.glass, style: .continuous))
+        // A card in the list, so a solid one: content, not glass.
+        .sidebarCard(cornerRadius: Radius.glass)
         .accessibilityElement(children: .contain)
         .accessibilityLabel(Text("\(notice.heading): \(notice.name)"))
     }

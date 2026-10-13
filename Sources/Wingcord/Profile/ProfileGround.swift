@@ -77,6 +77,16 @@ enum ProfileGround: Equatable {
         return true
     }
 
+    /// Discord's "Apply theme to other users' profiles"
+    /// (`syncProfileThemeWithUserTheme`): every themed profile in the reader's
+    /// own light or dark (`101928`), its modal ground mixed for that room, and
+    /// the heavier overlay Discord keeps for it (`920601`).
+    private var followsReader: Bool { AppSettings.shared.appliesThemeToProfiles }
+
+    /// Discord's `PROFILE_GRADIENT_OVERLAY`: black or white at 60 % — and at
+    /// 80 % (`…_SYNCED_WITH_USER_THEME`) for a profile in the reader's room.
+    private var overlay: Double { followsReader ? 0.8 : 0.6 }
+
     /// Whether this surface draws itself dark.
     ///
     /// **Discord decides this per SURFACE, not once per person**, and measuring
@@ -103,7 +113,7 @@ enum ProfileGround: Equatable {
     /// theme this app shipped was dark; the first light theme made every
     /// profile without colours of its own a white card with white type on it.
     var isDark: Bool {
-        guard let pair, !followsAppTheme else { return Self.appIsDark }
+        guard let pair, !followsAppTheme, !followsReader else { return Self.appIsDark }
         return ProfileThemeColors.isDark(pair.primary)
     }
 
@@ -111,6 +121,21 @@ enum ProfileGround: Equatable {
     /// Read through `ThemeAccess`, so a card evaluating it is redrawn when the
     /// theme changes.
     private static var appIsDark: Bool { ThemeAccess.colors.appearance == .dark }
+
+    /// **What a profile with no colours of its own is drawn in: the house's
+    /// neutral room, never the app's theme.** Discord paints an unthemed card
+    /// on its own base surfaces, and a reader's green or sunset theme spread
+    /// over a stranger's plain profile reads as the stranger having chosen it
+    /// (Alex, 2026-10-07: "on blank profiles that dont have nitro, the app's
+    /// theme gets applied which discord doesnt do"). True Black's ladder in a
+    /// dark room and Porcelain's in a light one — the two rooms "Sync with
+    /// computer" resolves to.
+    private var neutral: ThemeColors { isDark ? .trueBlack : .porcelain }
+
+    /// An unthemed card's own fill. See `neutral`.
+    var neutralSurface: Color { Color(hex: neutral.surface) }
+    /// A step above it — a ring, a plate, a card on the card.
+    var neutralRaised: Color { Color(hex: neutral.surfaceRaised) }
 
     /// Whether a surface painting this ground needs **dark** ink on it.
     ///
@@ -131,14 +156,14 @@ enum ProfileGround: Equatable {
     /// dock's scrim are one surface, and three private copies of the arithmetic
     /// is how each stays individually defensible while the result is wrong (§2).
     var bodyHead: Color {
-        guard let pair else { return Palette.canvas }
-        return Color(hex: ProfileThemeColors.veiled(pair.primary, dark: isDark))
+        guard let pair else { return Color(hex: neutral.canvas) }
+        return Color(hex: ProfileThemeColors.veiled(pair.primary, dark: isDark, alpha: overlay))
     }
 
     /// And at its foot — the secondary under the same overlay.
     var bodyFoot: Color {
-        guard let pair else { return Palette.canvas }
-        return Color(hex: ProfileThemeColors.veiled(pair.secondary, dark: isDark))
+        guard let pair else { return Color(hex: neutral.canvas) }
+        return Color(hex: ProfileThemeColors.veiled(pair.secondary, dark: isDark, alpha: overlay))
     }
 
     // MARK: The full profile
@@ -154,20 +179,22 @@ enum ProfileGround: Equatable {
     /// across both is what made this client's full profile one flat slab of
     /// somebody's theme.
     var modalBase: Color {
-        guard let pair else { return Palette.canvas }
+        guard let pair else { return Color(hex: neutral.canvas) }
         let base = ProfileThemeColors.modalBackground(
             primary: pair.primary,
-            secondary: pair.secondary
+            secondary: pair.secondary,
+            forcedDark: followsReader ? Self.appIsDark : nil
         )
         return Color(hex: ProfileThemeColors.modalRamp(over: base, dark: isDark, fraction: 0.2))
     }
 
     /// What that base starts at, before it settles into `modalBase`.
     var modalHead: Color {
-        guard let pair else { return Palette.canvas }
+        guard let pair else { return Color(hex: neutral.canvas) }
         let base = ProfileThemeColors.modalBackground(
             primary: pair.primary,
-            secondary: pair.secondary
+            secondary: pair.secondary,
+            forcedDark: followsReader ? Self.appIsDark : nil
         )
         return Color(hex: ProfileThemeColors.modalRamp(over: base, dark: isDark, fraction: 0.8))
     }
@@ -269,7 +296,7 @@ enum ProfileGround: Equatable {
     /// Not glass: the card's ground is opaque paint with nothing behind it to
     /// refract (§4 rule 3).
     var panelFill: AnyShapeStyle {
-        guard pair != nil else { return AnyShapeStyle(Palette.surfaceRaised) }
+        guard pair != nil else { return AnyShapeStyle(neutralRaised) }
         return AnyShapeStyle(wantsDarkInk ? Self.overlayLight : Self.overlayDark)
     }
 
@@ -335,11 +362,11 @@ enum ProfileGround: Equatable {
     /// would settle whether the constant is right or whether the relationship
     /// is something else that happens to pass through this point.
     var statusBubbleFill: Color {
-        guard let pair else { return Palette.surface }
+        guard let pair else { return neutralSurface }
         let base = ProfileThemeColors.modalBackground(
             primary: pair.primary,
             secondary: pair.secondary,
-            forcedDark: followsAppTheme ? Self.appIsDark : nil
+            forcedDark: followsAppTheme || followsReader ? Self.appIsDark : nil
         )
         return Color(hex: ProfileThemeColors.veiled(base, dark: isDark, alpha: 0.9))
     }
@@ -375,7 +402,7 @@ enum ProfileGround: Equatable {
     /// been fixed.
     func plateStyle(accentColorValue: UInt32?) -> AnyShapeStyle {
         if let pair { return AnyShapeStyle(Color(hex: pair.primary)) }
-        let seed = accentColorValue.map { Color(hex: $0) } ?? Palette.surfaceRaised
+        let seed = accentColorValue.map { Color(hex: $0) } ?? neutralRaised
         return AnyShapeStyle(LinearGradient(
             colors: [seed, seed.opacity(0.6)],
             startPoint: .topLeading,
@@ -437,10 +464,11 @@ struct ProfileGroundFill: ViewModifier {
         if !paints {
             EmptyView()
         } else if ground == .neutral {
-            // **One opaque fill.** `surface` rather than `canvas` so the card is
-            // one step off the transcript it floats over; the rest of the
-            // separation is the rim above and the shadow the surface casts.
-            Palette.surface.clipShape(.rect(cornerRadius: corner, style: .continuous))
+            // **One opaque fill**, the neutral room's `surface` rather than its
+            // `canvas` so the card is one step off the transcript it floats
+            // over; the rest of the separation is the rim above and the shadow
+            // the surface casts. Never the app theme's — see `neutralSurface`.
+            ground.neutralSurface.clipShape(.rect(cornerRadius: corner, style: .continuous))
         } else {
             switch form {
             case .card(let topHold):

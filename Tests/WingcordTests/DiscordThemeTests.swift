@@ -179,11 +179,24 @@ struct DiscordThemeTests {
     func choicesRoundTrip() {
         let choices: [ThemeChoice] = ThemePreset.allCases.map(ThemeChoice.preset)
             + DiscordTheme.allCases.map(ThemeChoice.discord)
-            + [.custom]
+            + [.custom, .system]
         for choice in choices {
             let stored = ThemeStore.storageValue(for: choice)
             #expect(ThemeStore.choice(forStorageValue: stored) == choice, "\(stored) came back as something else")
         }
+    }
+
+    @Test("Sync with computer is one of the two stated rooms, by the system's appearance")
+    func syncWithComputer() {
+        #expect(ThemePreset.following(systemIsDark: true) == .trueBlack)
+        #expect(ThemePreset.following(systemIsDark: false) == .porcelain)
+        #expect(ThemePreset.following(systemIsDark: true).colors(vividness: 0).appearance == .dark)
+        #expect(ThemePreset.following(systemIsDark: false).colors(vividness: 0).appearance == .light)
+        // Vividness moves neither, so its slider is off for this choice too.
+        #expect(ThemeChoice.system.isStated)
+        // Stored out of the presets' namespace: a house theme called "system"
+        // must never become the reader's sync setting.
+        #expect(ThemeStore.choice(forStorageValue: "system") == nil)
     }
 
     @Test("A Discord theme's bare name is not a stored choice")

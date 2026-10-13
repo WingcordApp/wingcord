@@ -34,6 +34,12 @@ struct MessageActionPresenter: ViewModifier {
         {
             menuGroups.append([.apps])
         }
+        // **A right-click over selected words leads with them**, as Discord's
+        // menu does: Copy, then Search with Google, each its own band, above
+        // everything about the message itself.
+        if model.messageMenu?.selectedText != nil {
+            menuGroups.insert(contentsOf: [[.copySelection], [.searchWithGoogle]], at: 0)
+        }
         let deletion = model.deleteRequest
 
         return content
@@ -103,6 +109,13 @@ struct MessageActionPresenter: ViewModifier {
                 // The menu carries its own material, so the popover must carry
                 // none — two in series read as frost rather than as glass.
                 .presentationBackground(.clear)
+            }
+            .popover(
+                item: $model.traitsFlyout,
+                attachmentAnchor: .rect(.rect(model.traitsFlyout?.anchor ?? .zero)),
+                arrowEdge: .bottom
+            ) { request in
+                GuildTraitsFlyout(traits: request.traits)
             }
             .popover(
                 item: $model.reactionPicker,
@@ -185,6 +198,16 @@ struct MessageActionPresenter: ViewModifier {
                 CreateChannelSheet(request: request)
                     .environment(model)
             }
+            // **On a view of its own**, so that its suppression toggle is the
+            // only one: the modifier reaches every dialog under it.
+            .background { FakeNitroEmbedDialog() }
+            // Discord's Preview Camera, from the camera's ▾, the reader's own
+            // menu in a call, or the camera switch while "Always preview
+            // video" is on.
+            .sheet(isPresented: $model.isCameraPreviewOpen) {
+                CameraPreviewSheet()
+                    .environment(model)
+            }
             // Apply to Join — from a server's card, or an invite into a server
             // that reviews who joins.
             .sheet(
@@ -250,5 +273,42 @@ extension View {
     /// Apply once, at the window root, above `.environment(model)`.
     func presentsMessageActions() -> some View {
         modifier(MessageActionPresenter())
+    }
+}
+
+/// Vencord's "Hold on!" (FakeNitro's `CannotEmbedNoticeModal`), in its words,
+/// before a send or an edit whose links the channel will not embed. The
+/// system's "Do not show this message again" is the plugin's checkbox — its
+/// `disableEmbedPermissionCheck`.
+private struct FakeNitroEmbedDialog: View {
+    @Environment(AppModel.self) private var model
+    @State private var settings = AppSettings.shared
+
+    var body: some View {
+        Color.clear
+            .confirmationDialog(
+                "Hold on!",
+                isPresented: Binding(
+                    get: { model.fakeNitroEmbedPrompt != nil },
+                    set: { if !$0 { model.fakeNitroEmbedPrompt = nil } }
+                ),
+                titleVisibility: .visible,
+                presenting: model.fakeNitroEmbedPrompt
+            ) { prompt in
+                Button("Send Anyway") { prompt.proceed() }
+                Button("Cancel", role: .cancel) {}
+            } message: { _ in
+                Text("You are trying to send/edit a message that contains a FakeNitro emoji or sticker, however you do not have permissions to embed links in the current channel. Are you sure you want to send this message? Your FakeNitro items will appear as a link only.")
+            }
+            .dialogSuppressionToggle(isSuppressed: $settings.fakeNitroSkipsEmbedCheck)
+            // The plugin's other "Hold on!", for an animated sticker.
+            .alert("Hold on!", isPresented: Binding(
+                get: { model.fakeNitroStickerRefused },
+                set: { model.fakeNitroStickerRefused = $0 }
+            )) {
+                Button("OK", role: .cancel) {}
+            } message: {
+                Text("You cannot send this message because it contains an animated FakeNitro sticker, and you do not have permissions to attach files in the current channel. Please remove the sticker to proceed.")
+            }
     }
 }

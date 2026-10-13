@@ -159,11 +159,11 @@ private struct BackdropChooserRow: View {
             Spacer(minLength: Spacing.base)
             if hasBackdrop {
                 Button("Remove", role: .destructive, action: remove)
-                    .buttonStyle(.glass)
+                    .buttonStyle(.bordered)
                     .controlSize(.small)
             }
             Button(hasBackdrop ? "Replace…" : "Choose…", action: choose)
-                .buttonStyle(.glass)
+                .buttonStyle(.bordered)
                 .controlSize(.small)
         }
         .padding(.leading, SettingsMetrics.cardContentInset)

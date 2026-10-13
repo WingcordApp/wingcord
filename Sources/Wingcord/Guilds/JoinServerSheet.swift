@@ -37,13 +37,6 @@ struct JoinServerSheet: View {
             footer
         }
         .frame(width: Self.width)
-        .background(Palette.surface)
-        .clipShape(.rect(cornerRadius: Radius.card, style: .continuous))
-        .overlay {
-            RoundedRectangle(cornerRadius: Radius.card, style: .continuous)
-                .strokeBorder(Ink.quaternary, lineWidth: 1)
-        }
-        .presentationBackground(.clear)
         // A sheet that opens with its one field unfocused is a sheet that asks
         // for a click before it can be used for the thing it exists for.
         .onAppear {
@@ -164,13 +157,14 @@ struct JoinServerSheet: View {
     private var footer: some View {
         HStack(spacing: Spacing.base) {
             SurfaceQuietButton(title: "Cancel", systemImage: nil, action: dismiss)
+                .keyboardShortcut(.cancelAction)
             Spacer(minLength: Spacing.base)
             if state.isJoining {
                 ProgressView().controlSize(.small)
             }
             SurfaceFilledButton(title: "Join Server", systemImage: nil, action: join)
                 .disabled(!state.canJoin)
-                .opacity(state.canJoin ? 1 : 0.45)
+                .keyboardShortcut(.defaultAction)
         }
         .padding(Spacing.group)
         .animation(motion.fadeQuick, value: state.canJoin)

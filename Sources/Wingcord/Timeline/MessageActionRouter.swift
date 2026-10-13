@@ -33,6 +33,10 @@ enum MessageActionRouter {
             model.startThread(in: channelID, from: messageID, location: "Message")
         case .edit:
             model.beginEdit(of: messageID, in: channelID)
+        case .copySelection:
+            if let text = model.messageMenu?.selectedText { AppModel.copy(text) }
+        case .searchWithGoogle:
+            if let text = model.messageMenu?.selectedText { model.searchWithGoogle(text) }
         case .copyText:
             model.copyText(of: messageID, in: channelID)
         case .pin, .unpin:

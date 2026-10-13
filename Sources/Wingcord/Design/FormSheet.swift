@@ -9,6 +9,10 @@ import SwiftUI
 /// sheets used to be a bare headline over two glass buttons, which is why they
 /// read as unfinished next to the dialogs.
 ///
+/// **The system's sheet, with the system's buttons** (DESIGN-NOTES §2.2):
+/// no custom ground and no close glyph — Cancel is the way out, on Escape, and
+/// the act is the default button, on Return.
+///
 /// **A tall form scrolls, a short one does not.** `ViewThatFits` offers the
 /// form as it is first and the scrolling copy only when the window cannot hold
 /// it: a `ScrollView` with no height of its own is how a sheet collapses to a
@@ -17,6 +21,9 @@ struct FormSheet<Content: View>: View {
     var title: String
     var subtitle: Text?
     var confirmTitle: String
+    /// Discord's words for the way out where they are not "Cancel" — "Never
+    /// mind" over a notice.
+    var cancelTitle = "Cancel"
     /// Discord's `critical-primary` — Kick, Ban, Delete.
     var isDestructive = false
     /// A write in flight: the button spins and nothing can be pressed twice.
@@ -47,7 +54,6 @@ struct FormSheet<Content: View>: View {
             footer
         }
         .frame(width: width)
-        .background(Palette.surface)
     }
 
     private var form: some View {
@@ -61,24 +67,11 @@ struct FormSheet<Content: View>: View {
 
     private var header: some View {
         VStack(alignment: .leading, spacing: Spacing.tight) {
-            HStack(alignment: .firstTextBaseline) {
-                Text(verbatim: title)
-                    .font(.system(.title3, weight: .semibold))
-                    .foregroundStyle(Ink.primary)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .accessibilityAddTraits(.isHeader)
-                Spacer(minLength: Spacing.base)
-                Button { dismiss() } label: {
-                    Image(systemName: "xmark")
-                        .font(.system(size: 11, weight: .bold))
-                        .frame(width: Metrics.control, height: Metrics.control)
-                        .contentShape(.circle)
-                }
-                .buttonStyle(.plain)
-                .foregroundStyle(Ink.secondary)
-                .keyboardShortcut(.cancelAction)
-                .accessibilityLabel(Text("Close"))
-            }
+            Text(verbatim: title)
+                .font(.system(.title3, weight: .semibold))
+                .foregroundStyle(Ink.primary)
+                .fixedSize(horizontal: false, vertical: true)
+                .accessibilityAddTraits(.isHeader)
             if let subtitle {
                 subtitle
                     .font(.system(.subheadline))
@@ -95,18 +88,9 @@ struct FormSheet<Content: View>: View {
     private var footer: some View {
         HStack(spacing: Spacing.snug) {
             Spacer(minLength: 0)
-            Button { dismiss() } label: {
-                Text("Cancel")
-                    .font(.system(.body, weight: .medium))
-                    .padding(.horizontal, Spacing.group)
-                    .frame(height: Metrics.composerControlHeight)
-                    .background(Palette.surfaceRaised, in: .capsule)
-                    .contentShape(.capsule)
-            }
-            .buttonStyle(.plain)
-            .foregroundStyle(Ink.primary)
-            .specularEdge()
-            Button {
+            Button(cancelTitle, role: .cancel) { dismiss() }
+                .keyboardShortcut(.cancelAction)
+            Button(role: isDestructive ? .destructive : nil) {
                 confirm()
                 if closesOnConfirm { dismiss() }
             } label: {
@@ -115,20 +99,13 @@ struct FormSheet<Content: View>: View {
                     Text(verbatim: confirmTitle).opacity(isWorking ? 0 : 1)
                     if isWorking { ProgressView().controlSize(.small) }
                 }
-                .font(.system(.body, weight: .semibold))
-                .padding(.horizontal, Spacing.group)
-                .frame(height: Metrics.composerControlHeight)
-                .background(
-                    (isDestructive ? Palette.destructive : Palette.accent).opacity(canConfirm ? 1 : 0.45),
-                    in: .capsule
-                )
-                .contentShape(.capsule)
             }
-            .buttonStyle(.plain)
-            .foregroundStyle(.white)
+            .buttonStyle(.borderedProminent)
+            .tint(isDestructive ? Palette.destructive : nil)
             .disabled(isWorking || !canConfirm)
             .keyboardShortcut(confirmShortcut)
         }
+        .controlSize(.large)
         .padding(.horizontal, Spacing.group)
         .padding(.vertical, Spacing.margin)
     }

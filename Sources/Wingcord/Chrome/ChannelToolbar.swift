@@ -18,13 +18,6 @@ struct ChannelToolbar: ToolbarContent {
     var chrome: ChannelChrome
     var toggleMemberList: () -> Void = {}
     var toggleUserProfile: () -> Void = {}
-    /// A thread's parent, from the crumb before its name.
-    var openParent: (ChannelID) -> Void = { _ in }
-    var openChannelDetails: () -> Void = {}
-    /// The topic flyout's contents. A closure for the reason `pinsContent` is
-    /// one: the bar is evaluated on every navigation and the flyout is opened a
-    /// few times a session.
-    var topicContent: () -> AnyView = { AnyView(EmptyView()) }
     var toggleCall: () -> Void = {}
     var toggleVoiceChat: () -> Void = {}
     var togglePins: () -> Void = {}
@@ -81,47 +74,15 @@ struct ChannelToolbar: ToolbarContent {
     }
 
     var body: some ToolbarContent {
-        ToolbarItem(placement: .navigation) {
-            // Named rather than tested for a channel id: a server page has no
-            // channel and still has a title, and an item that disappears there
-            // is a hole the bar closes by sliding its neighbours.
-            if !chrome.name.isEmpty {
-                HStack(spacing: 0) {
-                    // A thread names what it hangs off first, and that name
-                    // goes there — Discord's thread header.
-                    if let parent = chrome.parent {
-                        Button { openParent(parent.channelID) } label: {
-                            HStack(spacing: Spacing.tight) {
-                                Image(symbol: parent.symbolName)
-                                    .foregroundStyle(Ink.tertiary)
-                                Text(parent.name)
-                                    .foregroundStyle(Ink.secondary)
-                                    .lineLimit(1)
-                                Image(systemName: "chevron.right")
-                                    .font(.system(size: 9, weight: .bold))
-                                    .foregroundStyle(Ink.tertiary)
-                            }
-                            .padding(.leading, Spacing.snug)
-                            .contentShape(.rect)
-                        }
-                        .buttonStyle(.plain)
-                        .help(parent.name)
-                    }
-                    ChannelPill(
-                        name: chrome.name,
-                        symbolName: chrome.symbolName,
-                        canOpenTopic: !(chrome.topic?.isEmpty ?? true),
-                        isTopicShown: chrome.isTopicShown,
-                        action: openChannelDetails,
-                        topicContent: topicContent
-                    )
-                }
-            }
-        }
+        // **The channel is the window's title, not an item in the bar.** The
+        // HIG's rule: "Provide a useful title for each window." It is set on
+        // the detail column in `MainWindow` — the name, the topic as its
+        // subtitle, and the channel's acts in the title's own menu — where it
+        // was a custom pill inside the bar's glass.
 
-        // Without a spacer the trailing item packs against the navigation
-        // items, so the member toggle sat beside the channel pill at the
-        // leading edge instead of at the far end of the bar.
+        // Without a spacer the trailing items pack against the title, so the
+        // member toggle sat beside it at the leading edge instead of at the far
+        // end of the bar.
         ToolbarSpacer(.flexible)
 
         // **One control, two states.** Starting a call and hanging one up are
@@ -240,13 +201,10 @@ struct ChannelToolbar: ToolbarContent {
         }
 
         if !isServerPage {
-            // **Its own group, because it is not about this channel.** A spacer
-            // between toolbar items breaks the glass platter they share, which
-            // is how a Liquid Glass bar says "these belong together and that
-            // one does not" — and every item before this one is scoped to the
-            // channel while the inbox is scoped to the account.
-            ToolbarSpacer(.fixed)
-
+            // **In the actions' group, not a group of its own.** The HIG asks a
+            // toolbar for three groups at most — here the title, the actions
+            // and search — and a fourth for one button was the bar's clutter.
+            //
             // The third and last inline presentation in this app, under the
             // same scoped exception the pins and threads panes take: one
             // toolbar item, evaluated once, pointing its popover at the control

@@ -261,7 +261,7 @@ struct AddWidgetSheet: View {
                                         .foregroundStyle(InkColor.tertiary)
                                     } else if kind == .personal {
                                         Text("A cover and up to four slots, all yours")
-                                            .font(.system(size: 11))
+                                            .font(.system(.subheadline))
                                             .foregroundStyle(InkColor.tertiary)
                                     }
                                 }

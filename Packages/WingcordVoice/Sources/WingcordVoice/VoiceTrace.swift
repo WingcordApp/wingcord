@@ -15,8 +15,8 @@ import Synchronization
 //   reading which one it stopped after is the diagnosis. One line each,
 //   formatted only when a sink is installed.
 // - **Drops** — a frame the transform refused. Those arrive fifty times a
-//   second per stream, so they are *counted* and flushed twice a second by
-//   `VoiceEngine.publish()`. A line each would cost more than the media path
+//   second per stream, so they are *counted* and flushed with each session's
+//   media line. A line each would cost more than the media path
 //   it is measuring, and would bury the nine lines that say why.
 //
 // Free when off. `write` takes an autoclosure, so no message is built; `note`

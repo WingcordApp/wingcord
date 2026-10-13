@@ -232,10 +232,8 @@ private struct ThreadSearchField: View {
         .padding(.horizontal, Spacing.snug)
         .frame(height: Metrics.compactControl)
         .background(Palette.surfaceRaised, in: .capsule)
-        // A field never moves, so it catches no travelling specular highlight —
-        // the still-life edge is what stops it reading as a slightly lighter
-        // region on a near-black ground.
-        .specularEdge(in: Capsule())
+        // A hairline, so the field has an edge on a dark ground.
+        .overlay { Capsule().strokeBorder(Palette.edge) }
     }
 }
 

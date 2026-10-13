@@ -56,6 +56,20 @@ struct InviteCardLayoutTests {
         }
     }
 
+    /// A text block is as wide as it was given (INVARIANTS §4.85), so a mark
+    /// placed after an unhugged name sat at the card's far edge — Alex's image
+    /// of a "Wingcord" card, 2026-10-06.
+    @Test("The mark sits right after a short name, not at the card's edge")
+    func markFollowsTheName() {
+        let slot = layout(server())
+        guard case .profile(let profile) = slot.body else {
+            Issue.record("expected the profile card")
+            return
+        }
+        #expect(slot.markRect.minX == profile.titleOrigin.x + profile.title.size.width + 4)
+        #expect(slot.markRect.maxX < slot.rect.maxX - 100)
+    }
+
     /// Discord's 292: past it the card is cut, and opened it gains Hide Details
     /// above the button.
     @Test("A tall profile card folds at 292 and opens past it")
@@ -77,6 +91,44 @@ struct InviteCardLayoutTests {
         }
         #expect(hide.maxY <= button.rect.minY)
         #expect(open.foldTarget == hide)
+    }
+
+    /// Images 42–43 (2026-10-07): a trait chip and "Invited by" ghosted
+    /// through under the button, because the fade ran to the card's fill and
+    /// that fill is translucent. The content is erased now, so the strip
+    /// between the fade's foot and the button is the card's ground alone —
+    /// the same pixels whatever was laid out there.
+    @Test("A folded card shows nothing of its content under the fade")
+    func foldErasesWhatItHides() {
+        // Two descriptions that read differently all the way down, so any of
+        // their words left in the strip makes the two strips differ.
+        let one = String(repeating: "A server about a great many things. ", count: 14)
+        let two = String(repeating: "Wholly other words, set otherwise! ", count: 14)
+        func strip(_ card: InviteCard) -> [UInt8] {
+            let slot = layout(card)
+            guard case .collapsed(let fade) = slot.fold, let button = slot.button else {
+                Issue.record("expected a folded card with a button")
+                return []
+            }
+            let pixels = RenderProbe.pixels(width: 320, height: Int(slot.rect.height) + 10) { context, _ in
+                TimelineRowPainter.drawInviteCard(
+                    slot, offset: .zero, context: context, isSettled: false,
+                    hovered: nil, images: ImageStore.shared, scale: 1
+                )
+            }
+            var region: [UInt8] = []
+            for y in Int(fade.maxY.rounded(.up)) + 1..<Int(button.rect.minY) - 1 {
+                for x in 40..<260 {
+                    let index = (y * 320 + x) * 4
+                    region.append(contentsOf: pixels[index..<index + 4])
+                }
+            }
+            return region
+        }
+        let first = strip(server(description: one))
+        let second = strip(server(description: two))
+        #expect(!first.isEmpty)
+        #expect(first == second)
     }
 
     @Test("Apply to Join for a server that reviews applications")
@@ -132,5 +184,34 @@ struct InviteCardLayoutTests {
         #expect(paragraph.alignment == .center)
         #expect(classic.monogram.size.width == classic.iconRect.width)
         #expect(!classic.isExpired)
+    }
+    /// Discord's overflow list: two lines of chips at most, and "+ N more"
+    /// (`vGclWm`) at the end of the second, carrying what it stands for.
+    @Test("Traits past two lines become a \"+ N more\" chip that holds the rest")
+    func moreTraits() throws {
+        let traits = (0..<5).map { GuildTrait(id: $0, label: "A rather long trait number \($0)") }
+        guard case .profile(let profile) = layout(server(traits: traits)).body else {
+            Issue.record("expected the profile card")
+            return
+        }
+        let more = try #require(profile.moreTraits)
+        let chip = try #require(profile.traits.last)
+        // The chip is the last of the drawn ones, and visible and hidden
+        // together are every trait.
+        #expect(more.rect == chip.rect)
+        #expect(profile.traits.count - 1 + more.traits.count == traits.count)
+        #expect(more.traits.map(\.id) == Array(traits.suffix(more.traits.count)).map(\.id))
+        #expect(chip.label.text.attributed.string == "+ \(more.traits.count) more")
+    }
+
+    @Test("Traits that fit leave no \"+ N more\"")
+    func noMoreTraits() {
+        let traits = [GuildTrait(id: 0, label: "Art"), GuildTrait(id: 1, label: "Games")]
+        guard case .profile(let profile) = layout(server(traits: traits)).body else {
+            Issue.record("expected the profile card")
+            return
+        }
+        #expect(profile.moreTraits == nil)
+        #expect(profile.traits.count == 2)
     }
 }

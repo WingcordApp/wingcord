@@ -33,6 +33,9 @@ nonisolated struct MessageTextStyle: @unchecked Sendable {
     var mentionFont: NSFont
     var authorFont: NSFont
     var metadataFont: NSFont
+    /// The metadata face in italic — what Discord sets a reply's placeholder
+    /// in ("Message could not be loaded", `repliedTextPlaceholder`).
+    var metadataItalicFont: NSFont
 
     var primaryColor: NSColor
     var secondaryColor: NSColor
@@ -85,6 +88,9 @@ nonisolated struct MessageTextStyle: @unchecked Sendable {
         // taken against this body rather than Discord's 16 px one.
         let code = NSFont.monospacedSystemFont(ofSize: body.pointSize * 0.85, weight: .regular)
         let codeBlock = NSFont.monospacedSystemFont(ofSize: body.pointSize * 0.875, weight: .regular)
+        let metadata = NSFont.systemFont(
+            ofSize: NSFont.preferredFont(forTextStyle: .caption1).pointSize * scale
+        )
 
         return MessageTextStyle(
             bodyFont: body,
@@ -95,9 +101,8 @@ nonisolated struct MessageTextStyle: @unchecked Sendable {
             codeBlockFont: codeBlock,
             mentionFont: NSFont.systemFont(ofSize: body.pointSize, weight: .medium),
             authorFont: manager.convert(body, toHaveTrait: .boldFontMask),
-            metadataFont: NSFont.systemFont(
-                ofSize: NSFont.preferredFont(forTextStyle: .caption1).pointSize * scale
-            ),
+            metadataFont: metadata,
+            metadataItalicFont: manager.convert(metadata, toHaveTrait: .italicFontMask),
             primaryColor: tinted(.labelColor),
             secondaryColor: tinted(.secondaryLabelColor),
             tertiaryColor: tinted(.tertiaryLabelColor),

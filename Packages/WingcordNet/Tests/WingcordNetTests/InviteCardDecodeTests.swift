@@ -67,4 +67,46 @@ struct InviteCardDecodeTests {
         #expect(card.name == "Oz")
         #expect(card.header(sentByReader: false) == "You've got a friend link")
     }
+    /// The same captured invite, asked with `?event=`: Discord's answer adds
+    /// the event whole, which is what the card turns into.
+    private static let withEvent = captured.dropLast() + """
+    ,
+     "guild_scheduled_event":{"id":"1323893975486496490","guild_id":"1520000000000000001",
+       "name":"Movie night","scheduled_start_time":"2026-10-09T19:00:00+00:00","status":1,
+       "entity_type":2,"channel_id":"1520000000000000002","creator_id":"987654321987654321"}}
+    """
+
+    @Test("An invite asked with its event carries the event")
+    func inviteWithEvent() throws {
+        let dto = try DiscordREST.decoder.decode(InviteDTO.self, from: Data(Self.withEvent.utf8))
+        let event = try #require(dto.card?.event)
+        #expect(event.id == 1_323_893_975_484_369_279)
+        #expect(event.name == "Movie night")
+        #expect(event.status == .scheduled)
+        #expect(event.location == .voice(ChannelID(rawValue: 1_520_000_000_000_000_002)))
+    }
+
+    @Test("An event that cannot be read costs the card its event, not the invite")
+    func unreadableEvent() throws {
+        let broken = Self.captured.dropLast() + #"""
+        ,"guild_scheduled_event":{"id":"1","scheduled_start_time":{"no":"date"}}}
+        """#
+        let card = try #require(try DiscordREST.decoder.decode(InviteDTO.self, from: Data(broken.utf8)).card)
+        #expect(card.name == "Lumen Club")
+        #expect(card.event == nil)
+    }
+
+    /// Discord's `resolveInvite`: the event id rides between `with_expiration`
+    /// and `with_permissions`, and the path is the bare code.
+    @Test("A link's event is asked for on the invite's own route")
+    func eventQuery() async throws {
+        let (rest, token) = await RequestRecorder.client(body: Self.captured)
+        _ = try await rest.inviteCard("LumenClub?event=1323893975486496490")
+        let request = try #require(RequestRecorder.requests(for: token).first)
+        #expect(request.path == "/api/v9/invites/LumenClub")
+        #expect(request.queryItems.map(\.name) == [
+            "with_counts", "with_expiration", "guild_scheduled_event_id", "with_permissions",
+        ])
+        #expect(request.query["guild_scheduled_event_id"] == "1323893975486496490")
+    }
 }

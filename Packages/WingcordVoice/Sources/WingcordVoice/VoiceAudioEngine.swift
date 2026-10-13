@@ -25,8 +25,8 @@ import Synchronization
 
 public final class VoiceAudioEngine: @unchecked Sendable {
 
-    /// 48 kHz stereo interleaved `Int16`, 960 frames — one Opus packet's worth.
-    /// Called from the capture tap's queue, never the main actor.
+    /// 48 kHz mono `Int16`, 960 samples — one Opus packet's worth — and its
+    /// level, 0…1. Called from the capture tap's queue, never the main actor.
     public var onCaptureFrame: (@Sendable (UnsafePointer<Int16>, Float) -> Void)?
     /// Fired when the voice processor hears speech while the input is muted.
     public var onSpeechWhileMuted: (@Sendable () -> Void)?
@@ -34,7 +34,10 @@ public final class VoiceAudioEngine: @unchecked Sendable {
     /// **A `var`, because a refused voice processor poisons the engine.** See
     /// `unwind()`: the only reliable way back is a new one.
     private var engine = AVAudioEngine()
-    private let playbackRing = AudioRing(capacity: 1 << 16)   // ~340 ms of stereo
+    private let playbackRing = AudioRing(capacity: 1 << 16)   // ~680 ms of stereo
+    /// Ticks each time the output device takes audio — the one clock the call's
+    /// mixer may follow. See `PlaybackClock`.
+    public let playbackClock = PlaybackClock()
     private var sourceNode: AVAudioSourceNode?
     public private(set) var isRunning = false
 
@@ -42,6 +45,26 @@ public final class VoiceAudioEngine: @unchecked Sendable {
     /// ones rather than silently moving the call to the system default.
     private var requestedInput: String?
     private var requestedOutput: String?
+    /// The processing `start` was asked for, kept for the same reason.
+    private var requestedProcessing = Processing()
+
+    /// Discord's Echo Cancellation and Automatic Gain Control.
+    ///
+    /// **Echo cancellation is the voice processor, and the processor is the
+    /// 24 kHz path.** Apple's unit runs a call at 24 kHz in and out on this Mac,
+    /// with its noise suppression and gain control riding along; without it the
+    /// engine runs at the device's own rate — 48 kHz — with nothing in the way,
+    /// which is what Discord's Studio profile is for. Gain control is the
+    /// processor's own and means nothing without it.
+    public struct Processing: Sendable, Equatable {
+        public var echoCancellation: Bool
+        public var automaticGainControl: Bool
+
+        public init(echoCancellation: Bool = true, automaticGainControl: Bool = true) {
+            self.echoCancellation = echoCancellation
+            self.automaticGainControl = automaticGainControl
+        }
+    }
     /// This engine's configuration-change observer.
     ///
     /// **One per engine, because `unwind` replaces the engine.** An observer
@@ -81,7 +104,7 @@ public final class VoiceAudioEngine: @unchecked Sendable {
 
         mutating func reset() {
             pending.removeAll(keepingCapacity: true)
-            pending.reserveCapacity(OpusFormat.interleavedCount * 8)
+            pending.reserveCapacity(OpusFormat.voiceFrameCount * 8)
             channelPeaks.removeAll(keepingCapacity: true)
             peakBuffers = 0
             staging = nil
@@ -90,8 +113,8 @@ public final class VoiceAudioEngine: @unchecked Sendable {
             source = nil
         }
 
-        /// Builds the conversion to 48 kHz stereo `Int16` for the format the
-        /// tap is delivering, and rebuilds it if that ever changes underneath.
+        /// Builds the conversion to 48 kHz mono `Int16` for the format the tap
+        /// is delivering, and rebuilds it if that ever changes underneath.
         ///
         /// **Driven by the buffer, never by the node.** Asking the input node
         /// what it will deliver is a guess it is entitled to break, and under
@@ -117,8 +140,7 @@ public final class VoiceAudioEngine: @unchecked Sendable {
             // zero**, which is where `AUVoiceIO` puts its processed capture.
             // The trace below prints every channel's peak, so a bus that puts
             // it somewhere else says so rather than presenting as silence.
-            let width = incoming.channelCount > AVAudioChannelCount(OpusFormat.channels)
-                && !incoming.isInterleaved
+            let width = incoming.channelCount > 2 && !incoming.isInterleaved
                 ? AVAudioChannelCount(1) : incoming.channelCount
             guard let taken = AVAudioFormat(
                       commonFormat: incoming.commonFormat,
@@ -129,15 +151,18 @@ public final class VoiceAudioEngine: @unchecked Sendable {
                   let target = AVAudioFormat(
                       commonFormat: .pcmFormatInt16,
                       sampleRate: Double(OpusFormat.sampleRate),
-                      channels: AVAudioChannelCount(OpusFormat.channels),
+                      channels: AVAudioChannelCount(OpusFormat.voiceChannels),
                       interleaved: true
                   ),
                   let made = AVAudioConverter(from: taken, to: target)
             else {
-                VoiceTrace.fault("no converter from \(incoming) to 48k stereo int16")
+                VoiceTrace.fault("no converter from \(incoming) to 48k mono int16")
                 reset()
                 return false
             }
+            // A stereo microphone is one voice in two channels, and is mixed
+            // down rather than halved.
+            made.downmix = true
             // Mastering-grade resampling in a 20 ms budget spends on a quality
             // nobody can hear through Opus at 64 kbit. `.medium` is what the
             // voice unit itself resamples at.
@@ -249,9 +274,10 @@ public final class VoiceAudioEngine: @unchecked Sendable {
         )
         let input = requestedInput
         let output = requestedOutput
+        let processing = requestedProcessing
         stop()
         do {
-            try start(inputUniqueID: input, outputUniqueID: output)
+            try start(inputUniqueID: input, outputUniqueID: output, processing: processing)
         } catch {
             VoiceTrace.fault("audio engine would not start without the processor either: \(error)")
         }
@@ -284,7 +310,7 @@ public final class VoiceAudioEngine: @unchecked Sendable {
     /// `start()` then fails on
     /// `IsFormatSampleRateAndChannelCountValid(outputHWFormat)`. Reproduced
     /// outside this app: the identical sequence is 6/6 on the main thread and
-    /// fails every other attempt on a background queue. `VoiceEngine` is an
+    /// fails every other attempt on a background queue. `MediaSession` is an
     /// actor, so without this the call's audio is a coin flip — which is
     /// exactly how it behaved.
     ///
@@ -296,10 +322,13 @@ public final class VoiceAudioEngine: @unchecked Sendable {
     /// state the plain engine can use. Remembering the refusal to "save" the
     /// attempt is what broke it.
     @MainActor
-    public func start(inputUniqueID: String?, outputUniqueID: String?) throws {
+    public func start(
+        inputUniqueID: String?, outputUniqueID: String?, processing: Processing = Processing()
+    ) throws {
         guard !isRunning else { return }
         requestedInput = inputUniqueID
         requestedOutput = outputUniqueID
+        requestedProcessing = processing
         // Proved once that the processor costs this machine its microphone, and
         // it is not asked for again. See `abandonVoiceProcessing`.
         guard !refusesVoiceProcessing else {
@@ -311,6 +340,30 @@ public final class VoiceAudioEngine: @unchecked Sendable {
             isRunning = true
             VoiceTrace.write("audio engine up, voiceProcessing=false (capture needs it off)")
             return
+        }
+        // **Echo cancellation off is the reader's choice, and it is honoured —
+        // unless the plain engine will not come up at all.** Measured on one
+        // machine: a start that never asked for the processor left the output
+        // node at `0 ch, 0 Hz`, while asking, being refused and rebuilding
+        // worked. A call with echo cancellation the reader did not want beats
+        // no call, and the trace says which happened.
+        if !processing.echoCancellation {
+            do {
+                try bringUp(
+                    inputUniqueID: inputUniqueID,
+                    outputUniqueID: outputUniqueID,
+                    voiceProcessing: false
+                )
+                isRunning = true
+                VoiceTrace.write("audio engine up, voiceProcessing=false (echo cancellation off)")
+                return
+            } catch {
+                VoiceTrace.fault(
+                    "audio engine would not start without the voice processor (\(error)); "
+                    + "asking for it instead"
+                )
+                unwind()
+            }
         }
         do {
             try bringUp(
@@ -398,7 +451,7 @@ public final class VoiceAudioEngine: @unchecked Sendable {
         if voiceProcessing {
             do {
                 try engine.inputNode.setVoiceProcessingEnabled(true)
-                engine.inputNode.isVoiceProcessingAGCEnabled = true
+                engine.inputNode.isVoiceProcessingAGCEnabled = requestedProcessing.automaticGainControl
                 // Other applications keep their volume. Ducking Music while
                 // somebody is in a call is a decision for the person listening
                 // to it, and the system's default here is to duck.
@@ -425,13 +478,16 @@ public final class VoiceAudioEngine: @unchecked Sendable {
 
         let ring = playbackRing
         let levels = self.levels
+        let clock = playbackClock
         let node = AVAudioSourceNode(format: playbackFormat) { _, _, frameCount, audioBufferList in
-            Self.render(
+            let status = Self.render(
                 into: audioBufferList,
                 frames: Int(frameCount),
                 ring: ring,
                 gain: Float(bitPattern: levels.output.load(ordering: .relaxed))
             )
+            clock.tick()
+            return status
         }
         sourceNode = node
         engine.attach(node)
@@ -538,9 +594,10 @@ public final class VoiceAudioEngine: @unchecked Sendable {
         VoiceTrace.fault("audio hardware changed; rebuilding the engine")
         let input = requestedInput
         let output = requestedOutput
+        let processing = requestedProcessing
         stop()
         do {
-            try start(inputUniqueID: input, outputUniqueID: output)
+            try start(inputUniqueID: input, outputUniqueID: output, processing: processing)
         } catch {
             // The reason, never only the fact — §1.5's rule for close codes,
             // and an OSStatus out of CoreAudio is the same bargain.
@@ -561,7 +618,7 @@ public final class VoiceAudioEngine: @unchecked Sendable {
             self.sourceNode = nil
         }
         isVoiceProcessing = false
-        playbackRing.drain()
+        playbackRing.flush()
     }
 
     /// Swaps a device without ending the call.
@@ -572,11 +629,26 @@ public final class VoiceAudioEngine: @unchecked Sendable {
     /// untouched — the reader hears a gap of a few tens of milliseconds and
     /// nothing else.
     @MainActor
-    public func reconfigure(inputUniqueID: String?, outputUniqueID: String?) {
+    public func reconfigure(
+        inputUniqueID: String?, outputUniqueID: String?, processing: Processing? = nil
+    ) {
         let wasRunning = isRunning
+        let processing = processing ?? requestedProcessing
         stop()
         guard wasRunning else { return }
-        try? start(inputUniqueID: inputUniqueID, outputUniqueID: outputUniqueID)
+        do {
+            try start(inputUniqueID: inputUniqueID, outputUniqueID: outputUniqueID, processing: processing)
+        } catch {
+            VoiceTrace.fault("audio engine would not come back after a change: \(error)")
+        }
+    }
+
+    /// Automatic gain control on or off, on the running processor — no rebuild.
+    @MainActor
+    public func setAutomaticGainControl(_ enabled: Bool) {
+        requestedProcessing.automaticGainControl = enabled
+        guard isVoiceProcessing else { return }
+        engine.inputNode.isVoiceProcessingAGCEnabled = enabled
     }
 
     // MARK: Muting
@@ -641,7 +713,7 @@ public final class VoiceAudioEngine: @unchecked Sendable {
         playbackRing.write(samples, count: frames * Int(OpusFormat.channels))
     }
 
-    public func flushPlayback() { playbackRing.drain() }
+    public func flushPlayback() { playbackRing.flush() }
 
     // MARK: The render block
 
@@ -842,7 +914,7 @@ public final class VoiceAudioEngine: @unchecked Sendable {
             guard error == nil, converted.frameLength > 0,
                   let samples = converted.int16ChannelData?[0] else { return }
 
-            let count = Int(converted.frameLength) * Int(OpusFormat.channels)
+            let count = Int(converted.frameLength) * Int(OpusFormat.voiceChannels)
             if gain == 1 {
                 state.pending.append(contentsOf: UnsafeBufferPointer(start: samples, count: count))
             } else {
@@ -852,7 +924,7 @@ public final class VoiceAudioEngine: @unchecked Sendable {
                 }
             }
 
-            let width = OpusFormat.interleavedCount
+            let width = OpusFormat.voiceFrameCount
             let whole = state.pending.count / width * width
             guard whole > 0 else { return }
             drained = Array(state.pending[0..<whole])
@@ -862,7 +934,7 @@ public final class VoiceAudioEngine: @unchecked Sendable {
         // **Outside the lock.** A client that encodes and sends while holding
         // the capture lock stalls the next tap, and the tap is on the audio
         // device's own thread.
-        let width = OpusFormat.interleavedCount
+        let width = OpusFormat.voiceFrameCount
         let monitors = levels.monitors.load(ordering: .relaxed)
         drained.withUnsafeBufferPointer { buffer in
             guard let base = buffer.baseAddress else { return }
@@ -876,16 +948,21 @@ public final class VoiceAudioEngine: @unchecked Sendable {
         }
     }
 
-    /// Loops the microphone back into the playback ring, for the mic test.
+    /// Loops the microphone back into the playback ring, for the mic test —
+    /// the one voice in both ears, as the ring is stereo.
     ///
     /// The scratch is stack memory rather than an array: this runs fifty times
     /// a second on the capture thread, and a heap allocation there is the one
     /// cost that buys nothing.
     private func monitor(_ samples: UnsafePointer<Int16>, frames count: Int) {
-        withUnsafeTemporaryAllocation(of: Float.self, capacity: count) { floats in
+        withUnsafeTemporaryAllocation(of: Float.self, capacity: count * 2) { floats in
             guard let base = floats.baseAddress else { return }
-            Self.normalise(samples, into: base, count: count)
-            playbackRing.write(base, count: count)
+            Self.normalise(samples, into: base + count, count: count)
+            for index in 0..<count {
+                base[index * 2] = base[count + index]
+                base[index * 2 + 1] = base[count + index]
+            }
+            playbackRing.write(base, count: count * 2)
         }
     }
 
@@ -911,5 +988,34 @@ public final class VoiceAudioEngine: @unchecked Sendable {
         vDSP_vflt16(samples, 1, floats, 1, vDSP_Length(count))
         var scale: Float = 1.0 / 32_768
         vDSP_vsmul(floats, 1, &scale, floats, 1, vDSP_Length(count))
+    }
+}
+
+// MARK: - The output device's clock
+
+/// The output device's demand for audio, as something another thread can wait
+/// on.
+///
+/// **The mixer is clocked by the device, never by a timer** — INVARIANTS §1.5.
+/// A 20 ms timer and a 48 kHz sound card drift apart by tens of milliseconds a
+/// minute; a pump that polls every few milliseconds instead wakes two hundred
+/// and fifty times a second to find nothing to do. The render callback ticks
+/// this once per buffer it fills and the mix pump wakes on it.
+///
+/// **A semaphore, because it is the one primitive a render callback may
+/// touch**: signalling it takes no lock the callback could wait on and
+/// allocates nothing.
+public final class PlaybackClock: Sendable {
+    private let semaphore = DispatchSemaphore(value: 0)
+
+    public init() {}
+
+    /// From the render callback, once per buffer.
+    func tick() { semaphore.signal() }
+
+    /// Waits for the device's next request, or the timeout — so a device that
+    /// stops asking, or a pump being stopped, never strands the waiter.
+    func wait(milliseconds timeout: Int) {
+        _ = semaphore.wait(timeout: .now() + .milliseconds(timeout))
     }
 }

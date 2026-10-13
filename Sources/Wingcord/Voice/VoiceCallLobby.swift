@@ -18,10 +18,9 @@ import SwiftUI
 // - **The same tiles.** `VoiceTileGrid`, the same faces, the same speaking
 //   rings and mute badges, live. A watcher can see who is there and who is
 //   talking before deciding, which is the question they actually have.
-// - **The same glass, morphing.** This panel and `VoiceCallOverlay` share one
-//   `glassEffectID`, so joining does not swap one surface for another: the
-//   glass *is* the call panel, and it grows into it. §4, and the reason
-//   `Motion.glassMorph` exists.
+// - **The same band.** This and `VoiceCallOverlay` are one opaque band across
+//   the top of the conversation, so joining grows the band rather than
+//   swapping one surface for another.
 // - **No video.** Nothing is subscribed to anybody's camera until the reader
 //   joins — see `AppModel.callLobby`. A lobby that decoded a stream would spend
 //   a call's worth of CPU on a panel nobody has stepped into.
@@ -61,14 +60,8 @@ struct VoiceCallLobby: View {
                 .padding(.vertical, Spacing.snug)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        // Layout first, glass last, and one body for the whole panel — §4.
-        // `.clear`, never `.regular`: what passes under this is the transcript,
-        // and frosting somebody's message into a grey slab is the one thing
-        // glass exists not to do.
-        .glassEffect(
-            .clear.tint(Palette.flyoutTint),
-            in: .rect(cornerRadius: Radius.card)
-        )
+        .background(Palette.surface)
+        .overlay(alignment: .bottom) { Divider() }
     }
 
     private var joinButton: some View {
@@ -83,11 +76,11 @@ struct VoiceCallLobby: View {
             .padding(.horizontal, Spacing.group)
             .padding(.vertical, Spacing.base)
         }
-        // **A pill, like every other call control.** The bar under a call is
-        // capsules, the tile name badges are capsules, and Accept on an
-        // incoming call is a capsule — a rounded rectangle here is the one
+        // **A pill, like every other call control.** The controls under a
+        // call are capsules, the tile name badges are capsules, and Accept on
+        // an incoming call is a capsule — a rounded rectangle here is the one
         // shape in the surface that belongs to a different vocabulary.
-        .buttonStyle(.glassProminent)
+        .buttonStyle(.borderedProminent)
         .buttonBorderShape(.capsule)
         // The same green Accept wears. Joining a call already running is the
         // affirmative call action, and giving it a colour of its own would be

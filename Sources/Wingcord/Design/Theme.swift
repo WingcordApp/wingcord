@@ -700,17 +700,28 @@ enum ThemePreset: String, CaseIterable, Identifiable, Hashable, Sendable {
 
     /// The two whose colours are written down rather than derived.
     var isStated: Bool { self == .trueBlack || self == .porcelain }
+
+    /// The room "Sync with computer" is in: Porcelain while the Mac is in
+    /// Light, True Black while it is in Dark.
+    static func following(systemIsDark: Bool) -> ThemePreset {
+        systemIsDark ? .trueBlack : .porcelain
+    }
 }
 
 // MARK: - What is selected
 
-/// One of the presets, one of Discord's, or the reader's own.
+/// "Sync with computer", one of the presets, one of Discord's, or the reader's
+/// own.
 ///
 /// The custom seed lives **beside** the selection rather than inside it, so
 /// stepping through the presets to compare them and coming back to Custom finds
 /// the blend still there. A selection that carried its payload would lose the
 /// reader's work every time they looked at something else.
 enum ThemeChoice: Hashable, Sendable {
+    /// Discord's "Sync with computer": the system's appearance picks the room,
+    /// and follows it when it changes (DESIGN-NOTES decision 17). The default
+    /// for a reader who never chose.
+    case system
     case preset(ThemePreset)
     case discord(DiscordTheme)
     case custom
@@ -721,4 +732,14 @@ enum ThemeChoice: Hashable, Sendable {
     }
 
     var isCustom: Bool { self == .custom }
+
+    /// Whether vividness has nothing to move: the two stated presets, and the
+    /// choice that is always one of them.
+    var isStated: Bool {
+        switch self {
+        case .system: true
+        case .preset(let preset): preset.isStated
+        case .discord, .custom: false
+        }
+    }
 }

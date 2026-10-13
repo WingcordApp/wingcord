@@ -400,7 +400,7 @@ struct ConnectionChip: View {
             .padding(.leading, 4)
             .padding(.trailing, 7)
             .padding(.vertical, 3)
-            .glassEffect(.clear, in: .rect(cornerRadius: 9))
+            .plainChip(in: .rect(cornerRadius: 9))
             .contentShape(.rect)
         }
         .buttonStyle(.plain)
@@ -706,7 +706,7 @@ struct MutualFriendsList: View {
                 }
                 .padding(.horizontal, 5)
                 .padding(.vertical, 2)
-                .glassEffect(.clear, in: .rect(cornerRadius: 6))
+                .plainChip(in: .rect(cornerRadius: 6))
                 .accessibilityLabel(Text("Tag \(tag)"))
             }
             Spacer(minLength: 0)
@@ -719,15 +719,10 @@ struct MutualFriendsList: View {
 
 /// A small uppercase chip — the APP mark.
 ///
-/// **Tinted, and that is not a colour-rule exception.** The rule is that colour
-/// carries meaning; this mark's whole job is to say *this account is not a
-/// person*, which is the one thing on a profile a reader must not have to work
-/// out. The transcript already draws it in the accent — a clear-glass version
-/// here made the same mark read as a grey label on the surface where it matters
-/// most, and made the two disagree one click apart.
-///
-/// The tint is in the material rather than a fill behind it, so it still lenses
-/// the person's own ground: a fill under glass is what §4 rule 3 forbids.
+/// **The accent, and that is not a colour-rule exception.** The rule is that
+/// colour carries meaning; this mark's whole job is to say *this account is not
+/// a person*, which is the one thing on a profile a reader must not have to
+/// work out. The transcript draws it in the accent too, so the two agree.
 struct TagChip: View {
     var text: String
 
@@ -742,7 +737,7 @@ struct TagChip: View {
             .foregroundStyle(.white)
             .padding(.horizontal, 6)
             .padding(.vertical, 2)
-            .glassEffect(.regular.tint(Palette.accent), in: .rect(cornerRadius: 5))
+            .background(Palette.accent, in: .rect(cornerRadius: 5))
     }
 }
 
@@ -1053,12 +1048,8 @@ struct RoleChip: View {
         }
         .padding(.horizontal, size.horizontalPadding)
         .padding(.vertical, size.verticalPadding)
-        // Clear glass, because the ground behind it is the person's own
-        // colour and a `.regular` material would blur it into grey.
-        .glassEffect(
-            .clear.tint(Palette.flyoutTint),
-            in: size == .compact ? AnyShape(.rect(cornerRadius: 7)) : AnyShape(.capsule)
-        )
+        // A plain chip: a role is content, never glass. See `PlainChipBackground`.
+        .modifier(RoleChipGround(size: size))
         .onHover { hovering in
             guard remove != nil, isHovering != hovering else { return }
             isHovering = hovering
@@ -1098,10 +1089,7 @@ struct RoleAddChip: View {
             .contentShape(.rect)
         }
         .buttonStyle(.plain)
-        .glassEffect(
-            .clear.tint(Palette.flyoutTint),
-            in: size == .compact ? AnyShape(.rect(cornerRadius: 7)) : AnyShape(.capsule)
-        )
+        .modifier(RoleChipGround(size: size))
         .help("Add role")
         .accessibilityLabel(Text("Add role"))
         .popover(isPresented: $isPicking, arrowEdge: .bottom) {
@@ -1251,7 +1239,7 @@ struct RoleOverflowChip: View {
         }
         .padding(.horizontal, RoleChipFit.horizontalPadding)
         .padding(.vertical, 3)
-        .glassEffect(.clear, in: .rect(cornerRadius: 7))
+        .plainChip(in: .rect(cornerRadius: 7))
     }
 }
 
@@ -1276,8 +1264,23 @@ struct RoleCollapseChip: View {
         .buttonStyle(.plain)
         .padding(.horizontal, RoleChipFit.horizontalPadding)
         .padding(.vertical, 3)
-        .glassEffect(.clear, in: .rect(cornerRadius: 7))
+        .plainChip(in: .rect(cornerRadius: 7))
         .accessibilityLabel(Text("Show fewer roles"))
+    }
+}
+
+/// A role chip's ground: a rounded rect at the compact size, a capsule
+/// otherwise. One modifier rather than a branch at each call site, so a chip
+/// that changes size does not change identity.
+private struct RoleChipGround: ViewModifier {
+    var size: RoleChipFlow.Size
+
+    func body(content: Content) -> some View {
+        if size == .compact {
+            content.plainChip(in: .rect(cornerRadius: 7))
+        } else {
+            content.plainChip(in: .capsule)
+        }
     }
 }
 
@@ -1400,6 +1403,12 @@ enum RoleChipFit {
 struct FlowLayout: Layout {
     var spacing: CGFloat = 4
 
+    /// The horizontal gap before a subview: its own `FlowGap` where it set one,
+    /// the flow's spacing otherwise.
+    private func gap(before index: Int, in subviews: Subviews) -> CGFloat {
+        subviews[index][FlowGap.self] ?? spacing
+    }
+
     struct Cache {
         /// What each subview wants, measured once.
         var ideal: [CGSize]
@@ -1452,14 +1461,15 @@ struct FlowLayout: Layout {
         var rowHeight: CGFloat = 0
         var total = CGSize.zero
 
-        for size in cache.sizes {
-            if rowWidth > 0, rowWidth + spacing + size.width > width {
+        for (index, size) in cache.sizes.enumerated() {
+            let gap = gap(before: index, in: subviews)
+            if rowWidth > 0, rowWidth + gap + size.width > width {
                 total.width = max(total.width, rowWidth)
                 total.height += rowHeight + spacing
                 rowWidth = size.width
                 rowHeight = size.height
             } else {
-                rowWidth += rowWidth > 0 ? spacing + size.width : size.width
+                rowWidth += rowWidth > 0 ? gap + size.width : size.width
                 rowHeight = max(rowHeight, size.height)
             }
         }
@@ -1487,19 +1497,31 @@ struct FlowLayout: Layout {
 
         for (index, subview) in subviews.enumerated() {
             let size = cache.sizes[index]
-            if x > bounds.minX, x + size.width > bounds.maxX {
-                x = bounds.minX
-                y += rowHeight + spacing
-                rowHeight = 0
+            if x > bounds.minX {
+                let gap = gap(before: index, in: subviews)
+                if x + gap + size.width > bounds.maxX {
+                    x = bounds.minX
+                    y += rowHeight + spacing
+                    rowHeight = 0
+                } else {
+                    x += gap
+                }
             }
             // Proposed the size it was measured at, which for an over-wide
             // child is the container's width rather than its own ideal — the
             // proposal is what makes it wrap instead of running off the edge.
             subview.place(at: CGPoint(x: x, y: y), proposal: ProposedViewSize(size))
-            x += size.width + spacing
+            x += size.width
             rowHeight = max(rowHeight, size.height)
         }
     }
+}
+
+/// The gap before one item of a `FlowLayout` where it is not the flow's own
+/// spacing. Prose sets zero between two pieces that touched in what was
+/// written — four custom emoji typed as one picture stay one picture.
+nonisolated struct FlowGap: LayoutValueKey {
+    static let defaultValue: CGFloat? = nil
 }
 
 /// The avatar as a profile draws it: a **hole in the artwork**, not a ring on

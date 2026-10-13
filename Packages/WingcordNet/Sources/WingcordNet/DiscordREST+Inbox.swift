@@ -214,6 +214,7 @@ extension DiscordREST {
         content: String,
         at date: Date,
         replyingTo: MessageID? = nil,
+        pingsRepliedAuthor: Bool = true,
         attachments: [UploadedAttachment] = [],
         poll: PollDraft? = nil
     ) async throws -> ScheduledMessage? {
@@ -223,6 +224,7 @@ extension DiscordREST {
             var scheduled_timestamp: String
             var flags: Int
             var message_reference: ReplyBody?
+            var allowed_mentions: QuietReplyMentions?
             var poll: PollBody?
             var attachments: [AttachmentBody]
         }
@@ -235,6 +237,7 @@ extension DiscordREST {
                 scheduled_timestamp: ISO8601DateFormatter.withFraction.string(from: date),
                 flags: 0,
                 message_reference: replyingTo.map(ReplyBody.init),
+                allowed_mentions: replyingTo != nil && !pingsRepliedAuthor ? QuietReplyMentions() : nil,
                 poll: poll.map(PollBody.init),
                 attachments: attachments.map(AttachmentBody.init)
             ),

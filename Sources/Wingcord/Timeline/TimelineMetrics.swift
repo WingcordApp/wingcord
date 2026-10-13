@@ -140,14 +140,23 @@ nonisolated enum TimelineMetrics {
     /// The star that keeps a GIF, on the picture it belongs to.
     static let favoriteBadgeSide: CGFloat = 30
     static let favoriteBadgeInset: CGFloat = 8
-    /// A card for a file with nothing to show: a glyph, a name, a size.
-    static let attachmentCardHeight: CGFloat = 56
-    /// The widest such card. It holds two short lines and grows no further —
-    /// a full-width bar for a 4 KB text file reads as a missing picture.
+    /// The widest request tile (`hiddenMediaSlot`).
     static let attachmentCardMaxWidth: CGFloat = 400
-    /// The glyph's box inside one, and the gap after it.
-    static let attachmentCardGlyphSide: CGFloat = 26
+    /// A voice note's and a request tile's glyph inset.
     static let attachmentCardInset: CGFloat = 12
+    /// A file with nothing to show, and an upload — Discord's `.file`
+    /// (`745268`, stylesheet `0ccae`): 432 wide at most, 16 all round, a 30×40
+    /// type icon and 8 after it, the name over the size. 72 tall: the icon
+    /// and its padding.
+    static let fileCardMaxWidth: CGFloat = 432
+    static let fileCardInset: CGFloat = 16
+    static let fileCardIcon = CGSize(width: 30, height: 40)
+    static let fileCardIconGap: CGFloat = 8
+    static let fileCardHeight: CGFloat = 72
+    /// Discord's hover group on a file (`06ab4`): one 32-point button, its
+    /// corner 5, hanging 8 past the card's top-right corner.
+    static let fileCardHoverButton: CGFloat = 32
+    static let fileCardHoverOverhang: CGFloat = 8
     /// An upload card's bar, and the cancel at its trailing edge — Discord's
     /// progress bar and its `md` close glyph.
     static let uploadBarHeight: CGFloat = 6

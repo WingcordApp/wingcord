@@ -14,6 +14,15 @@ final class WingcordAppDelegate: NSObject, NSApplicationDelegate {
     /// Set by the app once the model exists; SwiftUI makes the delegate first.
     static weak var model: AppModel?
 
+    func applicationWillFinishLaunching(_ notification: Notification) {
+        // No window in this app is a document: one workspace, one Settings,
+        // one Server Settings per server. Tabs would only merge them — a
+        // server's settings opening as a tab of the workspace for a reader
+        // whose Mac prefers tabs — so the app opts out of them, and View loses
+        // Show Tab Bar with it.
+        NSWindow.allowsAutomaticWindowTabbing = false
+    }
+
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         // The drafts are written a second after the last keystroke; a quit
         // inside that second writes them now. Local, so it costs no wait.

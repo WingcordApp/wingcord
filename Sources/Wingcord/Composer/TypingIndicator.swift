@@ -82,7 +82,8 @@ struct TypingIndicator: View, Equatable {
                 // and it is the composer's own so the two read as one object.
                 .padding(.horizontal, Spacing.snug)
                 .padding(.vertical, 5)
-                .glassEffect(.clear.tint(Palette.flyoutTint), in: .capsule)
+                // Status, not a control: a plain chip rather than glass.
+                .plainChip(in: .capsule)
                 .padding(.leading, Spacing.margin)
                 .padding(.bottom, Spacing.tight)
                 .transition(.materialize(from: .bottom))

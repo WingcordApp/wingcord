@@ -99,12 +99,12 @@ struct ChannelPermissionsTab: View {
                 Spacer(minLength: Spacing.base)
                 if !synced {
                     Button("Sync Now") { isSyncing = true }
-                        .buttonStyle(.glass)
+                        .buttonStyle(.bordered)
                         .controlSize(.small)
                 }
             }
             .padding(SettingsMetrics.cardContentInset)
-            .background(Palette.presenceIdle.opacity(0.12), in: .settingsRect(SettingsMetrics.paneRadius))
+            .background(Palette.presenceIdle.opacity(0.12), in: .settingsRect(SettingsMetrics.cardRadius))
         }
     }
 

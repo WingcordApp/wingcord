@@ -127,9 +127,9 @@ private struct SelectionToolbar: View {
             control(.format(.spoiler), "eye.slash", "Spoiler")
         }
         .padding(Spacing.tight)
-        // Over the transcript — media, somebody else's words — so the room's
-        // own glass, untinted: `INVARIANTS.md` §4.
-        .glassEffect(.clear, in: .capsule)
+        // A control floating over the transcript: regular glass, the default —
+        // `INVARIANTS.md` §4. (Clear is for controls over media.)
+        .glassEffect(.regular, in: .capsule)
         .padding(Spacing.tight)
     }
 

@@ -101,10 +101,8 @@ struct ForwardSheet<Preview: View>: View {
         .padding(.horizontal, Spacing.snug)
         .frame(height: Metrics.composerControlHeight)
         .background(Palette.surfaceRaised, in: .capsule)
-        // A still surface picks up no specular response of its own, so on a
-        // near-black ground it would be a slightly lighter region rather than a
-        // field with an edge.
-        .specularEdge()
+        // A hairline, so the field has an edge on a dark ground.
+        .overlay { Capsule().strokeBorder(Palette.edge) }
         .padding(.horizontal, Spacing.group)
         .padding(.bottom, Spacing.snug)
     }
@@ -145,7 +143,7 @@ struct ForwardSheet<Preview: View>: View {
                 .padding(.horizontal, Spacing.snug)
                 .frame(height: Metrics.composerControlHeight)
                 .background(Palette.surfaceRaised, in: .capsule)
-                .specularEdge()
+                .overlay { Capsule().strokeBorder(Palette.edge) }
 
             if let copyLink {
                 Button {
@@ -161,7 +159,7 @@ struct ForwardSheet<Preview: View>: View {
                 .buttonStyle(.plain)
                 .foregroundStyle(Ink.primary)
                 .background(Palette.surfaceRaised, in: .circle)
-                .specularEdge()
+                .overlay { Circle().strokeBorder(Palette.edge) }
                 .help(didCopy ? "Link Copied!" : "Copy Link")
                 .accessibilityLabel(Text(didCopy ? "Link Copied!" : "Copy Link"))
                 // Back to the link after a beat, so a second copy reads as one.

@@ -182,12 +182,12 @@ struct ChannelsAndRolesPane: View, Equatable {
 
 /// The page's one piece of floating chrome.
 ///
-/// **One glass body per control, merged in a container** — the segmented control
-/// and the search field are two surfaces that reflow as one when the second
-/// appears, which is what `GlassEffectContainer` is for. Neither carries a fill
-/// behind its material: the selected segment's pill is a *region inside* the
-/// segmented control's own glass, exactly as the now bar's controls are regions
-/// inside the bar's.
+/// **The tabs are the system's capsule segmented control** (`SegmentedPicker`,
+/// INVARIANTS "The system's own segmented control"), which brings its own
+/// material — so it sits outside the `GlassEffectContainer` the search field
+/// and the saving spinner share, where they reflow as one when the field
+/// appears. The channel count rides in the second segment's title: the system
+/// control has no badge, and the number is the reason to look at that tab.
 private struct ChannelsAndRolesBar: View {
     @Binding var tab: ChannelsAndRolesPane.Tab
     @Binding var query: String
@@ -199,91 +199,38 @@ private struct ChannelsAndRolesBar: View {
     @Environment(\.motion) private var motion
 
     var body: some View {
-        GlassEffectContainer(spacing: Spacing.base) {
-            HStack(spacing: Spacing.base) {
-                if showsTabs {
-                    SegmentedTabs(tab: $tab, channelCount: channelCount)
-                }
-                if showsSearch {
-                    ChannelSearchField(query: $query)
-                }
-                if isSaving {
-                    ProgressView()
-                        .controlSize(.small)
-                        .padding(.horizontal, Spacing.base)
-                        .frame(height: Metrics.control + Spacing.base)
-                        .glassEffect(.regular, in: .capsule)
-                        .transition(.materialize)
-                        .accessibilityLabel("Saving your answers")
-                }
-                Spacer(minLength: 0)
+        HStack(spacing: Spacing.base) {
+            if showsTabs {
+                SegmentedPicker(options: tabs, selection: $tab)
+                    .fixedSize()
             }
+            GlassEffectContainer(spacing: Spacing.base) {
+                HStack(spacing: Spacing.base) {
+                    if showsSearch {
+                        ChannelSearchField(query: $query)
+                    }
+                    if isSaving {
+                        ProgressView()
+                            .controlSize(.small)
+                            .padding(.horizontal, Spacing.base)
+                            .frame(height: Metrics.control + Spacing.base)
+                            .glassEffect(.regular, in: .capsule)
+                            .transition(.materialize)
+                            .accessibilityLabel("Saving your answers")
+                    }
+                }
+            }
+            Spacer(minLength: 0)
         }
         .animation(motion.glassMorph, value: showsSearch)
         .animation(motion.glassMorph, value: isSaving)
     }
-}
 
-/// Two segments, one travelling pill.
-///
-/// The pill is a plain tinted capsule inside the control's material rather than
-/// a second glass body — §4 rule 2 — and it travels with
-/// `matchedGeometryEffect`, which is the same idiom the full profile's tab
-/// underline uses. A `glassEffectID` morph is the alternative and is wrong here:
-/// the pill sits *behind* two labels that are ordinary siblings, and a
-/// container promotes its glass elements above them.
-private struct SegmentedTabs: View {
-    @Binding var tab: ChannelsAndRolesPane.Tab
-    var channelCount: Int
-
-    @Environment(\.motion) private var motion
-    @Namespace private var pill
-
-    var body: some View {
-        HStack(spacing: 2) {
-            segment("Customize", value: .customize, badge: nil)
-            segment("Browse Channels", value: .browse, badge: channelCount)
-        }
-        .padding(3)
-        .frame(height: Metrics.control + Spacing.base)
-        .glassEffect(.regular, in: .capsule)
-        .animation(motion.glassMorph, value: tab)
-    }
-
-    private func segment(
-        _ title: String,
-        value: ChannelsAndRolesPane.Tab,
-        badge: Int?
-    ) -> some View {
-        let isSelected = tab == value
-        return Button {
-            guard tab != value else { return }
-            tab = value
-        } label: {
-            HStack(spacing: Spacing.tight) {
-                Text(title)
-                    .font(.system(.callout, weight: isSelected ? .semibold : .regular))
-                if let badge, badge > 0 {
-                    Text("\(badge)")
-                        .font(Typeface.badge)
-                        .foregroundStyle(Ink.tertiary)
-                        .contentTransition(.numericText())
-                }
-            }
-            .foregroundStyle(isSelected ? AnyShapeStyle(Ink.primary) : AnyShapeStyle(Ink.secondary))
-            .padding(.horizontal, Spacing.snug)
-            .frame(maxHeight: .infinity)
-            .background {
-                if isSelected {
-                    Capsule()
-                        .fill(Palette.selectionFill)
-                        .matchedGeometryEffect(id: "segment", in: pill)
-                }
-            }
-            .contentShape(.capsule)
-        }
-        .buttonStyle(.plain)
-        .accessibilityAddTraits(isSelected ? [.isButton, .isSelected] : .isButton)
+    private var tabs: [SegmentedPicker<ChannelsAndRolesPane.Tab>.Option] {
+        [
+            .init(.customize, "Customize"),
+            .init(.browse, channelCount > 0 ? "Browse Channels \(channelCount)" : "Browse Channels"),
+        ]
     }
 }
 
@@ -323,10 +270,6 @@ private struct ChannelSearchField: View {
         .padding(.horizontal, Spacing.snug)
         .frame(width: 200, height: Metrics.control + Spacing.base)
         .glassEffect(.regular, in: .capsule)
-        // A search field never moves, so it never picks up the system's own
-        // specular response as it travels — on a near-black ground that leaves a
-        // capsule with no edge at all. This is the still-life version.
-        .specularEdge()
         .transition(.materialize)
     }
 }

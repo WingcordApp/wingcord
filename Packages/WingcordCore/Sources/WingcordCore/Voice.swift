@@ -224,41 +224,101 @@ public struct SoundboardSound: Hashable, Sendable, Identifiable {
 
 /// Whether a reader may press a given sound.
 ///
-/// A pure function over the three facts that decide it, so it can be checked
-/// against a table without a store in the picture — the same treatment
+/// A pure function over the facts that decide it, so it can be checked against
+/// a table without a store in the picture — the same treatment
 /// `MessageActionPolicy` gets, and for the same reason: a gate written at each
 /// call site is a gate that drifts.
 public enum SoundboardGate {
-    /// - Parameter playsEverywhere: whether the subscription buys
-    ///   `soundboardEverywhere` — **Nitro proper only**; Basic and Classic do
-    ///   not carry it. See `PremiumTier.grants(_:)`.
+    /// Discord's own rule — `W(user, sound, channel)` and `j(sound, channel)` in
+    /// its module 813564:
+    ///
+    /// ```js
+    /// (canUseSoundboardEverywhere(user) || sound.guildId === channel.guild_id || sound.guildId === "0")
+    ///   && (channel.guild_id == null || can(USE_EXTERNAL_SOUNDS, channel)
+    ///       || sound.guildId === "0" || sound.guildId === channel.guild_id)
+    ///   && sound.available
+    /// ```
+    ///
+    /// Discord's own sounds play everywhere; a server's own play in that
+    /// server; anywhere else a sound is the subscription's — and, in a server,
+    /// Use External Sounds as well. A direct message's call asks only the
+    /// subscription.
+    ///
+    /// - Parameters:
+    ///   - playsEverywhere: whether the subscription buys `soundboardEverywhere`
+    ///     — **Nitro proper only**; Basic and Classic do not carry it. See
+    ///     `PremiumTier.grants(_:)`.
+    ///   - guildID: the call's server, nil in a direct message's call.
+    ///   - mayUseExternalSounds: the reader's Use External Sounds in the
+    ///     call's channel. Not asked in a direct message.
     public static func canPlay(
         _ sound: SoundboardSound,
         playsEverywhere: Bool,
-        inGuild guildID: GuildID?
+        inGuild guildID: GuildID?,
+        mayUseExternalSounds: Bool
     ) -> Bool {
         guard sound.isAvailable else { return false }
-        // Discord's own six are free to everybody, everywhere.
         if sound.isDefault { return true }
-        // A server's own sounds are free **in that server**.
         if let owner = sound.guildID, owner == guildID { return true }
-        // Anywhere else, they are the subscription's.
-        return playsEverywhere
+        return playsEverywhere && (guildID == nil || mayUseExternalSounds)
     }
 
-    /// Why a sound cannot be played, in words the picker can show.
+    /// Discord's words for a sound the subscription would unlock — and nil for
+    /// any other reason, where Discord says nothing.
     public static func refusal(
         _ sound: SoundboardSound,
         playsEverywhere: Bool,
         inGuild guildID: GuildID?
     ) -> String? {
-        guard !canPlay(sound, playsEverywhere: playsEverywhere, inGuild: guildID) else {
+        guard sound.isAvailable, !sound.isDefault, sound.guildID != guildID, !playsEverywhere else {
             return nil
         }
-        guard sound.isAvailable else {
-            return "This server has lost the boosts that unlocked this sound."
-        }
-        return "Nitro is needed to use another server's sounds."
+        return "Subscribe to Nitro to send sounds across servers."
+    }
+}
+
+/// The sounds a reader starred — `FrecencyUserSettings.favorite_soundboard_sounds`
+/// (field 8): `sound_ids` and `ordered_sound_ids`, both repeated `fixed64`, the
+/// second in the order the reader arranged them.
+///
+/// **Both lists, kept the way Discord's writer keeps them.** Its add appends to
+/// whichever list lacks the sound and refuses at 250 in either; its remove
+/// filters both. An older client wrote only `sound_ids`, which is why the
+/// order falls back to it for anything `ordered_sound_ids` does not hold.
+public struct SoundboardFavorites: Hashable, Sendable {
+    public var soundIDs: [UInt64]
+    public var orderedSoundIDs: [UInt64]
+
+    /// Discord's cap: "You cannot have more than 250 favorites."
+    public static let limit = 250
+
+    public init(soundIDs: [UInt64] = [], orderedSoundIDs: [UInt64] = []) {
+        self.soundIDs = soundIDs
+        self.orderedSoundIDs = orderedSoundIDs
+    }
+
+    public func contains(_ soundID: UInt64) -> Bool {
+        soundIDs.contains(soundID) || orderedSoundIDs.contains(soundID)
+    }
+
+    /// The favourites in the reader's order.
+    public var inOrder: [UInt64] {
+        orderedSoundIDs + soundIDs.filter { !orderedSoundIDs.contains($0) }
+    }
+
+    /// Discord's add — false when either list is full, which it answers with
+    /// "Oh no!" and nothing written.
+    @discardableResult
+    public mutating func add(_ soundID: UInt64) -> Bool {
+        guard soundIDs.count < Self.limit, orderedSoundIDs.count < Self.limit else { return false }
+        if !soundIDs.contains(soundID) { soundIDs.append(soundID) }
+        if !orderedSoundIDs.contains(soundID) { orderedSoundIDs.append(soundID) }
+        return true
+    }
+
+    public mutating func remove(_ soundID: UInt64) {
+        soundIDs.removeAll { $0 == soundID }
+        orderedSoundIDs.removeAll { $0 == soundID }
     }
 }
 
@@ -438,4 +498,15 @@ public enum VoiceChannelStatus {
         else { return nil }
         return EmojiRef(id: EmojiID(rawValue: id), name: String(name), isAnimated: animated)
     }
+}
+
+/// Which kind of client somebody in a call is on — voice opcode 20, Discord's
+/// `RTC_CONNECTION_PLATFORM` (its module 806931), drawn as the mark beside
+/// their name. Known only for a call the reader is in.
+public enum VoicePlatform: Int, Hashable, Sendable {
+    case desktop = 0
+    case mobile = 1
+    case xbox = 2
+    case playStation = 3
+    case quest = 4
 }

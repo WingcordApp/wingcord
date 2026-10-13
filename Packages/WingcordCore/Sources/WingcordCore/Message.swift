@@ -102,8 +102,32 @@ public struct Message: Hashable, Sendable, Identifiable, Codable {
     /// listing `victor_answer_id` at somebody — AutoMod's, and a safety
     /// notice's.
     public var drawableEmbeds: [Embed] {
-        let drawn = embeds.filter { !Self.ownCardKinds.contains($0.kind ?? "") }
+        let drawn = embeds.filter {
+            !Self.ownCardKinds.contains($0.kind ?? "")
+                // A fake Nitro emoji's or sticker's unfurl: the thing itself
+                // is drawn in the words, or under them.
+                && $0.url.map { FakeNitroLink(url: $0) == nil } ?? true
+        }
         return Embed.mergingGalleries(drawn)
+    }
+
+    private static func isOnlyFakeStickers(_ content: String) -> Bool {
+        var rest = content
+        for match in content.matches(of: /\[[^\]]*\]\((https?:\/\/[^)\s]+)\)|https?:\/\/\S+/) {
+            let url = match.output.1.map(String.init) ?? String(match.output.0)
+            guard case .sticker? = FakeNitroLink(url: url) else { continue }
+            rest = rest.replacingOccurrences(of: String(match.output.0), with: "")
+        }
+        return rest != content && rest.allSatisfy(\.isWhitespace)
+    }
+
+    /// The stickers to draw: the ones sent, and any sent as fake Nitro links —
+    /// which the words no longer show. See `FakeNitroLink`.
+    public var displayedStickers: [StickerRef] {
+        let fake = FakeNitroLink.links(in: content).compactMap { link -> StickerRef? in
+            if case .sticker(let sticker) = link { sticker } else { nil }
+        }
+        return stickers + fake
     }
 
     /// The embed kinds drawn as a card of their own rather than an embed.
@@ -131,6 +155,9 @@ public struct Message: Hashable, Sendable, Identifiable, Codable {
     public var displayedContent: String {
         let trimmed = content.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return content }
+        // Nothing but fake Nitro stickers: they are drawn as stickers, and the
+        // words they were sent as leave nothing behind but an empty line.
+        if Self.isOnlyFakeStickers(trimmed) { return "" }
         let sources = Set(
             drawableEmbeds.lazy
                 .filter { $0.isBareImage }
@@ -514,6 +541,16 @@ public enum MessageKind: Int, Hashable, Sendable, Codable {
     case threadStarterMessage = 21
     case contextMenuCommand = 23
     case autoModerationAction = 24
+    /// A stage went live; `content` is its topic.
+    case stageStart = 27
+    /// A stage ended; `content` is the topic it had.
+    case stageEnd = 28
+    /// Somebody stepped up to speak on a stage.
+    case stageSpeaker = 29
+    /// Somebody raised their hand on a stage.
+    case stageRaiseHand = 30
+    /// A live stage's topic changed; `content` is the new one.
+    case stageTopic = 31
     /// A poll that has ended. **Its words are in an embed, not in `content`** —
     /// see `Message.pollResult` — so a renderer that only knows about content
     /// draws an author line over a blank row, which is what a closed poll looked
@@ -542,6 +579,11 @@ public enum MessageKind: Int, Hashable, Sendable, Codable {
         case 21: .threadStarterMessage
         case 23: .contextMenuCommand
         case 24: .autoModerationAction
+        case 27: .stageStart
+        case 28: .stageEnd
+        case 29: .stageSpeaker
+        case 30: .stageRaiseHand
+        case 31: .stageTopic
         case 46: .pollResult
         default: .unknown
         }
@@ -855,6 +897,15 @@ public struct MessageReference: Hashable, Sendable, Codable {
     public var excerpt: String
     /// Whether the quoted message was a picture or a file rather than words.
     public var hasAttachment: Bool
+    /// Whether Discord said the quoted message is **gone** — `referenced_message`
+    /// sent as `null` — rather than simply not sent.
+    ///
+    /// **Two states with one symptom, and Discord tells them apart.** A key
+    /// that is absent means the server did not look the message up, so its
+    /// fate is unknown: "Message could not be loaded", and the line still jumps
+    /// to it. Only an explicit `null` is "Original message was deleted"
+    /// (Discord's `ReferencedMessageState` `NOT_LOADED` and `DELETED`).
+    public var isDeleted: Bool
 
     public init(
         messageID: MessageID? = nil,
@@ -863,7 +914,8 @@ public struct MessageReference: Hashable, Sendable, Codable {
         authorID: UserID? = nil,
         isAuthorBot: Bool = false,
         excerpt: String = "",
-        hasAttachment: Bool = false
+        hasAttachment: Bool = false,
+        isDeleted: Bool = false
     ) {
         self.messageID = messageID
         self.channelID = channelID
@@ -872,9 +924,11 @@ public struct MessageReference: Hashable, Sendable, Codable {
         self.isAuthorBot = isAuthorBot
         self.excerpt = excerpt
         self.hasAttachment = hasAttachment
+        self.isDeleted = isDeleted
     }
 
-    /// Whether Discord sent a reference with nothing behind it.
+    /// Whether Discord sent a reference with nothing behind it — deleted, or
+    /// never looked up. `isDeleted` says which.
     public var isUnavailable: Bool { authorID == nil }
 
     /// One line of a quoted body: markdown folded, newlines collapsed, and cut

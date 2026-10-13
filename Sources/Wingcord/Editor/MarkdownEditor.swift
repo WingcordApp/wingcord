@@ -181,6 +181,7 @@ private struct MarkdownEditorRepresentable: NSViewRepresentable {
             }
             textView.onSelectionSettled = { [weak self] in self?.selectionSettled() }
             textView.onFormatShortcut = { [weak self] format in self?.toggle(format) }
+            textView.onFormatCommand = { [weak self] action in self?.perform(action) }
             restyle()
             updatePlaceholder()
             container.onHeightChange = owner.onHeightChange
@@ -330,6 +331,27 @@ private struct MarkdownEditorRepresentable: NSViewRepresentable {
         private func toggleQuote() {
             guard let textView = container?.textView else { return }
             apply(FormattingToggle.toggleQuote(in: textView.string, selection: textView.selectedRange()))
+        }
+
+        /// The menu bar's Format menu, on this field.
+        private func perform(_ action: ComposerFormatCommand.Action) {
+            guard let textView = container?.textView else { return }
+            let text = textView.string
+            let selection = textView.selectedRange()
+            switch action {
+            case .format(let format): toggle(format)
+            case .quote: toggleQuote()
+            case .codeBlock:
+                apply(FormattingToggle.toggleCodeBlock(in: text, selection: selection))
+            case .linePrefix(let prefix):
+                apply(FormattingToggle.toggleLinePrefix(prefix, in: text, selection: selection))
+            case .insert(let words):
+                // Through the field's own typing path, so the mention list and
+                // the time picker hear it exactly as if it had been typed.
+                textView.insertText(words, replacementRange: selection)
+            case .send:
+                owner.onSubmit?()
+            }
         }
 
         /// Replaces the text through the text view's own editing path, so the

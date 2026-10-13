@@ -105,11 +105,11 @@ struct TopicMinimap: View {
             .padding(.top, CGFloat(first) * (isExpanded ? Self.titleRow : Self.barRow))
             .padding(.vertical, Spacing.base)
             .padding(.horizontal, isExpanded ? Spacing.snug : Spacing.tight)
-            // **Clear glass, and only while it holds titles.** At rest the bars
-            // sit on the transcript like a scroller does; a plate under them
-            // would be a panel standing in the reading column all day.
+            // **Glass, and only while it holds titles.** At rest the bars sit on
+            // the transcript like a scroller does; a plate under them would be a
+            // panel standing in the reading column all day.
             .glassEffect(
-                isExpanded ? .clear.tint(Palette.flyoutTint) : .identity,
+                isExpanded ? .regular : .identity,
                 in: .rect(cornerRadius: Radius.glass)
             )
             .contentShape(.rect(cornerRadius: Radius.glass))

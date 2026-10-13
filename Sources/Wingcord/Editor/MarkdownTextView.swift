@@ -20,6 +20,8 @@ final class MarkdownTextView: NSTextView {
     var onSelectionSettled: (() -> Void)?
     /// ⌘B, ⌘I and ⌘U: the three formats a keyboard has a habit for.
     var onFormatShortcut: ((MarkdownFormat) -> Void)?
+    /// The menu bar's Format menu — see `ComposerFormatCommand`.
+    var onFormatCommand: ((ComposerFormatCommand.Action) -> Void)?
     /// Files on the clipboard at a paste — see `PastedFiles`. Answers whether
     /// they were taken; a paste they were not is an ordinary one.
     var onPasteFiles: (([URL]) -> Bool)?
@@ -44,6 +46,13 @@ final class MarkdownTextView: NSTextView {
     /// Text only, so a file dragged over the field falls through to the
     /// composer's own drop target rather than landing as a path.
     override var acceptableDragTypes: [NSPasteboard.PasteboardType] { [.string] }
+
+    /// Format › anything, arriving down the responder chain while this field
+    /// has the caret.
+    @objc func applyComposerFormat(_ sender: Any?) {
+        guard let command = sender as? ComposerFormatCommand else { return }
+        onFormatCommand?(command.action)
+    }
 
     override func becomeFirstResponder() -> Bool {
         let accepted = super.becomeFirstResponder()

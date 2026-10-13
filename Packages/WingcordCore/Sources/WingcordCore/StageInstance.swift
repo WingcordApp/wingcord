@@ -92,11 +92,21 @@ public struct StageRoster: Hashable, Sendable {
     public var audience: [UserID]
     /// Hands up, **oldest first** — the order they were raised.
     public var requests: [UserID]
+    /// Hands a moderator has answered and their owner has not yet taken —
+    /// Discord's `REQUESTED_TO_SPEAK_AND_AWAITING_USER_ACK`, its "Invite
+    /// Sent". Still in the queue and the audience until they step up.
+    public var invited: Set<UserID>
 
-    public init(speakers: [UserID] = [], audience: [UserID] = [], requests: [UserID] = []) {
+    public init(
+        speakers: [UserID] = [],
+        audience: [UserID] = [],
+        requests: [UserID] = [],
+        invited: Set<UserID> = []
+    ) {
         self.speakers = speakers
         self.audience = audience
         self.requests = requests
+        self.invited = invited
     }
 
     /// Splits a channel's voice states three ways.
@@ -104,17 +114,30 @@ public struct StageRoster: Hashable, Sendable {
     /// A raised hand is *also* in the audience — the person is still listening
     /// — so the two lists overlap by design. The moderator's queue is a view
     /// onto the audience, not a fourth place to stand.
+    ///
+    /// Discord's own classification (its `l(voiceState)`): suppressed with a
+    /// hand up is a request; **not** suppressed with the hand still up is an
+    /// invitation awaiting its answer, which is not yet a speaker; neither is
+    /// on the stage; suppressed alone is the audience.
     public static func resolve(_ states: [VoiceState]) -> StageRoster {
         var speakers: [UserID] = []
         var audience: [UserID] = []
         var requests: [(UserID, Date)] = []
+        var invited: Set<UserID> = []
 
         for state in states {
-            if state.isSuppressed {
-                audience.append(state.userID)
-                if let at = state.requestToSpeakAt { requests.append((state.userID, at)) }
-            } else {
+            switch (state.isSuppressed, state.requestToSpeakAt) {
+            case (false, nil):
                 speakers.append(state.userID)
+            case (false, let at?):
+                audience.append(state.userID)
+                requests.append((state.userID, at))
+                invited.insert(state.userID)
+            case (true, let at?):
+                audience.append(state.userID)
+                requests.append((state.userID, at))
+            case (true, nil):
+                audience.append(state.userID)
             }
         }
 
@@ -128,7 +151,34 @@ public struct StageRoster: Hashable, Sendable {
             // moderator's pointer.
             requests: requests
                 .sorted { $0.1 == $1.1 ? $0.0.rawValue < $1.0.rawValue : $0.1 < $1.1 }
-                .map(\.0)
+                .map(\.0),
+            invited: invited
         )
+    }
+}
+
+/// What Discord writes under a raised hand in Requests to Speak — its own
+/// order, read out of its stage chunk:
+///
+/// ```js
+/// if (isNewToDiscord(user)) return "New to Discord"   // account ≤ 7 days old
+/// let joined = member?.joinedAt
+/// return joined == null ? "Visitor (Non-Member)"
+///      : member.roles.length > 0 ? role?.name ?? "Member with Role(s)"
+///      : now - joined < DAY ? "New Member" : "Member"
+/// ```
+public enum StageRequesterLabel {
+    public static func label(
+        for userID: UserID,
+        joinedAt: Date?,
+        roleCount: Int,
+        roleName: String?,
+        now: Date = .now
+    ) -> String {
+        let created = Date(timeIntervalSince1970: Double((userID.rawValue >> 22) + 1_420_070_400_000) / 1000)
+        if now.timeIntervalSince(created) <= 7 * 86_400 { return "New to Discord" }
+        guard let joinedAt else { return "Visitor (Non-Member)" }
+        if roleCount > 0 { return roleName ?? "Member with Role(s)" }
+        return now.timeIntervalSince(joinedAt) < 86_400 ? "New Member" : "Member"
     }
 }

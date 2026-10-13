@@ -62,8 +62,7 @@ private struct InteractionModalPanel: View {
             Rectangle().fill(Palette.selectionFill).frame(height: 1)
             footer
         }
-        .glassEffect(.clear.tint(Palette.flyoutTint), in: .rect(cornerRadius: Radius.card))
-        .specularEdge(in: RoundedRectangle(cornerRadius: Radius.card, style: .continuous))
+        .modalPanel(in: RoundedRectangle(cornerRadius: Radius.card))
     }
 
     private func set(_ customID: String, _ answer: InteractionModal.Answer) {

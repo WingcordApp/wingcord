@@ -3,14 +3,10 @@ import WingcordCore
 
 // MARK: - The detail pane
 //
-// The same construction as `SettingsDetailPane`, and the comments there explain
-// every number in it — the drawn scroll-edge band, why `safeAreaBar` rather than
-// `safeAreaInset`, and why the scrim goes outside the bar. None of that is
-// restated here; what follows is only what this pane does *differently*.
+// The same construction as `SettingsDetailPane`: a scrolling page under the
+// window's own toolbar, its name the window's title. Two things differ:
 //
-// Two things do:
-//
-//   1. **A save banner**, because every page here writes to somebody's server
+//   1. **A save indicator**, because every page here writes to somebody's server
 //      and a write that reported nothing would leave the reader guessing. It
 //      lives in the toolbar rather than over the content: a banner that covers
 //      the field you just edited is a banner that hides its own subject.
@@ -30,39 +26,27 @@ struct ServerSettingsDetailPane: View {
     let store: ServerSettingsStore
     let model: AppModel
     var page: ServerSettingsPage
-    var isSidebarCollapsed: Bool
-    var toggleSidebar: () -> Void
+    /// Under the page's name: the server, or the channel being edited.
+    var subtitle: String
 
     @Environment(\.motion) private var motion
-    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
-    @State private var isScrolled = false
 
     var body: some View {
         ScrollView(.vertical) {
             ServerSettingsPaneContent(store: store, model: model, page: page)
-                .padding(.horizontal, SettingsMetrics.cardInset)
-                .padding(.bottom, SettingsMetrics.cardInset)
+                .padding(SettingsMetrics.cardInset)
                 .frame(maxWidth: .infinity, alignment: .leading)
         }
         .scrollBounceBehavior(.basedOnSize)
-        .floatingTopBar {
-            ServerSettingsToolbar(
-                title: isScrolled ? title : nil,
-                save: store.save,
-                isSidebarCollapsed: isSidebarCollapsed,
-                toggleSidebar: toggleSidebar
-            )
+        .navigationTitle(title)
+        .navigationSubtitle(subtitle)
+        .toolbar {
+            ToolbarItem(placement: .primaryAction) {
+                SaveIndicator(state: store.save)
+            }
+            // Words about the last write, not a button: no capsule behind them.
+            .sharedBackgroundVisibility(.hidden)
         }
-        .background(SettingsSurface.pane(reducingTransparency: reduceTransparency))
-        .overlay(alignment: .top) { scrollEdgeBand }
-        .onScrollGeometryChange(for: Bool.self) { geometry in
-            geometry.contentOffset.y + geometry.contentInsets.top > 6
-        } action: { _, moved in
-            isScrolled = moved
-        }
-        .clipShape(.settingsRect(SettingsMetrics.paneRadius))
-        .padding(.vertical, SettingsMetrics.paneInset)
-        .padding(.trailing, SettingsMetrics.paneInset)
         .animation(motion.standard, value: page)
         // The page's own fetch, started when it appears and cancelled with it.
         // Keyed on the page so switching pages starts the next one's.
@@ -79,54 +63,6 @@ struct ServerSettingsDetailPane: View {
         case .server(let section): section.title(isCommunity: store.settings.value?.isCommunity ?? false)
         case .channel(_, let tab): tab.title
         }
-    }
-
-    private var scrollEdgeBand: some View {
-        LinearGradient(
-            stops: [
-                .init(color: .black.opacity(SettingsSurface.scrollEdgeTint), location: 0),
-                .init(color: .black.opacity(SettingsSurface.scrollEdgeTint), location: 0.36),
-                .init(color: .clear, location: 1.0),
-            ],
-            startPoint: .top,
-            endPoint: .bottom
-        )
-        .frame(height: SettingsMetrics.toolbarBandHeight)
-        .opacity(isScrolled ? 1 : 0)
-        .animation(motion.fade, value: isScrolled)
-        .allowsHitTesting(false)
-    }
-}
-
-// MARK: - The toolbar
-
-private struct ServerSettingsToolbar: View {
-    var title: String?
-    var save: ServerSettingsStore.SaveState
-    var isSidebarCollapsed: Bool
-    var toggleSidebar: () -> Void
-
-    @Environment(\.motion) private var motion
-
-    var body: some View {
-        HStack(spacing: 12.5) {
-            if isSidebarCollapsed {
-                Spacer(minLength: 0)
-                SettingsSidebarButton(action: toggleSidebar)
-            }
-            if let title {
-                Text(title)
-                    .font(SettingsType.sectionHeader)
-                    .foregroundStyle(Ink.primary)
-                    .lineLimit(1)
-                    .transition(.opacity)
-            }
-            Spacer(minLength: 0)
-            SaveIndicator(state: save)
-        }
-        .animation(motion.fade, value: title)
-        .padding(.horizontal, 14)
-        .frame(height: SettingsMetrics.toolbarItemHeight)
     }
 }
 

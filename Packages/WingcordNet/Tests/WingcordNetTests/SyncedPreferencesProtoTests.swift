@@ -48,6 +48,40 @@ struct SyncedPreferencesProtoTests {
         #expect(MessagingPrivacyProto.decode(on).privacy == MessagingPrivacyProto.decode(Self.capturedTextAndImages).privacy)
     }
 
+    /// Discord's `getSetting()?.volume ?? 100`: no `voice_and_video` says
+    /// nothing; one without `soundboard_settings` is 100; an empty
+    /// `soundboard_settings` is 0, because proto3 writes no zero.
+    @Test("Soundboard Volume reads as Discord reads it, and writes keeping its neighbours")
+    func soundboardVolume() throws {
+        #expect(SyncedPreferencesProto.decode(Data()).soundboardVolume == nil)
+
+        // `voice_and_video` holding only an unrelated bool at field 2.
+        var neighbour = ProtobufWriter()
+        neighbour.varint(field: 2, 1)
+        var blob = ProtobufWriter()
+        blob.message(field: 5, neighbour.data)
+        #expect(SyncedPreferencesProto.decode(blob.data).soundboardVolume == 100)
+
+        let quieter = try #require(Data(base64Encoded: SyncedPreferencesProto.patch(
+            applying: .soundboardVolume(42.5), to: blob.data
+        )))
+        #expect(SyncedPreferencesProto.decode(quieter).soundboardVolume == 42.5)
+        // The neighbour survives the splice.
+        var reader = ProtobufReader(quieter)
+        var kept = false
+        while let field = reader.next() {
+            guard field.number == 5 else { continue }
+            var inner = reader.reader(for: field)
+            while let entry = inner.next() { if entry.number == 2 { kept = entry.value == 1 } }
+        }
+        #expect(kept)
+
+        let silent = try #require(Data(base64Encoded: SyncedPreferencesProto.patch(
+            applying: .soundboardVolume(0), to: quieter
+        )))
+        #expect(SyncedPreferencesProto.decode(silent).soundboardVolume == 0)
+    }
+
     @Test("Don't show this again writes safety_settings field 2, keeping the preset")
     func skipWarning() throws {
         // `safety_settings` with only its preset set: field 21, `{ 1: 2 }`.
@@ -72,5 +106,30 @@ struct SyncedPreferencesProtoTests {
             }
         }
         #expect(preset == 2)
+    }
+
+    /// Discord's `?.value ?? false`, and its write of `BoolValue{value}` either
+    /// way — so off goes as a present empty wrapper.
+    @Test("Always preview video reads as Discord reads it, and writes beside the soundboard")
+    func alwaysPreviewVideo() throws {
+        var volume = ProtobufWriter()
+        volume.float(field: 1, 42.5)
+        var voice = ProtobufWriter()
+        voice.message(field: 9, volume.data)
+        var blob = ProtobufWriter()
+        blob.message(field: 5, voice.data)
+        #expect(SyncedPreferencesProto.decode(blob.data).alwaysPreviewsVideo == false)
+
+        let on = try #require(Data(base64Encoded: SyncedPreferencesProto.patch(
+            applying: .alwaysPreviewsVideo(true), to: blob.data
+        )))
+        #expect(SyncedPreferencesProto.decode(on).alwaysPreviewsVideo == true)
+        #expect(SyncedPreferencesProto.decode(on).soundboardVolume == 42.5)
+
+        let off = try #require(Data(base64Encoded: SyncedPreferencesProto.patch(
+            applying: .alwaysPreviewsVideo(false), to: on
+        )))
+        #expect(SyncedPreferencesProto.decode(off).alwaysPreviewsVideo == false)
+        #expect(SyncedPreferencesProto.decode(off).soundboardVolume == 42.5)
     }
 }

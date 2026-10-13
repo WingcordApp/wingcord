@@ -72,7 +72,7 @@ struct IncomingCallCard: View {
         .padding(.horizontal, Spacing.snug)
         .padding(.vertical, Spacing.base)
         .frame(width: 360)
-        .glassEffect(.clear.tint(Palette.flyoutTint), in: .rect(cornerRadius: Radius.card))
+        .glassEffect(.regular, in: .rect(cornerRadius: Radius.card))
         .padding(.top, Spacing.base)
         .transition(.move(edge: .top).combined(with: .materialize(from: .top)))
         .task {

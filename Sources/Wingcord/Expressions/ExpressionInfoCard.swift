@@ -170,12 +170,10 @@ private struct PackSection: View {
             if pack.isOffered, let openStickerPack {
                 Button { openStickerPack(pack.sectionID) } label: {
                     Text("View More Stickers")
-                        .font(.system(.subheadline, weight: .semibold))
                         .frame(maxWidth: .infinity)
-                        .padding(.vertical, Spacing.base)
-                        .contentShape(.rect)
                 }
-                .buttonStyle(.glass)
+                .buttonStyle(.bordered)
+                .controlSize(.large)
                 .accessibilityHint("Opens the sticker picker at \(pack.name)")
             }
         }
@@ -266,12 +264,10 @@ struct ExpressionSourceRow: View {
             if let guildID = joinableGuildID, let previewGuild {
                 Button { previewGuild(guildID) } label: {
                     Label("Join Server", systemImage: "plus")
-                        .font(.system(.subheadline, weight: .semibold))
                         .frame(maxWidth: .infinity)
-                        .padding(.vertical, Spacing.base)
-                        .contentShape(.rect)
                 }
-                .buttonStyle(.glass)
+                .buttonStyle(.bordered)
+                .controlSize(.large)
                 .padding(.top, Spacing.tight)
             }
         }
@@ -296,7 +292,7 @@ struct ExpressionSourceRow: View {
         HStack(spacing: Spacing.base) {
             AnimatedPicture(url: source.iconURL, side: Metrics.avatarMessage, contentMode: .fill) {
                 Text(source.monogram)
-                    .font(.system(size: 11, weight: .bold))
+                    .font(.system(.subheadline, weight: .bold))
                     .foregroundStyle(Ink.secondary)
                     .frame(width: Metrics.avatarMessage, height: Metrics.avatarMessage)
                     .background(Palette.surfaceRaised)

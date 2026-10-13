@@ -44,7 +44,7 @@ struct ComposerBlocker: View {
             MessageRequestButton(title: buttonTitle, isProminent: false, isBusy: isBusy, action: action)
         }
         .padding(Spacing.snug)
-        .glassEffect(.clear, in: .rect(cornerRadius: Radius.glass))
+        .glassEffect(.regular, in: .rect(cornerRadius: Radius.glass))
         .padding(.horizontal, Spacing.margin)
         .padding(.bottom, Spacing.snug)
     }

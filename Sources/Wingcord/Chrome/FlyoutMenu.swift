@@ -35,6 +35,9 @@ enum FlyoutAccessory: Equatable {
     case control(Bool)
     /// A short trailing label — the level a submenu is currently set to.
     case detail(String)
+    /// A choice the account cannot make — Go Live's Nitro and boost
+    /// resolutions. Drawn on a row that is also disabled.
+    case locked
 }
 
 /// One row of a glass flyout.
@@ -157,6 +160,10 @@ struct FlyoutRow: View {
                 .font(.system(.caption))
                 .foregroundStyle(Ink.tertiary)
                 .lineLimit(1)
+        case .locked:
+            Image(systemName: "lock.fill")
+                .font(.system(size: 10, weight: .semibold))
+                .foregroundStyle(Ink.quaternary)
         }
     }
 

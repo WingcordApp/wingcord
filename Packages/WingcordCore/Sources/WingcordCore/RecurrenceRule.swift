@@ -94,6 +94,26 @@ public struct RecurrenceRule: Hashable, Sendable {
         occurrences(from: date.addingTimeInterval(1), until: .distantFuture, limit: 1).first
     }
 
+    /// Whether a date's id could be one of this series' dates — Discord's
+    /// `p$`, which an event link's date passes before its card is drawn: the
+    /// same time of day in UTC, and for a weekly or a yearly rule the same
+    /// weekday or day of the month. **Coarse on purpose**, Discord's own
+    /// test: a monthly or daily date at the right time passes whatever its day.
+    public func admits(occurrence id: UInt64) -> Bool {
+        let date = ScheduledEvent.originalStart(ofOccurrence: id)
+        let parts: Set<Calendar.Component> = [.hour, .minute, .second, .weekday, .day]
+        let first = Self.calendar.dateComponents(parts, from: start)
+        let asked = Self.calendar.dateComponents(parts, from: date)
+        guard first.hour == asked.hour, first.minute == asked.minute, first.second == asked.second else {
+            return false
+        }
+        switch frequency {
+        case .weekly: return first.weekday == asked.weekday
+        case .yearly: return first.day == asked.day
+        case .monthly, .daily: return true
+        }
+    }
+
     // MARK: Walking the calendar
 
     private static let calendar: Calendar = {

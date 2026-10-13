@@ -101,6 +101,10 @@ struct WingcordApp: App {
                 .providesSettingsWindow()
                 .providesServerSettingsWindow()
                 .showsPerformanceInspector()
+                // **Before every layer a tile or a control can raise**, so a
+                // profile or a flyout opened from the full-screen call comes up
+                // over it.
+                .presentsCallFullScreen()
                 .presentsMedia()
                 .presentsMessageActions()
                 .presentsProfiles()
@@ -134,6 +138,9 @@ struct WingcordApp: App {
                 .presentsQuickSwitcher()
                 .watchesPushToTalk()
                 .publishesGameActivity()
+                // The menu bar's workspace commands are on while this window is
+                // in front, and only then — `FocusedValues.workspaceIsKey`.
+                .focusedSceneValue(\.workspaceIsKey, true)
                 .resolvesMotion()
                 .environment(model)
                 .frame(
@@ -194,10 +201,20 @@ struct WingcordCommands: Commands {
     /// bounds check when it is opened and nothing at all when it is not.
     var model: AppModel
 
+    /// Whether the workspace is in front — see `FocusedValues.workspaceIsKey`.
+    /// Read once per build of the menu bar, and it moves only when the key
+    /// window does, so it costs §4.95 nothing.
+    @FocusedValue(\.workspaceIsKey) private var workspaceIsKey
+
     var body: some Commands {
+        let isWorkspace = workspaceIsKey == true
         // The New Window and New Document items a default menu bar carries
-        // point at scenes this app does not have.
-        CommandGroup(replacing: .newItem) {}
+        // point at scenes this app does not have; Discord's ⇧⌘N, Create or
+        // join a server, stands where they were.
+        CommandGroup(replacing: .newItem) {
+            ShortcutMenuItem(shortcut: .addServer, model: model)
+                .disabled(!isWorkspace)
+        }
         // Settings is a `Window` scene rather than a `Settings` scene, so the
         // item and its ⌘, are installed by hand. Same title and same shortcut
         // macOS would have given it, in the same place in the app menu.
@@ -206,73 +223,269 @@ struct WingcordCommands: Commands {
                 .keyboardShortcut(",", modifiers: .command)
         }
 
-        // A Go menu rather than items buried in View: these are destinations, and
-        // a reader looking for "how do I get to the next channel" looks under a
-        // heading that says going somewhere.
+        // **The menu bar is Alex's reference** (DESIGN-NOTES §10, images
+        // 33–43): Edit, View, User, Channel, Voice, Window — Channel before
+        // Voice, as its note asks. The HIG's rule is that every toolbar item is
+        // also a command here; the ones whose acts do not exist yet are listed
+        // in §10.1 rather than shown greyed for ever.
         //
-        // **Every equivalent here is read from `AppSettings`, not written
-        // down.** That is what makes the shortcuts pane a set of bindings rather
-        // than a printed table beside them: one list — `AppShortcut` — carries
-        // the title, the default, the availability test and the verb, so a row
-        // in the pane and an item in this menu cannot come to mean different
-        // things.
-        CommandMenu("Go") {
-            Group {
-                shortcutItem(.quickSwitcher)
-                Divider()
-                shortcutItem(.nextChannel)
-                shortcutItem(.previousChannel)
-                Divider()
-                shortcutItem(.nextServer)
-                shortcutItem(.previousServer)
-                shortcutItem(.directMessages)
+        // **Every rebindable equivalent is read from `AppSettings`**, through
+        // `ShortcutMenuItem`: one table — `AppShortcut` — carries the title,
+        // the default, the availability test and the verb, so a row in the
+        // Shortcuts pane and an item here cannot come to mean different things.
 
+        // View › Show/Hide Sidebar, ⌃⌘S — the reference's "Expand Side Bar".
+        SidebarCommands()
+
+        CommandGroup(after: .pasteboard) {
+            Group {
                 Divider()
+                Menu("Search") {
+                    ShortcutMenuItem(shortcut: .searchChannel, model: model)
+                    Divider()
+                    ShortcutMenuItem(shortcut: .quickSwitcher, model: model, title: "Quick Search")
+                }
+                Divider()
+                // Return's own act — ⌘↩ is Discord's Answer Call.
+                Button("Send Message") { ComposerFormatCommand.send(.send) }
+                    .disabled(!model.menuContext.isConversation)
+                ShortcutMenuItem(shortcut: .replyToLastMessage, model: model)
+                ShortcutMenuItem(shortcut: .forwardLastMessage, model: model)
+                // A fixed title: reading whether the newest message is pinned
+                // would re-read the message list on every message — `MenuContext`.
+                Button("Pin Last Message") { model.togglePinOnLatestMessage() }
+                    .disabled(!model.menuContext.isConversation)
+                // Up in an empty composer, Discord's own key — not a menu key.
+                Button("Edit Last Message") {
+                    guard let channelID = model.selectedChannelID else { return }
+                    model.editLatestOwnMessage(in: channelID)
+                }
+                .disabled(!model.menuContext.isConversation)
+                Button("Delete Last Message…") { model.deleteLatestOwnMessage() }
+                    .disabled(!model.menuContext.isConversation)
+            }
+            .disabled(!isWorkspace)
+        }
+
+        CommandGroup(after: .sidebar) {
+            Divider()
+            Button("Make Text Bigger") { AppSettings.shared.textScale += 0.1 }
+                .keyboardShortcut("+", modifiers: .command)
+            // Discord's ⌘0, its zoom reset.
+            Button("Make Text Normal Size") { AppSettings.shared.textScale = 1 }
+                .keyboardShortcut("0", modifiers: .command)
+            Button("Make Text Smaller") { AppSettings.shared.textScale -= 0.1 }
+                .keyboardShortcut("-", modifiers: .command)
+            Divider()
+            Group {
+                ShortcutMenuItem(shortcut: .showPins, model: model)
+                ShortcutMenuItem(shortcut: .showThreads, model: model)
+                ShortcutMenuItem(shortcut: .memberList, model: model)
+                ShortcutMenuItem(shortcut: .inbox, model: model)
+                Divider()
+                ShortcutMenuItem(shortcut: .toggleCategories, model: model)
+            }
+            .disabled(!isWorkspace)
+            Divider()
+            // Alex's reference: the times on the messages, back under the
+            // pointer.
+            Toggle("Hide Times", isOn: Binding(
+                get: { AppSettings.shared.hidesMessageTimes },
+                set: { AppSettings.shared.hidesMessageTimes = $0 }
+            ))
+        }
+
+        CommandMenu("User") {
+            UserStatusPicker(model: model)
+            // The custom-status editor lives on the reader's own card.
+            Button("Set Status…") { model.openOwnCard(on: .customStatus) }
+                .disabled(model.currentUserID == nil || !isWorkspace)
+            Divider()
+            Button("View Profile") {
+                guard let userID = model.currentUserID else { return }
+                model.openProfile(userID, anchor: .zero, depth: .full)
+            }
+            .disabled(model.currentUserID == nil || !isWorkspace)
+            Button("Edit Profile…") { model.editOwnProfile() }
+                .disabled(model.currentUserID == nil || !isWorkspace)
+            Button("Edit Server Profile…") {
+                guard let guildID = model.menuContext.guildID else { return }
+                model.editPerServerProfile(in: guildID)
+            }
+            .disabled(model.menuContext.guildID == nil || !isWorkspace)
+            Divider()
+            // Vencord's CustomRPC toolbox item: the Rich Presence builder's
+            // card last on, or the first (DESIGN-NOTES §11).
+            Toggle("Show Custom RPC", isOn: Binding(
+                get: { model.showsCustomPresence },
+                set: { _ in model.toggleShowsCustomPresence() }
+            ))
+            .disabled(AppSettings.shared.customPresences.isEmpty)
+        }
+
+        CommandMenu("Channel") {
+            Group {
+                ChannelRecentsMenu(model: model)
+                Divider()
+                ShortcutMenuItem(shortcut: .channelTopic, model: model, title: "Show Details")
+                ShortcutMenuItem(shortcut: .voiceChat, model: model)
+                Divider()
+                ShortcutMenuItem(shortcut: .uploadFile, model: model)
+                Button("Create a Poll") {
+                    guard let channelID = model.menuContext.channelID else { return }
+                    model.openPollEditor(in: channelID)
+                }
+                .disabled(!model.menuContext.isConversation)
+                ShortcutMenuItem(shortcut: .viewGIFs, model: model)
+                ShortcutMenuItem(shortcut: .viewEmojis, model: model)
+                ShortcutMenuItem(shortcut: .viewStickers, model: model)
+                ShortcutMenuItem(shortcut: .createThread, model: model)
+                Divider()
+                ChannelProfileMenu(model: model)
+                Divider()
+                ShortcutMenuItem(shortcut: .startCall, model: model)
+                Button("Start Video Call") {
+                    guard let channelID = model.menuContext.channelID else { return }
+                    model.startVideoCall(in: channelID)
+                }
+                .disabled(!AppShortcut.startCall.isAvailable(in: model))
+                Divider()
+                Button(model.menuContext.channelID.map { model.pinnedChannelIDs.contains($0) } == true ? "Unpin" : "Pin") {
+                    guard let channelID = model.menuContext.channelID else { return }
+                    model.setDirectMessagePinned(!model.pinnedChannelIDs.contains(channelID), channelID: channelID)
+                }
+                .disabled(!model.menuContext.isPrivate)
+                Button("Close DM") {
+                    guard let channelID = model.menuContext.channelID else { return }
+                    model.closeDirectMessage(channelID)
+                }
+                .disabled(!model.menuContext.isPrivate)
+                Divider()
+                ChannelInviteMenu(model: model)
+                // Discord's Add Friends to DM, which grows a group.
+                Button("Add to Group DM…") {
+                    guard let channelID = model.menuContext.channelID else { return }
+                    model.groupInvite = channelID
+                }
+                .disabled(model.menuContext.kind != .groupDirectMessage)
+                Divider()
+                ChannelDeveloperMenu(model: model)
+                ChannelSettingsMenu(model: model)
+                Divider()
+                ChannelNotificationsMenu(model: model)
+                Divider()
+                // Escape in the composer, Discord's own key — not a menu key.
+                Button("Mark Channel Read") {
+                    guard let channelID = model.selectedChannelID else { return }
+                    model.markRead(channelID)
+                }
+                .disabled(model.menuContext.channelID == nil)
+                ShortcutMenuItem(shortcut: .markServerRead, model: model)
+                ShortcutMenuItem(shortcut: .markTopInboxChannelRead, model: model)
+                ShortcutMenuItem(shortcut: .jumpToOldestUnread, model: model)
+            }
+            .disabled(!isWorkspace)
+        }
+
+        CommandMenu("Voice") {
+            Button("Leave Voice Channel") { model.leaveVoice() }
+                .disabled(model.connectedVoiceChannelID == nil)
+            Button("Rejoin Last Voice Channel") { model.rejoinLastVoiceChannel() }
+                .disabled(model.connectedVoiceChannelID != nil || model.lastVoiceChannelID == nil)
+            ShortcutMenuItem(shortcut: .currentCall, model: model)
+            ShortcutMenuItem(shortcut: .answerCall, model: model)
+            Divider()
+            Toggle(isOn: Binding(get: { model.isSelfMuted }, set: { _ in model.toggleVoiceMute() })) {
+                Text(AppShortcut.toggleMute.menuTitle)
+            }
+            .keyboardShortcut(AppSettings.shared.shortcut(for: .toggleMute)?.keyboardShortcut)
+            .disabled(!AppShortcut.toggleMute.isAvailable(in: model))
+            Toggle(isOn: Binding(get: { model.isSelfDeafened }, set: { _ in model.toggleVoiceDeafen() })) {
+                Text(AppShortcut.toggleDeafen.menuTitle)
+            }
+            .keyboardShortcut(AppSettings.shared.shortcut(for: .toggleDeafen)?.keyboardShortcut)
+            .disabled(!AppShortcut.toggleDeafen.isAvailable(in: model))
+            Toggle(isOn: Binding(get: { model.isCameraOn }, set: { _ in model.toggleCamera() })) {
+                Text(AppShortcut.toggleCamera.menuTitle)
+            }
+            .keyboardShortcut(AppSettings.shared.shortcut(for: .toggleCamera)?.keyboardShortcut)
+            .disabled(!AppShortcut.toggleCamera.isAvailable(in: model))
+            Toggle("Share Screen", isOn: Binding(get: { model.isScreenSharing }, set: { _ in model.toggleScreenShare() }))
+                .disabled(model.connectedVoiceChannelID == nil)
+            Divider()
+            Section("Camera") { VoiceDevicePicker(kind: .camera, model: model).labelsHidden() }
+            Section("Microphone") {
+                VoiceDevicePicker(kind: .input, model: model).labelsHidden()
+                InputProfilePicker(model: model)
+            }
+            Section("Output") { VoiceDevicePicker(kind: .output, model: model).labelsHidden() }
+        }
+
+        // **Format, to Alex's reference** — on the composer being typed in, sent
+        // down the responder chain (`ComposerFormatCommand`); with no composer
+        // focused the item does nothing, as a Format menu does over a window
+        // with no text in it. Only Bold carries its key here: the composer
+        // takes ⌘I and ⌘U itself, which outside it are Inbox and Member List.
+        CommandMenu("Format") {
+            Group {
+                Button("Bold") { ComposerFormatCommand.send(.format(.bold)) }
+                    .keyboardShortcut("b", modifiers: .command)
+                Button("Italic") { ComposerFormatCommand.send(.format(.italics)) }
+                Button("Underline") { ComposerFormatCommand.send(.format(.underline)) }
+                Button("Strikethrough") { ComposerFormatCommand.send(.format(.strikethrough)) }
+                Divider()
+                Button("Spoiler") { ComposerFormatCommand.send(.format(.spoiler)) }
+                Menu("Codeblock") {
+                    Button("Inline") { ComposerFormatCommand.send(.format(.inlineCode)) }
+                    Button("Multiline") { ComposerFormatCommand.send(.codeBlock) }
+                }
+                Menu("Header") {
+                    Button("Title") { ComposerFormatCommand.send(.linePrefix("# ")) }
+                    Button("Heading") { ComposerFormatCommand.send(.linePrefix("## ")) }
+                    Button("Subheading") { ComposerFormatCommand.send(.linePrefix("### ")) }
+                }
+                Button("Subtext") { ComposerFormatCommand.send(.linePrefix("-# ")) }
+                Button("Quote") { ComposerFormatCommand.send(.quote) }
+                Divider()
+                Button("Add @mention") { ComposerFormatCommand.send(.insert("@")) }
+                Button("Add @time") { ComposerFormatCommand.send(.insert("@time")) }
+            }
+            .disabled(!isWorkspace || !model.menuContext.isConversation)
+        }
+
+        // Window › going somewhere, above the window list — where the
+        // reference puts Go to Next and Previous Channel. The servers follow.
+        CommandGroup(before: .windowList) {
+            Group {
+                ShortcutMenuItem(shortcut: .nextChannel, model: model, title: "Go to Next Channel")
+                ShortcutMenuItem(shortcut: .previousChannel, model: model, title: "Go to Previous Channel")
+                ShortcutMenuItem(shortcut: .nextUnreadChannel, model: model, title: "Go to Next Unread Channel")
+                ShortcutMenuItem(shortcut: .previousUnreadChannel, model: model, title: "Go to Previous Unread Channel")
+                ShortcutMenuItem(shortcut: .nextMentionChannel, model: model, title: "Go to Next Unread Channel with Mentions")
+                ShortcutMenuItem(shortcut: .previousMentionChannel, model: model, title: "Go to Previous Unread Channel with Mentions")
+                Divider()
+                ShortcutMenuItem(shortcut: .nextServer, model: model, title: "Go to Next Server")
+                ShortcutMenuItem(shortcut: .previousServer, model: model, title: "Go to Previous Server")
+                ShortcutMenuItem(shortcut: .directMessages, model: model)
 
                 // Nine items rather than a loop over the servers the reader
                 // happens to have: ⌘4 must mean the fourth server whether or not
                 // there is one, or the shortcut changes meaning as you join and
                 // leave. **Deliberately not rebindable** — nine rows in a
                 // settings pane for one idea, and the idea is the digit.
-                ForEach(1...9, id: \.self) { ordinal in
-                    Button("Server \(ordinal)") { model.selectGuild(atOrdinal: ordinal) }
-                        .keyboardShortcut(
-                            KeyEquivalent(Character("\(ordinal)")), modifiers: .command
-                        )
+                Menu("Servers") {
+                    ForEach(1...9, id: \.self) { ordinal in
+                        Button("Server \(ordinal)") { model.selectGuild(atOrdinal: ordinal) }
+                            .keyboardShortcut(
+                                KeyEquivalent(Character("\(ordinal)")), modifiers: .command
+                            )
+                    }
                 }
-                .disabled(!model.canNavigate)
+                .disabled(!model.menuContext.isReady)
+                Divider()
             }
+            .disabled(!isWorkspace)
         }
-
-        CommandMenu("Channel") {
-            shortcutItem(.memberList)
-            shortcutItem(.inbox)
-            shortcutItem(.channelTopic)
-            Divider()
-            shortcutItem(.markChannelRead)
-            shortcutItem(.markServerRead)
-            Divider()
-            shortcutItem(.toggleMute)
-            shortcutItem(.toggleDeafen)
-        }
-    }
-
-    /// One menu item, bound to whatever the reader has moved it to.
-    ///
-    /// **A cleared binding keeps its item and loses its equivalent**, which is
-    /// what makes clearing one a way of freeing a combination rather than of
-    /// hiding a command — the item is still in the menu, still says what it
-    /// does, and is still clickable.
-    ///
-    /// On the item rather than on the menu: a whole menu that greys out while
-    /// the app is connecting reads as a feature that is missing, where greyed
-    /// items read as a feature that is not ready yet.
-    @ViewBuilder
-    private func shortcutItem(_ shortcut: AppShortcut) -> some View {
-        let binding = AppSettings.shared.shortcut(for: shortcut)?.keyboardShortcut
-        Button(shortcut.menuTitle) { shortcut.perform(in: model) }
-            .keyboardShortcut(binding)
-            .disabled(!shortcut.isAvailable(in: model))
     }
 }
 

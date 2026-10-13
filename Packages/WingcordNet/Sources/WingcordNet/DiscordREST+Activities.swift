@@ -23,19 +23,21 @@ extension DiscordREST {
     /// The collections route below returns richer *rows* but no assets, and
     /// the artwork a featured tile draws — `embedded_cover` — exists only
     /// here. Merging the two is `ActivityDirectory`'s whole job.
-    public func activityShelf() async throws -> [ApplicationID: ActivityApp] {
+    ///
+    /// **In the shelf's own order**, which is Discord's ranking: the captured
+    /// shelf lists its `activities` and its `applications` in one order, and a
+    /// call's Suggested Activities are its first five.
+    public func activityShelf() async throws -> [ActivityApp] {
         let shelf = try await get("/activities/shelf", route: "activities/shelf", as: ShelfDTO.self)
         let assets = shelf.assets ?? [:]
-        return Dictionary(
-            (shelf.applications ?? []).compactMap { dto -> (ApplicationID, ActivityApp)? in
-                guard var app = dto.domain else { return nil }
-                app.tileAssetID = ShelfDTO.tileAsset(in: assets[app.id.description])
-                return (app.id, app)
-            },
+        var seen = Set<ApplicationID>()
+        return (shelf.applications ?? []).compactMap { dto -> ActivityApp? in
             // A shelf that listed one app twice would be Discord's bug, not a
             // reason to crash: keep the first, which is the higher-ranked row.
-            uniquingKeysWith: { first, _ in first }
-        )
+            guard var app = dto.domain, seen.insert(app.id).inserted else { return nil }
+            app.tileAssetID = ShelfDTO.tileAsset(in: assets[app.id.description])
+            return app
+        }
     }
 
     /// The launcher's titled rows.
@@ -268,7 +270,7 @@ extension DiscordREST {
         )
     }
 
-    private func frecencySettings() async throws -> String {
+    func frecencySettings() async throws -> String {
         struct Response: Decodable { var settings: String? }
         return try await get(
             "/users/@me/settings-proto/2",

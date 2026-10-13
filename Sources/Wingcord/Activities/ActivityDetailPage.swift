@@ -613,25 +613,25 @@ struct ActivityDetailPage: View {
                     }
                     .frame(minWidth: 96)
                 }
-                .buttonStyle(.glassProminent)
+                .buttonStyle(.borderedProminent)
                 .controlSize(.large)
                 .disabled(isLaunching)
             }
             Button("Add App", systemImage: "plus.app") { onAdd() }
-                .buttonStyle(.glass)
+                .buttonStyle(.bordered)
                 .controlSize(.large)
             Button {
                 NSPasteboard.general.clearContents()
                 NSPasteboard.general.setString(Self.directoryURL(applicationID), forType: .string)
             } label: {
                 // **No frame of its own.** A 28-point box inside a `.large`
-                // glass button is the glyph's size *plus* the style's own
+                // bordered button is the glyph's size *plus* the style's own
                 // padding, which drew a slab half again as tall as the Add App
-                // pill beside it. `buttonBorderShape(.circle)` is what makes the
-                // two the same height and this one round.
+                // button beside it. `buttonBorderShape(.circle)` is what makes
+                // the two the same height and this one round.
                 Image(systemName: "link")
             }
-            .buttonStyle(.glass)
+            .buttonStyle(.bordered)
             .buttonBorderShape(.circle)
             .controlSize(.large)
             .help("Copy a link to this app")
@@ -705,15 +705,12 @@ struct ActivityDetailPage: View {
             Task { await model.sessionController.leaveActivity() }
         } label: {
             Text("Leave")
-                .font(.system(.subheadline, weight: .semibold))
                 .lineLimit(1)
                 .frame(maxWidth: .infinity)
-                .frame(height: Metrics.control)
-                .contentShape(.capsule)
         }
-        .buttonStyle(.plain)
-        .foregroundStyle(.white)
-        .emphasisChrome(Palette.destructive)
+        .buttonStyle(.borderedProminent)
+        .tint(Palette.destructive)
+        .controlSize(.large)
     }
 
     private func launchButton(
@@ -742,19 +739,15 @@ struct ActivityDetailPage: View {
                     ProgressView().controlSize(.small)
                 } else {
                     Text(inDirectMessage ? "Launch in DM" : launchLabel(entryPoint))
-                        .font(.system(.subheadline, weight: .semibold))
                         .lineLimit(1)
                 }
             }
             .frame(maxWidth: .infinity)
-            .frame(height: Metrics.control)
-            .contentShape(.capsule)
         }
-        .buttonStyle(.plain)
         // The accent is reserved for the primary action. A second button beside
         // it in the same colour is two primaries, which is none.
-        .foregroundStyle(inDirectMessage ? AnyShapeStyle(Ink.primary) : AnyShapeStyle(.white))
-        .modifier(LaunchButtonChrome(isSecondary: inDirectMessage))
+        .modifier(LaunchButtonWeight(isSecondary: inDirectMessage))
+        .controlSize(.large)
         .disabled(isLaunching)
     }
 
@@ -1098,20 +1091,20 @@ private struct AppCommandRowView: View {
     }
 }
 
-/// The launch bar's two weights.
+/// The launch bar's two weights: the launch is the prominent button, Launch in
+/// DM beside it a bordered one.
 ///
-/// A modifier rather than a branch at the call site, because `.emphasisChrome`
-/// and `.chromeOverMedia` return different opaque types and a `ViewBuilder`
-/// `if` around them makes the button's identity change with the branch — which
-/// is what makes SwiftUI drop its press state mid-press.
-private struct LaunchButtonChrome: ViewModifier {
+/// A modifier rather than a branch at the call site, because the two styles are
+/// different types and a `ViewBuilder` `if` around them would give the button
+/// two identities — which is what makes SwiftUI drop its press state mid-press.
+private struct LaunchButtonWeight: ViewModifier {
     var isSecondary: Bool
 
     func body(content: Content) -> some View {
         if isSecondary {
-            content.chromeOverMedia(in: .capsule)
+            content.buttonStyle(.bordered)
         } else {
-            content.emphasisChrome(Palette.accent)
+            content.buttonStyle(.borderedProminent)
         }
     }
 }

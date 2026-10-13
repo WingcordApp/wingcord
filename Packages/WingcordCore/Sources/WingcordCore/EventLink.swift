@@ -39,4 +39,31 @@ public struct EventLink: Hashable, Sendable {
         }
         return EventLink(guildID: GuildID(rawValue: guild), eventID: event, occurrence: occurrence)
     }
+
+    /// The events a message's text links to, in order and each once — what
+    /// Discord draws its event card under a message for (`721779`'s `EVENT`
+    /// code, `guild-event[-date]`), at most ten a message, as every code link.
+    ///
+    /// **Discord's own hosts only.** Discord's rule takes any address whose
+    /// path starts `/events/`; a card under a stranger's site would be a card
+    /// for an event nobody linked.
+    public static func links(in content: String) -> [EventLink] {
+        guard content.contains("/events/") else { return [] }
+        var links: [EventLink] = []
+        for match in content.matches(of: pattern) {
+            guard let guild = UInt64(match.1), let event = UInt64(match.2) else { continue }
+            let link = EventLink(
+                guildID: GuildID(rawValue: guild),
+                eventID: event,
+                occurrence: match.3.flatMap { UInt64($0) }
+            )
+            guard !links.contains(link) else { continue }
+            links.append(link)
+            if links.count == 10 { break }
+        }
+        return links
+    }
+
+    nonisolated(unsafe) private static let pattern =
+        /(?i)(?:https?:\/\/)?(?:www\.|ptb\.|canary\.)?discord(?:app)?\.com\/events\/([0-9]{15,21})\/([0-9]{15,21})(?:\/([0-9]{15,21}))?\/?(?=$|[\s<>)\]"'?#])/
 }

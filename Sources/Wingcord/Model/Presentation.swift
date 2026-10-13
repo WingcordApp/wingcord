@@ -519,8 +519,14 @@ struct VoiceMemberChip: Hashable, Sendable, Identifiable {
     var streamKey: String?
 
     /// Whether anything is drawn in the row's trailing cluster.
+    /// Muted by the reader alone, and which kind of client they are on — both
+    /// known only in the reader's own call, as Discord's sidebar has them.
+    var isLocallyMuted = false
+    var platform: VoicePlatform?
+
     var hasAccessories: Bool {
-        isStreaming || isMuted || isDeafened || gameIconURL != nil
+        isStreaming || isMuted || isDeafened || gameIconURL != nil || isCameraOn
+            || isLocallyMuted || (platform != nil && platform != .desktop)
     }
 }
 
@@ -640,6 +646,16 @@ struct WorkspacePresentation: Hashable, Sendable {
         var isServerPage: Bool {
             if case .guildSurface = self { return true }
             return false
+        }
+
+        /// A voice or stage channel: the call, whose bar carries no search.
+        /// Discord's channel header has an empty toolbar case for both, and the
+        /// call view puts back only its own call items and Show Chat.
+        var isCall: Bool {
+            switch self {
+            case .voice, .stage: true
+            default: false
+            }
         }
     }
 

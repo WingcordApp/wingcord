@@ -62,8 +62,17 @@ nonisolated struct Hotkey: Equatable, Hashable, Sendable {
     /// there is nothing for them to eat.
     var isValid: Bool {
         if Self.functionKeyCodes.contains(keyCode) { return true }
+        // **A key that types nothing needs any modifier at all** — Discord's
+        // ⇧Esc and ⇧PageUp. Bare, it is a key a field already uses: Escape
+        // is every field's way out.
+        if Self.silentKeyCodes.contains(keyCode) { return !modifiers.isEmpty }
         return !modifiers.intersection([.command, .option, .control]).isEmpty
     }
+
+    /// Keys that never type a character, so ⇧ alone cannot turn one into text.
+    private static let silentKeyCodes: Set<UInt16> = [
+        UInt16(kVK_Escape), UInt16(kVK_PageUp), UInt16(kVK_PageDown), UInt16(kVK_Home), UInt16(kVK_End),
+    ]
 
     /// Why a combination was refused, in the words the flyout shows.
     var rejection: String? {

@@ -5,20 +5,16 @@ import WingcordCore
 
 // MARK: - A call inside a conversation
 //
-// A panel over the top of a direct message's transcript, holding the same tiles
-// and the same controls the channel stage does — and resizable, because a call
-// in a conversation is something people want *smaller* while they type and
-// bigger while they watch.
+// A band across the top of a direct message, holding the same tiles and the
+// same controls the channel stage does — and resizable, because a call in a
+// conversation is something people want *smaller* while they type and bigger
+// while they watch.
 //
-// **`.clear` glass, not `.regular`, and that is §4 rather than taste.** What
-// passes under this panel is the transcript: faces, emoji, somebody's message.
-// `.regular` frosts all of it into a grey slab, which is the one thing glass
-// exists not to be. The tint is what stops it disappearing over an empty stretch
-// of near-black.
-//
-// **The transcript is inset by the panel's height rather than covered by it.**
-// A call that hides the last four messages is a call people close to read, which
-// defeats the point of having it in the conversation at all.
+// **Opaque, edge to edge.** It was a clear-glass card floating over the
+// transcript, so messages read through the call. The band is the call's own
+// surface, the transcript is pushed down by its height rather than covered by
+// it, and a hairline closes it off — reference 22, and Alex: "the call overlay
+// could be a blur, like on Lumen Club".
 struct VoiceCallOverlay: View {
     var presentation: VoicePresentation
     var effects: [UserID: String]
@@ -61,22 +57,16 @@ struct VoiceCallOverlay: View {
             let ceiling = min(Self.maximumHeight, max(Self.minimumHeight, proxy.size.height * 0.62))
             let resolved = resolvedHeight(ceiling: ceiling)
 
-            panel
-                .frame(height: isFullHeight ? proxy.size.height - Spacing.margin : resolved)
+            band
+                .frame(height: isFullHeight ? proxy.size.height : resolved)
                 .frame(maxWidth: .infinity, alignment: .top)
-                .padding(.horizontal, Spacing.base)
-                .padding(.top, Spacing.base)
                 .onChange(of: isFullHeight ? proxy.size.height : resolved, initial: true) { _, value in
-                    heightChanged(value + Spacing.base * 2)
+                    heightChanged(value)
                 }
         }
-        // The panel arrives from the edge it lives on and leaves the same way —
-        // spatial symmetry, §3 — and materialises rather than fading, because
-        // it is glass.
-        .transition(
-            .move(edge: .top)
-                .combined(with: .materialize(from: .top))
-        )
+        // The band arrives from the edge it lives on and leaves the same way —
+        // spatial symmetry, §3.
+        .transition(.move(edge: .top).combined(with: .opacity))
     }
 
     private func resolvedHeight(ceiling: CGFloat) -> CGFloat {
@@ -90,22 +80,24 @@ struct VoiceCallOverlay: View {
         )
     }
 
-    // MARK: The panel
+    // MARK: The band
 
-    private var panel: some View {
+    private var band: some View {
         VStack(spacing: 0) {
             tiles
             controls
             grabber
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        // Layout first, glass last — and one body for the whole panel, so
-        // nothing inside it is a second material.
-        .glassEffect(
-            .clear.tint(Palette.flyoutTint),
-            in: .rect(cornerRadius: Radius.card)
-        )
-        .overlay(alignment: .bottomTrailing) { expandButton }
+        .background(Palette.surface)
+        .overlay(alignment: .bottom) { Divider() }
+        .overlay(alignment: .bottomTrailing) {
+            HStack(spacing: Spacing.tight) {
+                CallFullScreenButton()
+                expandButton
+            }
+            .padding(Spacing.snug)
+        }
         .animation(motion.reposition, value: isFullHeight)
     }
 
@@ -126,19 +118,19 @@ struct VoiceCallOverlay: View {
     }
 
     private var controls: some View {
-        VoiceControlBar(
+        CallControlRow(
             presentation: presentation,
-            isCompact: true,
             toggleMute: toggleMute,
             toggleDeafen: toggleDeafen,
             toggleCamera: toggleCamera,
             toggleScreenShare: toggleScreenShare,
             leave: leave
         )
-        .padding(.vertical, Spacing.snug)
+        .padding(.horizontal, Spacing.snug)
+        .padding(.top, Spacing.snug)
     }
 
-    /// The handle at the foot of the panel.
+    /// The handle at the foot of the band.
     ///
     /// A pill rather than a hit area with nothing in it: an edge that can be
     /// dragged has to say so, and a cursor change alone is a discovery nobody
@@ -146,7 +138,7 @@ struct VoiceCallOverlay: View {
     /// `hover`, fast enough that running the pointer past it leaves no trail.
     private var grabber: some View {
         Capsule()
-            .fill(Color.white.opacity(isGrabberHovering ? 0.42 : 0.22))
+            .fill(isGrabberHovering ? Palette.edgeStrong : Palette.edge)
             .frame(width: 44, height: 4)
             .padding(.bottom, Spacing.base)
             .padding(.top, Spacing.tight)
@@ -208,9 +200,11 @@ struct VoiceCallOverlay: View {
         Button {
             isFullHeight.toggle()
         } label: {
+            // Vertical, because the band grows down the conversation; the
+            // diagonal arrows are full screen's, as they are across macOS.
             Image(symbol: isFullHeight
-                ? "arrow.down.right.and.arrow.up.left"
-                : "arrow.up.left.and.arrow.down.right")
+                ? "rectangle.compress.vertical"
+                : "rectangle.expand.vertical")
                 .font(.system(.footnote, weight: .semibold))
                 .foregroundStyle(Ink.primary)
                 .frame(width: Metrics.compactControl, height: Metrics.compactControl)
@@ -218,7 +212,6 @@ struct VoiceCallOverlay: View {
         }
         .buttonStyle(.plain)
         .background { Circle().fill(Palette.selectionFill) }
-        .padding(Spacing.snug)
         .help(isFullHeight ? "Shrink the call" : "Fill the conversation")
         .accessibilityLabel(Text(isFullHeight ? "Shrink the call" : "Fill the conversation"))
     }
@@ -237,11 +230,6 @@ struct VoiceCallOverlayContainer: View {
     @Environment(AppModel.self) private var model
     @Environment(\.motion) private var motion
     @State private var cameraSession: AVCaptureSession?
-    /// Shared by the lobby and the call, so the glass **morphs** between them
-    /// rather than one surface leaving and another arriving. Joining is
-    /// stepping into a call that is visibly already there; a swap would say the
-    /// opposite. §4, and why `Motion.glassMorph` exists.
-    @Namespace private var callSurface
 
     var body: some View {
         // **Read once per evaluation.** This is a walk of every voice state the
@@ -254,14 +242,12 @@ struct VoiceCallOverlayContainer: View {
         // **Whether this container is showing anything at all**, which is the
         // only thing the transcript's inset may follow.
         let isShowing = lobby != nil || model.voicePresentation.map {
-            $0.isDirect && $0.channelID == channelID
+            $0.isDirect && $0.channelID == channelID && !model.isCallFullScreen
         } ?? false
 
-        return GlassEffectContainer {
-            content(lobby: lobby)
-        }
-        .animation(motion.glassMorph, value: model.connectedVoiceChannelID)
-        .animation(motion.glassMorph, value: waiting.map(\.id))
+        return content(lobby: lobby)
+            .animation(motion.reposition, value: model.connectedVoiceChannelID)
+            .animation(motion.reposition, value: waiting.map(\.id))
         .onChange(of: isShowing) { _, showing in
             // **A panel that has left reports no height of its own**, so the
             // inset it reserved has to be given back here or the transcript
@@ -289,49 +275,37 @@ struct VoiceCallOverlayContainer: View {
     @ViewBuilder
     private func content(lobby: [VoiceParticipant]?) -> some View {
         Group {
+            // Full screen draws the call's tiles itself, and one person's video
+            // can be attached to one view at a time.
             if let presentation = model.voicePresentation,
                presentation.isDirect,
                presentation.channelID == channelID {
-                VoiceCallOverlay(
-                    presentation: presentation,
-                    effects: effectNames,
-                    cameraSession: cameraSession,
-                    selfUserID: model.currentUserID,
-                    attachVideo: model.attachVideo,
-                    watch: model.toggleWatchingStream,
-                    spotlight: model.spotlight,
-                    toggleMute: model.toggleVoiceMute,
-                    toggleDeafen: model.toggleVoiceDeafen,
-                    toggleCamera: model.toggleCamera,
-                    toggleScreenShare: model.toggleScreenShare,
+                if !model.isCallFullScreen {
+                    VoiceCallOverlay(
+                        presentation: presentation,
+                        effects: model.soundboardEffectNames,
+                        cameraSession: cameraSession,
+                        selfUserID: model.currentUserID,
+                        attachVideo: model.attachVideo,
+                        watch: model.toggleWatchingStream,
+                        spotlight: model.spotlight,
+                        toggleMute: model.toggleVoiceMute,
+                        toggleDeafen: model.toggleVoiceDeafen,
+                        toggleCamera: model.toggleCamera,
+                        toggleScreenShare: model.toggleScreenShare,
                         leave: model.leaveVoice,
-                    heightChanged: heightChanged
-                )
-                .glassEffectID(Self.surfaceID, in: callSurface)
+                        heightChanged: heightChanged
+                    )
+                }
             } else if let lobby {
                 VoiceCallLobby(participants: lobby) { model.joinCall(in: channelID) }
                     .frame(height: VoiceCallLobby.height)
                     .frame(maxWidth: .infinity, alignment: .top)
-                    .padding(.horizontal, Spacing.base)
-                    .padding(.top, Spacing.base)
-                    .glassEffectID(Self.surfaceID, in: callSurface)
-                    // The panel arrives from the edge it lives on and leaves the
-                    // same way — §3 — and materialises rather than fading,
-                    // because it is glass.
-                    .transition(.move(edge: .top).combined(with: .materialize(from: .top)))
-                    .onAppear { heightChanged(VoiceCallLobby.height + Spacing.base * 2) }
+                    // The band arrives from the edge it lives on and leaves the
+                    // same way — §3.
+                    .transition(.move(edge: .top).combined(with: .opacity))
+                    .onAppear { heightChanged(VoiceCallLobby.height) }
             }
         }
-    }
-
-    /// One id for both states of one surface.
-    private static let surfaceID = "call-surface"
-
-    private var effectNames: [UserID: String] {
-        var names: [UserID: String] = [:]
-        for (userID, soundID) in model.soundboardEffects {
-            names[userID] = model.soundboardSound(id: soundID)?.name ?? "sound"
-        }
-        return names
     }
 }

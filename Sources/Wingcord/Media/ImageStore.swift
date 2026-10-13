@@ -5,6 +5,7 @@ import ImageIO
 import OSLog
 import Synchronization
 import UniformTypeIdentifiers
+import WingcordCore
 
 /// The one place a remote image is fetched, decoded and cached.
 ///
@@ -228,9 +229,21 @@ nonisolated final class ImageStore: @unchecked Sendable {
     }
 
     private func attemptLoad(key: Key, bucket: Bucket) async -> LoadOutcome {
-        await decodeGate.run {
+        // **An upload's link may have run out**: fetch with a freshly signed
+        // one, and cache under the link the caller holds — see
+        // `AttachmentLinks`. Anything that is not a signed upload skips the hop.
+        let isSigned = AttachmentLink.isSigned(key.url)
+        let url = isSigned ? await AttachmentLinks.shared.usable(key.url) : key.url
+        return await decodeGate.run {
             do {
-                let (data, response) = try await session.data(from: key.url)
+                var (data, response) = try await session.data(from: url)
+                // A refusal of a signed link is asked once more with a fresh
+                // signature — the expiry it carried may simply be wrong.
+                if isSigned, Self.isRefusal(response),
+                   let retry = await AttachmentLinks.shared.retrying(key.url)
+                {
+                    (data, response) = try await session.data(from: retry)
+                }
                 if let http = response as? HTTPURLResponse,
                    !(200..<300).contains(http.statusCode)
                 {
@@ -266,11 +279,51 @@ nonisolated final class ImageStore: @unchecked Sendable {
     /// different ones means a decoration is downloaded twice — once as a still
     /// and once as a filmstrip — for the same bytes.
     func data(for url: URL) async throws -> Data {
-        let (data, response) = try await session.data(from: url)
+        let isSigned = AttachmentLink.isSigned(url)
+        var (data, response) = try await session.data(
+            from: isSigned ? await AttachmentLinks.shared.usable(url) : url
+        )
+        if isSigned, Self.isRefusal(response), let retry = await AttachmentLinks.shared.retrying(url) {
+            (data, response) = try await session.data(from: retry)
+        }
         if let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
             throw Failure.status(http.statusCode)
         }
         return data
+    }
+
+    /// The start of a text file, and what the answer says about the rest —
+    /// Discord's preview fetch (`684519.eC`): the first 50,001 bytes, asked
+    /// for as `text/plain`, through the same signed-link handling as every
+    /// other attachment here.
+    func textPreview(_ url: URL) async throws -> TextPreviewResponse {
+        func request(_ url: URL) -> URLRequest {
+            var request = URLRequest(url: url)
+            request.setValue(PlaintextPreview.rangeHeader, forHTTPHeaderField: "Range")
+            request.setValue("text/plain", forHTTPHeaderField: "Accept")
+            return request
+        }
+        let isSigned = AttachmentLink.isSigned(url)
+        var (data, response) = try await session.data(
+            for: request(isSigned ? await AttachmentLinks.shared.usable(url) : url)
+        )
+        if isSigned, Self.isRefusal(response), let retry = await AttachmentLinks.shared.retrying(url) {
+            (data, response) = try await session.data(for: request(retry))
+        }
+        guard let http = response as? HTTPURLResponse else { throw Failure.status(0) }
+        guard (200..<300).contains(http.statusCode) else { throw Failure.status(http.statusCode) }
+        return TextPreviewResponse(
+            data: data,
+            contentType: http.value(forHTTPHeaderField: "Content-Type"),
+            contentRange: http.value(forHTTPHeaderField: "Content-Range"),
+            contentLength: http.value(forHTTPHeaderField: "Content-Length")
+        )
+    }
+
+    /// The answers a signed link gives once its signature has run out.
+    private static func isRefusal(_ response: URLResponse) -> Bool {
+        guard let http = response as? HTTPURLResponse else { return false }
+        return http.statusCode == 404 || http.statusCode == 403
     }
 
     /// Streams an asset to a temporary file, reporting progress as it goes.
@@ -289,7 +342,15 @@ nonisolated final class ImageStore: @unchecked Sendable {
         onProgress: @escaping @Sendable (Double) -> Void
     ) async throws -> URL {
         let delegate = DownloadProgressDelegate(onProgress: onProgress)
-        let (file, response) = try await session.download(from: url, delegate: delegate)
+        let isSigned = AttachmentLink.isSigned(url)
+        var (file, response) = try await session.download(
+            from: isSigned ? await AttachmentLinks.shared.usable(url) : url,
+            delegate: delegate
+        )
+        if isSigned, Self.isRefusal(response), let retry = await AttachmentLinks.shared.retrying(url) {
+            try? FileManager.default.removeItem(at: file)
+            (file, response) = try await session.download(from: retry, delegate: delegate)
+        }
         if let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
             throw Failure.status(http.statusCode)
         }
@@ -298,6 +359,14 @@ nonisolated final class ImageStore: @unchecked Sendable {
 
     enum Failure: Error {
         case status(Int)
+    }
+
+    /// A text preview's bytes and the three headers Discord reads.
+    struct TextPreviewResponse: Sendable {
+        var data: Data
+        var contentType: String?
+        var contentRange: String?
+        var contentLength: String?
     }
 
     /// Decodes at the drawn size.

@@ -2,8 +2,7 @@ import Foundation
 import Testing
 @testable import Wingcord
 
-/// The settings window's measured geometry and its one piece of gesture
-/// arithmetic.
+/// The settings panes' measured geometry.
 ///
 /// The numbers in `SettingsMetrics` were read off a live reference window rather
 /// than designed, so the thing worth pinning is not any single value — it is the
@@ -56,93 +55,6 @@ struct SettingsLayoutTests {
         // a card's bottom edge and the next card's top edge.
         let header: CGFloat = 16
         #expect(SettingsMetrics.cardToHeader + header + SettingsMetrics.headerToCard == 46)
-    }
-
-    @Test("The pane and its cards leave the reference's insets")
-    func paneInsets() {
-        // Sidebar 208.5 + pane 520.5 + trailing inset 10 = the 739 the window
-        // opens at, which is what makes the default size the measured one.
-        let paneWidth = SettingsMetrics.defaultWidth
-            - SettingsMetrics.sidebarWidth
-            - SettingsMetrics.paneInset
-        #expect(paneWidth == 520.5)
-        // A card is inset 16 inside the pane on both sides.
-        #expect(paneWidth - SettingsMetrics.cardInset * 2 == 488.5)
-    }
-
-    @Test("The toolbar band clears the item it holds")
-    func toolbarBandFitsItsItem() {
-        #expect(SettingsMetrics.toolbarBandHeight > SettingsMetrics.toolbarItemHeight + 12)
-        // Two square buttons and a hairline fit inside the capsule's own width.
-        let pair = SettingsMetrics.toolbarButtonSide * 2 + SettingsMetrics.hairline
-        #expect(pair == 57)
-    }
-
-    @Test("A source-list row pitch is the row plus one point")
-    func sidebarPitch() {
-        #expect(SettingsMetrics.sidebarRowHeight + SettingsMetrics.sidebarRowSpacing == 29)
-        // The icon is centred in the row with room either side.
-        #expect(SettingsMetrics.sidebarIconSide < SettingsMetrics.sidebarRowHeight)
-        // Row edge, icon, gap, label: the label starts 36 in from the row's edge.
-        let labelOrigin = SettingsMetrics.sidebarRowLeading
-            + SettingsMetrics.sidebarIconSide
-            + SettingsMetrics.sidebarIconGap
-        #expect(labelOrigin == 36)
-    }
-
-    // MARK: The divider
-
-    @Test("The column tracks the pointer one to one inside its range")
-    func dragTracksExactly() {
-        var width = SidebarWidth()
-        width.drag(to: 240)
-        #expect(width.current == 240)
-        width.drag(to: SidebarWidth.minimum)
-        #expect(width.current == SidebarWidth.minimum)
-    }
-
-    @Test("Past a limit it resists rather than stopping dead")
-    func dragRubberBands() {
-        var width = SidebarWidth()
-        width.drag(to: SidebarWidth.maximum + 100)
-        // It moved — a hard stop reads as frozen — but not the whole 100.
-        #expect(width.current > SidebarWidth.maximum)
-        #expect(width.current < SidebarWidth.maximum + 100)
-    }
-
-    @Test("A slow drag short of the threshold does not collapse the column")
-    func slowDragKeepsTheColumn() {
-        let width = SidebarWidth()
-        let target = width.release(at: 150, velocity: 0)
-        #expect(target == SidebarWidth.minimum)
-    }
-
-    @Test("A flick collapses it even when the pointer stopped short")
-    func flickCollapses() {
-        let width = SidebarWidth()
-        // Released at 150 — above the threshold — but travelling left fast
-        // enough that its projected rest is well past it.
-        let target = width.release(at: 150, velocity: -1600)
-        #expect(target == 0)
-    }
-
-    @Test("A collapsed column returns to the width it had, not to the default")
-    func collapseRestoresTheChosenWidth() {
-        var width = SidebarWidth()
-        width.settle(to: 260)
-        width.toggle()
-        #expect(width.isCollapsed)
-        width.toggle()
-        #expect(width.current == 260)
-    }
-
-    @Test("Settling at zero does not overwrite the remembered width")
-    func collapsingDoesNotForgetTheWidth() {
-        var width = SidebarWidth()
-        width.settle(to: 300)
-        width.settle(to: 0)
-        width.toggle()
-        #expect(width.current == 300)
     }
 }
 

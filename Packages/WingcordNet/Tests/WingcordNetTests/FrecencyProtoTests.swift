@@ -384,3 +384,111 @@ struct NavigationFrecencyTests {
         #expect(FrecencyProto.commands(base64: blob).isEmpty)
     }
 }
+
+/// The soundboard's two fields of the frecency blob, built to Discord's own
+/// descriptors: `favorite_soundboard_sounds = 8` (two packed `fixed64` lists)
+/// and `played_sound_frecency = 11` (a string-keyed map of `FrecencyItem`).
+@Suite("Soundboard frecency")
+struct SoundboardFrecencyTests {
+
+    private func favorites(soundIDs: [UInt64], ordered: [UInt64], extra: Bool = false) -> Data {
+        var message = ProtobufWriter()
+        message.packedFixed64(field: 1, soundIDs)
+        message.packedFixed64(field: 2, ordered)
+        // A field this client cannot name, which a rewrite must keep.
+        if extra { message.varint(field: 7, 1) }
+        var blob = ProtobufWriter()
+        // Another top-level field beside it, as a real blob has.
+        blob.varint(field: 3, 9)
+        blob.message(field: 8, message.data)
+        return blob.data
+    }
+
+    @Test("Favourite sounds decode from field 8, both lists")
+    func decode() {
+        let read = FrecencyProto.favoriteSounds(in: favorites(soundIDs: [5, 9], ordered: [9, 5]))
+        #expect(read == SoundboardFavorites(soundIDs: [5, 9], orderedSoundIDs: [9, 5]))
+        #expect(read.inOrder == [9, 5])
+    }
+
+    /// The patch is field 8 alone, its lists rewritten and anything else in
+    /// it kept as it came.
+    @Test("A rewrite carries the lists and keeps what it cannot name")
+    func patch() throws {
+        let blob = favorites(soundIDs: [5], ordered: [5], extra: true)
+        let patch = try #require(Data(base64Encoded: FrecencyProto.favoriteSoundsPatch(
+            SoundboardFavorites(soundIDs: [5, 9], orderedSoundIDs: [5, 9]), in: blob
+        )))
+        #expect(FrecencyProto.favoriteSounds(in: patch) == SoundboardFavorites(soundIDs: [5, 9], orderedSoundIDs: [5, 9]))
+        var reader = ProtobufReader(patch)
+        var topLevel: [Int] = []
+        var keptUnknown = false
+        while let field = reader.next() {
+            topLevel.append(field.number)
+            guard field.number == 8 else { continue }
+            var inner = reader.reader(for: field)
+            while let entry = inner.next() { if entry.number == 7 { keptUnknown = entry.value == 1 } }
+        }
+        #expect(topLevel == [8])
+        #expect(keptUnknown)
+
+        // Unstarring the last one leaves an empty message, not stale bytes.
+        let empty = try #require(Data(base64Encoded: FrecencyProto.favoriteSoundsPatch(SoundboardFavorites(), in: patch)))
+        #expect(FrecencyProto.favoriteSounds(in: empty) == SoundboardFavorites())
+    }
+
+    @Test("Played sounds decode from field 11, keyed by sound id, uses and all")
+    func played() {
+        var item = ProtobufWriter()
+        item.varint(field: 1, 4)
+        item.packedVarints(field: 2, [1_790_000_000_000, 1_790_000_060_000])
+        item.varint(field: 3, 400)
+        item.varint(field: 4, 300)
+        var entry = ProtobufWriter()
+        entry.string(field: 1, "1234")
+        entry.message(field: 2, item.data)
+        var map = ProtobufWriter()
+        map.message(field: 1, entry.data)
+        var blob = ProtobufWriter()
+        blob.message(field: 11, map.data)
+        let played = FrecencyProto.playedSoundHistory(base64: blob.base64)
+        #expect(played.keys.sorted() == ["1234"])
+        #expect(played["1234"] == SoundFrecency.Use(
+            totalUses: 4, recentUses: [1_790_000_000_000, 1_790_000_060_000], frecency: 400, score: 300
+        ))
+    }
+
+    /// Field 11 whole, as Discord writes it, reads back as it went.
+    @Test("The played-sound table round-trips, and nothing else is written")
+    func playedRoundTrip() throws {
+        let history: [String: SoundFrecency.Use] = [
+            "1234": .init(totalUses: 4, recentUses: [1_790_000_000_000, 1_790_000_060_000], frecency: 400, score: 200),
+            "99": .init(totalUses: 1, recentUses: [1_790_100_000_000], frecency: 100, score: 100),
+        ]
+        let patch = FrecencyProto.playedSoundsPatch(history)
+        #expect(FrecencyProto.playedSoundHistory(base64: patch) == history)
+        var reader = ProtobufReader(try #require(Data(base64Encoded: patch)))
+        var topLevel: [Int] = []
+        while let field = reader.next() { topLevel.append(field.number) }
+        #expect(topLevel == [11])
+    }
+
+    /// Discord's `overwriteHistory(stored, pending)`, then its write: the table
+    /// as it stands, this client's plays on top, field 11 back.
+    @Test("Recorded plays are added to the stored table and written as field 11")
+    func recordPlays() async throws {
+        let now = Date(timeIntervalSince1970: 1_790_856_000)
+        let stored = FrecencyProto.playedSoundsPatch([
+            "1234": .init(totalUses: 3, recentUses: [UInt64((now.timeIntervalSince1970 - 3_600) * 1000)]),
+        ])
+        let (rest, token) = await RequestRecorder.client(body: #"{"settings":"\#(stored)"}"#)
+        let played = try await rest.recordPlayedSounds([("1234", now), ("99", now)], now: now)
+        #expect(played.history["1234"]?.totalUses == 4)
+        #expect(played.history["99"]?.totalUses == 1)
+
+        let requests = RequestRecorder.requests(for: token)
+        #expect(requests.map(\.method) == ["GET", "PATCH"])
+        let written = try #require(requests.last?.json?["settings"] as? String)
+        #expect(FrecencyProto.playedSoundHistory(base64: written) == played.written)
+    }
+}

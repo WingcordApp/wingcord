@@ -243,13 +243,24 @@ extension AppModel {
     /// presentation deferred behind another's dismissal is a race.
     func openStickerPicker(at sectionID: String) {
         guard let channelID = selectedChannelID else { return }
-        stickerPickerToken &+= 1
-        stickerPickerRequest = StickerPickerRequest(
+        composerControlToken &+= 1
+        composerControlRequest = ComposerControlRequest(
             channelID: channelID,
-            sectionID: sectionID,
-            token: stickerPickerToken
+            control: .sticker,
+            stickerSectionID: sectionID,
+            token: composerControlToken
         )
         expressionInfoRequest = nil
+    }
+
+    /// Discord's ⌘E, ⌘G and ⌘S: the open conversation's picker, opened — or
+    /// closed, when it is the one already open.
+    func toggleComposerControl(_ control: ComposerControl) {
+        guard let channelID = selectedChannelID else { return }
+        composerControlToken &+= 1
+        composerControlRequest = ComposerControlRequest(
+            channelID: channelID, control: control, token: composerControlToken
+        )
     }
 
     private func expressionSource(for guildID: GuildID) -> ExpressionInfo.Source? {

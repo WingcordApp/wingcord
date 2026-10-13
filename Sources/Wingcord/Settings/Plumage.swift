@@ -14,20 +14,23 @@ import SwiftUI
 // depth down. What a bead is standing on is what the window behind this one
 // becomes.
 //
-// BEADS, JOINED BY A THREAD. A theme is two to five colours — the darker one
-// behind the toolbar, the lit one behind the composer, and up to three the
-// light passes through between them — so the instrument has one bead per
-// colour, each showing the ground it selects, and a thread through them drawn
-// in the very gradient they make. Drag any. The thread follows, and it is the
-// only preview anybody needs of what the hues will look like as one room.
+// BEADS ON A SHEET. A theme is two to five colours — the darker one behind
+// the toolbar, the lit one behind the composer, and up to three the light
+// passes through between them — so the instrument has one bead per colour,
+// each showing the ground it selects. Drag any; the window behind is the
+// preview. (A thread through the beads drew the gradient once, and Alex had it
+// taken out, 2026-10-07: "remove the lines that links them".)
 //
 // So there is no wheel, no eyedropper and no hex box.
 //
 // THE CONTROLS:
 //
-//   - **The field.** Every stop a hue and a depth, tracked 1:1, wrapping
-//     horizontally because hue is circular and rubber-banding vertically
-//     because depth is not.
+//   - **The field.** Every stop a hue and a depth, tracked 1:1 from where the
+//     bead was grabbed, and **held at every edge** with the resistance §3
+//     asks for. Hue used to wrap, because hue is circular — which made a bead
+//     dragged past the right edge leap to the left one (Alex, 2026-10-07: "it
+//     restarts from the other side"). The sheet's two ends are both red, so
+//     stopping at either loses no colour.
 //   - **The light track.** How bright the ground is, drawn as the actual ramp
 //     it selects from.
 //   - **The dial.** Which way the colours run across the window.
@@ -53,7 +56,7 @@ struct PlumageCard: View {
     @State private var active: PlumageStop = .foot
 
     /// The blend as the window shows it — at the reader's vividness — so every
-    /// bead, the thread and the track agree with what is behind this window.
+    /// bead and the track agree with what is behind this window.
     /// Edits still go to the stored blend, which carries no vividness.
     private var seed: ThemeSeed { theme.customSeed.at(vividness: theme.vividness) }
 
@@ -64,8 +67,8 @@ struct PlumageCard: View {
                 help: "Two to five colours make a theme: the largest bead is the "
                     + "lit end, down where the composer is, and the light walks "
                     + "back through the others to the darkest, behind the "
-                    + "toolbar. Hue across, depth down. Drag any — the thread "
-                    + "through them is the gradient they make."
+                    + "toolbar. Hue across, depth down. Drag any — the window "
+                    + "behind this one is the preview."
             )
 
             PlumageField(
@@ -99,8 +102,8 @@ struct PlumageCard: View {
                         PlumageRoundButton(
                             systemName: "plus",
                             label: "Add a colour",
-                            help: "Adds a colour on the widest stretch of the "
-                                + "thread, exactly where the gradient already is."
+                            help: "Adds a colour on the widest stretch between "
+                                + "two others, exactly where the gradient already is."
                         ) { addColour() }
                         .disabled(seed.middle.count >= ThemeSeed.maximumMiddle)
                         PlumageRoundButton(
@@ -160,7 +163,7 @@ struct PlumageCard: View {
         theme.editCustom { $0 = next }
     }
 
-    /// A new colour **on the thread**: the midpoint of its longest leg, at the
+    /// A new colour **between two others**: the midpoint of its longest leg, at the
     /// hue and depth the walk already has there. The ground does not move until
     /// the reader moves the new bead — adding a colour is a place to pull from,
     /// not a change they did not ask for.
@@ -250,9 +253,12 @@ private struct PlumageField: View {
     var trackingChanged: (Bool) -> Void
 
     @Environment(\.motion) private var motion
-    /// How far past the top or bottom edge the pointer has pulled, in points.
-    /// Drives the moving bead's overshoot only — the seed is clamped regardless.
-    @State private var overshoot: CGFloat = 0
+    /// How far past an edge the pointer has pulled, in points. Drives the
+    /// moving bead's overshoot only — the seed is clamped regardless.
+    @State private var overshoot: CGSize = .zero
+    /// Where the press landed relative to the bead it took — zero for a press
+    /// on bare sheet, which brings the bead to the pointer.
+    @State private var grab: CGSize = .zero
     @FocusState private var isFocused: Bool
 
     static let height: CGFloat = 152
@@ -264,10 +270,6 @@ private struct PlumageField: View {
     private static let keyStepDepth: Double = 0.04
 
     var body: some View {
-        // Resolved once per update and handed to the thread, which draws each
-        // leg from it: the samples are the ground's own, so the thread cannot
-        // disagree with the window.
-        let page = ThemeGround.page(of: seed)
         GeometryReader { proxy in
             let size = proxy.size
             PlumageMesh()
@@ -277,7 +279,6 @@ private struct PlumageField: View {
                     RoundedRectangle(cornerRadius: Self.radius, style: .continuous)
                         .strokeBorder(Color.white.opacity(isFocused ? 0.45 : 0.12), lineWidth: 1)
                 }
-                .overlay(alignment: .topLeading) { thread(page, in: size) }
                 .overlay(alignment: .topLeading) {
                     ZStack(alignment: .topLeading) {
                         ForEach(seed.anchors.indices, id: \.self) { index in
@@ -331,10 +332,19 @@ private struct PlumageField: View {
         }
     }
 
+    /// An arrow key's step — stopping at the sheet's ends, as a drag does.
     private func move(hue: Double = 0, depth: Double = 0) {
         let current = seed.anchors[active.index(in: seed)]
-        write(active, hue: current.hue + hue, depth: current.depth + depth)
+        write(active, hue: Self.held(current.hue + hue), depth: current.depth + depth)
     }
+
+    /// A hue held inside the sheet. **Just short of 360**, because a stop
+    /// wraps its hue and 360 is 0 — the bead would land on the other edge.
+    private static func held(_ hue: Double) -> Double {
+        min(Self.lastHue, max(0, hue))
+    }
+
+    private static let lastHue = 359.9
 
     // MARK: Geometry
 
@@ -366,11 +376,10 @@ private struct PlumageField: View {
             // media here, and `.regular` would frost the very colour the bead is
             // pointing at into grey. §4.
             .glassEffect(.clear.interactive(), in: .circle)
-            .specularEdge(in: Circle(), intensity: isActive ? 0.55 : 0.34)
             .shadow(color: .black.opacity(0.38), radius: 5, y: 2)
             .offset(
-                x: origin.x - side / 2,
-                y: origin.y + (isActive ? overshoot : 0) - side / 2
+                x: origin.x + (isActive ? overshoot.width : 0) - side / 2,
+                y: origin.y + (isActive ? overshoot.height : 0) - side / 2
             )
             // The one being moved is drawn over the others, so a bead dragged
             // across another is never hidden under it mid-gesture.
@@ -399,58 +408,6 @@ private struct PlumageField: View {
         }
     }
 
-    /// The line through the beads, drawn in the gradient they make.
-    ///
-    /// **It is the preview.** Dots on a sheet say what hues are; a thread drawn
-    /// out of the actual walk says what they will look like *as one ground*,
-    /// which is the only question the reader is asking. Each leg is drawn from
-    /// its own share of the ground's samples and runs *along the leg*, bead to
-    /// bead, so the colour under every bead is the colour that bead chose.
-    ///
-    /// A leg is skipped when its two beads are nearly on top of each other,
-    /// where a gradient is a smudge under the beads rather than a line.
-    private func thread(_ page: Gradient, in size: CGSize) -> some View {
-        let anchors = seed.anchors.indices.map { PlumageStop.at($0, in: seed) }
-        let legs = anchors.count - 1
-        let perLeg = ThemeGround.samplesPerLeg
-        return ZStack(alignment: .topLeading) {
-            ForEach(0..<legs, id: \.self) { leg in
-                let from = point(anchors[leg], in: size)
-                let to = point(anchors[leg + 1], in: size)
-                if (from - to).length > Self.beadSide {
-                    let samples = page.stops[(leg * perLeg)...((leg + 1) * perLeg)]
-                    let gradient = Gradient(stops: samples.enumerated().map { offset, stop in
-                        Gradient.Stop(color: stop.color, location: CGFloat(offset) / CGFloat(perLeg))
-                    })
-                    let line = Path { path in
-                        path.move(to: from)
-                        path.addLine(to: to)
-                    }
-                    line.stroke(
-                        LinearGradient(
-                            gradient: gradient,
-                            startPoint: UnitPoint(x: from.x / size.width, y: from.y / size.height),
-                            endPoint: UnitPoint(x: to.x / size.width, y: to.y / size.height)
-                        ),
-                        style: StrokeStyle(lineWidth: 3, lineCap: .round)
-                    )
-                    .overlay {
-                        // A hairline of white over the thread, because
-                        // near-black grounds against a dark sheet make a line
-                        // nobody can see.
-                        line.stroke(
-                            Color.white.opacity(0.30),
-                            style: StrokeStyle(lineWidth: 1, lineCap: .round)
-                        )
-                    }
-                }
-            }
-        }
-        .animation(isTracking ? nil : motion.reposition, value: seed)
-        .allowsHitTesting(false)
-        .accessibilityHidden(true)
-    }
-
     // MARK: The gesture
 
     private func drag(in size: CGSize) -> some Gesture {
@@ -464,39 +421,46 @@ private struct PlumageField: View {
                     // which is precisely when somebody is dragging one past
                     // another.
                     active = nearestStop(to: value.startLocation, in: size)
+                    // **From where it was grabbed**: a press on the bead keeps
+                    // its offset, so the bead does not jump its own radius
+                    // under the pointer; a press on bare sheet brings it there.
+                    let centre = point(active, in: size)
+                    let offset = CGSize(
+                        width: centre.x - value.startLocation.x,
+                        height: centre.y - value.startLocation.y
+                    )
+                    let onBead = (offset.width * offset.width + offset.height * offset.height).squareRoot()
+                        <= Self.beadSide / 2
+                    grab = onBead ? offset : .zero
                     trackingChanged(true)
                 }
-                // Hue WRAPS: the field is a cylinder, so dragging off the right
-                // edge continues from the left rather than stopping. `ThemeStop`
-                // does the wrapping, so nothing here has to remember to.
-                let hue = value.location.x / size.width * 360
-                // Depth does not wrap and must not stop dead either — §3. The
-                // stop takes the clamped value; the bead takes the resisted one,
-                // so the control says "there is nothing more here" rather than
-                // "I have stopped answering".
-                let resisted = Motion.clampWithResistance(
-                    value.location.y, to: 0...size.height, limit: size.height
+                let target = CGPoint(x: value.location.x + grab.width, y: value.location.y + grab.height)
+                // **Held at every edge, never wrapped and never stopped dead** —
+                // §3. The stop takes the clamped value; the bead takes the
+                // resisted one, so the control says "there is nothing more
+                // here" rather than "I have stopped answering".
+                let resistedX = Motion.clampWithResistance(target.x, to: 0...size.width, limit: size.width)
+                let resistedY = Motion.clampWithResistance(target.y, to: 0...size.height, limit: size.height)
+                let clampedX = min(size.width, max(0, target.x))
+                let clampedY = min(size.height, max(0, target.y))
+                overshoot = CGSize(width: resistedX - clampedX, height: resistedY - clampedY)
+                write(
+                    active,
+                    hue: Self.held(clampedX / size.width * 360),
+                    depth: clampedY / size.height
                 )
-                overshoot = resisted - min(size.height, max(0, value.location.y))
-                write(active, hue: hue, depth: value.location.y / size.height)
             }
             .onEnded { _ in
-                overshoot = 0
+                overshoot = .zero
+                grab = .zero
                 trackingChanged(false)
             }
     }
 
-    /// The stop a press belongs to.
-    ///
-    /// Distance is measured with the **hue axis wrapped**, because the field is
-    /// a cylinder: a bead at 355° and a press at 5° are ten degrees apart, and a
-    /// straight subtraction would call them three hundred and fifty.
+    /// The stop a press belongs to: the nearest bead on the sheet as drawn.
     private func nearestStop(to location: CGPoint, in size: CGSize) -> PlumageStop {
         func distance(to which: PlumageStop) -> CGFloat {
-            let target = point(which, in: size)
-            var dx = abs(location.x - target.x)
-            if size.width > 0 { dx = min(dx, size.width - dx) }
-            return CGPoint(x: dx, y: location.y - target.y).length
+            (location - point(which, in: size)).length
         }
         return seed.anchors.indices
             .map { PlumageStop.at($0, in: seed) }
@@ -653,7 +617,6 @@ private struct PlumageLightTrack: View {
             .frame(width: 6, height: 6)
             .frame(width: Self.knobSide, height: Self.knobSide)
             .glassEffect(.clear.interactive(), in: .circle)
-            .specularEdge(in: Circle(), intensity: 0.42)
             .shadow(color: .black.opacity(0.32), radius: 4, y: 1)
             .offset(x: seed.light * travel + overshoot)
             .animation(isTracking ? nil : motion.reposition, value: seed.light)

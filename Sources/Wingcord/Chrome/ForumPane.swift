@@ -530,7 +530,7 @@ private struct ForumNewBadge: View {
     var body: some View {
         Text("new")
             .textCase(.uppercase)
-            .font(.system(size: 11, weight: .bold))
+            .font(.system(.subheadline, weight: .bold))
             .foregroundStyle(Palette.newBadgeInk)
             .padding(.horizontal, Spacing.base)
             .frame(height: 20)
@@ -544,7 +544,7 @@ private struct ForumOlderPostsDivider: View {
     var body: some View {
         Text("Older Posts")
             .textCase(.uppercase)
-            .font(.system(size: 11, weight: .semibold))
+            .font(.system(.subheadline, weight: .semibold))
             .foregroundStyle(Ink.tertiary)
             .frame(maxWidth: .infinity, alignment: .leading)
             .frame(height: 16)
@@ -864,10 +864,8 @@ private struct ForumSearchField: View {
         .frame(height: Metrics.control + Spacing.tight)
         .frame(maxWidth: .infinity)
         .background(Palette.surfaceRaised, in: .capsule)
-        // A field never moves, so it catches no travelling specular highlight —
-        // the still-life edge is what stops it reading as a slightly lighter
-        // region on a near-black ground.
-        .specularEdge(in: Capsule())
+        // A hairline, so the field has an edge on a dark ground.
+        .overlay { Capsule().strokeBorder(Palette.edge) }
     }
 }
 

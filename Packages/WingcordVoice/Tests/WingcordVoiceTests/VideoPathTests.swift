@@ -25,21 +25,23 @@ import VideoToolbox
 @Suite("Video path", .serialized)
 struct VideoPathTests {
 
-    fileprivate static let width = 320
-    fileprivate static let height = 240
+    static let width = 320
+    static let height = 240
 
     // MARK: A real encoded frame
 
     /// A pixel buffer with something in it, so the encoder has detail to spend
     /// bits on and a keyframe that is not four bytes long.
-    fileprivate func makePixelBuffer(seed: UInt8) throws -> CVPixelBuffer {
+    static func makePixelBuffer(
+        seed: UInt8, width: Int = width, height: Int = height
+    ) throws -> CVPixelBuffer {
         var buffer: CVPixelBuffer?
         let attributes: [CFString: Any] = [
             kCVPixelBufferIOSurfacePropertiesKey: [:] as CFDictionary,
             kCVPixelBufferPixelFormatTypeKey: kCVPixelFormatType_32BGRA,
         ]
         let created = CVPixelBufferCreate(
-            kCFAllocatorDefault, Self.width, Self.height,
+            kCFAllocatorDefault, width, height,
             kCVPixelFormatType_32BGRA, attributes as CFDictionary, &buffer
         )
         let pixels = try #require(created == kCVReturnSuccess ? buffer : nil)
@@ -49,8 +51,8 @@ struct VideoPathTests {
         let base = try #require(CVPixelBufferGetBaseAddress(pixels))
         let stride = CVPixelBufferGetBytesPerRow(pixels)
         let bytes = base.assumingMemoryBound(to: UInt8.self)
-        for row in 0..<Self.height {
-            for column in 0..<Self.width {
+        for row in 0..<height {
+            for column in 0..<width {
                 let offset = row * stride + column * 4
                 bytes[offset] = UInt8(truncatingIfNeeded: column &* 3 &+ Int(seed))
                 bytes[offset + 1] = UInt8(truncatingIfNeeded: row &* 5 &+ Int(seed))
@@ -82,14 +84,14 @@ struct VideoPathTests {
             width: Self.width, height: Self.height, framerate: 30, bitrate: 800_000
         ))
         let frames = Encoded()
-        encoder.onEncodedFrame = { units, sets, isKeyframe in
+        encoder.onEncodedFrame = { units, sets, isKeyframe, _ in
             frames.append(
                 EncodedFrame(units: units, parameterSets: sets, isKeyframe: isKeyframe)
             )
         }
         try encoder.start()
         encoder.encode(
-            try makePixelBuffer(seed: 1),
+            try Self.makePixelBuffer(seed: 1),
             at: CMTime(value: 0, timescale: 90_000),
             forceKeyframe: true
         )
@@ -160,6 +162,7 @@ struct VideoPathTests {
     }
 
     private static let ssrc: UInt32 = 4242
+    private static let retransmissionSSRC: UInt32 = 4243
     private static let sender: UInt64 = 777
 
     /// What reached a display layer, as the only thing worth asserting about
@@ -168,7 +171,8 @@ struct VideoPathTests {
     /// The dimensions rather than the buffers, because a `CMSampleBuffer` is
     /// not `Sendable` and a collector that keeps one has to say why it is safe
     /// — and here it does not need to keep one. A reference type holding the
-    /// mutex, for the reason `StreamPreview` is one.
+    /// mutex, because `Mutex` is non-copyable and a `@Sendable` sink cannot
+    /// capture one out of an enclosing type.
     private final class Drawn: Sendable {
         private let sizes = Mutex<[(width: Int, height: Int)]>([])
 
@@ -253,6 +257,28 @@ struct VideoPathTests {
         #expect(report.census.unrouted == 0)
     }
 
+    /// Discord's Disable Video: what was already in flight is not drawn, and
+    /// turning it back on draws the next picture.
+    @Test("A video turned off draws nothing, and turned back on draws again")
+    func disabledVideo() throws {
+        let frame = try encodeKeyframe()
+        let sealer = transportPair()
+        var writer = RTPWriter(ssrc: Self.ssrc, payloadType: RTP.PayloadType.h264)
+        let (inbound, drawn) = receiver(sealer: sealer, dave: nil)
+
+        inbound.setVideoDisabled(true, for: Self.sender)
+        for packet in try datagrams(for: frame, writer: &writer, sealer: sealer, dave: nil) {
+            inbound.accept(packet, arrival: 0)
+        }
+        #expect(drawn.count == 0)
+
+        inbound.setVideoDisabled(false, for: Self.sender)
+        for packet in try datagrams(for: frame, writer: &writer, sealer: sealer, dave: nil) {
+            inbound.accept(packet, arrival: 0.1)
+        }
+        #expect(drawn.count == 1)
+    }
+
     /// **The bug this exists to pin.** A padding-only packet trims to nothing
     /// and returns before anything reads it — and if it returns before the
     /// sequence is recorded, the next real packet looks like it followed a gap
@@ -294,6 +320,63 @@ struct VideoPathTests {
             drawn.count == 1,
             "the probe is not a gap, and the frame it sat inside still assembles"
         )
+    }
+
+    /// **A network reorders, and a frame must survive it.** Two fragments of a
+    /// keyframe swapped on the way used to be a "gap" to the depacketiser, which
+    /// threw the frame away and waited for the next keyframe; the reorder
+    /// buffer puts them back.
+    @Test("A keyframe whose packets arrive out of order still draws")
+    func reorderedKeyframeDraws() throws {
+        let frame = try encodeKeyframe()
+        let sealer = transportPair()
+        var writer = RTPWriter(ssrc: Self.ssrc, payloadType: RTP.PayloadType.h264)
+        var packets = try datagrams(for: frame, writer: &writer, sealer: sealer, dave: nil)
+        try #require(packets.count >= 3, "the keyframe has to span several packets")
+        packets.swapAt(1, 2)
+        let (inbound, drawn) = receiver(sealer: sealer, dave: nil)
+
+        for packet in packets { inbound.accept(packet, arrival: 0) }
+
+        #expect(drawn.count == 1)
+    }
+
+    /// **The packet that never arrived, resent.** RFC 4588: the retransmission
+    /// is a packet of its own on its own SSRC, carrying the original sequence
+    /// number ahead of the original payload — and the hole it fills holds the
+    /// rest of the frame until it does.
+    @Test("A packet lost and resent as a retransmission still draws")
+    func retransmissionFillsTheHole() throws {
+        let frame = try encodeKeyframe()
+        let sealer = transportPair()
+        let (encryptor, decryptor) = davePair()
+        var writer = RTPWriter(ssrc: Self.ssrc, payloadType: RTP.PayloadType.h264)
+        let packets = try datagrams(for: frame, writer: &writer, sealer: sealer, dave: encryptor)
+        try #require(packets.count >= 3)
+        let (inbound, drawn) = receiver(sealer: sealer, dave: decryptor)
+        inbound.bindVideo(ssrc: Self.ssrc, retransmission: Self.retransmissionSSRC, to: Self.sender)
+
+        let lost = 1
+        for (index, packet) in packets.enumerated() where index != lost {
+            inbound.accept(packet, arrival: 0.01)
+        }
+        #expect(drawn.count == 0, "the frame waits for its missing packet")
+
+        // The retransmission: the lost packet's own payload, behind its own
+        // sequence number, on the retransmission stream.
+        let original = try #require(RTPHeader(parsing: packets[lost]))
+        let payload = try #require(sealer.open(packets[lost], headerLength: original.clearPrefixLength))
+        let header = RTPWriter.header(
+            ssrc: Self.retransmissionSSRC, payloadType: RTP.PayloadType.h264RTX,
+            sequence: 7, timestamp: original.timestamp, marker: original.marker, extensions: []
+        )
+        let body = [UInt8(original.sequence >> 8), UInt8(original.sequence & 0xFF)] + payload
+        inbound.accept(
+            try [UInt8](body.withUnsafeBytes { try sealer.seal(payload: $0, header: header) }),
+            arrival: 0.05
+        )
+
+        #expect(drawn.count == 1, "and draws once it comes back")
     }
 
     /// **The regression this exists to catch.** Header extensions were added to
@@ -353,22 +436,37 @@ struct VideoPathTests {
     /// a real share as `video first frame in=[1:17455]` — one P-slice, sent
     /// under a key that had just arrived, which no decoder can start from.
     @Test("A stream does not open with anything but a keyframe")
-    func nothingLeavesBeforeAKeyframe() throws {
+    func nothingLeavesBeforeAKeyframe() async throws {
         let path = VideoSendPath()
         path.configure(
             sealer: transportPair(),
             transport: VoiceTransport(host: "127.0.0.1", port: 1),
             ssrc: Self.ssrc,
+            retransmissionSSRC: Self.ssrc &+ 1,
             sendTimeExtensionID: nil,
             transportSequenceExtensionID: nil,
-            transportSequence: nil,
-            label: "test"
+            transportSequence: nil
         )
         path.isActive = true
 
+        // Packets leave on the pacer's queue, so a count is read once it has
+        // had a moment to send what it was given — with the per-window counts
+        // gathered across every drain it took.
+        func packetsSent(atLeast count: Int) async throws -> VideoSendPath.Report {
+            var report = path.drainCounters()
+            var unstartable = report.unstartable
+            for _ in 0..<100 where report.packets < count {
+                try await Task.sleep(for: .milliseconds(5))
+                report = path.drainCounters()
+                unstartable += report.unstartable
+            }
+            report.unstartable = unstartable
+            return report
+        }
+
         let delta = [[UInt8]([0x41, 0x9A, 0x02, 0x03])]
-        path.send(units: delta, parameterSets: [], isKeyframe: false, presentationTime: 0)
-        var report = path.drainCounters()
+        path.send(units: delta, parameterSets: [], isKeyframe: false, captureTime: 0)
+        var report = try await packetsSent(atLeast: 1)
         #expect(report.packets == 0, "a delta frame cannot open a stream")
         #expect(report.unstartable == 1)
         #expect(path.takeKeyframeRequest(), "and the encoder is asked for one")
@@ -376,9 +474,9 @@ struct VideoPathTests {
         let key = try encodeKeyframe()
         path.send(
             units: key.units, parameterSets: key.parameterSets,
-            isKeyframe: true, presentationTime: 0
+            isKeyframe: true, captureTime: 0
         )
-        report = path.drainCounters()
+        report = try await packetsSent(atLeast: 1)
         // `packets` is the running total the trace prints, so it is read as a
         // difference rather than a per-window count.
         let afterKeyframe = report.packets
@@ -386,8 +484,8 @@ struct VideoPathTests {
         #expect(report.unstartable == 0)
 
         // And once it is open, delta frames flow.
-        path.send(units: delta, parameterSets: [], isKeyframe: false, presentationTime: 0.033)
-        report = path.drainCounters()
+        path.send(units: delta, parameterSets: [], isKeyframe: false, captureTime: 0.033)
+        report = try await packetsSent(atLeast: afterKeyframe + 1)
         #expect(report.packets == afterKeyframe + 1)
         #expect(report.unstartable == 0)
     }
@@ -465,13 +563,13 @@ struct EncoderConformanceTests {
             width: 1_280, height: 720, framerate: 30, bitrate: 2_500_000
         ))
         let sets = Mutex<[[UInt8]]>([])
-        encoder.onEncodedFrame = { _, parameterSets, _ in
+        encoder.onEncodedFrame = { _, parameterSets, _, _ in
             guard !parameterSets.isEmpty else { return }
             sets.withLock { if $0.isEmpty { $0 = parameterSets } }
         }
         try encoder.start()
         encoder.encode(
-            try VideoPathTests().makePixelBuffer(seed: 3),
+            try VideoPathTests.makePixelBuffer(seed: 3),
             at: CMTime(value: 0, timescale: 90_000),
             forceKeyframe: true
         )

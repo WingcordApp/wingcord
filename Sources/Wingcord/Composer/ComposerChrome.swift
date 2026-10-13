@@ -49,7 +49,6 @@ struct ComposerChrome<Leading: View, Input: View, Controls: View, Send: View>: V
             }
             .padding(.horizontal, Metrics.composerControlInset)
             .glassEffect(.regular, in: .rect(cornerRadius: corner))
-            .specularEdge(in: .rect(cornerRadius: corner))
         } else {
             HStack(alignment: .bottom, spacing: Spacing.base) {
                 leading
@@ -62,7 +61,6 @@ struct ComposerChrome<Leading: View, Input: View, Controls: View, Send: View>: V
                 .padding(.leading, Spacing.snug)
                 .padding(.trailing, Metrics.composerControlInset)
                 .glassEffect(.regular, in: .rect(cornerRadius: corner))
-                .specularEdge(in: .rect(cornerRadius: corner))
                 send
             }
         }

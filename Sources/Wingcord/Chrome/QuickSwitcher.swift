@@ -3,13 +3,9 @@ import WingcordCore
 
 /// ⌘K — everywhere the account can go, one field and a list.
 ///
-/// **Clear glass over a dimmed window, and both halves are load-bearing.** §4
-/// sends a flyout over the transcript to `.clear.tint(Palette.flyoutTint)`,
-/// because `.regular` frosts avatars and message text into a grey slab —
-/// exactly the thing glass exists not to be. Clear glass over near-black has
-/// nothing to refract, though, which is what the scrim under the panel answers:
-/// it is a modal act, it dims what it interrupts, and the dimmed window is what
-/// the panel then lenses.
+/// **Regular glass over a dimmed window** — §4's default for a control floating
+/// over content. The scrim under the panel is because switching is a modal act:
+/// it dims what it interrupts.
 ///
 /// **The lit row is this view's own state.** Reading it off the store would mean
 /// a publication per arrow key, and every read of `quickSwitchSections` walks
@@ -52,8 +48,9 @@ struct QuickSwitcher: View {
             protip
         }
         .frame(width: Self.width)
-        .glassEffect(.clear.tint(Palette.flyoutTint), in: shape)
-        .specularEdge(in: shape)
+        // A navigation control over the window, like Spotlight: `.regular`
+        // glass, the HIG's default for a control over content.
+        .glassEffect(.regular, in: shape)
         // **After the panel is in the window, not as it appears**: a focus
         // request made in `onAppear` lands while the materialize transition is
         // still inserting the field, and is dropped — the switcher opened with

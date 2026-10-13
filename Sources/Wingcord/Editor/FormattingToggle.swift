@@ -119,6 +119,87 @@ nonisolated enum FormattingToggle {
         )
     }
 
+    // MARK: The menu bar's Format menu
+
+    /// The block prefixes a line can start with — Discord's headings and
+    /// subtext. A line wears one at a time: choosing Heading on a Title line
+    /// swaps the prefix rather than stacking a second.
+    static let headingPrefixes = ["# ", "## ", "### ", "-# "]
+
+    /// Puts `prefix` on every line the selection touches, replacing any other
+    /// heading prefix there, or takes it off when every line already has it.
+    static func toggleLinePrefix(_ prefix: String, in text: String, selection: NSRange) -> FormattingEdit {
+        let string = text as NSString
+        let lines = string.lineRange(for: selection)
+        var starts: [Int] = []
+        var cursor = lines.location
+        repeat {
+            starts.append(cursor)
+            let next = NSMaxRange(string.lineRange(for: NSRange(location: cursor, length: 0)))
+            if next <= cursor { break }
+            cursor = next
+        } while cursor < NSMaxRange(lines)
+
+        /// The heading prefix a line starts with, longest first so `### ` is
+        /// not read as `# `.
+        func existing(at lineStart: Int, in current: NSString) -> String? {
+            let rest = current.substring(from: lineStart)
+            return headingPrefixes.sorted { $0.count > $1.count }.first { rest.hasPrefix($0) }
+        }
+
+        let allHaveIt = starts.allSatisfy { existing(at: $0, in: string) == prefix }
+        let edited = NSMutableString(string: text)
+        var shiftBeforeStart = 0
+        var shiftTotal = 0
+        // From the last line up, so earlier offsets stay where they were.
+        for lineStart in starts.reversed() {
+            let removed = existing(at: lineStart, in: edited).map { ($0 as NSString).length } ?? 0
+            let inserted = allHaveIt ? 0 : (prefix as NSString).length
+            edited.replaceCharacters(
+                in: NSRange(location: lineStart, length: removed),
+                with: allHaveIt ? "" : prefix
+            )
+            let delta = inserted - removed
+            shiftTotal += delta
+            if lineStart < selection.location || (lineStart == selection.location && delta > 0) {
+                shiftBeforeStart += delta
+            }
+        }
+        let location = max(lines.location, selection.location + shiftBeforeStart)
+        let end = NSMaxRange(selection) + shiftTotal
+        return FormattingEdit(
+            text: edited as String,
+            selection: NSRange(location: location, length: max(0, end - location))
+        )
+    }
+
+    /// Fences the selection as a multiline code block, or unfences it when the
+    /// fences are already there — Discord's ```` ``` ```` on lines of their own.
+    static func toggleCodeBlock(in text: String, selection: NSRange) -> FormattingEdit {
+        let string = text as NSString
+        let open = "```\n", close = "\n```"
+        let openLength = (open as NSString).length, closeLength = (close as NSString).length
+        let start = selection.location, end = NSMaxRange(selection)
+        if start >= openLength, end + closeLength <= string.length,
+           string.substring(with: NSRange(location: start - openLength, length: openLength)) == open,
+           string.substring(with: NSRange(location: end, length: closeLength)) == close {
+            let edited = NSMutableString(string: text)
+            edited.deleteCharacters(in: NSRange(location: end, length: closeLength))
+            edited.deleteCharacters(in: NSRange(location: start - openLength, length: openLength))
+            return FormattingEdit(
+                text: edited as String,
+                selection: NSRange(location: start - openLength, length: selection.length)
+            )
+        }
+        let edited = NSMutableString(string: text)
+        edited.insert(close, at: end)
+        edited.insert(open, at: start)
+        return FormattingEdit(
+            text: edited as String,
+            selection: NSRange(location: start + openLength, length: selection.length)
+        )
+    }
+
     // MARK: Discord's scan (`d`, `h`, `m`, `f`)
 
     private struct Found {

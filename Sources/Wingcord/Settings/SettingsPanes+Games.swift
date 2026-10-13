@@ -232,7 +232,7 @@ private struct AddGameRow: View {
                 help: "Everything currently running that has a window."
             ) {
                 Button("Choose…") { isPicking = true }
-                    .buttonStyle(.glass)
+                    .buttonStyle(.bordered)
                     .controlSize(.small)
                     .popover(isPresented: $isPicking, arrowEdge: .bottom) {
                         candidateList
@@ -633,10 +633,10 @@ private struct ClipRow: View {
         SettingsControlRow(clip.name, help: caption) {
             HStack(spacing: Spacing.base) {
                 Button("Show") { NSWorkspace.shared.activateFileViewerSelecting([clip.url]) }
-                    .buttonStyle(.glass)
+                    .buttonStyle(.bordered)
                     .controlSize(.small)
                 Button("Delete", role: .destructive, action: remove)
-                    .buttonStyle(.glass)
+                    .buttonStyle(.bordered)
                     .controlSize(.small)
             }
         }

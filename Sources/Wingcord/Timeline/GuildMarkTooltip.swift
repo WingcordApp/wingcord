@@ -37,10 +37,10 @@ struct GuildMarkTooltipOverlay: View {
                     .overlay(alignment: below ? .top : .bottom) {
                         GuildMarkFlyout(mark: shown.mark)
                             .clipShape(.rect(cornerRadius: Radius.glass, style: .continuous))
-                            // A flyout over the transcript is over media —
-                            // `INVARIANTS.md` §4.
+                            // A flyout over the transcript: regular glass, the
+                            // default — `INVARIANTS.md` §4.
                             .glassEffect(
-                                .clear.tint(Palette.flyoutTint),
+                                .regular,
                                 in: .rect(cornerRadius: Radius.glass, style: .continuous)
                             )
                             .fixedSize()

@@ -1,21 +1,20 @@
 import SwiftUI
 import WingcordCore
 
-/// The floating identity capsule at the foot of the sidebar: who you are, what
-/// your status is, and the three controls that belong to *you* rather than to
-/// the conversation.
+/// The reader's own card at the foot of the sidebar: who you are, what your
+/// status is, and the way into settings.
 ///
-/// It floats over the channel list rather than sitting under it. Attached with
-/// `.safeAreaBar` — not `.safeAreaInset` — so the list both reserves its height
-/// **and** registers it as a bar, which is what the scroll-edge effect keys off:
-/// channels passing beneath it blur into it instead of sliding under it sharp.
+/// **Alex's design** (references 09 and 10 in `docs/references/2026-10-05`):
+/// avatar, name, status, and one white gear. Mute and deafen live on the call
+/// card above it, where the call is, and in the menu bar. With nothing else on
+/// it the card is one fixed object that never changes shape.
 ///
-/// **The three controls are regions inside the bar's material, not glass bodies
-/// on top of it.** Stacking `.glassEffect` on a control inside a glass capsule
-/// is glass on glass — the inner one has the outer one's blurred output to
-/// sample rather than the content behind the window, so it renders as a flat
-/// lighter disc and the whole bar loses its depth. A tinted region inherits the
-/// capsule's material and reads as part of it.
+/// **Floating clear glass over the channel list — Alex's choice (2026-10-06).**
+/// For one build it was an opaque card below the list; he asked for the glass
+/// and the float back. It is attached with `.safeAreaBar`, so the list both
+/// reserves its height and registers it as a bar, and the list's bottom
+/// scroll edge stays hidden (`softScrollEdgeTopOnly`) so the capsule refracts
+/// the rows themselves rather than an already-blurred band.
 struct NowBar: View, Equatable {
     var presentation: NowBarPresentation
     /// The silhouette. Passed in rather than read from `AppSettings` here, so
@@ -27,18 +26,16 @@ struct NowBar: View, Equatable {
         lhs.presentation == rhs.presentation && lhs.shape == rhs.shape
     }
 
-    var toggleMute: () -> Void = {}
-    var toggleDeafen: () -> Void = {}
     var openSettings: () -> Void = {}
-    /// Opens the reader's own profile card, beside the capsule that asked for
-    /// it. See `ProfilePresenter` — the card is a window-root layer, not a
+    /// Opens the reader's own profile card, beside the identity row. See
+    /// `ProfilePresenter` — the card is a window-root layer, not a
     /// presentation, because a profile frame draws outside it.
-    var openProfile: (CGRect) -> Void = { _ in }
+    var openProfile: () -> Void = {}
+    /// Told where the identity row is, in the window root's space, so the card
+    /// opens beside it — from a click here or from User › Set Status….
+    var reportAnchor: (CGRect) -> Void = { _ in }
 
     @Environment(\.motion) private var motion
-    /// The identity capsule's own frame, in the window root's space, so the
-    /// card opens beside it rather than at the window's corner.
-    @State private var anchor: CGRect = .zero
     /// Whether the pointer is on the bar, which is when the reader's own plate
     /// plays.
     @State private var isHoveringPlate = false
@@ -49,75 +46,24 @@ struct NowBar: View, Equatable {
         shape.cornerRadius(forHeight: Metrics.nowBarHeight)
     }
 
-    /// What lights the bar's material.
-    ///
-    /// **Neutral, and the same whoever the reader is.** This carried the
-    /// nameplate's own hue at 0.42 for a while, on the argument that a plate
-    /// colours the whole capsule rather than a patch of it. Measured against a
-    /// client that gets this right, that argument is sound and the number was
-    /// not: over a themed sidebar of (66,38,32) the bar came out (117,74,130) —
-    /// the blue channel four times its ground — where the reference lifts
-    /// (35,34,34) to (67,61,71), a veil that is very nearly neutral with about
-    /// six units of hue in it. A capsule that is the one saturated object in the
-    /// window stops reading as glass and starts reading as a painted plate,
-    /// which is what it looked like.
-    ///
-    /// So the hue moved to where the reference keeps it — a ramp inside
-    /// `NowBarPlate`, weakest under the name and strongest under the artwork.
-    ///
-    /// **And there is no neutral lift left either, which is the second half of
-    /// the same measurement.** White at 0.15 went in on the argument that the
-    /// selected channel's fill is the same value three rows up the same column.
-    /// It is, and it was still too much: measured on the running window, this
-    /// bar lifted a ground of `30,31,34` to `99,95,108` — plus 68 — against the
-    /// reference's plus 30 on a ground of its own. `.clear` on its own accounts
-    /// for about 34 of that, so the tint was the whole of the difference and
-    /// removing it lands within a few units of the client this was measured
-    /// against.
-    ///
-    /// The bar is still an object without it: the specular edge draws its
-    /// silhouette, the three controls carry their own fills, and a reader who
-    /// wears a plate has the ramp. What it no longer has is a flat veil
-    /// standing between the channel list and the material that is supposed to
-    /// be refracting it — which is what "it is not liquid glassing" meant.
-
     var body: some View {
-        // **The call is not drawn here any more.** It used to be a line above
-        // the identity row, which meant the bar changed height whenever
-        // somebody joined a channel and the whole channel list re-laid out under
-        // it. The call is its own floating panel — `VoiceHUD` — stacked above
-        // this one, so the identity capsule is one fixed object again.
         HStack(spacing: Spacing.base) {
             identity
             Spacer(minLength: Spacing.tight)
-            controls
+            NowBarSettingsButton(action: openSettings)
         }
         .padding(.horizontal, Spacing.base)
         .frame(height: Metrics.nowBarHeight)
-        // One capsule for the whole bar. The controls above are regions inside
-        // it, never bodies on top of it.
-        //
-        // **`.clear`, not `.regular`.** This bar floats over the sidebar
-        // column, and that column is the one surface in the window that is
-        // *nothing* — behind-window vibrancy, so what passes under the capsule
-        // is the reader's own desktop plus the channel list. §4's split sends
-        // clear glass wherever there is media or a lit ground behind the
-        // surface, and frosting a wallpaper into grey is exactly the loss the
-        // material exists to avoid. `.regular` here is what made the bar read
-        // as a plate rather than as glass.
-        //
-        // **And untinted.** A tint lights the material rather than sitting
-        // behind it, so it is not §4 rule 3 — but it is still a flat value
-        // added to every pixel of the surface, and at 0.15 it was more than
-        // twice the veil the reference client carries. See the note on this
-        // type: the measurement is `30,31,34` to `99,95,108` with it, against
-        // plus 30 without.
+        // **`.clear`, untinted.** The bar floats over the sidebar column, which
+        // is behind-window vibrancy — the reader's desktop with the channel
+        // list over it — and a tint is a flat value added to every pixel of
+        // the surface (measured: it doubled the veil a reference client
+        // carries).
         .glassEffect(.clear, in: .rect(cornerRadius: cornerRadius))
-        // **The plate goes OVER the material, never behind it.** A fill behind
-        // glass is §4 rule 3 and is exactly what stops a surface lensing; the
-        // artwork belongs on top, the way a nameplate sits over a roster row's
-        // own material. Clipped to the bar's shape and held well under full
-        // strength, so what is behind the window still refracts through.
+        // **The plate goes over the material, never behind it.** Clipped to
+        // the bar's shape and held under full strength, so what is behind the
+        // window still refracts through and the name and the gear stay
+        // legible.
         .overlay {
             if let url = presentation.nameplateURL {
                 NowBarPlate(
@@ -143,21 +89,16 @@ struct NowBar: View, Equatable {
         .specularEdge(in: .rect(cornerRadius: cornerRadius))
         .animation(motion.glassMorph, value: shape)
         // A plate arriving, changing or being switched off in Settings changes
-        // the ramp over the material; a cut between two saturated hues on the
-        // one surface that is always on screen reads as a glitch.
+        // the ramp over the material; a cut between two saturated hues on the one
+        // surface that is always on screen reads as a glitch.
         .animation(motion.standard, value: presentation.nameplatePalette)
         .padding(.horizontal, Spacing.base)
         .padding(.bottom, Spacing.base)
     }
 
     /// The identity row, and the panel it opens.
-    ///
-    /// **One popover on one view**, which is what makes a presentation modifier
-    /// legitimate here: the rule it would otherwise break — never a `.popover`
-    /// on a row — exists because a popover written into a list row is evaluated
-    /// by every row on every pass. There is exactly one now bar.
     private var identity: some View {
-        Button { openProfile(anchor) } label: {
+        Button(action: openProfile) {
             HStack(spacing: Spacing.base) {
                 AvatarView(
                     url: presentation.avatarURL,
@@ -171,7 +112,7 @@ struct NowBar: View, Equatable {
 
                 VStack(alignment: .leading, spacing: 0) {
                     Text(presentation.displayName)
-                        .font(.system(.subheadline, weight: .semibold))
+                        .font(.system(.body, weight: .semibold))
                         .foregroundStyle(Ink.primary)
                         .lineLimit(1)
                     subtitle
@@ -189,14 +130,13 @@ struct NowBar: View, Equatable {
             presentation.activityLine.map { "\(presentation.status.label), \($0.spokenText)" }
                 ?? presentation.status.label
         ))
-        .accessibilityHint("Open your profile")
         // **The card is raised through the store, not presented here.** It was a
         // `.popover` for one build and that was the bug: a popover is an
         // `NSWindow` and cannot draw past its own frame, so a profile FRAME —
         // the decoration that hangs over the top of a card — was clipped to
         // nothing. `INVARIANTS.md` §2. `ProfilePresenter` draws it at the window
         // root, where every other profile card in the app already is.
-        .reportsPresentationAnchor { anchor = $0 }
+        .reportsPresentationAnchor(reportAnchor)
     }
 
     /// The second line, and the handle it rolls to under the pointer — Discord's
@@ -213,63 +153,47 @@ struct NowBar: View, Equatable {
                     .foregroundStyle(Ink.secondary)
                     .lineLimit(1)
                     .transition(roll(from: .bottom))
-            } else if let line = presentation.activityLine {
-                ActivityLineView(line: line, ink: Ink.secondary)
-                    .transition(roll(from: .top))
             } else {
-                Text(presentation.status.label)
-                    .font(Typeface.rowSubtitle)
-                    .foregroundStyle(presentation.status.tint)
-                    .lineLimit(1)
-                    .transition(roll(from: .top))
+                HStack(spacing: 3) {
+                    // Muted or deafened, said where the reader looks for their
+                    // own state now that the switches are on the call card.
+                    if let mark = voiceMark {
+                        Image(symbol: mark)
+                            .font(Typeface.rowSubtitle)
+                            .foregroundStyle(Palette.destructive)
+                        Text(verbatim: "·")
+                            .font(Typeface.rowSubtitle)
+                            .foregroundStyle(Ink.tertiary)
+                    }
+                    if let line = presentation.activityLine {
+                        ActivityLineView(line: line, ink: Ink.secondary)
+                    } else {
+                        Text(presentation.status.label)
+                            .font(Typeface.rowSubtitle)
+                            .foregroundStyle(presentation.status.tint)
+                            .lineLimit(1)
+                    }
+                }
+                .transition(roll(from: .top))
             }
         }
         .clipped()
         .animation(motion.hover, value: isHoveringIdentity)
     }
 
+    private var voiceMark: String? {
+        if presentation.isDeafened { return "headphones.slash" }
+        if presentation.isMuted { return "mic.slash.fill" }
+        return nil
+    }
+
     private func roll(from edge: Edge) -> AnyTransition {
         motion.reduceMotion ? .opacity : .move(edge: edge).combined(with: .opacity)
     }
-
-    private var controls: some View {
-        HStack(spacing: Spacing.tight) {
-            NowBarControl(
-                systemImage: presentation.isMuted ? "mic.slash.fill" : "mic.fill",
-                isActive: presentation.isMuted,
-                accent: Palette.destructive,
-                label: presentation.isMuted ? "Unmute" : "Mute",
-                action: toggleMute
-            )
-            NowBarControl(
-                systemImage: presentation.isDeafened ? "headphones.slash" : "headphones",
-                isActive: presentation.isDeafened,
-                accent: Palette.destructive,
-                label: presentation.isDeafened ? "Undeafen" : "Deafen",
-                action: toggleDeafen
-            )
-            NowBarControl(
-                systemImage: "gearshape.fill",
-                isActive: false,
-                accent: Palette.accent,
-                label: "Settings",
-                action: openSettings
-            )
-        }
-    }
 }
 
-/// One control inside the now bar.
-///
-/// A region in the parent's material: a fill and a glyph, with no material of
-/// its own. The hover and active states are changes to that fill, which is the
-/// only way to light a control inside glass without stacking a second body on
-/// top of the first.
-private struct NowBarControl: View {
-    var systemImage: String
-    var isActive: Bool
-    var accent: Color
-    var label: String
+/// The white gear: the now bar's one control.
+private struct NowBarSettingsButton: View {
     var action: () -> Void
 
     @Environment(\.motion) private var motion
@@ -277,13 +201,12 @@ private struct NowBarControl: View {
 
     var body: some View {
         Button(action: action) {
-            Image(symbol: systemImage)
-                .font(.system(.footnote, weight: .medium))
-                .foregroundStyle(isActive ? AnyShapeStyle(accent) : AnyShapeStyle(Ink.primary))
-                .frame(width: Metrics.compactControl, height: Metrics.compactControl)
+            Image(symbol: "gearshape.fill")
+                .font(.system(.title3, weight: .medium))
+                .foregroundStyle(InkColor.primary)
+                .frame(width: Metrics.control, height: Metrics.control)
                 .background {
-                    Circle()
-                        .fill(isActive ? accent.opacity(0.22) : isHovering ? nowBarControlHovered : Palette.edge)
+                    Circle().fill(isHovering ? Palette.hoverFill : .clear)
                 }
                 .contentShape(.circle)
         }
@@ -293,9 +216,8 @@ private struct NowBarControl: View {
             isHovering = hovering
         }
         .animation(motion.hover, value: isHovering)
-        .animation(motion.standard, value: isActive)
-        .help(label)
-        .accessibilityLabel(Text(label))
+        .help("User Settings")
+        .accessibilityLabel(Text("User Settings"))
     }
 }
 
@@ -367,23 +289,23 @@ struct PresenceDot: View {
 /// palette with the artwork hung off the trailing end.
 ///
 /// **The ramp is where the colour lives now.** It used to be a flat tint in the
-/// capsule's own material, on the argument that a plate colours the whole
-/// surface rather than a patch of it — see `NowBar.lift` for the measurement
-/// that overturned the strength, not the argument. A ramp keeps both halves: it
+/// bar's own glass, on the argument that a plate colours the whole surface
+/// rather than a patch of it; measured against a reference client, the
+/// strength was wrong and the argument was not. A ramp keeps both halves: it
 /// closes the gap the strip's transparent leading two thirds leave, and it is
 /// almost nothing under the name, which is where a flat tint did its damage.
 ///
-/// **It sits over the material rather than behind it**: a fill behind glass is
-/// §4 rule 3, and it is what would take the lensing away.
+/// **It sits over the material rather than behind it**: a fill behind glass
+/// is what would take the lensing away.
 private struct NowBarPlate: View {
     var still: URL
     var animated: URL?
     var palette: NameplatePalette
     var isAnimating: Bool
 
-    /// How strongly the plate reads. High enough to be the reader's own
-    /// artwork, low enough that the glass underneath still shows what is behind
-    /// the window — which is the whole reason the bar is glass.
+    /// How strongly the plate reads: high enough to be the reader's own
+    /// artwork, low enough that the glass underneath still shows what is
+    /// behind the window.
     private static let strength: Double = 0.55
 
     /// The ramp's two ends, before `strength` is applied.
@@ -404,8 +326,8 @@ private struct NowBarPlate: View {
     /// column — so which end overflows depends on how wide they have made it,
     /// and both cases have to be right. Narrow, the strip is wider than the bar
     /// and the clip takes its leading, transparent end; wide, the strip hangs
-    /// off the trailing edge and leaves bare bar beside it, which is the half
-    /// of the plate the tinted material is now covering.
+    /// off the trailing edge and leaves bare bar beside it, which the ramp
+    /// covers.
     /// `NowBarPlateTests` pins the crossover.
     private static var artWidth: CGFloat {
         (Metrics.nowBarHeight * Nameplate.artworkAspect).rounded()
@@ -458,7 +380,3 @@ private struct NowBarPlate: View {
         }
     }
 }
-
-/// A now-bar control under the pointer: light on a dark room's glass, shade on a
-/// light one's.
-private let nowBarControlHovered = Color.relative(dark: 0.16, light: 0.14)

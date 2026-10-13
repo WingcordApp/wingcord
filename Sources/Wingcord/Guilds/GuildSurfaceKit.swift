@@ -225,7 +225,7 @@ struct SurfaceGlyphView: View {
                     .frame(width: Metrics.inlineEmojiSide, height: Metrics.inlineEmojiSide)
             case .character(let character):
                 Text(character)
-                    .font(.system(size: 15))
+                    .font(.system(.title3))
             case .symbol(let name):
                 Image(symbol: name)
                     .font(.system(.callout))
@@ -459,88 +459,57 @@ struct SurfaceEmptyState: View {
 
 // MARK: Actions
 
-/// The one filled control these pages have.
-///
-/// **A tinted region inside the card's material, not a glass body of its own.**
-/// A card here sits on the opaque reading surface, so a `.glassEffect` button
-/// inside one would be glass over an opaque fill — §4 rule 3 — which is the
-/// composition that makes a surface read as a flat panel. §4's own remedy is
-/// this: "make the inner control a region inside the outer material rather than
-/// its own body", which is what the now bar's controls are.
+/// The one filled control these pages and their sheets have — the system's
+/// prominent button, in the accent unless a page tints it.
 struct SurfaceFilledButton: View {
     var title: String
     var systemImage: String?
     var tint: Color = Palette.accent
     var action: () -> Void
 
-    /// **It hugs its label.** A primary action stretched across a 680-point
-    /// column is a banner rather than a button: it out-weighs the card it sits
-    /// in and there is nothing for the eye to aim at. The minimum is what keeps
-    /// a two-letter label from being a dot.
-    private static let minimumWidth: CGFloat = 136
-
-    @Environment(\.motion) private var motion
-    @State private var isHovering = false
+    /// **It hugs its label**, with a floor. A primary action stretched across a
+    /// 680-point column is a banner rather than a button: it out-weighs the card
+    /// it sits in and there is nothing for the eye to aim at. The minimum is
+    /// what keeps a two-letter label from being a dot.
+    private static let minimumLabelWidth: CGFloat = 112
 
     var body: some View {
         Button(action: action) {
-            HStack(spacing: Spacing.tight) {
-                if let systemImage {
-                    Image(symbol: systemImage)
-                        .font(.system(.caption, weight: .semibold))
-                }
-                Text(title)
-                    .font(.system(.callout, weight: .semibold))
-            }
-            .foregroundStyle(.white)
-            .padding(.horizontal, Spacing.margin)
-            .frame(minWidth: Self.minimumWidth, minHeight: Metrics.control)
-            .background(tint.opacity(isHovering ? 1 : 0.88), in: .capsule)
-            .contentShape(.capsule)
+            SurfaceButtonLabel(title: title, systemImage: systemImage)
+                .frame(minWidth: Self.minimumLabelWidth)
         }
-        .buttonStyle(.plain)
-        .onHover { hovering in
-            guard isHovering != hovering else { return }
-            isHovering = hovering
-        }
-        .animation(motion.fadeQuick, value: isHovering)
+        .buttonStyle(.borderedProminent)
+        .tint(tint)
+        .controlSize(.large)
     }
 }
 
-/// A quiet secondary action beside it.
+/// A quiet secondary action beside it — the system's bordered button.
 struct SurfaceQuietButton: View {
     var title: String
     var systemImage: String?
     var action: () -> Void
 
-    @Environment(\.motion) private var motion
-    @State private var isHovering = false
-
     var body: some View {
         Button(action: action) {
-            HStack(spacing: Spacing.tight) {
-                if let systemImage {
-                    Image(symbol: systemImage)
-                        .font(.system(.caption, weight: .semibold))
-                }
-                Text(title)
-                    .font(.system(.callout, weight: .medium))
+            SurfaceButtonLabel(title: title, systemImage: systemImage)
+        }
+        .buttonStyle(.bordered)
+        .controlSize(.large)
+    }
+}
+
+/// The words, and the glyph before them where there is one.
+private struct SurfaceButtonLabel: View {
+    var title: String
+    var systemImage: String?
+
+    var body: some View {
+        HStack(spacing: Spacing.tight) {
+            if let systemImage {
+                Image(symbol: systemImage)
             }
-            .foregroundStyle(Ink.secondary)
-            .padding(.horizontal, Spacing.margin)
-            .frame(minHeight: Metrics.control)
-            // The app's own two weights of white rather than a multiplied
-            // opacity: `Color.opacity` multiplies what is already there, so a
-            // factor above one is an obscure way to name a value that has a
-            // token.
-            .background(isHovering ? Palette.selectionFill : Palette.hoverFill, in: .capsule)
-            .contentShape(.capsule)
+            Text(title)
         }
-        .buttonStyle(.plain)
-        .onHover { hovering in
-            guard isHovering != hovering else { return }
-            isHovering = hovering
-        }
-        .animation(motion.fadeQuick, value: isHovering)
     }
 }

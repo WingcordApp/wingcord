@@ -101,4 +101,22 @@ struct RecurrenceRuleTests {
         cancelled.exceptions = [.init(id: occurrence, isCanceled: true)]
         #expect(cancelled.status(of: occurrence) == .canceled)
     }
+    /// Discord's `p$`: an event link's date is drawn only when the series
+    /// could have it.
+    @Test("A linked date must fall at the series' time, and on its weekday or day")
+    func admitsOccurrence() {
+        let yearly = RecurrenceRule(start: Self.utc(2026, 1, 1), frequency: .yearly)
+        #expect(yearly.admits(occurrence: ScheduledEvent.occurrenceID(startingAt: Self.utc(2028, 1, 1))))
+        #expect(!yearly.admits(occurrence: ScheduledEvent.occurrenceID(startingAt: Self.utc(2028, 1, 2))))
+        #expect(!yearly.admits(occurrence: ScheduledEvent.occurrenceID(startingAt: Self.utc(2028, 1, 1, 7))))
+
+        // 5 October 2026 is a Monday.
+        let weekly = RecurrenceRule(start: Self.utc(2026, 10, 5, 18), frequency: .weekly)
+        #expect(weekly.admits(occurrence: ScheduledEvent.occurrenceID(startingAt: Self.utc(2026, 10, 19, 18))))
+        #expect(!weekly.admits(occurrence: ScheduledEvent.occurrenceID(startingAt: Self.utc(2026, 10, 20, 18))))
+
+        // Monthly and daily ask only the time of day — Discord's own leniency.
+        let monthly = RecurrenceRule(start: Self.utc(2026, 10, 5, 18), frequency: .monthly)
+        #expect(monthly.admits(occurrence: ScheduledEvent.occurrenceID(startingAt: Self.utc(2026, 12, 9, 18))))
+    }
 }

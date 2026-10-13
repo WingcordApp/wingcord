@@ -20,12 +20,29 @@ struct VoiceParticipant: Hashable, Sendable, Identifiable {
     var displayName: String
     var avatarURL: URL?
     var monogram: String
-    /// Their role colour, where a server gave them one.
-    var nameColor: UInt32?
+    /// The face their display name is set in — the only part of their name
+    /// style Discord's tile takes (its `useDisplayNameStylesFont`); the chip's
+    /// ink is the overlay's own white, as Discord's is.
+    var nameFont: DisplayNameFont?
+    /// What the tile is painted with when it carries no picture. Nil until
+    /// their colour is known, and the neutral ground meanwhile.
+    var ground: VoiceTileGround?
+    /// The picture `ground` is read from, asked for by the grid that draws
+    /// the tile — so only a call on screen costs a decode.
+    var groundArtwork: URL?
     var isSpeaking: Bool
     var isSelfMuted: Bool
     var isServerMuted: Bool
+    var isServerDeafened = false
     var isDeafened: Bool
+    /// Muted by the reader alone — Discord's Mute in the person menu.
+    var isLocallyMuted = false
+    var isBlocked = false
+    var isIgnored = false
+    /// Which kind of client they are on, once the voice server has said.
+    var platform: VoicePlatform?
+    /// The game they are playing, for Discord's chip beside the name.
+    var game: VoiceGame?
     var isCameraOn: Bool
     var isStreaming: Bool
     var isSelf: Bool
@@ -85,6 +102,13 @@ struct VoicePresentation: Hashable, Sendable {
     var quality: VoiceQuality
     /// People being rung who have not answered. Direct calls only.
     var ringingUserIDs: [UserID]
+    /// Whether the soundboard can be opened here — see `SoundboardAccess`.
+    var soundboard: SoundboardAccess = .available
+    /// Whether an activity can be launched into the call: always in a direct
+    /// message, and in a server with Use Activities.
+    var canLaunchActivities = true
+    /// When the reader joined, for the HUD's timer.
+    var connectedSince: Date? = nil
 
     var channelID: ChannelID {
         switch placement {
@@ -158,16 +182,29 @@ struct VoiceQuality: Hashable, Sendable {
 
 /// The soundboard's contents, grouped the way the picker draws them.
 struct SoundboardPresentation: Hashable, Sendable {
+    /// What a section holds — Discord's category types.
+    enum Kind: Hashable, Sendable {
+        case favorites
+        case frequentlyUsed
+        case defaults
+        case server
+        /// Discord's "Search Results", the one section while searching.
+        case search
+    }
+
     struct Section: Hashable, Sendable, Identifiable {
         var id: String
+        var kind: Kind
         var title: String
         var iconURL: URL?
         var monogram: String
-        /// Whether the whole section is behind the Nitro gate. Dimmed rather
-        /// than hidden — §5.5: a gate is a statement, and hiding a section
-        /// makes a server's sounds look like they do not exist.
+        /// Another server's sounds without Nitro — Discord's `isNitroLocked`.
+        /// Dimmed rather than hidden — §5.5: a gate is a statement, and hiding
+        /// a section makes a server's sounds look like they do not exist.
         var isLocked: Bool
         var sounds: [Entry]
+        /// Discord's Add Sound tile at the end of the call's own server.
+        var addSound: AddSound?
     }
 
     struct Entry: Hashable, Sendable, Identifiable {
@@ -176,12 +213,94 @@ struct SoundboardPresentation: Hashable, Sendable {
         var emoji: String?
         var emojiURL: URL?
         var isLocked: Bool
+        var isFavorite: Bool
+        /// Discord's words for a lock the subscription would lift.
+        var refusal: String?
+    }
+
+    /// Offered when the server has a free slot and the reader may add, or when
+    /// it has no sounds at all — where it is drawn either way, and inert
+    /// without the permission.
+    struct AddSound: Hashable, Sendable {
+        var guildID: GuildID
+        var guildName: String
+        var canAdd: Bool
     }
 
     var sections: [Section]
     /// Whether the account may press another server's sounds — the refusal's
     /// wording depends on it.
     var playsEverywhere: Bool
+    /// Self-deafened, server-muted or suppressed: Discord's grid plays nothing
+    /// then (`selfDeaf || mute || suppress`).
+    var isSilenced: Bool
+    /// The call's server, for Server Settings in the volume menu — set only
+    /// where the reader may create and manage its sounds.
+    var managedGuildID: GuildID?
 
-    static let empty = SoundboardPresentation(sections: [], playsEverywhere: false)
+    static let empty = SoundboardPresentation(sections: [], playsEverywhere: false, isSilenced: false)
+}
+
+/// The call's soundboard button: drawn and working, drawn and off while the
+/// reader is server-muted (Discord's "Soundboard disabled when server muted"),
+/// or not drawn in a server channel where Use Soundboard is not theirs — §5.5:
+/// a control that cannot work must not be drawn.
+enum SoundboardAccess: Hashable, Sendable {
+    case available
+    case serverMuted
+    case unavailable
+}
+
+/// A game somebody in a call is playing, as Discord's tile names it: its
+/// application's icon and name.
+struct VoiceGame: Hashable, Sendable {
+    var name: String
+    var iconURL: URL?
+}
+
+/// A call tile's colour, top to bottom — Discord's `VideoBackground`.
+///
+/// **Their profile's two colours where the profile is known**, as the
+/// stylesheet's `.user-profile-video-tile-background`:
+///
+/// ```css
+/// background: linear-gradient(
+///   color-mix(in oklab, var(--profile-gradient-primary-color) 20%, var(--profile-gradient-modal-background-color)),
+///   color-mix(in oklab, var(--profile-gradient-secondary-color) 60%, var(--profile-gradient-modal-background-color)) 100%);
+/// ```
+///
+/// **Otherwise their avatar's colour, flat** — the first swatch of the
+/// picture at 80 (`getAvatarURL(guildId, 80)`), the same picture and the same
+/// quantiser a profile's derived theme comes from. That is everybody: Discord
+/// computes it for every tile, which is what makes a call a row of colours.
+struct VoiceTileGround: Hashable, Sendable {
+    var top: UInt32
+    var bottom: UInt32
+
+    init(flat colour: UInt32) {
+        top = colour
+        bottom = colour
+    }
+
+    /// The profile's gradient, from colours already desaturated as the reader
+    /// asked — Discord desaturates each of the three before the mix.
+    init(primary: UInt32, secondary: UInt32, base: UInt32) {
+        let ground = Oklch(packedRGB: base)
+        top = ground.mixed(with: Oklch(packedRGB: primary), weight: 0.2).clippedRGB()
+        bottom = ground.mixed(with: Oklch(packedRGB: secondary), weight: 0.6).clippedRGB()
+    }
+}
+
+extension VoicePlatform {
+    /// The mark beside a name, or nil for a desktop, which Discord marks with
+    /// nothing.
+    var symbolName: String? {
+        switch self {
+        case .desktop: nil
+        case .mobile: "iphone"
+        case .xbox: "xbox.logo"
+        case .playStation: "playstation.logo"
+        case .quest: "visionpro"
+        }
+    }
 }

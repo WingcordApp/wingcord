@@ -102,6 +102,15 @@ struct TimelineView: NSViewRepresentable {
     /// The listen-along cards' hosts, by party. Its keys are the parties still
     /// on, which is the one thing about a card the layout takes.
     var listenAlongCards: [String: ListenAlongCard]
+    /// A stage chat's "requested to speak." lines that wear Invite to Speak —
+    /// see `AppModel.openStageRequests`.
+    var stageInvitations: Set<MessageID>
+    /// The stickers Fake Nitro GIF uploads stand for — see
+    /// `AppModel.fakeGIFStickers`.
+    var fakeGIFStickers: [UInt64: StickerRef] = [:]
+    /// The event on now in this channel, whose card a stage start wears —
+    /// see `AppModel.liveEvent(in:)`.
+    var liveEvent: TimelineLayoutEngine.LiveEvent?
     var model: AppModel
 
     func makeCoordinator() -> TimelineCoordinator {
@@ -138,6 +147,9 @@ struct TimelineView: NSViewRepresentable {
             canAddReactions: canAddReactions,
             hidesMedia: hidesMedia,
             listenAlongCards: listenAlongCards,
+            stageInvitations: stageInvitations,
+            fakeGIFStickers: fakeGIFStickers,
+            liveEvent: liveEvent,
             head: head,
             postActions: postActions
         )
@@ -191,12 +203,18 @@ final class TimelineCoordinator: NSObject {
     private var hidesMedia = false
     /// See `TimelineView.listenAlongCards`.
     private var listenAlongLive: Set<String> = []
+    /// See `TimelineView.stageInvitations`.
+    private var stageInvitations: Set<MessageID> = []
+    /// See `TimelineView.fakeGIFStickers`.
+    private var fakeGIFStickers: [UInt64: StickerRef] = [:]
+    /// See `TimelineView.liveEvent`.
+    private var liveEvent: TimelineLayoutEngine.LiveEvent?
     /// What the Spotify table was at when the rows were last laid out.
     private var cardRevision: UInt64 = 0
     private var head: ChannelHead = .channel
     private var postActions: PostActions?
-    /// The live profile cards over the rows in view — see `UserCardHosts`.
-    private let userCardHosts = UserCardHosts()
+    /// The live profile cards over the rows in view — see `HostedCardHosts`.
+    private let hostedCardHosts = HostedCardHosts()
 
     /// Laid-out message rows, reused across passes. Swept by the engine.
     private var rowCache: [MessageID: TimelineLayoutEngine.CacheEntry] = [:]
@@ -411,6 +429,9 @@ final class TimelineCoordinator: NSObject {
             guard let self, let channelID = self.channelID else { return }
             self.model.openReactionPicker(for: messageID, in: channelID, anchor: anchor)
         }
+        canvas.onShowTraits = { [weak self] traits, anchor in
+            self?.model.traitsFlyout = TraitsFlyoutRequest(traits: traits, anchor: anchor)
+        }
         canvas.onToggleBookmark = { [weak self] messageID in
             guard let self, let channelID = self.channelID else { return }
             self.model.toggleBookmark(of: messageID, in: channelID)
@@ -483,7 +504,10 @@ final class TimelineCoordinator: NSObject {
             self.model.openMessageMenu(
                 for: messageID,
                 in: channelID,
-                anchor: canvas.anchorInHostingRoot(rect)
+                anchor: canvas.anchorInHostingRoot(rect),
+                // A right-click over selected words offers to copy them, as
+                // Discord's menu does.
+                selectedText: canvas.selectedText()
             )
         }
         canvas.onOpenAttachment = { [weak self] messageID, index, widths in
@@ -494,6 +518,11 @@ final class TimelineCoordinator: NSObject {
                 attachmentIndex: index,
                 posterWidths: widths
             )
+        }
+
+        canvas.onDownloadAttachment = { [weak self] messageID, index in
+            guard let self, let channelID = self.channelID else { return }
+            self.model.downloadAttachment(messageID: messageID, in: channelID, attachmentIndex: index)
         }
 
         let document = TimelineDocumentView(frame: .zero)
@@ -633,7 +662,7 @@ final class TimelineCoordinator: NSObject {
         scrollEndedObserver = nil
         activationObserver = nil
         rowCache.removeAll(keepingCapacity: false)
-        userCardHosts.removeAll()
+        hostedCardHosts.removeAll()
         canvas?.onWidthChange = nil
         canvas?.onOpenLink = nil
         canvas?.onVisibleRangeChange = nil
@@ -725,6 +754,9 @@ final class TimelineCoordinator: NSObject {
         canAddReactions: Bool,
         hidesMedia: Bool,
         listenAlongCards: [String: ListenAlongCard],
+        stageInvitations: Set<MessageID>,
+        fakeGIFStickers: [UInt64: StickerRef] = [:],
+        liveEvent: TimelineLayoutEngine.LiveEvent? = nil,
         head: ChannelHead = .channel,
         postActions: PostActions? = nil
     ) {
@@ -785,6 +817,7 @@ final class TimelineCoordinator: NSObject {
             settings = PresentationRevision.shared.timeline
             canvas?.style = style
             canvas?.alwaysShowsTimestamps = settings.alwaysShowsTimestamps
+            canvas?.hidesTimes = settings.hidesTimes
             rowCache.removeAll(keepingCapacity: true)
             if !items.isEmpty { runLayout(preservingPosition: true) }
         }
@@ -800,6 +833,25 @@ final class TimelineCoordinator: NSObject {
         let live = Set(listenAlongCards.keys)
         if live != listenAlongLive {
             listenAlongLive = live
+            if !items.isEmpty { runLayout(preservingPosition: true) }
+        }
+
+        // A hand going up or coming down adds or takes away Invite to Speak.
+        if stageInvitations != self.stageInvitations {
+            self.stageInvitations = stageInvitations
+            if !items.isEmpty { runLayout(preservingPosition: true) }
+        }
+
+        // A GIF upload turning out to be a sticker swaps an attachment for it.
+        if fakeGIFStickers != self.fakeGIFStickers {
+            self.fakeGIFStickers = fakeGIFStickers
+            if !items.isEmpty { runLayout(preservingPosition: true) }
+        }
+
+        // An event starting or ending in this channel gives a stage start its
+        // card or takes it away.
+        if liveEvent != self.liveEvent {
+            self.liveEvent = liveEvent
             if !items.isEmpty { runLayout(preservingPosition: true) }
         }
 
@@ -838,7 +890,7 @@ final class TimelineCoordinator: NSObject {
             // keeping its layouts would hold every text block and decoded image
             // of a channel nobody is looking at.
             rowCache.removeAll(keepingCapacity: true)
-            userCardHosts.removeAll()
+            hostedCardHosts.removeAll()
             // A clip does not play on in a channel the reader has left.
             embedPlayer?.stop()
             embedPlayer = nil
@@ -1083,7 +1135,7 @@ final class TimelineCoordinator: NSObject {
             invites: model.inviteLookups,
             expandedInvites: model.expandedInviteCards,
             palettes: model.derivedPalettes,
-            userCardSizes: model.userCardSizes,
+            hostedCardSizes: model.hostedCardSizes,
             guildID: channelID.flatMap { model.channelIndex.guildID(of: $0) },
             canEditChannel: channelID.map {
                 model.channelIndex.guildID(of: $0) != nil
@@ -1096,6 +1148,9 @@ final class TimelineCoordinator: NSObject {
             uploads: channelID.map(model.uploadSummaries(in:)) ?? [:],
             hidesMedia: hidesMedia,
             listenAlongLive: listenAlongLive,
+            stageInvitations: stageInvitations,
+            liveEvent: liveEvent,
+            fakeGIFStickers: fakeGIFStickers,
             // A one-to-one conversation has one other person in it, so their
             // bubbles carry neither a name nor a face — Messages' own rule.
             arrangement: settings.usesBubbles
@@ -1255,10 +1310,10 @@ final class TimelineCoordinator: NSObject {
     }
 
     /// Puts a live card over each profile link near the viewport. See
-    /// `UserCardHosts`.
+    /// `HostedCardHosts`.
     private func reconcileUserCards() {
         guard let canvas, let scrollView else { return }
-        userCardHosts.reconcile(in: canvas, visible: scrollView.contentView.bounds, model: model)
+        hostedCardHosts.reconcile(in: canvas, visible: scrollView.contentView.bounds, model: model)
     }
 
     private func positionCanvas() {

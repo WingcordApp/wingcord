@@ -366,32 +366,29 @@ struct AddApplicationSheet: View {
                 if isInstalling {
                     ProgressView().controlSize(.small)
                 } else {
-                    Text("Authorize").font(.system(.subheadline, weight: .semibold))
+                    Text("Authorize")
                 }
             }
             .frame(minWidth: 96)
-            .frame(height: Metrics.control)
-            .contentShape(.capsule)
         }
-        .buttonStyle(.plain)
-        .foregroundStyle(.white)
-        .emphasisChrome(Palette.accent)
+        .buttonStyle(.borderedProminent)
+        .controlSize(.large)
+        .keyboardShortcut(.defaultAction)
         .disabled(isInstalling || (needsGuild && selectedGuildID == nil))
     }
 
     private var done: some View {
         VStack(spacing: Spacing.snug) {
             notice("Added", systemImage: "checkmark.circle.fill", tint: Palette.affirmative)
-            Button("Done") {
+            Button {
                 onFinished()
                 dismiss()
+            } label: {
+                Text("Done").frame(minWidth: 96)
             }
-            .buttonStyle(.plain)
-            .font(.system(.subheadline, weight: .semibold))
-            .foregroundStyle(.white)
-            .frame(minWidth: 96)
-            .frame(height: Metrics.control)
-            .emphasisChrome(Palette.accent)
+            .buttonStyle(.borderedProminent)
+            .controlSize(.large)
+            .keyboardShortcut(.defaultAction)
         }
     }
 

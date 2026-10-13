@@ -106,16 +106,9 @@ struct GameServerConnectSheet: View {
             }
             footer
         }
+        // The system's sheet, as the HIG has it: its own ground and corners,
+        // not a card painted inside a transparent one.
         .frame(width: Self.width)
-        .background(Palette.surface)
-        .clipShape(.rect(cornerRadius: Radius.card, style: .continuous))
-        .overlay {
-            RoundedRectangle(cornerRadius: Radius.card, style: .continuous)
-                .strokeBorder(Ink.quaternary, lineWidth: 1)
-        }
-        // The sheet supplies no material of its own, so the corners drawn above
-        // are the corners on screen rather than a rounded rect inside a square.
-        .presentationBackground(.clear)
         .animation(motion.panel, value: parsed)
         .task(id: steps) {
             parsed = steps.map(Self.attributed)
@@ -162,6 +155,7 @@ struct GameServerConnectSheet: View {
         HStack(spacing: Spacing.base) {
             Spacer(minLength: 0)
             SurfaceFilledButton(title: "Done", systemImage: nil, action: dismiss)
+                .keyboardShortcut(.defaultAction)
         }
         .padding(.horizontal, Spacing.group)
         .padding(.bottom, Spacing.group)
@@ -250,8 +244,7 @@ struct ServerRulesSheet: View {
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .clipShape(.rect(cornerRadius: Radius.card, style: .continuous))
-                .structuralSurface(in: .rect(cornerRadius: Radius.card, style: .continuous))
+                .background(Palette.groupedFill, in: .rect(cornerRadius: Radius.card))
             }
             // A cap rather than a fixed height: a server with three rules gets a
             // short sheet, and one with fifteen scrolls instead of running off
@@ -263,13 +256,6 @@ struct ServerRulesSheet: View {
             footer
         }
         .frame(width: Self.width)
-        .background(Palette.surface)
-        .clipShape(.rect(cornerRadius: Radius.card, style: .continuous))
-        .overlay {
-            RoundedRectangle(cornerRadius: Radius.card, style: .continuous)
-                .strokeBorder(Ink.quaternary, lineWidth: 1)
-        }
-        .presentationBackground(.clear)
         .animation(motion.standard, value: presentation.outcomeMessage)
     }
 
@@ -299,9 +285,10 @@ struct ServerRulesSheet: View {
                 if presentation.canAgree || presentation.isWorking {
                     SurfaceFilledButton(title: "Agree", systemImage: nil, action: agree)
                         .disabled(presentation.isWorking)
-                        .opacity(presentation.isWorking ? 0.45 : 1)
+                        .keyboardShortcut(.defaultAction)
                 } else {
                     SurfaceFilledButton(title: "Done", systemImage: nil, action: dismiss)
+                        .keyboardShortcut(.defaultAction)
                 }
             }
         }

@@ -192,17 +192,17 @@ private struct WebhookCard: View {
                             isCopied = false
                         }
                     }
-                    .buttonStyle(.glass)
+                    .buttonStyle(.bordered)
                     .controlSize(.small)
                 }
                 Button("Delete Webhook", role: .destructive) { isDeleting = true }
-                    .buttonStyle(.glass)
+                    .buttonStyle(.bordered)
                     .controlSize(.small)
                     .tint(Palette.destructive)
                 Spacer()
                 if name != webhook.name, !name.trimmingCharacters(in: .whitespaces).isEmpty {
                     Button("Save Changes", action: rename)
-                        .buttonStyle(.glassProminent)
+                        .buttonStyle(.borderedProminent)
                         .controlSize(.small)
                 }
             }
@@ -246,7 +246,7 @@ struct FollowedChannelsSection: View {
                             .background(SettingsSurface.controlTrough, in: .circle)
                     } trailing: {
                         Button("Unfollow", role: .destructive) { unfollowing = webhook }
-                            .buttonStyle(.glass)
+                            .buttonStyle(.bordered)
                             .controlSize(.small)
                             .tint(Palette.destructive)
                     }

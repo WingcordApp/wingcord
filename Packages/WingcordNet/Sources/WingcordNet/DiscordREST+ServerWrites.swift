@@ -397,12 +397,19 @@ extension DiscordREST {
     /// `PUT /channels/{id}/permissions/{roleID}` afterwards — see
     /// `ChannelAccess.everyoneOverwrite`. A caller looking for a `private` flag
     /// is looking for something that does not exist.
+    ///
+    /// `bitrate` and `userLimit` are Duplicate Channel's, copied from the
+    /// channel duplicated, and sent as Discord's `createChannel` sends them: a
+    /// bitrate only when it is not the default 64 kbit/s, a limit only above
+    /// zero.
     public func createChannel(
         in guildID: GuildID,
         name: String,
         kind: ChannelKind,
         parentID: ChannelID? = nil,
-        overwrites: [PermissionOverwrite] = []
+        overwrites: [PermissionOverwrite] = [],
+        bitrate: Int? = nil,
+        userLimit: Int? = nil
     ) async throws -> Channel? {
         struct Body: Encodable {
             var type: Int
@@ -410,6 +417,8 @@ extension DiscordREST {
             /// In the create itself — Discord's `createChannel` sends a private
             /// channel's overwrites here, so it is never briefly public.
             var permission_overwrites: [Overwrite]
+            var bitrate: Int?
+            var user_limit: Int?
             var parent_id: String?
             struct Overwrite: Encodable {
                 var id: String
@@ -433,11 +442,16 @@ extension DiscordREST {
                         deny: $0.deny.apiString
                     )
                 },
+                bitrate: bitrate.flatMap { $0 == Self.defaultBitrate ? nil : $0 },
+                user_limit: userLimit.flatMap { $0 > 0 ? $0 : nil },
                 parent_id: parentID.map { String($0.rawValue) }
             ),
             as: ChannelDTO.self
         ).domain(guildID: guildID)
     }
+
+    /// A voice channel's bitrate when nobody has set one — Discord's `gp3`.
+    static let defaultBitrate = 64_000
 
     /// The channel Overview page, whole.
     ///

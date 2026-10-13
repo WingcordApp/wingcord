@@ -3,13 +3,17 @@ import SwiftUI
 
 // MARK: - Settings metrics
 //
-// The settings window is the one surface in Wingcord whose geometry was
+// The settings panes are the one surface in Wingcord whose geometry was
 // *measured* rather than designed: every number below came out of a live
-// reference window, read from its accessibility frames and from captures of the
-// window composited over five known backdrops. Nothing here was eyeballed from a
-// screenshot, and nothing here should be "tidied" toward a rounder number — the
-// halves are real (the reference lays its columns out on a half-point grid) and
-// the rhythm only reads correctly when the whole set is kept.
+// reference window — the system's own Settings — read from its accessibility
+// frames and from captures of the window composited over five known backdrops.
+// Nothing here was eyeballed from a screenshot, and nothing here should be
+// "tidied" toward a rounder number — the halves are real and the rhythm only
+// reads correctly when the whole set is kept.
+//
+// The window around the panes is the system's now (DESIGN-NOTES decision 16):
+// its sidebar, toolbar and title take the system's own metrics, so the numbers
+// that used to hand-build them are gone.
 //
 // The tokens in `Tokens.swift` deliberately do NOT cover this: those describe the
 // workspace, which is a denser surface with its own scale. A settings pane is
@@ -19,52 +23,19 @@ nonisolated enum SettingsMetrics {
 
     // MARK: Columns
 
-    /// The source list's width. Fixed rather than a min/ideal/max triple: the
-    /// rows are a fixed-width icon plus a short label, so there is nothing for a
-    /// resize to reveal, and a settings window that can be dragged into an
-    /// unreadable shape is a settings window that will be.
+    /// The sidebar's width when the window first opens — the reference's. The
+    /// reader can drag the split between the limits below.
     static let sidebarWidth: CGFloat = 208.5
+    /// Narrower than this and a row is an icon and a truncated word.
+    static let sidebarMinWidth: CGFloat = 168
+    static let sidebarMaxWidth: CGFloat = 320
 
-    /// The detail pane's inset inside the window — top, bottom and trailing. The
-    /// leading edge is flush against the source list.
-    static let paneInset: CGFloat = 10
-
-    /// The detail pane's corner. Continuous, like every rounded rect here.
-    static let paneRadius: CGFloat = 16
-
-    /// How far the pane's content is held below its top edge, so the floating
-    /// toolbar has somewhere to be. Applied as a bar, never as a hand-reserved
-    /// margin — see `SettingsToolbar`.
-    static let toolbarBandHeight: CGFloat = 72
-
-    // MARK: Source list
-
-    /// The traffic lights own the top of the source list, so the search field
-    /// starts below them.
-    static let searchFieldTop: CGFloat = 44
-    static let searchFieldHeight: CGFloat = 30
-
-    /// Leading and trailing inset for everything in the source list — the search
-    /// field and every row share it.
-    static let sidebarRowInset: CGFloat = 10
-
-    /// Gap between the search field and the first row.
-    static let sidebarListTopInset: CGFloat = 12
-
-    static let sidebarRowHeight: CGFloat = 28
-    static let sidebarRowRadius: CGFloat = 7
-    /// Between rows inside one group.
-    static let sidebarRowSpacing: CGFloat = 1
-    /// Between groups. Not a divider — the reference separates by space alone.
-    static let sidebarGroupSpacing: CGFloat = 12
-
-    /// The coloured tile carrying each section's symbol.
+    /// The coloured tile carrying each section's symbol in the sidebar.
     static let sidebarIconSide: CGFloat = 20
     static let sidebarIconRadius: CGFloat = 5
-    /// Tile to label.
-    static let sidebarIconGap: CGFloat = 8
-    /// Row edge to tile.
-    static let sidebarRowLeading: CGFloat = 8
+
+    /// A search field inside a pane.
+    static let searchFieldHeight: CGFloat = 30
 
     // MARK: Cards
 
@@ -105,13 +76,6 @@ nonisolated enum SettingsMetrics {
     /// The gap between a label and the info glyph that annotates it.
     static let infoGlyphGap: CGFloat = 10
 
-    // MARK: Toolbar
-
-    /// The paired back/forward control. Two square buttons in one capsule.
-    static let toolbarButtonSide: CGFloat = 28
-    /// A toolbar item carrying a label.
-    static let toolbarItemHeight: CGFloat = 32
-
     // MARK: Window
 
     /// The size the window opens at the first time. The reference's own default;
@@ -127,55 +91,22 @@ nonisolated enum SettingsMetrics {
 
 // MARK: - Surfaces
 //
-// Every fill in this window is defined *relative to what is behind it*, because
-// what is behind it is the user's desktop coming through a translucent window.
-// An absolute hex cannot stay correct here: it would be one specific grey over
-// one specific wallpaper, and wrong over every other.
+// Every fill in a pane is defined *relative to what is behind it* — a white or a
+// black at an opacity — so a card is one step off the window's own background,
+// whatever the appearance and whatever theme the reader chose.
 //
 // The opacities are solved values, not guesses — each was recovered by capturing
 // the reference window over black, grey, white, red and blue and fitting the
 // compositing equation. All five backdrops agreed to within a least significant
-// bit, which is what says the model is right.
+// bit, which is what says the model is right. That reference window was
+// translucent and this one is not, so the steps are the measured ones over a
+// different ground: the window's background is now the system's opaque one.
 //
 // **The light-theme halves are NOT measured.** They are first values, set by
 // the system's own light settings window rather than fitted against a capture,
 // and they are the ones to tune.
 
 nonisolated enum SettingsSurface {
-
-    /// The scrim that turns the window's material into the reading pane. The
-    /// source list is the bare material; the pane is the material *minus light*.
-    ///
-    /// **Not valid under Reduce Transparency** — use `pane(reducingTransparency:)`.
-    /// The system substitutes an opaque material for the glass underneath, and a
-    /// scrim measured against a translucent ground then lands on top of an
-    /// already-dark solid and takes the pane most of the way to black.
-    ///
-    /// **Under a light theme the pane is the material *plus* light instead** —
-    /// the reading side of a light window is the brighter one, as it is in the
-    /// system's own settings.
-    private static let paneScrim = Color.adaptive(
-        dark: NSColor(srgbRed: 0, green: 0, blue: 0, alpha: 0.333),
-        light: NSColor(srgbRed: 1, green: 1, blue: 1, alpha: 0.40)
-    )
-
-    /// What goes behind the detail pane's content.
-    ///
-    /// A scrim over the window's glass normally; the app's own reading surface
-    /// when the reader has asked for less transparency, because at that point
-    /// there is nothing to see through and the relationship the scrim expresses
-    /// — pane darker than source list — has to be stated outright instead.
-    static func pane(reducingTransparency: Bool) -> Color {
-        reducingTransparency ? Palette.canvas : paneScrim
-    }
-
-    /// The whole window's ground, behind both columns.
-    ///
-    /// Opaque under Reduce Transparency. `Palette.surface` rather than a value
-    /// invented here: the sidebar is the lighter of the two surfaces and the pane
-    /// the darker, which is the same relationship the measured translucent pair
-    /// has, said in the app's own tokens.
-    static let opaqueGround = Palette.surface
 
     /// A card, lifted off the pane.
     ///
@@ -195,23 +126,7 @@ nonisolated enum SettingsSurface {
         light: NSColor(srgbRed: 1, green: 1, blue: 1, alpha: 0.90)
     )
 
-    /// The search field, over the bare material.
-    static let searchField = Color.relative(dark: 0.061, light: 0.05)
-
-    /// A selected row in the source list, over the bare material.
-    static let rowSelected = Color.relative(dark: 0.104, light: 0.08)
-
-    /// The selected row while the list owns the arrow keys.
-    ///
-    /// Brighter than the resting selection rather than a ring around the column:
-    /// a source list's focus belongs on the row a key press will move from, and
-    /// the default focus effect draws a rectangle around the whole column.
-    static let rowFocused = Color.relative(dark: 0.165, light: 0.12)
-
-    /// A row under the pointer. Deliberately not half the selection's weight the
-    /// way the workspace's is — over a translucent ground a hover that faint is
-    /// invisible on a bright wallpaper and shouting on a dark one, so it is a
-    /// little more than half.
+    /// A row of a card under the pointer.
     static let rowHover = Color.relative(dark: 0.055, light: 0.04)
 
     /// The hairline between two rows of a card.
@@ -221,15 +136,6 @@ nonisolated enum SettingsSurface {
     /// lighter-handed than the card's, because it sits on the control's trough
     /// rather than on the card, and the trough is already a step up.
     static let controlHairline = Color.relative(dark: 0.084, light: 0.07)
-
-    /// What the scroll-edge band tints the content passing under it.
-    ///
-    /// Measured against the reference: the pane's left margin reads a factor of
-    /// 0.42 at the top of the band against the same column at rest, which is
-    /// black at 64.5% — solved against a render rather than read off the
-    /// reference directly, because the content under the two bands is not the
-    /// same content.
-    static let scrollEdgeTint: Double = 0.645
 
     /// The switch, when it is on.
     ///
@@ -245,4 +151,15 @@ nonisolated enum SettingsSurface {
         dark: NSColor(white: 0.675, alpha: 1),
         light: NSColor(white: 0.40, alpha: 1)
     )
+}
+
+// MARK: - Shapes
+
+extension Shape where Self == RoundedRectangle {
+    /// Every rounded rect in a settings pane is continuous. The reference's
+    /// corners were matched against rendered candidates rather than guessed, and
+    /// circular corners at these radii are visibly tighter at the shoulder.
+    static func settingsRect(_ radius: CGFloat) -> RoundedRectangle {
+        RoundedRectangle(cornerRadius: radius, style: .continuous)
+    }
 }

@@ -265,7 +265,7 @@ struct DiscoveryPane: View {
                 .padding(.vertical, Spacing.snug)
         } else if hasMore {
             Button("Show more", action: loadMore)
-                .buttonStyle(.glass)
+                .buttonStyle(.bordered)
                 .controlSize(.large)
                 .frame(maxWidth: .infinity)
         }
@@ -436,7 +436,7 @@ private struct FilterMenuLabel: View {
         .padding(.horizontal, Spacing.base)
         .padding(.vertical, 5)
         .background(Palette.surfaceRaised, in: .capsule)
-        .specularEdge(in: Capsule())
+        .overlay { Capsule().strokeBorder(Palette.edge) }
     }
 }
 
@@ -481,7 +481,7 @@ private struct DiscoverySearchField: View {
         .padding(.horizontal, Spacing.snug)
         .frame(height: Metrics.control + Spacing.tight)
         .background(Palette.surfaceRaised, in: .capsule)
-        .specularEdge(in: Capsule())
+        .overlay { Capsule().strokeBorder(Palette.edge) }
         .contentShape(.capsule)
         .onTapGesture { isFocused = true }
     }

@@ -15,6 +15,7 @@ struct RootView: View {
     /// reads it gives the three reasons it is not.
     private var showsToolbar: Bool {
         model.showsWorkspace && !model.isColumnTakenOver && !model.isFullProfileShown
+            && !model.isCallFullScreen
     }
 
     var body: some View {

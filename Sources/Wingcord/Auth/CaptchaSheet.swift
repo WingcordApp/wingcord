@@ -62,13 +62,6 @@ struct CaptchaSheet: View {
             footer
         }
         .frame(width: Self.width)
-        .background(Palette.surface)
-        .clipShape(.rect(cornerRadius: Radius.card, style: .continuous))
-        .overlay {
-            RoundedRectangle(cornerRadius: Radius.card, style: .continuous)
-                .strokeBorder(Ink.quaternary, lineWidth: 1)
-        }
-        .presentationBackground(.clear)
         .task(id: attempt) {
             try? await Task.sleep(for: Self.loadTimeout)
             guard phase == .loading else { return }
@@ -153,6 +146,7 @@ struct CaptchaSheet: View {
         HStack(spacing: Spacing.base) {
             Spacer(minLength: 0)
             SurfaceQuietButton(title: "Cancel", systemImage: nil) { onFinish(nil) }
+                .keyboardShortcut(.cancelAction)
         }
         .padding(Spacing.group)
     }

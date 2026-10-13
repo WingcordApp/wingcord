@@ -296,6 +296,14 @@ struct MiniProfileCard: View {
                 // bio and the roles would read as part of what the profile says.
                 if let ownActions {
                     OwnProfileActionBlock(actions: ownActions, surface: $ownSurface)
+                        // Set Status… opens the card on the editor, without
+                        // the swap's animation — `ProfileRequest.ownSurface`.
+                        .onChange(of: ownActions.startsOn, initial: true) { _, start in
+                            guard start != .root else { return }
+                            var transaction = Transaction()
+                            transaction.disablesAnimations = true
+                            withTransaction(transaction) { ownSurface = start }
+                        }
                 }
             }
         }
@@ -426,19 +434,15 @@ struct MiniProfileCard: View {
         return FrameShadow.opacity(in: ThemeStore.shared.colors)
     }
 
-    /// Discord's one button on the embed: the full profile, across the foot.
-    ///
-    /// **Glass, like Open Server on a server's card** — the one control on a
-    /// surface that is otherwise entirely somebody's own colours.
+    /// Discord's one button on the embed: the full profile, across the foot. A
+    /// standard bordered button, like Open Server on a server's card.
     private var viewProfileButton: some View {
         Button { openFullProfile(nil) } label: {
             Text("View Profile")
-                .font(.system(.subheadline, weight: .semibold))
                 .frame(maxWidth: .infinity)
-                .padding(.vertical, Spacing.base)
-                .contentShape(.rect)
         }
-        .buttonStyle(.glass)
+        .buttonStyle(.bordered)
+        .controlSize(.large)
         .padding(.horizontal, Spacing.margin)
         .padding(.top, Spacing.tight)
         .padding(.bottom, Spacing.margin)
@@ -564,7 +568,8 @@ struct MiniProfileCard: View {
                     cardWidth: width,
                     fill: ground.statusBubbleFill,
                     ink: ground.statusBubbleInk,
-                    answer: model.statusAnswering(for: profile)
+                    answer: model.statusAnswering(for: profile),
+                    isSelectable: true
                 )
             }
         }
@@ -664,6 +669,7 @@ struct MiniProfileCard: View {
                 .buttonStyle(.plain)
                 .pointerStyle(.link)
                 .onHover { isHoveringName = $0 }
+                .nameCopyMenu(displayName: profile.displayName, handle: profile.handle)
                 // Discord's own account has no full profile behind its name.
                 .allowsHitTesting(!profile.isSystem)
                 if let tag = profile.nameTag {
@@ -682,6 +688,7 @@ struct MiniProfileCard: View {
                 .buttonStyle(.plain)
                 .pointerStyle(.link)
                 .onHover { isHoveringName = $0 }
+                .nameCopyMenu(displayName: profile.displayName, handle: profile.handle)
                 // Discord's own account has no full profile behind its name.
                 .allowsHitTesting(!profile.isSystem)
                 if let pronouns = profile.pronouns, !pronouns.isEmpty {
@@ -692,6 +699,7 @@ struct MiniProfileCard: View {
                     Text(pronouns)
                         .foregroundStyle(InkColor.secondary)
                         .lineLimit(1)
+                        .textSelection(.enabled)
                 }
                 // **A label, never a filter.** The profile route says
                 // `private: true` and still hands over the mutual servers the
@@ -709,6 +717,7 @@ struct MiniProfileCard: View {
                 Text("Known here as \(nickname)")
                     .font(.system(.caption2))
                     .foregroundStyle(InkColor.tertiary)
+                    .textSelection(.enabled)
             }
 
             // The tag leads the row, then the badges — Discord's own order,

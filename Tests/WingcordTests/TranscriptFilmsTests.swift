@@ -66,7 +66,8 @@ struct TranscriptFilmsTests {
             canSuperReact: false,
             canAddReactions: true,
             hidesMedia: false,
-            listenAlongCards: [:]
+            listenAlongCards: [:],
+            stageInvitations: []
         )
     }
 

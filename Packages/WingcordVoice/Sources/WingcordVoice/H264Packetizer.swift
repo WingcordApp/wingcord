@@ -353,6 +353,19 @@ public final class H264Depacketizer {
         }
     }
 
+    /// Drops what this stream would decode next until a keyframe arrives.
+    ///
+    /// For a frame that reassembled and then could not be used — refused by
+    /// the end-to-end transform, or refused by the decoder — after which every
+    /// delta frame refers to something the decoder does not have.
+    public func requireKeyframe() {
+        fragment.removeAll(keepingCapacity: true)
+        pendingUnits.removeAll(keepingCapacity: true)
+        orderedUnits.removeAll(keepingCapacity: true)
+        isCollecting = false
+        needsKeyframe = true
+    }
+
     public func reset() {
         fragment.removeAll(keepingCapacity: false)
         pendingUnits.removeAll(keepingCapacity: false)

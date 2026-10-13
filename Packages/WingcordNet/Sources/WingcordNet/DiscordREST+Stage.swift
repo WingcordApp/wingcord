@@ -75,17 +75,20 @@ extension DiscordREST {
     /// difference between starting a stage and simply being in the channel.
     /// `send_start_notification` pings `@everyone` and is **off unless the
     /// caller says otherwise** — it is the one field here that reaches people
-    /// who are not in the room.
+    /// who are not in the room. A stage started for a scheduled event names
+    /// it, which is what makes the event live (Discord's module 602146).
     public func startStage(
         inChannel channelID: ChannelID,
         topic: String,
         privacyLevel: StagePrivacyLevel = .guildOnly,
-        notifyEveryone: Bool = false
+        notifyEveryone: Bool = false,
+        scheduledEventID: UInt64? = nil
     ) async throws -> StageInstance? {
         struct Body: Encodable {
             var channel_id: String
             var topic: String
             var privacy_level: Int
+            var guild_scheduled_event_id: String?
             var send_start_notification: Bool
         }
         return try await request(
@@ -96,23 +99,29 @@ extension DiscordREST {
                 channel_id: String(channelID.rawValue),
                 topic: topic,
                 privacy_level: privacyLevel.rawValue,
+                guild_scheduled_event_id: scheduledEventID.map(String.init),
                 send_start_notification: notifyEveryone
             ),
             as: StageInstanceDTO.self
         ).domain
     }
 
-    /// Renames a running stage.
+    /// Renames a running stage — Discord's Edit Stage, which sends the
+    /// privacy level it has beside the topic.
     public func setStageTopic(
         _ topic: String,
+        privacyLevel: StagePrivacyLevel,
         inChannel channelID: ChannelID
     ) async throws -> StageInstance? {
-        struct Body: Encodable { var topic: String }
+        struct Body: Encodable {
+            var topic: String
+            var privacy_level: Int
+        }
         return try await request(
             method: "PATCH",
             path: "/stage-instances/\(channelID.rawValue)",
             route: "stage-instances/{id}",
-            body: Body(topic: topic),
+            body: Body(topic: topic, privacy_level: privacyLevel.rawValue),
             as: StageInstanceDTO.self
         ).domain
     }
@@ -151,19 +160,24 @@ extension DiscordREST {
     /// `channel_id` is sent on every call and **must be a stage channel**, and
     /// the reader must already be in it — this moves somebody who is present
     /// between two states, it does not put them in the room.
+    ///
+    /// `silent` steps up without the chat's "is now a speaker." line —
+    /// Discord's own after starting a stage.
     public func setSelfStageState(
         inGuild guildID: GuildID,
         channelID: ChannelID,
         suppress: Bool? = nil,
-        requestToSpeakAt: Date?? = nil
+        requestToSpeakAt: Date?? = nil,
+        silent: Bool = false
     ) async throws {
         struct Body: Encodable {
             var channel_id: String
             var suppress: Bool?
             var request_to_speak_timestamp: String?
+            var silent: Bool?
 
             enum CodingKeys: String, CodingKey {
-                case channel_id, suppress, request_to_speak_timestamp
+                case channel_id, suppress, request_to_speak_timestamp, silent
             }
 
             /// **Written by hand so an explicit null survives.** Lowering a
@@ -176,6 +190,7 @@ extension DiscordREST {
                 var container = encoder.container(keyedBy: CodingKeys.self)
                 try container.encode(channel_id, forKey: .channel_id)
                 try container.encodeIfPresent(suppress, forKey: .suppress)
+                try container.encodeIfPresent(silent, forKey: .silent)
                 if let request_to_speak_timestamp {
                     try container.encode(
                         request_to_speak_timestamp, forKey: .request_to_speak_timestamp
@@ -191,7 +206,8 @@ extension DiscordREST {
             suppress: suppress,
             request_to_speak_timestamp: requestToSpeakAt.flatMap { $0 }.map {
                 ISO8601DateFormatter.withFraction.string(from: $0)
-            }
+            },
+            silent: silent ? true : nil
         )
         // The outer optional says "the caller mentioned the hand at all"; the
         // inner one says "and it is down". Only the second sends a null.

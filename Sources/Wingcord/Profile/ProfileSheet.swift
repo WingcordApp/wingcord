@@ -464,6 +464,18 @@ struct ProfileSheet: View {
 
     @ViewBuilder
     private var activityPane: some View {
+        // **The same tab, not a second surface** — the board's rule. Editing,
+        // the reader's own Activity tab is the Rich Presence builder
+        // (DESIGN-NOTES §11): the presences they made, each its own card.
+        if editor != nil, profile.isSelf {
+            RichPresenceEditorPane(ground: ground)
+        } else {
+            currentActivities
+        }
+    }
+
+    @ViewBuilder
+    private var currentActivities: some View {
         VStack(alignment: .leading, spacing: 14) {
             // A stream first, as Discord lists it.
             let stream = model.profileStream(for: profile.userID, inGuild: profile.guild?.id)

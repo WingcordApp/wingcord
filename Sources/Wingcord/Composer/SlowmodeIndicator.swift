@@ -121,7 +121,8 @@ struct SlowmodeIndicator: View, Equatable {
         .lineLimit(1)
         .padding(.horizontal, Spacing.snug)
         .padding(.vertical, 5)
-        .glassEffect(.clear.tint(Palette.flyoutTint), in: .capsule)
+        // Status, not a control: a plain chip rather than glass.
+        .plainChip(in: .capsule)
         // Never compressed: beside a long typing sentence it is the sentence
         // that truncates, and a countdown cut to "0:…" says nothing.
         .fixedSize()

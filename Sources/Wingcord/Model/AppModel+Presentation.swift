@@ -328,12 +328,14 @@ extension AppModel {
         {
             return .thread(selectedThreadID)
         }
-        // A voice channel's own chat takes the column ahead of the roster:
-        // you are looking at the people already, in tiles the size of faces,
-        // and the thing you cannot see is what anybody wrote.
+        // A call's column is its chat or nothing — never the roster: you are
+        // looking at the people already, in tiles the size of faces, and the
+        // thing you cannot see is what anybody wrote. Discord's call view has no
+        // member list, so the member toggle's state from a text channel does
+        // not follow the reader in here.
         if channel.kind == .voice || channel.kind == .stage {
             if isVoiceChatShown { return .voiceChat(channel.id) }
-            return supplementary(orMembers: isMemberListShown)
+            return supplementary(orMembers: false)
         }
         if channel.guildID != nil {
             return supplementary(orMembers: isMemberListShown)
@@ -412,6 +414,11 @@ extension AppModel {
         guard let channelID = selectedChannelID, let channel = channelIndex[channelID] else {
             return .none
         }
+        // **A call has its own bar.** Discord's channel header has an empty
+        // toolbar case for voice and stage channels, and the call view puts back
+        // only its call items and Show Chat — no roster (the people are the
+        // tiles), no pins, threads or summaries, and no search (`Primary.isCall`).
+        let isCall = channel.kind == .voice || channel.kind == .stage
         return ChannelChrome(
             channelID: channelID,
             name: displayName(of: channel),
@@ -426,16 +433,16 @@ extension AppModel {
             topic: channel.topic,
             isTopicShown: openTopicChannelID == channelID,
             isMemberListShown: isMemberListShown,
-            canShowMemberList: channel.guildID != nil
-                || channel.kind == .groupDirectMessage,
+            canShowMemberList: !isCall
+                && (channel.guildID != nil || channel.kind == .groupDirectMessage),
             isUserProfileShown: isDirectMessageProfileShown,
             canShowUserProfile: channel.guildID == nil && channel.kind == .directMessage,
             // A channel whose history the reader cannot load has pins they
             // cannot read either — the route answers 403, and a control that
             // opens onto a refusal is the inert control §5.5 is about.
-            canShowPins: permissionGate.canReadHistory(channelID),
+            canShowPins: !isCall && permissionGate.canReadHistory(channelID),
             arePinsShown: openPinsChannelID == channelID,
-            canShowThreads: canBrowseThreads(in: channelID),
+            canShowThreads: !isCall && canBrowseThreads(in: channelID),
             areThreadsShown: openThreadsChannelID == channelID,
             // A conversation, not a channel: a guild's voice channel is joined
             // from its own pane, and a text channel has no call to start.
@@ -449,7 +456,7 @@ extension AppModel {
                 },
             canShowVoiceChat: channel.kind == .voice || channel.kind == .stage,
             isVoiceChatShown: isVoiceChatShown,
-            canShowSummaries: summariesApply(to: channelID) && !summaries(in: channelID).isEmpty,
+            canShowSummaries: !isCall && summariesApply(to: channelID) && !summaries(in: channelID).isEmpty,
             areSummariesShown: AppSettings.shared.showsSummaryBar
         )
     }
@@ -682,7 +689,11 @@ extension AppModel {
                 // to a role must still show, or the channel underneath becomes
                 // unreachable.
                 categories.append(channel)
-            } else if channel.kind.isConversation || channel.kind == .forum || channel.kind == .media {
+            } else if channel.kind.isConversation || channel.kind == .forum || channel.kind == .media
+                        // A stage is a room to go into, as a voice channel is,
+                        // though `isConversation` does not count it — left out
+                        // here, no stage channel was ever listed.
+                        || channel.kind == .stage {
                 guard permissionGate.canView(channel.id) else { continue }
                 // **The opt-in filter sits beside the permission one**, in the
                 // one place a channel can enter the list. Filtering later, at
@@ -800,7 +811,7 @@ extension AppModel {
             isUnread: state.unread,
             mentionCount: state.mentions,
             isMuted: state.muted,
-            voiceMembers: voiceChips(in: channel.id, guildID: channel.guildID),
+            voiceMembers: voiceChips(in: channel.id, guildID: channel.guildID, onStageOnly: channel.kind == .stage),
             voiceStatus: info?.status.map(VoiceChannelStatus.runs) ?? [],
             // Nil and zero both mean "no limit" on the wire, and the row draws
             // no counter for either — see `SidebarChannel.voiceLimit`.

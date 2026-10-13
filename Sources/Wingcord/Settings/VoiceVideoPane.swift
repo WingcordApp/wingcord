@@ -1,15 +1,16 @@
 import AVFoundation
 import SwiftUI
+import WingcordCore
 import WingcordVoice
 
 // MARK: - Voice & Video
 //
-// Devices, levels, how the microphone is gated, and the three tests that answer
-// the questions people actually open this pane with: can it hear me, can I hear
-// it, and does the camera work.
+// Devices, levels, how the microphone is gated, and the two tests that answer
+// the questions people actually open this pane with: can it hear me — Discord's
+// Mic Test plays you back through the chosen speaker, which answers whether you
+// can hear it too — and does the camera work.
 //
-// **Every test uses the device the pane has selected**, not the system default.
-// A speaker test that plays through `NSSound` tests whatever macOS is using,
+// **Every test uses the device the pane has selected**, not the system default,
 // which is precisely the thing somebody in here is trying to change.
 //
 // **Nothing here persists a preference that reaches nothing.** §1: a setting
@@ -36,8 +37,10 @@ struct VoiceVideoPane: View {
             devices
             levels
             inputMode
+            voiceProcessing
             micCheck
             video
+            streaming
             callSounds
         }
         // **Off the main actor.** Both catalogs are synchronous system calls and
@@ -46,11 +49,15 @@ struct VoiceVideoPane: View {
         // not main-actor isolated and both device types are `Sendable`, so this
         // is one hop and no copy.
         .task { await loadDevices() }
-        // Start and stop follow the switch, so the engine's life is the test's.
+        // Start and stop follow the button, so the engine's life is the test's.
         // `.task(id:)` rather than `.onChange`, so a cancel tears it down too.
         .task(id: isTestingMic) {
             if isTestingMic {
                 await rig.start()
+                // Discord's test plays you back — except where echo
+                // cancellation was asked for and this Mac refused it, where a
+                // speaker would feed the microphone.
+                rig.isMonitoring = rig.isVoiceProcessing || !settings.resolvedProcessing.echoCancellation
             } else {
                 rig.stop()
             }
@@ -61,14 +68,15 @@ struct VoiceVideoPane: View {
         }
     }
 
-    // MARK: Devices
+    // MARK: Voice
 
+    /// Discord's Voice category: the microphone and the speaker, by its names
+    /// for them.
     private var devices: some View {
-        SettingsGroup("Devices") {
+        SettingsGroup("Voice") {
             SettingsCard {
                 DevicePickerRow(
-                    title: "Input",
-                    help: "The microphone Wingcord listens to in calls.",
+                    title: "Microphone",
                     systemImage: "mic.fill",
                     selection: Binding(
                         get: { settings.voiceInputDeviceID },
@@ -78,12 +86,11 @@ struct VoiceVideoPane: View {
                             model.voicePreferencesChanged()
                         }
                     ),
-                    options: inputs.map { ($0.uniqueID, $0.name, $0.isDefault) }
+                    options: inputs.map { ($0.uniqueID, $0.name) }
                 )
                 CardDivider()
                 DevicePickerRow(
-                    title: "Output",
-                    help: "Where everyone else's voice comes out.",
+                    title: "Speaker",
                     systemImage: "speaker.wave.2.fill",
                     selection: Binding(
                         get: { settings.voiceOutputDeviceID },
@@ -93,23 +100,9 @@ struct VoiceVideoPane: View {
                             model.voicePreferencesChanged()
                         }
                     ),
-                    options: outputs.map { ($0.uniqueID, $0.name, $0.isDefault) }
+                    options: outputs.map { ($0.uniqueID, $0.name) }
                 )
-                CardDivider()
-                SettingsActionRow(
-                    "Speaker test",
-                    help: "Plays a short chime through the output above — not through the system default.",
-                    actionTitle: "Play"
-                ) {
-                    rig.playTestTone()
-                }
             }
-            SettingsFootnote(
-                "Devices are remembered by name rather than by their position in the list, "
-                    + "so unplugging a headset and plugging it back in keeps your choice. "
-                    + "A device that has gone away falls back to whatever macOS is using.",
-                symbolName: "cable.connector"
-            )
         }
     }
 
@@ -118,30 +111,33 @@ struct VoiceVideoPane: View {
     private var levels: some View {
         SettingsGroup("Volume") {
             SettingsCard {
+                // Discord's Input Volume stops at 100%, and its Output Volume
+                // on the desktop at 200%.
+                // Both along Discord's slider curve — see `VolumeCurve`.
                 SettingsSliderRow(
-                    title: "Input volume",
-                    help: "Applied before your voice is encoded. Above 100% is real gain, for a quiet microphone.",
+                    title: "Input Volume",
                     value: Binding(
-                        get: { settings.voiceInputVolume },
+                        get: { min(1, VolumeCurve.position(ofGain: settings.voiceInputVolume)) },
                         set: {
-                            settings.voiceInputVolume = $0
-                            rig.setInputVolume($0)
+                            let gain = VolumeCurve.gain(atPosition: $0)
+                            settings.voiceInputVolume = gain
+                            rig.setInputVolume(gain)
                             model.voicePreferencesChanged()
                         }
                     ),
-                    range: 0...2,
+                    range: 0...1,
                     step: 0.05,
                     format: { "\(Int($0 * 100))%" }
                 )
                 CardDivider()
                 SettingsSliderRow(
-                    title: "Output volume",
-                    help: "Wingcord's own level. It does not move the system volume.",
+                    title: "Output Volume",
                     value: Binding(
-                        get: { settings.voiceOutputVolume },
+                        get: { min(2, VolumeCurve.position(ofGain: settings.voiceOutputVolume)) },
                         set: {
-                            settings.voiceOutputVolume = $0
-                            rig.setOutputVolume($0)
+                            let gain = VolumeCurve.gain(atPosition: $0)
+                            settings.voiceOutputVolume = gain
+                            rig.setOutputVolume(gain)
                             model.voicePreferencesChanged()
                         }
                     ),
@@ -155,13 +151,10 @@ struct VoiceVideoPane: View {
 
     // MARK: How the microphone opens
 
+    /// Discord's Input Mode, in Discord's words.
     private var inputMode: some View {
-        SettingsGroup("Input mode") {
+        SettingsGroup("Input Mode") {
             SettingsCard {
-                CardHeaderRow(
-                    title: "Open the microphone",
-                    help: "Voice activity opens it when you speak. Push to talk opens it only while a key is held."
-                )
                 SettingsSegmentedControl(
                     selection: Binding(
                         get: { settings.inputMode },
@@ -171,38 +164,55 @@ struct VoiceVideoPane: View {
                         }
                     ),
                     options: [
-                        .init(.voiceActivity, "Voice activity", symbolName: "waveform"),
-                        .init(.pushToTalk, "Push to talk", symbolName: "hand.tap.fill"),
+                        .init(.voiceActivity, "Voice Activity", symbolName: "waveform"),
+                        // Discord's own name for a push to talk that works only
+                        // while its window is in front, which is what this one
+                        // is: the key is read without Accessibility access.
+                        .init(.pushToTalk, "Push to Talk (Limited)", symbolName: "hand.tap.fill"),
                     ]
                 )
             }
 
-            if settings.inputMode == .voiceActivity {
-                SettingsCard {
-                    ThresholdRow(
-                        level: rig.level,
-                        isLive: rig.isRunning,
-                        threshold: Binding(
-                            get: { settings.voiceActivityThreshold },
+            SettingsCard {
+                if settings.inputMode == .voiceActivity {
+                    SettingsToggle(
+                        title: "Automatically determine input sensitivity",
+                        help: "Turning this off may help if your voice is not being detected by the automatic input sensitivity.",
+                        isOn: Binding(
+                            get: { settings.automaticInputSensitivity },
                             set: {
-                                settings.voiceActivityThreshold = $0
+                                settings.automaticInputSensitivity = $0
                                 model.voicePreferencesChanged()
                             }
                         )
                     )
-                }
-                .padding(.top, SettingsMetrics.cardToHeader)
-                SettingsFootnote(
-                    "Speak normally and set the line just under where the bar sits. "
-                        + "Wingcord keeps sending for a quarter of a second after you stop, "
-                        + "so a pause between words does not cut the end off a sentence.",
-                    symbolName: "waveform.badge.mic"
-                )
-            } else {
-                SettingsCard {
+                    CardDivider()
+                    MeterRow(
+                        title: "Input Sensitivity",
+                        level: rig.level,
+                        threshold: settings.automaticInputSensitivity
+                            ? nil : settings.voiceActivityThreshold,
+                        isLive: rig.isRunning
+                    )
+                    if !settings.automaticInputSensitivity {
+                        CardDivider()
+                        SettingsSliderRow(
+                            title: "Input Sensitivity",
+                            value: Binding(
+                                get: { settings.voiceActivityThreshold },
+                                set: {
+                                    settings.voiceActivityThreshold = $0
+                                    model.voicePreferencesChanged()
+                                }
+                            ),
+                            range: -100...0,
+                            step: 1,
+                            format: { "\(Int($0)) dB" }
+                        )
+                    }
+                } else {
                     HotkeyRecorderRow(
-                        title: "Push-to-talk key",
-                        help: "Held down to open the microphone.",
+                        title: "Push to Talk Keybind",
                         hotkey: Binding(
                             get: { settings.pushToTalkKey },
                             set: {
@@ -212,73 +222,165 @@ struct VoiceVideoPane: View {
                         )
                     )
                 }
-                .padding(.top, SettingsMetrics.cardToHeader)
-                SettingsFootnote(
-                    "The key works while Wingcord is the frontmost app. Making it work over a "
-                        + "game would need Accessibility access — the same permission a keylogger "
-                        + "asks for — and Wingcord will not ask for that on your behalf.",
-                    symbolName: "hand.raised"
+            }
+            .padding(.top, SettingsMetrics.cardToHeader)
+
+            SettingsCard {
+                // Discord's own description, for the mode the reader is in.
+                HotkeyRecorderRow(
+                    title: "Push to Talk (Priority)",
+                    help: settings.inputMode == .pushToTalk
+                        ? "Hold to temporarily enable your microphone while in Push to Talk mode. Other speakers who are not also transmitting with priority will temporarily have their volume lowered while you are speaking."
+                        : "Hold to transmit your voice with priority in Voice Activity mode. Other speakers who are not also transmitting with priority will temporarily have their volume lowered while you are speaking.",
+                    hotkey: $settings.priorityPushToTalkKey
                 )
+                CardDivider()
+                SettingsToggle(
+                    title: "Show a warning when Discord is not detecting audio from your mic",
+                    isOn: $settings.showsSilentMicWarning
+                )
+            }
+            .padding(.top, SettingsMetrics.cardToHeader)
+        }
+    }
+
+    // MARK: Voice processing
+
+    /// Discord's Input Profile, and the switches its Custom profile leaves to
+    /// the reader. Noise suppression is the system's own Mic Mode: Apple's
+    /// in-app voice isolation adds over fifty milliseconds — measured, against
+    /// a thirty-millisecond bound — so the choice is offered where macOS keeps
+    /// it.
+    private var voiceProcessing: some View {
+        SettingsGroup("Voice Processing") {
+            SettingsCard {
+                CardHeaderRow(title: "Input Profile")
+                SettingsSegmentedControl(
+                    selection: Binding(
+                        get: { settings.inputProfile },
+                        set: {
+                            settings.inputProfile = $0
+                            processingChanged()
+                        }
+                    ),
+                    options: AppSettings.InputProfile.allCases.map { .init($0, $0.title) }
+                )
+            }
+
+            if settings.inputProfile == .custom {
+                SettingsCard {
+                    SettingsToggle(
+                        title: "Echo Cancellation",
+                        isOn: Binding(
+                            get: { settings.echoCancellation },
+                            set: {
+                                settings.echoCancellation = $0
+                                processingChanged()
+                            }
+                        )
+                    )
+                    CardDivider()
+                    SettingsToggle(
+                        title: "Automatic Gain Control",
+                        isOn: Binding(
+                            get: { settings.automaticGainControl },
+                            set: {
+                                settings.automaticGainControl = $0
+                                processingChanged()
+                            }
+                        )
+                    )
+                    // The processor's own, and nothing without it.
+                    .disabled(!settings.echoCancellation)
+                }
+                .padding(.top, SettingsMetrics.cardToHeader)
+            }
+
+            if settings.resolvedProcessing.echoCancellation {
+                SettingsCard {
+                    SettingsActionRow(
+                        "Noise Suppression",
+                        help: "Reduces background noise from your mic.",
+                        actionTitle: "Customize"
+                    ) {
+                        AVCaptureDevice.showSystemUserInterface(.microphoneModes)
+                    }
+                }
+                .padding(.top, SettingsMetrics.cardToHeader)
             }
         }
     }
 
-    // MARK: Mic check
+    /// A change to how the voice is processed reaches the call and the test.
+    private func processingChanged() {
+        rig.reconfigure()
+        model.voicePreferencesChanged()
+    }
 
+    // MARK: Mic Test
+
+    /// Discord's mic test: one button, the meter, and your voice played back
+    /// through the speaker chosen above — "Playing back your beautiful voice" —
+    /// or, after five seconds of nothing at all, its no-input lines.
     private var micCheck: some View {
-        SettingsGroup("Mic check") {
+        SettingsGroup("Mic Test") {
             SettingsCard {
                 if rig.isDenied {
                     PermissionDeniedState(
                         symbolName: "mic.slash",
-                        message: "Wingcord does not have permission to use the microphone.",
+                        message: "Discord does not have access to your microphone",
                         privacyAnchor: "Privacy_Microphone"
                     )
                     CardDivider()
                 }
-                // **The switch, and it is the only thing that opens the input.**
-                // The camera beside it has always worked this way; the
-                // microphone did not, and simply looking at this pane lit the
-                // recording indicator.
-                SettingsToggle(
-                    title: "Microphone test",
-                    help: "Opens your microphone so the level below moves. Wingcord "
-                        + "keeps it shut the rest of the time.",
-                    isOn: $isTestingMic
-                )
+                // **The button, and it is the only thing that opens the
+                // input.** Simply looking at this pane once lit the recording
+                // indicator.
+                HStack(spacing: Spacing.snug) {
+                    Text("Having mic issues? Start a test and say something fun\u{2014}we'll play your voice back to you.")
+                        .font(SettingsType.rowSubtitle)
+                        .foregroundStyle(Ink.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Spacer(minLength: Spacing.base)
+                    Button(isTestingMic ? "Stop Testing" : "Mic Test") { isTestingMic.toggle() }
+                        .buttonStyle(.borderedProminent)
+                }
+                .padding(.leading, SettingsMetrics.cardContentInset)
+                .padding(.trailing, SettingsMetrics.controlTrailing)
+                .padding(.vertical, SettingsMetrics.cardContentInset)
                 CardDivider()
-                MeterRow(level: rig.level, threshold: nil, isLive: rig.isRunning)
+                MeterRow(title: nil, level: rig.level, threshold: nil, isLive: rig.isRunning)
                 if rig.isRunning {
-                    CardDivider()
-                    SettingsToggle(
-                        title: "Hear yourself",
-                        help: rig.isVoiceProcessing
-                            ? "Plays your microphone back through the output above. Echo cancellation stays on, so it is safe on speakers."
-                            : "Plays your microphone back through the output above. There is no echo cancellation on this Mac — use headphones, or this will feed back.",
-                        isOn: Binding(
-                            get: { rig.isMonitoring },
-                            set: { rig.isMonitoring = $0 }
-                        )
-                    )
+                    micTestCaption
+                        .padding(.horizontal, SettingsMetrics.cardContentInset)
+                        .padding(.bottom, SettingsMetrics.cardContentInset)
                 }
             }
-            if rig.isRunning, !rig.isVoiceProcessing {
-                SettingsFootnote(
-                    "This Mac's audio system would not hand Wingcord the voice processor, so calls "
-                        + "run without echo cancellation, noise suppression or automatic gain. "
-                        + "Everything else works — but on speakers the far end will hear themselves, "
-                        + "so use headphones.",
-                    symbolName: "exclamationmark.triangle"
-                )
-            } else {
-                SettingsFootnote(
-                    "Wingcord uses the system's own voice processor — the one FaceTime uses — for "
-                        + "echo cancellation, noise suppression and automatic gain. There is nothing to "
-                        + "tune here because it tunes itself, and it works better on speakers than any "
-                        + "setting could.",
-                    symbolName: "waveform.circle"
-                )
+            SettingsFootnote(
+                markdown: "Need help? Check out our [troubleshooting guide](https://support.discord.com/hc/en-us/articles/360045138471)."
+            )
+        }
+    }
+
+    /// What Discord's test says under the meter.
+    @ViewBuilder
+    private var micTestCaption: some View {
+        if rig.isSilent {
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Discord isn\u{2019}t detecting any input from your mic.")
+                    .font(SettingsType.footnote.weight(.semibold))
+                    .foregroundStyle(Ink.primary)
+                Text("Please check that you\u{2019}ve selected the right input device. [Help!](https://support.discord.com/hc/en-us/articles/214925018)")
+                    .font(SettingsType.footnote)
+                    .foregroundStyle(Ink.secondary)
+                    .tint(Palette.accent)
             }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        } else if rig.isMonitoring {
+            Text("Playing back your beautiful voice")
+                .font(SettingsType.footnote)
+                .foregroundStyle(Ink.secondary)
+                .frame(maxWidth: .infinity, alignment: .leading)
         }
     }
 
@@ -289,7 +391,6 @@ struct VoiceVideoPane: View {
             SettingsCard {
                 DevicePickerRow(
                     title: "Camera",
-                    help: "The camera used for video calls.",
                     systemImage: "video.fill",
                     selection: Binding(
                         get: { settings.cameraDeviceID },
@@ -299,18 +400,17 @@ struct VoiceVideoPane: View {
                             Task { await camera.start(deviceID: deviceID) }
                         }
                     ),
-                    options: cameras.map { ($0.id, "\($0.name) · \($0.kind)", false) }
+                    options: cameras.map { ($0.id, "\($0.name) · \($0.kind)") }
                 )
                 CardDivider()
-                CardHeaderRow(
-                    title: "Quality",
-                    help: "1080p halves the frame rate: a call's video budget is a few megabits, and twice the pixels at thirty frames leaves neither sharp."
-                )
-                SettingsSegmentedControl(
-                    selection: $settings.videoQuality,
-                    options: AppSettings.VideoQuality.allCases.map {
-                        .init($0, $0.label)
-                    }
+                // Synced — `voice_and_video.always_preview_video`.
+                SettingsToggle(
+                    title: "Always preview video",
+                    help: "Pops up preview modal every time you turn on video",
+                    isOn: Binding(
+                        get: { model.syncedPreferences.alwaysPreviewsVideo },
+                        set: { model.setAlwaysPreviewsVideo($0) }
+                    )
                 )
             }
 
@@ -322,15 +422,43 @@ struct VoiceVideoPane: View {
                 )
             }
             .padding(.top, SettingsMetrics.cardToHeader)
+        }
+    }
 
+    // MARK: Streaming
+
+    /// Discord's Stream Attenuation, from its Streaming settings: a watched
+    /// stream's sound drops while people in the call talk.
+    private var streaming: some View {
+        SettingsGroup("Streaming") {
             SettingsCard {
                 SettingsToggle(
-                    title: "Share the app's sound when sharing a screen",
-                    help: "Captures audio from the window or display you share, alongside your microphone.",
-                    isOn: $settings.sharesSystemAudio
+                    title: "Stream Attenuation",
+                    help: "Automatically reduce stream volume when people are talking.",
+                    isOn: Binding(
+                        get: { settings.streamAttenuation },
+                        set: {
+                            settings.streamAttenuation = $0
+                            model.voicePreferencesChanged()
+                        }
+                    )
                 )
+                CardDivider()
+                SettingsSliderRow(
+                    title: "Stream Attenuation Strength",
+                    value: Binding(
+                        get: { settings.streamAttenuationStrength },
+                        set: {
+                            settings.streamAttenuationStrength = $0
+                            model.voicePreferencesChanged()
+                        }
+                    ),
+                    range: 0...100,
+                    step: 1,
+                    format: { "\(Int($0))%" }
+                )
+                .disabled(!settings.streamAttenuation)
             }
-            .padding(.top, SettingsMetrics.cardToHeader)
         }
     }
 
@@ -377,33 +505,32 @@ struct VoiceVideoPane: View {
 
 /// A label and a menu.
 ///
-/// **"System default" is a real choice and it is the first one**, not the
+/// **"Default" is a real choice and it is the first one**, not the
 /// absence of a choice: a reader who has never opened this pane is on it, and a
 /// reader whose headset has gone away falls back to it. Storing nil for it is
 /// what makes that fallback automatic.
 private struct DevicePickerRow: View {
     var title: String
-    var help: String
     var systemImage: String
     @Binding var selection: String?
-    /// id, name, and whether macOS calls it the default.
-    var options: [(String, String, Bool)]
+    /// id and name.
+    var options: [(String, String)]
 
     var body: some View {
-        SettingsControlRow(title, help: help) {
+        SettingsControlRow(title) {
             // A `Picker`, not a hand-built `Menu`: the system draws the
             // checkmark beside the chosen row, keeps it in step with the
             // binding, and gives Full Keyboard Access the behaviour a menu
             // built out of buttons would have to put back by hand.
             Picker(selection: $selection) {
-                Text("System default").tag(String?.none)
+                // Discord's own first entry.
+                Text("Default").tag(String?.none)
                 Divider()
                 ForEach(options, id: \.0) { option in
-                    Text(option.2 ? "\(option.1) (default)" : option.1)
-                        .tag(String?.some(option.0))
+                    Text(option.1).tag(String?.some(option.0))
                 }
                 // A stored device that is no longer here keeps its own row, or
-                // the picker would silently show "System default" for a choice
+                // the picker would silently show "Default" for a choice
                 // the reader made and can still get back by plugging it in.
                 if let selection, !options.contains(where: { $0.0 == selection }) {
                     Divider()
@@ -424,7 +551,7 @@ private struct DevicePickerRow: View {
     }
 
     private var currentName: String {
-        guard let selection else { return "System default" }
+        guard let selection else { return "Default" }
         // A stored device that is no longer here says so rather than showing a
         // blank menu: "the headset you chose is unplugged" is the answer
         // somebody in this pane needs.
@@ -434,52 +561,49 @@ private struct DevicePickerRow: View {
 
 // MARK: - The meter
 
-/// The level, drawn as a bar.
+/// The level, drawn as a bar on Discord's scale — dBFS, −100 at the left and 0
+/// at the right — with the line it has to cross when there is one.
 ///
-/// **One scale for the level and the threshold**, which is the whole reason this
-/// is not a percentage slider: "set the line under where the bar sits" is a
-/// sentence somebody can act on, and "sensitivity: 38%" is not.
+/// **One scale for the level and the line**, so "set the line under where the
+/// bar sits when you speak" is something a reader can do by looking.
 private struct MeterRow: View {
+    var title: String?
+    /// Linear, 0…1, as the engine measures it.
     var level: Float
+    /// In dBFS, or `nil` where nothing is set by hand.
     var threshold: Double?
-    /// Whether the microphone is actually open.
-    ///
-    /// **A still bar and a broken microphone look identical**, and this pane is
-    /// the one place somebody comes to tell those two apart — so a meter with no
-    /// input behind it says so rather than sitting at zero and letting the
-    /// reader draw the wrong conclusion.
+    /// Whether the microphone is actually open. **A still bar and a broken
+    /// microphone look identical**, so a bar with nothing behind it is drawn
+    /// faded rather than empty and confident.
     var isLive: Bool = true
+
+    private var decibels: Double { Double(MeterScale.decibels(level)) }
 
     var body: some View {
         VStack(alignment: .leading, spacing: Spacing.base) {
-            HStack(spacing: Spacing.tight) {
-                Text("Input level")
+            if let title {
+                Text(title)
                     .font(SettingsType.rowLabel)
                     .foregroundStyle(Ink.primary)
-                if !isLive {
-                    Text("microphone off")
-                        .font(SettingsType.rowSubtitle)
-                        .foregroundStyle(Ink.tertiary)
-                }
-                Spacer(minLength: 0)
             }
             GeometryReader { proxy in
                 ZStack(alignment: .leading) {
                     Capsule().fill(SettingsSurface.controlTrough)
                     Capsule()
                         .fill(fillStyle)
-                        .frame(width: max(0, proxy.size.width * CGFloat(min(1, level * 2.2))))
+                        .frame(width: proxy.size.width * MeterScale.position(decibels))
                     if let threshold {
                         // The line, on the same scale as the bar. Drawn over
                         // both, so the reader can see the bar cross it.
                         Rectangle()
                             .fill(Ink.primary)
                             .frame(width: 2)
-                            .offset(x: proxy.size.width * CGFloat(min(1, threshold * 2.2)) - 1)
+                            .offset(x: proxy.size.width * MeterScale.position(threshold) - 1)
                     }
                 }
             }
             .frame(height: 8)
+            .opacity(isLive ? 1 : 0.4)
             // Never animated on the level: it is a measured value arriving
             // twenty times a second, and a spring on it makes the bar lag the
             // voice it is supposed to be showing.
@@ -489,41 +613,29 @@ private struct MeterRow: View {
         .padding(.trailing, SettingsMetrics.controlTrailing)
         .padding(.vertical, SettingsMetrics.cardContentInset)
         .accessibilityElement(children: .combine)
-        .accessibilityValue(Text("\(Int(level * 100)) percent"))
+        .accessibilityValue(Text(isLive ? "\(Int(decibels)) dB" : "off"))
     }
 
     private var fillStyle: AnyShapeStyle {
         guard let threshold else { return AnyShapeStyle(SettingsSurface.switchOn) }
         // Green once it would open the gate. The colour IS the answer to "is it
         // loud enough", which a monochrome bar makes you infer from a position.
-        return Double(level) >= threshold
+        return decibels >= threshold
             ? AnyShapeStyle(Palette.presenceOnline)
             : AnyShapeStyle(SettingsSurface.switchOn)
     }
 }
 
-/// The meter and the threshold slider, as one row.
-private struct ThresholdRow: View {
-    var level: Float
-    var isLive: Bool
-    @Binding var threshold: Double
+/// Discord's meter scale.
+private enum MeterScale {
+    /// A linear level in dBFS, with digital silence at the scale's −100.
+    static func decibels(_ level: Float) -> Float {
+        level > 0.000_01 ? max(-100, 20 * log10(level)) : -100
+    }
 
-    var body: some View {
-        VStack(spacing: 0) {
-            MeterRow(level: level, threshold: threshold, isLive: isLive)
-            CardDivider()
-            SettingsSliderRow(
-                title: "Open at",
-                help: "Where the bar has to reach before Wingcord starts sending.",
-                value: $threshold,
-                range: 0...0.3,
-                step: 0.005,
-                // A percentage of full scale, with a decimal, because the
-                // useful settings all live in the first few per cent — an
-                // integer readout would show "3%" across a third of the slider.
-                format: { String(format: "%.1f%%", $0 * 100) }
-            )
-        }
+    /// Where a level in dBFS sits along the bar, 0…1.
+    static func position(_ decibels: Double) -> CGFloat {
+        CGFloat(min(1, max(0, (decibels + 100) / 100)))
     }
 }
 
@@ -550,7 +662,7 @@ private struct CameraTestRow: View {
                         rig.stop()
                     }
                 }
-                .buttonStyle(.glass)
+                .buttonStyle(.bordered)
                 .controlSize(.small)
             }
 
@@ -607,7 +719,7 @@ private struct PermissionDeniedState: View {
                 ) else { return }
                 NSWorkspace.shared.open(url)
             }
-            .buttonStyle(.glass)
+            .buttonStyle(.bordered)
             .controlSize(.small)
         }
         .frame(maxWidth: .infinity)

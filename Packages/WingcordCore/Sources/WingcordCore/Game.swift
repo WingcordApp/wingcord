@@ -633,13 +633,7 @@ public struct GameReviews: Hashable, Sendable {
 
     public var isEmpty: Bool { steam == nil && openCritic == nil }
 
-    /// Steam's three aggregates, of which a game may have one or all three.
-    ///
-    /// **Which rows the profile draws is decided here and not by a layout.** The
-    /// Sims sends all-time, recent and locale figures and shows two rows —
-    /// "Recent Reviews" and "English Reviews"; Beat Saber sends only the
-    /// all-time pair and shows one — "All Reviews". So a row exists exactly when
-    /// its count arrived.
+    /// Steam's three aggregates, of which a game may send one or all three.
     public struct SteamReviews: Hashable, Sendable {
         /// Positive share, 0–100. **Documented as 0–1 and sent as 0–100** in
         /// every captured response; the wire wins.
@@ -665,39 +659,74 @@ public struct GameReviews: Hashable, Sendable {
             self.localizedRating = localizedRating
             self.localizedRatingCount = localizedRatingCount
         }
+    }
 
-        /// The rows to draw, in Discord's order: recent, then locale, then
-        /// all-time — and all-time is titled "All Reviews" only when it is the
-        /// only one, because a page showing three rows names the third
-        /// "Overall".
-        public var rows: [Row] {
-            var rows: [Row] = []
-            if let rating = recentRating, let count = recentRatingCount {
-                rows.append(Row(title: "Recent Reviews", rating: rating, count: count))
-            }
-            if let rating = localizedRating, let count = localizedRatingCount {
-                rows.append(Row(title: "English Reviews", rating: rating, count: count))
-            }
-            if let rating, let count = ratingCount {
-                let title = rows.isEmpty ? "All Reviews" : "Overall"
-                rows.append(Row(title: title, rating: rating, count: count))
-            }
-            return rows
+    /// One Steam line of the Reviews card.
+    public struct SteamRow: Hashable, Sendable, Identifiable {
+        public enum Window: Hashable, Sendable {
+            /// The last thirty days.
+            case recent
+            /// Reviews written in English.
+            case english
+            /// Every review.
+            case all
         }
 
-        public struct Row: Hashable, Sendable, Identifiable {
-            public var title: String
-            /// 0–100.
-            public var rating: Double
-            public var count: Int
+        public var window: Window
+        public var rating: Double?
+        public var count: Int?
 
-            public var id: String { title }
+        public var id: Window { window }
 
-            /// Steam's own wording for this share and volume.
-            public var verdict: SteamVerdict {
-                SteamVerdict(rating: rating, count: count)
+        /// Discord's label — "Recent", "English", "All".
+        public var title: String {
+            switch window {
+            case .recent: "Recent"
+            case .english: "English"
+            case .all: "All"
             }
         }
+
+        public var verdict: SteamVerdict {
+            SteamVerdict(rating: rating, count: count, isRecent: window == .recent)
+        }
+
+        /// The tooltip's sentence, in Discord's words; "No User Reviews" where
+        /// there are none to describe.
+        public var sentence: String {
+            guard verdict != .noUserReviews, let rating, let count else { return verdict.title }
+            let share = rating.formatted(.number.precision(.fractionLength(0...3)))
+            let total = count.formatted(.number)
+            return switch window {
+            case .recent: "\(share)% of \(total) user reviews in the last 30 days are positive"
+            case .english: "\(share)% of \(total) user reviews in English are positive"
+            case .all: "\(share)% of \(total) user reviews are positive"
+            }
+        }
+    }
+
+    /// The Steam lines Discord's Reviews card draws, in its order (`lP`, chunk
+    /// `464cd197…`) — given whether the game has a Steam page at all.
+    ///
+    /// **At most two, and never a third "Overall".** Recent comes first, and
+    /// only when its verdict is a real one. The second line is English when
+    /// there are enough English reviews to stand for the whole — two hundred of
+    /// them out of at least two thousand — and every review otherwise; it is
+    /// drawn whenever the game has a Steam page, saying "No User Reviews" if
+    /// that is the answer. Both open the store page, so with no page there are
+    /// none.
+    public func steamRows(hasStorePage: Bool) -> [SteamRow] {
+        guard hasStorePage else { return [] }
+        var rows: [SteamRow] = []
+        let recent = SteamRow(window: .recent, rating: steam?.recentRating, count: steam?.recentRatingCount)
+        if recent.verdict != .noUserReviews { rows.append(recent) }
+        if let steam, let english = steam.localizedRating, let englishCount = steam.localizedRatingCount,
+           let total = steam.ratingCount, englishCount >= 200, total >= 2000 {
+            rows.append(SteamRow(window: .english, rating: english, count: englishCount))
+        } else {
+            rows.append(SteamRow(window: .all, rating: steam?.rating, count: steam?.ratingCount))
+        }
+        return rows
     }
 
     public struct OpenCriticReviews: Hashable, Sendable {
@@ -719,6 +748,18 @@ public struct GameReviews: Hashable, Sendable {
         }
 
         public var score: Int? { topCriticRating.map { Int($0) } }
+
+        /// The ring is drawn only for a tiered game with a real average and a
+        /// real count of critics behind it (`lL`).
+        public var showsRing: Bool {
+            tier != nil && (topCriticRating ?? -1) > 0 && (topCriticRatingCount ?? -1) > 0
+        }
+
+        /// Discord's "Not Enough Top Critic Reviews": no tier, and no average
+        /// or no critics.
+        public var lacksCritics: Bool {
+            tier == nil && ((topCriticRating ?? -1) <= 0 || (topCriticRatingCount ?? -1) <= 0)
+        }
     }
 }
 
@@ -738,25 +779,39 @@ public enum OpenCriticTier: Int, Hashable, Sendable {
         }
     }
 
-    /// The tier's own colour, as OpenCritic prints it.
-    public var colorValue: UInt32 {
+    /// The ring's colour — Discord's own per tier (`lO`), not OpenCritic's.
+    public var ringColorValue: UInt32 {
         switch self {
-        case .mighty: 0xFC_4F_28
-        case .strong: 0xB4_39_C8
-        case .fair: 0x40_9B_E8
-        case .weak: 0x91_92_98
+        case .mighty: 0xFC_43_0A
+        case .strong: 0x9E_00_B4
+        case .fair: 0x4A_A1_CE
+        case .weak: 0x80_B0_6A
         }
+    }
+
+    /// OpenCritic's badge art for the tier, which Discord serves from its own
+    /// CDN (`lM`) and draws at 32 points.
+    public var badgeURL: URL? {
+        let hash = switch self {
+        case .mighty: "35c42952234dc88292af091e1f0a5eb2189dbe0e40253245f51637c4ff587173"
+        case .strong: "8d450a540daa7b1a93e760d85891273058b41ed329141c86dae484c23817e0bb"
+        case .fair: "9008eb4e7484a2c84cc11e8dff3831398fedd2de795ebf7c70436fd747bab475"
+        case .weak: "1538fd1d5a67d65aebc33a9b47ab87cafbd83433f31f064f8deba3f89104ac8f"
+        }
+        return URL(string: "https://cdn.discordapp.com/assets/content/\(hash).png")
     }
 }
 
-/// Steam's wording for a review share.
+/// Steam's wording for a review share — Discord's own derivation (`lb`, chunk
+/// `464cd197…`), which is not quite Steam's published table.
 ///
-/// The thresholds are Steam's published ones and they are volume-dependent,
-/// which is not a detail that can be dropped: eighty per cent of thirty reviews
-/// is "Positive" and eighty per cent of thirty thousand is "Very Positive".
-/// Checked against all three captures — 96%/69,711 is Overwhelmingly Positive,
-/// 86%/106,026 and 80%/1,717 are both Very Positive.
+/// **Volume decides as much as share.** Under ten reviews there is no verdict
+/// at all; eighty per cent of forty is Positive and of four hundred is Very
+/// Positive. **The recent window has its own floors**: it never says plain
+/// Positive or Negative, and it reaches the Overwhelmingly verdicts at a
+/// hundred reviews where every other window needs five hundred.
 public enum SteamVerdict: Hashable, Sendable {
+    case noUserReviews
     case overwhelminglyPositive
     case veryPositive
     case positive
@@ -767,27 +822,46 @@ public enum SteamVerdict: Hashable, Sendable {
     case veryNegative
     case overwhelminglyNegative
 
-    public init(rating: Double, count: Int) {
-        switch rating {
-        case 95...:
-            self = count >= 500 ? .overwhelminglyPositive : .veryPositive
-        case 80..<95:
-            self = count >= 50 ? .veryPositive : .positive
-        case 70..<80:
+    /// How the verdict is coloured: Discord's `steam-review-text-*` tokens.
+    public enum Tone: Hashable, Sendable {
+        case positive
+        case mixed
+        case negative
+        /// "No User Reviews", in the subtle ink.
+        case none
+    }
+
+    public init(rating: Double?, count: Int?, isRecent: Bool) {
+        guard let rating, let count, count >= 10 else {
+            self = .noUserReviews
+            return
+        }
+        // Discord's `t < 50 * !n`: fifty for every window but the recent one,
+        // where it is zero and so never true.
+        let few = isRecent ? 0 : 50
+        let many = isRecent ? 100 : 500
+        if rating >= 80 {
+            if count < few { self = .positive }
+            else if count < many || rating < 95 { self = .veryPositive }
+            else { self = .overwhelminglyPositive }
+        } else if rating >= 70 {
             self = .mostlyPositive
-        case 40..<70:
+        } else if rating >= 40 {
             self = .mixed
-        case 20..<40:
+        } else if rating >= 20 {
             self = .mostlyNegative
-        default:
-            if count >= 500 { self = .overwhelminglyNegative }
-            else if count >= 50 { self = .veryNegative }
-            else { self = .negative }
+        } else if count < few {
+            self = .negative
+        } else if count < many {
+            self = .veryNegative
+        } else {
+            self = .overwhelminglyNegative
         }
     }
 
     public var title: String {
         switch self {
+        case .noUserReviews: "No User Reviews"
         case .overwhelminglyPositive: "Overwhelmingly Positive"
         case .veryPositive: "Very Positive"
         case .positive: "Positive"
@@ -800,16 +874,12 @@ public enum SteamVerdict: Hashable, Sendable {
         }
     }
 
-    /// Steam's own three-way colouring: blue for positive, grey-gold for mixed,
-    /// red for negative.
-    public var colorValue: UInt32 {
+    public var tone: Tone {
         switch self {
-        case .overwhelminglyPositive, .veryPositive, .positive, .mostlyPositive:
-            0x66_C0_F4
-        case .mixed:
-            0xB9_A0_6D
-        case .mostlyNegative, .negative, .veryNegative, .overwhelminglyNegative:
-            0xC1_5C_5C
+        case .noUserReviews: .none
+        case .overwhelminglyPositive, .veryPositive, .positive, .mostlyPositive: .positive
+        case .mixed: .mixed
+        case .mostlyNegative, .negative, .veryNegative, .overwhelminglyNegative: .negative
         }
     }
 }

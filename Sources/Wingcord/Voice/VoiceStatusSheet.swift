@@ -96,7 +96,7 @@ struct VoiceStatusSheet: View {
                     Spacer(minLength: 0)
                     if text.count > Self.countAfter {
                         Text("\(Self.limit - text.count)")
-                            .font(.system(size: 11))
+                            .font(.system(.subheadline))
                             .monospacedDigit()
                             .foregroundStyle(Ink.tertiary)
                     }

@@ -164,6 +164,32 @@ final class AppSettings {
         }
     }
 
+    // MARK: The Rich Presence builder
+
+    /// The presences the reader made in the full profile's Activity tab
+    /// (DESIGN-NOTES §11) — kept on this Mac, as Vencord keeps its plugin's.
+    var customPresences: [CustomPresence] = [] {
+        didSet {
+            guard customPresences != oldValue else { return }
+            defaults.set(try? JSONEncoder().encode(customPresences), forKey: Key.customPresences)
+        }
+    }
+    /// The one that is on, if any — one at a time.
+    var activeCustomPresenceID: UUID? {
+        didSet {
+            guard activeCustomPresenceID != oldValue else { return }
+            defaults.set(activeCustomPresenceID?.uuidString, forKey: Key.activeCustomPresence)
+            if let activeCustomPresenceID { lastCustomPresenceID = activeCustomPresenceID }
+        }
+    }
+    /// The one Show Custom RPC turns back on.
+    private(set) var lastCustomPresenceID: UUID? {
+        didSet {
+            guard lastCustomPresenceID != oldValue else { return }
+            defaults.set(lastCustomPresenceID?.uuidString, forKey: Key.lastCustomPresence)
+        }
+    }
+
     // MARK: The overlay, and clips
     /// Games the reader added by hand, because Discord's database does not
     /// know them.
@@ -576,6 +602,18 @@ final class AppSettings {
         }
     }
 
+    /// View › Hide Times, from Alex's reference (DESIGN-NOTES §10): every time
+    /// in the transcript drawn only under the pointer — the one beside an
+    /// author's name as well as a continuation row's, which it takes back from
+    /// `alwaysShowsTimestamps`.
+    var hidesMessageTimes = false {
+        didSet {
+            guard hidesMessageTimes != oldValue else { return }
+            defaults.set(hidesMessageTimes, forKey: Key.hidesMessageTimes)
+            notifyPresentation()
+        }
+    }
+
     /// The cosmetics this reader has asked not to see.
     ///
     /// **One stored set rather than six booleans.** It is the memo key for the
@@ -768,21 +806,64 @@ final class AppSettings {
         }
     }
 
-    /// Where voice activity opens the gate, 0…1.
-    ///
-    /// **Not "sensitivity", which is the same number said backwards.** The meter
-    /// beside it draws the level and the threshold on one scale, so the control
-    /// reads as a line the level has to cross rather than as an abstract
-    /// percentage.
-    var voiceActivityThreshold: Double {
-        get { storedVoiceThreshold }
-        set { storedVoiceThreshold = min(0.5, max(0, newValue)) }
+    /// Discord's Input Profile — Custom until the reader picks another, as
+    /// Discord's is.
+    var inputProfile: InputProfile = .custom {
+        didSet {
+            guard inputProfile != oldValue else { return }
+            defaults.set(inputProfile.rawValue, forKey: Key.inputProfile)
+        }
     }
 
-    private var storedVoiceThreshold: Double = 0.03 {
+    /// Discord's Echo Cancellation, for the Custom profile: Apple's voice
+    /// processor, or the 48 kHz path without it.
+    var echoCancellation = true {
+        didSet {
+            guard echoCancellation != oldValue else { return }
+            defaults.set(echoCancellation, forKey: Key.echoCancellation)
+        }
+    }
+
+    /// Discord's Automatic Gain Control, for the Custom profile.
+    var automaticGainControl = true {
+        didSet {
+            guard automaticGainControl != oldValue else { return }
+            defaults.set(automaticGainControl, forKey: Key.automaticGainControl)
+        }
+    }
+
+    /// What the profile makes of the Custom switches — Discord's profiles are
+    /// overrides, and Custom is the reader's own settings untouched.
+    var resolvedProcessing: VoiceAudioEngine.Processing {
+        switch inputProfile {
+        case .voiceIsolation: VoiceAudioEngine.Processing(echoCancellation: true, automaticGainControl: true)
+        case .studio: VoiceAudioEngine.Processing(echoCancellation: false, automaticGainControl: false)
+        case .custom: VoiceAudioEngine.Processing(
+            echoCancellation: echoCancellation, automaticGainControl: automaticGainControl
+        )
+        }
+    }
+
+    /// Discord's "Automatically determine input sensitivity" — on by default,
+    /// as its desktop app has it.
+    var automaticInputSensitivity = true {
+        didSet {
+            guard automaticInputSensitivity != oldValue else { return }
+            defaults.set(automaticInputSensitivity, forKey: Key.automaticSensitivity)
+        }
+    }
+
+    /// Where voice activity opens the gate when sensitivity is set by hand, in
+    /// dBFS — Discord's own scale, −100…0, and its default of −60.
+    var voiceActivityThreshold: Double {
+        get { storedVoiceThreshold }
+        set { storedVoiceThreshold = min(0, max(-100, newValue)) }
+    }
+
+    private var storedVoiceThreshold: Double = -60 {
         didSet {
             guard storedVoiceThreshold != oldValue else { return }
-            defaults.set(storedVoiceThreshold, forKey: Key.voiceThreshold)
+            defaults.set(storedVoiceThreshold, forKey: Key.voiceThresholdDecibels)
         }
     }
 
@@ -796,18 +877,15 @@ final class AppSettings {
         }
     }
 
-    /// What the camera sends. 720p at 30 is the shape a channel's bitrate
-    /// actually supports; the pane offers 480 and 1080 either side of it.
-    var videoQuality: VideoQuality = .high {
+    /// Discord's Push to Talk (Priority): held, the microphone opens in either
+    /// mode and transmits with priority — which everybody else's client honours
+    /// only from somebody with the channel's Priority Speaker.
+    var priorityPushToTalkKey: Hotkey? {
         didSet {
-            guard videoQuality != oldValue else { return }
-            defaults.set(videoQuality.rawValue, forKey: Key.videoQuality)
+            guard priorityPushToTalkKey != oldValue else { return }
+            defaults.set(priorityPushToTalkKey?.storageValue ?? Self.noHotkey, forKey: Key.priorityPushToTalk)
         }
     }
-
-    var videoWidth: Int { videoQuality.width }
-    var videoHeight: Int { videoQuality.height }
-    var videoFramerate: Int { videoQuality.framerate }
 
     /// Whether a call makes a sound when something happens in it.
     ///
@@ -822,12 +900,209 @@ final class AppSettings {
         }
     }
 
-    /// Whether a screen share carries the shared application's sound.
-    var sharesSystemAudio = true {
+    /// Discord's Go Live choices — Resolution, Frame Rate and Share Audio —
+    /// kept from one stream to the next, as its `ApplicationStreamingSettingsStore`
+    /// keeps them. What the account may actually use is `GoLiveGate`'s call.
+    var goLive = GoLiveSettings() {
         didSet {
-            guard sharesSystemAudio != oldValue else { return }
-            defaults.set(sharesSystemAudio, forKey: Key.sharesAudio)
+            guard goLive != oldValue else { return }
+            defaults.set(goLive.resolution.rawValue, forKey: Key.goLiveResolution)
+            defaults.set(goLive.frameRate.rawValue, forKey: Key.goLiveFrameRate)
+            defaults.set(goLive.sharesAudio, forKey: Key.sharesAudio)
         }
+    }
+
+    /// Discord's Stream Attenuation: "Automatically reduce stream volume when
+    /// people are talking." On by default, as Discord's `sidechainCompression`.
+    var streamAttenuation = true {
+        didSet {
+            guard streamAttenuation != oldValue else { return }
+            defaults.set(streamAttenuation, forKey: Key.streamAttenuation)
+        }
+    }
+
+    /// Discord's Stream Attenuation Strength, 0–100, 50 by default.
+    var streamAttenuationStrength: Double = 50 {
+        didSet {
+            let clamped = min(100, max(0, streamAttenuationStrength))
+            guard clamped == streamAttenuationStrength else {
+                streamAttenuationStrength = clamped
+                return
+            }
+            guard streamAttenuationStrength != oldValue else { return }
+            defaults.set(streamAttenuationStrength, forKey: Key.streamAttenuationStrength)
+        }
+    }
+
+    /// Vencord's Fake Nitro (decision 9): one switch, off by default, and under
+    /// it the three things it does — send emoji and stickers this account
+    /// cannot use as links to their pictures, and lift Go Live's limits. Each
+    /// on by default once the switch is, as the plugin's are.
+    var fakeNitro = false {
+        didSet {
+            guard fakeNitro != oldValue else { return }
+            defaults.set(fakeNitro, forKey: Key.fakeNitro)
+        }
+    }
+    var fakeNitroEmoji = true {
+        didSet {
+            guard fakeNitroEmoji != oldValue else { return }
+            defaults.set(fakeNitroEmoji, forKey: Key.fakeNitroEmoji)
+        }
+    }
+    var fakeNitroStickers = true {
+        didSet {
+            guard fakeNitroStickers != oldValue else { return }
+            defaults.set(fakeNitroStickers, forKey: Key.fakeNitroStickers)
+        }
+    }
+    var fakeNitroStreamQuality = true {
+        didSet {
+            guard fakeNitroStreamQuality != oldValue else { return }
+            defaults.set(fakeNitroStreamQuality, forKey: Key.fakeNitroStreamQuality)
+        }
+    }
+
+    /// The plugin's `disableEmbedPermissionCheck`: off, a send whose links a
+    /// channel will not embed asks first ("Hold on!").
+    var fakeNitroSkipsEmbedCheck = false {
+        didSet {
+            guard fakeNitroSkipsEmbedCheck != oldValue else { return }
+            defaults.set(fakeNitroSkipsEmbedCheck, forKey: Key.fakeNitroSkipsEmbedCheck)
+        }
+    }
+
+    /// Vencord's AnonymiseFileNames (decision 11): off, as a plugin is until
+    /// it is switched on. On, each file is renamed as its send begins unless
+    /// its tile says otherwise — by the plugin's settings, with its defaults.
+    var anonymisesFileNames = false {
+        didSet {
+            guard anonymisesFileNames != oldValue else { return }
+            defaults.set(anonymisesFileNames, forKey: Key.anonymisesFileNames)
+        }
+    }
+    /// "Whether to anonymise file names by default" — for a tile nobody has
+    /// toggled.
+    var anonymisesByDefault = true {
+        didSet {
+            guard anonymisesByDefault != oldValue else { return }
+            defaults.set(anonymisesByDefault, forKey: Key.anonymisesByDefault)
+        }
+    }
+    /// "Anonymising method".
+    var anonymisingMethod = FileNameAnonymiser.Method.randomCharacters {
+        didSet {
+            guard anonymisingMethod != oldValue else { return }
+            defaults.set(anonymisingMethod.rawValue, forKey: Key.anonymisingMethod)
+        }
+    }
+    /// "Random characters length".
+    var randomisedLength = 7 {
+        didSet {
+            let clamped = min(Self.randomisedLengths.upperBound, max(Self.randomisedLengths.lowerBound, randomisedLength))
+            guard clamped == randomisedLength else {
+                randomisedLength = clamped
+                return
+            }
+            guard randomisedLength != oldValue else { return }
+            defaults.set(randomisedLength, forKey: Key.randomisedLength)
+        }
+    }
+    /// At least one character — the plugin would send a name that is only its
+    /// ending — and no more than the 255 a Mac's disks hold in one name.
+    static let randomisedLengths = 1...255
+    /// "Consistent filename".
+    var consistentFileName = "image" {
+        didSet {
+            guard consistentFileName != oldValue else { return }
+            defaults.set(consistentFileName, forKey: Key.consistentFileName)
+        }
+    }
+
+    /// Discord's "Sync theme across my devices" (`shouldSync("appearance")`,
+    /// on unless switched off): one of Discord's themes chosen here is
+    /// written to the account, and one chosen in Discord is taken here.
+    var syncsThemeAcrossDevices = true {
+        didSet {
+            guard syncsThemeAcrossDevices != oldValue else { return }
+            defaults.set(syncsThemeAcrossDevices, forKey: Key.syncsThemeAcrossDevices)
+        }
+    }
+
+    /// Discord's "Apply theme to other users' profiles"
+    /// (`syncProfileThemeWithUserTheme`, off): a profile with colours of its
+    /// own is drawn in the reader's light or dark, under Discord's heavier
+    /// overlay. See `ProfileGround`.
+    var appliesThemeToProfiles = false {
+        didSet {
+            guard appliesThemeToProfiles != oldValue else { return }
+            defaults.set(appliesThemeToProfiles, forKey: Key.appliesThemeToProfiles)
+        }
+    }
+
+    /// Discord's "Auto-compress Images": a picture over the upload limit is
+    /// compressed to fit as it is added, without asking. Off, as Discord's
+    /// desktop has no such step; Always Compress Images turns it on.
+    var autoCompressesImages = false {
+        didSet {
+            guard autoCompressesImages != oldValue else { return }
+            defaults.set(autoCompressesImages, forKey: Key.autoCompressesImages)
+        }
+    }
+
+    var sendsFakeEmoji: Bool { fakeNitro && fakeNitroEmoji }
+    var sendsFakeStickers: Bool { fakeNitro && fakeNitroStickers }
+    var liftsStreamQuality: Bool { fakeNitro && fakeNitroStreamQuality }
+
+    /// Discord's "Show a warning when Discord is not detecting audio from your
+    /// mic" — its `silenceWarning`, on by default.
+    var showsSilentMicWarning = true {
+        didSet {
+            guard showsSilentMicWarning != oldValue else { return }
+            defaults.set(showsSilentMicWarning, forKey: Key.silenceWarning)
+        }
+    }
+
+    /// Discord's "Don't show again" on the activity suggestions under a call —
+    /// its `VC_TILE_ACTIVITIES_ENTRY_POINT`, dismissed for good on the device.
+    var hidesActivitySuggestions = false {
+        didSet {
+            guard hidesActivitySuggestions != oldValue else { return }
+            defaults.set(hidesActivitySuggestions, forKey: Key.activitySuggestionsDismissed)
+        }
+    }
+
+    /// Discord's Mute Music in a stage's tray, kept on the device as its
+    /// `StageMusicStore` keeps it.
+    var mutesStageMusic = false {
+        didSet {
+            guard mutesStageMusic != oldValue else { return }
+            defaults.set(mutesStageMusic, forKey: Key.stageMusicMuted)
+        }
+    }
+
+    /// Whether "Welcome to Stages!" has been shown — Discord's once-ever
+    /// `HasBeenInStageChannel`.
+    var hasSeenStageWelcome = false {
+        didSet {
+            guard hasSeenStageWelcome != oldValue else { return }
+            defaults.set(hasSeenStageWelcome, forKey: Key.stageWelcomeSeen)
+        }
+    }
+
+    /// People whose video the reader turned off — Discord's Disable Video,
+    /// which it keeps on the device rather than syncing.
+    var disabledVideoUserIDs: Set<UInt64> = [] {
+        didSet {
+            guard disabledVideoUserIDs != oldValue else { return }
+            defaults.set(disabledVideoUserIDs.map(String.init), forKey: Key.disabledVideo)
+        }
+    }
+
+    /// The attenuation as the engine takes it: how far a stream drops, 0…1,
+    /// or `nil` when it is off.
+    var resolvedStreamAttenuation: Float? {
+        streamAttenuation ? Float(streamAttenuationStrength / 100) : nil
     }
 
     /// The input mode as the engine wants it, with the threshold folded in.
@@ -835,13 +1110,22 @@ final class AppSettings {
     /// One place, because the two halves have to agree: a push-to-talk mode with
     /// no key bound is a microphone that can never open, and resolving that here
     /// means no caller has to remember it.
-    var resolvedInputMode: VoiceEngine.InputMode {
-        switch inputMode {
-        case .voiceActivity: .voiceActivity(threshold: Float(voiceActivityThreshold))
-        case .pushToTalk:
-            pushToTalkKey == nil
-                ? .voiceActivity(threshold: Float(voiceActivityThreshold))
-                : .pushToTalk
+    ///
+    /// **The profile overrides, as Discord's do**: Studio is voice activity at a
+    /// fixed −84 dB whatever was chosen, and Voice Isolation decides the line
+    /// itself.
+    var resolvedInputMode: MediaSession.InputMode {
+        let activity = switch inputProfile {
+        case .studio: MediaSession.VoiceActivity(isAutomatic: false, threshold: -84)
+        case .voiceIsolation: MediaSession.VoiceActivity(isAutomatic: true, threshold: Float(voiceActivityThreshold))
+        case .custom: MediaSession.VoiceActivity(
+            isAutomatic: automaticInputSensitivity, threshold: Float(voiceActivityThreshold)
+        )
+        }
+        if inputProfile == .studio { return .voiceActivity(activity) }
+        return switch inputMode {
+        case .voiceActivity: .voiceActivity(activity)
+        case .pushToTalk: pushToTalkKey == nil ? .voiceActivity(activity) : .pushToTalk
         }
     }
 
@@ -986,6 +1270,7 @@ final class AppSettings {
         showsSeconds = defaults.object(forKey: Key.showsSeconds) as? Bool ?? false
         alwaysShowsTimestamps = defaults.object(forKey: Key.alwaysShowsTimestamps) as? Bool
             ?? false
+        hidesMessageTimes = defaults.object(forKey: Key.hidesMessageTimes) as? Bool ?? false
         showsPerformanceInspector = defaults.object(forKey: Key.showsInspector) as? Bool ?? false
         developerMode = defaults.object(forKey: Key.developerMode) as? Bool ?? false
         hidesActivityCards = defaults.object(forKey: Key.hidesActivityCards) as? Bool ?? false
@@ -997,14 +1282,65 @@ final class AppSettings {
         cameraDeviceID = defaults.object(forKey: Key.camera) as? String
         storedVoiceInputVolume = defaults.object(forKey: Key.voiceInputVolume) as? Double ?? 1
         storedVoiceOutputVolume = defaults.object(forKey: Key.voiceOutputVolume) as? Double ?? 1
-        storedVoiceThreshold = defaults.object(forKey: Key.voiceThreshold) as? Double ?? 0.03
+        // **Decision 4: the old line, converted once to Discord's scale.** It was
+        // a linear 0…1 — 0.03 by default, which is −30.5 dB — and the setting
+        // that replaces it is the dBFS slider Discord draws. Nobody ever chose
+        // automatic sensitivity before it existed, so it starts on, as
+        // Discord's does.
+        if let decibels = defaults.object(forKey: Key.voiceThresholdDecibels) as? Double {
+            storedVoiceThreshold = decibels
+        } else if let linear = defaults.object(forKey: Key.voiceThreshold) as? Double {
+            // Written here, not by the property's observer: an initialiser's
+            // own assignments do not call it.
+            storedVoiceThreshold = min(0, max(-100, linear > 0 ? 20 * log10(linear) : -100))
+            defaults.set(storedVoiceThreshold, forKey: Key.voiceThresholdDecibels)
+            defaults.removeObject(forKey: Key.voiceThreshold)
+        }
+        automaticInputSensitivity = defaults.object(forKey: Key.automaticSensitivity) as? Bool ?? true
+        inputProfile = (defaults.object(forKey: Key.inputProfile) as? String)
+            .flatMap(InputProfile.init(rawValue:)) ?? .custom
+        echoCancellation = defaults.object(forKey: Key.echoCancellation) as? Bool ?? true
+        automaticGainControl = defaults.object(forKey: Key.automaticGainControl) as? Bool ?? true
         inputMode = (defaults.object(forKey: Key.inputMode) as? String)
             .flatMap(VoiceInputMode.init(rawValue:)) ?? .voiceActivity
         pushToTalkKey = (defaults.object(forKey: Key.pushToTalk) as? Int)
             .flatMap { $0 == Self.noHotkey ? nil : Hotkey(storageValue: $0) }
-        videoQuality = (defaults.object(forKey: Key.videoQuality) as? String)
-            .flatMap(VideoQuality.init(rawValue:)) ?? .high
-        sharesSystemAudio = defaults.object(forKey: Key.sharesAudio) as? Bool ?? true
+        goLive = GoLiveSettings(
+            resolution: (defaults.object(forKey: Key.goLiveResolution) as? Int)
+                .flatMap(StreamResolution.init(rawValue:)) ?? .p720,
+            frameRate: (defaults.object(forKey: Key.goLiveFrameRate) as? Int)
+                .flatMap(StreamFrameRate.init(rawValue:)) ?? .fps30,
+            sharesAudio: defaults.object(forKey: Key.sharesAudio) as? Bool ?? true
+        )
+        streamAttenuation = defaults.object(forKey: Key.streamAttenuation) as? Bool ?? true
+        showsSilentMicWarning = defaults.object(forKey: Key.silenceWarning) as? Bool ?? true
+        hidesActivitySuggestions = defaults.bool(forKey: Key.activitySuggestionsDismissed)
+        mutesStageMusic = defaults.bool(forKey: Key.stageMusicMuted)
+        hasSeenStageWelcome = defaults.bool(forKey: Key.stageWelcomeSeen)
+        fakeNitro = defaults.object(forKey: Key.fakeNitro) as? Bool ?? false
+        fakeNitroEmoji = defaults.object(forKey: Key.fakeNitroEmoji) as? Bool ?? true
+        fakeNitroStickers = defaults.object(forKey: Key.fakeNitroStickers) as? Bool ?? true
+        fakeNitroStreamQuality = defaults.object(forKey: Key.fakeNitroStreamQuality) as? Bool ?? true
+        fakeNitroSkipsEmbedCheck = defaults.object(forKey: Key.fakeNitroSkipsEmbedCheck) as? Bool ?? false
+        autoCompressesImages = defaults.object(forKey: Key.autoCompressesImages) as? Bool ?? false
+        syncsThemeAcrossDevices = defaults.object(forKey: Key.syncsThemeAcrossDevices) as? Bool ?? true
+        appliesThemeToProfiles = defaults.object(forKey: Key.appliesThemeToProfiles) as? Bool ?? false
+        anonymisesFileNames = defaults.object(forKey: Key.anonymisesFileNames) as? Bool ?? false
+        anonymisesByDefault = defaults.object(forKey: Key.anonymisesByDefault) as? Bool ?? true
+        anonymisingMethod = defaults.string(forKey: Key.anonymisingMethod)
+            .flatMap(FileNameAnonymiser.Method.init(rawValue:)) ?? .randomCharacters
+        randomisedLength = defaults.object(forKey: Key.randomisedLength) as? Int ?? 7
+        consistentFileName = defaults.string(forKey: Key.consistentFileName) ?? "image"
+        customPresences = defaults.data(forKey: Key.customPresences)
+            .flatMap { try? JSONDecoder().decode([CustomPresence].self, from: $0) } ?? []
+        lastCustomPresenceID = defaults.string(forKey: Key.lastCustomPresence).flatMap(UUID.init(uuidString:))
+        activeCustomPresenceID = defaults.string(forKey: Key.activeCustomPresence).flatMap(UUID.init(uuidString:))
+        priorityPushToTalkKey = (defaults.object(forKey: Key.priorityPushToTalk) as? Int)
+            .flatMap { $0 == Self.noHotkey ? nil : Hotkey(storageValue: $0) }
+        disabledVideoUserIDs = Set(
+            (defaults.stringArray(forKey: Key.disabledVideo) ?? []).compactMap(UInt64.init)
+        )
+        streamAttenuationStrength = min(100, max(0, defaults.object(forKey: Key.streamAttenuationStrength) as? Double ?? 50))
         playsCallSounds = defaults.object(forKey: Key.callSounds) as? Bool ?? true
         mutesMedia = defaults.object(forKey: Key.mutesMedia) as? Bool ?? false
         loopsVideo = defaults.object(forKey: Key.loopsVideo) as? Bool ?? false
@@ -1024,69 +1360,24 @@ final class AppSettings {
     }
 
     /// How the microphone is gated.
+    /// Discord's three input profiles (its module 621380), in its order.
+    enum InputProfile: String, CaseIterable, Hashable, Sendable {
+        case voiceIsolation
+        case studio
+        case custom
+
+        var title: String {
+            switch self {
+            case .voiceIsolation: "Voice Isolation"
+            case .studio: "Studio"
+            case .custom: "Custom"
+            }
+        }
+    }
+
     enum VoiceInputMode: String, CaseIterable, Hashable, Sendable {
         case voiceActivity
         case pushToTalk
-    }
-
-    /// What the camera sends.
-    ///
-    /// Three rungs rather than a free resolution: the encoder's dimensions are
-    /// fixed at session creation, so every distinct pair is a session that has
-    /// to be rebuilt, and a slider over them would rebuild it per pixel.
-    enum VideoQuality: String, CaseIterable, Hashable, Sendable {
-        case standard
-        case high
-        case full
-
-        var width: Int {
-            switch self {
-            case .standard: 854
-            case .high: 1_280
-            case .full: 1_920
-            }
-        }
-
-        var height: Int {
-            switch self {
-            case .standard: 480
-            case .high: 720
-            case .full: 1_080
-            }
-        }
-
-        /// **1080 drops to 15.** A channel's video budget is a few megabits;
-        /// spending it on twice the pixels at thirty frames leaves neither
-        /// sharp, and the reference clients make exactly the same trade.
-        var framerate: Int {
-            switch self {
-            case .standard, .high: 30
-            case .full: 15
-            }
-        }
-
-        /// What the encoder is given and what op 12 announces.
-        ///
-        /// **It was never set, and the engine's 2 Mbit default stood for every
-        /// quality.** 480p at two megabits is twice what it needs and 1080p is
-        /// half, so one setting was overspending and another was starving —
-        /// neither visibly, because a bitrate is not something a reader can see
-        /// being wrong.
-        var bitrate: Int {
-            switch self {
-            case .standard: 1_000_000
-            case .high: 2_500_000
-            case .full: 4_000_000
-            }
-        }
-
-        var label: String {
-            switch self {
-            case .standard: "480p"
-            case .high: "720p"
-            case .full: "1080p"
-            }
-        }
     }
 
     /// Where a cold launch lands.
@@ -1151,6 +1442,7 @@ final class AppSettings {
         static let groupSpacing = "appearance.messageGroupSpacing"
         static let showsSeconds = "chat.showsSeconds"
         static let alwaysShowsTimestamps = "chat.alwaysShowsTimestamps"
+        static let hidesMessageTimes = "chat.hidesMessageTimes"
         static let showsInspector = "diagnostics.showsPerformanceInspector"
         static let developerMode = "advanced.developerMode"
         static let hidesActivityCards = "memberList.hidesActivityCards"
@@ -1172,10 +1464,43 @@ final class AppSettings {
         static let voiceInputVolume = "voice.inputVolume"
         static let voiceOutputVolume = "voice.outputVolume"
         static let inputMode = "voice.inputMode"
+        /// The pre-2026-10-06 line, linear 0…1. Read once, to convert.
         static let voiceThreshold = "voice.activityThreshold"
+        static let voiceThresholdDecibels = "voice.activityThresholdDecibels"
+        static let automaticSensitivity = "voice.automaticInputSensitivity"
+        static let inputProfile = "voice.inputProfile"
+        static let echoCancellation = "voice.echoCancellation"
+        static let automaticGainControl = "voice.automaticGainControl"
         static let pushToTalk = "voice.pushToTalkKey"
-        static let videoQuality = "voice.videoQuality"
+        /// Share Audio, under the key the old toggle used, so a reader's
+        /// choice carries over.
         static let sharesAudio = "voice.sharesSystemAudio"
+        static let goLiveResolution = "goLive.resolution"
+        static let goLiveFrameRate = "goLive.frameRate"
+        static let streamAttenuation = "voice.streamAttenuation"
+        static let streamAttenuationStrength = "voice.streamAttenuationStrength"
+        static let disabledVideo = "voice.disabledVideoUsers"
+        static let silenceWarning = "voice.silenceWarning"
+        static let activitySuggestionsDismissed = "voice.activitySuggestionsDismissed"
+        static let stageMusicMuted = "voice.stageMusicMuted"
+        static let stageWelcomeSeen = "voice.stageWelcomeSeen"
+        static let fakeNitro = "fakeNitro.enabled"
+        static let fakeNitroEmoji = "fakeNitro.emoji"
+        static let fakeNitroStickers = "fakeNitro.stickers"
+        static let fakeNitroStreamQuality = "fakeNitro.streamQuality"
+        static let fakeNitroSkipsEmbedCheck = "fakeNitro.skipsEmbedCheck"
+        static let autoCompressesImages = "uploads.autoCompressImages"
+        static let syncsThemeAcrossDevices = "appearance.syncsThemeAcrossDevices"
+        static let appliesThemeToProfiles = "appearance.syncProfileThemeWithUserTheme"
+        static let anonymisesFileNames = "anonymiseFileNames.enabled"
+        static let anonymisesByDefault = "anonymiseFileNames.byDefault"
+        static let anonymisingMethod = "anonymiseFileNames.method"
+        static let randomisedLength = "anonymiseFileNames.randomisedLength"
+        static let consistentFileName = "anonymiseFileNames.consistent"
+        static let customPresences = "richPresence.presences"
+        static let activeCustomPresence = "richPresence.active"
+        static let lastCustomPresence = "richPresence.last"
+        static let priorityPushToTalk = "voice.priorityPushToTalkKey"
         static let callSounds = "voice.playsCallSounds"
     }
 }

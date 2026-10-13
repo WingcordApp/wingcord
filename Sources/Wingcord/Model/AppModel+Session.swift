@@ -63,8 +63,30 @@ extension AppModel {
         _ content: String,
         in channelID: ChannelID,
         stickerIDs: [UInt64] = [],
-        launch: SendLaunch? = nil
+        launch: SendLaunch? = nil,
+        checksEmbeds: Bool = true
     ) {
+        // The plugin's APNG branch: nothing is sent — words, reply and tray
+        // stay — and the sticker joins the tray as a GIF, or is refused where
+        // files are not allowed.
+        if let sticker = fakeNitroAnimatedSticker(in: stickerIDs, channelID: channelID) {
+            if permissionGate.canAttachFiles(in: channelID) {
+                trayAnimatedSticker(sticker, in: channelID)
+            } else {
+                fakeNitroStickerRefused = true
+            }
+            return
+        }
+        let rewrite = applyingFakeNitro(content, stickerIDs: stickerIDs, in: channelID)
+        // **Asked before anything empties**: Cancel leaves the draft, the
+        // reply and the tray exactly where they were.
+        if checksEmbeds, needsFakeNitroEmbedPrompt(bypassed: rewrite.bypassed, in: channelID) {
+            fakeNitroEmbedPrompt = FakeNitroEmbedPrompt { [weak self] in
+                self?.sendMessage(content, in: channelID, stickerIDs: stickerIDs, launch: launch, checksEmbeds: false)
+            }
+            return
+        }
+        let (content, stickerIDs) = (rewrite.content, rewrite.stickerIDs)
         let box = messages(in: channelID)
         // An empty Return is not a send, so it must not flash a slowmode
         // refusal at somebody who has not tried to say anything.
@@ -91,6 +113,7 @@ extension AppModel {
             content,
             in: channelID,
             replyingTo: box.replyingTo,
+            pingsRepliedAuthor: box.replyPings,
             stickerIDs: stickerIDs,
             attachments: box.attachments
         )
@@ -124,11 +147,12 @@ extension AppModel {
     func sendGIF(_ url: URL, in channelID: ChannelID) {
         let box = messages(in: channelID)
         let content = url.absoluteString
+        let pings = box?.replyPings ?? true
         if let date = box?.scheduledAt {
-            queueScheduled(content, at: date, replyingTo: box?.replyingTo, in: channelID)
+            queueScheduled(content, at: date, replyingTo: box?.replyingTo, pingsRepliedAuthor: pings, in: channelID)
         } else {
             guard !holdsForSlowmode(channelID) else { return }
-            sessionController.send(content, in: channelID, replyingTo: box?.replyingTo)
+            sessionController.send(content, in: channelID, replyingTo: box?.replyingTo, pingsRepliedAuthor: pings)
         }
         mutateBox(channelID) { $0.replyingTo = nil }
     }

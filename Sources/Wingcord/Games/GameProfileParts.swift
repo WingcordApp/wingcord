@@ -25,6 +25,9 @@ struct GameMediaStage: View {
     /// Which run of thumbnails the tray is showing. The counter and the arrows
     /// are the same fact.
     @State private var page = 0
+    /// Whether the trailer on the stage is playing — the tray's mark on it
+    /// says Pause while it is, as Discord's does.
+    @State private var isTrailerPlaying = false
 
     /// 78 in the handoff. The tray shows a page of these and names how many
     /// there are, which a bare scrolling strip does not.
@@ -61,10 +64,13 @@ struct GameMediaStage: View {
             .aspectRatio(16 / 9, contentMode: .fit)
             .overlay {
                 switch current {
-                case .trailer(let url):
-                    // Muted and looping, like every store page's own hero. The
-                    // page is opened to look at a game, not to be played at.
-                    LoopingVideo(url: url)
+                case .trailer(let video, let poster):
+                    TrailerPlayer(
+                        url: video,
+                        poster: poster,
+                        autoplays: !motion.reduceMotion,
+                        onPlayingChange: { isTrailerPlaying = $0 }
+                    )
                 case .still(let url):
                     RemoteImage(url: url, side: 900, bucket: .artwork) { Palette.surfaceRaised }
                         .aspectRatio(contentMode: .fill)
@@ -124,10 +130,8 @@ struct GameMediaStage: View {
             .frame(height: Self.thumbnailHeight)
         }
         .padding(Spacing.snug)
-        .glassEffect(
-            .clear.tint(Palette.flyoutTint),
-            in: .rect(cornerRadius: 22, style: .continuous)
-        )
+        // Content over the game's artwork: a standard material, not glass.
+        .background(.thinMaterial, in: .rect(cornerRadius: 22))
         .overlay {
             RoundedRectangle(cornerRadius: 22, style: .continuous)
                 .strokeBorder(Color.white.opacity(0.12), lineWidth: 1)
@@ -147,22 +151,22 @@ struct GameMediaStage: View {
                 .frame(maxWidth: .infinity)
                 .frame(height: Self.thumbnailHeight)
                 .overlay {
-                    // **A trailer's thumbnail is not the trailer.** An `.mp4`
-                    // handed to the image path decodes to nothing and the slot
-                    // stays grey for the life of the page, so a trailer wears a
-                    // plate with a play mark on it instead.
+                    // **A trailer's thumbnail is its poster**, never the video:
+                    // an `.mp4` handed to the image path decodes to nothing.
+                    RemoteImage(url: item.picture, side: 240, bucket: .artwork) {
+                        Palette.surfaceRaised
+                    }
+                    .aspectRatio(contentMode: .fill)
+                }
+                .overlay {
+                    // Discord's round overlay mark, centred: Play, or Pause on
+                    // the trailer that is playing (`thumbnailPlayIcon`).
                     if item.isTrailer {
-                        ZStack {
-                            Palette.surfaceRaised
-                            Image(systemName: "play.fill")
-                                .font(.system(size: 16))
-                                .foregroundStyle(InkColor.primary)
-                        }
-                    } else {
-                        RemoteImage(url: item.id, side: 240, bucket: .artwork) {
-                            Palette.surfaceRaised
-                        }
-                        .aspectRatio(contentMode: .fill)
+                        Image(systemName: isCurrent && isTrailerPlaying ? "pause.fill" : "play.fill")
+                            .font(.system(size: 11, weight: .semibold))
+                            .foregroundStyle(.white)
+                            .frame(width: 26, height: 26)
+                            .background(.black.opacity(0.5), in: .circle)
                     }
                 }
                 .clipShape(.rect(cornerRadius: 12, style: .continuous))
@@ -318,7 +322,7 @@ private struct AnnouncementCard: View {
             .padding(Spacing.snug)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        .glassEffect(.clear.tint(Palette.flyoutTint), in: .rect(cornerRadius: Radius.glass, style: .continuous))
+        .background(.thinMaterial, in: .rect(cornerRadius: Radius.glass))
         .clipShape(.rect(cornerRadius: Radius.glass, style: .continuous))
         .accessibilityElement(children: .combine)
     }
@@ -654,116 +658,183 @@ struct GameCommunitySection: View {
     }
 }
 
-/// Steam's and OpenCritic's verdicts.
+/// Steam's and OpenCritic's verdicts — Discord's Reviews card (`lP`, chunk
+/// `464cd197…`): one card of 56-point lines, each of them a link to its page.
+///
+/// **Two Steam lines at most** — Recent, then English or All — each with
+/// Steam's mark, its window, the verdict in Discord's colour for it and the
+/// count; **then OpenCritic** with the tier's badge and the top critics'
+/// average in a ring part-filled to the score. No bars and no "Overall":
+/// `GameReviews.steamRows(hasStorePage:)` decides which lines exist.
 struct GameReviewsSection: View {
     var reviews: GameReviews
+    /// The game's Steam page — the lines open it, so without one there are none.
+    var steamURL: URL?
     var openCriticURL: URL?
 
-    @Environment(\.openURL) private var openURL
+    private var steamRows: [GameReviews.SteamRow] {
+        reviews.steamRows(hasStorePage: steamURL != nil)
+    }
+
+    private var openCritic: GameReviews.OpenCriticReviews? {
+        openCriticURL == nil ? nil : reviews.openCritic
+    }
 
     var body: some View {
-        AsideSection(title: "Reviews") {
-            VStack(alignment: .leading, spacing: Spacing.margin) {
-                ForEach(reviews.steam?.rows ?? []) { row in
-                    steamRow(row)
-                }
-                if let critic = reviews.openCritic, let score = critic.score {
-                    HStack(spacing: Spacing.base) {
-                        Text("OpenCritic")
-                            .font(.system(.subheadline))
-                            .foregroundStyle(InkColor.secondary)
-                        Spacer(minLength: Spacing.base)
-                        OpenCriticScore(score: score, tier: critic.tier)
+        let rows = steamRows
+        if !rows.isEmpty || openCritic != nil {
+            AsideSection(title: "Reviews") {
+                VStack(spacing: 0) {
+                    ForEach(Array(rows.enumerated()), id: \.element.id) { index, row in
+                        if index > 0 { divider }
+                        if let steamURL {
+                            GameReviewLine(url: steamURL, label: "Open Steam page") { steamLine(row) }
+                                .help(row.sentence)
+                        }
                     }
-                    .contentShape(.rect)
-                    .onTapGesture { if let openCriticURL { openURL(openCriticURL) } }
+                    if let openCritic, let openCriticURL {
+                        if !rows.isEmpty { divider }
+                        GameReviewLine(url: openCriticURL, label: "Open OpenCritic page") {
+                            openCriticLine(openCritic)
+                        }
+                    }
                 }
+                // The page's own card, as the Details table under it is.
+                .background(
+                    Color.white.opacity(0.05),
+                    in: .rect(cornerRadius: Radius.glass, style: .continuous)
+                )
             }
         }
     }
 
-    /// One aggregate: its name, its verdict and count, and the share as a bar.
-    ///
-    /// **The bar is the one number on this page that is genuinely a
-    /// proportion.** Everything the mockup put beside it — hours played,
-    /// achievements, friends who play — was invented; `rating` is a real
-    /// positive share on the wire and drawing it as a real bar is what the
-    /// mockup got right.
-    private func steamRow(_ row: GameReviews.SteamReviews.Row) -> some View {
-        VStack(alignment: .leading, spacing: 7) {
-            HStack(alignment: .firstTextBaseline, spacing: Spacing.base) {
-                Text(row.title)
-                    .font(.system(.subheadline))
-                    .foregroundStyle(InkColor.secondary)
-                Spacer(minLength: Spacing.base)
-                Text(row.verdict.title)
-                    .font(.system(.subheadline, weight: .semibold))
-                    .foregroundStyle(Color(hex: row.verdict.colorValue))
-                Text("(\(row.count.formatted(.number)))")
-                    .font(.system(.caption).monospacedDigit())
+    private var divider: some View {
+        Rectangle()
+            .fill(Ink.quaternary)
+            .frame(height: 0.5)
+    }
+
+    private func steamLine(_ row: GameReviews.SteamRow) -> some View {
+        HStack(spacing: Spacing.tight) {
+            BrandGlyph(service: "steam")
+                .fill(InkColor.primary)
+                .frame(width: 18, height: 18)
+                .accessibilityHidden(true)
+            Text(row.title)
+                .font(.system(.body, weight: .medium))
+                .foregroundStyle(InkColor.primary)
+            Spacer(minLength: Spacing.base)
+            Text(row.verdict.title)
+                .font(.system(.subheadline, weight: .medium))
+                .foregroundStyle(SteamVerdictInk(tone: row.verdict.tone))
+            if let count = row.count, row.verdict != .noUserReviews {
+                Text("(\(count.formatted(.number)))")
+                    .font(.system(.subheadline, weight: .medium))
                     .foregroundStyle(InkColor.tertiary)
             }
-            bar(share: row.rating / 100, tint: Color(hex: row.verdict.colorValue))
         }
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel(
-            Text("\(row.title): \(row.verdict.title), \(Int(row.rating)) per cent of \(row.count)")
-        )
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(Text("Steam, \(row.title): \(row.verdict.title). \(row.sentence)"))
     }
 
-    /// **A reader over the track, and `containerRelativeFrame` was wrong here.**
-    /// That modifier resolves against the nearest *container* — the aside's
-    /// whole scroll view — not against the capsule it is inside, so every bar
-    /// came out 320 points long, clipped to the track, and all three read as a
-    /// hundred per cent whatever the share was. A `GeometryReader` inside the
-    /// overlay is the right instrument: it is handed the track's own width and
-    /// the value is consumed in the same pass that produced it, so there is no
-    /// extra layout pass and no measurement written into `@State` that could
-    /// outlive what it measured.
-    private func bar(share: Double, tint: Color) -> some View {
-        Capsule()
-            .fill(Color.white.opacity(0.1))
-            .frame(height: 5)
-            .overlay(alignment: .leading) {
-                GeometryReader { proxy in
-                    Capsule()
-                        .fill(
-                            LinearGradient(
-                                colors: [tint.mix(with: .white, by: 0.3), tint],
-                                startPoint: .leading,
-                                endPoint: .trailing
-                            )
-                        )
-                        .frame(width: proxy.size.width * min(max(share, 0), 1))
-                }
+    private func openCriticLine(_ critic: GameReviews.OpenCriticReviews) -> some View {
+        HStack(spacing: Spacing.snug) {
+            Text("OpenCritic")
+                .font(.system(.body, weight: .medium))
+                .foregroundStyle(InkColor.primary)
+            Spacer(minLength: Spacing.base)
+            if let tier = critic.tier {
+                RemoteImage(url: tier.badgeURL, side: 32, bucket: .artwork) { Color.clear }
+                    .frame(width: 32, height: 32)
+                    .help(tier.title)
+                    .accessibilityLabel(Text(tier.title))
             }
+            if critic.showsRing, let tier = critic.tier, let score = critic.score {
+                OpenCriticRing(score: score, rating: critic.topCriticRating ?? 0, tier: tier)
+            }
+            if critic.lacksCritics {
+                Text("Not Enough Top Critic Reviews")
+                    .font(.system(.subheadline, weight: .medium))
+                    .foregroundStyle(InkColor.tertiary)
+            }
+        }
     }
 }
 
-/// OpenCritic's number in its tier's ring.
-private struct OpenCriticScore: View {
-    var score: Int
-    var tier: OpenCriticTier?
+/// One line of the Reviews card: a link to its page, lit under the pointer
+/// (`link`'s `--background-surface-higher`).
+private struct GameReviewLine<Content: View>: View {
+    var url: URL
+    var label: String
+    @ViewBuilder var content: Content
 
-    private var color: Color {
-        tier.map { Color(hex: $0.colorValue) } ?? InkColor.secondary
-    }
+    @Environment(\.openURL) private var openURL
+    @State private var isHovering = false
 
     var body: some View {
-        HStack(spacing: Spacing.base) {
-            if let tier {
-                Text(tier.title.uppercased())
-                    .font(.system(size: 9, weight: .bold))
-                    .foregroundStyle(color)
-            }
-            Text(score, format: .number)
-                .font(.system(size: 12, weight: .semibold).monospacedDigit())
-                .foregroundStyle(InkColor.primary)
-                .frame(width: 28, height: 28)
-                .overlay { Circle().strokeBorder(color, lineWidth: 2) }
+        Button { openURL(url) } label: {
+            content
+                .padding(.horizontal, 12)
+                .frame(height: 56)
+                .frame(maxWidth: .infinity)
+                .contentShape(.rect)
         }
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel(Text("OpenCritic \(score)\(tier.map { ", \($0.title)" } ?? "")"))
+        .buttonStyle(.plain)
+        .background(isHovering ? Palette.hoverFill : .clear)
+        .onHover { hovering in
+            if isHovering != hovering { isHovering = hovering }
+        }
+        .accessibilityHint(Text(label))
+    }
+}
+
+/// Discord's `steam-review-text-*` colours: its `theme-dark` values in a dark
+/// room and its `theme-light` ones in a light room (`--blue-new-26` and
+/// `-53`, `--yellow-new-29` and `-75`, `--red-new-24` and `-50`), the subtle
+/// ink for "No User Reviews".
+private struct SteamVerdictInk: ShapeStyle {
+    var tone: SteamVerdict.Tone
+
+    func resolve(in environment: EnvironmentValues) -> some ShapeStyle {
+        let isDark = environment.colorScheme == .dark
+        return switch tone {
+        case .positive: AnyShapeStyle(Color(hex: isDark ? 0x7A_B2_F7 : 0x00_6D_D4))
+        case .mixed: AnyShapeStyle(Color(hex: isDark ? 0xFF_C2_52 : 0x88_48_00))
+        case .negative: AnyShapeStyle(Color(hex: isDark ? 0xFD_8C_87 : 0xD2_2D_39))
+        case .none: AnyShapeStyle(InkColor.tertiary)
+        }
+    }
+}
+
+/// The top critics' average in its tier's ring — Discord's `lO`: a 32-point
+/// disc of `#2e2e2e`, the score floored in white, and a 30-point ring
+/// stroked to the score's share, turned so the gap sits centred on the right.
+private struct OpenCriticRing: View {
+    var score: Int
+    /// The unfloored average, which is what the ring is filled to.
+    var rating: Double
+    var tier: OpenCriticTier
+
+    var body: some View {
+        let share = min(max(rating, 0), 100) / 100
+        ZStack {
+            Circle().fill(Color(hex: 0x2E_2E_2E))
+            // Discord's `<circle r=16>` in a 36-unit box drawn at 30 points,
+            // stroked 2.4 units: two points here.
+            Circle()
+                .inset(by: 2)
+                .trim(from: 0, to: share)
+                .stroke(Color(hex: tier.ringColorValue), lineWidth: 2)
+                .rotationEffect(.degrees((1 - share) * 180))
+                .frame(width: 30, height: 30)
+            Text(score, format: .number)
+                .font(.system(.subheadline, weight: .bold).monospacedDigit())
+                .foregroundStyle(.white)
+        }
+        .frame(width: 32, height: 32)
+        .help("Top Critic Average")
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(Text("Top Critic Average \(score)"))
     }
 }
 

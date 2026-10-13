@@ -40,6 +40,9 @@ final class TimelineCanvasView: NSView {
     /// Whether a continuation row draws its gutter time without being pointed
     /// at. Set beside `style` from the same revision, for the same reason.
     var alwaysShowsTimestamps = false
+    /// View › Hide Times: no time drawn unless pointed at, the one beside an
+    /// author's name included. From the same revision.
+    var hidesTimes = false
     var contentHeight: CGFloat { offsets[offsets.count - 1] }
     /// The empty space above the first row — `TimelineViewportPolicy
     /// .leadingSpace`. It is the first offset, so every rectangle, every hit
@@ -369,6 +372,8 @@ final class TimelineCanvasView: NSView {
     /// was drawn at — a peek built from any other number looks in a slot nothing
     /// was ever put in.
     var onOpenAttachment: ((MessageID, Int, [CGFloat]) -> Void)?
+    /// A file card's Download, by message and attachment.
+    var onDownloadAttachment: ((MessageID, Int) -> Void)?
     /// Stars or un-stars a GIF in the transcript.
     var onToggleFavoriteGIF: ((GIF) -> Void)?
     /// Starts or stops a music card's thirty-second clip.
@@ -403,6 +408,9 @@ final class TimelineCanvasView: NSView {
     var onInviteButton: ((InviteCard) -> Void)?
     /// A profile card was opened past its fold, or folded again.
     var onToggleInviteFold: ((InviteCardFold) -> Void)?
+    /// A profile invite card's "+ N more" chip: the traits it stands for, and
+    /// its rect in the hosting root's space.
+    var onShowTraits: (([GuildTrait], CGRect) -> Void)?
     /// Whether the reader is already where an invite leads — Join or Go to
     /// Server, Add Friend or Send a Message — decided at paint time so joining
     /// is a repaint, not a relayout.
@@ -1114,16 +1122,16 @@ final class TimelineCanvasView: NSView {
     }
 
     /// The profile cards in `rect`, in the canvas's coordinates — what
-    /// `UserCardHosts` keeps a live card over. A binary search to the first row
+    /// `HostedCardHosts` keeps a live card over. A binary search to the first row
     /// and a walk to the last, so the cost is the rows in view.
-    func userCardPlacements(in rect: CGRect) -> [UserCardPlacement] {
+    func hostedCardPlacements(in rect: CGRect) -> [HostedCardPlacement] {
         guard !rows.isEmpty, var index = rowIndex(at: max(0, rect.minY)) else { return [] }
-        var placements: [UserCardPlacement] = []
+        var placements: [HostedCardPlacement] = []
         while index < rows.count, offsets[index] < rect.maxY {
-            if case .message(let row) = rows[index].kind, !row.userCards.isEmpty {
+            if case .message(let row) = rows[index].kind, !row.hostedCards.isEmpty {
                 let origin = rowFrame(at: index).origin
-                for (position, card) in row.userCards.enumerated() {
-                    placements.append(UserCardPlacement(
+                for (position, card) in row.hostedCards.enumerated() {
+                    placements.append(HostedCardPlacement(
                         id: .init(message: row.id, index: position),
                         key: card.key,
                         frame: card.rect.offsetBy(dx: origin.x, dy: origin.y)
@@ -1337,10 +1345,12 @@ final class TimelineCanvasView: NSView {
                 // presentation revision, which is what invalidates every cached
                 // row when it changes — a read of `AppSettings` here would be the
                 // painter reading a value its cache cannot see (§1).
-                state.showsGutterTimestamp = alwaysShowsTimestamps
+                state.showsGutterTimestamp = alwaysShowsTimestamps && !hidesTimes
+                state.showsHeaderTimestamp = !hidesTimes
                 if hoveredRow == index, !isScrolling {
                     state.isHovered = true
                     state.showsGutterTimestamp = true
+                    state.showsHeaderTimestamp = true
                 }
                 state.animationTime = AnimationClock.shared.time
                 if case .message(let message) = row.kind {
@@ -1645,6 +1655,8 @@ final class TimelineCanvasView: NSView {
                 return
             }
             onOpenAttachment?(row.id, attachmentIndex, row.attachments.map(\.decodeWidth))
+        case .downloadAttachment(let attachmentIndex, _):
+            onDownloadAttachment?(row.id, attachmentIndex)
         case .favoriteGIF(let attachmentIndex):
             guard let gif = row.attachments[attachmentIndex].favorite else { return }
             onToggleFavoriteGIF?(gif)
@@ -1710,6 +1722,9 @@ final class TimelineCanvasView: NSView {
         case .inviteMark:
             // The mark answers the pointer, not a click — see `onHoverMark`.
             break
+        case .inviteTraits(let traits, let rect):
+            // In the hosting root's space, as the reaction picker's anchor is.
+            onShowTraits?(traits, anchorInHostingRoot(rect.offsetBy(dx: frame.minX, dy: frame.minY)))
         case .reaction(let emoji, let kind, _):
             // A super reaction chip without Nitro is not a control; the click
             // lands on it and stops there. See `canSuperReact`.
@@ -1953,6 +1968,9 @@ final class TimelineCanvasView: NSView {
         /// The star on a GIF. Ahead of the picture in the hit test, because it
         /// sits inside it and the picture would otherwise swallow every press.
         case favoriteGIF(index: Int)
+        /// A file card's Download, in the group hanging past its corner — its
+        /// rect in row space, the origin to light.
+        case downloadAttachment(index: Int, rect: CGRect)
         /// The same star, on a GIF that arrived as an unfurled link rather than
         /// as a file. A separate case because the two index different arrays.
         case favoriteEmbedGIF(index: Int)
@@ -1999,6 +2017,9 @@ final class TimelineCanvasView: NSView {
         case inviteFold(InviteCardFold, origin: CGPoint)
         /// A server's mark on an invite card. Its rect, in row space.
         case inviteMark(GuildMark, rect: CGRect)
+        /// A profile invite card's "+ N more" chip: the traits behind it, and
+        /// its rect in row space — the origin to light, the size to anchor.
+        case inviteTraits([GuildTrait], rect: CGRect)
         /// A reaction chip. Clicking it adds or removes the reader's own of the
         /// chip's kind. Carries its origin in row space so the painter can
         /// light the one under the pointer — identified by origin, not index,
@@ -2147,6 +2168,11 @@ final class TimelineCanvasView: NSView {
             if let mark = card.mark, card.markRect.contains(local) {
                 return .inviteMark(mark, rect: card.markRect)
             }
+            // Not under a folded card's fade, where it is going or gone.
+            if case .profile(let profile) = card.body, let more = profile.moreTraits, more.rect.contains(local) {
+                let isFaded = if case .collapsed(let fade) = card.fold { more.rect.maxY > fade.minY } else { false }
+                if !isFaded { return .inviteTraits(more.traits, rect: more.rect) }
+            }
             if let target = card.foldTarget, target.contains(local) {
                 return .inviteFold(InviteCardFold(message: row.id, code: card.code), origin: target.origin)
             }
@@ -2219,8 +2245,16 @@ final class TimelineCanvasView: NSView {
         }
 
         let revealedHere = revealedAttachments[row.id] ?? []
+        // A file's Download first: it hangs past the card, over whatever is
+        // beside it, as Discord's hover group does.
+        for (attachmentIndex, slot) in row.attachments.enumerated() {
+            if let button = slot.downloadRect, button.contains(local) {
+                return .downloadAttachment(index: attachmentIndex, rect: button)
+            }
+        }
+        // A text preview is its hosted card's to answer, which sits over it.
         for (attachmentIndex, slot) in row.attachments.enumerated()
-        where slot.rect.contains(local) {
+        where slot.kind != .textPreview && slot.rect.contains(local) {
             let isHidden = slot.isSpoiler && !revealedHere.contains(attachmentIndex)
             // The star, before the picture it is drawn on. A spoiler still
             // covered has no star to press: the first click uncovers.
@@ -2346,7 +2380,11 @@ final class TimelineCanvasView: NSView {
                     frame: tip.rect.offsetBy(dx: rowFrame(at: index).minX - clip.x, dy: offsets[index] - clip.y)
                 )
             }
-            attachment = row.attachments.firstIndex { $0.rect.contains(local) }
+            // A file stays hovered while the pointer is on its Download, which
+            // hangs past it.
+            attachment = row.attachments.firstIndex {
+                $0.rect.contains(local) || $0.downloadRect?.contains(local) == true
+            }
             // The same rule for an unfurled GIF, and only for the embeds that
             // have a star at all — a card the pointer crosses has nothing to
             // reveal, so it must not claim the hover from the picture below it.
@@ -2375,6 +2413,9 @@ final class TimelineCanvasView: NSView {
                 cursor = .pointingHand
             case .inviteFold(_, let origin):
                 component = origin
+                cursor = .pointingHand
+            case .inviteTraits(_, let rect):
+                component = rect.origin
                 cursor = .pointingHand
             case .inviteMark(let mark, let rect):
                 let clip = enclosingScrollView?.contentView.bounds.origin ?? .zero
@@ -2425,6 +2466,9 @@ final class TimelineCanvasView: NSView {
                 // nowhere, so it must not offer a hand that says it does.
                 cursor = target == nil ? nil : .pointingHand
             case .favoriteGIF:
+                cursor = .pointingHand
+            case .downloadAttachment(_, let rect):
+                component = rect.origin
                 cursor = .pointingHand
             case .favoriteEmbedGIF, .previewClip, .openMusicPlayer, .playVideo:
                 cursor = .pointingHand
@@ -2630,10 +2674,15 @@ final class TimelineCanvasView: NSView {
     // per row eagerly would put an object per message into the accessibility
     // tree, which is the cost the drawn timeline exists to avoid; building them
     // for the visible window only keeps the tree the size of the viewport.
+    //
+    // **The hosted cards are children too** — a profile, an event, a text
+    // file's preview: live views over the rows, which an override that lists
+    // only the drawn elements would hide from VoiceOver.
 
     override func accessibilityChildren() -> [Any]? {
         let range = visibleRowRange()
-        return range.flatMap { index -> [NSAccessibilityElement] in
+        let hosted: [Any] = subviews.filter { $0.identifier == HostedCardHosts.identifier }
+        return hosted + range.flatMap { index -> [NSAccessibilityElement] in
             switch rows[index].kind {
             case .message(let row):
                 let element = NSAccessibilityElement()

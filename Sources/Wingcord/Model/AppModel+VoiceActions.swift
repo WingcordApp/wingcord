@@ -2,6 +2,7 @@ import AVFoundation
 import CoreMedia
 import Foundation
 import WingcordCore
+import WingcordNet
 import WingcordVoice
 
 // MARK: - What a call surface can ask for
@@ -32,6 +33,11 @@ extension AppModel {
         voice.startDirectCall(channelID: channelID)
     }
 
+    /// Discord's Start Video Call: the same call, with the camera on.
+    func startVideoCall(in channelID: ChannelID) {
+        voice.startDirectCall(channelID: channelID, withCamera: true)
+    }
+
     /// Joins a direct-message call that is already running.
     ///
     /// **The same act as answering, and deliberately not the same as starting.**
@@ -43,9 +49,7 @@ extension AppModel {
     }
 
     func leaveVoice() {
-        // The local mutes belong to the call, not to the account — see
-        // `locallyMutedUserIDs`.
-        locallyMutedUserIDs = []
+        showsNonVideoParticipants = true
         voice.leave()
     }
 
@@ -64,6 +68,12 @@ extension AppModel {
     func toggleVoiceDeafen() { voice.setDeafened(!isSelfDeafened) }
 
     func toggleCamera() {
+        // Discord's "Always preview video" (module 442353): turning the camera
+        // on goes through its preview.
+        if !isCameraOn, syncedPreferences.alwaysPreviewsVideo {
+            previewCamera()
+            return
+        }
         // **A camera and a share are two media sessions now, so they coexist.**
         // This used to stop the share, because both went down the call's one
         // video track and the second to start would have overwritten the first.
@@ -73,25 +83,62 @@ extension AppModel {
         voice.setCameraOn(!isCameraOn)
     }
 
-    /// Opens the picker, or stops a share already running.
+    /// Discord's Preview Camera.
+    func previewCamera() {
+        userMenu = nil
+        isCameraPreviewOpen = true
+    }
+
+    /// The preview's Turn On Camera — past the preview, whatever the setting.
+    func turnOnCameraFromPreview() {
+        voice.setCameraOn(true)
+    }
+
+    /// "Always preview video", written to the account as Discord's is.
+    func setAlwaysPreviewsVideo(_ previews: Bool) {
+        let previous = syncedPreferences
+        guard previous.alwaysPreviewsVideo != previews else { return }
+        syncedPreferences.alwaysPreviewsVideo = previews
+        sessionController.writeSyncedPreference(.alwaysPreviewsVideo(previews), restoring: previous)
+    }
+
+    /// Opens the Go Live sheet, or stops a share already running.
     func toggleScreenShare() {
         if isScreenSharing {
             voice.stopScreenShare()
         } else {
-            isScreenSharePickerOpen = true
+            voice.openGoLive()
         }
     }
 
-    func startScreenShare(target: ShareableTarget) {
-        isScreenSharePickerOpen = false
-        var quality = ScreenShareCapture.Quality.standard
-        let settings = AppSettings.shared
-        quality.width = settings.videoWidth
-        quality.height = settings.videoHeight
-        quality.framerate = settings.videoFramerate
-        quality.capturesAudio = settings.sharesSystemAudio
-        voice.startScreenShare(target: target, quality: quality)
+    func closeGoLive() { voice.closeGoLive() }
+
+    func pickScreenSource() { voice.pickScreenSource() }
+
+    func goLive() { voice.goLive() }
+
+    func stopScreenShare() { voice.stopScreenShare() }
+
+    /// Discord's Stream Quality and Share Audio, before going live or during.
+    func updateGoLive(_ settings: GoLiveSettings) { voice.updateGoLive(settings) }
+
+    /// Where the Go Live sheet's preview draws.
+    nonisolated func attachGoLivePreview(_ sink: (@Sendable (CMSampleBuffer) -> Void)?) {
+        MainActor.assumeIsolated { voice.setGoLivePreviewSink(sink) }
     }
+
+    /// Who may stream at what in the call the reader is in: the account's
+    /// subscription, or the server's boosts.
+    var goLiveGate: GoLiveGate {
+        GoLiveGate(
+            premiumTier: entitlements.premiumTier,
+            guildBoostTier: connectedVoiceChannelID
+                .flatMap { channelIndex[$0]?.guildID }
+                .flatMap { guilds[$0]?.premiumTier } ?? 0,
+            isUnlocked: AppSettings.shared.liftsStreamQuality
+        )
+    }
+
 
     /// Opens somebody's screen share, or closes the one that is open.
     ///
@@ -107,26 +154,64 @@ extension AppModel {
         }
     }
 
-    /// Silences one person for the rest of this call, or lets them back.
-    ///
-    /// **The engine already had the knob and nothing was turning it.**
-    /// `VoiceController.setVolume(_:forUser:)` reaches the mixer's per-stream
-    /// gain, which is the one honest thing a speaker button on a stream tile can
-    /// mean: a client cannot stop Discord sending the audio, only stop playing
-    /// it, and saying so with a local gain is better than a control that
-    /// pretends to reach the other end.
-    func toggleLocalMute(_ userID: UserID) {
+    // MARK: One person's sound
+    //
+    // Discord's person menu in a call: User Volume, Mute, Mute Soundboard and
+    // Disable Video — and a stream's own volume. The first three are the
+    // account's, synced across devices (`audioContext`); a disabled video
+    // stays on this Mac, as Discord keeps it.
+
+    /// Discord's User Volume — or, for their stream, Stream Volume — as a gain.
+    func setVolume(_ volume: Double, of userID: UserID, in context: AudioContextSettings.Context) {
         guard userID != currentUserID else { return }
-        let muted = locallyMutedUserIDs.contains(userID)
-        if muted {
-            locallyMutedUserIDs.remove(userID)
-        } else {
-            locallyMutedUserIDs.insert(userID)
-        }
-        voice.setVolume(muted ? 1 : 0, forUser: userID)
+        audioContext.setVolume(max(0, min(2, volume)), of: userID, in: context, at: .now)
+        audioContextChanged(userID, in: context)
     }
 
-    func isLocallyMuted(_ userID: UserID) -> Bool { locallyMutedUserIDs.contains(userID) }
+    /// Discord's Mute, for one person and for this reader alone: not played,
+    /// and the server told not to send it — their volume untouched, so letting
+    /// them back brings them back where they were.
+    func toggleLocalMute(_ userID: UserID, in context: AudioContextSettings.Context = .user) {
+        guard userID != currentUserID else { return }
+        audioContext.setMuted(!audioContext.isMuted(userID, in: context), of: userID, in: context, at: .now)
+        audioContextChanged(userID, in: context)
+    }
+
+    func isLocallyMuted(_ userID: UserID) -> Bool { audioContext.isMuted(userID) }
+
+    /// Discord's Mute Soundboard: their sounds are not played here.
+    func toggleSoundboardMute(_ userID: UserID) {
+        guard userID != currentUserID else { return }
+        let muted = !(audioContext.users[userID]?.isSoundboardMuted ?? false)
+        audioContext.setSoundboardMuted(muted, of: userID, at: .now)
+        audioContextChanged(userID, in: .user)
+    }
+
+    private func audioContextChanged(_ userID: UserID, in context: AudioContextSettings.Context) {
+        voice.applyAudioContext()
+        sessionController.scheduleAudioContextWrite(
+            AudioContextProto.Change(
+                context: context, userID: userID, entry: audioContext[context][userID]
+            )
+        )
+    }
+
+    /// Discord's Disable Video, for one person, kept on this Mac.
+    func toggleVideoDisabled(_ userID: UserID) {
+        guard userID != currentUserID else { return }
+        let settings = AppSettings.shared
+        let disabled = !settings.disabledVideoUserIDs.contains(userID.rawValue)
+        if disabled {
+            settings.disabledVideoUserIDs.insert(userID.rawValue)
+        } else {
+            settings.disabledVideoUserIDs.remove(userID.rawValue)
+        }
+        voice.setVideoDisabled(disabled, userID: userID)
+    }
+
+    func isVideoDisabled(_ userID: UserID) -> Bool {
+        AppSettings.shared.disabledVideoUserIDs.contains(userID.rawValue)
+    }
 
     /// The address of somebody's share, for the thumbnail route.
     ///
@@ -146,9 +231,19 @@ extension AppModel {
 
     func setPushToTalkHeld(_ held: Bool) { voice.setPushToTalkHeld(held) }
 
+    func setPriorityHeld(_ held: Bool) { voice.setPriorityHeld(held) }
+
     func spotlight(_ userID: UserID?) {
         guard spotlightUserID != userID else { return }
         spotlightUserID = userID
+    }
+
+    /// Whose camera the call asks for whole — Discord's selected participant:
+    /// the spotlight, unless it is showing their share, which arrives on a
+    /// session of its own.
+    var focusedCameraUserID: UserID? {
+        guard let spotlightUserID, spotlightUserID != watchedStreamUserID else { return nil }
+        return spotlightUserID
     }
 
     /// Re-applies the settings window's choices to a call already running.
@@ -164,6 +259,11 @@ extension AppModel {
         MainActor.assumeIsolated { voice.setVideoSink(sink, for: userID) }
     }
 
+    /// How big somebody's picture is drawn, for a one-to-one call's want.
+    nonisolated func reportVideoPixels(_ userID: UserID, _ pixels: Int) {
+        MainActor.assumeIsolated { voice.setDrawnPixels(pixels, for: userID) }
+    }
+
     /// The camera's own session, for the self-view.
     func cameraSession() async -> AVCaptureSession? {
         await voice.cameraSession()
@@ -172,10 +272,36 @@ extension AppModel {
     // MARK: The soundboard
 
     /// Fetches one server's soundboard, when its section is looked at.
-    func loadSoundboard(inGuild guildID: GuildID) { voice.loadSoundboard(inGuild: guildID) }
 
     func pressSound(_ id: String) {
         guard let sound = soundboardSound(id: id) else { return }
         voice.press(sound)
+    }
+
+    /// Discord's Preview — the sound here only.
+    func previewSound(_ id: String) {
+        guard let sound = soundboardSound(id: id) else { return }
+        voice.preview(sound)
+    }
+
+    func soundboardDidOpen() {
+        voice.soundboardDidOpen()
+    }
+
+    func setFavoriteSound(_ id: String, favorite: Bool) {
+        voice.setFavoriteSound(id, favorite: favorite)
+    }
+
+    /// Soundboard Volume, as the slider moves — heard at once, written to the
+    /// account when the slider is let go (`commitSoundboardVolume`).
+    func setSoundboardVolume(_ volume: Float) {
+        syncedPreferences.soundboardVolume = min(100, max(0, volume))
+    }
+
+    func commitSoundboardVolume(from previous: SyncedPreferences) {
+        guard previous.soundboardVolume != syncedPreferences.soundboardVolume else { return }
+        sessionController.writeSyncedPreference(
+            .soundboardVolume(syncedPreferences.soundboardVolume), restoring: previous
+        )
     }
 }

@@ -25,6 +25,19 @@ extension DiscordREST {
         ).compactMap { $0.domain(fallbackGuildID: guildID) }
     }
 
+    /// One event — Discord's `fetchGuildEvent`, which its event card sends
+    /// for a linked event its store does not hold: `GET
+    /// /guilds/{id}/scheduled-events/{event}`, with no query.
+    public func scheduledEvent(_ eventID: UInt64, in guildID: GuildID) async throws -> ScheduledEvent {
+        let dto = try await get(
+            "/guilds/\(guildID.rawValue)/scheduled-events/\(eventID)",
+            route: "guilds/{id}/scheduled-events/{event}",
+            as: ScheduledEventDTO.self
+        )
+        guard let event = dto.domain(fallbackGuildID: guildID) else { throw Failure.notFound }
+        return event
+    }
+
     /// The reader's answers to a guild's events — to whole series and to
     /// single dates.
     ///

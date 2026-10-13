@@ -81,8 +81,9 @@ private struct ActivityCardPopout: View {
         }
         .padding(Spacing.margin)
         .overlay(alignment: .bottom) { toast }
-        .glassEffect(.clear.tint(Palette.flyoutTint), in: shape)
-        .specularEdge(in: shape)
+        // A solid panel over the window, like the reactions list — content,
+        // not glass (Alex, 2026-10-06).
+        .modalPanel(in: shape)
         .accessibilityElement(children: .contain)
         .accessibilityLabel(Text("\(name), \(card.title)"))
     }
@@ -204,7 +205,7 @@ private struct ActivityCardPopout: View {
             ForEach(Self.quickEmoji, id: \.self) { emoji in
                 Button { send(emoji) } label: {
                     Text(emoji)
-                        .font(.system(size: 22))
+                        .font(.system(.title))
                         .frame(width: 36, height: 36)
                         .background(Circle().fill(Palette.hoverFill))
                         .contentShape(.circle)

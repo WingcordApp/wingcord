@@ -1,7 +1,9 @@
 import SwiftUI
 import WingcordCore
 
-/// A stage channel, seen from inside and from outside.
+/// A stage channel, in Discord's three arrangements under one header (module
+/// 883396, `iA`): **the start screen** for a moderator while nothing is live,
+/// **the room** for somebody in it, and **the join card** for everybody else.
 ///
 /// # Why this is not the voice pane with a filter on it
 ///
@@ -13,29 +15,18 @@ import WingcordCore
 /// to the audience is not.
 ///
 /// So: speakers at full size with their rings and their badges, the audience as
-/// a dense grid of faces at half that, and — for a moderator only — the raised
-/// hands in the order they went up.
-///
-/// # The three states of a stage channel
-///
-/// **Dark** — nobody has started a stage. The channel exists, people may be
-/// standing in it, and there is nothing to listen to. A moderator gets the one
-/// control that changes that.
-///
-/// **Live, from outside** — a stage is running and the reader is not in it.
-/// The topic, who is speaking, and a way in.
-///
-/// **Live, from inside** — everything above, plus the reader's own place in it
-/// and the controls that change it.
+/// a dense grid of faces at half that, and — for whoever may answer them — the
+/// raised hands in the order they went up.
 struct StagePane: View {
     var channelID: ChannelID
 
     @Environment(AppModel.self) private var model
     @Environment(\.motion) private var motion
-    /// The topic being typed for a stage about to start. Held here rather than
-    /// in the store: it is a draft on one surface and it dies with the view.
-    @State private var draftTopic = ""
-    @State private var isNamingStage = false
+    /// Discord's Show Requests — closed until asked for, as its own is.
+    @State private var showsRequests = false
+    @State private var sheet: StageSheet?
+    @State private var confirmation: StageConfirmation?
+    @State private var isConfirming = false
 
     var body: some View {
         Group {
@@ -56,43 +47,123 @@ struct StagePane: View {
         .task(id: channelID) {
             model.sessionController.loadStage(inChannel: channelID)
         }
+        // Discord's "Welcome to Stages!", the first time any stage is opened.
+        .onAppear {
+            guard !AppSettings.shared.hasSeenStageWelcome else { return }
+            AppSettings.shared.hasSeenStageWelcome = true
+            sheet = .welcome
+        }
+        .sheet(item: $sheet) { sheet in
+            switch sheet {
+            case .start:
+                StartStageSheet(channelID: channelID)
+            case .startEvent(let event):
+                StageEventStartSheet(event: event, channelID: channelID)
+            case .welcome:
+                StageWelcomeSheet()
+            case .blockedPresent:
+                StageBlockedSheet(channelID: channelID) { model.joinVoice(channelID) }
+            }
+        }
+        .alert(confirmation?.title ?? "", isPresented: $isConfirming, presenting: confirmation) { asked in
+            switch asked {
+            case .endStage:
+                Button("Cancel", role: .cancel) {}
+                Button("End Stage", role: .destructive) { endAndLeave() }
+            case .alsoEnd:
+                Button("No, just disconnect quietly") { model.leaveVoice() }
+                Button("Disconnect and End", role: .destructive) { endAndLeave() }
+                Button("Cancel", role: .cancel) {}
+            }
+        } message: { asked in
+            Text(asked.message)
+        }
     }
 
-    // MARK: The room
+    // MARK: The arrangements
 
-    @ViewBuilder
     private func content(_ stage: StagePresentation) -> some View {
+        HStack(spacing: 0) {
+            VStack(spacing: 0) {
+                StageHeader(
+                    stage: stage,
+                    showsRequestsButton: stage.canMuteMembers && !showsRequests
+                ) { showsRequests = true }
+                Divider()
+                if stage.isVideoFull {
+                    StageCapacityNotice { model.dismissStageCapacityNotice(in: channelID) }
+                        .padding(.top, Spacing.snug)
+                }
+                Group {
+                    if stage.showsStartScreen {
+                        StageStartScreen(
+                            stage: stage,
+                            waitingFaces: Array((stage.speakers + stage.audience).prefix(3))
+                        ) { startAct($0, stage) }
+                    } else if stage.isConnected {
+                        room(stage)
+                    } else {
+                        StageJoinCard(stage: stage) { join(stage) }
+                    }
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+            .safeAreaBar(edge: .bottom, spacing: 0) {
+                if stage.isConnected {
+                    StageControlBar(stage: stage, isMuted: model.isSelfMuted) { trayAct($0, stage) }
+                        .padding(.bottom, Spacing.margin)
+                }
+            }
+            // **The queue is theirs who may answer it.** An audience member
+            // seeing eleven raised hands learns only that they are eleventh.
+            if showsRequests, stage.canMuteMembers {
+                Divider()
+                StageRequestsSidebar(
+                    requests: stage.requests,
+                    canEditPermissions: canEditPermissions,
+                    allowsEveryone: stage.allowsEveryoneToRequest,
+                    setAllowsEveryone: { model.setEveryoneMayRequestToSpeak($0, inChannel: channelID) },
+                    invite: { model.setStageSpeaker($0, isSpeaker: true, inChannel: channelID) },
+                    dismiss: { model.dismissStageRequest($0, inChannel: channelID) },
+                    close: { showsRequests = false }
+                )
+                .transition(.move(edge: .trailing).combined(with: .opacity))
+            }
+        }
+        .animation(motion.panel, value: showsRequests)
+    }
+
+    private func room(_ stage: StagePresentation) -> some View {
         ScrollView {
             VStack(alignment: .leading, spacing: Spacing.group) {
-                header(stage)
+                if stage.isInvitedToSpeak { invitation }
+
+                // Discord's `n4` over a room still waiting: what is about to
+                // start and, for a moderator, the highlighted Start the Stage.
+                if !stage.isLive, !stage.imminentEvents.isEmpty || (stage.isModerator && !stage.isTeen) {
+                    VStack(spacing: Spacing.snug) {
+                        StageEventCards(events: stage.imminentEvents) { startAct($0, stage) }
+                        if stage.isModerator, !stage.isTeen {
+                            StageOptionCard(
+                                title: "Start the Stage",
+                                detail: "Pick a topic to start the conversation.",
+                                symbol: "person.wave.2.fill",
+                                tint: Palette.presenceOnline,
+                                isHighlighted: true
+                            ) { sheet = .start }
+                        }
+                    }
+                    .frame(maxWidth: 440)
+                    .frame(maxWidth: .infinity)
+                }
 
                 if stage.isLive || !stage.speakers.isEmpty {
                     section("Speakers", count: stage.speakers.count) {
                         SpeakerRow(
                             members: stage.speakers,
-                            canMove: stage.isModerator,
+                            canMove: stage.canMuteMembers,
                             moveToAudience: { userID in
-                                model.setStageSpeaker(
-                                    userID, isSpeaker: false, inChannel: channelID
-                                )
-                            }
-                        )
-                    }
-                }
-
-                // **The queue is a moderator's surface and nobody else's.** An
-                // audience member seeing eleven raised hands learns only that
-                // they are eleventh, which is a fact this client would be
-                // inventing — Discord shows the count to the room and the list
-                // to the people who can act on it.
-                if stage.isModerator, !stage.requests.isEmpty {
-                    section("Requests to speak", count: stage.requests.count) {
-                        RequestList(
-                            members: stage.requests,
-                            invite: { userID in
-                                model.setStageSpeaker(
-                                    userID, isSpeaker: true, inChannel: channelID
-                                )
+                                model.setStageSpeaker(userID, isSpeaker: false, inChannel: channelID)
                             }
                         )
                     }
@@ -103,70 +174,31 @@ struct StagePane: View {
                         AudienceGrid(members: stage.audience)
                     }
                 }
-
-                if !stage.isLive { dark(stage) }
             }
             .padding(Spacing.margin)
             .frame(maxWidth: .infinity, alignment: .leading)
         }
         .scrollBounceBehavior(.basedOnSize)
-        .softScrollEdgeTopOnly()
-        .safeAreaBar(edge: .bottom, spacing: 0) {
-            StageControlBar(
-                stage: stage,
-                raiseHand: { model.setStageHandRaised(!stage.hasRaisedHand, inChannel: channelID) },
-                stepDown: { model.leaveStageAsSpeaker(inChannel: channelID) },
-                stepUp: { model.setStageSpeaker(nil, isSpeaker: true, inChannel: channelID) },
-                join: { model.joinVoice(channelID) },
-                leave: { model.leaveVoice() },
-                endStage: { model.endStage(inChannel: channelID) },
-                toggleMute: { model.toggleVoiceMute() },
-                isMuted: model.isSelfMuted
-            )
-            .padding(.bottom, Spacing.margin)
-        }
         .animation(motion.standard, value: stage.speakers)
         .animation(motion.standard, value: stage.audience)
-        .animation(motion.standard, value: stage.requests)
     }
 
-    // MARK: Parts
-
-    private func header(_ stage: StagePresentation) -> some View {
-        VStack(alignment: .leading, spacing: Spacing.base) {
-            HStack(spacing: Spacing.base) {
-                Image(systemName: "person.wave.2.fill")
-                    .font(.system(.body))
-                    .foregroundStyle(
-                        stage.isLive
-                            ? AnyShapeStyle(Palette.presenceOnline)
-                            : AnyShapeStyle(Ink.tertiary)
-                    )
-                Text(stage.topic?.isEmpty == false ? stage.topic! : stage.channelName)
-                    .font(.system(.title2, weight: .semibold))
-                    .foregroundStyle(Ink.primary)
-                    .lineLimit(2)
-            }
-
-            // The two counts Discord puts in its own header, in the same
-            // order: who can be heard, then who is listening.
-            HStack(spacing: Spacing.snug) {
-                Label(
-                    "\(stage.speakers.count) speaking",
-                    systemImage: "mic.fill"
-                )
-                Label(
-                    "\(stage.audience.count) in audience",
-                    systemImage: "person.2.fill"
-                )
-                if !stage.isLive {
-                    Text("The stage has not started.")
-                        .foregroundStyle(Ink.quaternary)
-                }
-            }
-            .font(.system(.caption))
-            .foregroundStyle(Ink.tertiary)
+    /// Discord's notice to someone a moderator has invited up.
+    private var invitation: some View {
+        HStack(spacing: Spacing.snug) {
+            Image(systemName: "mic.fill")
+                .foregroundStyle(Palette.accent)
+            Text("You have been invited to speak.")
+                .font(.system(.subheadline, weight: .medium))
+                .foregroundStyle(Ink.primary)
+            Spacer(minLength: Spacing.base)
+            Button("Accept") { model.answerStageInvite(accept: true, inChannel: channelID) }
+                .buttonStyle(.borderedProminent)
+            Button("Decline") { model.answerStageInvite(accept: false, inChannel: channelID) }
+                .buttonStyle(.bordered)
         }
+        .padding(Spacing.snug)
+        .background(Palette.surfaceRaised, in: .rect(cornerRadius: Radius.card, style: .continuous))
     }
 
     @ViewBuilder
@@ -176,7 +208,7 @@ struct StagePane: View {
         @ViewBuilder content: () -> some View
     ) -> some View {
         VStack(alignment: .leading, spacing: Spacing.snug) {
-            Text("\(title.uppercased()) — \(count)")
+            Text("\(title.uppercased()) \u{2014} \(count)")
                 .font(.system(.caption2, weight: .bold))
                 .foregroundStyle(Ink.quaternary)
                 .tracking(0.6)
@@ -184,69 +216,93 @@ struct StagePane: View {
         }
     }
 
-    /// A stage channel with the lights off.
-    @ViewBuilder
-    private func dark(_ stage: StagePresentation) -> some View {
-        if stage.canStartStage {
-            VStack(alignment: .leading, spacing: Spacing.snug) {
-                if isNamingStage {
-                    // **A topic is required and this is why it is a field.**
-                    // Discord refuses a stage without one, so a bare Start
-                    // button would be a control that fails on press.
-                    TextField("What is this stage about?", text: $draftTopic)
-                        .textFieldStyle(.plain)
-                        .font(.system(.body))
-                        .foregroundStyle(Ink.primary)
-                        .padding(.horizontal, Spacing.snug)
-                        .frame(height: 34)
-                        .background {
-                            RoundedRectangle(cornerRadius: Radius.chip, style: .continuous)
-                                .fill(Palette.hoverFill)
-                        }
-                        .onSubmit(start)
+    // MARK: Acts
 
-                    HStack(spacing: Spacing.base) {
-                        Button("Start Stage", action: start)
-                            .buttonStyle(.glass)
-                            .disabled(draftTopic.trimmed.isEmpty)
-                        Button("Cancel") { isNamingStage = false }
-                            .buttonStyle(.plain)
-                            .foregroundStyle(Ink.tertiary)
-                    }
-                } else {
-                    Button {
-                        isNamingStage = true
-                    } label: {
-                        Label("Start a Stage", systemImage: "play.circle")
-                            .font(.system(.subheadline, weight: .semibold))
-                            .padding(.horizontal, Spacing.snug)
-                            .frame(height: 34)
-                            .contentShape(.capsule)
-                    }
-                    .buttonStyle(.plain)
-                    .emphasisChrome(Palette.presenceOnline)
-                }
-            }
-            .animation(motion.panel, value: isNamingStage)
+    /// Discord's gate on the toggle in Requests to Speak: Manage Channels or
+    /// Manage Roles.
+    private var canEditPermissions: Bool {
+        let permissions = model.permissionGate.permissions(in: channelID)
+        return permissions.contains(.manageChannels) || permissions.contains(.manageRoles)
+    }
+
+    /// Discord's `cy`: somebody who does not moderate, joining a room with
+    /// people they blocked or ignored in it, is told first (`j6`).
+    private func join(_ stage: StagePresentation) {
+        if !stage.isModerator, stage.blockedCount + stage.ignoredCount > 0 {
+            sheet = .blockedPresent
         } else {
-            Text("Nobody has started a stage here yet.")
-                .font(.system(.subheadline))
-                .foregroundStyle(Ink.tertiary)
+            model.joinVoice(channelID)
         }
     }
 
-    private func start() {
-        let topic = draftTopic.trimmed
-        guard !topic.isEmpty else { return }
-        // **Not `@everyone`, unless somebody asks for it.** The notification
-        // reaches people who are not in the room, and a client that sent it by
-        // default would be pinging a server on the reader's behalf.
-        model.startStage(inChannel: channelID, topic: topic, notifyEveryone: false)
-        isNamingStage = false
-        draftTopic = ""
+    private func startAct(_ act: StageStartAct, _ stage: StagePresentation) {
+        switch act {
+        case .startStage:
+            sheet = .start
+        case .createEvent:
+            if let guildID = stage.guildID { model.openEventEditor(inGuild: guildID) }
+        case .continueWithoutStarting:
+            model.continueStageWithoutStarting(inChannel: channelID)
+        case .event(let event):
+            if model.canManage(event) {
+                sheet = .startEvent(event)
+            } else {
+                model.openEvents(inGuild: event.guildID, event: event.id)
+            }
+        }
+    }
+
+    private func trayAct(_ act: StageAct, _ stage: StagePresentation) {
+        switch act {
+        case .toggleMute: model.toggleVoiceMute()
+        case .music: model.toggleStageMusic()
+        case .hand: model.setStageHandRaised(!stage.hasRaisedHand, inChannel: channelID)
+        case .speakOnStage: model.setStageSpeaker(nil, isSpeaker: true, inChannel: channelID)
+        case .leaveStage: model.leaveStageAsSpeaker(inChannel: channelID)
+        case .changeTopic, .startStage: sheet = .start
+        case .voiceSettings: SettingsWindow.open(.voiceVideo)
+        case .disconnect:
+            // Discord's `106044`: the last moderator speaking is asked whether
+            // the stage ends with them.
+            if model.isLastStageModerator(in: channelID) {
+                ask(.alsoEnd)
+            } else {
+                model.leaveVoice()
+            }
+        case .endStage:
+            ask(.endStage)
+        }
+    }
+
+    private func ask(_ asked: StageConfirmation) {
+        confirmation = asked
+        isConfirming = true
+    }
+
+    private func endAndLeave() {
+        model.endStage(inChannel: channelID)
+        model.leaveVoice()
     }
 }
 
-private extension String {
-    var trimmed: String { trimmingCharacters(in: .whitespacesAndNewlines) }
+/// Discord's two questions on the way out of a live stage.
+enum StageConfirmation {
+    /// End Stage for Everyone (module 25997).
+    case endStage
+    /// The last moderator speaking disconnects (module 118101).
+    case alsoEnd
+
+    var title: String {
+        switch self {
+        case .endStage: "Are you sure you want to end the Stage for everyone?"
+        case .alsoEnd: "Do you want to also end the Stage?"
+        }
+    }
+
+    var message: String {
+        switch self {
+        case .endStage: "The Stage will end immediately."
+        case .alsoEnd: "A Stage with no speakers will automatically end after a few minutes."
+        }
+    }
 }

@@ -53,18 +53,44 @@ struct StageRosterTests {
         #expect(roster.requests.map(\.rawValue) == [1])
     }
 
-    @Test("A speaker's stale timestamp is not a request")
-    func aSpeakerIsNeverInTheQueue() {
-        // **This is the trap the route sets.** Unsuppressing somebody sets
-        // their `request_to_speak_timestamp` to *now* — Discord does it, not
-        // the client — so an invited speaker comes back with a raised hand in
-        // the payload. A queue that filtered on the timestamp alone would keep
-        // showing the person it just promoted.
+    /// Discord's own classification (`l(voiceState)` in its bundle):
+    /// unsuppressed with the hand still up is
+    /// `REQUESTED_TO_SPEAK_AND_AWAITING_USER_ACK` — a moderator's invitation
+    /// the person has not answered. Not a speaker yet: their Accept is what
+    /// clears the hand (`{suppress: false, request_to_speak_timestamp: null}`).
+    @Test("An unanswered invitation is in the queue as Invite Sent, not on the stage")
+    func anInvitationAwaitsItsAnswer() {
         let roster = StageRoster.resolve([
             state(1, suppressed: false, requestedAt: Date(timeIntervalSince1970: 10)),
+            state(2, suppressed: false),
         ])
-        #expect(roster.speakers.map(\.rawValue) == [1])
-        #expect(roster.requests.isEmpty)
+        #expect(roster.speakers.map(\.rawValue) == [2])
+        #expect(roster.requests.map(\.rawValue) == [1])
+        #expect(roster.audience.map(\.rawValue) == [1])
+        #expect(roster.invited == [UserID(rawValue: 1)])
+    }
+
+    /// Discord's labels under a hand, in its order.
+    @Test("A requester is labelled as Discord labels them")
+    func requesterLabels() {
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        // A snowflake minted at `now` minus `days`.
+        func user(daysOld days: Double) -> UserID {
+            let ms = UInt64((now.timeIntervalSince1970 - days * 86_400) * 1000) - 1_420_070_400_000
+            return UserID(rawValue: ms << 22)
+        }
+        let veteran = user(daysOld: 400)
+        #expect(StageRequesterLabel.label(for: user(daysOld: 3), joinedAt: nil, roleCount: 0, roleName: nil, now: now)
+            == "New to Discord")
+        #expect(StageRequesterLabel.label(for: veteran, joinedAt: nil, roleCount: 0, roleName: nil, now: now)
+            == "Visitor (Non-Member)")
+        #expect(StageRequesterLabel.label(for: veteran, joinedAt: now, roleCount: 2, roleName: "Mods", now: now) == "Mods")
+        #expect(StageRequesterLabel.label(for: veteran, joinedAt: now, roleCount: 1, roleName: nil, now: now)
+            == "Member with Role(s)")
+        #expect(StageRequesterLabel.label(for: veteran, joinedAt: now.addingTimeInterval(-3_600), roleCount: 0, roleName: nil, now: now)
+            == "New Member")
+        #expect(StageRequesterLabel.label(for: veteran, joinedAt: now.addingTimeInterval(-90_000), roleCount: 0, roleName: nil, now: now)
+            == "Member")
     }
 
     @Test("Hands are ordered oldest first")

@@ -296,7 +296,7 @@ private struct OverlaySidebarSearchField: View {
         .padding(.horizontal, Spacing.snug)
         .frame(height: Metrics.compactControl)
         .background(Palette.surfaceRaised, in: .capsule)
-        .specularEdge(in: Capsule())
+        .overlay { Capsule().strokeBorder(Palette.edge) }
         .contentShape(.capsule)
         .onTapGesture { isFocused = true }
     }

@@ -177,7 +177,7 @@ struct SignInView: View {
             Button("Sign in with Discord", systemImage: "arrow.right.circle.fill") {
                 isPresentingWebLogin = true
             }
-            .buttonStyle(.glassProminent)
+            .buttonStyle(.borderedProminent)
             .controlSize(.large)
 
             if case .failed(let reason) = model.connectionState {

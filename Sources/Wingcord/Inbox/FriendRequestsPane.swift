@@ -129,9 +129,9 @@ struct FriendRequestRow: View {
                 } label: {
                     Label("Accept", systemImage: "checkmark")
                         .labelStyle(.iconOnly)
-                        .font(.system(size: 11, weight: .semibold))
+                        .font(.system(.subheadline, weight: .semibold))
                 }
-                .buttonStyle(.glass)
+                .buttonStyle(.bordered)
                 .controlSize(.small)
                 .tint(Palette.affirmative)
                 .help("Accept")
@@ -146,7 +146,7 @@ struct FriendRequestRow: View {
                 .labelStyle(.iconOnly)
                 .font(.system(size: 11, weight: .semibold))
             }
-            .buttonStyle(.glass)
+            .buttonStyle(.bordered)
             .controlSize(.small)
             .help(request.isIncoming ? "Ignore this request" : "Cancel this request")
         }
@@ -166,7 +166,7 @@ struct FlagChip: View {
 
     var body: some View {
         Text(text)
-            .font(.system(size: 9, weight: .bold))
+            .font(.system(.caption2, weight: .bold))
             .textCase(.uppercase)
             .foregroundStyle(.white)
             .padding(.horizontal, Spacing.tight + 1)

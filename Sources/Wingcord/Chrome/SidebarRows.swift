@@ -3,10 +3,9 @@ import WingcordCore
 
 /// A channel.
 ///
-/// The selected row carries a glass pill in a shared namespace, so the system
-/// **flows** it from one row to the next rather than fading it out here and in
-/// there. That is the same idiom as the rail's indicator and it is why switching
-/// channels reads as one object moving.
+/// **A row of the system sidebar list.** The list draws the selection, the
+/// list's selection is what opens the channel, and the row draws only what is
+/// its own — so the highlight, the keyboard and VoiceOver are the system's.
 ///
 /// Unread bolds the name rather than adding a second mark. A dot beside a
 /// brighter, heavier name is two marks saying the same thing, and the one that
@@ -20,8 +19,6 @@ struct SidebarChannelRow: View {
     var guildID: GuildID?
     /// Whether the reader is in this channel's call.
     var isConnected = false
-    var namespace: Namespace.ID
-    var action: () -> Void
     /// Voice channels only. Nil elsewhere, which is what removes the hover
     /// accessories from every text row rather than drawing them disabled.
     var join: (() -> Void)?
@@ -33,7 +30,7 @@ struct SidebarChannelRow: View {
 
     @Environment(\.motion) private var motion
     @State private var isHovering = false
-    /// Bumped by a press, to play the name's effect once.
+    /// Bumped by the row being chosen, to play the name's effect once.
     ///
     /// **A token, not a `Bool`.** `.task(id:)` restarts on a change, so a second
     /// press while the first play is still running cancels it and starts again —
@@ -42,11 +39,6 @@ struct SidebarChannelRow: View {
     @State private var playToken = 0
 
     var body: some View {
-        Button {
-            // A press plays the name's effect once. See `playToken`.
-            if channel.nameStyle?.isPlain == false { playToken &+= 1 }
-            action()
-        } label: {
             VStack(alignment: .leading, spacing: Spacing.tight) {
                 HStack(spacing: Spacing.base) {
                     SidebarRowLeading(channel: channel)
@@ -114,28 +106,17 @@ struct SidebarChannelRow: View {
                     .padding(.leading, Metrics.voiceStripInset)
                 }
             }
-            .padding(.horizontal, Spacing.base)
-            .padding(.vertical, Spacing.tight)
             .frame(
                 minHeight: channel.isPerson
-                    ? Metrics.directMessageRowHeight
-                    : Metrics.rowMinHeight,
+                    ? Metrics.directMessageRowHeight - Metrics.sidebarRowInset * 2
+                    : Metrics.sidebarRowContent,
                 alignment: .leading
             )
             .frame(maxWidth: .infinity, alignment: .leading)
-            .contentShape(.rect(cornerRadius: Radius.row))
-        }
-        .buttonStyle(.plain)
-        .background {
-            // A ZStack of two shapes rather than an `if`: the hover fill and the
-            // selection pill are different states of the same slot, and giving
-            // the row two view identities makes selection cut instead of flow.
-            ZStack {
-                // **The plate is a state of the row's own slot, not a layer over
-                // it.** Under the hover fill and the selection pill, so all
-                // three share the row's shape and its corner — a plate over the
-                // pill would cover the one thing that says which conversation is
-                // open.
+            .contentShape(.rect)
+            .background {
+                // **The plate lies exactly on the system's highlight**, which
+                // is drawn behind the row; see `SidebarRowGeometry`.
                 if let url = channel.nameplateURL, isPlateShown {
                     SidebarNameplate(
                         still: url,
@@ -148,45 +129,33 @@ struct SidebarChannelRow: View {
                         // picture behind text nobody asked to have moving.
                         isAnimating: isHovering
                     )
+                    .padding(SidebarRowGeometry.highlightOutset)
                     .transition(.opacity)
                 }
-
-                RoundedRectangle(cornerRadius: Radius.row, style: .continuous)
-                    .fill(Palette.hoverFill)
-                    .opacity(isHovering && !isSelected ? 1 : 0)
-
-                if isSelected {
-                    // The tint is IN the material. A `.fill` under
-                    // `.glassEffect` is a fill behind glass — §4 rule 3 — and
-                    // it is what stops the pill lensing the row beneath it.
-                    Color.clear
-                        .glassEffect(
-                            .regular.tint(Palette.selectionFill),
-                            in: .rect(cornerRadius: Radius.row)
-                        )
-                        .glassEffectID(SidebarSelection.id, in: namespace)
-                }
             }
-        }
-        .onHover { hovering in
-            guard isHovering != hovering else { return }
-            isHovering = hovering
-        }
-        // Only where there is a menu to raise. See `openMenu`.
-        .modifier(SecondaryClickModifier(openMenu: openMenu))
-        .animation(motion.fadeQuick, value: isHovering)
-        .animation(motion.standard, value: isSelected)
-        // **A press plays the effect once and then stops.** A style is something
-        // its owner chose and worth seeing; a column of them all looping at once
-        // is a list that never settles, which is why the resting state is still.
-        .task(id: playToken) {
+            .onHover { hovering in
+                guard isHovering != hovering else { return }
+                isHovering = hovering
+            }
+            // Only where there is a menu to raise. See `openMenu`.
+            .modifier(SecondaryClickModifier(openMenu: openMenu))
+            .animation(motion.fadeQuick, value: isHovering)
+            // Being chosen plays the name's effect once. See `playToken`.
+            .onChange(of: isSelected) { _, selected in
+                if selected, channel.nameStyle?.isPlain == false { playToken &+= 1 }
+            }
+            // **The effect plays once and then stops.** A style is something
+            // its owner chose and worth seeing; a column of them all looping at
+            // once is a list that never settles, which is why the resting state
+            // is still.
+            .task(id: playToken) {
             guard playToken > 0 else { return }
             try? await Task.sleep(for: .seconds(DisplayNameEffectLayers.cycle))
             guard !Task.isCancelled else { return }
             playToken = 0
         }
         .accessibilityLabel(Text(accessibilityLabel))
-        .accessibilityAddTraits(isSelected ? [.isButton, .isSelected] : .isButton)
+        .accessibilityAddTraits(isSelected ? .isSelected : [])
         .accessibilityActions {
             if let join {
                 Button(isConnected ? "Leave the call" : "Join the call", action: join)
@@ -217,7 +186,7 @@ struct SidebarChannelRow: View {
                     .foregroundStyle(count >= channel.voiceLimit ? Ink.tertiary : Ink.quaternary)
                     .padding(.horizontal, 6)
                     .frame(height: 17)
-                    .floatingChrome()
+                    .background { Capsule().fill(Palette.edge) }
                 }
             }
             .fixedSize()
@@ -352,7 +321,7 @@ private struct SidebarTagChip: View {
                     .frame(width: 11, height: 11)
             }
             Text(text)
-                .font(.system(size: 9, weight: .bold))
+                .font(.system(.caption2, weight: .bold))
                 .foregroundStyle(Ink.secondary)
                 .lineLimit(1)
         }
@@ -419,7 +388,13 @@ private struct SidebarNameplate: View {
     /// whole row for as long as the fetch takes and then jumps to the trailing
     /// edge when it arrives.
     private static var artWidth: CGFloat {
-        (Metrics.directMessageRowHeight * Nameplate.artworkAspect).rounded()
+        (height * Nameplate.artworkAspect).rounded()
+    }
+
+    /// The highlight's height on a conversation row: the row less the list's
+    /// inset at its top and its foot, halved — `SidebarRowGeometry`.
+    private static var height: CGFloat {
+        Metrics.directMessageRowHeight - Metrics.sidebarRowInset
     }
 
     var body: some View {
@@ -443,7 +418,7 @@ private struct SidebarNameplate: View {
                 width: Self.artWidth,
                 isAnimating: isAnimating
             )
-            .frame(width: Self.artWidth, height: Metrics.directMessageRowHeight)
+            .frame(width: Self.artWidth, height: Self.height)
             .mask {
                 // Erasing rather than painting: what shows through the leading
                 // half is the row's own background, whatever that happens to be.
@@ -539,21 +514,23 @@ struct TypingPill: View {
     }
 }
 
-/// The identifier the selection pill travels under. One constant so the sidebar
-/// and anything else animating into the same slot cannot disagree about it.
-enum SidebarSelection {
-    static let id = "sidebar.selection"
+/// Where the system sidebar list draws its selection highlight, against a
+/// row's content.
+///
+/// **Measured on the macOS 27 SDK, 2026-10-05**, from an offscreen `.sidebar`
+/// `List`: content is inset 16 points from the column's edges and the
+/// highlight 10, and vertically the highlight sits 2 points inside a row the
+/// list pads by 4 above and below. Anything a row draws on the highlight's
+/// footprint — a nameplate — takes this outset.
+enum SidebarRowGeometry {
+    static let highlightOutset = EdgeInsets(top: -2, leading: -6, bottom: -2, trailing: -6)
 }
 
-/// A category disclosure header.
+/// A category's section header in the sidebar list.
 ///
-/// **Glass, and only as wide as its own label.** Two steps, and the second only
-/// matters at column width: a material stretched across the whole column has
-/// nothing to lens and renders as a flat grey slab; and at full width the
-/// capsule comes out the same size and colour as the *selected channel's* pill
-/// two rows below it, so a section header and a selected row render as the same
-/// object. Hugging the label separates them by shape rather than asking the eye
-/// to compare two greys.
+/// **Plain text and a disclosure chevron**, the way a sidebar heads a group.
+/// It was a glass capsule; a heading is content, and glass in the content layer
+/// is what the HIG rules out (DESIGN-NOTES §2.1).
 struct SidebarCategoryRow: View {
     var category: SidebarCategory
     var toggle: () -> Void
@@ -585,11 +562,7 @@ struct SidebarCategoryRow: View {
                 .accessibilityLabel(Text("Create Channel"))
             }
         }
-        .padding(.horizontal, Spacing.base)
-        .padding(.top, Spacing.base)
-        .padding(.bottom, Spacing.tight)
-        // The row still spans, so the chip stays at the leading edge instead of
-        // centring itself across the column.
+        .padding(.top, Spacing.tight)
         .frame(maxWidth: .infinity, alignment: .leading)
         .modifier(SecondaryClickModifier(openMenu: openMenu))
         .onHover { isHovering = $0 }
@@ -607,13 +580,11 @@ struct SidebarCategoryRow: View {
                     .lineLimit(1)
             }
             .foregroundStyle(category.hasUnread ? AnyShapeStyle(Ink.secondary) : AnyShapeStyle(Ink.tertiary))
-            .padding(.horizontal, Spacing.base)
             .frame(minHeight: Metrics.categoryMinHeight)
-            .contentShape(.capsule)
+            .contentShape(.rect)
         }
         .buttonStyle(.plain)
         .fixedSize()
-        .floatingChrome()
         .animation(motion.standard, value: category.isExpanded)
         .accessibilityLabel(Text(category.name))
         .accessibilityAddTraits(.isButton)
@@ -623,11 +594,8 @@ struct SidebarCategoryRow: View {
 /// Server Guide, Channels & Roles, Game Servers — the rows above the first
 /// category that go somewhere other than a transcript.
 ///
-/// **It carries the same travelling pill as a channel row, in the same
-/// namespace.** They are destinations in one list, so the selection is one
-/// object that flows between them — a separate indicator here would make going
-/// from `#general` to Channels & Roles read as one pill vanishing and another
-/// appearing, which is the thing `glassEffectID` exists to prevent.
+/// **Destinations in the same list as the channels**, so they take the same
+/// system selection rather than an indicator of their own.
 struct SidebarActionRow: View {
     var symbolName: String
     var title: String
@@ -635,14 +603,8 @@ struct SidebarActionRow: View {
     /// requests, in the badge an unread conversation wears.
     var count = 0
     var isSelected: Bool
-    var namespace: Namespace.ID
-    var action: () -> Void
-
-    @Environment(\.motion) private var motion
-    @State private var isHovering = false
 
     var body: some View {
-        Button(action: action) {
             HStack(spacing: Spacing.base) {
                 Image(symbol: symbolName)
                     .font(.system(.caption))
@@ -661,37 +623,12 @@ struct SidebarActionRow: View {
                     UnreadBadge(count: count, isMuted: false)
                 }
             }
-            .padding(.horizontal, Spacing.base)
-            .padding(.vertical, Spacing.tight)
-            .frame(minHeight: Metrics.rowMinHeight, alignment: .leading)
+            .frame(minHeight: Metrics.sidebarRowContent, alignment: .leading)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .contentShape(.rect(cornerRadius: Radius.row))
-        }
-        .buttonStyle(.plain)
-        .background {
-            ZStack {
-                RoundedRectangle(cornerRadius: Radius.row, style: .continuous)
-                    .fill(Palette.hoverFill)
-                    .opacity(isHovering && !isSelected ? 1 : 0)
-
-                if isSelected {
-                    Color.clear
-                        .glassEffect(
-                            .regular.tint(Palette.selectionFill),
-                            in: .rect(cornerRadius: Radius.row)
-                        )
-                        .glassEffectID(SidebarSelection.id, in: namespace)
-                }
-            }
-        }
-        .onHover { hovering in
-            guard isHovering != hovering else { return }
-            isHovering = hovering
-        }
-        .animation(motion.fadeQuick, value: isHovering)
-        // Discord's own label for the requests row: "Message Requests — 2".
-        .accessibilityLabel(Text(count > 0 ? "\(title) \u{2014} \(count)" : title))
-        .accessibilityAddTraits(isSelected ? [.isButton, .isSelected] : .isButton)
+            .contentShape(.rect)
+            // Discord's own label for the requests row: "Message Requests — 2".
+            .accessibilityLabel(Text(count > 0 ? "\(title) \u{2014} \(count)" : title))
+            .accessibilityAddTraits(isSelected ? .isSelected : [])
     }
 }
 
@@ -704,9 +641,6 @@ struct SidebarActionRow: View {
 struct SidebarEventsRowView: View {
     var row: SidebarEventsRow
     var action: () -> Void
-
-    @Environment(\.motion) private var motion
-    @State private var isHovering = false
 
     var body: some View {
         Button(action: action) {
@@ -721,23 +655,11 @@ struct SidebarEventsRowView: View {
                     .lineLimit(1)
                 Spacer(minLength: Spacing.tight)
             }
-            .padding(.horizontal, Spacing.base)
-            .padding(.vertical, Spacing.tight)
-            .frame(minHeight: Metrics.rowMinHeight, alignment: .leading)
+            .frame(minHeight: Metrics.sidebarRowContent, alignment: .leading)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .contentShape(.rect(cornerRadius: Radius.row))
+            .contentShape(.rect)
         }
         .buttonStyle(.plain)
-        .background {
-            RoundedRectangle(cornerRadius: Radius.row, style: .continuous)
-                .fill(Palette.hoverFill)
-                .opacity(isHovering ? 1 : 0)
-        }
-        .onHover { hovering in
-            guard isHovering != hovering else { return }
-            isHovering = hovering
-        }
-        .animation(motion.fadeQuick, value: isHovering)
         .accessibilityLabel(Text(row.hasUnread ? "\(row.title), new" : row.title))
         .accessibilityAddTraits(.isButton)
     }
@@ -745,9 +667,8 @@ struct SidebarEventsRowView: View {
 
 /// A small glyph button revealed on a row's hover.
 ///
-/// A region rather than a glass body: it lives inside the row's own selection
-/// pill, and §4 forbids stacking a second material on the first — the container
-/// would promote it above its siblings and every one of them would draw at once.
+/// A plain glyph with a hover disc; it sits on the row, over the list's own
+/// highlight when the row is selected.
 private struct RowAccessory: View {
     var systemImage: String
     var label: String
@@ -788,23 +709,18 @@ private struct RowAccessory: View {
 struct SidebarThreadRow: View {
     var thread: SidebarThread
     var isSelected: Bool
-    var namespace: Namespace.ID
-    var action: () -> Void
     /// The thread's own menu — `ThreadOptionsMenu`.
     var openMenu: ((CGRect) -> Void)?
 
-    @Environment(\.motion) private var motion
-    @State private var isHovering = false
-
     /// Where the hook sits, measured from the row's leading edge.
     ///
-    /// Lined up with the centre of the channel glyph above it — the gutter is
-    /// `Spacing.base` of padding plus half a glyph — so the line descends out of
-    /// the icon rather than out of the gap beside it.
+    /// Lined up with the centre of the channel glyph above it, so the line
+    /// descends out of the icon rather than out of the gap beside it; and as
+    /// wide as the glyph's slot and a gap, so the name lines up with the
+    /// channel names.
     private static let hookInset: CGFloat = Spacing.base + 7
 
     var body: some View {
-        Button(action: action) {
             HStack(spacing: Spacing.base) {
                 hook
                 Text(thread.name)
@@ -819,50 +735,28 @@ struct SidebarThreadRow: View {
                     UnreadBadge(count: thread.mentionCount, isMuted: thread.isMuted)
                 }
             }
-            .padding(.horizontal, Spacing.base)
-            .padding(.vertical, Spacing.tight)
-            .frame(minHeight: Metrics.rowMinHeight, alignment: .leading)
+            .frame(minHeight: Metrics.sidebarRowContent, alignment: .leading)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .contentShape(.rect(cornerRadius: Radius.row))
-        }
-        .buttonStyle(.plain)
-        .background {
-            // The same two-shape slot the channel row uses, for the same reason:
-            // giving the row two view identities makes selection cut rather than
-            // flow.
-            ZStack {
-                RoundedRectangle(cornerRadius: Radius.row, style: .continuous)
-                    .fill(Palette.hoverFill)
-                    .opacity(isHovering && !isSelected ? 1 : 0)
-
-                if isSelected {
-                    Color.clear
-                        .glassEffect(
-                            .regular.tint(Palette.selectionFill),
-                            in: .rect(cornerRadius: Radius.row)
-                        )
-                        .glassEffectID(SidebarSelection.id, in: namespace)
-                }
-            }
-        }
-        .onHover { hovering in
-            guard isHovering != hovering else { return }
-            isHovering = hovering
-        }
-        .animation(motion.fadeQuick, value: isHovering)
-        .modifier(SecondaryClickModifier(openMenu: openMenu))
-        .accessibilityLabel(Text("Thread, \(thread.name)"))
-        .accessibilityAddTraits(isSelected ? [.isButton, .isSelected] : .isButton)
+            .contentShape(.rect)
+            .modifier(SecondaryClickModifier(openMenu: openMenu))
+            .accessibilityLabel(Text("Thread, \(thread.name)"))
+            .accessibilityAddTraits(isSelected ? .isSelected : [])
     }
 
     /// The elbow, and the run of line above it.
     ///
     /// Drawn in a fixed-width leading slot rather than as a background on the
-    /// row, so the label after it starts at one x whatever the hook does.
+    /// row, so the label after it starts at one x whatever the hook does. It
+    /// reaches into the list's inset above and below the row, so the line runs
+    /// unbroken from one thread to the next.
     private var hook: some View {
         ThreadHook(isLast: thread.isLast)
             .stroke(Ink.quaternary, style: StrokeStyle(lineWidth: 1, lineCap: .round))
-            .frame(width: Self.hookInset, height: Metrics.rowMinHeight)
+            .frame(
+                width: Self.hookInset,
+                height: Metrics.sidebarRowContent + Metrics.sidebarRowInset * 2
+            )
+            .padding(.vertical, -Metrics.sidebarRowInset)
             .accessibilityHidden(true)
     }
 

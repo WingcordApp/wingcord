@@ -1,5 +1,6 @@
 import CoreMedia
 import Foundation
+import QuartzCore
 import Synchronization
 
 // MARK: - Everybody else
@@ -32,6 +33,7 @@ final class InboundStreams: Sendable {
     /// One person's audio.
     private final class AudioStream {
         let buffer = JitterBuffer()
+        var reception = ReceptionStatistics(clockRate: Double(OpusFormat.sampleRate))
         let decoder: OpusDecoder?
         var pcm = [Int16](repeating: 0, count: OpusFormat.interleavedCount)
         var volume: Float = 1
@@ -40,24 +42,18 @@ final class InboundStreams: Sendable {
         /// second of silence rather than on the first quiet frame, or a ring
         /// flickers on every syllable.
         var quietFrames = 0
-        /// How many arriving packets are still to be printed as themselves.
-        ///
-        /// **Audio is the only packet a call always carries**, and the header
-        /// extensions on it are the only statement this client can read of what
-        /// ids a *call* server expects. Discord names none of them in READY, so
-        /// without this the call's ids are unknowable and the temptation is to
-        /// borrow a Go Live stream's — which is how a camera that worked
-        /// stopped working. Four packets, once per speaker.
-        var probesRemaining = VoiceTrace.isOn ? 4 : 0
 
         init() { decoder = try? OpusDecoder() }
     }
 
     /// One person's camera or screen.
     private final class VideoStream {
+        /// The packets back in order, with the holes asked for. See
+        /// `VideoReorderBuffer`.
+        var reorder = VideoReorderBuffer()
+        var reception = ReceptionStatistics(clockRate: 90_000)
         let depacketizer = H264Depacketizer()
         let builder = H264SampleBuilder()
-        var lastSequence: UInt16?
         var baseTimestamp: UInt32?
         /// Whether anything has ever arrived on this SSRC.
         ///
@@ -69,34 +65,6 @@ final class InboundStreams: Sendable {
         /// working, and nothing may be asked for on a binding that has never
         /// carried anything.
         var hasSeenPacket = false
-        /// How many arriving packets are still to be written out one by one.
-        ///
-        /// **A video stream that draws nothing produces no counter at all**
-        /// between the depacketiser and the decoder — a frame that never
-        /// completes is indistinguishable from a frame that completes and is
-        /// refused, and both look like a bound SSRC with healthy packet counts.
-        /// So the first few packets of every stream are printed as they arrive,
-        /// which is the only reading that does not depend on a theory about
-        /// which stage failed.
-        var probesRemaining = VoiceTrace.isOn ? 20 : 0
-        /// The same, for whole access units — far fewer, because one line
-        /// naming every NAL in a frame is worth twenty naming packets.
-        var frameProbesRemaining = VoiceTrace.isOn ? 4 : 0
-
-        /// Records this packet's place in the SSRC's sequence space, and says
-        /// whether it followed the previous one.
-        ///
-        /// **Every packet on the SSRC has to pass through here, including the
-        /// ones carrying no media.** A padding-only probe packet — which an SFU
-        /// sends to measure the path, and which trims to nothing — still
-        /// consumes a sequence number, so a receiver that returns early without
-        /// recording it judges the *next* real packet non-contiguous and throws
-        /// the frame in progress away. At a few probes a second that is every
-        /// frame, for ever, with no drop counted anywhere.
-        func track(sequence: UInt16) -> Bool {
-            defer { lastSequence = sequence }
-            return lastSequence.map { sequence == $0 &+ 1 } ?? true
-        }
     }
 
     /// What became of a stream's video between the socket and the screen.
@@ -136,9 +104,17 @@ final class InboundStreams: Sendable {
 
     private let state = Mutex(State())
 
-    /// The far end's own account of what it received. Shares this socket, and
-    /// is read here because this is the object every datagram passes through.
-    private let rtcp = RTCPListener()
+    /// The far end's own account of what it received, and its requests about
+    /// what we send. Shares this socket, and is read here because this is the
+    /// object every datagram passes through.
+    private let rtcp: RTCPListener
+
+    /// Where this end's own requests go — a NACK for a hole, a picture loss
+    /// indication for a stream that cannot start — and whose they are.
+    private struct FeedbackRoute {
+        var transport: VoiceTransport
+        var sender: UInt32
+    }
 
     private struct State {
         /// The call's per-sender end-to-end transforms, when it has any, and
@@ -157,7 +133,10 @@ final class InboundStreams: Sendable {
         var videoBySSRC: [UInt32: VideoStream] = [:]
         var videoUserBySSRC: [UInt32: UInt64] = [:]
         var videoSSRCByUser: [UInt64: UInt32] = [:]
+        /// Each retransmission SSRC's media SSRC, from opcode 12's `rtx_ssrc`.
+        var mediaByRetransmission: [UInt32: UInt32] = [:]
         var sinks: [UInt64: @Sendable (CMSampleBuffer) -> Void] = [:]
+        var feedbackRoute: FeedbackRoute?
         /// Everybody whose video has actually started arriving.
         ///
         /// **Announced and arriving are not the same fact**, and the tile may
@@ -170,10 +149,6 @@ final class InboundStreams: Sendable {
         var mixScratch = [Float](repeating: 0, count: OpusFormat.interleavedCount)
         var frameScratch = [Float](repeating: 0, count: OpusFormat.interleavedCount)
         var packetsReceived = 0
-        /// Whether the post-mortem below has already run. Once a call, because
-        /// it is a copy of the payload and a handful of AES calls on a path
-        /// that handles fifty frames a second.
-        var hasProbedRefusal = false
         /// Every datagram the socket handed over, before anything judged it.
         /// The difference between this and `packetsReceived` is the whole
         /// question of whether media is arriving but unreadable, or not
@@ -201,6 +176,39 @@ final class InboundStreams: Sendable {
         /// several people publish and only the gateway can say which is which.
         var soleVideoOwner: UInt64?
         var isDeafened = false
+        /// People whose video the reader turned off — Discord's Disable Video.
+        /// Their packets stop here as well as at the server, so the few already
+        /// in flight when it was asked do not light the tile again.
+        var videoDisabled: Set<UInt64> = []
+        /// People the reader muted for themselves, whatever their volume.
+        var locallyMuted: Set<UInt64> = []
+        /// The person spotlighted, whose picture is asked for whole while
+        /// everybody else's shares the budget — Discord's selected participant.
+        var focusedVideoUser: UInt64?
+        /// A stage keeps an offscreen picture two minutes, a call thirty
+        /// seconds.
+        var isStage = false
+        /// How many pixels each person's tile draws them at — Discord's
+        /// `streamPixelCounts`, which sizes a one-to-one call's want.
+        var drawnPixels: [UInt64: Int] = [:]
+        /// False once every window has been hidden for thirty seconds —
+        /// Discord's `WindowVisibilityVideoManager`. The app keeps the clock.
+        var incomingVideoEnabled = true
+        /// Whether any tile has drawn anybody yet. Until one has, nobody is
+        /// offscreen — Discord's `getActiveOutputSinkTrackingEnabled`.
+        var tracksSinks = false
+        /// When each person's picture lost the last tile drawing it.
+        var offscreenSince: [UInt64: ContinuousClock.Instant] = [:]
+        /// Offscreen long enough, or beyond the three kept: asked for nothing
+        /// until a tile draws them again.
+        var offscreenPaused: Set<UInt64> = []
+        /// Each person's volume, by person rather than by stream: it is set
+        /// from the account's settings before anybody's SSRC is known, and
+        /// outlives a reconnect that gives them a new one.
+        var volumes: [UInt64: Float] = [:]
+        /// Who is speaking with priority and may: everybody else plays at a
+        /// tenth while any of them is — Discord's `prioritySpeakerDucking`.
+        var prioritySpeakers: Set<UInt64> = []
         /// Sounds the app is playing itself — soundboard clips, and the blips
         /// a call makes when somebody joins or a switch moves. Mixed here
         /// rather than played through a second engine so they go out of the
@@ -220,7 +228,11 @@ final class InboundStreams: Sendable {
         var volume: Float
     }
 
-    init() {}
+    /// - Parameter requests: where the far end's requests about our own
+    ///   streams go, on the socket's queue, the moment they are read.
+    init(requests: @escaping @Sendable (RTCP.Request) -> Void = { _ in }) {
+        rtcp = RTCPListener(requests: requests)
+    }
 
     // MARK: Wiring
 
@@ -229,10 +241,15 @@ final class InboundStreams: Sendable {
         rtcp.setSealer(sealer)
     }
 
+    /// The socket this end's own requests go out on, and our SSRC to sign them
+    /// with — nothing is sent from it, but a request has to name its sender.
+    func attach(transport: VoiceTransport, sender: UInt32) {
+        state.withLock { $0.feedbackRoute = FeedbackRoute(transport: transport, sender: sender) }
+    }
+
     /// What the far end said since the last call. See `RTCP`.
     func drainFeedback() -> (feedback: RTCP.Feedback, unreadable: Int) {
-        let report = rtcp.drain()
-        return (report.feedback, report.unreadable)
+        rtcp.drain()
     }
 
     /// Asks every sender whose picture cannot start for a keyframe.
@@ -242,18 +259,87 @@ final class InboundStreams: Sendable {
     /// until the sender's next keyframe is refused — correctly, because a delta
     /// frame with no reference decodes to rubbish. The sender has no way to
     /// know that unless it is told, and on an encoder that produces keyframes
-    /// only on request there is no next one to wait for.
-    func askForKeyframes(on transport: VoiceTransport, from sender: UInt32) {
-        let wanted = state.withLock { state in
+    /// only on request there is no next one to wait for. Rate limited by the
+    /// listener, so asking on every reason there is costs nothing.
+    func askForKeyframes() {
+        let (wanted, route) = state.withLock { state in
             // **Only where media is actually arriving.** An announced stream on
             // a media session this client never joined delivers nothing and
             // wants a keyframe for ever; asking for one is a packet a second,
             // to a server that has nothing to forward it to.
-            state.videoBySSRC.compactMap { ssrc, stream in
+            (state.videoBySSRC.compactMap { ssrc, stream in
                 stream.hasSeenPacket && stream.depacketizer.needsKeyframe ? ssrc : nil
+            }, state.feedbackRoute)
+        }
+        guard let route else { return }
+        rtcp.askForKeyframes(on: route.transport, from: route.sender, about: wanted)
+    }
+
+    /// Reports what this end received, and what it sent, to the far end.
+    ///
+    /// **Every second, whether or not anything else is moving.** A report block
+    /// per stream received is how the server learns the path it sends us down;
+    /// a sender report per stream sent is what lets a receiver time the round
+    /// trip and line our audio up with our video; and the packet itself is the
+    /// traffic that keeps a NAT mapping open on a call where nobody is talking.
+    ///
+    /// - Parameter senders: our own streams that sent since the last report,
+    ///   with what they would say about themselves. With none, one receiver
+    ///   report goes out from our SSRC.
+    func sendReports(senders: [(ssrc: UInt32, info: RTCP.SenderInfo)]) {
+        let now = CACurrentMediaTime()
+        guard let route = state.withLock({ $0.feedbackRoute }) else { return }
+        let received = state.withLock { state -> [(UInt32, StatisticsSource)] in
+            state.audioBySSRC.map { ($0.key, .audio($0.value)) }
+                + state.videoBySSRC.map { ($0.key, .video($0.value)) }
+        }
+        let timing = received.map { ssrc, _ in rtcp.lastSenderReport(about: ssrc, at: now) }
+        let blocks = state.withLock { _ in
+            zip(received, timing).compactMap { entry, timing -> RTCP.ReportBlock? in
+                switch entry.1 {
+                case .audio(let stream):
+                    stream.reception.block(
+                        for: entry.0, lastSenderReport: timing.lastSenderReport,
+                        delaySinceLastSenderReport: timing.delay
+                    )
+                case .video(let stream):
+                    stream.reception.block(
+                        for: entry.0, lastSenderReport: timing.lastSenderReport,
+                        delaySinceLastSenderReport: timing.delay
+                    )
+                }
             }
         }
-        rtcp.askForKeyframes(on: transport, from: sender, about: wanted)
+        // The blocks ride on the first report; each stream we send has its own.
+        if senders.isEmpty {
+            rtcp.sendReport(RTCP.report(from: route.sender, sender: nil, blocks: blocks), on: route.transport)
+        }
+        for (index, sender) in senders.enumerated() {
+            rtcp.sendReport(
+                RTCP.report(from: sender.ssrc, sender: sender.info, blocks: index == 0 ? blocks : []),
+                on: route.transport
+            )
+        }
+    }
+
+    /// A received stream whose statistics a report reads, under the lock.
+    private enum StatisticsSource {
+        case audio(AudioStream)
+        case video(VideoStream)
+    }
+
+    /// One person's picture would not decode, as the display layer saw it.
+    ///
+    /// **A decoder that failed is a decoder with no reference**, and every
+    /// delta frame after it fails the same way: the tile freezes until the
+    /// sender's own next keyframe. So the stream drops what it cannot use and
+    /// asks for a keyframe now.
+    func requestKeyframe(from userID: UInt64) {
+        state.withLock { state in
+            guard let ssrc = state.videoSSRCByUser[userID] else { return }
+            state.videoBySSRC[ssrc]?.depacketizer.requireKeyframe()
+        }
+        askForKeyframes()
     }
 
     /// Declares that every picture on this socket belongs to one person.
@@ -289,13 +375,24 @@ final class InboundStreams: Sendable {
             }
             state.ssrcByUser[userID] = ssrc
             state.userBySSRC[ssrc] = userID
-            if state.audioBySSRC[ssrc] == nil { state.audioBySSRC[ssrc] = AudioStream() }
+            if state.audioBySSRC[ssrc] == nil {
+                let stream = AudioStream()
+                stream.volume = state.volumes[userID] ?? 1
+                state.audioBySSRC[ssrc] = stream
+            }
         }
     }
 
-    func bindVideo(ssrc: UInt32, to userID: UInt64) {
+    /// - Parameter retransmission: the SSRC its retransmissions arrive on,
+    ///   when the gateway named one.
+    func bindVideo(ssrc: UInt32, retransmission: UInt32? = nil, to userID: UInt64) {
         guard ssrc != 0 else { return }
-        state.withLock { Self.bindVideo(ssrc: ssrc, to: userID, in: &$0) }
+        state.withLock { state in
+            Self.bindVideo(ssrc: ssrc, to: userID, in: &state)
+            if let retransmission, retransmission != 0 {
+                state.mediaByRetransmission[retransmission] = ssrc
+            }
+        }
     }
 
     /// The same binding, for a caller that already holds the lock.
@@ -303,20 +400,27 @@ final class InboundStreams: Sendable {
         // A person's SSRC changes when they reconnect, and the stream that was
         // reassembling the old one has to go with it.
         if let previous = state.videoSSRCByUser[userID], previous != ssrc {
-            state.videoBySSRC[previous] = nil
-            state.videoUserBySSRC[previous] = nil
+            dropVideo(ssrc: previous, in: &state)
         }
         state.videoSSRCByUser[userID] = ssrc
         state.videoUserBySSRC[ssrc] = userID
         if state.videoBySSRC[ssrc] == nil { state.videoBySSRC[ssrc] = VideoStream() }
     }
 
+    private static func dropVideo(ssrc: UInt32, in state: inout State) {
+        state.videoBySSRC[ssrc] = nil
+        state.videoUserBySSRC[ssrc] = nil
+        state.mediaByRetransmission = state.mediaByRetransmission.filter { $0.value != ssrc }
+    }
+
     func unbindVideo(for userID: UInt64) {
         state.withLock { state in
             guard let ssrc = state.videoSSRCByUser.removeValue(forKey: userID) else { return }
-            state.videoBySSRC[ssrc] = nil
-            state.videoUserBySSRC[ssrc] = nil
+            Self.dropVideo(ssrc: ssrc, in: &state)
             state.deliveringVideo.remove(userID)
+            // A camera turned back on starts with no offscreen history.
+            state.offscreenSince[userID] = nil
+            state.offscreenPaused.remove(userID)
         }
     }
 
@@ -327,11 +431,13 @@ final class InboundStreams: Sendable {
                 state.userBySSRC[ssrc] = nil
             }
             if let ssrc = state.videoSSRCByUser.removeValue(forKey: userID) {
-                state.videoBySSRC[ssrc] = nil
-                state.videoUserBySSRC[ssrc] = nil
+                Self.dropVideo(ssrc: ssrc, in: &state)
             }
             state.sinks[userID] = nil
             state.deliveringVideo.remove(userID)
+            state.offscreenSince[userID] = nil
+            state.offscreenPaused.remove(userID)
+            state.drawnPixels[userID] = nil
         }
     }
 
@@ -353,23 +459,157 @@ final class InboundStreams: Sendable {
     /// Where a person's decoded video goes. Set by the tile that is drawing
     /// them; cleared when it goes away, which is what stops a display layer
     /// being fed after it has left the window.
+    ///
+    /// **Attaching is starting over.** A tile that has just appeared has no
+    /// parameter sets and no keyframe, and a display layer that failed to
+    /// decode has lost its reference — both re-attach, and both are owed the
+    /// same thing: the reassembler emptied and a keyframe asked for now rather
+    /// than on the session's next tick.
     func setVideoSink(_ sink: (@Sendable (CMSampleBuffer) -> Void)?, for userID: UInt64) {
         state.withLock { state in
             state.sinks[userID] = sink
-            // A tile that has just appeared has no parameter sets and no
-            // keyframe, so it would show nothing until the sender's next one —
-            // up to two seconds. Resetting the reassembler makes it ask.
+            if sink != nil { state.tracksSinks = true }
             if let ssrc = state.videoSSRCByUser[userID] {
+                state.videoBySSRC[ssrc]?.reorder.reset()
                 state.videoBySSRC[ssrc]?.depacketizer.reset()
                 state.videoBySSRC[ssrc]?.builder.reset()
             }
         }
+        if sink != nil { askForKeyframes() }
     }
 
+    /// One person's volume, as a gain: 1 is as sent, and Discord's slider
+    /// reaches about 2 at its 200%.
     func setVolume(_ volume: Float, for userID: UInt64) {
         state.withLock { state in
+            let clamped = max(0, min(2, volume))
+            state.volumes[userID] = clamped
             guard let ssrc = state.ssrcByUser[userID] else { return }
-            state.audioBySSRC[ssrc]?.volume = max(0, min(2, volume))
+            state.audioBySSRC[ssrc]?.volume = clamped
+        }
+    }
+
+    /// Discord's Disable Video and Enable Video, for one person.
+    ///
+    /// Turning it back on starts their picture over: the reassembler holds
+    /// nothing worth keeping from before, and they are asked for a keyframe at
+    /// once rather than on their own cadence.
+    func setVideoDisabled(_ disabled: Bool, for userID: UInt64) {
+        let resumes = state.withLock { state -> Bool in
+            guard disabled else { return state.videoDisabled.remove(userID) != nil }
+            state.videoDisabled.insert(userID)
+            state.deliveringVideo.remove(userID)
+            if let ssrc = state.videoSSRCByUser[userID], let stream = state.videoBySSRC[ssrc] {
+                stream.reorder.reset()
+                stream.depacketizer.reset()
+                stream.builder.reset()
+            }
+            return false
+        }
+        if resumes { requestKeyframe(from: userID) }
+    }
+
+    /// Discord's Mute, for one person and for this reader alone.
+    func setLocallyMuted(_ muted: Bool, for userID: UInt64) {
+        state.withLock { state in
+            if muted { state.locallyMuted.insert(userID) } else { state.locallyMuted.remove(userID) }
+        }
+    }
+
+    /// Who is speaking with priority, and may.
+    func setPrioritySpeakers(_ userIDs: Set<UInt64>) {
+        state.withLock { $0.prioritySpeakers = userIDs }
+    }
+
+    /// The spotlighted person — see `State.focusedVideoUser`.
+    func setFocusedVideoUser(_ userID: UInt64?) {
+        state.withLock { $0.focusedVideoUser = userID }
+    }
+
+    func setIsStage(_ isStage: Bool) {
+        state.withLock { $0.isStage = isStage }
+    }
+
+    /// The pixels a person's tile draws them at; zero when it goes.
+    func setDrawnPixels(_ pixels: Int, for userID: UInt64) {
+        state.withLock { $0.drawnPixels[userID] = pixels > 0 ? pixels : nil }
+    }
+
+    func setIncomingVideoEnabled(_ enabled: Bool) {
+        state.withLock { $0.incomingVideoEnabled = enabled }
+    }
+
+    /// What this end wants the server to send — Discord's desktop
+    /// `LocalMediaSinkWantsManager.update`, with the ladder (module 4511):
+    ///
+    /// - `any` is the ladder's want for the number of pictures being received,
+    ///   which falls from 100 as more people show video;
+    /// - the spotlighted person's picture is asked for whole (when `any` is
+    ///   not already);
+    /// - in a one-to-one call, each picture as big as its tile draws it;
+    /// - nothing of a video turned off, a picture no tile has drawn for thirty
+    ///   seconds (two minutes on a stage, three kept at most), every picture
+    ///   while the windows are hidden, or a person muted.
+    func sinkWants(now: ContinuousClock.Instant = .now, isOneToOne: Bool = false) -> MediaSinkWants {
+        state.withLock { state in
+            Self.noteOffscreen(at: now, in: &state)
+            let pictures = state.videoSSRCByUser.keys.count { !state.videoDisabled.contains($0) }
+            let want = VideoLadder.maxSinkValue(streams: pictures)
+            var wants = MediaSinkWants(any: want)
+            let sized = isOneToOne && !state.isStage
+            for (userID, ssrc) in state.videoSSRCByUser {
+                let receives = !state.videoDisabled.contains(userID)
+                    && !state.offscreenPaused.contains(userID)
+                    && state.incomingVideoEnabled
+                if !receives {
+                    wants.bySSRC[ssrc] = 0
+                } else if userID == state.focusedVideoUser, want != VideoQualityPolicy.fullWant {
+                    wants.bySSRC[ssrc] = VideoQualityPolicy.fullWant
+                } else if sized {
+                    wants.bySSRC[ssrc] = VideoLadder.maxSinkValue(
+                        streams: pictures, drawnPixels: state.drawnPixels[userID] ?? 0
+                    )
+                }
+            }
+            for userID in state.locallyMuted {
+                if let ssrc = state.ssrcByUser[userID] { wants.bySSRC[ssrc] = 0 }
+            }
+            return wants
+        }
+    }
+
+    /// Discord's `updateOffscreenUsers`: a picture with no tile is marked
+    /// offscreen, paused once it has been for the timeout, and of the ones not
+    /// yet paused at most three are kept — past three, the one offscreen
+    /// longest goes at once.
+    private static func noteOffscreen(at now: ContinuousClock.Instant, in state: inout State) {
+        guard state.tracksSinks else { return }
+        let timeout: Duration = state.isStage ? .seconds(120) : .seconds(30)
+        var kept: [UInt64] = []
+        func keep(_ userID: UInt64) {
+            kept.append(userID)
+            guard kept.count > 3 else { return }
+            let longest = kept.indices.max { lhs, rhs in
+                (state.offscreenSince[kept[lhs]] ?? now) > (state.offscreenSince[kept[rhs]] ?? now)
+            } ?? 0
+            state.offscreenPaused.insert(kept[longest])
+            kept.remove(at: longest)
+        }
+        // In a fixed order, so that which three are kept does not depend on
+        // a dictionary's. **Only pictures that have arrived**: a tile here
+        // attaches once one has, so a picture paused before its first packet
+        // would never be drawn, and never be asked for again.
+        for userID in state.videoSSRCByUser.keys.sorted() where state.deliveringVideo.contains(userID) {
+            if state.sinks[userID] != nil {
+                state.offscreenSince[userID] = nil
+                state.offscreenPaused.remove(userID)
+            } else if let since = state.offscreenSince[userID] {
+                guard !state.offscreenPaused.contains(userID) else { continue }
+                if now - since >= timeout { state.offscreenPaused.insert(userID) } else { keep(userID) }
+            } else {
+                state.offscreenSince[userID] = now
+                keep(userID)
+            }
         }
     }
 
@@ -381,12 +621,18 @@ final class InboundStreams: Sendable {
             state.ssrcByUser.removeAll()
             state.videoUserBySSRC.removeAll()
             state.videoSSRCByUser.removeAll()
+            state.mediaByRetransmission.removeAll()
             state.sinks.removeAll()
             state.deliveringVideo.removeAll()
+            state.feedbackRoute = nil
             state.sealer = nil
             state.localClips.removeAll()
             state.arrivals.removeAll()
             state.video = VideoCensus()
+            state.offscreenSince.removeAll()
+            state.offscreenPaused.removeAll()
+            state.drawnPixels.removeAll()
+            state.tracksSinks = false
         }
     }
 
@@ -394,15 +640,6 @@ final class InboundStreams: Sendable {
 
     /// Called on the socket's queue, once per datagram.
     func accept(_ packet: [UInt8], arrival: TimeInterval) {
-        // Carried out of the lock rather than delivered inside it: a display
-        // layer's enqueue reaches into the window server, and holding the
-        // stream lock across it would stall every arriving packet behind a
-        // compositor.
-        var deliveries: [VideoDelivery] = []
-        /// Senders whose first frame this datagram completed. Reported after
-        /// the lock, for the same reason the frames themselves are.
-        var arrived: [UInt64] = []
-
         // **Reports first, and they are not media.** RTCP shares the port and
         // the version number with RTP and is told apart by a payload type RTP
         // reserves for the purpose; a receiver that misses the distinction
@@ -416,6 +653,12 @@ final class InboundStreams: Sendable {
             return
         }
 
+        // Everything a packet leads to that leaves this lock: the frames, the
+        // first-arrival notices, and this end's own requests. A display
+        // layer's enqueue reaches into the window server and a request is a
+        // socket write, and holding the stream lock across either would stall
+        // every arriving packet behind it.
+        var outcome = Outcome()
         state.withLock { state in
             state.datagramsReceived += 1
             guard let header = RTPHeader(parsing: packet), let sealer = state.sealer else {
@@ -433,6 +676,108 @@ final class InboundStreams: Sendable {
                 UInt64(header.ssrc) << 8 | UInt64(header.payloadType), default: 0
             ] += 1
 
+            // **Padding first, from the back.** Its count is the final octet
+            // and includes itself, so it has to come off before anything reads
+            // the end of the frame — which is exactly where the DAVE footer
+            // lives.
+            if header.hasPadding {
+                guard let count = payload.last.map(Int.init),
+                      count > 0, count <= payload.count
+                else { return }
+                payload.removeLast(count)
+            }
+            // **Then the extension elements, from the front.** They were
+            // encrypted, so they arrive at the head of the plaintext rather
+            // than in the header, and the media starts after them. A receiver
+            // that forgets this decrypts perfectly and hands the decoder four
+            // bytes of RFC 8285 preamble.
+            let head = header.extensionBodyLength
+            if head > 0 {
+                guard payload.count >= head else { return }
+                payload.removeFirst(head)
+            }
+
+            switch header.payloadType {
+            case RTP.PayloadType.opus:
+                state.audioBySSRC[header.ssrc]?.reception.record(
+                    sequence: header.sequence, timestamp: header.timestamp, arrival: arrival
+                )
+                // Deafened is enforced here rather than at the mixer: a client
+                // that decodes everything and multiplies by zero has paid the
+                // whole cost of listening.
+                guard !payload.isEmpty, !state.isDeafened,
+                      let sender = state.userBySSRC[header.ssrc],
+                      let frame = Self.open(payload, from: sender, isAudio: true, state: state)
+                else { return }
+                state.audioBySSRC[header.ssrc]?.buffer.accept(
+                    sequence: header.sequence,
+                    timestamp: header.timestamp,
+                    payload: frame,
+                    arrival: arrival
+                )
+
+            case RTP.PayloadType.h264, RTP.PayloadType.h264RTX:
+                Self.acceptVideo(
+                    payload, header: header, arrival: arrival, state: &state, outcome: &outcome
+                )
+
+            default:
+                break
+            }
+        }
+
+        for delivery in outcome.frames { delivery.sink(delivery.sample) }
+        if !outcome.arrived.isEmpty, let announce = onFirstVideoFrame.withLock({ $0 }) {
+            for userID in outcome.arrived { announce(userID) }
+        }
+        if let route = outcome.route {
+            for ask in outcome.retransmissions {
+                rtcp.askForRetransmission(
+                    on: route.transport, from: route.sender,
+                    about: ask.ssrc, sequences: ask.sequences
+                )
+            }
+        }
+        if outcome.wantsKeyframe { askForKeyframes() }
+    }
+
+    /// What one datagram leads to once the lock is let go.
+    private struct Outcome {
+        var frames: [VideoDelivery] = []
+        /// Senders whose picture this datagram was the first of.
+        var arrived: [UInt64] = []
+        var retransmissions: [(ssrc: UInt32, sequences: [UInt16])] = []
+        var route: FeedbackRoute?
+        /// Whether a stream just lost its reference and should ask now rather
+        /// than on the session's next tick.
+        var wantsKeyframe = false
+    }
+
+    /// One video packet — or a retransmission of one — on its way to a frame.
+    private static func acceptVideo(
+        _ received: [UInt8],
+        header: RTPHeader,
+        arrival: TimeInterval,
+        state: inout State,
+        outcome: inout Outcome
+    ) {
+        var payload = received
+        var ssrc = header.ssrc
+        var sequence = header.sequence
+        if header.payloadType == RTP.PayloadType.h264RTX {
+            // RFC 4588: the original sequence number ahead of the original
+            // payload, on a stream of its own. Nothing past the number is the
+            // server padding the path to measure it, and carries no packet.
+            guard payload.count >= 2,
+                  let media = state.mediaByRetransmission[header.ssrc]
+                    ?? adoptRetransmission(header.ssrc, in: &state)
+            else { return }
+            ssrc = media
+            sequence = UInt16(payload[0]) << 8 | UInt16(payload[1])
+            payload.removeFirst(2)
+        } else if state.videoBySSRC[ssrc] == nil, let owner = state.soleVideoOwner,
+                  state.videoSSRCByUser[owner]
+                      .flatMap({ state.videoBySSRC[$0]?.hasSeenPacket }) != true {
             // **A stream session's video binds itself.** See
             // `State.soleVideoOwner`: on a socket with one publisher, H.264 on
             // an unclaimed SSRC is that publisher's, and reading it off the
@@ -442,232 +787,149 @@ final class InboundStreams: Sendable {
             // publisher offering two simulcast layers would otherwise have each
             // arriving packet unbind the other one, and the reassembler would
             // be reset between every pair of fragments.
-            if header.payloadType == RTP.PayloadType.h264,
-               state.videoBySSRC[header.ssrc] == nil,
-               let owner = state.soleVideoOwner,
-               state.videoSSRCByUser[owner]
-                   .flatMap({ state.videoBySSRC[$0]?.hasSeenPacket }) != true {
-                VoiceTrace.write(
-                    "video adopted ssrc=\(header.ssrc) as the only publisher's"
-                )
-                Self.bindVideo(ssrc: header.ssrc, to: owner, in: &state)
+            bindVideo(ssrc: ssrc, to: owner, in: &state)
+        }
+
+        guard let stream = state.videoBySSRC[ssrc], let userID = state.videoUserBySSRC[ssrc]
+        else {
+            state.video.unrouted += 1
+            return
+        }
+        // Turned off by the reader: the server was told, and what it had
+        // already sent is not drawn either.
+        guard !state.videoDisabled.contains(userID) else { return }
+        state.video.packets += 1
+        stream.hasSeenPacket = true
+        if header.payloadType == RTP.PayloadType.h264 {
+            stream.reception.record(sequence: sequence, timestamp: header.timestamp, arrival: arrival)
+        }
+
+        // **Arrival is reported before a sink is required, and that ordering
+        // is load-bearing.** A tile only builds its display layer — and
+        // therefore only registers a sink — once the app believes there is a
+        // picture, and the app believes that when this fires. Requiring the
+        // sink first is a cycle with no entry: no sink, no decode, no first
+        // frame, no sink. Measured on a watched share: 1,511 of 1,557 packets
+        // opened, the group established, and the tile sat on "Opening share…"
+        // for ever because nothing downstream of this line ever ran.
+        if state.deliveringVideo.insert(userID).inserted { outcome.arrived.append(userID) }
+
+        // Nothing to draw into yet. The packet goes no further, because a
+        // decode nobody displays is a decode nobody asked for — and the
+        // reorder buffer starts again when a tile attaches.
+        guard let sink = state.sinks[userID] else {
+            state.video.sinkless += 1
+            return
+        }
+
+        // **Every packet on the SSRC goes through the buffer, including the
+        // ones carrying no media.** A padding-only probe packet — which an SFU
+        // sends to measure the path, and which trims to nothing — still
+        // consumes a sequence number, and a receiver that skipped it would see
+        // a hole that never fills.
+        let deliveries = stream.reorder.insert(
+            VideoReorderBuffer.Packet(
+                payload: payload, sequence: sequence, marker: header.marker,
+                timestamp: header.timestamp
+            ),
+            at: arrival
+        )
+        var isContiguous = true
+        for delivery in deliveries {
+            isContiguous = isContiguous && delivery.isContiguous
+            // An empty packet carries its place in the stream and nothing else;
+            // a discontinuity it arrived with is carried to the packet after.
+            guard !delivery.packet.payload.isEmpty else { continue }
+            defer { isContiguous = true }
+            let hadReference = !stream.depacketizer.needsKeyframe
+            guard let frame = stream.depacketizer.accept(
+                payload: delivery.packet.payload,
+                sequence: delivery.packet.sequence,
+                marker: delivery.packet.marker,
+                isContiguous: isContiguous
+            ) else {
+                if hadReference, stream.depacketizer.needsKeyframe { outcome.wantsKeyframe = true }
+                continue
             }
-
-            // **Tracked before anything can drop the packet, and for every
-            // packet on the SSRC.** See `VideoStream.track`.
-            let isContiguous = state.videoBySSRC[header.ssrc]?
-                .track(sequence: header.sequence) ?? true
-
-            // **The extension elements were encrypted, so they are at the front
-            // of the plaintext rather than in the header.** The media starts
-            // after them. A receiver that forgets this decrypts perfectly well
-            // and then hands the decoder four bytes of RFC 8285 preamble.
-            // **Padding first, from the back.** Its count is the final octet
-            // and includes itself, so it has to come off before anything reads
-            // the end of the frame — which is exactly where the DAVE footer
-            // lives. Trimming the tail is free; the head costs one short move.
-            //
-            // Both trims are remembered, and the untrimmed payload with them,
-            // for the post-mortem in `DAVEProbe` — which is the one thing left
-            // that can explain a frame that parses and will not open. Nothing
-            // is kept unless a trace is running and the probe has yet to fire,
-            // so the copy costs a healthy call nothing at all.
-            let untrimmed = header.payloadType == RTP.PayloadType.opus
-                && state.isDAVEActive && !state.hasProbedRefusal && VoiceTrace.isOn
-                ? payload : nil
-            var tail = 0
-            if header.hasPadding {
-                guard let count = payload.last.map(Int.init),
-                      count > 0, count <= payload.count
-                else { return }
-                payload.removeLast(count)
-                tail = count
-            }
-            let head = header.extensionBodyLength
-            // **Kept, because it is the one part of somebody else's packet this
-            // client has never looked at.** The elements are encrypted, so they
-            // arrive here rather than in the header, and every one of them is
-            // something the sending client thought the SFU needed — a RID, a
-            // send time, a transport sequence — negotiated by ids this server
-            // does not publish in READY. Reading them off a working stream is
-            // the only way to learn what they are. Nothing is copied unless a
-            // probe is still to be printed.
-            var extensionBody: ArraySlice<UInt8> = []
-            if head > 0 {
-                guard payload.count >= head else { return }
-                if VoiceTrace.isOn { extensionBody = payload.prefix(head) }
-                payload.removeFirst(head)
-            }
-            guard !payload.isEmpty else { return }
-
-            switch header.payloadType {
-            case RTP.PayloadType.opus:
-                // Deafened is enforced here rather than at the mixer: a client
-                // that decodes everything and multiplies by zero has paid the
-                // whole cost of listening.
-                guard !state.isDeafened else { return }
-                guard let sender = state.userBySSRC[header.ssrc] else { return }
-                if let stream = state.audioBySSRC[header.ssrc], stream.probesRemaining > 0 {
-                    stream.probesRemaining -= 1
-                    VoiceTrace.write(
-                        "audio ssrc=\(header.ssrc) seq=\(header.sequence) "
-                        + "len=\(payload.count) pad=\(header.hasPadding ? 1 : 0) "
-                        + "ext=[\(RTPExtension.describe(extensionBody))]"
-                    )
-                }
-                guard let frame = Self.open(
-                    payload, from: sender, isAudio: true, state: state
-                ) else {
-                    if let untrimmed, let decryptor = state.decryptors[sender] {
-                        state.hasProbedRefusal = true
-                        DAVEProbe.explain(
-                            payload: untrimmed, head: head, tail: tail, with: decryptor
-                        )
-                    }
-                    return
-                }
-                state.audioBySSRC[header.ssrc]?.buffer.accept(
-                    sequence: header.sequence,
-                    timestamp: header.timestamp,
-                    payload: frame,
-                    arrival: arrival
-                )
-
-            case RTP.PayloadType.h264:
-                guard let stream = state.videoBySSRC[header.ssrc],
-                      let userID = state.videoUserBySSRC[header.ssrc]
-                else {
-                    state.video.unrouted += 1
-                    return
-                }
-                state.video.packets += 1
-                stream.hasSeenPacket = true
-                if stream.probesRemaining > 0 {
-                    stream.probesRemaining -= 1
-                    VoiceTrace.write(Self.describe(
-                        packet: payload, header: header,
-                        extensions: extensionBody, isContiguous: isContiguous
-                    ))
-                }
-
-                // **Arrival is reported before a sink is required, and that
-                // ordering is load-bearing.** A tile only builds its display
-                // layer — and therefore only registers a sink — once the app
-                // believes there is a picture, and the app believes that when
-                // this fires. Requiring the sink first is a cycle with no
-                // entry: no sink, no decode, no first frame, no sink.
-                //
-                // Measured on a watched share: 1,511 of 1,557 packets opened
-                // past the transport cipher, the MLS group reached epoch 1 with
-                // both members, and the tile sat on "Opening share…" for ever
-                // because nothing downstream of this line ever ran.
-                if state.deliveringVideo.insert(userID).inserted { arrived.append(userID) }
-
-                // Nothing to draw into yet. The frame is dropped rather than
-                // decoded, because a decode nobody displays is a decode nobody
-                // asked for — the tile attaches on the line above and the next
-                // frame lands properly.
-                guard let sink = state.sinks[userID] else {
-                    state.video.sinkless += 1
-                    return
-                }
-
-                guard let frame = stream.depacketizer.accept(
-                    payload: payload,
-                    sequence: header.sequence,
-                    marker: header.marker,
-                    isContiguous: isContiguous
-                ) else { return }
-                state.video.frames += 1
-                if stream.frameProbesRemaining > 0 {
-                    stream.frameProbesRemaining -= 1
-                    VoiceTrace.write(Self.describe(frame: frame))
-                }
-
-                // DAVE covers the whole access unit, so it is rebuilt in the
-                // arrival order the sender used — parameter sets and SEI
-                // included — opened, and split again. `frame.units` is the
-                // classified list and is the wrong input: it has already
-                // dropped bytes the sender authenticated.
-                var units = frame.units
-                if state.isDAVEActive || state.decryptors[userID] != nil {
-                    guard let opened = Self.open(
-                        H264.annexB(units: frame.ordered),
-                        from: userID, isAudio: false, state: state
-                    ) else { return }
-                    let all = H264.splitAnnexB(opened)
-                    units = all.filter {
-                        let type = ($0.first ?? 0) & 0x1F
-                        return type != H264.NALType.sps.rawValue
-                            && type != H264.NALType.pps.rawValue
-                            && type != H264.NALType.sei.rawValue
-                    }
-                    guard !units.isEmpty else { return }
-                }
-
-                stream.builder.updateParameterSets(stream.depacketizer.parameterSets)
-                if stream.baseTimestamp == nil { stream.baseTimestamp = header.timestamp }
-                let elapsed = Double(header.timestamp &- (stream.baseTimestamp ?? 0)) / 90_000
-                guard let sample = stream.builder.sampleBuffer(
-                    units: units,
-                    presentationTime: CMTime(seconds: elapsed, preferredTimescale: 90_000),
-                    isKeyframe: frame.isKeyframe
-                ) else {
-                    state.video.undrawable += 1
-                    return
-                }
-                state.video.drawn += 1
-                // Delivered outside the lock. A display layer's enqueue reaches
-                // into the window server, and holding the stream lock across it
-                // would stall every arriving packet behind a compositor.
-                deliveries.append(VideoDelivery(sink: sink, sample: sample))
-
-            default:
-                break
+            state.video.frames += 1
+            if let sample = picture(
+                from: frame, of: userID, stream: stream,
+                timestamp: delivery.packet.timestamp, state: &state
+            ) {
+                outcome.frames.append(VideoDelivery(sink: sink, sample: sample))
+            } else {
+                outcome.wantsKeyframe = true
             }
         }
 
-        for delivery in deliveries { delivery.sink(delivery.sample) }
-        if !arrived.isEmpty, let announce = onFirstVideoFrame.withLock({ $0 }) {
-            for userID in arrived { announce(userID) }
+        let missing = stream.reorder.asks(at: arrival)
+        if !missing.isEmpty {
+            outcome.retransmissions.append((ssrc, missing))
+            outcome.route = state.feedbackRoute
         }
+        if outcome.wantsKeyframe { outcome.route = state.feedbackRoute }
     }
 
-    // MARK: What the wire actually carried
-    //
-    // **Printed, not inferred.** Every earlier theory about a black video tile
-    // was built from counters either side of the reassembler; these two lines
-    // are the packets and the frames themselves, twenty and four of them per
-    // stream, and they cost a build nobody is tracing nothing at all.
-
-    private static func naming(_ units: [[UInt8]]) -> String {
-        units.map { "\($0.first.map { $0 & 0x1F } ?? 0):\($0.count)" }.joined(separator: " ")
+    /// A retransmission on an SSRC nobody named, on a session with one
+    /// publisher: it is theirs, for the reason their video is.
+    private static func adoptRetransmission(_ ssrc: UInt32, in state: inout State) -> UInt32? {
+        guard let owner = state.soleVideoOwner, let media = state.videoSSRCByUser[owner]
+        else { return nil }
+        state.mediaByRetransmission[ssrc] = media
+        return media
     }
 
-    /// One arriving video packet: where it sat in the stream, what shape of NAL
-    /// it carried, and every header extension element on it.
-    private static func describe(
-        packet: [UInt8], header: RTPHeader, extensions: ArraySlice<UInt8>, isContiguous: Bool
-    ) -> String {
-        let first = packet.first ?? 0
-        var shape = "nal=\(first & 0x1F)"
-        if first & 0x1F == H264.NALType.fuA.rawValue, packet.count > 1 {
-            let fu = packet[1]
-            shape += " fu=s\(fu >> 7 & 1)e\(fu >> 6 & 1)t\(fu & 0x1F)"
+    /// One reassembled access unit, opened and made into something a display
+    /// layer takes — or `nil`, with the stream told it has lost its reference.
+    private static func picture(
+        from frame: (units: [[UInt8]], ordered: [[UInt8]], isKeyframe: Bool),
+        of userID: UInt64,
+        stream: VideoStream,
+        timestamp: UInt32,
+        state: inout State
+    ) -> CMSampleBuffer? {
+        // DAVE covers the whole access unit, so it is rebuilt in the arrival
+        // order the sender used — parameter sets and SEI included — opened,
+        // and split again. `frame.units` is the classified list and is the
+        // wrong input: it has already dropped bytes the sender authenticated.
+        var units = frame.units
+        if state.isDAVEActive || state.decryptors[userID] != nil {
+            guard let opened = open(
+                H264.annexB(units: frame.ordered), from: userID, isAudio: false, state: state
+            ) else {
+                // **A frame that will not open is a reference the next frame
+                // needs.** Everything after it until a keyframe decodes to
+                // rubbish, so the stream asks for one now rather than leaving
+                // the tile to smear until the sender's own cadence.
+                stream.depacketizer.requireKeyframe()
+                return nil
+            }
+            units = H264.splitAnnexB(opened).filter {
+                let type = ($0.first ?? 0) & 0x1F
+                return type != H264.NALType.sps.rawValue
+                    && type != H264.NALType.pps.rawValue
+                    && type != H264.NALType.sei.rawValue
+            }
+            guard !units.isEmpty else {
+                stream.depacketizer.requireKeyframe()
+                return nil
+            }
         }
-        return "video ssrc=\(header.ssrc) seq=\(header.sequence) "
-            + "ts=\(header.timestamp) m=\(header.marker ? 1 : 0) "
-            + "len=\(packet.count) pad=\(header.hasPadding ? 1 : 0) "
-            + "ct=\(isContiguous ? 1 : 0) " + shape
-            + " ext=[" + RTPExtension.describe(extensions) + "]"
-    }
 
-    /// One reassembled access unit, before the end-to-end transform sees it.
-    private static func describe(
-        frame: (units: [[UInt8]], ordered: [[UInt8]], isKeyframe: Bool)
-    ) -> String {
-        "video frame ordered=[\(naming(frame.ordered))] "
-            + "units=[\(naming(frame.units))] key=\(frame.isKeyframe ? 1 : 0)"
+        stream.builder.updateParameterSets(stream.depacketizer.parameterSets)
+        if stream.baseTimestamp == nil { stream.baseTimestamp = timestamp }
+        let elapsed = Double(timestamp &- (stream.baseTimestamp ?? 0)) / 90_000
+        guard let sample = stream.builder.sampleBuffer(
+            units: units,
+            presentationTime: CMTime(seconds: elapsed, preferredTimescale: 90_000),
+            isKeyframe: frame.isKeyframe
+        ) else {
+            state.video.undrawable += 1
+            stream.depacketizer.requireKeyframe()
+            return nil
+        }
+        state.video.drawn += 1
+        return sample
     }
 
     /// Applies the end-to-end transform for one sender.
@@ -705,71 +967,25 @@ final class InboundStreams: Sendable {
     /// **Not an average**: dividing by the number of speakers makes everybody
     /// quieter as more people join, which is the one thing a conference mixer
     /// must not do. A sum can clip, which is what the limiter is for.
-    func mixNextFrame() -> MixedFrame {
+    ///
+    /// - Parameters:
+    ///   - now: the local clock — the one arrivals were stamped with — which
+    ///     each speaker's jitter buffer plays out against.
+    ///   - companion: another session's sound to add before the limiter — a
+    ///     watched stream's, which plays out of the call's device and inside
+    ///     its echo canceller's reference. Told whether anybody in the call is
+    ///     speaking on this frame, which is what Stream Attenuation listens
+    ///     for; returns whether it added anything. Not asked while deafened.
+    func mixNextFrame(
+        at now: TimeInterval,
+        adding companion: (_ mix: inout [Float], _ isSpeech: Bool) -> Bool = { _, _ in false }
+    ) -> MixedFrame {
         state.withLock { state in
-            var changes: [(userID: UInt64, isSpeaking: Bool)] = []
-            var contributors = 0
+            var (contributors, changes) = Self.pullFrame(at: now, state: &state)
 
-            for index in state.mixScratch.indices { state.mixScratch[index] = 0 }
-
-            for (ssrc, stream) in state.audioBySSRC {
-                let frame = stream.buffer.pull()
-                let decoded: Bool
-                switch frame {
-                case .packet(let payload):
-                    decoded = (try? stream.decoder?.decode(
-                        payload, into: &stream.pcm
-                    )) != nil
-                case .forwardCorrection(let successor):
-                    // The redundant copy inside the NEXT packet. This is the
-                    // path that makes a lost packet inaudible rather than
-                    // merely smoothed.
-                    decoded = (try? stream.decoder?.decode(
-                        successor, recoverFromFEC: true, into: &stream.pcm
-                    )) != nil
-                case .conceal:
-                    decoded = (try? stream.decoder?.decode(nil, into: &stream.pcm)) != nil
-                case .idle:
-                    decoded = false
-                }
-
-                guard decoded else {
-                    if stream.isSpeaking {
-                        stream.quietFrames += 1
-                        if stream.quietFrames > 12 {
-                            stream.isSpeaking = false
-                            if let userID = state.userBySSRC[ssrc] {
-                                changes.append((userID, false))
-                            }
-                        }
-                    }
-                    continue
-                }
-
-                var energy: Float = 0
-                let gain = stream.volume
-                for index in 0..<OpusFormat.interleavedCount {
-                    let sample = Float(stream.pcm[index]) / 32_768 * gain
-                    state.mixScratch[index] += sample
-                    energy += sample * sample
-                }
-                contributors += 1
-
-                let level = (energy / Float(OpusFormat.interleavedCount)).squareRoot()
-                let isAudible = level > 0.004
-                if isAudible {
-                    stream.quietFrames = 0
-                    if !stream.isSpeaking {
-                        stream.isSpeaking = true
-                        if let userID = state.userBySSRC[ssrc] { changes.append((userID, true)) }
-                    }
-                } else if stream.isSpeaking {
-                    stream.quietFrames += 1
-                    if stream.quietFrames > 12 {
-                        stream.isSpeaking = false
-                        if let userID = state.userBySSRC[ssrc] { changes.append((userID, false)) }
-                    }
-                }
+            if !state.isDeafened {
+                let isSpeech = state.audioBySSRC.values.contains { $0.isSpeaking }
+                if companion(&state.mixScratch, isSpeech) { contributors += 1 }
             }
 
             // Anything the app is playing itself joins the same mix, so it goes
@@ -810,6 +1026,117 @@ final class InboundStreams: Sendable {
                 isSilent: false
             )
         }
+    }
+
+    /// Adds this session's sound to another session's mix, with a gain that
+    /// moves from `start` to `end` across the frame.
+    ///
+    /// **A ramp, not a step.** Stream Attenuation moves the gain every frame,
+    /// and a gain that jumps at a frame boundary is a click fifty times a
+    /// second while it settles.
+    ///
+    /// - Returns: whether anything was audible to add.
+    func mixStream(
+        into mix: inout [Float], at now: TimeInterval, gainFrom start: Float, to end: Float
+    ) -> Bool {
+        state.withLock { state in
+            let (contributors, _) = Self.pullFrame(at: now, state: &state)
+            guard contributors > 0 else { return false }
+            let count = min(mix.count, state.mixScratch.count)
+            let step = (end - start) / Float(max(1, count - 1))
+            for index in 0..<count {
+                mix[index] += state.mixScratch[index] * (start + step * Float(index))
+            }
+            return true
+        }
+    }
+
+    /// How loud everybody else is while a priority speaker talks: Discord's
+    /// `prioritySpeakerDucking`, a tenth.
+    static let priorityDucking: Float = 0.1
+
+    /// One 20 ms frame from every stream, summed into `mixScratch` with each
+    /// person's gain, and who started or stopped speaking on it.
+    private static func pullFrame(
+        at now: TimeInterval, state: inout State
+    ) -> (contributors: Int, changes: [(userID: UInt64, isSpeaking: Bool)]) {
+        var changes: [(userID: UInt64, isSpeaking: Bool)] = []
+        var contributors = 0
+
+        for index in state.mixScratch.indices { state.mixScratch[index] = 0 }
+
+        for (ssrc, stream) in state.audioBySSRC {
+            let frame = stream.buffer.pull(at: now)
+            let userID = state.userBySSRC[ssrc]
+            // Muted by the reader: pulled, so the buffer keeps draining, and
+            // never decoded — and not drawn as speaking either.
+            if let userID, state.locallyMuted.contains(userID) {
+                if stream.isSpeaking {
+                    stream.isSpeaking = false
+                    changes.append((userID, false))
+                }
+                continue
+            }
+            let decoded: Bool
+            switch frame {
+            case .packet(let payload):
+                decoded = (try? stream.decoder?.decode(
+                    payload, into: &stream.pcm
+                )) != nil
+            case .forwardCorrection(let successor):
+                // The redundant copy inside the NEXT packet. This is the
+                // path that makes a lost packet inaudible rather than
+                // merely smoothed.
+                decoded = (try? stream.decoder?.decode(
+                    successor, recoverFromFEC: true, into: &stream.pcm
+                )) != nil
+            case .conceal:
+                decoded = (try? stream.decoder?.decode(nil, into: &stream.pcm)) != nil
+            case .idle:
+                decoded = false
+            }
+
+            guard decoded else {
+                if stream.isSpeaking {
+                    stream.quietFrames += 1
+                    if stream.quietFrames > 12 {
+                        stream.isSpeaking = false
+                        if let userID = state.userBySSRC[ssrc] {
+                            changes.append((userID, false))
+                        }
+                    }
+                }
+                continue
+            }
+
+            var energy: Float = 0
+            let isDucked = !state.prioritySpeakers.isEmpty
+                && !(userID.map(state.prioritySpeakers.contains) ?? false)
+            let gain = stream.volume * (isDucked ? Self.priorityDucking : 1)
+            for index in 0..<OpusFormat.interleavedCount {
+                let sample = Float(stream.pcm[index]) / 32_768 * gain
+                state.mixScratch[index] += sample
+                energy += sample * sample
+            }
+            contributors += 1
+
+            let level = (energy / Float(OpusFormat.interleavedCount)).squareRoot()
+            let isAudible = level > 0.004
+            if isAudible {
+                stream.quietFrames = 0
+                if !stream.isSpeaking {
+                    stream.isSpeaking = true
+                    if let userID = state.userBySSRC[ssrc] { changes.append((userID, true)) }
+                }
+            } else if stream.isSpeaking {
+                stream.quietFrames += 1
+                if stream.quietFrames > 12 {
+                    stream.isSpeaking = false
+                    if let userID = state.userBySSRC[ssrc] { changes.append((userID, false)) }
+                }
+            }
+        }
+        return (contributors, changes)
     }
 
     /// Adds a locally-played clip to the mix, alongside anything already
@@ -905,16 +1232,6 @@ final class InboundStreams: Sendable {
             return line + " ssrc=[" + arrivals
                 .map { "\($0.ssrc)/\($0.payloadType):\($0.packets)" }
                 .joined(separator: " ") + "]"
-        }
-    }
-
-    func speakingUserIDs() -> Set<UInt64> {
-        state.withLock { state in
-            var result: Set<UInt64> = []
-            for (ssrc, stream) in state.audioBySSRC where stream.isSpeaking {
-                if let userID = state.userBySSRC[ssrc] { result.insert(userID) }
-            }
-            return result
         }
     }
 }

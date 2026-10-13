@@ -39,15 +39,26 @@ struct MainWindow: View {
                 )
         } detail: {
             WorkspacePane(presentation: model.workspacePresentation)
-                // **An empty title, not a removed one.** The channel is named by
-                // its own toolbar item, so the window's title has nothing to
-                // say — but `.toolbar(removing: .title)` also takes away what
-                // AppKit's scroll pocket needs: with the title removed, the soft
-                // edge a scroll view gets where it runs under the toolbar is
-                // installed and draws nothing. Measured by swapping one for the
-                // other and nothing else. An empty title keeps the edge and
-                // shows no words.
-                .navigationTitle("")
+                // **The channel is the window's title** — the HIG's "Provide a
+                // useful title for each window" — with the topic, or a
+                // thread's parent, as its subtitle and the channel's acts in
+                // the title's menu. It was a custom pill in the toolbar.
+                //
+                // Never `.toolbar(removing: .title)`: with the title removed,
+                // the soft edge a scroll view gets where it runs under the
+                // toolbar is installed and draws nothing (measured). A page
+                // with no channel has an empty title, which keeps the edge.
+                .navigationTitle(model.channelChrome.name)
+                .navigationSubtitle(model.channelChrome.titleSubtitle)
+                .toolbarTitleMenu { ChannelTitleMenu(chrome: model.channelChrome, model: model) }
+                // The topic, which the pill used to open as a popover — a menu
+                // item cannot anchor one, so it is a small sheet.
+                .sheet(isPresented: Binding(
+                    get: { model.channelChrome.isTopicShown },
+                    set: { if !$0 { model.openTopicChannelID = nil } }
+                )) {
+                    ChannelTopicSheet()
+                }
                 .toolbar {
                     // **The closures have to be passed.** They default to `{}`,
                     // so a toolbar built without them compiles, renders, and
@@ -57,36 +68,6 @@ struct MainWindow: View {
                         chrome: model.channelChrome,
                         toggleMemberList: { model.isMemberListShown.toggle() },
                         toggleUserProfile: { model.isDirectMessageProfileShown.toggle() },
-                        openParent: { model.selectChannel($0) },
-                        openChannelDetails: {
-                            guard let channelID = model.selectedChannelID else { return }
-                            model.openTopicChannelID =
-                                model.openTopicChannelID == channelID ? nil : channelID
-                        },
-                        topicContent: {
-                            // Built only when the popover is presented, which is
-                            // what keeps the topic read out of the toolbar's own
-                            // body.
-                            AnyView(
-                                Group {
-                                    if let channelID = model.openTopicChannelID,
-                                       let channel = model.channelIndex[channelID],
-                                       let topic = channel.topic, !topic.isEmpty
-                                    {
-                                        ChannelTopicPane(
-                                            name: model.displayName(of: channel),
-                                            symbolName: channel.kind.symbolName,
-                                            topic: topic,
-                                            mentions: model.mentionContext(),
-                                            openLink: { model.openLink($0) },
-                                            openEmoji: {
-                                                model.openExpressionInfo(.emoji($0), anchor: .zero)
-                                            }
-                                        )
-                                    }
-                                }
-                            )
-                        },
                         toggleCall: {
                             guard let channelID = model.selectedChannelID else { return }
                             if model.connectedVoiceChannelID == channelID {
@@ -302,35 +283,24 @@ private struct SidebarColumn: View {
             // back to the gate where you left it is the point of it being a
             // destination rather than a modal.
             if !model.isColumnTakenOver {
-            ChannelSidebarContainer()
-                .safeAreaBar(edge: .bottom, spacing: 0) {
-                    // **Nothing is painted behind these bars, and that is the
-                    // fix rather than an omission.** They used to be handed the
-                    // column's own themed ground, to cover a fill the bar was
-                    // believed to paint. That ground is opaque, it sat directly
-                    // under the identity capsule's glass, and it is §4 rule 3
-                    // exactly: a surface with an opaque fill behind it has
-                    // nothing to refract, so under any theme the now bar stopped
-                    // lensing and read as a flat plate that no longer floated.
+                ChannelSidebarContainer()
+                    // **The call card and the now bar float over the list**,
+                    // as a registered bar: the list reserves their height and
+                    // its rows pass underneath. The now bar is clear glass that
+                    // refracts them (Alex, 2026-10-06); the call card is opaque,
+                    // because rows reading through the call was the fault he
+                    // reported in it.
                     //
-                    // Measured on the running app with a themed window: with the
-                    // ground removed there is no slab and no seam — the sidebar
-                    // ground in the `ZStack` above already ignores its safe
-                    // areas and covers this strip, and the channel list passes
-                    // under the bar for the capsule to lens. Which is precisely
-                    // the arrangement the composer has always had, and the
-                    // reason the composer kept its glass under a theme while
-                    // this bar lost it.
-                    //
-                    // **The call sits above the identity, in a panel of its
-                    // own.** It used to be a line inside the now bar, which made
-                    // the bar change height whenever somebody joined a channel
-                    // and re-laid out the whole list under it.
-                    VStack(spacing: Spacing.base) {
-                        VoiceHUDContainer()
-                        NowBarContainer()
+                    // **Nothing is painted behind these bars**: an opaque
+                    // ground under the now bar's glass leaves it nothing to
+                    // refract, and it reads as a flat plate. The sidebar's own
+                    // ground already covers this strip.
+                    .safeAreaBar(edge: .bottom, spacing: 0) {
+                        VStack(spacing: Spacing.base) {
+                            VoiceHUDContainer()
+                            NowBarContainer()
+                        }
                     }
-                }
             }
         }
         // Drawn HERE, outside the rail's own `ScrollView` — which clips — and on
@@ -429,27 +399,9 @@ private struct NowBarContainer: View {
         NowBar(
             presentation: model.nowBarPresentation,
             shape: settings.chromeShape,
-            // Through the controller, so the switch reaches the media engine
-            // AND is republished over the socket — a mute that only moves a
-            // local flag is a mute nobody else can see.
-            toggleMute: { model.toggleVoiceMute() },
-            toggleDeafen: { model.toggleVoiceDeafen() },
             openSettings: { SettingsWindow.open() },
-            openProfile: { anchor in
-                guard let userID = model.currentUserID else { return }
-                // **The MAIN profile, not the one worn in the open server.**
-                // Without this the card came up with the reader's server
-                // nickname, their roles there and their per-server avatar — the
-                // profile a *member list* shows, not the one the identity
-                // capsule is about.
-                model.profileRequest = ProfileRequest(
-                    userID: userID,
-                    showsMainProfile: true,
-                    anchor: anchor,
-                    showsOwnActions: true
-                )
-                model.sessionController.loadProfile(of: userID, inGuild: nil)
-            }
+            openProfile: { model.openOwnCard() },
+            reportAnchor: { model.ownCardAnchor = $0 }
         )
         .equatable()
     }

@@ -368,24 +368,13 @@ private struct PurchaseControl: View {
         Button(action: action) {
             HStack(spacing: Spacing.tight) {
                 Text(label)
-                    .font(.system(.subheadline, weight: .semibold))
                     .lineLimit(1)
                 Image(systemName: "arrow.up.forward.square")
-                    .font(.system(.caption))
             }
-            .foregroundStyle(.white)
-            // **Padding first, then the width.** The store page gives this the
-            // full column and the sheet's footer pins it to its own size — and
-            // with only `maxWidth: .infinity` the second case collapses to the
-            // label's intrinsic width with the capsule drawn right against the
-            // words.
-            .padding(.horizontal, Spacing.margin)
             .frame(maxWidth: .infinity)
-            .frame(height: Metrics.control)
-            .contentShape(.capsule)
         }
-        .buttonStyle(.plain)
-        .emphasisChrome(Palette.accent)
+        .buttonStyle(.borderedProminent)
+        .controlSize(.large)
         .help("Opens Discord's store in your browser")
         .accessibilityHint(Text("Opens Discord's store in your browser"))
     }

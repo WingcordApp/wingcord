@@ -192,11 +192,13 @@ extension SessionController {
     /// Puts an event the server sent into the store, replacing what was held.
     func storeScheduledEvent(_ event: ScheduledEvent) {
         var events = model.scheduledEvents[event.guildID] ?? []
+        let wasActive = events.first { $0.id == event.id }?.status == .active
         events.removeAll { $0.id == event.id }
         events.append(event)
         model.scheduledEvents[event.guildID] = events
         // The inbox's Events group is drawn from these.
         model.inbox.revision &+= 1
+        if !wasActive { noteEventWentLive(event) }
     }
 
     // MARK: The gateway

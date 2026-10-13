@@ -35,39 +35,54 @@ struct VoiceVideoView: NSViewRepresentable {
     /// Installs and removes the sink. A closure rather than a controller
     /// reference, so this view holds nothing that outlives it.
     var attach: (UserID, (@Sendable (CMSampleBuffer) -> Void)?) -> Void
+    /// Told how many pixels the picture is drawn at, and zero when it goes —
+    /// Discord's `VIDEO_SIZE_UPDATE`, which sizes a one-to-one call's want.
+    var reportPixels: ((UserID, Int) -> Void)?
 
     func makeNSView(context: Context) -> VideoHostView {
         let view = VideoHostView()
         attach(userID, view.sink)
+        view.startOver = { [weak view, coordinator = context.coordinator] in
+            guard let view else { return }
+            coordinator.attach?(coordinator.userID, view.sink)
+        }
+        view.onPixels = { [coordinator = context.coordinator] pixels in
+            coordinator.reportPixels?(coordinator.userID, pixels)
+        }
         return view
     }
 
     func updateNSView(_ view: VideoHostView, context: Context) {
         guard context.coordinator.userID != userID else { return }
         attach(context.coordinator.userID, nil)
+        context.coordinator.reportPixels?(context.coordinator.userID, 0)
         context.coordinator.userID = userID
         view.reset()
         attach(userID, view.sink)
+        view.reportPixels()
     }
 
     static func dismantleNSView(_ view: VideoHostView, coordinator: Coordinator) {
         // **Cleared, not merely released.** A sink left installed is a display
         // layer being fed after its window has gone, which keeps the whole
         // decode path alive for a tile nobody can see.
-        coordinator.detach?(coordinator.userID, nil)
+        coordinator.attach?(coordinator.userID, nil)
+        coordinator.reportPixels?(coordinator.userID, 0)
     }
 
     func makeCoordinator() -> Coordinator {
         let coordinator = Coordinator()
         coordinator.userID = userID
-        coordinator.detach = attach
+        coordinator.attach = attach
+        coordinator.reportPixels = reportPixels
         return coordinator
     }
 
     @MainActor
     final class Coordinator {
         var userID = UserID(rawValue: 0)
-        var detach: ((UserID, (@Sendable (CMSampleBuffer) -> Void)?) -> Void)?
+        var attach: ((UserID, (@Sendable (CMSampleBuffer) -> Void)?) -> Void)?
+        var reportPixels: ((UserID, Int) -> Void)?
     }
 
     /// The layer-backed host.
@@ -86,6 +101,14 @@ struct VoiceVideoView: NSViewRepresentable {
         private var receiver: AVSampleBufferVideoRenderer.Receiver?
         private var pump: Task<Void, Never>?
         private var inbox: AsyncStream<SampleBox>.Continuation?
+        /// Attaches this view's sink again, which empties the stream's
+        /// reassembler and asks its sender for a keyframe at once. See
+        /// `InboundStreams.setVideoSink`.
+        var startOver: (() -> Void)?
+        /// The pixels the picture is drawn at — on the screen's own scale —
+        /// each time that changes.
+        var onPixels: ((Int) -> Void)?
+        private var reportedPixels = 0
 
         override init(frame: NSRect) {
             super.init(frame: frame)
@@ -120,6 +143,21 @@ struct VoiceVideoView: NSViewRepresentable {
             CATransaction.setDisableActions(true)
             display.frame = bounds
             CATransaction.commit()
+            reportPixels()
+        }
+
+        override func viewDidChangeBackingProperties() {
+            super.viewDidChangeBackingProperties()
+            reportPixels()
+        }
+
+        /// Only when the count moves: a grid reflows on every resize.
+        func reportPixels() {
+            let scale = window?.backingScaleFactor ?? 2
+            let pixels = Int((bounds.width * scale).rounded() * (bounds.height * scale).rounded())
+            guard pixels != reportedPixels else { return }
+            reportedPixels = pixels
+            onPixels?(pixels)
         }
 
         /// **Ordered, and bounded.** An `AsyncStream` preserves the order it was
@@ -141,14 +179,19 @@ struct VoiceVideoView: NSViewRepresentable {
                         unsafeBuffer: box.sample
                     )
                     // **A refused frame leaves the renderer needing a flush
-                    // before it will take anything again.** Without it the tile
-                    // freezes on its last picture for the rest of the call, and
-                    // nothing anywhere reports an error.
+                    // before it will take anything again**, and a decode that
+                    // failed leaves it with no reference for the delta frames
+                    // behind it. Either way the tile would freeze on its last
+                    // picture until the sender's own next keyframe — so the
+                    // renderer starts over and the sender is asked for one now.
                     switch receiver.enqueueImmediately(ready) {
-                    case .enqueued, .enqueuedWithDecodeFailures, .cancelledDueToFlush:
+                    case .enqueued, .cancelledDueToFlush:
                         break
+                    case .enqueuedWithDecodeFailures:
+                        startOver?()
                     case .cancelledDueToFlushRequiredToResume, .cancelledDueToError:
                         receiver.flush()
+                        startOver?()
                     @unknown default:
                         break
                     }

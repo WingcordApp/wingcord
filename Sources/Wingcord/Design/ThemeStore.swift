@@ -33,7 +33,7 @@ final class ThemeStore {
     ///
     /// Stored as a case name rather than an ordinal, so reordering
     /// `ThemePreset` cannot silently change what an existing preference means.
-    private(set) var choice: ThemeChoice = .preset(.trueBlack)
+    private(set) var choice: ThemeChoice = .system
 
     /// The reader's own blend, kept whether or not it is the one selected.
     ///
@@ -124,6 +124,7 @@ final class ThemeStore {
         vividness: Double
     ) -> ThemeColors {
         switch choice {
+        case .system: following.colors(vividness: vividness)
         case .preset(let preset): preset.colors(vividness: vividness)
         // Discord's flat surfaces are its tokens; vividness thins its veils and
         // touches nothing else.
@@ -135,10 +136,21 @@ final class ThemeStore {
     /// The ground a choice would produce, without selecting it.
     static func ground(for choice: ThemeChoice, customSeed: ThemeSeed, vividness: Double) -> ThemeGround {
         switch choice {
+        case .system: following.ground(vividness: vividness)
         case .preset(let preset): preset.ground(vividness: vividness)
         case .discord(let theme): ThemeGround(theme, vividness: vividness)
         case .custom: ThemeGround(customSeed.at(vividness: vividness))
         }
+    }
+
+    /// The preset "Sync with computer" is drawing now.
+    ///
+    /// **Read while nothing is pinned**: `apply` lets go of the app's
+    /// appearance before resolving this choice, so the app's effective
+    /// appearance is the system's. Read under a pin it would be the pin.
+    private static var following: ThemePreset {
+        let dark = NSApplication.shared.effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+        return .following(systemIsDark: dark)
     }
 
     // MARK: Writing
@@ -151,11 +163,25 @@ final class ThemeStore {
     }
 
     func select(_ choice: ThemeChoice) {
-        guard choice != self.choice else { return }
+        guard adopt(choice) else { return }
+        onChoose?(choice)
+    }
+
+    /// Selects a theme the account brought — "Sync theme across my devices"
+    /// — without telling `onChoose`, which would write it straight back.
+    /// - Returns: whether anything changed.
+    @discardableResult
+    func adopt(_ choice: ThemeChoice) -> Bool {
+        guard choice != self.choice else { return false }
         self.choice = choice
         defaults.set(Self.storageValue(for: choice), forKey: Key.choice)
         apply(notifyingDrawnSurfaces: true)
+        return true
     }
+
+    /// Told of each theme the reader chooses, so the session can write it to
+    /// the account. Set by the session; nil signed out.
+    @ObservationIgnored var onChoose: ((ThemeChoice) -> Void)?
 
     /// Starts a picker gesture.
     ///
@@ -231,6 +257,9 @@ final class ThemeStore {
     /// is what wakes SwiftUI, and a canvas that repaints in response has to find
     /// the new theme already installed or it draws one frame of the old ground.
     private func apply(notifyingDrawnSurfaces: Bool) {
+        // "Sync with computer" holds no appearance of its own: the system's is
+        // the room, so it is let through before the choice is resolved.
+        if choice == .system { Self.releaseAppearance() }
         let own = Self.colors(
             for: choice,
             customSeed: customSeed,
@@ -249,11 +278,15 @@ final class ThemeStore {
         if resolvedGround != ground { ground = resolvedGround }
 
         let resolved = server?.colors ?? own
-        guard resolved != colors || !isLoaded else { return }
         // Before the colours go out, so every view woken by them — and the
         // transcript's text style, rebuilt on the appearance change — resolves
-        // against the room it is about to be in.
-        Self.pinAppearance(resolved.appearance)
+        // against the room it is about to be in. **And before the test below**:
+        // True Black chosen while "Sync with computer" was already drawing it
+        // changes no colour, but it does change who owns the appearance — and
+        // left unpinned, the next switch to Light would put the system's black
+        // labels on its near-black ground.
+        if choice != .system { Self.pinAppearance(resolved.appearance) }
+        guard resolved != colors || !isLoaded else { return }
         ThemeRuntime.install(resolved)
         colors = resolved
         guard isLoaded, notifyingDrawnSurfaces else { return }
@@ -263,7 +296,7 @@ final class ThemeStore {
         PresentationRevision.shared.settingsDidChange()
     }
 
-    /// **The app's appearance follows the theme, never the system.**
+    /// **A chosen theme's appearance is the app's, whatever the system's is.**
     ///
     /// Every surface here is built for the room the theme makes, so a dark
     /// theme in a Mac set to Light has to stay dark: left to the system, it drew
@@ -271,14 +304,31 @@ final class ThemeStore {
     /// every build did before a light theme existed, on any Mac in Light mode.
     /// App-wide rather than per window, so the settings windows, menus and
     /// alerts are the same room as the workspace.
+    ///
+    /// "Sync with computer" is the one choice that pins nothing: its room is
+    /// always the system's appearance, so there is never a mismatch to prevent.
     private static func pinAppearance(_ appearance: ThemeAppearance) {
         let name: NSAppearance.Name = appearance == .light ? .aqua : .darkAqua
         guard NSApplication.shared.appearance?.name != name else { return }
         NSApplication.shared.appearance = NSAppearance(named: name)
     }
 
+    /// Lets the system's appearance through — "Sync with computer".
+    private static func releaseAppearance() {
+        guard NSApplication.shared.appearance != nil else { return }
+        NSApplication.shared.appearance = nil
+    }
+
+    /// The system's appearance moved. Only "Sync with computer" follows it;
+    /// every other choice has its own pinned.
+    private func systemAppearanceDidChange() {
+        guard isLoaded, choice == .system else { return }
+        apply(notifyingDrawnSurfaces: true)
+    }
+
     private let defaults: UserDefaults
     @ObservationIgnored private var accentObserver: NSObjectProtocol?
+    @ObservationIgnored private var appearanceObserver: NSKeyValueObservation?
 
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
@@ -287,7 +337,7 @@ final class ThemeStore {
         customFollowsSystemAccent = defaults.object(forKey: Key.customSystemAccent) as? Bool ?? false
         vividness = min(1, max(0, defaults.object(forKey: Key.vividness) as? Double ?? 0))
         choice = (defaults.object(forKey: Key.choice) as? String)
-            .flatMap(Self.choice(forStorageValue:)) ?? .preset(.trueBlack)
+            .flatMap(Self.choice(forStorageValue:)) ?? .system
         backdrop = (defaults.object(forKey: Key.backdrop) as? [String: Any])
             .flatMap(Backdrop.init(storageValue:))
         // A picture whose file is gone — a reader who emptied Application
@@ -316,6 +366,13 @@ final class ThemeStore {
             }
         }
 
+        // Light ⇄ dark, for "Sync with computer". `[weak self]` rather than
+        // `.shared`: this store is still being made, and reaching for the
+        // singleton from inside its own initialiser waits on itself.
+        appearanceObserver = NSApplication.shared.observe(\.effectiveAppearance) { [weak self] _, _ in
+            MainActor.assumeIsolated { self?.systemAppearanceDidChange() }
+        }
+
         // Last, and after every assignment above: from here on a setter may talk
         // to the rest of the app.
         isLoaded = true
@@ -334,6 +391,7 @@ final class ThemeStore {
 
     static func storageValue(for choice: ThemeChoice) -> String {
         switch choice {
+        case .system: systemStorageValue
         case .preset(let preset): preset.rawValue
         case .discord(let theme): discordStoragePrefix + theme.rawValue
         case .custom: customStorageValue
@@ -341,6 +399,7 @@ final class ThemeStore {
     }
 
     static func choice(forStorageValue value: String) -> ThemeChoice? {
+        if value == systemStorageValue { return .system }
         if value == customStorageValue { return .custom }
         if value.hasPrefix(discordStoragePrefix) {
             return DiscordTheme(rawValue: String(value.dropFirst(discordStoragePrefix.count)))
@@ -353,6 +412,9 @@ final class ThemeStore {
     /// take: a theme added later called "custom" would otherwise silently
     /// inherit every reader's blend.
     private static let customStorageValue = "·custom"
+
+    /// "Sync with computer", out of the presets' namespace for the same reason.
+    private static let systemStorageValue = "·system"
 
     /// Discord's themes live in a namespace of their own for the same reason:
     /// both sets name themes after the sky, and a house preset called "sunset"

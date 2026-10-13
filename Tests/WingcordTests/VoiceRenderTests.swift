@@ -52,7 +52,7 @@ struct VoiceRenderTests {
             displayName: name,
             avatarURL: nil,
             monogram: String(name.prefix(1)).uppercased(),
-            nameColor: speaking ? 0x5865F2 : nil,
+            ground: speaking ? VoiceTileGround(flat: 0x5865F2) : nil,
             isSpeaking: speaking,
             isSelfMuted: muted,
             isServerMuted: false,
@@ -73,6 +73,23 @@ struct VoiceRenderTests {
     /// share is already on this machine, and asking the server to forward it
     /// back would be a second decode of a picture the capture is handing us
     /// directly.
+    /// Discord's `.user-profile-video-tile-background` for a themed profile —
+    /// the two `color-mix(in oklab, …)` stops answered by Chrome itself, over
+    /// the modal base `ProfileThemeColors` computes for the cyan account whose
+    /// modal Discord was measured drawing. The expected bytes are the
+    /// browser's, not a second port.
+    @Test("A themed profile's tile is Discord's gradient, to the byte")
+    func themedTileGround() {
+        let base = ProfileThemeColors.modalBackground(primary: 0x07_AD_EA, secondary: 0x4F_00_3B)
+        #expect(base == 0xC1_C2_D7, "the base Chrome was given")
+        let ground = VoiceTileGround(primary: 0x07_AD_EA, secondary: 0x4F_00_3B, base: base)
+        #expect(ground.top == 0xA9_BF_DB)
+        #expect(ground.bottom == 0x80_51_76)
+        // An avatar's colour is drawn flat: one swatch, both stops.
+        let flat = VoiceTileGround(flat: 0x58_65_F2)
+        #expect(flat.top == 0x58_65_F2 && flat.bottom == 0x58_65_F2)
+    }
+
     @Test("Only somebody else's live share offers a watch control")
     func onlyOtherPeoplesSharesAreWatchable() {
         #expect(!Self.participant(10, name: "Quiet").canWatch)
@@ -116,6 +133,8 @@ struct VoiceRenderTests {
     ) -> Double {
         let renderer = ImageRenderer(
             content: content()
+                // The grid reads the store for Show Non-Video Participants.
+                .environment(AppModel())
                 .environment(\.motion, MotionResolver())
                 .environment(\.colorScheme, .dark)
                 .frame(width: width, height: height)
@@ -234,10 +253,7 @@ struct VoiceRenderTests {
 
     @Test("The HUD composes at the sidebar's width")
     func hudComposes() {
-        let rendered = size(of: VoiceHUD(
-            presentation: Self.call,
-            speakingUserIDs: [Self.cast[1].id]
-        ).frame(width: 240))
+        let rendered = size(of: VoiceHUD(presentation: Self.call).frame(width: 240))
         #expect(rendered?.width == 240)
     }
 
@@ -266,40 +282,42 @@ struct VoiceRenderTests {
 
     @Test("The soundboard draws its sections, and the locked half is dimmer")
     func soundboardDraws() {
+        func sound(_ id: String, _ name: String, _ emoji: String, locked: Bool = false) -> SoundboardPresentation.Entry {
+            .init(id: id, name: name, emoji: emoji, emojiURL: nil, isLocked: locked, isFavorite: id == "2",
+                  refusal: locked ? "Subscribe to Nitro to send sounds across servers." : nil)
+        }
         let presentation = SoundboardPresentation(
             sections: [
                 .init(
-                    id: "default",
-                    title: "Discord Sounds",
-                    iconURL: nil,
-                    monogram: "♪",
+                    id: "favorites", kind: .favorites, title: "Favorites", iconURL: nil, monogram: "",
+                    isLocked: false, sounds: [sound("2", "airhorn", "🔊")]
+                ),
+                .init(
+                    id: "default", kind: .defaults, title: "Discord Sounds", iconURL: nil, monogram: "",
                     isLocked: false,
                     sounds: [
-                        .init(id: "1", name: "quack", emoji: "🦆", emojiURL: nil, isLocked: false),
-                        .init(id: "2", name: "airhorn", emoji: "🔊", emojiURL: nil, isLocked: false),
-                        .init(id: "3", name: "cricket", emoji: "🦗", emojiURL: nil, isLocked: false),
-                        .init(id: "4", name: "golf clap", emoji: "👏", emojiURL: nil, isLocked: false),
-                        .init(id: "5", name: "sad horn", emoji: "🎺", emojiURL: nil, isLocked: false),
-                        .init(id: "7", name: "ba dum tss", emoji: "🥁", emojiURL: nil, isLocked: false),
+                        sound("1", "quack", "🦆"), sound("2", "airhorn", "🔊"), sound("3", "cricket", "🦗"),
+                        sound("4", "golf clap", "👏"), sound("5", "sad horn", "🎺"), sound("7", "ba dum tss", "🥁"),
                     ]
                 ),
                 .init(
-                    id: "1000",
-                    title: "The Iris Project",
-                    iconURL: nil,
-                    monogram: "IP",
+                    id: "1000", kind: .server, title: "The Iris Project", iconURL: nil, monogram: "IP",
                     isLocked: true,
-                    sounds: [
-                        .init(id: "1000", name: "bonk", emoji: "🔨", emojiURL: nil, isLocked: true),
-                        .init(id: "1001", name: "wow", emoji: "😮", emojiURL: nil, isLocked: true),
-                    ]
+                    sounds: [sound("1000", "bonk", "🔨", locked: true), sound("1001", "wow", "😮", locked: true)]
                 ),
             ],
-            playsEverywhere: false
+            playsEverywhere: false,
+            isSilenced: false
         )
-        let ink = inkFraction("soundboard", width: 460, height: 420) {
-            SoundboardPicker(presentation: presentation, press: { _ in }, dismiss: {})
-                .background(Palette.canvas)
+        let ink = inkFraction("soundboard", width: SoundboardPicker.width, height: SoundboardPicker.height) {
+            SoundboardPicker(
+                presentation: presentation,
+                actions: SoundboardActions(
+                    press: { _ in }, preview: { _ in }, favorite: { _, _ in }, addSound: { _ in }, dismiss: {}
+                )
+            )
+            .environment(AppModel())
+            .background(Palette.canvas)
         }
         #expect(ink > 0.2)
     }
@@ -324,14 +342,15 @@ struct VoiceRenderTests {
                 spotlight: { _ in },
                 heightChanged: { reported.value = $0 }
             )
+            // The band's device menus read the store, as the app's do.
+            .environment(AppModel())
             .environment(\.motion, MotionResolver())
             .frame(width: 720, height: 600)
         )
         renderer.scale = 1
         _ = renderer.cgImage
 
-        // The resting height plus the panel's own top and bottom margins, and
-        // never more than the pane it is floating in.
+        // At least the resting height, and never more than the pane it sits in.
         #expect(reported.value >= VoiceCallOverlay.restingHeight)
         #expect(reported.value <= 600)
     }
@@ -346,7 +365,9 @@ struct VoiceRenderTests {
     /// rendered offscreen.
     private func size(of content: some View) -> CGSize? {
         let renderer = ImageRenderer(
-            content: content.environment(\.motion, MotionResolver())
+            content: content
+                .environment(AppModel())
+                .environment(\.motion, MotionResolver())
         )
         renderer.scale = 1
         return renderer.cgImage.map { CGSize(width: $0.width, height: $0.height) }

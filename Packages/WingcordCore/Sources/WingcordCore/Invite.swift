@@ -262,6 +262,9 @@ public struct InviteCard: Hashable, Sendable {
     public var inviterUsername: String?
     public var inviterAvatarHash: String?
     public var expiresAt: Date?
+    /// The event the link carried (`?event=`), as the invite answered with
+    /// it — which, while it is not over, turns the card into the event's.
+    public var event: ScheduledEvent?
 
     public init(
         code: String,
@@ -282,7 +285,8 @@ public struct InviteCard: Hashable, Sendable {
         inviterName: String? = nil,
         inviterUsername: String? = nil,
         inviterAvatarHash: String? = nil,
-        expiresAt: Date? = nil
+        expiresAt: Date? = nil,
+        event: ScheduledEvent? = nil
     ) {
         self.code = code
         self.kind = kind
@@ -303,6 +307,7 @@ public struct InviteCard: Hashable, Sendable {
         self.inviterUsername = inviterUsername
         self.inviterAvatarHash = inviterAvatarHash
         self.expiresAt = expiresAt
+        self.event = event
     }
 
     /// The server's mark — see `GuildMark`. Nil for a group or a friend link.
@@ -354,20 +359,44 @@ public enum InviteLookup: Hashable, Sendable {
 }
 
 extension InviteCard {
-    /// The invite codes a message's text links to, in order and each once —
+    /// The invites a message's text links to, in order and each once —
     /// `discord.gg/…`, `discord.com/invite/…` and `discordapp.com/invite/…`,
     /// which is what Discord draws a card under a message for.
+    ///
+    /// **Keyed as Discord keys them** (`21599`'s `fB`): the code, and
+    /// `?event=` after it where the link names an event — the same invite
+    /// with an event on it is another card, the event's. `code(ofKey:)` and
+    /// `eventID(ofKey:)` take a key apart.
     public static func codes(in content: String) -> [String] {
         guard content.contains("discord") else { return [] }
         var seen = Set<String>()
         var codes: [String] = []
         for match in content.matches(of: linkPattern) {
             let code = String(match.1)
-            if seen.insert(code).inserted { codes.append(code) }
+            let key = match.2.flatMap(eventID(inQuery:)).map { "\(code)?event=\($0)" } ?? code
+            if seen.insert(key).inserted { codes.append(key) }
         }
         return codes
     }
 
+    /// The invite code a key names, without the event on it.
+    public static func code(ofKey key: String) -> String {
+        key.firstIndex(of: "?").map { String(key[..<$0]) } ?? key
+    }
+
+    /// The event a key carries, where its link named one.
+    public static func eventID(ofKey key: String) -> UInt64? {
+        key.firstIndex(of: "?").flatMap { eventID(inQuery: key[key.index(after: $0)...]) }
+    }
+
+    /// `event=` in a link's query, a snowflake or nothing.
+    private static func eventID(inQuery query: Substring) -> UInt64? {
+        for pair in query.split(separator: "&") where pair.hasPrefix("event=") {
+            return UInt64(pair.dropFirst("event=".count).prefix { $0.isASCII && $0.isNumber })
+        }
+        return nil
+    }
+
     nonisolated(unsafe) private static let linkPattern =
-        /(?i)(?:https?:\/\/)?(?:www\.|ptb\.|canary\.)?(?:discord\.gg|discord(?:app)?\.com\/invite)\/([A-Za-z0-9-]{2,32})/
+        /(?i)(?:https?:\/\/)?(?:www\.|ptb\.|canary\.)?(?:discord\.gg|discord(?:app)?\.com\/invite)\/([A-Za-z0-9-]{2,32})(?:\/?\?([^\s<>#]*))?/
 }

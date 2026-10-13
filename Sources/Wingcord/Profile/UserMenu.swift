@@ -42,6 +42,8 @@ struct UserMenu: View {
 
     var userID: UserID
     var guildID: GuildID?
+    /// Raised from a call tile: the call's own layout items join the menu.
+    var isFromCall = false
     var profileOptions: ProfileOptions?
     /// Raised when the reader picks one of the two items above.
     var onProfileOption: ((ProfileOption) -> Void)?
@@ -58,6 +60,7 @@ struct UserMenu: View {
         case invite
         case roles
         case moveTo
+        case apps
     }
 
     @Environment(AppModel.self) private var model
@@ -87,6 +90,14 @@ struct UserMenu: View {
                 roleList
             case .moveTo:
                 moveList(server?.moveTargets ?? [])
+            case .apps:
+                if let target = commandTarget {
+                    ContextCommandList(
+                        target: target,
+                        back: { level = .root },
+                        run: { model.runContextCommand($0, on: target) }
+                    )
+                }
             }
         }
         .padding(.vertical, Spacing.tight)
@@ -172,6 +183,12 @@ struct UserMenu: View {
                 model.userMenu = nil
                 model.messagePerson(userID)
             }
+            if !isSystem, model.users[userID]?.isBot != true {
+                FlyoutRow(title: "Start a Call", symbolName: "phone") {
+                    model.userMenu = nil
+                    model.callPerson(userID)
+                }
+            }
             if !isSystem {
                 FlyoutRow(
                     title: model.note(for: userID).isEmpty ? "Add Note" : "Edit Note",
@@ -179,9 +196,32 @@ struct UserMenu: View {
                     symbolName: "note.text"
                 ) { openFullProfile() }
             }
+            // Discord's `watch-stream` (module 77544), last in this group: a
+            // Twitch or YouTube stream the person is live on.
+            if let stream = model.presences[userID]?.liveActivities.lazy.compactMap(\.watchURL).first {
+                FlyoutRow(title: "Watch Stream", symbolName: "play.tv") {
+                    model.userMenu = nil
+                    NSWorkspace.shared.open(stream)
+                }
+            }
         }
-        if server?.nickname != nil || actions != nil {
+        // Discord's call items (its `showMediaItems`): a level of their own,
+        // then the switches leading the next group.
+        if isInCall, !isSelf {
             FlyoutDivider()
+            CallVolumeItems(userID: userID)
+        }
+        let offersApps = commandTarget.map {
+            !model.contextCommandGroups(.user, in: $0.channelID ?? ChannelID(rawValue: 0)).isEmpty
+        } ?? false
+        if server?.nickname != nil || actions != nil || isInCall || offersApps {
+            FlyoutDivider()
+            if isInCall { CallSwitchItems(userID: userID) }
+            if offersApps {
+                FlyoutRow(title: "Apps", symbolName: "puzzlepiece.extension", accessory: .disclosure) {
+                    level = .apps
+                }
+            }
             if let guildID, let nickname = server?.nickname {
                 switch nickname {
                 case .change:
@@ -215,6 +255,12 @@ struct UserMenu: View {
         if let server, let guildID, server.hasModeration {
             FlyoutDivider()
             moderationRows(server, in: guildID)
+        }
+        // The call's own layout, from a tile only — Discord's sidebar row does
+        // not offer it.
+        if isFromCall {
+            FlyoutDivider()
+            CallLayoutItems()
         }
         copyIDRow
     }
@@ -294,6 +340,27 @@ struct UserMenu: View {
                 model.presentModeration(.ban(userID, guildID))
             }
         }
+    }
+
+    // MARK: In a call
+
+    /// Whether they are in the call the reader is in — the only place the
+    /// call's own items mean anything.
+    private var isInCall: Bool {
+        guard let channelID = model.connectedVoiceChannelID else { return false }
+        return model.voiceStates[userID]?.channelID == channelID
+    }
+
+    /// Where an app's command about this person runs: the channel being read
+    /// in this server, or the call's — the conversation, in a direct message.
+    private var commandTarget: AppCommandTarget? {
+        if let selected = model.selectedChannelID, model.channelIndex[selected]?.guildID == guildID {
+            return .user(userID, in: selected)
+        }
+        if let call = model.connectedVoiceChannelID, model.channelIndex[call]?.guildID == guildID {
+            return .user(userID, in: call)
+        }
+        return nil
     }
 
     // MARK: Shared rows
@@ -492,7 +559,7 @@ struct UserMenuPresenter: ViewModifier {
             attachmentAnchor: .rect(.rect(model.userMenu?.anchor ?? .zero)),
             arrowEdge: .trailing
         ) { request in
-            UserMenu(userID: request.userID, guildID: request.guildID)
+            UserMenu(userID: request.userID, guildID: request.guildID, isFromCall: request.isFromCall)
                 .environment(model)
                 .presentationBackground(.clear)
         }

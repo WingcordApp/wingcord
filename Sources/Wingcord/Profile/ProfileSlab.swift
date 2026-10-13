@@ -50,18 +50,12 @@ struct ProfileSlab<Content: View>: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(Spacing.margin)
-        // Layout first, glass last — rule 1.
-        //
-        // **Tinted clear, not bare clear.** A fully clear body over a
-        // low-contrast field is invisible at rest — the slabs came out as
-        // wireframes, an outline with nothing inside it. The tint is part of the
-        // material rather than a fill behind it; a fill under glass is what rule
-        // 3 forbids and is exactly what stops a surface lensing. Same treatment
-        // the selection indicator already takes for the same reason.
-        .glassEffect(
-            .clear.tint(Palette.flyoutTint),
-            in: .rect(cornerRadius: Radius.glass, style: .continuous)
-        )
+        // **The profile's own panel, not glass** — Alex, 2026-10-06: the
+        // activity cards were "weird liquid glass". A card on a profile is
+        // content; it takes the ground's panel fill, which is Discord's own
+        // translucent overlay on a coloured profile and the raised surface on
+        // a plain one (`ProfileGround.panelFill`).
+        .background(ground.panelFill, in: .rect(cornerRadius: Radius.glass))
         .overlay {
             RoundedRectangle(cornerRadius: Radius.glass, style: .continuous)
                 .strokeBorder(ground.borderStyle, lineWidth: ground.borderWidth)
@@ -71,7 +65,7 @@ struct ProfileSlab<Content: View>: View {
 
 /// A slab whose content runs to its own edges — artwork, a cover grid.
 ///
-/// The same material with no padding, because a header image inset by sixteen
+/// The same panel with no padding, because a header image inset by sixteen
 /// points reads as a picture in a frame rather than as the top of a card.
 struct ProfileBleedSlab<Content: View>: View {
     var ground: ProfileGround
@@ -80,10 +74,7 @@ struct ProfileBleedSlab<Content: View>: View {
     var body: some View {
         content()
             .frame(maxWidth: .infinity, alignment: .leading)
-            .glassEffect(
-                .clear.tint(Palette.flyoutTint),
-                in: .rect(cornerRadius: Radius.glass, style: .continuous)
-            )
+            .background(ground.panelFill, in: .rect(cornerRadius: Radius.glass))
             .overlay {
                 RoundedRectangle(cornerRadius: Radius.glass, style: .continuous)
                     .strokeBorder(ground.borderStyle, lineWidth: ground.borderWidth)

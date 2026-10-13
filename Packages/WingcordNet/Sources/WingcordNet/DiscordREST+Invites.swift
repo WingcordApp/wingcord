@@ -57,16 +57,24 @@ extension DiscordREST {
     /// `GET /invites/{code}?with_counts=true&with_expiration=true&with_permissions=true`.
     /// A 404 is an expired or unknown invite, which is an answer, not a failure:
     /// Discord draws a card saying so.
-    public func inviteCard(_ code: String) async throws -> InviteLookup {
+    ///
+    /// `key` is `InviteCard.codes(in:)`'s: a link with `?event=` on it asks
+    /// for the event too, `guild_scheduled_event_id` in the place Discord's
+    /// `resolveInvite` puts it, and the answer carries it whole.
+    public func inviteCard(_ key: String) async throws -> InviteLookup {
+        var query = [
+            URLQueryItem(name: "with_counts", value: "true"),
+            URLQueryItem(name: "with_expiration", value: "true"),
+        ]
+        if let eventID = InviteCard.eventID(ofKey: key) {
+            query.append(URLQueryItem(name: "guild_scheduled_event_id", value: String(eventID)))
+        }
+        query.append(URLQueryItem(name: "with_permissions", value: "true"))
         do {
             let dto = try await get(
-                "/invites/\(code)",
+                "/invites/\(InviteCard.code(ofKey: key))",
                 route: "invites/{code}",
-                query: [
-                    URLQueryItem(name: "with_counts", value: "true"),
-                    URLQueryItem(name: "with_expiration", value: "true"),
-                    URLQueryItem(name: "with_permissions", value: "true"),
-                ],
+                query: query,
                 as: InviteDTO.self
             )
             return dto.card.map(InviteLookup.resolved) ?? .invalid
@@ -191,6 +199,19 @@ struct InviteDTO: Decodable, Sendable {
     /// Accept only, into a server that reviews applications: the request the
     /// accept opened — Discord's `INVITE_ACCEPT_SUCCESS` reads it. Not captured.
     var join_request: OwnJoinRequestDTO?
+    /// The event a link's `?event=` asked about, whole — what Discord's
+    /// invite card turns into while it is not over (`346542`'s `ly`).
+    var guild_scheduled_event: InviteEventDTO?
+
+    /// The invite's event, read on its own: one this cannot read costs the
+    /// card its event, never the invite.
+    struct InviteEventDTO: Decodable, Sendable {
+        var event: ScheduledEventDTO?
+
+        init(from decoder: any Decoder) throws {
+            event = try? ScheduledEventDTO(from: decoder)
+        }
+    }
 
     /// The guild as an invite describes it: thirteen fields, and none of the
     /// contents. **Deliberately not `GuildDTO`** — that type's `domain` builds a
@@ -263,7 +284,8 @@ struct InviteDTO: Decodable, Sendable {
                 channelName: channel?.name.nonEmpty,
                 profile: profile?.domain,
                 inviterID: inviter?.id, inviterName: inviterName, inviterUsername: inviter?.username,
-                inviterAvatarHash: inviter?.avatar, expiresAt: expiresAt
+                inviterAvatarHash: inviter?.avatar, expiresAt: expiresAt,
+                event: guild_scheduled_event?.event?.domain(fallbackGuildID: guildID)
             )
         }
     }

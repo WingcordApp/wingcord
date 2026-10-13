@@ -16,9 +16,6 @@ import WingcordCore
 struct WorkspacePane: View {
     var presentation: WorkspacePresentation
 
-    /// How far the supplementary column is lifted off the shared field.
-    static let rosterLift: Double = 0.055
-
     @Environment(AppModel.self) private var model
     @Environment(\.motion) private var motion
 
@@ -64,37 +61,36 @@ struct WorkspacePane: View {
         HStack(spacing: 0) {
             PrimaryPane(content: presentation.primary)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .modifier(ToolbarSearch(isOffered: !presentation.primary.isServerPage))
+                .modifier(ToolbarSearch(
+                    isOffered: !presentation.primary.isServerPage && !presentation.primary.isCall
+                ))
 
             if let supplementary = presentation.supplementary {
-                SupplementaryPane(content: supplementary, chromeHeight: chromeHeight)
-                    // **A lifted panel, not a second ground.**
-                    //
-                    // The roster shares the window's one field — it has to, or
-                    // it is a second exposure of the same photograph with the
-                    // split between them, which is exactly the fault the
-                    // sidebar had. What separates it is *light*: a hair of white
-                    // over the field, which over a picture reads as more of the
-                    // picture coming through and over a flat theme reads as a
-                    // panel a step above the page. Relative, so it survives the
-                    // system glass-intensity setting and Reduce Transparency —
-                    // the same reasoning every fill in `Palette` is built on.
-                    //
-                    // It is the mirror of `ThemeColors.sidebarRecess`: contents
-                    // on the left sit a step behind the page, people on the
-                    // right a step in front of it.
-                    .background(Color.white.opacity(Self.rosterLift))
-                    // **In and out along the same edge.** The column lives at
-                    // the trailing edge, so it arrives from there and leaves the
-                    // same way — a panel that slides in from the right and fades
-                    // out in place reads as two unrelated events. Spatial
-                    // symmetry, `INVARIANTS.md` §3.
-                    //
-                    // Paired with `.opacity` because the transcript widens
-                    // underneath it at the same time: a column travelling at
-                    // full opacity over content that is already reflowing reads
-                    // as two things moving past each other.
-                    .transition(.move(edge: .trailing).combined(with: .opacity))
+                HStack(spacing: 0) {
+                    // **One ground, and a hairline where the columns meet.**
+                    // The roster used to paint its own lift, white at 5.5%,
+                    // and that lift ran up under the toolbar with the column:
+                    // the toolbar's strip changed shade at the column's edge
+                    // whether or not anything was under the search field. The
+                    // HIG's split view is one ground with a divider. The strip
+                    // stays uniform at rest, and the system's scroll-edge
+                    // effect shows only when rows actually pass under the
+                    // search field. The divider keeps to the safe area, so it
+                    // starts below the toolbar rather than cutting through it.
+                    Divider()
+                    SupplementaryPane(content: supplementary, chromeHeight: chromeHeight)
+                }
+                // **In and out along the same edge.** The column lives at
+                // the trailing edge, so it arrives from there and leaves the
+                // same way — a panel that slides in from the right and fades
+                // out in place reads as two unrelated events. Spatial
+                // symmetry, `INVARIANTS.md` §3.
+                //
+                // Paired with `.opacity` because the transcript widens
+                // underneath it at the same time: a column travelling at
+                // full opacity over content that is already reflowing reads
+                // as two things moving past each other.
+                .transition(.move(edge: .trailing).combined(with: .opacity))
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)

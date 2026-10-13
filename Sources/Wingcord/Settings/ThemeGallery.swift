@@ -56,6 +56,16 @@ struct ThemeGallery: View {
         // registering its own dependency on it.
         let vividness = theme.vividness
         ThemeGrid {
+            ThemeTile(
+                title: "Sync with computer",
+                help: nil,
+                isSelected: theme.choice == .system,
+                ring: ring
+            ) {
+                theme.select(.system)
+            } swatch: {
+                SystemSwatch()
+            }
             ForEach(ThemePreset.allCases) { preset in
                 ThemeTile(
                     title: preset.title,
@@ -76,6 +86,25 @@ struct ThemeGallery: View {
     }
 }
 
+/// Both rooms "Sync with computer" can be, split down the middle — the light
+/// one leading, as the system's own Auto appearance draws its tile.
+private struct SystemSwatch: View {
+    var body: some View {
+        let light = ThemePreset.following(systemIsDark: false)
+        let dark = ThemePreset.following(systemIsDark: true)
+        RoomSwatch(ground: light.ground(vividness: 0), accent: light.colors(vividness: 0).accent)
+            .overlay {
+                RoomSwatch(ground: dark.ground(vividness: 0), accent: dark.colors(vividness: 0).accent)
+                    .mask {
+                        HStack(spacing: 0) {
+                            Color.clear
+                            Color.black
+                        }
+                    }
+            }
+    }
+}
+
 /// The reader's own blend, in its own view.
 ///
 /// **So a Plumage drag redraws one tile, not eleven.** The blend changes on
@@ -87,9 +116,12 @@ private struct PlumageTile: View {
     @State private var theme = ThemeStore.shared
 
     var body: some View {
+        // **"Custom", Discord's own word for a theme somebody makes**, so the
+        // tile says what choosing it does; Plumage is the instrument it opens
+        // below (Alex, 2026-10-07).
         ThemeTile(
-            title: "Plumage",
-            help: "Your own blend. Choosing this opens the instrument below.",
+            title: "Custom",
+            help: "Your own blend. Choosing this opens Plumage below.",
             isSelected: theme.choice.isCustom,
             ring: ring
         ) {

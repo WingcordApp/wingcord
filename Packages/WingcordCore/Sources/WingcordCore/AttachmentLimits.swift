@@ -54,20 +54,94 @@ public enum AttachmentLimits {
         )
     }
 
-    /// Above this, Discord's edge refuses the request body outright and the
-    /// Google Cloud upload flow is the only way through.
-    ///
-    /// This client uses that flow for *every* upload — one code path is one
-    /// thing to get right — so the figure is here for the message a refusal
-    /// needs rather than as a branch.
-    public static let cloudOnlyThreshold = 200 * mebibyte
+    /// The most one message's files may add up to — Discord's
+    /// `uploadSumTooLarge` (`292348.jS`): 500 MiB, which an experiment doubles.
+    public static let messageTotal = 500 * mebibyte
 
-    /// "24.3 MB", for a sentence explaining a refusal.
-    ///
-    /// Decimal units on purpose: the ceiling is counted in mebibytes and the
-    /// Finder is not, so a reader comparing this against what they see in a
-    /// Get Info window needs the units that window uses.
-    public static func describe(bytes: Int) -> String {
-        ByteCountFormatStyle(style: .file).format(Int64(bytes))
+    // MARK: Discord's words for a refusal (`openUploadError`)
+
+    /// A file, or the message's files together, over the limit.
+    public static let tooLargeTitle = "Your files are too powerful"
+
+    /// What the limit is, in Discord's words (`382287.WQ`): Nitro Classic has
+    /// its own line. Discord ranks Basic *below* Classic (`202541.ci`), so a
+    /// Basic account reads the plain one.
+    public static func tooLargeHelp(limit: Int, premium: PremiumTier) -> String {
+        let size = DiscordFileSize.text(limit)
+        return premium == .classic
+            ? "Max file size for Nitro Classic is \(size) please."
+            : "Max file size is \(size) please."
+    }
+
+    /// The same, where the pictures over the limit can be compressed — the
+    /// words of Discord's own Send Compressed, which its mobile client shows.
+    public static func compressHelp(limit: Int) -> String {
+        "To upload images larger than \(DiscordFileSize.text(limit)), you can compress it as a lower size image, "
+            + "or get Nitro to send a crystal clear image without losing quality!"
+    }
+
+    /// The message's files together over `messageTotal`.
+    public static var totalTooLargeHelp: String {
+        "Total message size must be less than \(DiscordFileSize.text(messageTotal))"
+    }
+
+    /// More files than a message can carry.
+    public static let tooManyTitle = "Too many uploads!"
+    public static func tooManyHelp(limit: Int) -> String {
+        "You can only upload \(limit) files at a time!"
+    }
+
+    /// A file with nothing in it — and a folder, which a drop delivers as one.
+    public static let emptyTitle = "Upload Failed"
+    public static let emptyHelp = "File cannot be empty"
+}
+
+/// A picture Discord's desktop turns into a JPEG before it uploads it
+/// (`85582`, through the system's own image library — ImageIO on a Mac), and
+/// the name it gives the result (`452661`).
+public enum UploadConversion: Sendable, Equatable {
+    case heic
+    case jxr
+
+    /// By the type it arrived as — matched as written, as Discord's set
+    /// matches it — or by the end of its name, in any case.
+    public init?(filename: String, contentType: String?) {
+        let ending = filename.lastIndex(of: ".").map { filename[$0...].lowercased() } ?? ""
+        func arrived(as types: Set<String>) -> Bool { contentType.map(types.contains) ?? false }
+        if arrived(as: ["image/heic", "image/heif", "image/heic-sequence", "image/heif-sequence"])
+            || [".heic", ".heif", ".hif"].contains(ending)
+        {
+            self = .heic
+        } else if arrived(as: ["image/jxr", "image/vnd.ms-photo"]) || [".jxr", ".wdp", ".hdp"].contains(ending) {
+            self = .jxr
+        } else {
+            return nil
+        }
+    }
+
+    /// The JPEG's quality, as Discord encodes it.
+    public var quality: Double {
+        switch self {
+        case .heic: 0.80
+        case .jxr: 0.85
+        }
+    }
+
+    /// The largest file Discord converts; a bigger one goes up as it is.
+    public var maximumBytes: Int {
+        switch self {
+        case .heic: 20 * AttachmentLimits.mebibyte
+        case .jxr: 50 * AttachmentLimits.mebibyte
+        }
+    }
+
+    /// `renameToJpegExtension`: the HEIC or JXR ending becomes `.jpg`, in any
+    /// case — and any other name has `.jpg` added.
+    public static func jpegName(for filename: String) -> String {
+        let lowered = filename.lowercased()
+        for ending in [".heic", ".heif", ".hif", ".jxr", ".wdp", ".hdp"] where lowered.hasSuffix(ending) {
+            return String(filename.dropLast(ending.count)) + ".jpg"
+        }
+        return filename + ".jpg"
     }
 }

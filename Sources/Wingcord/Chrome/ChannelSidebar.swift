@@ -58,9 +58,6 @@ struct ChannelSidebar: View, Equatable {
     var createChannel: (ChannelID) -> Void = { _ in }
 
     @Environment(\.motion) private var motion
-    /// Shared namespace so the selection pill *flows* from row to row rather
-    /// than fading in at the new position.
-    @Namespace private var selectionNamespace
     /// How far the list has been scrolled — see `SidebarScroll`.
     @State private var scroll = SidebarScroll()
     /// Whether the pointer is over the banner — see `SidebarBannerPointer`.
@@ -144,6 +141,11 @@ struct ChannelSidebar: View, Equatable {
                     TravellingToolbarTitle(header: header, layout: layout, scroll: scroll)
                 }
             }
+            // **A title, not a pill.** The bar's shared glass platter made
+            // "Direct Messages" and the server's name read as a capsule over
+            // the list; the column's title is plain text, the way a sidebar
+            // heads itself.
+            .sharedBackgroundVisibility(.hidden)
             // Pushes the title to the LEADING edge of the sidebar's span.
             // Without it the section right-aligns against the toggle and the
             // name lands at x=196 — a hundred points right of where the
@@ -161,21 +163,22 @@ struct ChannelSidebar: View, Equatable {
             SidebarActionRow(
                 symbolName: surface.symbolName,
                 title: surface.title,
-                isSelected: target == .surface(surface),
-                namespace: selectionNamespace,
-                action: { openSurface(surface) }
+                isSelected: target == .surface(surface)
             )
+            .tag(SidebarTarget.surface(surface))
         case .messageRequests(let pending):
             SidebarActionRow(
                 symbolName: "envelope.fill",
                 title: "Message Requests",
                 count: pending,
-                isSelected: target == .messageRequests,
-                namespace: selectionNamespace,
-                action: openMessageRequests
+                isSelected: target == .messageRequests
             )
+            .tag(SidebarTarget.messageRequests)
         case .events(let events):
+            // Opens a panel rather than going anywhere, so it is a button in
+            // the list and never its selection.
             SidebarEventsRowView(row: events) { openEvents(events.guildID, nil) }
+                .selectionDisabled()
         case .category(let category):
             // A category only reaches here if it has no section of its own,
             // which the grouping above does not produce. Rendered anyway rather
@@ -189,14 +192,13 @@ struct ChannelSidebar: View, Equatable {
                     ? { createChannel(category.id) }
                     : nil
             )
+            .selectionDisabled()
         case .channel(let channel):
             SidebarChannelRow(
                 channel: channel,
                 isSelected: target == .channel(channel.id),
                 guildID: presentation.header?.guildID,
                 isConnected: connectedVoiceChannelID == channel.id,
-                namespace: selectionNamespace,
-                action: { selectChannel(channel.id) },
                 // Nil for anything that is not a voice channel, which is what
                 // removes the accessories from every text row rather than
                 // drawing them disabled — §5.5.
@@ -210,42 +212,44 @@ struct ChannelSidebar: View, Equatable {
                 // (`ChannelOptionsMenu`); the model decides which.
                 openMenu: { openMenu(channel.id, $0) }
             )
+            .tag(SidebarTarget.channel(channel.id))
         case .thread(let thread):
             SidebarThreadRow(
                 thread: thread,
                 isSelected: target == .channel(thread.id),
-                namespace: selectionNamespace,
-                action: { openThread(thread.id) },
                 openMenu: { openMenu(thread.id, $0) }
             )
+            .tag(SidebarTarget.channel(thread.id))
         }
     }
 
-    /// How a row arrives when the whole list is replaced.
+    /// The list's selection, which IS where the reader is.
     ///
-    /// The list unfolds from the top rather than appearing all at once: each row
-    /// drops a few points into place a beat after the one above it, which reads
-    /// as one list settling instead of as a hard cut between two servers.
-    ///
-    /// **The stagger is capped.** Left proportional to the index, a fifty-row
-    /// server would still be arriving a second after the click — and past
-    /// roughly 200ms a response animation stops reading as motion and starts
-    /// reading as latency. Ten steps of 18ms is the whole budget; every row
-    /// below the tenth arrives with it.
-    ///
-    /// Reduce Motion is handled by `motion.panel` itself, which drops the travel
-    /// and leaves the fade — so the cascade degrades to a plain cross-fade
-    /// rather than having to be branched around here.
-    private func rowEntrance(at index: Int) -> AnyTransition {
-        let delay = Double(min(index, 10)) * 0.018
-        return .asymmetric(
-            insertion: .move(edge: .top)
-                .combined(with: .opacity)
-                .animation(motion.panel.delay(delay)),
-            // The outgoing list must not linger under the incoming one — two
-            // channel lists overlapping mid-swap is the one thing that would
-            // make this read as a glitch rather than as a transition.
-            removal: .opacity.animation(motion.fadeQuick)
+    /// Read from the model's target, so a channel opened from anywhere else —
+    /// a mention, the quick switcher, a shortcut — is the one the list
+    /// highlights. Written by the list, on a click or an arrow key, and routed
+    /// to the same act the old rows ran: a thread opens through `openThread`,
+    /// whose panel-or-column decision is the store's.
+    private var selection: Binding<SidebarTarget?> {
+        Binding(
+            get: { target == .none ? nil : target },
+            set: { chosen in
+                guard let chosen, chosen != target else { return }
+                switch chosen {
+                case .channel(let id):
+                    let isThread = presentation.rows.contains { row in
+                        if case .thread(let thread) = row { return thread.id == id }
+                        return false
+                    }
+                    if isThread { openThread(id) } else { selectChannel(id) }
+                case .surface(let surface):
+                    openSurface(surface)
+                case .messageRequests:
+                    openMessageRequests()
+                case .none:
+                    break
+                }
+            }
         )
     }
 
@@ -292,18 +296,13 @@ struct ChannelSidebar: View, Equatable {
         withTransaction(transaction) { binding.wrappedValue = value }
     }
 
-    /// The rows, grouped for pinning.
+    /// The rows, grouped into the list's sections.
     ///
     /// **The presentation stays flat; the grouping happens here.** `INVARIANTS`
     /// rejects a nested sidebar model, and that still holds — a nested *model*
     /// re-materialises whole sections on every rebuild and cannot be diffed
-    /// per row. What it was protecting against is not this: each row keeps its
-    /// own stable id, `ForEach` still diffs row by row, and the only thing the
-    /// grouping adds is a `Section` boundary for `pinnedViews` to hold on to.
-    ///
-    /// That boundary is the entire reason a category heading can stay under the
-    /// server pill while its channels scroll past it, which is not expressible
-    /// over a flat `LazyVStack` at all.
+    /// per row. Each row keeps its own stable id, `ForEach` still diffs row by
+    /// row, and the grouping adds only the `Section` a category heads.
     private struct Group_: Identifiable {
         var id: UInt64
         /// Nil for the rows above the first category — the guild actions.
@@ -331,72 +330,66 @@ struct ChannelSidebar: View, Equatable {
         return result
     }
 
+    /// **The system sidebar list** — DESIGN-NOTES decision 13. The selection
+    /// highlight, the row metrics (which follow the sidebar size in System
+    /// Settings), the keyboard and VoiceOver are the system's, and nothing
+    /// here is glass.
     private var list: some View {
-        ScrollView {
-            LazyVStack(spacing: 1, pinnedViews: [.sectionHeaders]) {
-                if layout.listReserve > 0 {
-                    Color.clear
-                        .frame(height: layout.listReserve)
-                        .modifier(BannerHover(
-                            pointer: bannerPointer,
-                            isEnabled: presentation.header?.bannerURL.map(CDN.canAnimate) ?? false
-                        ))
-                        .accessibilityHidden(true)
-                }
+        List(selection: selection) {
+            if layout.listReserve > 0 {
+                Color.clear
+                    .frame(height: layout.listReserve - Self.listTopMargin)
+                    .modifier(BannerHover(
+                        pointer: bannerPointer,
+                        isEnabled: presentation.header?.bannerURL.map(CDN.canAnimate) ?? false
+                    ))
+                    .selectionDisabled()
+                    .accessibilityHidden(true)
+            }
 
-                if let liveEvent {
-                    LiveEventCard(
-                        notice: liveEvent,
-                        open: { openEvents(liveEvent.guildID, liveEvent.eventID) },
-                        join: liveEvent.joinChannelID.map { channelID in
-                            { liveEvent.isJoined ? selectChannel(channelID) : joinVoice(channelID) }
-                        },
-                        dismiss: { dismissLiveEvent(liveEvent.eventID) }
-                    )
-                    .padding(.bottom, Spacing.base)
-                    .transition(.materialize)
-                }
+            if let liveEvent {
+                LiveEventCard(
+                    notice: liveEvent,
+                    open: { openEvents(liveEvent.guildID, liveEvent.eventID) },
+                    join: liveEvent.joinChannelID.map { channelID in
+                        { liveEvent.isJoined ? selectChannel(channelID) : joinVoice(channelID) }
+                    },
+                    dismiss: { dismissLiveEvent(liveEvent.eventID) }
+                )
+                .selectionDisabled()
+                .transition(.materialize)
+            }
 
-                ForEach(groups) { group in
+            ForEach(groups) { group in
+                if let category = group.header {
                     Section {
                         ForEach(group.rows, id: \.row.id) { entry in
                             row(entry.row)
-                                .transition(rowEntrance(at: entry.index))
                         }
                     } header: {
-                        if let category = group.header {
-                            SidebarCategoryRow(
-                                category: category,
-                                toggle: { toggleCategory(category.id) },
-                                openMenu: { openMenu(category.id, $0) },
-                                createChannel: presentation.header?.canCreateChannels == true
-                                    ? { createChannel(category.id) }
-                                    : nil
-                            )
-                            // The header travels with the list until it reaches
-                            // the top, then stays — so it needs a ground of its
-                            // own, or the channels it is pinned over scroll
-                            // through it. The pill's glass is that ground; the
-                            // padding is what stops the row beneath touching it.
-                            .padding(.vertical, 2)
-                        }
+                        SidebarCategoryRow(
+                            category: category,
+                            toggle: { toggleCategory(category.id) },
+                            openMenu: { openMenu(category.id, $0) },
+                            createChannel: presentation.header?.canCreateChannels == true
+                                ? { createChannel(category.id) }
+                                : nil
+                        )
+                    }
+                } else {
+                    ForEach(group.rows, id: \.row.id) { entry in
+                        row(entry.row)
                     }
                 }
             }
-            .padding(.horizontal, Spacing.base)
-            .padding(.bottom, Spacing.base)
         }
-        // Switching servers replaces every row id at once, so every row is an
-        // INSERTION and the transitions above fire together. Declared here, on
-        // the container, rather than by wrapping the change in `withAnimation`:
-        // a global transaction animates every view in the window that happens to
-        // re-lay-out while it runs.
-        .animation(motion.panel, value: presentation.header?.guildID)
+        .listStyle(.sidebar)
+        // The column's own ground shows through: the theme, the wallpaper's
+        // vibrancy, and the banner the list scrolls over.
+        .scrollContentBackground(.hidden)
         // Collapsing or expanding a category adds or removes its channels, so
-        // the row count is exactly the signal — and the same per-row entrance
-        // transition then cascades them in or out rather than cutting.
+        // the row count is exactly the signal.
         .animation(motion.standard, value: presentation.rows.count)
-        .scrollIndicators(.never)
         // One read, carrying the banner and the pill up together.
         .onScrollGeometryChange(for: CGFloat.self) { geometry in
             geometry.contentOffset.y + geometry.contentInsets.top
@@ -405,13 +398,15 @@ struct ChannelSidebar: View, Equatable {
             // on every scroll tick.
             if abs(scroll.travel - offset) > 0.5 { scroll.travel = offset }
         }
-        // **Top only.** The now bar is glass, and a scroll edge effect under it
-        // blurs the rows before the capsule can refract them — see
-        // `softScrollEdgeTopOnly`, which carries the measurement. The bar still
-        // registers through `safeAreaBar`; only the blur it was drawing is
-        // gone.
+        // **Top only.** The now bar is glass floating over the list's foot,
+        // and a scroll edge effect under it blurs the rows before the capsule
+        // can refract them — see `softScrollEdgeTopOnly`.
         .softScrollEdgeTopOnly()
     }
+
+    /// The space a sidebar list leaves above its first row, which the banner's
+    /// reserve already accounts for. Measured on the macOS 27 SDK, 2026-10-05.
+    private static let listTopMargin: CGFloat = 10
 }
 
 /// How far the channel list has been scrolled: zero at rest, positive downward.
@@ -528,7 +523,13 @@ private struct TravellingPill: View {
 
     var body: some View {
         let layout = layout.travelled(scroll)
-        ServerNamePill(name: header.name, guildID: header.guildID, mark: header.mark)
+        ServerNamePill(
+            name: header.name,
+            guildID: header.guildID,
+            mark: header.mark,
+            // The toolbar title answers the menu bar once it has the name.
+            answersMenuBar: !layout.showsToolbarTitle
+        )
             .padding(.leading, SidebarBannerLayout.pillLeading)
             .padding(.trailing, Spacing.snug)
             .offset(y: layout.pillTop)
@@ -591,14 +592,21 @@ private struct ServerNamePill: View {
     var guildID: GuildID?
     /// Discord's mark, before the name — see `GuildMark`.
     var mark: GuildMark?
+    /// Whether a menu-bar command's page request is this pill's to open —
+    /// `ServerMenuPageRequest`.
+    var answersMenuBar: Bool
 
     @Environment(\.motion) private var motion
 
     @State private var isMenuOpen = false
+    @State private var page = ServerMenuPage()
 
     var body: some View {
         HStack(spacing: Spacing.base) {
-            Button { isMenuOpen = true } label: {
+            Button {
+                page = ServerMenuPage()
+                isMenuOpen = true
+            } label: {
                 label
             }
             // `.plain` + a content shape, THEN the glass. The borderless style
@@ -618,10 +626,18 @@ private struct ServerNamePill: View {
             // the control that opened it.
             .popover(isPresented: $isMenuOpen, arrowEdge: .bottom) {
                 if let guildID {
-                    ServerOptionsMenu(guildID: guildID, close: { isMenuOpen = false })
-                        .presentationBackground(.clear)
+                    ServerOptionsMenu(
+                        guildID: guildID,
+                        startsOn: page.surface,
+                        inviteChannelID: page.inviteChannelID,
+                        close: { isMenuOpen = false }
+                    )
+                    .presentationBackground(.clear)
                 }
             }
+            .modifier(ServerMenuRequestAnswer(
+                guildID: guildID, answers: answersMenuBar, page: $page, isMenuOpen: $isMenuOpen
+            ))
 
             // The spacer keeps the pill leading-aligned instead of centring
             // itself across the column, and it is also what stops the overlay
@@ -695,20 +711,33 @@ private struct ServerTitleItem: View, Equatable {
     }
 
     @State private var isMenuOpen = false
+    @State private var page = ServerMenuPage()
 
     var body: some View {
         Group {
             if let guildID {
-                Button { isMenuOpen = true } label: { title }
+                Button {
+                    page = ServerMenuPage()
+                    isMenuOpen = true
+                } label: { title }
                     .accessibilityHint("Server options")
                     // **A real toolbar item is the one place a presentation may
                     // be inline** — `INVARIANTS.md` §1. It is one item evaluated
                     // once, and the alternative is a window-root presenter
                     // anchored to a rect the toolbar cannot report.
                     .popover(isPresented: $isMenuOpen, arrowEdge: .bottom) {
-                        ServerOptionsMenu(guildID: guildID, close: { isMenuOpen = false })
-                            .presentationBackground(.clear)
+                        ServerOptionsMenu(
+                            guildID: guildID,
+                            startsOn: page.surface,
+                            inviteChannelID: page.inviteChannelID,
+                            close: { isMenuOpen = false }
+                        )
+                        .presentationBackground(.clear)
                     }
+                    // It exists only while it has the name, so it always answers.
+                    .modifier(ServerMenuRequestAnswer(
+                        guildID: guildID, answers: true, page: $page, isMenuOpen: $isMenuOpen
+                    ))
             } else {
                 title.accessibilityAddTraits(.isHeader)
             }
@@ -818,3 +847,33 @@ private struct ServerTitleItem: View, Equatable {
 
 /// The server's own menu, under the name.
 ///
+
+// MARK: - The menu bar's asks of the server's name
+
+/// Which page the server menu opens on, and the channel an invite is for: the
+/// root from a click, whatever a menu-bar command asked for otherwise.
+private struct ServerMenuPage {
+    var surface: ServerOptionsMenu.Surface = .root
+    var inviteChannelID: ChannelID?
+}
+
+/// Opens a server-name control's own menu on the page a menu-bar command asked
+/// for — `ServerMenuPageRequest` — when the request is this control's: its
+/// server, and it is the one showing the name.
+private struct ServerMenuRequestAnswer: ViewModifier {
+    var guildID: GuildID?
+    var answers: Bool
+    @Binding var page: ServerMenuPage
+    @Binding var isMenuOpen: Bool
+
+    @Environment(AppModel.self) private var model
+
+    func body(content: Content) -> some View {
+        content.onChange(of: model.serverMenuPageRequest) { _, request in
+            guard answers, let request, request.guildID == guildID else { return }
+            model.serverMenuPageRequest = nil
+            page = ServerMenuPage(surface: request.page, inviteChannelID: request.inviteChannelID)
+            isMenuOpen = true
+        }
+    }
+}

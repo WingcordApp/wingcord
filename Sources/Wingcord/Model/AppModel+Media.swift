@@ -21,6 +21,14 @@ extension AppModel {
     ///   transcript, so the viewer can peek the exact rendition already decoded
     ///   and open on the picture instead of on a placeholder. The cache key is
     ///   `(url, pixel size)` and both halves have to match the transcript's.
+    /// A file card's Download.
+    func downloadAttachment(messageID: MessageID, in channelID: ChannelID, attachmentIndex: Int) {
+        guard let attachments = messageBoxes[channelID]?.messages.first(where: { $0.id == messageID })?.attachments,
+              attachments.indices.contains(attachmentIndex)
+        else { return }
+        AttachmentDownloads.download(attachments[attachmentIndex], model: self)
+    }
+
     func openMedia(
         messageID: MessageID,
         in channelID: ChannelID,
@@ -34,6 +42,15 @@ extension AppModel {
         let attachments = message.attachments
         guard attachments.indices.contains(attachmentIndex) else { return }
 
+        // **A file nothing here can show is downloaded — whatever sits beside
+        // it.** The check used to be whether the message had *any* viewable
+        // item, so a zip beside a picture opened the picture.
+        let clicked = attachments[attachmentIndex]
+        guard MediaItem(clicked, posterWidth: Metrics.attachmentThumbnail) != nil else {
+            AttachmentDownloads.download(clicked, model: self)
+            return
+        }
+
         var items: [MediaItem] = []
         items.reserveCapacity(attachments.count)
         var index = 0
@@ -44,17 +61,6 @@ extension AppModel {
             guard let item = MediaItem(attachment, posterWidth: width) else { continue }
             if position == attachmentIndex { index = items.count }
             items.append(item)
-        }
-
-        // Nothing the viewer can show. A file attachment is still something the
-        // reader clicked on, and handing it to the browser is what every client
-        // does with one — the scheme is re-checked at this boundary for the
-        // reason `INVARIANTS.md` §5.5 gives.
-        guard !items.isEmpty else {
-            let url = attachments[attachmentIndex].url
-            guard InlineScannerSchemeCheck.isSafe(url), let target = URL(string: url) else { return }
-            NSWorkspace.shared.open(target)
-            return
         }
 
         mediaViewer = MediaViewerRequest(

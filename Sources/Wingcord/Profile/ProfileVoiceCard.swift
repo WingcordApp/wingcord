@@ -307,18 +307,6 @@ struct ProfileVoiceCard: View {
     }
 }
 
-/// A link-like button: plain text, underlined while the pointer is on it —
-/// Discord's `clickableText:hover`.
-private struct UnderlinesOnHover: ButtonStyle {
-    @State private var isHovering = false
-
-    func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .underline(isHovering)
-            .onHover { isHovering = $0 }
-    }
-}
-
 /// Everybody in the call, as Discord tiles them (`b` in `986712`): up to four
 /// faces at its own sizes and places, and past four the second slot — the
 /// fourth, once the rest number ten — becomes "+N".
@@ -392,7 +380,7 @@ struct VoiceAvatarCluster: View {
     private var outline: Color {
         switch ground {
         case .themed: ground.wantsDarkInk ? Color.white.opacity(0.72) : Color.white.opacity(0.24)
-        case .neutral: Palette.surfaceRaised
+        case .neutral: ground.neutralRaised
         }
     }
 }

@@ -20,7 +20,7 @@ struct ActivityLineView: View {
             if let glyph = line.glyph {
                 Image(symbol: glyph.symbolName)
                     .imageScale(.small)
-                    .foregroundStyle(glyph.isLive ? AnyShapeStyle(Palette.presenceOnline) : AnyShapeStyle(ink))
+                    .foregroundStyle(Palette.presenceOnline)
             }
             if let text = line.text {
                 Text(text)

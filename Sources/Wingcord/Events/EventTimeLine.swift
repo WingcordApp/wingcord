@@ -50,7 +50,7 @@ struct EventTimeLine: View {
     private func mark(_ state: EventTimeText.State) -> some View {
         if isNew && status == .scheduled {
             Text("NEW")
-                .font(.system(size: 10, weight: .bold))
+                .font(.system(.caption, weight: .bold))
                 .foregroundStyle(.white)
                 .padding(.horizontal, 5)
                 .frame(height: 16)

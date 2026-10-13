@@ -30,4 +30,34 @@ struct EventLinkTests {
         #expect(EventLink.parse("https://discord.com/channels/1/2") == nil)
         #expect(EventLink.parse("https://discord.com/events/1/2/3/4") == nil)
     }
+    @Test("A message's event links, in order, each once, with their dates")
+    func linksInText() {
+        let text = """
+        tonight https://discord.com/events/603970300668805120/1323893975486496490 and \
+        (discord.com/events/603970300668805120/1323893975486496491/1588436611891200000), \
+        again https://ptb.discord.com/events/603970300668805120/1323893975486496490/
+        """
+        #expect(EventLink.links(in: text) == [
+            EventLink(guildID: GuildID(rawValue: 603_970_300_668_805_120), eventID: 1_323_893_975_484_369_279),
+            EventLink(
+                guildID: GuildID(rawValue: 603_970_300_668_805_120),
+                eventID: 1_323_893_975_487_238_721,
+                occurrence: 1_588_436_611_891_200_000
+            ),
+        ])
+    }
+
+    @Test("Another host's page, or a path that goes on, draws no card")
+    func linksElsewhere() {
+        #expect(EventLink.links(in: "https://example.com/events/603970300668805120/1323893975486496490").isEmpty)
+        #expect(EventLink.links(in: "https://discord.com/events/603970300668805120/1323893975486496490/more").isEmpty)
+    }
+
+    @Test("Ten a message, as every code link")
+    func linksCapped() {
+        let text = (0..<12)
+            .map { "https://discord.com/events/603970300668805120/13238939754864964\(10 + $0)" }
+            .joined(separator: " ")
+        #expect(EventLink.links(in: text).count == 10)
+    }
 }

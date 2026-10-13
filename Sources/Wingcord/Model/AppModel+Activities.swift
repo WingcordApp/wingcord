@@ -162,6 +162,23 @@ extension AppModel {
         )
     }
 
+    /// Discord's suggestions for a call — the shelf's top launchable apps, in
+    /// its order (`getShelfActivities(guildId)`, five in the call's mini
+    /// shelf, three on the voice tile).
+    func suggestedActivities(_ count: Int) -> [ActivityRow] {
+        // **Read first, because the directory is not observed.** It is
+        // `@ObservationIgnored` and announces itself through this counter; a
+        // view that read only the directory never heard it arrive, which is
+        // the shelf that spun for ever.
+        _ = activityRevision
+        let directory = activityDirectory
+        return directory.shelf.lazy
+            .compactMap { directory.apps[$0] }
+            .filter(\.isLaunchable)
+            .prefix(count)
+            .map(Self.row(for:))
+    }
+
     /// How many icons the Recents row shows. Eight in the reference client, and
     /// eight is what fits the flyout's width at this icon size.
     static let recentsShown = 8
@@ -356,7 +373,13 @@ extension AppModel {
         // **Everything this client publishes, not just the embedded one** —
         // otherwise a reader looking at their own profile sees "Nothing right
         // now" while their roster row says Playing.
-        for activity in publishedActivities {
+        for (index, activity) in publishedActivities.enumerated() {
+            // **Everything the card draws**, so the reader's own card is the
+            // one everybody else sees — the Rich Presence builder's links,
+            // buttons and party included. The buttons' links are this
+            // client's to know: nobody fetches the reader's own metadata.
+            let session = activity.buttonURLs.isEmpty ? nil : "own-\(index)"
+            if let session { activityButtonURLs[session] = activity.buttonURLs }
             list.append(Activity(
                 kind: Activity.Kind(rawValue: activity.type),
                 name: activity.name,
@@ -365,9 +388,22 @@ extension AppModel {
                 applicationID: activity.applicationID,
                 largeImageKey: activity.assets?.largeImage,
                 smallImageKey: activity.assets?.smallImage,
+                largeText: activity.assets?.largeText,
+                smallText: activity.assets?.smallText,
+                largeImageURL: activity.assets?.largeURL,
+                smallImageURL: activity.assets?.smallURL,
                 startedAt: activity.timestamps?.start.map {
                     Date(timeIntervalSince1970: Double($0) / 1000)
-                }
+                },
+                endsAt: activity.timestamps?.end.map {
+                    Date(timeIntervalSince1970: Double($0) / 1000)
+                },
+                partySize: activity.party?.size,
+                sessionID: session,
+                buttons: activity.buttons,
+                detailsURL: activity.detailsURL,
+                stateURL: activity.stateURL,
+                url: activity.url
             ))
         }
         presences[userID] = Presence(

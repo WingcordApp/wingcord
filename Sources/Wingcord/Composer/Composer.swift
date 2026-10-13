@@ -58,7 +58,8 @@ struct Composer: View {
     /// nothing observable and the settings preview has no channel at all.
     var focusKey: AnyHashable = 0
     var canSend: Bool
-    var replyingToAuthor: String?
+    /// The message being answered, as the reply bar draws it.
+    var reply: ComposerReply?
     /// Whether the bar is holding an edit rather than a new message. It changes
     /// three things at once — the banner, the placeholder and what Return does
     /// — so it is one flag rather than three parameters that can disagree.
@@ -69,10 +70,14 @@ struct Composer: View {
     /// their flight into the transcript, in bubbles.
     var send: (SendLaunch?) -> Void = { _ in }
     var cancelReply: () -> Void = {}
+    /// Scrolls the transcript to the message being answered.
+    var jumpToReply: () -> Void = {}
+    /// Discord's @ ON / OFF: whether the reply pings its author.
+    var toggleReplyPing: () -> Void = {}
     var cancelEdit: () -> Void = {}
-    /// Replies to the newest message. Returns false when there is nothing to
-    /// reply to, so Up falls through to the text view instead of dying.
-    var replyToLatest: () -> Bool = { false }
+    /// Discord's Up in an empty box: edits the reader's newest editable
+    /// message. False when there is none, so Up falls through to the text view.
+    var editLatest: () -> Bool = { false }
     /// Escape's last step, for the transcript this composer belongs to — see
     /// `AppModel.escapeTranscript(in:)`. Returns false when there was nothing
     /// to do, so the key falls through.
@@ -93,8 +98,15 @@ struct Composer: View {
     /// Files staged for this message, and why the last one was refused.
     var attachments: [PendingAttachment] = []
     var attachmentRefusal: AttachmentRefusal?
+    /// Files being compressed to fit, and the two ways a refusal offers it.
+    var compressingFiles = 0
+    var sendCompressed: ([URL]) -> Void = { _ in }
+    var alwaysCompress: ([URL]) -> Void = { _ in }
     var removeAttachment: (PendingAttachment.ID) -> Void = { _ in }
     var toggleAttachmentSpoiler: (PendingAttachment.ID) -> Void = { _ in }
+    var toggleAttachmentAnonymise: (PendingAttachment.ID) -> Void = { _ in }
+    /// Modify Attachment's Save: the name, the description, the spoiler.
+    var modifyAttachment: (PendingAttachment.ID, String, String?, Bool) -> Void = { _, _, _, _ in }
     var dismissAttachmentRefusal: () -> Void = {}
     /// The `:shortcode` completions for what is currently typed. Empty closes
     /// the list, which is the only thing that does.
@@ -156,11 +168,11 @@ struct Composer: View {
     var submitCommand: () -> Void = {}
     /// Interactions posted from this channel and not yet answered.
     var pendingInteractions: [PendingInteraction] = []
-    /// The sticker picker, asked for at one pack — "View More Stickers" on a
-    /// stock sticker's card. Handed in, for `shape`'s reason.
-    var stickerPickerRequest: StickerPickerRequest?
-    /// Tells the store the request was taken, so it opens the picker once.
-    var takeStickerPickerRequest: () -> Void = {}
+    /// A picker asked for from outside — Discord's ⌘E, ⌘G, ⌘S, or "View More
+    /// Stickers" on a sticker's card. Handed in, for `shape`'s reason.
+    var controlRequest: ComposerControlRequest?
+    /// Tells the store the request was taken, so it acts once.
+    var takeControlRequest: () -> Void = {}
     /// The app launcher, asked for at one app — Open App on its profile. The
     /// page is already set on the store; this only opens the control.
     var appLauncherRequest: AppLauncherRequest?
@@ -282,14 +294,9 @@ struct Composer: View {
                     cancel: cancelEdit
                 )
                 .transition(.materialize(from: .bottom))
-            } else if let replyingToAuthor {
-                ComposerBanner(
-                    symbolName: "arrowshape.turn.up.left.fill",
-                    text: "Replying to \(replyingToAuthor)",
-                    cancelLabel: "Cancel reply",
-                    cancel: cancelReply
-                )
-                .transition(.materialize(from: .bottom))
+            } else if let reply {
+                ReplyBar(reply: reply, jump: jumpToReply, togglePing: toggleReplyPing, cancel: cancelReply)
+                    .transition(.materialize(from: .bottom))
             }
 
             // **Beside a reply, never beside an edit.** A scheduled reply is a
@@ -300,12 +307,17 @@ struct Composer: View {
                     .transition(.materialize(from: .bottom))
             }
 
-            if canSend, !attachments.isEmpty || attachmentRefusal != nil {
+            if canSend, !attachments.isEmpty || attachmentRefusal != nil || compressingFiles > 0 {
                 AttachmentTray(
                     attachments: attachments,
                     refusal: attachmentRefusal,
+                    compressingFiles: compressingFiles,
+                    sendCompressed: sendCompressed,
+                    alwaysCompress: alwaysCompress,
                     remove: removeAttachment,
                     toggleSpoiler: toggleAttachmentSpoiler,
+                    toggleAnonymise: toggleAttachmentAnonymise,
+                    modify: modifyAttachment,
                     dismissRefusal: dismissAttachmentRefusal
                 )
                 .transition(.materialize(from: .bottom))
@@ -319,7 +331,7 @@ struct Composer: View {
         }
         .padding(.horizontal, Spacing.margin)
         .padding(.bottom, Spacing.snug)
-        .animation(motion.panel, value: replyingToAuthor)
+        .animation(motion.panel, value: reply?.name)
         .animation(motion.panel, value: isEditing)
         .animation(motion.panel, value: scheduledAt)
         .animation(motion.standard, value: canSend)
@@ -342,11 +354,16 @@ struct Composer: View {
         // …and the same for the option list, which changes on every keystroke
         // while a choice is being filtered.
         .onChange(of: commandPrompt?.rows) { _, _ in optionSelection = 0 }
-        .onChange(of: stickerPickerRequest?.token, initial: true) { _, _ in
-            guard let request = stickerPickerRequest else { return }
-            stickerSection = request.sectionID
-            openControl = .sticker
-            takeStickerPickerRequest()
+        .onChange(of: controlRequest?.token, initial: true) { _, _ in
+            guard let request = controlRequest else { return }
+            if let section = request.stickerSectionID {
+                stickerSection = section
+                openControl = .sticker
+            } else {
+                // A key toggles, as Discord's do.
+                openControl = openControl == request.control ? nil : request.control
+            }
+            takeControlRequest()
         }
         .onChange(of: appLauncherRequest?.token, initial: true) { _, _ in
             guard appLauncherRequest != nil else { return }
@@ -533,7 +550,7 @@ struct Composer: View {
         if case .none = activeList {
             // An edit or a command already has the composer; Up there is the
             // caret, not a reply to something else.
-            guard !isEditing, pendingCommand == nil, text.isEmpty, replyToLatest()
+            guard !isEditing, pendingCommand == nil, text.isEmpty, editLatest()
             else { return .ignored }
             return .handled
         }
@@ -670,7 +687,12 @@ struct Composer: View {
             cancelEdit()
             return .handled
         }
-        // Discord's chain takes the time away next (module `92960`).
+        // Then a reply, as Discord's chain does (module `92960`, `R`).
+        if reply != nil {
+            cancelReply()
+            return .handled
+        }
+        // Discord's chain takes the time away next.
         if scheduledAt != nil {
             setSchedule(nil)
             return .handled
@@ -842,7 +864,7 @@ private struct InteractionBanner: View {
         }
         .padding(.horizontal, Spacing.snug)
         .padding(.vertical, Spacing.base)
-        .glassEffect(.clear, in: .rect(cornerRadius: Radius.chip))
+        .glassEffect(.regular, in: .rect(cornerRadius: Radius.chip))
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(Text(message))
     }
@@ -912,7 +934,7 @@ private struct ComposerBanner: View {
         }
         .padding(.horizontal, Spacing.snug)
         .padding(.vertical, Spacing.base)
-        .glassEffect(.clear, in: .rect(cornerRadius: Radius.chip))
+        .glassEffect(.regular, in: .rect(cornerRadius: Radius.chip))
     }
 
     private var line: some View {
@@ -943,7 +965,7 @@ private struct PermissionNotice: View {
         .padding(.horizontal, Spacing.snug)
         .frame(minHeight: Metrics.composerControlHeight)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .glassEffect(.clear, in: .rect(cornerRadius: Radius.glass))
+        .glassEffect(.regular, in: .rect(cornerRadius: Radius.glass))
     }
 }
 
@@ -965,8 +987,8 @@ private struct TimeMentionHint: View {
         .padding(.horizontal, Spacing.snug)
         .padding(.vertical, Spacing.base)
         .frame(maxWidth: .infinity, alignment: .leading)
-        // Clear, untinted: what passes under it is the transcript's content.
-        .glassEffect(.clear, in: .rect(cornerRadius: Radius.glass, style: .continuous))
+        // Part of the composer, a control over the transcript: `.regular`.
+        .glassEffect(.regular, in: .rect(cornerRadius: Radius.glass))
         .accessibilityElement(children: .combine)
     }
 }

@@ -54,6 +54,10 @@ nonisolated struct TimelineSettings: @unchecked Sendable {
     /// way, but a row that always draws one is a row whose repaint no longer
     /// depends on hover.
     var alwaysShowsTimestamps: Bool
+    /// View › Hide Times: every time drawn only under the pointer. **Paint,
+    /// carried with the layout's inputs** for the reason the line above gives —
+    /// it decides whether a row's repaint depends on hover.
+    var hidesTimes: Bool
     /// Extra air between runs, on top of what `isCompact` sets.
     var groupSpacing: CGFloat
     /// The parts of a message's spoken label the reader has muted.
@@ -80,6 +84,7 @@ nonisolated struct TimelineSettings: @unchecked Sendable {
         uses24HourTime: Bool,
         showsSeconds: Bool = false,
         alwaysShowsTimestamps: Bool = false,
+        hidesTimes: Bool = false,
         groupSpacing: CGFloat = 0,
         mutedSpokenDetails: SpokenDetail.Set = [],
         locale: Locale
@@ -90,6 +95,7 @@ nonisolated struct TimelineSettings: @unchecked Sendable {
         self.uses24HourTime = uses24HourTime
         self.showsSeconds = showsSeconds
         self.alwaysShowsTimestamps = alwaysShowsTimestamps
+        self.hidesTimes = hidesTimes
         self.groupSpacing = groupSpacing
         self.mutedSpokenDetails = mutedSpokenDetails
         self.localeIdentifier = locale.identifier
@@ -187,6 +193,7 @@ nonisolated struct TimelineSettings: @unchecked Sendable {
             uses24HourTime: settings.uses24HourTime,
             showsSeconds: settings.showsSeconds,
             alwaysShowsTimestamps: settings.alwaysShowsTimestamps,
+            hidesTimes: settings.hidesMessageTimes,
             groupSpacing: settings.messageGroupSpacing,
             mutedSpokenDetails: settings.mutedSpokenDetails,
             locale: .current
@@ -209,6 +216,7 @@ extension TimelineSettings: Equatable {
             && lhs.uses24HourTime == rhs.uses24HourTime
             && lhs.showsSeconds == rhs.showsSeconds
             && lhs.alwaysShowsTimestamps == rhs.alwaysShowsTimestamps
+            && lhs.hidesTimes == rhs.hidesTimes
             && lhs.groupSpacing == rhs.groupSpacing
             && lhs.mutedSpokenDetails == rhs.mutedSpokenDetails
             && lhs.localeIdentifier == rhs.localeIdentifier

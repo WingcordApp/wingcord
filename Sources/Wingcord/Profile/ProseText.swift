@@ -194,6 +194,16 @@ private struct ProseLine: View {
     var body: some View {
         FlowLayout(spacing: context.spacing) {
             ForEach(segments) { segment in
+                segmentView(segment)
+                    // A space only where one was written: pieces that touched
+                    // in the text touch on screen, as Discord draws them.
+                    .layoutValue(key: FlowGap.self, value: segment.joinsPrevious ? 0 : nil)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func segmentView(_ segment: ProseSegment) -> some View {
                 switch segment.kind {
                 case .word(let text, let style, let destination):
                     ProseWord(
@@ -217,8 +227,6 @@ private struct ProseLine: View {
                         onTap: context.onEmoji
                     )
                 }
-            }
-        }
     }
 }
 
@@ -365,16 +373,27 @@ struct ProseSegment: Identifiable {
     /// Position in the line. Stable because the line is rebuilt whole.
     let id: Int
     let kind: Kind
+    /// No whitespace stood between this and the segment before it, so the two
+    /// are drawn touching — a word and the emoji typed straight after it, or
+    /// the pieces of a picture made of several custom emoji.
+    var joinsPrevious = false
 
     /// Splits one block's words into lines; a `lineBreak` starts another.
     static func lines(of nodes: [InlineNode], style: ProseStyle, mentions: MentionContext?) -> [[ProseSegment]] {
         var lines: [[ProseSegment]] = []
         var current: [ProseSegment] = []
         var counter = 0
+        /// Whether whitespace has been passed since the last segment.
+        var passedSpace = false
 
         func emit(_ kind: Kind) {
-            current.append(ProseSegment(id: counter, kind: kind))
+            current.append(ProseSegment(
+                id: counter,
+                kind: kind,
+                joinsPrevious: !current.isEmpty && !passedSpace
+            ))
             counter += 1
+            passedSpace = false
         }
 
         func word(_ text: String, _ style: ProseStyle, _ destination: String? = nil) {
@@ -384,31 +403,35 @@ struct ProseSegment: Identifiable {
         func breakLine() {
             lines.append(current)
             current = []
+            passedSpace = false
         }
 
         func append(_ nodes: [InlineNode], style: ProseStyle, destination: String? = nil) {
             for node in nodes {
                 switch node {
                 case .text(let value):
-                    for run in value.split(separator: " ", omittingEmptySubsequences: true) {
-                        // A standard emoji leaves the word as a segment of its
-                        // own, so it can be clicked — but not out of a link,
-                        // where the whole run is the link.
-                        guard destination == nil, run.contains(where: \.isEmojiCluster) else {
-                            word(String(run), style, destination)
-                            continue
-                        }
-                        var letters = ""
-                        for character in run {
-                            if character.isEmojiCluster {
-                                if !letters.isEmpty { word(letters, style); letters = "" }
-                                emit(.emoji(EmojiRef(name: String(character))))
-                            } else {
-                                letters.append(character)
-                            }
-                        }
-                        if !letters.isEmpty { word(letters, style) }
+                    // Walked a character at a time, so every segment knows
+                    // whether a space came before it. A standard emoji leaves
+                    // the word as a segment of its own, so it can be clicked —
+                    // but not out of a link, where the whole run is the link.
+                    var letters = ""
+                    func flush() {
+                        guard !letters.isEmpty else { return }
+                        word(letters, style, destination)
+                        letters = ""
                     }
+                    for character in value {
+                        if character == " " {
+                            flush()
+                            passedSpace = true
+                        } else if destination == nil, character.isEmojiCluster {
+                            flush()
+                            emit(.emoji(EmojiRef(name: String(character))))
+                        } else {
+                            letters.append(character)
+                        }
+                    }
+                    flush()
                 case .styled(let inline, let children):
                     append(children, style: style.adding(inline), destination: destination)
                 case .code(let value):

@@ -82,7 +82,7 @@ struct ReasonField: View {
             .padding(.horizontal, Spacing.snug)
             .padding(.vertical, Spacing.base)
             .background(Palette.surfaceRaised, in: .rect(cornerRadius: Radius.chip))
-            .specularEdge(in: RoundedRectangle(cornerRadius: Radius.chip))
+            .overlay { RoundedRectangle(cornerRadius: Radius.chip).strokeBorder(Palette.edge) }
             .onChange(of: text) { _, reason in
                 if reason.count > ModerationReason.maximumLength {
                     text = String(reason.prefix(ModerationReason.maximumLength))

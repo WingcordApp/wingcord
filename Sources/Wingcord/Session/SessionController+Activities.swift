@@ -18,14 +18,21 @@ extension SessionController {
     /// grouping at all. Requested together rather than in sequence — neither
     /// depends on the other, and the launcher opens on whichever is slower.
     func loadActivityDirectory() async {
-        guard model.activityDirectory.isEmpty else { return }
+        // **Keyed on the collections, never on the app table.** That table is
+        // also filled by `resolveApplications` and the Recents row, which put
+        // apps in it long before a launcher opens — and a guard on "any app at
+        // all" read the directory as loaded when it never was: the launcher
+        // drew Recents alone and the call's shelf waited for ever.
+        guard model.activityDirectory.collections.isEmpty, !isLoadingActivityDirectory else { return }
+        isLoadingActivityDirectory = true
+        defer { isLoadingActivityDirectory = false }
         let locale = metadata.locale
 
         async let shelf = try? rest.activityShelf()
         async let collections = try? rest.activityCollections(locale: locale)
-        let (apps, rows) = await (shelf, collections)
+        let (shelfApps, rows) = await (shelf, collections)
 
-        guard let apps, let rows, !rows.isEmpty else {
+        guard let ranked = shelfApps, let rows, !rows.isEmpty else {
             // Nothing partial: a launcher showing four of nine collections with
             // no way to say so is worse than one that says it could not load.
             Self.trace("activities: directory unavailable")
@@ -36,7 +43,9 @@ extension SessionController {
         // the tagline and the server count — where the shelf's carry the asset
         // map. Each row keeps its collection's copy and borrows the shelf's
         // artwork, which is the only field the collections route never sends.
-        var merged = apps
+        let apps = Dictionary(ranked.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        // What was resolved elsewhere stays beside the shelf's own.
+        var merged = model.activityDirectory.apps.merging(apps) { _, shelf in shelf }
         let enriched = rows.map { collection in
             var collection = collection
             collection.apps = collection.apps.map { app in
@@ -49,7 +58,9 @@ extension SessionController {
             return collection
         }
 
-        model.activityDirectory = ActivityDirectory(collections: enriched, apps: merged)
+        model.activityDirectory = ActivityDirectory(
+            collections: enriched, apps: merged, shelf: ranked.map(\.id)
+        )
         model.activitySectionsCache = nil
         model.activityRevision &+= 1
     }

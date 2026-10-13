@@ -96,14 +96,31 @@ struct ChannelCreationRequest: Identifiable, Hashable {
     var parentID: ChannelID?
     /// `.category` for Create Category; otherwise the type the list opens on.
     var kind: ChannelKind
+    /// Discord's Duplicate Channel: the channel whose name, permissions, user
+    /// limit and bitrate the new one copies, as it was when the item was
+    /// chosen. Its type is fixed and there is no privacy switch — the
+    /// permissions are the copied ones.
+    var duplicating: Channel?
 
-    var id: String { "\(guildID.rawValue)-\(parentID?.rawValue ?? 0)-\(kind.rawValue)" }
+    var id: String {
+        "\(guildID.rawValue)-\(parentID?.rawValue ?? 0)-\(kind.rawValue)-\(duplicating?.id.rawValue ?? 0)"
+    }
 }
 
 extension AppModel {
     func openChannelCreation(inGuild guildID: GuildID, parentID: ChannelID? = nil, kind: ChannelKind = .text) {
         channelOptionsMenu = nil
         channelCreation = ChannelCreationRequest(guildID: guildID, parentID: parentID, kind: kind)
+    }
+
+    /// Discord's Duplicate Channel, for a reader with Manage Channels: Create
+    /// Channel with the name, type and category of `channelID`.
+    func openChannelDuplication(of channelID: ChannelID) {
+        guard let channel = channelIndex[channelID], let guildID = channel.guildID else { return }
+        channelOptionsMenu = nil
+        channelCreation = ChannelCreationRequest(
+            guildID: guildID, parentID: channel.parentID, kind: channel.kind, duplicating: channel
+        )
     }
 
     /// A category's "+": a text channel inside it.

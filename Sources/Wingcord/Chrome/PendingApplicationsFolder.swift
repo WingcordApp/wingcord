@@ -120,7 +120,7 @@ private struct ApplicationCoachmark: View {
                     .font(.system(.callout, weight: .semibold))
                     .frame(maxWidth: .infinity)
             }
-            .buttonStyle(.glassProminent)
+            .buttonStyle(.borderedProminent)
             .controlSize(.large)
             .keyboardShortcut(.defaultAction)
         }

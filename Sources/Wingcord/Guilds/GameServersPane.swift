@@ -178,7 +178,6 @@ private struct GameServerCard: View {
             // that vanishes takes the row's shape with it; one that is present
             // and disabled says the server is the reason.
             .disabled(!server.isJoinable)
-            .opacity(server.isJoinable ? 1 : 0.45)
             .help(server.isJoinable
                 ? "Show how to connect"
                 : "This server is \(server.status.label.lowercased())")

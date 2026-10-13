@@ -131,7 +131,10 @@ struct GameDecodeTests {
     func reviews() throws {
         let game = try decode(sims)
         let reviews = try #require(game.reviews)
-        #expect(reviews.steam?.rows.count == 3)
+        #expect(reviews.steam?.recentRatingCount != nil)
+        #expect(reviews.steam?.localizedRatingCount != nil)
+        #expect(reviews.steam?.ratingCount != nil)
+        #expect(reviews.steamRows(hasStorePage: game.steamStoreURL != nil).map(\.title) == ["Recent", "English"])
         #expect(reviews.openCritic?.tier == .fair)
         #expect(reviews.openCritic?.score == 69)
     }

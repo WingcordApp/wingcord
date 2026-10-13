@@ -1,5 +1,6 @@
 import Foundation
 import WingcordCore
+import WingcordVoice
 
 // MARK: - Calls, in the store
 //
@@ -21,6 +22,15 @@ struct VoiceMemoKey: Hashable, Sendable {
     /// that cannot have changed.
     var voiceRevision: UInt64
     var memberRevision: UInt64
+    /// What they are playing, for the game chip.
+    var voicePresenceRevision: UInt64
+    /// A profile fetched or an avatar's colour derived, for the tile ground
+    /// and the name's face.
+    var identityRevision: UInt64
+    var blockedUserIDs: Set<UserID>
+    var ignoredUserIDs: Set<UserID>
+    /// A role or an overwrite moved, for the soundboard's Use Soundboard.
+    var roleRevision: UInt64
     var speaking: Set<UserID>
     var liveVideo: Set<UserID>
     var spotlight: UserID?
@@ -29,6 +39,7 @@ struct VoiceMemoKey: Hashable, Sendable {
     var isCameraOn: Bool
     var isScreenSharing: Bool
     var quality: VoiceQuality
+    var connectedSince: Date?
 }
 
 extension AppModel {
@@ -78,8 +89,13 @@ extension AppModel {
     /// is the same whichever list is asking — a nickname resolved against the
     /// *selected* server would be the wrong nickname the moment anything but the
     /// open sidebar called this.
-    func voiceChips(in channelID: ChannelID, guildID: GuildID?) -> [VoiceMemberChip] {
-        let states = voiceStates(in: channelID)
+    /// - Parameter onStageOnly: a stage's row lists the people on its stage,
+    ///   not an audience that can run to thousands — filtered before a single
+    ///   chip is built.
+    func voiceChips(in channelID: ChannelID, guildID: GuildID?, onStageOnly: Bool = false) -> [VoiceMemberChip] {
+        let states = voiceStates(in: channelID).filter {
+            !onStageOnly || (!$0.isSuppressed && $0.requestToSpeakAt == nil)
+        }
         guard !states.isEmpty else { return [] }
         var chips: [VoiceMemberChip] = []
         chips.reserveCapacity(states.count)
@@ -88,7 +104,7 @@ extension AppModel {
             let presence = presences[state.userID]
             let status = presence?.customStatus
             let game = presence?.primaryActivity
-            chips.append(VoiceMemberChip(
+            var chip = VoiceMemberChip(
                 id: state.userID,
                 name: voiceName(of: state.userID, inGuild: guildID),
                 avatarURL: user.flatMap { avatarURL(for: $0, side: Metrics.avatarVoiceRow) },
@@ -115,7 +131,12 @@ extension AppModel {
                         guildID: guildID, channelID: channelID, userID: state.userID
                     )
                     : nil
-            ))
+            )
+            if state.channelID == connectedVoiceChannelID, state.userID != currentUserID {
+                chip.isLocallyMuted = audioContext.isMuted(state.userID)
+                chip.platform = voicePlatforms[state.userID]
+            }
+            chips.append(chip)
         }
         return chips
     }
@@ -139,6 +160,33 @@ extension AppModel {
         return applicationIconURL(applicationID, side: Metrics.voiceGameMark)
     }
 
+    /// The avatar a call tile's colour is read from, in points: Discord's
+    /// `getAvatarURL(guildId, 80)` — the profile's own rendition, so a person
+    /// whose profile was opened already has the answer.
+    static let tileGroundSide = CGFloat(ProfileThemePalette.profilePixelSize) / 2
+
+    /// A call tile's colour — see `VoiceTileGround`. Every colour is
+    /// desaturated as the reader asked before it is mixed, as Discord's are.
+    private func tileGround(of userID: UserID, user: User?, inGuild guildID: GuildID?) -> VoiceTileGround? {
+        let saturation = userColorSaturation
+        if let user, let chosen = cosmetics(of: user)?.themeColorValues, chosen.count >= 2 {
+            let base = ProfileThemeColors.modalBackground(primary: chosen[0], secondary: chosen[1])
+            return VoiceTileGround(
+                primary: UserColor.desaturated(chosen[0], by: saturation),
+                secondary: UserColor.desaturated(chosen[1], by: saturation),
+                base: UserColor.desaturated(base, by: saturation)
+            )
+        }
+        guard let url = tileGroundArtwork(of: userID, inGuild: guildID),
+              let colour = derivedPalettes[url]?.first
+        else { return nil }
+        return VoiceTileGround(flat: UserColor.desaturated(colour, by: saturation))
+    }
+
+    private func tileGroundArtwork(of userID: UserID, inGuild guildID: GuildID?) -> URL? {
+        avatarURL(forUserID: userID, inGuild: guildID, side: Self.tileGroundSide)
+    }
+
     /// Whether the reader is in this channel's call.
     func isConnected(to channelID: ChannelID) -> Bool {
         connectedVoiceChannelID == channelID
@@ -159,16 +207,29 @@ extension AppModel {
         return VoiceParticipant(
             id: state.userID,
             displayName: voiceName(of: state.userID, inGuild: guildID),
-            avatarURL: user.flatMap { avatarURL(for: $0, side: Metrics.avatarProfile) },
+            // The server's own face where they set one, as Discord's tile
+            // draws it — and the face the ground's colour is read from.
+            avatarURL: avatarURL(forUserID: state.userID, inGuild: guildID, side: Metrics.avatarProfile),
             monogram: user?.monogram ?? "?",
-            nameColor: voiceNameColor(of: state.userID, inGuild: guildID),
+            nameFont: user.flatMap { cosmetics(of: $0)?.displayNameStyle?.font },
+            ground: tileGround(of: state.userID, user: user, inGuild: guildID),
+            groundArtwork: tileGroundArtwork(of: state.userID, inGuild: guildID),
             // Our own tile lights from the engine's gate, not from a packet we
             // sent to ourselves — there is no loopback, so a self tile driven
             // by `speakingUserIDs` never lights at all.
             isSpeaking: isSelf ? isSelfSpeaking : speakingUserIDs.contains(state.userID),
             isSelfMuted: isSelf ? isSelfMuted : state.isSelfMuted,
             isServerMuted: state.isServerMuted,
+            isServerDeafened: state.isServerDeafened,
             isDeafened: isSelf ? isSelfDeafened : state.isSelfDeafened,
+            isLocallyMuted: !isSelf && audioContext.isMuted(state.userID),
+            isBlocked: blockedUserIDs.contains(state.userID),
+            isIgnored: ignoredUserIDs.contains(state.userID),
+            platform: voicePlatforms[state.userID],
+            // Discord's game chip: the activity a game is played under.
+            game: presences[state.userID]?.activities?.list
+                .first { $0.kind == .playing }
+                .map { VoiceGame(name: $0.name, iconURL: applicationIconURL($0.applicationID, side: 32)) },
             isCameraOn: isSelf ? isCameraOn : state.isCameraOn,
             isStreaming: isSelf ? isScreenSharing : state.isStreaming,
             isSelf: isSelf,
@@ -222,6 +283,11 @@ extension AppModel {
             channelID: channelID,
             voiceRevision: voiceRevision,
             memberRevision: memberRevision,
+            voicePresenceRevision: voicePresenceRevision,
+            identityRevision: identityRevision,
+            blockedUserIDs: blockedUserIDs,
+            ignoredUserIDs: ignoredUserIDs,
+            roleRevision: roleRevision,
             speaking: speakingUserIDs,
             liveVideo: liveVideoUserIDs,
             spotlight: spotlightUserID,
@@ -229,7 +295,8 @@ extension AppModel {
             isDeafened: isSelfDeafened,
             isCameraOn: isCameraOn,
             isScreenSharing: isScreenSharing,
-            quality: voiceQuality
+            quality: voiceQuality,
+            connectedSince: voiceConnectedSince
         )
         if let voicePresentationCache, voicePresentationCache.key == key {
             return voicePresentationCache.value
@@ -259,10 +326,23 @@ extension AppModel {
             isCameraOn: isCameraOn,
             isScreenSharing: isScreenSharing,
             quality: voiceQuality,
-            ringingUserIDs: directCalls[channelID]?.ringingUserIDs ?? []
+            ringingUserIDs: directCalls[channelID]?.ringingUserIDs ?? [],
+            soundboard: soundboardAccess(in: channel),
+            canLaunchActivities: channel.guildID == nil
+                || permissionGate.permissions(in: channel.id).contains(.useEmbeddedActivities),
+            connectedSince: voiceConnectedSince
         )
         voicePresentationCache = (key, value)
         return value
+    }
+
+    /// Whether the call's soundboard can be opened — see `SoundboardAccess`.
+    private func soundboardAccess(in channel: Channel) -> SoundboardAccess {
+        if channel.guildID != nil, !permissionGate.permissions(in: channel.id).contains(.useSoundboard) {
+            return .unavailable
+        }
+        let me = currentUserID.flatMap { voiceStates[$0] }
+        return me?.isServerMuted == true ? .serverMuted : .available
     }
 
     /// Who fills the stage.
@@ -280,78 +360,135 @@ extension AppModel {
 
     // MARK: The soundboard
 
-    /// Every sound the reader could press here, grouped by where it came from.
+    /// The sound each person just pressed, by name, for the chip on their
+    /// tile — every call surface draws the same ones.
+    var soundboardEffectNames: [UserID: String] {
+        var names: [UserID: String] = [:]
+        for (userID, soundID) in soundboardEffects {
+            names[userID] = soundboardSound(id: soundID)?.name ?? "sound"
+        }
+        return names
+    }
+
+    /// Every sound the reader could press here, as Discord's picker lays it
+    /// out — its `useSoundGrid`:
     ///
-    /// **Discord's own six are always first and never locked.** They are the
-    /// only sounds an account with no subscription can use anywhere, so putting
-    /// them anywhere but the top makes the free half of the feature the half
-    /// nobody finds.
+    /// Favorites, then Frequently Used (the three most played that are not
+    /// favourites), then the call's own server — never locked, with Add Sound
+    /// where a slot is free and the reader may add — then Discord Sounds, then
+    /// every other server with sounds, locked without Nitro. **With Nitro,
+    /// Discord Sounds goes last** (`p||eP(i,s)` before the other servers,
+    /// `p&&eP(i,s)` after them).
     var soundboardPresentation: SoundboardPresentation {
         let playsEverywhere = entitlements.has(.soundboardEverywhere)
-        let defaults = defaultSoundboardSounds
-        let perGuild = guildSoundboardSounds
-        let guildTable = guilds
+        let callID = connectedVoiceChannelID
+        let home = callID.flatMap { channelIndex[$0] }?.guildID
+        let channelPermissions = home != nil ? callID.map { permissionGate.permissions(in: $0) } ?? [] : []
+        let guildPermissions = home.map { permissionGate.permissions(inGuild: $0) } ?? []
+        let me = currentUserID.flatMap { voiceStates[$0] }
         let key = SoundboardMemoKey(
             revision: soundboardRevision,
-            guildID: selectedGuildID,
-            playsEverywhere: playsEverywhere
+            guildID: home,
+            playsEverywhere: playsEverywhere,
+            channelPermissions: channelPermissions,
+            guildPermissions: guildPermissions,
+            isSilenced: isSelfDeafened || (me?.isServerMuted ?? false) || (me?.isSuppressed ?? false),
+            guildOrder: orderedGuildIDs,
+            favorites: soundboardFavorites,
+            frequent: soundboardFrequentSoundIDs
         )
         if let soundboardCache, soundboardCache.key == key { return soundboardCache.value }
 
-        var sections: [SoundboardPresentation.Section] = []
-        if !defaults.isEmpty {
-            sections.append(SoundboardPresentation.Section(
-                id: "default",
-                title: "Discord Sounds",
-                iconURL: nil,
-                monogram: "♪",
-                isLocked: false,
-                sounds: defaults.map { entry(for: $0, locked: false) }
-            ))
+        let perGuild = guildSoundboardSounds
+        let mayUseExternal = channelPermissions.contains(.useExternalSounds)
+        func entry(_ sound: SoundboardSound) -> SoundboardPresentation.Entry {
+            SoundboardPresentation.Entry(
+                id: sound.id,
+                name: sound.name,
+                emoji: sound.emojiName,
+                emojiURL: sound.emojiID.flatMap {
+                    CDN.emoji(id: EmojiID(rawValue: $0), animated: false, side: 22)
+                },
+                isLocked: !SoundboardGate.canPlay(
+                    sound, playsEverywhere: playsEverywhere, inGuild: home,
+                    mayUseExternalSounds: mayUseExternal
+                ),
+                isFavorite: UInt64(sound.id).map(key.favorites.contains) ?? false,
+                refusal: SoundboardGate.refusal(sound, playsEverywhere: playsEverywhere, inGuild: home)
+            )
         }
-
-        let home = connectedVoiceChannelID.flatMap { channelIndex[$0] }?.guildID
-            ?? selectedGuildID
-        for guildID in orderedGuildIDs {
-            guard let sounds = perGuild[guildID], !sounds.isEmpty,
-                  let guild = guildTable[guildID] else { continue }
-            let isLocked = !SoundboardGate.canPlay(
-                sounds[0], playsEverywhere: playsEverywhere, inGuild: home
-            ) && guildID != home
-            sections.append(SoundboardPresentation.Section(
-                id: String(guildID.rawValue),
+        func serverSection(_ guild: Guild, sounds: [SoundboardSound], isLocked: Bool) -> SoundboardPresentation.Section {
+            SoundboardPresentation.Section(
+                id: String(guild.id.rawValue),
+                kind: .server,
                 title: guild.name,
                 iconURL: guild.iconHash.flatMap {
-                    CDN.guildIcon(guildID: guildID, hash: $0, side: Metrics.avatarRow)
+                    CDN.guildIcon(guildID: guild.id, hash: $0, side: Metrics.avatarRow)
                 },
                 monogram: Self.soundboardMonogram(guild.name),
                 isLocked: isLocked,
-                sounds: sounds.map {
-                    entry(
-                        for: $0,
-                        locked: !SoundboardGate.canPlay(
-                            $0, playsEverywhere: playsEverywhere, inGuild: home
-                        )
-                    )
-                }
-            ))
+                sounds: sounds.map(entry)
+            )
         }
 
-        let value = SoundboardPresentation(sections: sections, playsEverywhere: playsEverywhere)
+        var byID: [String: SoundboardSound] = [:]
+        for sound in defaultSoundboardSounds { byID[sound.id] = sound }
+        for sounds in perGuild.values { for sound in sounds { byID[sound.id] = sound } }
+
+        var sections: [SoundboardPresentation.Section] = []
+        let favorites = key.favorites.inOrder.compactMap { byID[String($0)] }
+        if !favorites.isEmpty {
+            sections.append(SoundboardPresentation.Section(
+                id: "favorites", kind: .favorites, title: "Favorites", iconURL: nil, monogram: "",
+                isLocked: false, sounds: favorites.map(entry)
+            ))
+        }
+        let frequent = key.frequent
+            .filter { id in !(UInt64(id).map(key.favorites.contains) ?? false) }
+            .prefix(3)
+            .compactMap { byID[$0] }
+        if !frequent.isEmpty {
+            sections.append(SoundboardPresentation.Section(
+                id: "frequently-used", kind: .frequentlyUsed, title: "Frequently Used", iconURL: nil,
+                monogram: "", isLocked: false, sounds: frequent.map(entry)
+            ))
+        }
+        // The call's own server, once its sounds have been read — an Add Sound
+        // tile alone before then would say the server has none.
+        if let home, let guild = guilds[home], let sounds = perGuild[home] {
+            var section = serverSection(guild, sounds: sounds, isLocked: false)
+            let canAdd = guildPermissions.contains(.createExpressions)
+                || guildPermissions.contains(.manageExpressions)
+            if (canAdd && sounds.count < ExpressionSlots.soundboard(premiumTier: guild.premiumTier))
+                || sounds.isEmpty {
+                section.addSound = SoundboardPresentation.AddSound(
+                    guildID: home, guildName: guild.name, canAdd: canAdd
+                )
+            }
+            sections.append(section)
+        }
+        let defaults = defaultSoundboardSounds.isEmpty ? nil : SoundboardPresentation.Section(
+            id: "default", kind: .defaults, title: "Discord Sounds", iconURL: nil, monogram: "",
+            isLocked: false, sounds: defaultSoundboardSounds.map(entry)
+        )
+        if !playsEverywhere, let defaults { sections.append(defaults) }
+        for guildID in key.guildOrder where guildID != home {
+            guard let sounds = perGuild[guildID], !sounds.isEmpty, let guild = guilds[guildID] else { continue }
+            sections.append(serverSection(guild, sounds: sounds, isLocked: !playsEverywhere))
+        }
+        if playsEverywhere, let defaults { sections.append(defaults) }
+
+        let value = SoundboardPresentation(
+            sections: sections,
+            playsEverywhere: playsEverywhere,
+            isSilenced: key.isSilenced,
+            // Discord offers Server Settings to someone who may both create
+            // and manage the server's expressions.
+            managedGuildID: guildPermissions.contains(.createExpressions)
+                && guildPermissions.contains(.manageExpressions) ? home : nil
+        )
         soundboardCache = (key, value)
         return value
-    }
-
-    private func entry(for sound: SoundboardSound, locked: Bool) -> SoundboardPresentation.Entry {
-        SoundboardPresentation.Entry(
-            id: sound.id,
-            name: sound.name,
-            emoji: sound.emojiName,
-            emojiURL: sound.emojiID.flatMap {
-                CDN.emoji(id: EmojiID(rawValue: $0), animated: false, side: 22)
-            },
-            isLocked: locked
-        )
     }
 
     private static func soundboardMonogram(_ name: String) -> String {
@@ -373,6 +510,48 @@ struct SoundboardMemoKey: Hashable, Sendable {
     var revision: UInt64
     var guildID: GuildID?
     var playsEverywhere: Bool
+    var channelPermissions: Permissions
+    var guildPermissions: Permissions
+    var isSilenced: Bool
+    var guildOrder: [GuildID]
+    var favorites: SoundboardFavorites
+    var frequent: [String]
+}
+
+// MARK: - Going live
+
+/// What the Go Live sheet's surface shows.
+enum GoLivePreview: Equatable {
+    /// Nothing picked yet.
+    case empty
+    /// Picked, and the capture is coming up.
+    case starting
+    /// The picture that Go Live will send.
+    case previewing
+    /// The capture refused, in the system's own words.
+    case failed(String)
+}
+
+/// What is picked for a share, as the surfaces name it.
+struct ScreenShareSourceSummary: Equatable {
+    /// Discord's name for it — the windows' titles, the applications', or
+    /// "Entire Screen".
+    var name: String
+    var hasWindows: Bool
+    var hasApplications: Bool
+
+    init(_ source: ShareSource) {
+        name = source.name
+        hasWindows = source.hasWindows
+        hasApplications = source.hasApplications
+    }
+
+    /// What Discord's menu calls picking again: "Add Window" over windows,
+    /// "Add Application" over applications, and "Change Windows" over a
+    /// screen.
+    var changeTitle: String {
+        if hasWindows { "Add Window" } else if hasApplications { "Add Application" } else { "Change Windows" }
+    }
 }
 
 // MARK: - A picture of somebody's screen share

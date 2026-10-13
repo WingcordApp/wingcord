@@ -45,5 +45,56 @@ struct ReadyEntitlementsTests {
         """)
         #expect(ready.premiumType == nil)
         #expect(ready.ageVerificationStatus == nil)
+        #expect(ready.ageGatedFeatures.isEmpty)
+    }
+
+    /// `regional_feature_config.age_gated_features` — what Discord's
+    /// `RegionalFeatureConfigStore` reads — with STAGE_SPEAKING (128) set.
+    @Test("The region's age-gated features come off READY")
+    func regionalGate() throws {
+        let ready = try Self.snapshot("""
+        {
+          "session_id": "s", "user": { "id": "1", "username": "reader" },
+          "regional_feature_config": {
+            "age_gated_features": 129, "teen_by_default_settings": 0,
+            "should_collect_app_store_signal": false
+          }
+        }
+        """)
+        #expect(ready.ageGatedFeatures.contains(.stageSpeaking))
+    }
+
+    /// Never captured off a real READY, so a shape nobody expected must cost
+    /// the gate and nothing else.
+    @Test("A regional config of the wrong shape gates nothing and READY survives")
+    func malformedRegionalGate() throws {
+        let ready = try Self.snapshot("""
+        {
+          "session_id": "s", "user": { "id": "1", "username": "reader" },
+          "regional_feature_config": { "age_gated_features": "128" }
+        }
+        """)
+        #expect(ready.ageGatedFeatures.isEmpty)
+        let list = try Self.snapshot("""
+        { "session_id": "s", "user": { "id": "1", "username": "reader" }, "regional_feature_config": [1] }
+        """)
+        #expect(list.ageGatedFeatures.isEmpty)
+    }
+
+    /// §5.9: READY nests a guild's own fields under `properties`.
+    @Test("A stage's video limit is read from both guild shapes")
+    func stageVideoLimit() throws {
+        let ready = try Self.snapshot("""
+        {
+          "session_id": "s", "user": { "id": "1", "username": "reader" },
+          "guilds": [
+            { "id": "10", "properties": { "name": "nested", "max_stage_video_channel_users": 300 } },
+            { "id": "11", "name": "flat", "max_stage_video_channel_users": 50 }
+          ]
+        }
+        """)
+        let limits = Dictionary(uniqueKeysWithValues: ready.guilds.map { ($0.id.rawValue, $0.maxStageVideoUsers) })
+        #expect(limits[10] == 300)
+        #expect(limits[11] == 50)
     }
 }

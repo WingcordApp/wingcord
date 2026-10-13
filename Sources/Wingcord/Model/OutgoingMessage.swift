@@ -27,6 +27,8 @@ struct OutgoingMessage: Identifiable, Equatable, Sendable {
     struct Request: Equatable, Sendable {
         var content: String
         var replyingTo: MessageID?
+        /// Whether the reply pings its author — the reply bar's @ ON / OFF.
+        var pingsRepliedAuthor = true
         var stickerIDs: [UInt64] = []
         /// A poll, which Discord posts with empty content.
         var poll: PollDraft?

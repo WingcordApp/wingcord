@@ -188,7 +188,7 @@ struct NewThreadPanel: View {
                 onSubmit: submit
             )
             .padding(Spacing.base)
-            .glassEffect(.clear, in: .rect(cornerRadius: Radius.glass))
+            .glassEffect(.regular, in: .rect(cornerRadius: Radius.glass))
             .disabled(isSubmitting)
         }
         .padding(.horizontal, Spacing.snug)

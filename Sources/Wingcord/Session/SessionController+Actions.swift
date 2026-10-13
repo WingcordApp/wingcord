@@ -105,10 +105,19 @@ extension SessionController {
     // MARK: Editing and deleting
 
     func edit(_ messageID: MessageID, in channelID: ChannelID, content: String) {
+        // **A quiet reply stays quiet.** Discord's edit re-sends the no-ping
+        // mentions for a reply whose quoted author is in hand and was not
+        // pinged by it; without them, saving a typo pings them after all.
+        let keepsReplyQuiet = model.message(messageID, in: channelID).map { message in
+            guard message.kind == .reply, let quoted = message.reference?.authorID else { return false }
+            return !message.mentionedUserIDs.contains(quoted)
+        } ?? false
         Task { [weak self] in
             guard let self else { return }
             do {
-                let message = try await rest.editMessage(messageID, in: channelID, content: content)
+                let message = try await rest.editMessage(
+                    messageID, in: channelID, content: content, keepsReplyQuiet: keepsReplyQuiet
+                )
                 // **Merged, not replaced.** The edit route answers with the whole
                 // message, but a `pinned` of false on a pinned message would
                 // unpin it locally — the same class of bug the pins route has.
@@ -413,7 +422,11 @@ extension SessionController {
         case overlay
     }
 
-    func openConversation(with userID: UserID, to destination: ConversationDestination = .window) {
+    func openConversation(
+        with userID: UserID,
+        to destination: ConversationDestination = .window,
+        then followUp: ((ChannelID) -> Void)? = nil
+    ) {
         Task { [weak self] in
             guard let self else { return }
             do {
@@ -422,6 +435,7 @@ extension SessionController {
                 case .window: model.openDirectMessage(channelID)
                 case .overlay: model.overlay.openChat(channelID)
                 }
+                followUp?(channelID)
             } catch {
                 Self.trace("open DM \(userID) failed: \(Self.describe(error))")
                 model.reportActionFailure(Self.describe(error))
@@ -724,6 +738,48 @@ extension SessionController {
 
 extension SessionController {
 
+    /// Answers a moderator's invitation to speak: the hand down either way,
+    /// and the suppression lifted on Accept — Discord's own body,
+    /// `{suppress, request_to_speak_timestamp: null, channel_id}`.
+    func writeStageInviteAnswer(_ accept: Bool, inGuild guildID: GuildID, channelID: ChannelID) {
+        Task { [weak self] in
+            guard let self else { return }
+            do {
+                try await rest.setSelfStageState(
+                    inGuild: guildID,
+                    channelID: channelID,
+                    suppress: !accept,
+                    requestToSpeakAt: .some(nil)
+                )
+            } catch {
+                Self.trace("stage invite answer \(channelID): \(Self.describe(error))")
+                model.reportActionFailure(Self.describe(error))
+            }
+        }
+    }
+
+    /// Writes one permission overwrite on a channel. The gateway's channel
+    /// update is what moves the model, as it does for the settings pages.
+    func writeChannelOverwrite(
+        in channelID: ChannelID,
+        subjectID: UInt64,
+        isRole: Bool,
+        allow: Permissions,
+        deny: Permissions
+    ) {
+        Task { [weak self] in
+            guard let self else { return }
+            do {
+                try await rest.setChannelOverwrite(
+                    in: channelID, subjectID: subjectID, isRole: isRole, allow: allow, deny: deny
+                )
+            } catch {
+                Self.trace("channel overwrite \(channelID): \(Self.describe(error))")
+                model.reportActionFailure(Self.describe(error))
+            }
+        }
+    }
+
     /// Raises the reader's hand, or lowers it.
     ///
     /// **`Date.now` is computed here, at the moment of sending.** Discord
@@ -773,8 +829,12 @@ extension SessionController {
                         channelID: channelID
                     )
                 } else {
+                    // Discord's own `L(channel, suppress)`: the hand comes down
+                    // with every move of one's own, or an unsuppressed
+                    // moderator would read as an invitation still waiting.
                     try await rest.setSelfStageState(
-                        inGuild: guildID, channelID: channelID, suppress: suppress
+                        inGuild: guildID, channelID: channelID, suppress: suppress,
+                        requestToSpeakAt: .some(nil)
                     )
                 }
             } catch {
@@ -785,38 +845,58 @@ extension SessionController {
         }
     }
 
-    func writeStartStage(
+    /// Starts a stage, then steps the reader onto it — Discord's own order
+    /// (module 849736, `Nx`): the instance, and only then up, silently, so the
+    /// chat gains no "is now a speaker." for the person who started it.
+    ///
+    /// Throws Discord's refusal of the stage itself, for the dialog that
+    /// asked; a refused step up is the moderator's to retry with Speak on
+    /// Stage, and is only traced.
+    func startStage(
         channelID: ChannelID,
         guildID: GuildID,
         topic: String,
-        notifyEveryone: Bool
-    ) {
-        Task { [weak self] in
-            guard let self else { return }
-            do {
-                if let stage = try await rest.startStage(
-                    inChannel: channelID, topic: topic, notifyEveryone: notifyEveryone
-                ) {
-                    model.applyStage(stage)
-                }
-            } catch {
-                Self.trace("start stage \(channelID): \(Self.describe(error))")
-                model.reportActionFailure(Self.describe(error))
+        notifyEveryone: Bool,
+        scheduledEventID: UInt64?
+    ) async throws {
+        do {
+            if let stage = try await rest.startStage(
+                inChannel: channelID,
+                topic: topic,
+                notifyEveryone: notifyEveryone,
+                scheduledEventID: scheduledEventID
+            ) {
+                model.applyStage(stage)
             }
+        } catch {
+            Self.trace("start stage \(channelID): \(Self.describe(error))")
+            throw error
+        }
+        guard let userID = model.currentUserID else { return }
+        model.applyStageSuppress(false, for: userID)
+        do {
+            try await rest.setSelfStageState(
+                inGuild: guildID,
+                channelID: channelID,
+                suppress: false,
+                requestToSpeakAt: .some(nil),
+                silent: true
+            )
+        } catch {
+            Self.trace("start stage \(channelID) step up: \(Self.describe(error))")
+            model.applyStageSuppress(true, for: userID)
         }
     }
 
-    func writeStageTopic(_ topic: String, channelID: ChannelID) {
-        Task { [weak self] in
-            guard let self else { return }
-            do {
-                if let stage = try await rest.setStageTopic(topic, inChannel: channelID) {
-                    model.applyStage(stage)
-                }
-            } catch {
-                Self.trace("stage topic \(channelID): \(Self.describe(error))")
-                model.reportActionFailure(Self.describe(error))
+    /// Discord's Edit Stage. Throws its refusal for the dialog that asked.
+    func setStageTopic(_ topic: String, privacyLevel: StagePrivacyLevel, channelID: ChannelID) async throws {
+        do {
+            if let stage = try await rest.setStageTopic(topic, privacyLevel: privacyLevel, inChannel: channelID) {
+                model.applyStage(stage)
             }
+        } catch {
+            Self.trace("stage topic \(channelID): \(Self.describe(error))")
+            throw error
         }
     }
 

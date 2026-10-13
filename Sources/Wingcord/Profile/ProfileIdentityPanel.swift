@@ -314,7 +314,8 @@ struct ProfileIdentityPanel: View {
                     margin: Self.gutter,
                     fill: ground.statusBubbleFill,
                     ink: ground.statusBubbleInk,
-                    answer: model.statusAnswering(for: profile)
+                    answer: model.statusAnswering(for: profile),
+                    isSelectable: true
                 )
             }
         }
@@ -455,22 +456,27 @@ struct ProfileIdentityPanel: View {
                         maximumWidth: contentWidth - (profile.nameTag.map { TagChip.width($0) + Spacing.base } ?? 0),
                         maximumLines: 2
                     )
+                    .nameCopyMenu(displayName: profile.displayName, handle: profile.handle)
                 }
                 if let tag = profile.nameTag { TagChip(text: tag) }
                 Spacer(minLength: 0)
             }
 
             HStack(spacing: Spacing.base) {
+                // Selectable, as Discord's are: a handle is the thing people
+                // copy to add somebody.
                 Text(profile.handle)
                     .font(.system(.subheadline, weight: .medium))
                     .foregroundStyle(InkColor.secondary)
                     .lineLimit(1)
+                    .textSelection(.enabled)
                 if let pronouns = profile.pronouns, !pronouns.isEmpty {
                     Text("·").foregroundStyle(InkColor.tertiary)
                     Text(pronouns)
                         .font(.system(.subheadline))
                         .foregroundStyle(InkColor.secondary)
                         .lineLimit(1)
+                        .textSelection(.enabled)
                 }
                 if let editor {
                     ServerTagChooser(
@@ -506,6 +512,7 @@ struct ProfileIdentityPanel: View {
                 Text("Known here as \(nickname)")
                     .font(.system(.caption))
                     .foregroundStyle(InkColor.tertiary)
+                    .textSelection(.enabled)
             }
         }
         .padding(.horizontal, Self.gutter)
@@ -615,7 +622,7 @@ struct ProfileIdentityPanel: View {
             section("Connections", topGap: 24) {
                 VStack(alignment: .leading, spacing: Spacing.base) {
                     if !profile.connections.isEmpty {
-                        ConnectionDock(connections: profile.connections)
+                        ProfileConnectionGrid(connections: profile.connections)
                     }
                     if editor != nil {
                         Button {
@@ -903,120 +910,6 @@ private struct NeutralFriendGlass: ViewModifier {
     }
 }
 
-/// The linked accounts, as the handoff's magnifying dock.
-///
-/// **Marks in a row, and one of them named at a time.** A list of rows is what
-/// the column had and it is right on a card; at 360 points beside a name in
-/// 26-point type it is six grey lines where the design wants a shelf. The marks
-/// carry the recognition — nobody reads "Steam", they see the cog — and the
-/// account under the pointer is the one spelled out, with the facts that service
-/// published beside it.
-///
-/// **No "+" tile.** The handoff has one and it is not real: adding a connection
-/// is the reader's own settings, not something that can be done on somebody
-/// else's profile.
-private struct ConnectionDock: View {
-    var connections: [ConnectedAccount]
-
-    @Environment(\.openURL) private var openURL
-    @Environment(\.motion) private var motion
-    @State private var hovered: ConnectedAccount.ID?
-
-    private static let tile: CGFloat = 37
-
-    /// The one that is spelled out: whichever is under the pointer, else the
-    /// first. **Never nil** — an empty caption column would leave the dock
-    /// looking like it had failed to load half of itself.
-    private var named: ConnectedAccount? {
-        connections.first { $0.id == hovered } ?? connections.first
-    }
-
-    var body: some View {
-        HStack(alignment: .center, spacing: Spacing.base) {
-            HStack(spacing: Spacing.base) {
-                ForEach(connections.prefix(4)) { connection in
-                    tile(connection)
-                }
-            }
-            Spacer(minLength: Spacing.base)
-            if let named {
-                VStack(alignment: .trailing, spacing: 2) {
-                    HStack(spacing: 4) {
-                        Text(named.name)
-                            .font(.system(size: 12, weight: .semibold))
-                            .foregroundStyle(InkColor.primary)
-                            .lineLimit(1)
-                        if named.isVerified {
-                            Image(systemName: "checkmark.seal.fill")
-                                .font(.system(size: 9))
-                                .foregroundStyle(Palette.affirmative)
-                        }
-                    }
-                    Text(caption(named))
-                        .font(.system(size: 11))
-                        .foregroundStyle(InkColor.tertiary)
-                        .lineLimit(1)
-                }
-                .frame(maxWidth: 150, alignment: .trailing)
-            }
-        }
-        .padding(.horizontal, 11)
-        .padding(.vertical, 10)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .glassEffect(.clear.tint(Palette.flyoutTint), in: .rect(cornerRadius: 18))
-        .animation(motion.hover, value: hovered)
-    }
-
-    private func tile(_ connection: ConnectedAccount) -> some View {
-        Button { open(connection) } label: {
-            ConnectionMark(service: connection.service, side: Self.tile)
-                .frame(width: Self.tile, height: Self.tile)
-                .contentShape(.rect(cornerRadius: 11, style: .continuous))
-        }
-        .buttonStyle(.plain)
-        // The dock's own magnification: the mark under the pointer lifts and
-        // grows, which is what makes a row of icons read as a shelf rather than
-        // as a toolbar.
-        .scaleEffect(hovered == connection.id ? 1.16 : 1, anchor: .bottom)
-        .offset(y: hovered == connection.id ? -5 : 0)
-        .zIndex(hovered == connection.id ? 1 : 0)
-        .onHover { hovering in
-            let next = hovering ? connection.id : nil
-            guard hovered != next else { return }
-            hovered = next
-        }
-        .help(connection.profileURL == nil ? "Copy \(connection.name)" : "Open \(connection.name)")
-        .accessibilityLabel(Text(connection.name))
-    }
-
-    /// The service, and up to two of the facts it published about the account.
-    private func caption(_ connection: ConnectedAccount) -> String {
-        let service = BrandMark.mark(for: connection.service)?.name
-            ?? connection.service.capitalized
-        let facts = connection.facts.prefix(2).map(Self.describe)
-        return ([service] + facts).joined(separator: " · ")
-    }
-
-    private static func describe(_ fact: ConnectionFact) -> String {
-        switch fact.content {
-        case .since(let date):
-            "since \(date.formatted(.dateTime.year()))"
-        case .count(let value, let noun):
-            "\(value.formatted(.number)) \(noun)"
-        case .flag(let label):
-            label
-        }
-    }
-
-    private func open(_ connection: ConnectedAccount) {
-        if let url = connection.profileURL {
-            openURL(url)
-        } else {
-            AppModel.copy(connection.name)
-        }
-    }
-}
-
 /// Two dates at the ends of a rule.
 ///
 /// **A span, not a table.** Two label/value rows say the same thing and read as
@@ -1085,6 +978,7 @@ struct ProfileDateSpan: View {
                 .font(.system(size: 14, weight: .semibold))
                 .foregroundStyle(InkColor.primary)
                 .lineLimit(1)
+                .textSelection(.enabled)
             HStack(spacing: 4) {
                 marker(moment)
                 Text(moment.label)
@@ -1092,6 +986,7 @@ struct ProfileDateSpan: View {
                     .foregroundStyle(InkColor.tertiary)
                     .lineLimit(1)
                     .truncationMode(.tail)
+                    .textSelection(.enabled)
             }
         }
         .frame(

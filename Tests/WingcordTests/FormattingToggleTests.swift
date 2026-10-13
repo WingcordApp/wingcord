@@ -46,4 +46,39 @@ struct FormattingToggleTests {
         let back = FormattingToggle.toggleQuote(in: quoted.text, selection: quoted.selection)
         #expect(back.text == text)
     }
+
+    // MARK: The Format menu
+
+    @Test("A heading prefixes every line, swaps for another, and comes off when every line has it")
+    func headings() {
+        let text = "one\ntwo"
+        let title = FormattingToggle.toggleLinePrefix("# ", in: text, selection: NSRange(location: 0, length: 7))
+        #expect(title.text == "# one\n# two")
+        #expect(title.selection == NSRange(location: 2, length: 9))
+        // Heading on a Title swaps the prefix rather than stacking a second.
+        let heading = FormattingToggle.toggleLinePrefix("## ", in: title.text, selection: title.selection)
+        #expect(heading.text == "## one\n## two")
+        // The same prefix again takes it off.
+        let off = FormattingToggle.toggleLinePrefix("## ", in: heading.text, selection: heading.selection)
+        #expect(off.text == text)
+        // Subtext is one of the family.
+        #expect(FormattingToggle.toggleLinePrefix("-# ", in: "### x", selection: NSRange(location: 4, length: 1)).text == "-# x")
+    }
+
+    @Test("A heading on a caret alone prefixes its line and keeps the caret on the word")
+    func headingAtCaret() {
+        let edit = FormattingToggle.toggleLinePrefix("# ", in: "hello", selection: NSRange(location: 0, length: 0))
+        #expect(edit.text == "# hello")
+        #expect(edit.selection == NSRange(location: 2, length: 0))
+    }
+
+    @Test("A code block fences the selection on lines of its own, and unfences it")
+    func codeBlock() {
+        let fenced = FormattingToggle.toggleCodeBlock(in: "let x = 1", selection: NSRange(location: 0, length: 9))
+        #expect(fenced.text == "```\nlet x = 1\n```")
+        #expect(fenced.selection == NSRange(location: 4, length: 9))
+        let back = FormattingToggle.toggleCodeBlock(in: fenced.text, selection: fenced.selection)
+        #expect(back.text == "let x = 1")
+        #expect(back.selection == NSRange(location: 0, length: 9))
+    }
 }

@@ -89,12 +89,22 @@ public struct UploadedAttachment: Sendable {
     public var filename: String
     public var uploadedFilename: String
     public var altText: String?
+    /// The type the file was chosen as — Discord's `original_content_type`,
+    /// which says "image/heic" for a picture its client sent as a JPEG.
+    public var originalContentType: String?
 
-    public init(id: String, filename: String, uploadedFilename: String, altText: String? = nil) {
+    public init(
+        id: String,
+        filename: String,
+        uploadedFilename: String,
+        altText: String? = nil,
+        originalContentType: String? = nil
+    ) {
         self.id = id
         self.filename = filename
         self.uploadedFilename = uploadedFilename
         self.altText = altText
+        self.originalContentType = originalContentType
     }
 }
 
@@ -233,5 +243,38 @@ extension DiscordREST {
                 min(1, Double(totalBytesSent) / Double(totalBytesExpectedToSend))
             )
         }
+    }
+}
+
+// MARK: - Links that have run out
+
+extension DiscordREST {
+    /// Fresh signatures for attachment links that have expired or are about
+    /// to — Discord's `POST /attachments/refresh-urls`, which its client calls
+    /// for a link whose `ex` is less than an hour away (module `679164`).
+    ///
+    /// - Returns: each link Discord answered for, keyed by the link as it was
+    ///   asked. A link it did not answer for is left out, and the caller keeps
+    ///   the one it had.
+    public func refreshAttachmentURLs(_ urls: [String]) async throws -> [String: String] {
+        struct Body: Encodable { var attachment_urls: [String] }
+        struct Reply: Decodable {
+            var refreshed_urls: [Pair]
+            struct Pair: Decodable {
+                var original: String
+                var refreshed: String?
+            }
+        }
+        let reply = try await post(
+            "/attachments/refresh-urls",
+            route: "attachments/refresh-urls",
+            body: Body(attachment_urls: urls),
+            as: Reply.self
+        )
+        var refreshed: [String: String] = [:]
+        for pair in reply.refreshed_urls {
+            if let fresh = pair.refreshed { refreshed[pair.original] = fresh }
+        }
+        return refreshed
     }
 }

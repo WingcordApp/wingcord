@@ -103,10 +103,9 @@ private struct JumpToPresentControl: View, Equatable {
                 .contentShape(.circle)
         }
         .buttonStyle(.plain)
-        // The hover pill's material: it floats over the transcript, so what
-        // passes under it is content, and `.clear` is what lets it lens.
-        .glassEffect(.clear.interactive(), in: .circle)
-        .specularEdge(in: Circle())
+        // A control floating over the transcript: `.regular` glass, the HIG's
+        // default for a control over content.
+        .glassEffect(.regular.interactive(), in: .circle)
         .help("Jump to Present")
         .accessibilityLabel(Text("Jump to Present"))
         .accessibilityValue(Text(hasUnreadBelow ? "New messages below" : ""))

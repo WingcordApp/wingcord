@@ -33,6 +33,9 @@ struct OwnProfileActions {
     var setCustomStatus: (CustomStatus?) -> Void
     var signOut: () -> Void
     var copyUserID: () -> Void
+    /// The block's first page: the custom-status editor when User › Set
+    /// Status… opened the card.
+    var startsOn: OwnProfileSurface = .root
 }
 
 /// Which list the block under the card is showing.
@@ -50,26 +53,17 @@ enum OwnProfileSurface: Hashable {
 extension AppModel {
     /// What the reader's own card offers. Built here rather than in a view, so
     /// the presenter stays a placement problem.
-    func ownProfileActions(dismiss: @escaping () -> Void) -> OwnProfileActions? {
+    func ownProfileActions(
+        startsOn: OwnProfileSurface = .root,
+        dismiss: @escaping () -> Void
+    ) -> OwnProfileActions? {
         guard let userID = currentUserID else { return nil }
         return OwnProfileActions(
             userID: userID,
             status: selfStatus,
             customStatus: selfCustomStatus?.current(),
             developerMode: AppSettings.shared.developerMode,
-            editProfile: { [weak self] in
-                guard let self else { return }
-                // The full profile with its editor already open, at the account
-                // scope — the same entry the server menu's per-server variant
-                // uses. See `ProfileRequest.editsScope`.
-                profileRequest = ProfileRequest(
-                    userID: userID,
-                    guildID: selectedGuildID,
-                    anchor: .zero,
-                    depth: .full,
-                    editsScope: .account
-                )
-            },
+            editProfile: { [weak self] in self?.editOwnProfile() },
             setStatus: { [weak self] in self?.updateSelfStatus($0) },
             setCustomStatus: { [weak self] in self?.updateSelfCustomStatus($0) },
             signOut: { [weak self] in
@@ -79,7 +73,8 @@ extension AppModel {
             copyUserID: {
                 AppModel.copy(userID.description)
                 dismiss()
-            }
+            },
+            startsOn: startsOn
         )
     }
 }
@@ -242,7 +237,12 @@ private struct CustomStatusEditor: View {
             }
             .padding(.horizontal, Spacing.base)
             .padding(.vertical, Spacing.base)
-            .glassEffect(.regular, in: .rect(cornerRadius: Radius.row))
+            // A field on the card's own ground: a step of fill and a hairline,
+            // which read on any profile's colours — not glass in content.
+            .background(Palette.hoverFill, in: .rect(cornerRadius: Radius.row))
+            .overlay {
+                RoundedRectangle(cornerRadius: Radius.row).strokeBorder(Palette.edge)
+            }
 
             Button { isPickingDuration = true } label: {
                 HStack(spacing: Spacing.tight) {
@@ -281,11 +281,11 @@ private struct CustomStatusEditor: View {
                 // is in.
                 if status?.isEmpty == false {
                     Button("Clear", role: .destructive) { commit(nil) }
-                        .buttonStyle(.glass)
+                        .buttonStyle(.bordered)
                 }
                 Spacer(minLength: 0)
                 Button("Save", action: save)
-                    .buttonStyle(.glassProminent)
+                    .buttonStyle(.borderedProminent)
                     .keyboardShortcut(.defaultAction)
             }
         }

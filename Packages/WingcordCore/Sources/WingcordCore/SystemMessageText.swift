@@ -8,16 +8,19 @@ import Foundation
 /// and a blank space, which is indistinguishable from a message that failed to
 /// load. On a `#welcome` channel that is the entire channel.
 ///
-/// The sentence comes back in three pieces rather than one string, because the
+/// The sentence comes back in pieces rather than one string, because the
 /// member's name in the middle is drawn in their role colour and opens their
-/// profile. Interpolating it into a finished string throws away the one range
-/// anything downstream needs.
+/// profile, and a stage's topic at the end is drawn bold. Interpolating them
+/// into a finished string throws away the ranges anything downstream needs.
 public struct SystemSentence: Hashable, Sendable {
     public var prefix: String
     /// The member's name, drawn in their colour and clickable. Empty for events
     /// that name nobody.
     public var name: String
     public var suffix: String
+    /// Drawn bold after the suffix — Discord's `$b` run, the topic a stage
+    /// started, ended or changed to. Empty for every other sentence.
+    public var emphasis = ""
     /// The SF Symbol drawn in the gutter where an avatar would be.
     public var symbolName: String
     /// What the glyph is tinted with.
@@ -185,6 +188,36 @@ public enum SystemMessageText {
             return SystemSentence(
                 prefix: "", name: name, suffix: " started a call.",
                 symbolName: "phone.fill", tint: .quiet
+            )
+
+        // A stage's own lines (`Rv+TSM`, `zla/ux`, `dKW5C+`, `tv2DNy`,
+        // `Yy6vLs`), each with the topic from `content` in bold. Discord tints
+        // only the start's stage mark, green.
+        case .stageStart:
+            return SystemSentence(
+                prefix: "", name: name, suffix: " started ", emphasis: message.content,
+                symbolName: "person.wave.2.fill", tint: .affirmative
+            )
+        case .stageEnd:
+            return SystemSentence(
+                prefix: "", name: name, suffix: " ended ", emphasis: message.content,
+                symbolName: "person.wave.2.fill", tint: .quiet
+            )
+        case .stageSpeaker:
+            return SystemSentence(
+                prefix: "", name: name, suffix: " is now a speaker.",
+                symbolName: "mic.fill", tint: .quiet
+            )
+        case .stageRaiseHand:
+            return SystemSentence(
+                prefix: "", name: name, suffix: " requested to speak.",
+                symbolName: "hand.raised.fill", tint: .quiet
+            )
+        case .stageTopic:
+            return SystemSentence(
+                prefix: "", name: name, suffix: " changed the Stage topic: ",
+                emphasis: message.content,
+                symbolName: "person.wave.2.fill", tint: .quiet
             )
         case .default, .reply, .chatInputCommand, .contextMenuCommand,
              .threadStarterMessage, .unknown:

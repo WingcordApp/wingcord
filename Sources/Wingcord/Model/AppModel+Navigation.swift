@@ -64,6 +64,68 @@ extension AppModel {
         selectChannel(channels[next])
     }
 
+    /// Discord's Navigate between unread channels (⌥⇧↑↓) and its mentions-only
+    /// form (⇧⌥⌘↑↓): the next channel the sidebar shows with something unread —
+    /// or a mention — wrapping round the list. A muted channel is never one.
+    func stepUnreadChannel(by offset: Int, mentionsOnly: Bool) {
+        let channels = navigableChannelIDs
+        guard !channels.isEmpty else { return }
+        let start = selectedChannelID.flatMap { channels.firstIndex(of: $0) } ?? (offset > 0 ? -1 : 0)
+        for step in 1...channels.count {
+            let index = ((start + offset * step) % channels.count + channels.count) % channels.count
+            guard let channel = channelIndex[channels[index]] else { continue }
+            let state = unreadState(of: channel)
+            guard !state.muted, mentionsOnly ? state.mentions > 0 : state.unread else { continue }
+            selectChannel(channel.id)
+            return
+        }
+    }
+
+    /// Discord's Toggle between last server and DMs (⌥⌘→): the direct
+    /// messages, or back to the server the reader was in before them.
+    func toggleDirectMessages() {
+        if let guildID = selectedGuildID {
+            guildBeforeDirectMessages = guildID
+            selectGuild(nil)
+        } else if let guildID = guildBeforeDirectMessages, guilds[guildID] != nil {
+            selectGuild(guildID)
+        }
+    }
+
+    /// Discord's Navigate to current call (⇧⌥⌘V).
+    func goToCurrentCall() {
+        guard let channelID = connectedVoiceChannelID else { return }
+        selectGuild(channelIndex.guildID(of: channelID))
+        selectChannel(channelID)
+    }
+
+    /// Discord's Mark top inbox channel read (⇧⌘E).
+    func markTopInboxChannelRead() {
+        guard let channel = unreadInboxChannels().first else { return }
+        markRead(channel.id)
+    }
+
+    /// Discord's Jump to oldest unread message (⇧PageUp): where the open
+    /// channel's unread begins — the new-messages bar's own jump.
+    func jumpToOldestUnread() {
+        guard let channelID = selectedChannelID,
+              let first = newMessagesBanner(in: channelID)?.firstUnread
+        else { return }
+        sessionController.jumpToMessage(first, in: channelID, highlights: false)
+    }
+
+    /// Discord's ⇧⌘A (`151199`): every category in the open server collapsed —
+    /// or, when every one already is, every one opened.
+    func toggleAllCategories() {
+        guard let guildID = selectedGuildID else { return }
+        let categories = channelIndex.channelIDs(inGuild: guildID).filter { channelIndex[$0]?.kind == .category }
+        if categories.contains(where: { !collapsedCategoryIDs.contains($0) }) {
+            collapsedCategoryIDs.formUnion(categories)
+        } else {
+            collapsedCategoryIDs.subtract(categories)
+        }
+    }
+
     /// Moves `offset` servers through the rail, then opens that server.
     func stepGuild(by offset: Int) {
         let guilds = navigableGuildIDs
@@ -103,7 +165,10 @@ extension AppModel {
         guard let channelID = selectedChannelID,
               let latest = messages(in: channelID)?.messages.last
         else { return false }
-        mutateBox(channelID) { $0.replyingTo = latest.id }
+        mutateBox(channelID) {
+            $0.replyingTo = latest.id
+            $0.replyPings = latest.authorID != currentUserID
+        }
         return true
     }
 }

@@ -240,6 +240,8 @@ public struct Activity: Hashable, Sendable {
     /// "Play on Spotify" and "Listen Along" (module `402857`).
     public var offersPlay: Bool
     public var offersSync: Bool
+    /// A streaming activity's stream — the activity's own `url`.
+    public var url: URL?
 
     public static let syncFlag = 1 << 4
     public static let playFlag = 1 << 5
@@ -252,6 +254,17 @@ public struct Activity: Hashable, Sendable {
               let encoded = syncID.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed)
         else { return nil }
         return URL(string: "https://open.spotify.com/track/\(encoded)")
+    }
+
+    /// Where Watch Stream goes — Discord's rule (module 960076 and its
+    /// `/^https?:\/\/(?:www\.)?(twitch\.tv\/(.+)|youtube.com\/watch\?v=)/`):
+    /// a Streaming activity whose link is a Twitch channel or a YouTube video.
+    /// Nil for anything else, which has no Watch.
+    public var watchURL: URL? {
+        guard kind == .streaming, let url,
+              url.absoluteString.prefixMatch(of: /https?:\/\/(?:www\.)?(twitch\.tv\/(.+)|youtube.com\/watch\?v=)/) != nil
+        else { return nil }
+        return url
     }
 
     /// `status_display_type`.
@@ -289,8 +302,10 @@ public struct Activity: Hashable, Sendable {
         stateURL: URL? = nil,
         syncID: String? = nil,
         offersPlay: Bool = false,
-        offersSync: Bool = false
+        offersSync: Bool = false,
+        url: URL? = nil
     ) {
+        self.url = url
         self.syncID = syncID
         self.offersPlay = offersPlay
         self.offersSync = offersSync

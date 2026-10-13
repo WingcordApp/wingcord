@@ -176,9 +176,9 @@ struct InboxGroupCard: View {
             } label: {
                 Label("Mark As Read", systemImage: "checkmark")
                     .labelStyle(.iconOnly)
-                    .font(.system(size: 11, weight: .semibold))
+                    .font(.system(.subheadline, weight: .semibold))
             }
-            .buttonStyle(.glass)
+            .buttonStyle(.bordered)
             .controlSize(.small)
             .help("Mark as read")
             .disabled(!group.canOpen)

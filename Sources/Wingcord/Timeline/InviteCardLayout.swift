@@ -108,6 +108,8 @@ nonisolated struct InviteCardSlot: Sendable {
         var description: TimelineTextBlock?
         var descriptionOrigin: CGPoint
         var traits: [Trait]
+        /// Discord's "+ N more" chip, where the traits ran out of room.
+        var moreTraits: MoreTraits?
         var inviter: Inviter?
 
         struct Count: Sendable {
@@ -126,6 +128,13 @@ nonisolated struct InviteCardSlot: Sendable {
             var emojiRect: CGRect
             var label: TimelineTextBlock
             var labelOrigin: CGPoint
+        }
+
+        /// The "+ N more" chip — drawn among `traits` — and the traits it
+        /// stands for, which a press opens (`GuildTraitsFlyout`).
+        struct MoreTraits: Sendable {
+            var rect: CGRect
+            var traits: [GuildTrait]
         }
     }
 
@@ -277,8 +286,12 @@ nonisolated enum InviteCardLayoutEngine {
         let mark = card.mark ?? profile.mark
         let markRoom: CGFloat = mark == nil ? 0 : markSide + 4
         let nameFont = NSFont.systemFont(ofSize: style.bodyFont.pointSize, weight: .semibold)
+        // **Hugging, because the mark is placed after it**: a block is as
+        // wide as it was given (INVARIANTS §4.85), so a short name put the
+        // mark at the card's far edge.
         let title = block(profile.name.isEmpty ? card.name : profile.name, font: nameFont,
-                          color: style.primaryColor, width: contentWidth - markRoom, style: style)
+                          color: style.primaryColor, width: contentWidth - markRoom, style: style,
+                          hugs: true)
         let titleOrigin = CGPoint(x: contentX, y: y)
         let markRect = mark == nil ? .zero : CGRect(
             x: contentX + title.size.width + 4,
@@ -320,6 +333,7 @@ nonisolated enum InviteCardLayoutEngine {
         var description: TimelineTextBlock?
         var descriptionOrigin = CGPoint.zero
         var traits: [InviteCardSlot.Profile.Trait] = []
+        var moreTraits: InviteCardSlot.Profile.MoreTraits?
         let words = profile.description.flatMap { $0.isEmpty ? nil : $0 }
         let labels = profile.traits.filter { !$0.label.isEmpty }
         if words != nil || !labels.isEmpty {
@@ -335,6 +349,7 @@ nonisolated enum InviteCardLayoutEngine {
                 let laid = traitChips(labels, originX: contentX, y: y, width: contentWidth,
                                       font: detailFont, style: style)
                 traits = laid.chips
+                moreTraits = laid.more
                 y = laid.bottom
             }
             y += 16
@@ -413,6 +428,7 @@ nonisolated enum InviteCardLayoutEngine {
                 description: description,
                 descriptionOrigin: descriptionOrigin,
                 traits: traits,
+                moreTraits: moreTraits,
                 inviter: inviter
             )),
             button: button,
@@ -423,8 +439,9 @@ nonisolated enum InviteCardLayoutEngine {
     }
 
     /// Discord's trait chips: a hairline pill, the emoji and the word, four
-    /// points apart, two lines at most — what does not fit becomes a `+N` chip
-    /// at the end of the second line (`maxLines: 2` in its overflow list).
+    /// points apart, two lines at most — what does not fit becomes a "+ N more"
+    /// chip at the end of the second line (`maxLines: 2` in its overflow list,
+    /// `vGclWm` its words).
     private static func traitChips(
         _ traits: [GuildTrait],
         originX: CGFloat,
@@ -432,7 +449,7 @@ nonisolated enum InviteCardLayoutEngine {
         width: CGFloat,
         font: NSFont,
         style: MessageTextStyle
-    ) -> (chips: [InviteCardSlot.Profile.Trait], bottom: CGFloat) {
+    ) -> (chips: [InviteCardSlot.Profile.Trait], bottom: CGFloat, more: InviteCardSlot.Profile.MoreTraits?) {
         let emojiSide: CGFloat = 16, gap: CGFloat = 4, padX: CGFloat = 8, padY: CGFloat = 4
         let maxChip: CGFloat = 268
         let right = originX + width
@@ -484,7 +501,9 @@ nonisolated enum InviteCardLayoutEngine {
         if origins.count < contents.count {
             var hidden = contents.count - origins.count
             while true {
-                let chip = content(block("+\(hidden)", font: font, color: style.primaryColor, width: 60, style: style))
+                let chip = content(block(
+                    "+ \(hidden) more", font: font, color: style.primaryColor, width: maxChip, style: style
+                ))
                 let after = origins.last.map { $0.x + contents[origins.count - 1].size.width + gap } ?? originX
                 if after + chip.size.width <= right || origins.isEmpty {
                     overflow = chip
@@ -513,14 +532,16 @@ nonisolated enum InviteCardLayoutEngine {
             ))
         }
         for (index, origin) in origins.enumerated() { place(contents[index], at: origin) }
+        var more: InviteCardSlot.Profile.MoreTraits?
         if let overflow {
             let at = origins.last.map {
                 CGPoint(x: $0.x + contents[origins.count - 1].size.width + gap, y: $0.y)
             } ?? CGPoint(x: originX, y: top)
             place(overflow, at: at)
+            more = .init(rect: CGRect(origin: at, size: overflow.size), traits: Array(traits[origins.count...]))
         }
         let bottom = (chips.map(\.rect.maxY).max() ?? top)
-        return (chips, bottom)
+        return (chips, bottom, more)
     }
 
     // MARK: The classic card
@@ -779,7 +800,8 @@ nonisolated enum InviteCardLayoutEngine {
         color: NSColor,
         width: CGFloat,
         style: MessageTextStyle,
-        wraps: Bool = false
+        wraps: Bool = false,
+        hugs: Bool = false
     ) -> TimelineTextBlock {
         let paragraph = NSMutableParagraphStyle()
         paragraph.lineBreakMode = wraps ? .byWordWrapping : .byTruncatingTail
@@ -789,7 +811,8 @@ nonisolated enum InviteCardLayoutEngine {
                 attributes: [.font: font, .foregroundColor: color, .paragraphStyle: paragraph]
             )),
             width: width,
-            style: style
+            style: style,
+            hugsText: hugs
         )
     }
 

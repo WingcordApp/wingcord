@@ -26,7 +26,7 @@ struct ComposerControlMark: View {
             // points, which is what this was, is a label somebody left in the
             // corner rather than a control.
             Text("GIF")
-                .font(.system(size: 10, weight: .heavy))
+                .font(.system(.caption, weight: .heavy))
                 .frame(width: 26, height: 18)
                 .overlay {
                     RoundedRectangle(cornerRadius: 5, style: .continuous)
@@ -258,7 +258,6 @@ private struct ComposerCircleBody<Mark: View>: View {
         // Layout first, glass last — and the tint goes IN the material rather
         // than behind it, which is what keeps it lensing (§4 rule 3).
         .glassEffect(.regular.tint(tint).interactive(), in: .circle)
-        .specularEdge(in: Circle())
     }
 
     private var shell: some View {

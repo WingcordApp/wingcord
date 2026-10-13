@@ -73,6 +73,10 @@ public struct Guild: Hashable, Sendable, Identifiable, Codable {
     /// two verification rows to show (`823591`). Nil where the payload did not
     /// carry it, which asks for nothing rather than guessing.
     public var verificationLevel: VerificationLevel?
+    /// How many people a stage with a camera on may hold —
+    /// `max_stage_video_channel_users`. What Discord's "This Video Stage is
+    /// maxed out." is measured against (`StageVideoCapacity`).
+    public var maxStageVideoUsers: Int?
 
     /// The mark beside the server's name — see `GuildMark`.
     public var mark: GuildMark? {
@@ -100,7 +104,8 @@ public struct Guild: Hashable, Sendable, Identifiable, Codable {
         joinedAt: Date? = nil,
         theme: GuildTheme? = nil,
         isAgeRestricted: Bool = false,
-        verificationLevel: VerificationLevel? = nil
+        verificationLevel: VerificationLevel? = nil,
+        maxStageVideoUsers: Int? = nil
     ) {
         self.id = id
         self.name = name
@@ -123,6 +128,7 @@ public struct Guild: Hashable, Sendable, Identifiable, Codable {
         self.theme = theme
         self.isAgeRestricted = isAgeRestricted
         self.verificationLevel = verificationLevel
+        self.maxStageVideoUsers = maxStageVideoUsers
     }
 
     public var hasAnimatedIcon: Bool { iconHash?.hasPrefix("a_") ?? false }

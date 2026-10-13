@@ -87,6 +87,7 @@ struct MessageActionSurfaceTests {
     private func replyRow(
         excerpt: String,
         authorID: UserID? = UserID(rawValue: 7),
+        isDeleted: Bool = false,
         width: CGFloat = 620
     ) -> MessageRow? {
         let message = Message(
@@ -99,7 +100,8 @@ struct MessageActionSurfaceTests {
                 reference: MessageReference(
                     messageID: MessageID(rawValue: 1),
                     authorID: authorID,
-                    excerpt: excerpt
+                    excerpt: excerpt,
+                    isDeleted: isDeleted
                 )
             )
         )
@@ -165,14 +167,37 @@ struct MessageActionSurfaceTests {
         #expect(header.rect.minX == TimelineMetrics.replyElbowX)
     }
 
-    @Test("A deleted target says so, draws no face, and goes nowhere")
+    @Test("A deleted target says so, wears the badge, and goes nowhere")
     func deletedTargetIsInert() throws {
-        let row = try #require(replyRow(excerpt: "", authorID: nil))
+        let row = try #require(replyRow(excerpt: "", authorID: nil, isDeleted: true))
         let header = try #require(row.replyHeader)
         #expect(header.targetID == nil)
         #expect(header.avatarRect == .zero)
+        #expect(header.badgeRect.width == TimelineMetrics.replyAvatarSide)
         #expect(header.name.isEmpty)
         #expect(header.excerpt == "Original message was deleted")
+        #expect(header.excerptFont == MessageTextStyle.current().metadataItalicFont)
+    }
+
+    @Test("A target nobody fetched could not be loaded, and still jumps to it")
+    func unloadedTargetStillJumps() throws {
+        let row = try #require(replyRow(excerpt: "", authorID: nil))
+        let header = try #require(row.replyHeader)
+        #expect(header.excerpt == "Message could not be loaded")
+        #expect(header.targetID == MessageID(rawValue: 1))
+        #expect(header.badgeRect != .zero)
+        #expect(header.avatarRect == .zero)
+        // The quote starts after the badge, as it does after a face.
+        #expect(header.excerptRect.minX >= header.badgeRect.maxX)
+    }
+
+    @Test("A quote in words keeps the face and the plain metadata face")
+    func loadedQuoteHasNoBadge() throws {
+        let row = try #require(replyRow(excerpt: "hey man"))
+        let header = try #require(row.replyHeader)
+        #expect(header.badgeRect == .zero)
+        #expect(header.avatarRect != .zero)
+        #expect(header.excerptFont == MessageTextStyle.current().metadataFont)
     }
 
     @Test("A message with no reference has no header and costs nothing")

@@ -162,10 +162,8 @@ private struct FeaturedGameCard: View {
         .padding(18)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(alignment: .leading) { bleed }
-        .glassEffect(
-            .clear.tint(Palette.flyoutTint),
-            in: .rect(cornerRadius: Self.corner, style: .continuous)
-        )
+        // A card on a profile: the profile's own panel, not glass.
+        .background(ground.panelFill, in: .rect(cornerRadius: Self.corner))
         .overlay {
             RoundedRectangle(cornerRadius: Self.corner, style: .continuous)
                 .strokeBorder(ground.borderStyle, lineWidth: ground.borderWidth)
@@ -426,7 +424,7 @@ struct GameTagChip: View {
                 .font(.system(size: 8, weight: .semibold))
                 .foregroundStyle(InkColor.tertiary)
             Text(tag.title)
-                .font(.system(size: 11, weight: .medium))
+                .font(.system(.subheadline, weight: .medium))
                 .foregroundStyle(InkColor.primary)
                 .lineLimit(1)
         }
@@ -436,7 +434,7 @@ struct GameTagChip: View {
         // These are the same object, a small factual badge on somebody's own
         // ground, and giving them two shapes is what makes a profile look
         // assembled from parts.
-        .glassEffect(.clear.tint(Palette.flyoutTint), in: .capsule)
+        .plainChip(in: .capsule)
         .accessibilityElement(children: .combine)
     }
 }
@@ -451,12 +449,12 @@ struct GameTagOverflowChip: View {
 
     var body: some View {
         Text("+\(count)")
-            .font(.system(size: 11, weight: .medium))
+            .font(.system(.subheadline, weight: .medium))
             .monospacedDigit()
             .foregroundStyle(InkColor.tertiary)
             .padding(.horizontal, 9)
             .padding(.vertical, 4)
-            .glassEffect(.clear, in: .capsule)
+            .plainChip(in: .capsule)
             .accessibilityLabel(Text("\(count) more"))
     }
 }

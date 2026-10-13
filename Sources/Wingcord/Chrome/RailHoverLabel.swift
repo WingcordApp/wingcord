@@ -104,10 +104,10 @@ private struct RailHoverChip: View {
         // Boxy rather than a capsule: the rail's own tiles are rounded
         // squares, and a lozenge beside them reads as a different family.
         //
-        // `.clear`, because what passes behind it is the channel list —
-        // content, not a reading surface. §4: `.regular` would frost the
-        // names underneath into a grey slab.
-        .glassEffect(.clear.tint(Palette.flyoutTint), in: .rect(cornerRadius: Radius.chip))
+        // **`.regular` glass, floating** — Alex's choice (2026-10-06): glass
+        // for the pill, but the frosted variant rather than `.clear`, which
+        // threw too many specular highlights over the channel names behind it.
+        .glassEffect(.regular, in: .rect(cornerRadius: Radius.chip))
         .fixedSize()
     }
 
@@ -171,7 +171,7 @@ private struct RailHoverChip: View {
                 }
                 if row.overflow > 0 {
                     Text("+\(row.overflow)")
-                        .font(.system(size: 11, weight: .semibold))
+                        .font(.system(.subheadline, weight: .semibold))
                         .foregroundStyle(Ink.secondary)
                         .padding(.leading, Self.faceOverlap + Spacing.tight)
                         .fixedSize()
@@ -202,7 +202,7 @@ private struct RailHoverChip: View {
             Image(systemName: "headphones")
                 .font(.system(size: 9, weight: .semibold))
             Text(count, format: .number)
-                .font(.system(size: 11, weight: .semibold))
+                .font(.system(.subheadline, weight: .semibold))
                 .monospacedDigit()
         }
         .foregroundStyle(Ink.secondary)

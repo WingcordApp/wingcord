@@ -62,59 +62,57 @@ struct ChannelSettingsSidebar: View {
     /// Back to the server's own settings.
     var close: () -> Void
 
-    @Namespace private var pill
-    @Environment(\.motion) private var motion
     @State private var isDeleting = false
     @State private var refusal: ChannelDeleteGate.Refusal?
 
     var body: some View {
         let permissions = model.permissionGate.permissions(in: channel.id)
         let tabs = ChannelSettingsTab.available(for: channel, permissions: permissions)
-        VStack(alignment: .leading, spacing: 0) {
+        List(selection: selectionBinding) {
             header
-            ScrollView(.vertical) {
-                VStack(alignment: .leading, spacing: SettingsMetrics.sidebarRowSpacing) {
-                    ForEach(tabs, id: \.self) { tab in
-                        ChannelSettingsSidebarRow(
-                            title: tab.title,
+            Section {
+                ForEach(tabs, id: \.self) { tab in
+                    Label {
+                        Text(tab.title)
+                    } icon: {
+                        SettingsIconTile(
                             symbolName: tab.symbolName,
-                            isSelected: tab == selection,
-                            pill: pill
-                        ) { selection = tab }
+                            tint: Palette.accent,
+                            side: SettingsMetrics.sidebarIconSide,
+                            radius: SettingsMetrics.sidebarIconRadius
+                        )
                     }
-                    if permissions.contains(.manageChannels) {
-                        Divider()
-                            .padding(.vertical, Spacing.base)
-                            .padding(.horizontal, SettingsMetrics.sidebarRowLeading)
-                        ChannelSettingsSidebarRow(
-                            title: deleteTitle,
-                            symbolName: "trash.fill",
-                            isDestructive: true,
-                            isSelected: false,
-                            pill: pill
-                        ) {
-                            // Discord refuses first and never asks the server.
-                            if let reason = store.deleteRefusal(for: channel.id) {
-                                refusal = reason
-                            } else {
-                                isDeleting = true
-                            }
-                        }
-                    }
+                    .tag(tab)
                 }
-                .padding(.horizontal, SettingsMetrics.sidebarRowInset)
-                .padding(.top, SettingsMetrics.sidebarListTopInset)
-                .padding(.bottom, SettingsMetrics.sidebarRowInset)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .animation(motion.glassMorph, value: selection)
             }
-            .scrollBounceBehavior(.basedOnSize)
-            .softScrollEdgesVertical()
+            if permissions.contains(.manageChannels) {
+                Section {
+                    Button {
+                        // Discord refuses first and never asks the server.
+                        if let reason = store.deleteRefusal(for: channel.id) {
+                            refusal = reason
+                        } else {
+                            isDeleting = true
+                        }
+                    } label: {
+                        Label {
+                            Text(deleteTitle).foregroundStyle(Palette.destructive)
+                        } icon: {
+                            SettingsIconTile(
+                                symbolName: "trash.fill",
+                                tint: Palette.destructive,
+                                side: SettingsMetrics.sidebarIconSide,
+                                radius: SettingsMetrics.sidebarIconRadius
+                            )
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .contentShape(.rect)
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
         }
-        .frame(width: SettingsMetrics.sidebarWidth, alignment: .leading)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .clipped()
-        .accessibilityElement(children: .contain)
+        .listStyle(.sidebar)
         .accessibilityLabel("Channel settings sections")
         .onAppear {
             if !tabs.contains(selection), let first = tabs.first { selection = first }
@@ -144,89 +142,47 @@ struct ChannelSettingsSidebar: View {
         channel.kind == .category ? "Delete Category" : "Delete Channel"
     }
 
+    private var selectionBinding: Binding<ChannelSettingsTab?> {
+        Binding(
+            get: { selection },
+            set: { tab in
+                if let tab { selection = tab }
+            }
+        )
+    }
+
     /// The way back to the server's settings, then the channel — its mark,
     /// its name, and the category it sits in, as Discord's header has them.
+    /// Not a row the selection can land on.
     private var header: some View {
         VStack(alignment: .leading, spacing: Spacing.snug) {
             Button(action: close) {
                 Label(guildName, systemImage: "chevron.left")
-                    .font(.system(.caption, weight: .medium))
+                    .font(.caption.weight(.medium))
                     .lineLimit(1)
             }
             .buttonStyle(.plain)
-            .foregroundStyle(Ink.secondary)
+            .foregroundStyle(.secondary)
             .accessibilityLabel(Text("Back to \(guildName) settings"))
             HStack(spacing: Spacing.tight) {
                 if channel.kind != .category {
                     Image(symbol: channel.kind.symbolName)
-                        .font(.system(size: 11, weight: .semibold))
-                        .foregroundStyle(Ink.secondary)
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.secondary)
                         .accessibilityHidden(true)
                 }
                 Text(verbatim: channel.name)
-                    .font(.system(.subheadline, weight: .semibold))
-                    .foregroundStyle(Ink.primary)
+                    .font(.headline)
                     .lineLimit(1)
                 if let category = channel.parentID.flatMap({ model.channelIndex[$0] }) {
                     Text(verbatim: category.name.uppercased())
-                        .font(.system(.caption2, weight: .semibold))
-                        .foregroundStyle(Ink.tertiary)
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(.tertiary)
                         .lineLimit(1)
                 }
             }
         }
-        .padding(.horizontal, SettingsMetrics.sidebarRowInset + 2)
-        .padding(.top, SettingsMetrics.searchFieldTop)
-    }
-}
-
-private struct ChannelSettingsSidebarRow: View {
-    var title: String
-    var symbolName: String
-    var isDestructive = false
-    var isSelected: Bool
-    var pill: Namespace.ID
-    var select: () -> Void
-
-    @State private var isHovering = false
-    @Environment(\.motion) private var motion
-
-    var body: some View {
-        Button(action: select) {
-            HStack(spacing: SettingsMetrics.sidebarIconGap) {
-                SettingsIconTile(
-                    symbolName: symbolName,
-                    tint: isDestructive ? Palette.destructive : Palette.accent,
-                    side: SettingsMetrics.sidebarIconSide,
-                    radius: SettingsMetrics.sidebarIconRadius
-                )
-                Text(title)
-                    .font(.system(.subheadline))
-                    .foregroundStyle(isDestructive ? AnyShapeStyle(Palette.destructive) : AnyShapeStyle(Ink.primary))
-                    .lineLimit(1)
-                Spacer(minLength: 0)
-            }
-            .padding(.leading, SettingsMetrics.sidebarRowLeading)
-            .padding(.trailing, Spacing.tight)
-            .frame(height: SettingsMetrics.sidebarRowHeight)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background {
-                if isSelected {
-                    RoundedRectangle(cornerRadius: SettingsMetrics.sidebarRowRadius, style: .continuous)
-                        .fill(SettingsSurface.rowSelected)
-                        .matchedGeometryEffect(id: "selection", in: pill)
-                } else if isHovering {
-                    RoundedRectangle(cornerRadius: SettingsMetrics.sidebarRowRadius, style: .continuous)
-                        .fill(SettingsSurface.rowHover)
-                }
-            }
-            .contentShape(.rect)
-        }
-        .buttonStyle(.plain)
-        .onHover { hovering in
-            withAnimation(motion.hover) { isHovering = hovering }
-        }
-        .accessibilityAddTraits(isSelected ? [.isSelected, .isButton] : .isButton)
+        .padding(.vertical, Spacing.tight)
     }
 }
 
@@ -329,14 +285,14 @@ struct UnsavedChangesBar: View {
             Button("Reset", action: reset)
                 .buttonStyle(.link)
             Button("Save Changes", action: save)
-                .buttonStyle(.glassProminent)
+                .buttonStyle(.borderedProminent)
                 .tint(Palette.affirmative)
                 .disabled(!canSave)
                 .keyboardShortcut("s", modifiers: .command)
         }
         .padding(.horizontal, SettingsMetrics.cardContentInset)
         .padding(.vertical, Spacing.snug)
-        .background(SettingsSurface.controlTrough, in: .settingsRect(SettingsMetrics.paneRadius))
+        .background(SettingsSurface.controlTrough, in: .settingsRect(SettingsMetrics.cardRadius))
     }
 }
 

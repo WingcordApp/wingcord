@@ -33,6 +33,9 @@ private struct VoiceMemberRow: View {
     var guildID: GuildID?
 
     @Environment(\.motion) private var motion
+    /// Read only inside the right-click's closure, so a strip nobody touches
+    /// still costs no store reads.
+    @Environment(AppModel.self) private var model
     @State private var isHovering = false
     /// The dwell before the flyout opens, as a cancelled task rather than a
     /// timer — the same shape `HoverFlyout` uses, and for the same reason:
@@ -91,6 +94,13 @@ private struct VoiceMemberRow: View {
             }
         }
         .animation(motion.hover, value: isHovering)
+        // Discord's person menu, with the call's items when they are in the
+        // reader's call. The hover card makes way for it.
+        .onSecondaryClick { rect in
+            dwell?.cancel()
+            isFlyoutShown = false
+            model.openUserMenu(for: member.id, anchor: rect, inGuild: guildID)
+        }
         .popover(
             isPresented: Binding(
                 get: { isFlyoutShown },
@@ -148,6 +158,22 @@ private struct VoiceMemberRow: View {
                     .font(.system(size: 10, weight: .semibold))
                     .foregroundStyle(Palette.destructive)
             }
+            // Discord's row marks: muted by you, the camera, the platform.
+            if member.isLocallyMuted {
+                Image(systemName: "speaker.slash.fill")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(Ink.tertiary)
+            }
+            if member.isCameraOn {
+                Image(systemName: "video.fill")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(Ink.tertiary)
+            }
+            if let symbol = member.platform?.symbolName {
+                Image(systemName: symbol)
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(Ink.tertiary)
+            }
             if let url = member.gameIconURL {
                 RemoteImage(url: url, side: Metrics.voiceGameMark) { Color.clear }
                     .frame(width: Metrics.voiceGameMark, height: Metrics.voiceGameMark)
@@ -183,7 +209,7 @@ private struct VoiceStatusChip: View {
             if let emoji { ExpressionGlyph(emoji: emoji, side: Self.emojiSide) }
             if let text {
                 Text(text)
-                    .font(.system(size: 10, weight: .semibold))
+                    .font(.system(.caption, weight: .semibold))
                     .foregroundStyle(Ink.secondary)
                     .lineLimit(1)
             }
@@ -199,7 +225,7 @@ private struct VoiceStatusChip: View {
 struct LiveChip: View {
     var body: some View {
         Text("LIVE")
-            .font(.system(size: 9, weight: .heavy))
+            .font(.system(.caption2, weight: .heavy))
             // Fixed white rather than the hierarchy: this sits on a saturated
             // red plate, which vibrancy has no useful answer for.
             .foregroundStyle(Color.white)

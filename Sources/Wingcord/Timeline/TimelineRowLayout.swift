@@ -155,8 +155,8 @@ nonisolated struct MessageRow: @unchecked Sendable {
     /// The invites the text links to, drawn as Discord's invite cards.
     var inviteCards: [InviteCardSlot] = []
     /// The profiles the text links to — Discord's user profile embed. Hosted
-    /// over the canvas, not drawn by it; see `UserCardSlot`.
-    var userCards: [UserCardSlot] = []
+    /// over the canvas, not drawn by it; see `HostedCardSlot`.
+    var hostedCards: [HostedCardSlot] = []
     var reactions: [ReactionSlot]
     /// Add-a-reaction and bookmark, at the end of the reaction row.
     ///
@@ -542,6 +542,9 @@ nonisolated struct UploadSummary: Equatable, Sendable {
 /// progress, never laid out — it moves a hundred times an upload.
 nonisolated struct UploadCardSlot: Sendable {
     var rect: CGRect
+    /// The icon Discord draws for the title: one file's own, or — for
+    /// "Uploading 3 Files" — the unknown one.
+    var fileKind: AttachmentFileKind
     var title: String
     var titleOrigin: CGPoint
     var titleWidth: CGFloat
@@ -590,6 +593,11 @@ nonisolated struct AttachmentSlot: Sendable {
     /// The file's own name and size, for the kinds that show them.
     var filename: String = ""
     var sizeLabel: String = ""
+    /// Which of Discord's file icons a file card draws.
+    var fileKind: AttachmentFileKind = .unknown
+    /// A file card's Download, in the hover group that hangs past its corner.
+    /// Nil on every other kind.
+    var downloadRect: CGRect?
     /// Where the name and the size sit inside a file card.
     var titleOrigin: CGPoint = .zero
     var subtitleOrigin: CGPoint = .zero
@@ -620,6 +628,9 @@ nonisolated struct AttachmentSlot: Sendable {
         case voice
         /// Anything else: a card with a glyph, a name and a size.
         case file
+        /// A text file's preview: room kept for the hosted card that draws
+        /// it (`PlaintextPreviewCard`), and nothing painted here.
+        case textPreview
     }
 
     /// Whether the slot draws a picture at all. What decides if the prefetch
@@ -728,6 +739,13 @@ nonisolated struct ReplyHeaderSlot: @unchecked Sendable {
     var nameColor: NSColor?
     var excerpt: String
     var excerptRect: CGRect
+    /// The quote's face: the metadata face for the quoted words, its italic for
+    /// Discord's placeholders — "Message could not be loaded", "Blocked
+    /// message", "Click to see attachment" (`repliedTextPlaceholder`).
+    var excerptFont: NSFont
+    /// Discord's reply badge — its reply arrow in a 16-point circle — where a
+    /// face would be, or `.zero`. See `layoutReplyHeader` for when.
+    var badgeRect: CGRect
     var isBot: Bool
     /// Where a click goes. Nil when the quoted message is gone, which is also
     /// when the strip says so instead of quoting anything.
@@ -891,7 +909,7 @@ private nonisolated struct MessageContent {
     var embeds: [EmbedSlot] = []
     var components: [ComponentSlot] = []
     var inviteCards: [InviteCardSlot] = []
-    var userCards: [UserCardSlot] = []
+    var hostedCards: [HostedCardSlot] = []
     /// How far past `x` it reaches — in a bubble, the bubble's width.
     var width: CGFloat = 0
     /// Where it ends — in a bubble, the bubble's foot.
@@ -915,6 +933,14 @@ private nonisolated struct MessageContent {
 /// answer — width, and the presentation revision that covers text size, theme
 /// and mention names — so a hit is exact and a miss is honest.
 nonisolated struct TimelineLayoutEngine: Sendable {
+
+    /// The event on now in a channel, as far as a stage start asks: which,
+    /// and its name.
+    struct LiveEvent: Hashable, Sendable {
+        var guildID: GuildID
+        var id: UInt64
+        var name: String
+    }
 
     struct Input: Sendable {
         var items: [TimelineItem]
@@ -963,8 +989,8 @@ nonisolated struct TimelineLayoutEngine: Sendable {
         /// is its icon's colour where the server chose none. See
         /// `AppModel.derivedPalettes`.
         var palettes: [URL: [UInt32]] = [:]
-        /// What each profile card measured — see `AppModel.userCardSizes`.
-        var userCardSizes: [UserCardKey: CGSize] = [:]
+        /// What each hosted card measured — see `AppModel.hostedCardSizes`.
+        var hostedCardSizes: [HostedCardKey: HostedCardMeasure] = [:]
         /// The server this transcript is in, which the profile cards in it
         /// wear. Nil in a direct message.
         var guildID: GuildID?
@@ -983,6 +1009,17 @@ nonisolated struct TimelineLayoutEngine: Sendable {
         /// The listening parties still on, by party id — whether a listen-along
         /// card is the live one or Discord's "The listening party is over!".
         var listenAlongLive: Set<String> = []
+        /// A stage chat's "requested to speak." lines whose hand is still up,
+        /// for a reader who may answer — each wears Invite to Speak. Empty
+        /// everywhere else; see `AppModel.openStageRequests`.
+        var stageInvitations: Set<MessageID> = []
+        /// The event on now in this channel — what a stage start that
+        /// announced it wears its card for (Discord's
+        /// `getActiveEventByChannel`). Nil nearly everywhere.
+        var liveEvent: LiveEvent?
+        /// The stickers other Fake Nitro users' GIF uploads stand for, by
+        /// sticker — see `AppModel.fakeGIFStickers`. Empty nearly everywhere.
+        var fakeGIFStickers: [UInt64: StickerRef] = [:]
         /// Columns or bubbles. **Only a transcript ever asks for bubbles** —
         /// search, the inbox and the pinned pane keep Discord's columns, which
         /// is why this is decided by the caller rather than read from the
@@ -1105,6 +1142,17 @@ nonisolated struct TimelineLayoutEngine: Sendable {
         /// the member's message. Nil on every other row; a permission change
         /// adds or takes away the bar's last button.
         var canManageMessages: Bool?
+        /// Whether a stage's "requested to speak." line was laid out with
+        /// Invite to Speak under it. Nil on every other row; the hand coming
+        /// down takes the button away.
+        var stageInvitationOpen: Bool?
+        /// The event a stage start was laid out wearing the card of — see
+        /// `stageStartEvent(of:in:)`. Nil on every other row; the event
+        /// starting or ending adds or takes away the card.
+        var stageStartEvent: UInt64?
+        /// The stickers the message's GIF uploads were drawn as — see
+        /// `fakeGIFStickers(of:in:)`. Nil on every other row.
+        var gifStickers: [StickerRef]?
         var message: Message
         var row: MessageRow
 
@@ -1119,7 +1167,10 @@ nonisolated struct TimelineLayoutEngine: Sendable {
             isFailed: Bool,
             hidesMedia: Bool,
             listenAlongLive: Bool?,
-            canManageMessages: Bool?
+            canManageMessages: Bool?,
+            stageInvitationOpen: Bool?,
+            stageStartEvent: UInt64?,
+            gifStickers: [StickerRef]?
         ) -> Bool {
             self.width == width
                 && self.presentationRevision == presentationRevision
@@ -1131,6 +1182,9 @@ nonisolated struct TimelineLayoutEngine: Sendable {
                 && self.hidesMedia == hidesMedia
                 && self.listenAlongLive == listenAlongLive
                 && self.canManageMessages == canManageMessages
+                && self.stageInvitationOpen == stageInvitationOpen
+                && self.stageStartEvent == stageStartEvent
+                && self.gifStickers == gifStickers
                 && self.message == message
         }
     }
@@ -1140,14 +1194,56 @@ nonisolated struct TimelineLayoutEngine: Sendable {
     var cardRevision: UInt64 = 0
 
     /// Whether a message can draw a card that resolves after it is laid out:
-    /// an invite or profile link in its text, or a Spotify embed in it or in
-    /// what it forwards. The same two gates the builders use, so the answer cannot
-    /// disagree with what the row draws.
+    /// an invite, profile or event link in its text, a stage start's event, or
+    /// a Spotify embed in it or in what it forwards. The same gates the
+    /// builders use, so the answer cannot disagree with what the row draws.
     static func carriesCards(_ message: Message) -> Bool {
         !InviteCard.codes(in: message.content).isEmpty
             || !UserLink.userIDs(in: message.content).isEmpty
+            || !EventLink.links(in: message.content).isEmpty
+            || message.kind == .stageStart
+            || message.attachments.contains { PlaintextPreview.isPreviewable(filename: $0.filename) }
             || message.embeds.contains { $0.providerName == "Spotify" }
             || message.forwarded?.embeds.contains { $0.providerName == "Spotify" } == true
+    }
+
+    /// Where an event card goes, once it has measured: as wide as the column
+    /// up to Discord's 432, and as tall as it measured at that width — or at
+    /// the nearest it has, until the live card says.
+    private static func eventCardSlot(
+        _ key: EventCardKey,
+        x: CGFloat,
+        y: CGFloat,
+        width: CGFloat,
+        input: Input
+    ) -> HostedCardSlot? {
+        let width = min(Metrics.embedMaxWidth, width).rounded(.down)
+        guard let height = input.hostedCardSizes[.event(key)]?.height(atWidth: width) else { return nil }
+        return HostedCardSlot(rect: CGRect(x: x, y: y, width: width, height: height), key: .event(key))
+    }
+
+    /// Whether a link's unfurl gives way to a card drawn for it: a profile
+    /// link's or an event link's that has measured.
+    private static func hasHostedCard(forLink url: String, in input: Input) -> Bool {
+        guard !input.hostedCardSizes.isEmpty else { return false }
+        if let userID = UserLink.userID(inURL: url) {
+            return input.hostedCardSizes[.user(UserCardKey(userID: userID, guildID: input.guildID))] != nil
+        }
+        if let link = EventLink.parse(url) {
+            let key = EventCardKey(guildID: link.guildID, eventID: link.eventID, occurrence: link.occurrence)
+            return input.hostedCardSizes[.event(key)] != nil
+        }
+        return false
+    }
+
+    /// The event whose card a stage start wears: the channel's live event,
+    /// where its name is the line's topic — Discord's own test (`STAGE_START`
+    /// in `270642`). Nil for every other row.
+    static func stageStartEvent(of message: Message, in input: Input) -> UInt64? {
+        guard message.kind == .stageStart, let live = input.liveEvent, live.name == message.content else {
+            return nil
+        }
+        return live.id
     }
 
     /// The resolved card behind an embed, if it is a Spotify link and Spotify's
@@ -1242,6 +1338,10 @@ nonisolated struct TimelineLayoutEngine: Sendable {
                 let isRunTail = input.arrangement == .columns ? nil : message.isRunTail
                 let autoMod = AutoModMessage(message.message)
                 let canManageMessages = autoMod == nil ? nil : input.canManageMessages
+                let stageInvitationOpen = message.message.kind == .stageRaiseHand
+                    ? input.stageInvitations.contains(message.message.id) : nil
+                let stageStartEvent = Self.stageStartEvent(of: message.message, in: input)
+                let gifStickers = Self.fakeGIFStickers(of: message.message, in: input)
                 if let cached = cache[message.message.id],
                    cached.matches(
                        message.message,
@@ -1254,7 +1354,10 @@ nonisolated struct TimelineLayoutEngine: Sendable {
                        isFailed: isFailed,
                        hidesMedia: input.hidesMedia,
                        listenAlongLive: listenAlongLive,
-                       canManageMessages: canManageMessages
+                       canManageMessages: canManageMessages,
+                       stageInvitationOpen: stageInvitationOpen,
+                       stageStartEvent: stageStartEvent,
+                       gifStickers: gifStickers
                    )
                 {
                     // Painted, so carried over rather than keyed on.
@@ -1284,6 +1387,9 @@ nonisolated struct TimelineLayoutEngine: Sendable {
                     hidesMedia: input.hidesMedia,
                     listenAlongLive: listenAlongLive,
                     canManageMessages: canManageMessages,
+                    stageInvitationOpen: stageInvitationOpen,
+                    stageStartEvent: stageStartEvent,
+                    gifStickers: gifStickers,
                     message: message.message,
                     row: row
                 )
@@ -1356,7 +1462,7 @@ nonisolated struct TimelineLayoutEngine: Sendable {
         if let invite = row.activityInvite { bottom = max(bottom, invite.rect.maxY) }
         if let listenAlong = row.listenAlong { bottom = max(bottom, listenAlong.rect.maxY) }
         for card in row.inviteCards { bottom = max(bottom, card.rect.maxY) }
-        for card in row.userCards { bottom = max(bottom, card.rect.maxY) }
+        for card in row.hostedCards { bottom = max(bottom, card.rect.maxY) }
         for slot in row.reactions { bottom = max(bottom, slot.rect.maxY) }
         for slot in row.reactionControls { bottom = max(bottom, slot.rect.maxY) }
         if let chip = row.threadChip { bottom = max(bottom, chip.rect.maxY) }
@@ -1443,16 +1549,18 @@ nonisolated struct TimelineLayoutEngine: Sendable {
         // answers — Discord draws no quote over it.
         if let reference = message.reference, !message.isCrosspost {
             let quoted = reference.authorID.flatMap { input.authors[$0] }
+            let compact = input.settings.isCompact
             let slot = bubbleSide == nil
                 ? Self.layoutReplyHeader(
                     reference, y: y, leadingX: contentX,
                     maxX: input.width - TimelineMetrics.horizontalMargin,
-                    elbowX: TimelineMetrics.replyElbowX, style: input.style, author: quoted
+                    elbowX: TimelineMetrics.replyElbowX, isCompact: compact,
+                    style: input.style, author: quoted
                 )
                 : placed({
                     Self.layoutReplyHeader(
                         reference, y: y, leadingX: $0, maxX: lane.maxX,
-                        elbowX: nil, style: input.style, author: quoted
+                        elbowX: nil, isCompact: compact, style: input.style, author: quoted
                     )
                 }, width: { $0.rect.width })
             replyHeader = slot
@@ -1651,8 +1759,10 @@ nonisolated struct TimelineLayoutEngine: Sendable {
             }
 
             // Stickers, above attachments: a sticker IS the message, and one
-            // drawn under a screenshot reads as a caption on it.
-            for sticker in message.stickers {
+            // drawn under a screenshot reads as a caption on it. A Fake Nitro
+            // GIF upload that stands for one is drawn as it, in its place.
+            let gifStickers = Self.fakeGIFStickers(of: message, in: input)
+            for sticker in message.displayedStickers + (gifStickers ?? []) {
                 y += gap
                 let side = min(Metrics.stickerInline, cardWidth)
                 let rect = CGRect(x: cardX, y: y, width: side, height: side)
@@ -1667,16 +1777,24 @@ nonisolated struct TimelineLayoutEngine: Sendable {
                 y = rect.maxY
             }
 
-            // Attachments, which keep their own gap above them.
+            // Attachments, which keep their own gap above them. A text file's
+            // preview is a hosted card over the room its slot keeps.
             content.attachments = Self.attachmentSlots(
-                message.attachments,
+                gifStickers == nil ? message.attachments : [],
                 origin: CGPoint(x: cardX, y: y),
                 availableWidth: cardWidth,
-                style: input.style
+                style: input.style,
+                textPreviewHeight: { Self.textPreviewHeight($0, width: $1, input: input) }
             )
-            for slot in content.attachments {
+            for (index, slot) in content.attachments.enumerated() {
                 y = max(y, slot.rect.maxY)
                 holds(slot.rect)
+                if slot.kind == .textPreview {
+                    content.hostedCards.append(HostedCardSlot(
+                        rect: slot.rect,
+                        key: .plaintext(PlaintextCardKey(message.attachments[index]))
+                    ))
+                }
             }
 
             if let summary = input.uploads[message.id] {
@@ -1784,11 +1902,9 @@ nonisolated struct TimelineLayoutEngine: Sendable {
             // The components are filled by a Components V2 tree — the message's
             // own, below, or an embed's — and by rows of buttons.
             for embed in input.settings.showsEmbeds ? message.drawableEmbeds : [] {
-                // A profile link's unfurl, where its profile card is drawn
+                // A profile or event link's unfurl, where its card is drawn
                 // instead — Discord shows the card and not both.
-                if let url = embed.url, let userID = UserLink.userID(inURL: url),
-                   input.userCardSizes[UserCardKey(userID: userID, guildID: input.guildID)] != nil
-                {
+                if let url = embed.url, Self.hasHostedCard(forLink: url, in: input) {
                     continue
                 }
                 y += gap
@@ -1829,9 +1945,19 @@ nonisolated struct TimelineLayoutEngine: Sendable {
 
             // The invites the text links to — Discord's invite card, one per
             // code, once the answer has arrived. Until then the link is only a
-            // link.
+            // link. An invite that brought an event not yet over is that
+            // event's card instead (`346542`'s `ly`), once it has measured.
             for code in InviteCard.codes(in: message.content) {
                 guard let lookup = input.invites[code] else { continue }
+                if case .resolved(let card) = lookup, let event = card.event, event.status.isLive {
+                    let key = EventCardKey(guildID: event.guildID, eventID: event.id, invite: code)
+                    if let slot = Self.eventCardSlot(key, x: cardX, y: y + gap, width: cardWidth, input: input) {
+                        content.hostedCards.append(slot)
+                        holds(slot.rect)
+                        y = slot.rect.maxY
+                    }
+                    continue
+                }
                 y += gap
                 let slot = InviteCardLayoutEngine.layout(
                     code: code,
@@ -1849,19 +1975,27 @@ nonisolated struct TimelineLayoutEngine: Sendable {
                 y = slot.rect.maxY
             }
 
-            // The profiles the text links to, once each card has measured
-            // itself. Until then the link is only a link, exactly as an invite
-            // is.
-            if !input.userCardSizes.isEmpty {
+            // The events and the profiles the text links to, once each card
+            // has measured itself. Until then the link is only a link, exactly
+            // as an invite is.
+            if !input.hostedCardSizes.isEmpty {
+                for link in EventLink.links(in: message.content) {
+                    let key = EventCardKey(guildID: link.guildID, eventID: link.eventID, occurrence: link.occurrence)
+                    guard let slot = Self.eventCardSlot(key, x: cardX, y: y + gap, width: cardWidth, input: input)
+                    else { continue }
+                    content.hostedCards.append(slot)
+                    holds(slot.rect)
+                    y = slot.rect.maxY
+                }
                 for userID in UserLink.userIDs(in: message.content) {
-                    let key = UserCardKey(userID: userID, guildID: input.guildID)
-                    guard let size = input.userCardSizes[key] else { continue }
+                    let key = HostedCardKey.user(UserCardKey(userID: userID, guildID: input.guildID))
+                    guard let size = input.hostedCardSizes[key]?.latest else { continue }
                     y += gap
-                    let slot = UserCardSlot(
+                    let slot = HostedCardSlot(
                         rect: CGRect(x: cardX, y: y, width: size.width, height: size.height),
                         key: key
                     )
-                    content.userCards.append(slot)
+                    content.hostedCards.append(slot)
                     holds(slot.rect)
                     y = slot.rect.maxY
                 }
@@ -2113,7 +2247,7 @@ nonisolated struct TimelineLayoutEngine: Sendable {
             activityInvite: content.activityInvite,
             listenAlong: content.listenAlong,
             inviteCards: content.inviteCards,
-            userCards: content.userCards,
+            hostedCards: content.hostedCards,
             reactions: reactions,
             reactionControls: reactionControls,
             card: content.card,
@@ -2235,6 +2369,24 @@ nonisolated struct TimelineLayoutEngine: Sendable {
             : TimelineMetrics.contentInset
         let contentWidth = max(80, input.width - contentX - margin)
 
+        // The card of the event a stage start announced, under its line —
+        // Discord's embed after `STAGE_START`, while that event is on.
+        var hostedCards: [HostedCardSlot] = []
+        var below = y + block.size.height
+        if let eventID = Self.stageStartEvent(of: message, in: input), let live = input.liveEvent {
+            let width = min(Metrics.embedMaxWidth, contentWidth).rounded(.down)
+            if let slot = Self.eventCardSlot(
+                EventCardKey(guildID: live.guildID, eventID: eventID),
+                x: isCentred ? ((input.width - width) / 2).rounded() : contentX,
+                y: below + TimelineMetrics.attachmentGap,
+                width: width,
+                input: input
+            ) {
+                hostedCards.append(slot)
+                below = slot.rect.maxY
+            }
+        }
+
         // A join message can be reacted to like any other, and dropping them
         // would be dropping data the payload already carries.
         var reactions: [ReactionSlot] = []
@@ -2242,7 +2394,7 @@ nonisolated struct TimelineLayoutEngine: Sendable {
         let reactionsBottom = Self.layoutReactions(
             message.reactions,
             contentX: contentX,
-            y: y + block.size.height,
+            y: below,
             width: contentWidth,
             style: input.style,
             // Discord never offers a bookmark on the reader's own message.
@@ -2261,6 +2413,15 @@ nonisolated struct TimelineLayoutEngine: Sendable {
             width: contentWidth,
             style: input.style
         )
+        // Discord's Invite to Speak under a hand that is still up, for a
+        // reader who may answer it.
+        let inviteCard = message.kind == .stageRaiseHand && input.stageInvitations.contains(message.id)
+            ? Self.stageInviteCard(
+                for: message.authorID,
+                origin: CGPoint(x: contentX, y: systemChip.bottom + TimelineMetrics.threadChipGap),
+                style: input.style
+            )
+            : nil
 
         return MessageRow(
             id: message.id,
@@ -2287,8 +2448,10 @@ nonisolated struct TimelineLayoutEngine: Sendable {
             components: [],
             poll: nil,
             activityInvite: nil,
+            hostedCards: hostedCards,
             reactions: reactions,
             reactionControls: reactionControls,
+            card: inviteCard,
             threadChip: systemChip.slot,
             systemSymbol: sentence?.symbolName ?? "circle",
             systemTint: Self.tintColor(sentence?.tint),
@@ -2334,11 +2497,60 @@ nonisolated struct TimelineLayoutEngine: Sendable {
             ))
         }
         output.append(NSAttributedString(string: sentence.suffix, attributes: body))
+        if !sentence.emphasis.isEmpty {
+            output.append(NSAttributedString(string: sentence.emphasis, attributes: [
+                .font: style.boldFont,
+                .foregroundColor: style.primaryColor,
+            ]))
+        }
         output.append(NSAttributedString(string: "  " + time, attributes: [
             .font: style.metadataFont,
             .foregroundColor: style.tertiaryColor,
         ]))
         return .plain(output, links: links)
+    }
+
+    /// Discord's secondary button with the microphone, under "requested to
+    /// speak." — the whole plate is the control, and its words light under
+    /// the pointer as this transcript's other card buttons do.
+    private static func stageInviteCard(
+        for userID: UserID,
+        origin: CGPoint,
+        style: MessageTextStyle
+    ) -> DrawnCard {
+        var writer = DrawnCardWriter(style: style)
+        let title = "Invite to Speak"
+        let pad: CGFloat = 12
+        let icon = DrawnCardMetrics.icon
+        let gap: CGFloat = 6
+        let label = writer.block(title, font: writer.smallMedium, color: style.primaryColor, width: 10_000)
+        let lit = writer.block(title, font: writer.smallMedium, color: style.primaryColor, width: 10_000, underlined: true)
+        let plate = CGRect(
+            x: origin.x,
+            y: origin.y,
+            width: (pad + icon + gap + label.size.width + pad).rounded(.up),
+            height: 32
+        )
+        writer.card.parts.append(.ground(plate, .plate, .all, radius: DrawnCardMetrics.corner))
+        writer.card.parts.append(.symbol(
+            "mic.fill",
+            CGRect(x: plate.minX + pad, y: plate.midY - icon / 2, width: icon, height: icon),
+            .primary
+        ))
+        let labelOrigin = CGPoint(
+            x: plate.minX + pad + icon + gap,
+            y: (plate.midY - label.size.height / 2).rounded()
+        )
+        writer.card.controls.append(DrawnCard.Control(
+            action: .inviteToSpeak(userID),
+            rect: plate,
+            label: label,
+            litLabel: lit,
+            labelOrigin: labelOrigin,
+            accessibilityLabel: title
+        ))
+        writer.card.rect = plate
+        return writer.card
     }
 
     private static func tintColor(_ tint: SystemSentence.Tint?) -> NSColor {
@@ -2374,12 +2586,15 @@ nonisolated struct TimelineLayoutEngine: Sendable {
     ///   - leadingX: where the quoted face starts.
     ///   - maxX: where the quote must stop.
     ///   - elbowX: where the elbow rises from, or nil for a line with none.
+    ///   - isCompact: the compact layout, where Discord draws the badge in
+    ///     place of every face.
     private static func layoutReplyHeader(
         _ reference: MessageReference,
         y: CGFloat,
         leadingX: CGFloat,
         maxX: CGFloat,
         elbowX: CGFloat?,
+        isCompact: Bool,
         style: MessageTextStyle,
         author: AuthorInfo?
     ) -> ReplyHeaderSlot {
@@ -2412,10 +2627,12 @@ nonisolated struct TimelineLayoutEngine: Sendable {
 
         // What the quote says. A message that was only a picture still has to
         // be quotable, and a reference with nothing behind it says so in words
-        // rather than leaving a blank strip nobody can read.
+        // rather than leaving a blank strip nobody can read — in Discord's two
+        // sentences, because "deleted" is only what Discord said when it sent
+        // `null`, and a quote it never looked up may be there all along.
         let quote: String
         if isUnavailable {
-            quote = "Original message was deleted"
+            quote = reference.isDeleted ? "Original message was deleted" : "Message could not be loaded"
         } else if author?.isBlocked == true {
             quote = "Blocked message"
         } else if author?.isIgnored == true {
@@ -2427,6 +2644,10 @@ nonisolated struct TimelineLayoutEngine: Sendable {
         } else {
             quote = ""
         }
+        // **The badge stands where the face would**, for every quote whose face
+        // Discord will not show: nobody to show, somebody blocked, or the
+        // compact layout (its reply header's `replyBadge`).
+        let showsBadge = isUnavailable || author?.isBlocked == true || isCompact
         let excerptX = isUnavailable
             ? avatarRect.maxX + TimelineMetrics.replyItemGap
             : nameRect.maxX + TimelineMetrics.replyItemGap
@@ -2440,9 +2661,10 @@ nonisolated struct TimelineLayoutEngine: Sendable {
         // The strip's own bounds: from the elbow — or the face, where there is
         // none — to wherever the quote ends, so a click anywhere along the line
         // it draws lands on it.
+        let excerptFont = quote == reference.excerpt ? quoteFont : style.metadataItalicFont
         let quoteWidth = quote.isEmpty
             ? 0
-            : min(excerptRect.width, measure(quote, font: quoteFont))
+            : min(excerptRect.width, measure(quote, font: excerptFont))
         let start = elbowX ?? leadingX
         let rect = CGRect(
             x: start,
@@ -2457,7 +2679,7 @@ nonisolated struct TimelineLayoutEngine: Sendable {
             // where the author line begins — the connector then reads as coming
             // out of the face rather than as a bracket floating beside it.
             elbowBottom: elbowX.map { _ in y + height + TimelineMetrics.replyGap },
-            avatarRect: isUnavailable ? .zero : avatarRect,
+            avatarRect: showsBadge ? .zero : avatarRect,
             avatarURL: author?.avatarURL,
             monogram: author?.monogram ?? "?",
             name: name,
@@ -2467,8 +2689,12 @@ nonisolated struct TimelineLayoutEngine: Sendable {
             nameColor: author?.colorValue.map { NSColor(Color(hex: $0)) },
             excerpt: quote,
             excerptRect: excerptRect,
+            excerptFont: excerptFont,
+            badgeRect: showsBadge ? avatarRect : .zero,
             isBot: reference.isAuthorBot,
-            targetID: isUnavailable ? nil : reference.messageID
+            // Only a quote Discord said is gone goes nowhere: one it never
+            // fetched still jumps to where it would be (`m = state !== DELETED`).
+            targetID: isUnavailable && reference.isDeleted ? nil : reference.messageID
         )
     }
 
@@ -3273,11 +3499,39 @@ nonisolated struct TimelineLayoutEngine: Sendable {
     /// `AppModel.openMedia` — and the click that opens it carries a position in
     /// this array. Sorting the pictures to the front here would open the wrong
     /// one on every message that mixes a picture with a file.
+    /// The stickers a message's attachments stand for — Vencord's animated
+    /// Fake Nitro stickers, uploaded as `<sticker id>.gif` — when every one is
+    /// a sticker the reader's servers know, as the plugin asks its sticker
+    /// store. Nil otherwise, which leaves them attachments.
+    ///
+    /// **All or none**: the lightbox finds a picture by its position among the
+    /// message's attachments, and taking one out of the middle would open the
+    /// wrong one.
+    static func fakeGIFStickers(of message: Message, in input: Input) -> [StickerRef]? {
+        guard !input.fakeGIFStickers.isEmpty, !message.attachments.isEmpty else { return nil }
+        var stickers: [StickerRef] = []
+        for attachment in message.attachments {
+            guard let id = FakeNitroLink.gifStickerID(in: attachment),
+                  let sticker = input.fakeGIFStickers[id] else { return nil }
+            stickers.append(sticker)
+        }
+        return stickers
+    }
+
+    /// A text file's preview height at this width, once its card has measured
+    /// — nil leaves the file card, as it does when the fetch failed and the
+    /// measure was dropped (Discord's `hadError`).
+    private static func textPreviewHeight(_ attachment: Attachment, width: CGFloat, input: Input) -> CGFloat? {
+        guard PlaintextPreview.isPreviewable(filename: attachment.filename) else { return nil }
+        return input.hostedCardSizes[.plaintext(PlaintextCardKey(attachment))]?.height(atWidth: width.rounded(.down))
+    }
+
     static func attachmentSlots(
         _ attachments: [Attachment],
         origin: CGPoint,
         availableWidth: CGFloat,
-        style: MessageTextStyle
+        style: MessageTextStyle,
+        textPreviewHeight: (Attachment, CGFloat) -> CGFloat? = { _, _ in nil }
     ) -> [AttachmentSlot] {
         guard !attachments.isEmpty else { return [] }
 
@@ -3322,6 +3576,20 @@ nonisolated struct TimelineLayoutEngine: Sendable {
             y += pictures.isEmpty && index == rest.first
                 ? TimelineMetrics.attachmentGap
                 : AttachmentMosaic.stackGap
+            if let height = textPreviewHeight(attachments[index], availableWidth) {
+                let slot = AttachmentSlot(
+                    rect: CGRect(x: origin.x, y: y, width: availableWidth.rounded(.down), height: height),
+                    url: nil,
+                    isSpoiler: attachments[index].isSpoiler,
+                    altText: nil,
+                    decodeWidth: 0,
+                    kind: .textPreview,
+                    filename: attachments[index].filename
+                )
+                slots[index] = slot
+                y = slot.rect.maxY
+                continue
+            }
             let slot = nonVisualSlot(
                 attachments[index],
                 origin: CGPoint(x: origin.x, y: y),
@@ -3514,24 +3782,22 @@ nonisolated struct TimelineLayoutEngine: Sendable {
         availableWidth: CGFloat,
         style: MessageTextStyle
     ) -> AttachmentSlot {
-        let sizeLabel = AttachmentLimits.describe(bytes: attachment.size)
-        let inset = TimelineMetrics.attachmentCardInset
-        let textX = origin.x + inset + TimelineMetrics.attachmentCardGlyphSide + Spacing.base
-        let intrinsic = max(
-            measure(attachment.filename, font: style.bodyFont),
-            measure(sizeLabel, font: style.metadataFont)
-        )
-        let width = min(
-            min(availableWidth, TimelineMetrics.attachmentCardMaxWidth),
-            (textX - origin.x) + intrinsic + inset
-        )
-        let height = TimelineMetrics.attachmentCardHeight
+        let sizeLabel = DiscordFileSize.text(attachment.size)
+        let textX = origin.x + TimelineMetrics.fileCardInset + TimelineMetrics.fileCardIcon.width
+            + TimelineMetrics.fileCardIconGap
+        // Discord's card is 432 whatever its name, and less only where the
+        // column is.
+        let width = min(availableWidth, TimelineMetrics.fileCardMaxWidth)
+        let height = TimelineMetrics.fileCardHeight
+        let rect = CGRect(x: origin.x, y: origin.y, width: width, height: height)
         // Two lines stacked about the card's middle: the name on the upper
         // baseline, the size on the lower.
         let block = style.bodyFont.pointSize + style.metadataFont.pointSize + 4
         let top = origin.y + (height - block) / 2
+        let button = TimelineMetrics.fileCardHoverButton
+        let overhang = TimelineMetrics.fileCardHoverOverhang
         return AttachmentSlot(
-            rect: CGRect(x: origin.x, y: origin.y, width: max(120, width), height: height),
+            rect: rect,
             url: nil,
             isSpoiler: attachment.isSpoiler,
             altText: attachment.description,
@@ -3539,6 +3805,8 @@ nonisolated struct TimelineLayoutEngine: Sendable {
             kind: .file,
             filename: attachment.filename,
             sizeLabel: sizeLabel,
+            fileKind: AttachmentFileKind(filename: attachment.filename, contentType: attachment.contentType),
+            downloadRect: CGRect(x: rect.maxX + overhang - button, y: rect.minY - overhang, width: button, height: button),
             titleOrigin: CGPoint(x: textX, y: top),
             subtitleOrigin: CGPoint(x: textX, y: top + style.bodyFont.pointSize + 4)
         )
@@ -3577,12 +3845,12 @@ nonisolated struct TimelineLayoutEngine: Sendable {
         availableWidth: CGFloat,
         style: MessageTextStyle
     ) -> UploadCardSlot {
-        let inset = TimelineMetrics.attachmentCardInset
+        let inset = TimelineMetrics.fileCardInset
         let rect = CGRect(
             x: origin.x,
             y: origin.y,
-            width: min(availableWidth, TimelineMetrics.attachmentCardMaxWidth),
-            height: TimelineMetrics.attachmentCardHeight
+            width: min(availableWidth, TimelineMetrics.fileCardMaxWidth),
+            height: TimelineMetrics.fileCardHeight
         )
         let cancelSide = TimelineMetrics.uploadCancelSide
         let cancelRect = CGRect(
@@ -3591,9 +3859,9 @@ nonisolated struct TimelineLayoutEngine: Sendable {
             width: cancelSide,
             height: cancelSide
         )
-        let textX = rect.minX + inset + TimelineMetrics.attachmentCardGlyphSide + Spacing.base
+        let textX = rect.minX + inset + TimelineMetrics.fileCardIcon.width + TimelineMetrics.fileCardIconGap
         let room = max(0, cancelRect.minX - Spacing.base - textX)
-        let sizeLabel = "— \(AttachmentLimits.describe(bytes: summary.size))"
+        let sizeLabel = "— \(DiscordFileSize.text(summary.size))"
         let sizeWidth = measure(sizeLabel, font: style.metadataFont)
         // The name gives way to the size, never the other way round: how big
         // the upload is says how long the bar will take.
@@ -3607,6 +3875,7 @@ nonisolated struct TimelineLayoutEngine: Sendable {
         let barHeight = TimelineMetrics.uploadBarHeight
         return UploadCardSlot(
             rect: rect,
+            fileKind: AttachmentFileKind(filename: summary.title, contentType: nil),
             title: summary.title,
             titleOrigin: CGPoint(x: textX, y: top),
             titleWidth: titleWidth,

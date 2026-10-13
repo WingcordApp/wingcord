@@ -149,32 +149,77 @@ struct GameTests {
 
     // MARK: Reviews
 
-    @Test("Steam rows exist exactly where their counts arrived")
+    @Test("Steam lines are Discord's: Recent, then English or All, and no Overall")
     func steamRows() {
-        // The Sims sends all three aggregates.
-        let sims = GameReviews.SteamReviews(
+        // The Sims sends all three aggregates, and Discord draws two lines: a
+        // Recent with a real verdict, and English because 106,026 English
+        // reviews out of 199,981 clear its 200-of-2,000 bar.
+        let sims = GameReviews(steam: GameReviews.SteamReviews(
             rating: 86, ratingCount: 199_981,
             recentRating: 80, recentRatingCount: 1_717,
             localizedRating: 86, localizedRatingCount: 106_026
-        )
-        #expect(sims.rows.map(\.title) == ["Recent Reviews", "English Reviews", "Overall"])
+        ))
+        #expect(sims.steamRows(hasStorePage: true).map(\.title) == ["Recent", "English"])
 
-        // Beat Saber sends only the all-time pair, and its one row is named for
-        // being the only one.
-        let beatSaber = GameReviews.SteamReviews(rating: 96, ratingCount: 69_711)
-        #expect(beatSaber.rows.map(\.title) == ["All Reviews"])
+        // Beat Saber sends only the all-time pair: no Recent, and All.
+        let beatSaber = GameReviews(steam: GameReviews.SteamReviews(rating: 96, ratingCount: 69_711))
+        #expect(beatSaber.steamRows(hasStorePage: true).map(\.title) == ["All"])
+
+        // Too few English reviews to stand for the whole: All instead.
+        let small = GameReviews(steam: GameReviews.SteamReviews(
+            rating: 90, ratingCount: 1_500, localizedRating: 91, localizedRatingCount: 300
+        ))
+        #expect(small.steamRows(hasStorePage: true).map(\.title) == ["All"])
+
+        // The lines open the store page, so without one there are none — and
+        // with one and nothing to say, All says "No User Reviews".
+        #expect(sims.steamRows(hasStorePage: false).isEmpty)
+        let silent = GameReviews().steamRows(hasStorePage: true)
+        #expect(silent.map(\.title) == ["All"])
+        #expect(silent.first?.verdict == .noUserReviews)
+        #expect(silent.first?.sentence == "No User Reviews")
     }
 
-    @Test("Steam's wording matches its own thresholds")
+    @Test("Verdicts follow Discord's derivation, including the recent window's floors")
     func steamVerdicts() {
-        #expect(SteamVerdict(rating: 96, count: 69_711) == .overwhelminglyPositive)
-        #expect(SteamVerdict(rating: 86, count: 106_026) == .veryPositive)
-        #expect(SteamVerdict(rating: 80, count: 1_717) == .veryPositive)
-        // The same share with too few reviews is a weaker claim.
-        #expect(SteamVerdict(rating: 96, count: 40) == .veryPositive)
-        #expect(SteamVerdict(rating: 82, count: 12) == .positive)
-        #expect(SteamVerdict(rating: 55, count: 900) == .mixed)
-        #expect(SteamVerdict(rating: 10, count: 900) == .overwhelminglyNegative)
+        #expect(SteamVerdict(rating: 96, count: 69_711, isRecent: false) == .overwhelminglyPositive)
+        #expect(SteamVerdict(rating: 86, count: 106_026, isRecent: false) == .veryPositive)
+        #expect(SteamVerdict(rating: 80, count: 1_717, isRecent: true) == .veryPositive)
+        // Under fifty reviews is plain Positive outside the recent window…
+        #expect(SteamVerdict(rating: 96, count: 40, isRecent: false) == .positive)
+        // …and the recent window never says it.
+        #expect(SteamVerdict(rating: 96, count: 40, isRecent: true) == .veryPositive)
+        // Overwhelmingly at a hundred recent reviews, at five hundred otherwise.
+        #expect(SteamVerdict(rating: 96, count: 150, isRecent: true) == .overwhelminglyPositive)
+        #expect(SteamVerdict(rating: 96, count: 150, isRecent: false) == .veryPositive)
+        #expect(SteamVerdict(rating: 55, count: 900, isRecent: false) == .mixed)
+        #expect(SteamVerdict(rating: 10, count: 900, isRecent: false) == .overwhelminglyNegative)
+        #expect(SteamVerdict(rating: 10, count: 30, isRecent: false) == .negative)
+        #expect(SteamVerdict(rating: 10, count: 30, isRecent: true) == .veryNegative)
+        // Under ten there is nothing to say.
+        #expect(SteamVerdict(rating: 96, count: 9, isRecent: false) == .noUserReviews)
+        #expect(SteamVerdict(rating: nil, count: nil, isRecent: false) == .noUserReviews)
+    }
+
+    @Test("A Steam line's tooltip is Discord's sentence for its window")
+    func steamSentences() {
+        let row = GameReviews.SteamRow(window: .recent, rating: 80, count: 1_717)
+        #expect(row.sentence.hasPrefix("80% of "))
+        #expect(row.sentence.hasSuffix(" user reviews in the last 30 days are positive"))
+    }
+
+    @Test("OpenCritic draws a ring only for a tiered average with critics behind it")
+    func openCriticStates() {
+        let full = GameReviews.OpenCriticReviews(topCriticRating: 89.4, topCriticRatingCount: 120, tier: .mighty)
+        #expect(full.showsRing)
+        #expect(!full.lacksCritics)
+        let tierOnly = GameReviews.OpenCriticReviews(tier: .strong)
+        #expect(!tierOnly.showsRing)
+        #expect(!tierOnly.lacksCritics)
+        let nothing = GameReviews.OpenCriticReviews(topCriticRating: 0, topCriticRatingCount: 0)
+        #expect(!nothing.showsRing)
+        #expect(nothing.lacksCritics)
+        #expect(OpenCriticTier.mighty.badgeURL?.host == "cdn.discordapp.com")
     }
 
     @Test("An OpenCritic score is truncated, never rounded")

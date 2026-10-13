@@ -132,7 +132,7 @@ struct PollEditorSheet: View {
                     }
                     .buttonStyle(.plain)
                     .foregroundStyle(Ink.primary)
-                    .specularEdge()
+                    .overlay { Capsule().strokeBorder(Palette.edge) }
                 }
             }
             section("Duration") {
@@ -189,7 +189,7 @@ struct PollEditorSheet: View {
                 .padding(.horizontal, Spacing.snug)
                 .padding(.vertical, Spacing.base)
                 .background(Palette.surfaceRaised, in: .rect(cornerRadius: Radius.chip))
-                .specularEdge(in: RoundedRectangle(cornerRadius: Radius.chip))
+                .overlay { RoundedRectangle(cornerRadius: Radius.chip).strokeBorder(Palette.edge) }
             Text("\(draft.question.count)/\(PollDraft.questionLimit)")
                 .font(.system(.caption2).monospacedDigit())
                 .foregroundStyle(Ink.tertiary)
@@ -233,7 +233,7 @@ struct PollEditorSheet: View {
         .padding(.trailing, Spacing.base)
         .frame(minHeight: Metrics.composerControlHeight)
         .background(Palette.surfaceRaised, in: .capsule)
-        .specularEdge()
+        .overlay { Capsule().strokeBorder(Palette.edge) }
     }
 
     /// Discord's dropdown, as this app draws a choice: a flyout with a tick.
@@ -254,7 +254,7 @@ struct PollEditorSheet: View {
         }
         .buttonStyle(.plain)
         .foregroundStyle(Ink.primary)
-        .specularEdge()
+        .overlay { Capsule().strokeBorder(Palette.edge) }
         .accessibilityLabel(Text("Poll will be live for \(draft.duration.title)"))
         .popover(isPresented: $isChoosingDuration, arrowEdge: .bottom) {
             VStack(spacing: 0) {
@@ -284,7 +284,7 @@ struct PollEditorSheet: View {
         }
         .buttonStyle(.plain)
         .foregroundStyle(draft.scheduledAt == nil ? AnyShapeStyle(Ink.primary) : AnyShapeStyle(Palette.accent))
-        .specularEdge()
+        .overlay { Capsule().strokeBorder(Palette.edge) }
         .help(scheduleLabel)
         .accessibilityLabel(Text(scheduleLabel))
         .popover(isPresented: $isScheduling, arrowEdge: .top) {

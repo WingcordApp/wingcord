@@ -164,7 +164,7 @@ struct EventSheet: View {
                         cover = ImageData(mimeType: file.contentType, bytes: file.bytes)
                         coverName = file.filename
                     }
-                    .buttonStyle(.glass)
+                    .buttonStyle(.bordered)
                     .controlSize(.small)
                 }
             }

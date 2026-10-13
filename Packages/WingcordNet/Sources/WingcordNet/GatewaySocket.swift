@@ -585,6 +585,25 @@ public actor GatewaySocket {
         }
     }
 
+    /// Asks for these servers' soundboards — Discord's op 31,
+    /// `REQUEST_SOUNDBOARD_SOUNDS`, exactly as its client sends it when the
+    /// picker opens: `requestSoundboardSounds(e){this.send(31,{guild_ids:e})}`,
+    /// the ids as strings. Answered by one `SOUNDBOARD_SOUNDS` dispatch per
+    /// server.
+    public func requestSoundboardSounds(guildIDs: [GuildID]) {
+        guard !guildIDs.isEmpty else { return }
+        struct Request: Encodable {
+            var op = 31
+            var d: Data
+
+            struct Data: Encodable {
+                var guild_ids: [String]
+            }
+        }
+        Self.trace("request soundboards for \(guildIDs.count) servers")
+        send(Request(d: .init(guild_ids: guildIDs.map(\.description))))
+    }
+
     /// The op-14 lazy subscription, which is the only route that answers with
     /// members **and their presences**. The documented op-8 request answers with
     /// members and no presence for them, so a roster built on it shows everyone
@@ -858,6 +877,20 @@ public actor GatewaySocket {
         customEmoji: EmojiRef?,
         activities richPresences: [RichPresenceActivity] = []
     ) {
+        guard let frame = Self.presenceFrame(
+            status: status, customStatus: customStatus, customEmoji: customEmoji, activities: richPresences
+        ) else { return }
+        send(encoded: frame)
+    }
+
+    /// Opcode 3's frame, encoded — apart from the socket so the wire it writes
+    /// can be read back in a test.
+    static func presenceFrame(
+        status: String,
+        customStatus: String?,
+        customEmoji: EmojiRef?,
+        activities richPresences: [RichPresenceActivity]
+    ) -> Data? {
         struct Update: Encodable {
             var op = 3
             var d: Data
@@ -889,16 +922,25 @@ public actor GatewaySocket {
                 var sync_id: String?
                 var flags: Int?
                 var metadata: Metadata?
+                /// A Streaming activity's stream, and where the two lines link
+                /// to — a custom presence's (DESIGN-NOTES §11).
+                var url: String?
+                var details_url: String?
+                var state_url: String?
+                /// Which line names it in a member list — a local app's
+                /// `status_display_type`, passed through.
+                var status_display_type: Int?
             }
 
             /// Spotify's, as Discord's `getActivity` writes it — `button_urls`
-            /// included, empty.
+            /// included, empty — or a presence's buttons' links alone, as
+            /// Vencord's CustomRPC writes them.
             struct Metadata: Encodable {
                 var context_uri: String?
-                var album_id: String
-                var artist_ids: [String]
-                var type: String
-                var button_urls: [String] = []
+                var album_id: String?
+                var artist_ids: [String]?
+                var type: String?
+                var button_urls: [String]
             }
 
             /// **`id` and `animated` as well as the name.** A custom emoji in a
@@ -991,30 +1033,39 @@ public actor GatewaySocket {
                         context_uri: $0.contextURI,
                         album_id: $0.albumID,
                         artist_ids: $0.artistIDs,
-                        type: $0.type
+                        type: $0.type,
+                        button_urls: []
                     )
-                }
+                } ?? (activity.buttonURLs.isEmpty ? nil : Update.Metadata(
+                    button_urls: activity.buttonURLs.prefix(2).map(\.absoluteString)
+                )),
+                url: activity.url?.absoluteString,
+                details_url: activity.detailsURL?.absoluteString,
+                state_url: activity.stateURL?.absoluteString,
+                status_display_type: activity.statusDisplayType
             ))
         }
-        send(Update(d: .init(status: status, activities: activities)))
+        return try? JSONEncoder().encode(Update(d: .init(status: status, activities: activities)))
     }
 
     private func send(_ value: some Encodable) {
-        guard let task, !isStopped else { return }
         do {
-            let data = try JSONEncoder().encode(value)
-            // The payload is never logged. An IDENTIFY carries the account token
-            // in the clear, and a log line is a file, a screen share and a
-            // sysdiagnose.
-            Self.trace("send \(data.count) bytes")
-            task.send(.data(data)) { error in
-                if let error {
-                    GatewaySocket.trace("send failed: \(error.localizedDescription)")
-                    Self.log.error("gateway send failed: \(error.localizedDescription, privacy: .public)")
-                }
-            }
+            send(encoded: try JSONEncoder().encode(value))
         } catch {
             Self.log.error("gateway encode failed: \(error)")
+        }
+    }
+
+    private func send(encoded data: Data) {
+        guard let task, !isStopped else { return }
+        // The payload is never logged. An IDENTIFY carries the account token in
+        // the clear, and a log line is a file, a screen share and a sysdiagnose.
+        Self.trace("send \(data.count) bytes")
+        task.send(.data(data)) { error in
+            if let error {
+                GatewaySocket.trace("send failed: \(error.localizedDescription)")
+                Self.log.error("gateway send failed: \(error.localizedDescription, privacy: .public)")
+            }
         }
     }
 
@@ -1220,6 +1271,9 @@ public struct ReadySnapshot: Sendable {
     /// Whether the reader has confirmed an e-mail and holds a phone — off
     /// READY's own `user`, nil where it did not say. See `AccountVerification`.
     public var accountVerification: AccountVerification?
+    /// What Discord holds back by age in the reader's region. Empty when READY
+    /// gated nothing or did not say.
+    public var ageGatedFeatures: AgeGatedFeatures
     public var guilds: [Guild]
     public var channelsByGuild: [GuildID: [Channel]]
     /// The threads the account follows, per guild.
@@ -1330,6 +1384,7 @@ public struct ReadySnapshot: Sendable {
         premiumType = payload.user.premium_type
         ageVerificationStatus = payload.user.age_verification_status
         accountVerification = payload.user.accountVerification
+        ageGatedFeatures = AgeGatedFeatures(rawValue: payload.regional_feature_config?.ageGatedFeatures ?? 0)
 
         var guilds: [Guild] = []
         var channelsByGuild: [GuildID: [Channel]] = [:]
@@ -1760,7 +1815,11 @@ public enum GatewayUpdate: Sendable {
     /// echoed back. A partial update leaves out what did not change, so the
     /// rail's folders are nil, and each synced preference nil, where it did
     /// not carry them.
-    case userSettingsChanged(folders: GuildFolderSettings?, preferences: SyncedPreferences.Delta)
+    case userSettingsChanged(
+        folders: GuildFolderSettings?,
+        preferences: SyncedPreferences.Delta,
+        audioContext: AudioContextSettings?
+    )
     /// An application answered an interaction with a form to fill in.
     case interactionModalCreated(InteractionModal)
     /// Somebody moved in, out of, or between voice channels. A state whose
@@ -2213,10 +2272,14 @@ public enum GatewayUpdate: Sendable {
             else { return nil }
             let folders = UserSettingsProto.guildFolders(in: data)
             let preferences = SyncedPreferencesProto.decode(data)
+            let audioContext = AudioContextProto.decode(data)
             // An update about something else — the inbox's tab, a theme — has
             // nothing for the session.
-            guard folders != nil || preferences != SyncedPreferences.Delta() else { return nil }
-            self = .userSettingsChanged(folders: folders, preferences: preferences)
+            guard folders != nil || preferences != SyncedPreferences.Delta() || audioContext != nil
+            else { return nil }
+            self = .userSettingsChanged(
+                folders: folders, preferences: preferences, audioContext: audioContext
+            )
         case .interactionModalCreate(let dto):
             self = .interactionModalCreated(dto.domain)
         default:

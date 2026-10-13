@@ -11,9 +11,8 @@ import WingcordCore
 /// opens the details over itself and closing the details returns to the list —
 /// here the details replace the list and Back returns to it.
 ///
-/// Clear glass over `Palette.modalScrim` — the quick switcher's recipe, for its
-/// reason: cards of text over a transcript are unreadable through clear glass
-/// alone, and frosting it is the slab §4 exists to avoid.
+/// A solid panel over `Palette.modalScrim` — `ModalPanelBackground`. It was
+/// clear glass, and cards of text over a transcript read through it.
 struct EventsLayer: View {
     @Environment(AppModel.self) private var model
     @Environment(\.motion) private var motion
@@ -77,8 +76,7 @@ private struct EventsPanel: View {
         }
         .animation(motion.fadeQuick, value: request.page)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-        .glassEffect(.clear.tint(Palette.flyoutTint), in: shape)
-        .specularEdge(in: shape)
+        .modalPanel(in: shape)
     }
 }
 

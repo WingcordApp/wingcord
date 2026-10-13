@@ -83,22 +83,19 @@ struct RTPTests {
         #expect(quiet[1] == 127)
     }
 
-    /// The elements a writer emits are the elements a reader finds, in order.
-    ///
-    /// Read with `RTPExtension.describe`, which takes the block out of the
-    /// **decrypted payload** — the only place it exists on this connection.
-    /// A reader that looks in the raw datagram finds ciphertext, which is what
-    /// made the previous reader here impossible to use and unused.
-    @Test func anElementCanBeReadBack() throws {
+    /// The elements go in the part of the packet that is encrypted, in order,
+    /// padded to a word with RFC 8285's no-op — and the header says how long
+    /// that part is, which is what a receiver strips from the decrypted payload.
+    @Test func elementsAreWrittenIntoTheEncryptedBlock() throws {
         var writer = RTPWriter(ssrc: 1, payloadType: 120)
         let packet = writer.next(
             advancingClockBy: 960,
             extensions: RTPExtension.audioLevel(id: 3, dBov: 42, isVoice: true)
                 + RTPExtension.absoluteSendTime(id: 4, seconds: 1)
         )
+        #expect(packet.encrypted == [0x30, 0xAA, 0x42, 0x04, 0x00, 0x00, 0x00, 0x00])
         let header = try #require(RTPHeader(parsing: packet.clear + packet.encrypted))
         #expect(header.extensionBodyLength == packet.encrypted.count)
-        #expect(RTPExtension.describe(packet.encrypted[...]) == "3:aa 4:040000")
     }
 
     @Test func aNonRTPDatagramIsRejected() {
@@ -203,50 +200,25 @@ struct VoiceEndpointTests {
     }
 }
 
-// MARK: - Reading somebody else's extensions
+// MARK: - The extensions a working stream carries
 
 @Suite("RTP header extensions")
-struct RTPExtensionDescriptionTests {
-
-    /// **The reading that the next diagnosis depends on.** Discord's READY
-    /// carries no `header_extensions` on a call or on a stream, so the only
-    /// statement of what the server expects is what a client whose picture
-    /// renders puts on every packet. If this parse is wrong, that reading is
-    /// wrong, and a whole run is spent on it.
-    @Test("Every element in a one-byte block is named with its value")
-    func describesEachElement() {
-        // Abs-send-time, then a three-byte string — the shape a RID takes.
-        let block: [UInt8] = [
-            0x32, 0x0A, 0xBC, 0xDE,             // id 3, three bytes
-            0x92, 0x31, 0x30, 0x30,             // id 9, "100"
-        ]
-        #expect(RTPExtension.describe(block[...]) == "3:0abcde 9:313030")
-    }
-
-    /// Zero is the no-op RFC 8285 pads with, and a reader that stops at the
-    /// first one loses everything behind it.
-    @Test("Padding is skipped rather than read or stopped on")
-    func skipsPadding() {
-        // The low nibble is length MINUS ONE, so a two-byte element is `0x21`.
-        let block: [UInt8] = [0x00, 0x10, 0xFF, 0x00, 0x21, 0xAA, 0xBB, 0x00]
-        #expect(RTPExtension.describe(block[...]) == "1:ff 2:aabb")
-    }
+struct RTPExtensionTests {
 
     /// The two elements every packet of a stream Discord renders carries, and
-    /// which this client sent none of. Written the way they were read.
+    /// which this client once sent none of — **asserted against literal bytes**,
+    /// never against a reader of our own, which would agree with any mistake it
+    /// shared. Captured off a working stream as `ext=[3:bcbbac 5:0047]`; 47 s in
+    /// 6.18 fixed point is `0xbc0000`, so the capture is the same clock a few
+    /// milliseconds later.
     @Test("The two elements a working stream carries are written as they were read")
     func writesWhatWasRead() {
-        let sendTime = RTPExtension.absoluteSendTime(
+        #expect(RTPExtension.absoluteSendTime(
             id: RTPExtension.DefaultID.absoluteSendTime, seconds: 47.0
-        )
-        let sequence = RTPExtension.transportSequence(
+        ) == [0x32, 0xBC, 0x00, 0x00])
+        #expect(RTPExtension.transportSequence(
             id: RTPExtension.DefaultID.transportSequence, sequence: 0x0047
-        )
-        // `3:<three bytes>` and `5:<two bytes>`, which is the shape captured as
-        // `ext=[3:bcbbac 5:0047]` — and 47 s in 6.18 fixed point is 0xbc0000,
-        // so the captured value is the same clock a few milliseconds later.
-        // That agreement is what identifies the element.
-        #expect(RTPExtension.describe((sendTime + sequence)[...]) == "3:bc0000 5:0047")
+        ) == [0x51, 0x00, 0x47])
     }
 
     /// One number for the whole connection, wrapping where the field does.
@@ -257,19 +229,5 @@ struct RTPExtensionDescriptionTests {
         #expect(counter.next() == 1)
         for _ in 0..<(0xFFFF - 1) { _ = counter.next() }
         #expect(counter.next() == 0, "and wraps rather than saturating")
-    }
-
-    @Test("An element that runs past the block says so instead of guessing")
-    func truncated() {
-        #expect(RTPExtension.describe([0x34, 0x01, 0x02][...]) == "truncated")
-        #expect(RTPExtension.describe([][...]).isEmpty)
-    }
-
-    /// The block arrives as a slice of the decrypted payload, whose indices do
-    /// not start at zero — and a reader that assumes they do reads the media.
-    @Test("A block that does not start at zero is read from where it starts")
-    func offsetSlice() {
-        let payload: [UInt8] = [0xDE, 0xAD, 0xBE, 0xEF, 0x10, 0x7F, 0x00, 0x00]
-        #expect(RTPExtension.describe(payload[4...]) == "1:7f")
     }
 }

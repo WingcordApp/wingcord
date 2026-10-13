@@ -220,7 +220,7 @@ private struct DropHalo: View {
             }
             .foregroundStyle(Ink.primary)
             .padding(Spacing.group)
-            .glassEffect(.clear.tint(Palette.flyoutTint), in: .rect(cornerRadius: Radius.glass))
+            .glassEffect(.regular, in: .rect(cornerRadius: Radius.glass))
         }
         .allowsHitTesting(false)
         .transition(.materialize(from: .bottom))

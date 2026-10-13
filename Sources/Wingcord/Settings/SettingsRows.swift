@@ -336,7 +336,7 @@ struct SettingsSegmentedControl<Value: Hashable>: View {
                             .foregroundStyle(isSelected ? Ink.primary : Ink.secondary)
                     }
                     if let glyph = option.glyph {
-                        Text(glyph).font(.system(size: 15))
+                        Text(glyph).font(.system(.title3))
                     }
                     if !option.title.isEmpty {
                         Text(option.title)
@@ -421,7 +421,7 @@ struct SettingsValueRow: View {
 
 // MARK: Action row
 
-/// A label and a button. The button carries the glass; the row does not.
+/// A label and a standard bordered button.
 struct SettingsActionRow: View {
     var title: String
     var help: String?
@@ -446,7 +446,7 @@ struct SettingsActionRow: View {
     var body: some View {
         SettingsControlRow(title, help: help) {
             Button(actionTitle, role: role, action: action)
-                .buttonStyle(.glass)
+                .buttonStyle(.bordered)
                 .controlSize(.small)
         }
     }
@@ -460,11 +460,17 @@ struct SettingsActionRow: View {
 /// gap between a card and the next heading, which keeps the card a list of
 /// controls and nothing else.
 struct SettingsFootnote: View {
-    var text: String
+    var text: Text
     var symbolName: String?
 
     init(_ text: String, symbolName: String? = nil) {
-        self.text = text
+        self.text = Text(text)
+        self.symbolName = symbolName
+    }
+
+    /// One with a link in it — Discord's own footnotes carry theirs inline.
+    init(markdown: LocalizedStringKey, symbolName: String? = nil) {
+        self.text = Text(markdown)
         self.symbolName = symbolName
     }
 
@@ -475,9 +481,10 @@ struct SettingsFootnote: View {
                     .font(.system(size: 11))
                     .foregroundStyle(Ink.tertiary)
             }
-            Text(text)
+            text
                 .font(SettingsType.footnote)
                 .foregroundStyle(Ink.tertiary)
+                .tint(Palette.accent)
                 .fixedSize(horizontal: false, vertical: true)
         }
         .padding(.horizontal, SettingsMetrics.cardContentInset)

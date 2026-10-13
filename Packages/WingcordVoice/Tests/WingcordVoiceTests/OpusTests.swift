@@ -5,14 +5,12 @@ import Testing
 @Suite("Opus")
 struct OpusTests {
 
+    /// One channel, as a microphone is encoded — Discord's call encoder is
+    /// mono. It decodes to two, as every Discord decoder does.
     private func tone(frequency: Double, frames: Int) -> [Int16] {
-        var samples = [Int16](repeating: 0, count: frames * Int(OpusFormat.channels))
-        for frame in 0..<frames {
-            let value = sin(2 * .pi * frequency * Double(frame) / 48_000) * 12_000
-            samples[frame * 2] = Int16(value)
-            samples[frame * 2 + 1] = Int16(value)
+        (0..<frames).map { frame in
+            Int16(sin(2 * .pi * frequency * Double(frame) / 48_000) * 12_000)
         }
-        return samples
     }
 
     @Test func aFrameEncodesAndDecodes() throws {

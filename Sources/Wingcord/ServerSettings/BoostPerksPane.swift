@@ -149,7 +149,7 @@ private struct CustomInviteLinkSection: View {
                     HStack(spacing: Spacing.snug) {
                         if code != current {
                             Button("Save Changes") { save(code) }
-                                .buttonStyle(.glassProminent)
+                                .buttonStyle(.borderedProminent)
                                 .controlSize(.small)
                         }
                         if !current.isEmpty {

@@ -533,6 +533,24 @@ extension AppModel {
         )
     }
 
+    /// Whether somebody may speak with priority in a voice channel — Discord's
+    /// `PRIORITY_SPEAKER`, through the channel's own overwrites, as its client
+    /// checks it on every speaking frame that carries the flag. A direct call
+    /// has no such permission.
+    func mayHavePriority(_ userID: UserID, in channelID: ChannelID) -> Bool {
+        guard let channel = channelIndex[channelID], let guildID = channel.guildID,
+              let guild = guilds[guildID]
+        else { return false }
+        return PermissionResolver.permissions(
+            forMember: members[guildID]?[userID]?.roleIDs ?? [],
+            userID: userID,
+            guildID: guildID,
+            guildOwnerID: guild.ownerID,
+            roles: roles[guildID] ?? [:],
+            channel: channel
+        ).contains(.prioritySpeaker)
+    }
+
     /// The roles that grant somebody a permission, and whether ownership does.
     func permissionSources(
         of permission: Permissions,

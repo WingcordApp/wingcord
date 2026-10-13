@@ -118,7 +118,8 @@ struct EventActionBar: View {
 /// "The whole series, or this date?" — Discord's dialog (`666394`), as a
 /// popover off the button that asked. Its title turns to "not interested"
 /// when the reader is in the whole series, and each row writes at once.
-private struct EventSeriesChoice: View {
+/// Asked by the event card's Interested too.
+struct EventSeriesChoice: View {
     var event: ScheduledEvent
     var occurrence: UInt64
     var close: () -> Void

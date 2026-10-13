@@ -60,7 +60,6 @@ struct SettingsChromePreview: View {
                     controls: controls,
                     isReorderable: true,
                     canSend: true,
-                    replyingToAuthor: nil,
                     text: .constant("")
                 )
                 // **The reorder container goes on the whole bar, not on the

@@ -36,9 +36,10 @@ public final class H264Encoder: @unchecked Sendable {
     }
 
     /// Called on VideoToolbox's own callback thread with one finished access
-    /// unit: its NAL units, whether it is a keyframe, and the parameter sets to
-    /// send ahead of it.
-    public var onEncodedFrame: (@Sendable ([[UInt8]], [[UInt8]], Bool) -> Void)?
+    /// unit: its NAL units, the parameter sets to send ahead of it, whether it
+    /// is a keyframe, and the presentation time it was submitted with — which
+    /// is when it was captured, not when it finished encoding.
+    public var onEncodedFrame: (@Sendable ([[UInt8]], [[UInt8]], Bool, CMTime) -> Void)?
 
     private var session: VTCompressionSession?
     private var configuration: Configuration
@@ -69,11 +70,14 @@ public final class H264Encoder: @unchecked Sendable {
         // measured, ninety submitted and forty-seven emitted, at any data rate
         // ceiling. A thirty frame stream arriving at fifteen.
         //
-        // Without it the encoder emits `max_num_ref_frames = 1`, no VUI, and
-        // every frame it is given — which is what the reference client whose
-        // video renders produces. `EncoderConformanceTests` pins the first of
-        // those; the frame count is visible in the trace as `frames=` beside
-        // `video=`.
+        // Without it the encoder emits `max_num_ref_frames = 1` and every frame
+        // it is given. `EncoderConformanceTests` pins the first of those; the
+        // frame count is visible in the trace as `frames=` beside `video=`.
+        //
+        // It also emits **no VUI**, and that is not harmless: a WebRTC
+        // receiver rewrites such an SPS before DAVE checks it, and the keyframe
+        // then fails authentication. `emit` gives every SPS the VUI WebRTC's
+        // own sender gives it — see `H264VUI.swift`.
         let specification: [CFString: Any] = [
             kVTVideoEncoderSpecification_EnableHardwareAcceleratedVideoEncoder: true,
         ]
@@ -117,46 +121,58 @@ public final class H264Encoder: @unchecked Sendable {
         apply(kVTCompressionPropertyKey_MaxKeyFrameInterval, configuration.framerate * 2)
         apply(kVTCompressionPropertyKey_MaxKeyFrameIntervalDuration, 2)
         apply(kVTCompressionPropertyKey_ExpectedFrameRate, configuration.framerate)
-        apply(kVTCompressionPropertyKey_AverageBitRate, configuration.bitrate)
-        // A hard ceiling over one second, in bytes. Without it the encoder is
-        // free to spend a whole second's budget on one keyframe, and a keyframe
-        // that needs forty packets in one frame interval is a keyframe the path
-        // drops half of.
-        //
-        // **Twice the average, not a quarter over it.** A ceiling this close to
-        // the target does not shape the bitrate, it makes the encoder drop
-        // frames to stay under it: measured, ninety frames submitted and
-        // **forty-seven** emitted, at 1.25×. Twice is what the reference client
-        // uses and it leaves room for the keyframe this exists to bound.
-        apply(
-            kVTCompressionPropertyKey_DataRateLimits,
-            [configuration.bitrate / 8 * 2, 1] as CFArray
-        )
+        applyBitrate(configuration.bitrate)
     }
 
-
-
-    /// Re-opens the session for a new size or rate.
+    /// The average and its ceiling, which always move together.
     ///
-    /// A bitrate change alone is a property write; a size change is a new
-    /// session, because the encoder's dimensions are fixed at creation. Both go
-    /// through here so a caller never has to know which is which.
+    /// The ceiling is over one second, in bytes. Without it the encoder is free
+    /// to spend a whole second's budget on one keyframe, and a keyframe that
+    /// needs forty packets in one frame interval is a keyframe the path drops
+    /// half of.
+    ///
+    /// **Twice the average, and twice everywhere.** A ceiling a quarter over
+    /// the target does not shape the bitrate, it makes the encoder drop frames
+    /// to stay under it: measured, ninety frames submitted and **forty-seven**
+    /// emitted, at 1.25× — which is what a reconfiguration used to write while
+    /// the session's creation wrote twice.
+    private func applyBitrate(_ bitrate: Int) {
+        apply(kVTCompressionPropertyKey_AverageBitRate, bitrate)
+        apply(kVTCompressionPropertyKey_DataRateLimits, [bitrate / 8 * 2, 1] as CFArray)
+    }
+
+    /// A new size, rate or bitrate.
+    ///
+    /// A size change is a new session, because the encoder's dimensions are
+    /// fixed at creation — and a new session's first frame is a keyframe
+    /// carrying the new parameter sets, which is what a receiver needs to
+    /// follow it. Anything else is a property write on the running session.
     public func reconfigure(_ next: Configuration) {
         lock.lock()
         defer { lock.unlock() }
+        guard next != configuration else { return }
         let needsNewSession = next.width != configuration.width
             || next.height != configuration.height
         configuration = next
         if needsNewSession {
-            try? open()
+            do {
+                try open()
+            } catch {
+                Self.log.error("encoder would not reopen at \(next.width)x\(next.height): \(error.localizedDescription, privacy: .public)")
+            }
         } else {
-            apply(kVTCompressionPropertyKey_AverageBitRate, next.bitrate)
             apply(kVTCompressionPropertyKey_ExpectedFrameRate, next.framerate)
-            apply(
-                kVTCompressionPropertyKey_DataRateLimits,
-                [next.bitrate / 8 * 5 / 4, 1] as CFArray
-            )
+            applyBitrate(next.bitrate)
         }
+    }
+
+    /// Only the bitrate, as the far end's reports move it.
+    public func setBitrate(_ bitrate: Int) {
+        lock.lock()
+        defer { lock.unlock() }
+        guard bitrate != configuration.bitrate else { return }
+        configuration.bitrate = bitrate
+        applyBitrate(bitrate)
     }
 
     public func encode(_ pixelBuffer: CVPixelBuffer, at time: CMTime, forceKeyframe: Bool) {
@@ -178,7 +194,7 @@ public final class H264Encoder: @unchecked Sendable {
         ) { [weak self] status, _, sampleBuffer in
             guard let self, status == noErr, let sampleBuffer,
                   CMSampleBufferDataIsReady(sampleBuffer) else { return }
-            self.emit(sampleBuffer)
+            emit(sampleBuffer)
         }
     }
 
@@ -190,12 +206,21 @@ public final class H264Encoder: @unchecked Sendable {
         // at the start of a stream means anybody who joins later — which is
         // everybody, in a channel people come and go from — has no format
         // description and shows a black rectangle for ever.
+        //
+        // **The SPS leaves in the form a WebRTC receiver keeps.** VideoToolbox
+        // writes it with no VUI, which the receiver rewrites before DAVE
+        // authenticates it, so every keyframe would fail at the far end. This
+        // is the pass WebRTC's own sender makes on its encoder's output. An
+        // AVCC sample never carries an SPS in-band, so the format
+        // description's are the only ones there are.
         let isKeyframe = Self.isKeyframe(sampleBuffer)
         var sets: [[UInt8]] = []
         if isKeyframe, let format = CMSampleBufferGetFormatDescription(sampleBuffer) {
-            sets = H264.parameterSets(from: format)
+            sets = H264.parameterSets(from: format).map(H264.receiverStableSPS)
         }
-        onEncodedFrame?(units, sets, isKeyframe)
+        onEncodedFrame?(
+            units, sets, isKeyframe, CMSampleBufferGetPresentationTimeStamp(sampleBuffer)
+        )
     }
 
     private static func isKeyframe(_ sampleBuffer: CMSampleBuffer) -> Bool {
@@ -253,26 +278,31 @@ public final class H264SampleBuilder {
     /// description it made hands the decoder pictures of a size the description
     /// says they are not.
     public func updateParameterSets(_ sets: [[UInt8]]) {
-        guard sets.count >= 2, sets != parameterSetsFingerprint else { return }
-        var pointers: [UnsafePointer<UInt8>] = []
-        var sizes: [Int] = []
-        var storage: [[UInt8]] = sets
+        guard sets.count >= 2, sets != parameterSetsFingerprint,
+              !sets.contains(where: \.isEmpty)
+        else { return }
 
+        // **One buffer, and every pointer into it made and used inside the one
+        // closure that lends it.** This used to collect each set's
+        // `baseAddress` from its own `withUnsafeBufferPointer` and use them
+        // after those closures had returned — which worked only because nothing
+        // happened to move the arrays in between, and is undefined behaviour
+        // whether or not it does.
+        let sizes = sets.map(\.count)
+        let joined = Array(sets.joined())
         var description: CMFormatDescription?
-        let created: OSStatus = storage.withUnsafeMutableBufferPointer { buffer -> OSStatus in
-            for index in 0..<buffer.count {
-                buffer[index].withUnsafeBufferPointer { inner in
-                    if let base = inner.baseAddress {
-                        pointers.append(base)
-                        sizes.append(inner.count)
-                    }
-                }
+        let created = joined.withUnsafeBufferPointer { bytes -> OSStatus in
+            guard let base = bytes.baseAddress else { return kCMFormatDescriptionError_InvalidParameter }
+            var offset = 0
+            let pointers = sizes.map { size -> UnsafePointer<UInt8> in
+                defer { offset += size }
+                return base + offset
             }
-            return pointers.withUnsafeBufferPointer { pointerBuffer in
+            return pointers.withUnsafeBufferPointer { list in
                 CMVideoFormatDescriptionCreateFromH264ParameterSets(
                     allocator: kCFAllocatorDefault,
-                    parameterSetCount: pointerBuffer.count,
-                    parameterSetPointers: pointerBuffer.baseAddress!,
+                    parameterSetCount: list.count,
+                    parameterSetPointers: list.baseAddress!,
                     parameterSetSizes: sizes,
                     nalUnitHeaderLength: 4,
                     formatDescriptionOut: &description

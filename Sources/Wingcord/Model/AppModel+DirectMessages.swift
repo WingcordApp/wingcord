@@ -17,7 +17,7 @@ import WingcordCore
 extension AppModel {
 
     /// Raises the conversation's menu beside the row that asked for it.
-    func openDirectMessageMenu(for channelID: ChannelID, anchor: CGRect) {
+    func openDirectMessageMenu(for channelID: ChannelID, anchor: CGRect, callUserID: UserID? = nil) {
         guard let channel = channelIndex[channelID], channel.kind.isPrivate else { return }
         dismissMessageSurfaces()
         directMessageMenu = DirectMessageMenuRequest(
@@ -27,7 +27,8 @@ extension AppModel {
             userID: channel.kind == .directMessage
                 ? channel.recipientIDs.first { $0 != currentUserID }
                 : nil,
-            anchor: anchor
+            anchor: anchor,
+            callUserID: callUserID
         )
     }
 

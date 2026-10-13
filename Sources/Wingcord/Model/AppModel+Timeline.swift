@@ -485,9 +485,18 @@ extension AppModel {
             closeTopicPanel()
             return true
         }
-        guard messageBoxes[channelID]?.hasMoreNewer == true else { return false }
-        jumpToPresent(in: channelID)
-        return true
+        // Discord's last step (module `92960`, `I`): back to the present, and
+        // the channel marked read — its Mark channel as read is this key.
+        var acted = false
+        if messageBoxes[channelID]?.hasMoreNewer == true {
+            jumpToPresent(in: channelID)
+            acted = true
+        }
+        if let channel = channelIndex[channelID], unreadState(of: channel).unread {
+            markRead(channelID)
+            acted = true
+        }
+        return acted
     }
 
     /// Opens a fold, or shuts it again — its Show and its Hide.

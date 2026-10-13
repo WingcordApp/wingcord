@@ -489,6 +489,13 @@ struct InlineScanner {
         guard !labelBytes.isEmpty else { return false }
 
         flushLiteral()
+        // A fake Nitro link stands for an emoji — drawn in its place — or a
+        // sticker, drawn under the message instead. See `FakeNitroLink`.
+        if let fake = FakeNitroLink(url: url, label: String(decoding: labelBytes, as: UTF8.self)) {
+            if case .emoji(let emoji) = fake { nodes.append(.customEmoji(emoji)) }
+            index = parenEnd + 1
+            return true
+        }
         var inner = InlineScanner(
             bytes: labelBytes, options: options, depth: depth + 1,
             base: base + index + 1, recordsSpans: recordsSpans
@@ -554,7 +561,13 @@ struct InlineScanner {
         guard end - index > 8 else { return false }
 
         flushLiteral()
-        nodes.append(.autoLink(String(decoding: bytes[index..<end], as: UTF8.self)))
+        let url = String(decoding: bytes[index..<end], as: UTF8.self)
+        // A bare fake Nitro link, the plugin's other form. See `FakeNitroLink`.
+        switch FakeNitroLink(url: url) {
+        case .emoji(let emoji)?: nodes.append(.customEmoji(emoji))
+        case .sticker?: break
+        case nil: nodes.append(.autoLink(url))
+        }
         index = end
         return true
     }

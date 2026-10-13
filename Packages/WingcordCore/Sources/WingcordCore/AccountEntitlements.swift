@@ -68,6 +68,11 @@ public enum PremiumPerk: Hashable, Sendable, CaseIterable {
     /// `premiumGuildMemberProfile` — a per-server avatar, banner, bio and
     /// cosmetics.
     case serverProfile
+    /// `streamMidQuality` — Go Live at 1080p and 1440p, and at 60 FPS. See
+    /// `GoLiveGate`.
+    case streamMidQuality
+    /// `streamHighQuality` — Go Live at Source.
+    case streamHighQuality
 }
 
 extension PremiumTier {
@@ -89,13 +94,14 @@ extension PremiumTier {
         case .basic:
             switch perk {
             case .animatedEmoji, .emojiEverywhere, .stickersEverywhere: true
-            case .soundboardEverywhere, .profileCustomization, .serverProfile: false
+            case .soundboardEverywhere, .profileCustomization, .serverProfile,
+                 .streamMidQuality, .streamHighQuality: false
             }
         case .classic:
             switch perk {
-            case .animatedEmoji, .emojiEverywhere: true
+            case .animatedEmoji, .emojiEverywhere, .streamMidQuality: true
             case .stickersEverywhere, .soundboardEverywhere, .profileCustomization,
-                 .serverProfile: false
+                 .serverProfile, .streamHighQuality: false
             }
         }
     }

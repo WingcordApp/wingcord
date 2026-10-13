@@ -90,13 +90,14 @@ nonisolated enum Palette {
     /// Affirmative call actions only (Accept).
     static let affirmative = Color.green
 
-    /// What a clear-glass flyout is tinted with.
+    /// What clear glass over media is tinted with.
     ///
     /// **Clear glass over near-black has nothing to refract and disappears** —
-    /// §4 — so a floating card that may land over an empty stretch of transcript
-    /// needs a value of its own to be seen at rest. Kept low: past about a tenth
-    /// the surface stops lensing what passes beneath and starts reading as a
-    /// painted panel, which is the thing it is being rescued from.
+    /// §4 — so a control over a dark photo, a banner or a video's black frame
+    /// needs a value of its own to be seen at rest. (Over the transcript a
+    /// surface takes regular glass and needs none of this.) Kept low: past about
+    /// a tenth the surface stops lensing what passes beneath and starts reading
+    /// as a painted panel, which is the thing it is being rescued from.
     ///
     /// A shade of black on a light ground, for the same reason: clear glass over
     /// near-white has as little to refract as over near-black.
@@ -403,6 +404,26 @@ nonisolated enum Metrics {
     /// The now bar's own height — the floating identity capsule at the foot of
     /// the sidebar.
     static let nowBarHeight: CGFloat = 46
+
+    /// A row's content in the system sidebar list.
+    ///
+    /// **Measured, not chosen** (macOS 27 SDK, 2026-10-05, offscreen probe of a
+    /// `.sidebar` `List`): the list adds `sidebarRowInset` above and below a
+    /// row's content and keeps a 32-point minimum, so 24 of content is the
+    /// system's own row height.
+    static let sidebarRowContent: CGFloat = 24
+
+    /// What the system sidebar list adds above and below a row's content. Its
+    /// selection highlight sits half of this inside the row, and 6 points
+    /// wider than the content on each side — `SidebarRowGeometry`.
+    static let sidebarRowInset: CGFloat = 4
+
+    /// A call control's disc in the HUD: five across the sidebar's narrowest
+    /// width with room between them, and over the HIG's 28-point default.
+    static let callControl: CGFloat = 36
+
+    /// A labelled call control's capsule, in the call band.
+    static let callControlLabeled: CGFloat = 32
 
     /// The composer's text box. Its capsule adds `Spacing.tight` above and
     /// below, so the row measures `composerControlHeight`; that, not this, is

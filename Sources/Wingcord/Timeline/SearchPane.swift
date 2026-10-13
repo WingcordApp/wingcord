@@ -528,7 +528,6 @@ private struct SearchPageJump: View {
                     if let page { go(page) }
                 }
                 .disabled(page == nil)
-                .opacity(page == nil ? 0.45 : 1)
             }
         }
         .padding(Spacing.snug)

@@ -125,8 +125,32 @@ struct AttachmentSlotTests {
         let slot = slot(attachment(name: "notes.zip", type: "application/zip", size: 4_096_000))
         #expect(slot?.kind == AttachmentSlot.Kind.file)
         #expect(slot?.url == nil)
-        #expect(slot?.rect.height == TimelineMetrics.attachmentCardHeight)
+        #expect(slot?.rect.height == TimelineMetrics.fileCardHeight)
+        #expect(slot?.fileKind == .archive)
         #expect(slot?.sizeLabel.isEmpty == false)
+    }
+
+    /// Discord's `.fileWrapper{width:432px;max-width:100%}`, and its hover
+    /// group hanging 8 past the top-right corner.
+    @Test("A file card is Discord's: 432 wide, 72 tall, Download past its corner")
+    func fileCardGeometry() throws {
+        let wide = try #require(slot(attachment(name: "app-icons.txt", type: "text/plain", size: 14_000), width: 900))
+        #expect(wide.rect.width == 432)
+        #expect(wide.rect.height == 72)
+        #expect(wide.fileKind == .document)
+        let button = try #require(wide.downloadRect)
+        #expect(button.size == CGSize(width: 32, height: 32))
+        #expect(button.maxX == wide.rect.maxX + 8)
+        #expect(button.minY == wide.rect.minY - 8)
+        let narrow = try #require(slot(attachment(name: "a.zip", type: "application/zip", size: 1), width: 300))
+        #expect(narrow.rect.width < 432)
+    }
+
+    @Test("Every one of Discord's fourteen file icons is in the app")
+    func fileIcons() {
+        for kind in AttachmentFileKind.allCases {
+            #expect(FileIconArt.image(for: kind, scale: 2) != nil, "\(kind.iconName)")
+        }
     }
 
     @Test("A voice note is a bar with its length on it")

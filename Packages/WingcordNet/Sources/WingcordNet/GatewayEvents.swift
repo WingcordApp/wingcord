@@ -400,6 +400,27 @@ struct ReadyPayload: Decodable, Sendable {
     /// The reader's own applications to servers, each with how it stands —
     /// Discord's `CONNECTION_OPEN` reads `e.guild_join_requests ?? []`.
     var guild_join_requests: JoinRequestList?
+    /// What Discord holds back by age where the reader is — read by its
+    /// `RegionalFeatureConfigStore` on `CONNECTION_OPEN`.
+    var regional_feature_config: RegionalFeatureConfigDTO?
+
+    /// `{age_gated_features, teen_by_default_settings, …}`, of which only the
+    /// age-gated bitfield is taken.
+    ///
+    /// **Never the reason READY fails**, for the same reason as the join
+    /// requests: the key is in every READY this client has traced, its value
+    /// has never been captured, and a shape other than Discord's reader expects
+    /// reads as nothing gated.
+    struct RegionalFeatureConfigDTO: Decodable, Sendable {
+        var ageGatedFeatures: Int?
+
+        init(from decoder: any Decoder) throws {
+            let container = try? decoder.container(keyedBy: Keys.self)
+            ageGatedFeatures = (try? container?.decodeIfPresent(Int.self, forKey: .age_gated_features)) ?? nil
+        }
+
+        private enum Keys: String, CodingKey { case age_gated_features }
+    }
 
     /// Discord wrapped several READY arrays in `{ entries, partial, version }`
     /// envelopes and left others bare, in the same payload. Both shapes decode.

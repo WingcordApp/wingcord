@@ -144,7 +144,7 @@ struct SafetyPane: View {
                 .accessibilityHidden(true)
         } trailing: {
             Button("Edit") { page = target }
-                .buttonStyle(.glass)
+                .buttonStyle(.bordered)
                 .controlSize(.small)
         }
     }
@@ -321,7 +321,7 @@ struct SafetyPane: View {
                         isRemovingRisky = false
                     }
                 }
-                .buttonStyle(.glass)
+                .buttonStyle(.bordered)
                 .controlSize(.small)
                 .disabled(isRemovingRisky || refusal)
                 .help(refusal
@@ -355,7 +355,7 @@ struct SafetyPane: View {
                     detail: Text("Give your mods a break while keeping your server safe! Set up filters to moderate content and automate a custom response when they\u{2019}re found, and AutoMod will make it happen.")
                 ) {
                     Button("Create") { creating = true }
-                        .buttonStyle(.glass)
+                        .buttonStyle(.bordered)
                         .controlSize(.small)
                 }
             }
@@ -524,7 +524,7 @@ struct AuditLogPane: View {
                             Text("Load More")
                         }
                     }
-                    .buttonStyle(.glass)
+                    .buttonStyle(.bordered)
                     .controlSize(.small)
                     .disabled(isLoadingMore)
                     Spacer()

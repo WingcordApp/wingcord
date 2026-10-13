@@ -10,10 +10,15 @@ extension MainWindow {
     static func raise() {
         let app = NSApplication.shared
         app.activate()
-        for window in app.windows where window.identifier?.rawValue.contains("main") == true {
+        if let window = workspaceWindow {
             window.makeKeyAndOrderFront(nil)
             return
         }
         app.windows.first { $0.isVisible && $0.canBecomeKey }?.makeKeyAndOrderFront(nil)
+    }
+
+    /// The workspace's window — the `Window` scene whose id is `main`.
+    static var workspaceWindow: NSWindow? {
+        NSApplication.shared.windows.first { $0.identifier?.rawValue.contains("main") == true }
     }
 }

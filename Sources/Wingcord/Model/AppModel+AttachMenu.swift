@@ -53,7 +53,8 @@ extension AppModel {
             $0.attachmentRefusal = nil
         }
         queueScheduled(
-            content, at: date, replyingTo: box.replyingTo, attachments: attachments, in: channelID
+            content, at: date, replyingTo: box.replyingTo, pingsRepliedAuthor: box.replyPings,
+            attachments: attachments, in: channelID
         ) { [weak self] in
             self?.mutateBox(channelID) { box in
                 if box.draft.isEmpty { box.draft = content }
@@ -70,6 +71,7 @@ extension AppModel {
         _ content: String,
         at date: Date,
         replyingTo: MessageID?,
+        pingsRepliedAuthor: Bool = true,
         attachments: [PendingAttachment] = [],
         in channelID: ChannelID,
         refused: @escaping () -> Void = {}
@@ -77,7 +79,8 @@ extension AppModel {
         Task {
             do {
                 try await sessionController.schedule(
-                    content, in: channelID, at: date, replyingTo: replyingTo, attachments: attachments
+                    content, in: channelID, at: date, replyingTo: replyingTo,
+                    pingsRepliedAuthor: pingsRepliedAuthor, attachments: attachments
                 )
                 mutateBox(channelID) { if $0.scheduledAt == date { $0.scheduledAt = nil } }
             } catch {

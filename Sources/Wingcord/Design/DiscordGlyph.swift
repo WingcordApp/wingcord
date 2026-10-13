@@ -2,7 +2,8 @@ import AppKit
 import SwiftUI
 
 /// Discord's own icons, where an SF Symbol would be a stand-in for one that has
-/// a shape of its own — shipped as custom symbols in `Glyphs.xcassets`.
+/// a shape of its own — and a plugin's, where the feature is the plugin's —
+/// shipped as custom symbols in `Glyphs.xcassets`.
 ///
 /// **Symbols, not shapes.** A symbol scales with the text beside it, takes the
 /// same foreground style, sits on the baseline inside a `Text`, draws in a menu
@@ -22,9 +23,13 @@ nonisolated enum DiscordGlyph {
     static let thread = "discord.thread"
     /// Create Thread.
     static let newThread = "discord.thread.plus"
+    /// Vencord's AnonymiseFileNames toggle on a staged file: Material's
+    /// incognito, and the struck-through one the plugin draws mirrored.
+    static let anonymous = "vencord.incognito"
+    static let notAnonymous = "vencord.incognito.slash"
 
     /// Whether a symbol name is one of these rather than an SF Symbol.
-    static func owns(_ name: String) -> Bool { name.hasPrefix("discord.") }
+    static func owns(_ name: String) -> Bool { name.hasPrefix("discord.") || name.hasPrefix("vencord.") }
 }
 
 extension Image {

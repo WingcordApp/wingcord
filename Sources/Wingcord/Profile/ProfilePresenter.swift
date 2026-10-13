@@ -405,7 +405,7 @@ struct ProfilePresenter: ViewModifier {
             // `ProfileRequest.showsOwnActions`. Opening your own card from a
             // transcript is opening it to read.
             ownActions: request.showsOwnActions
-                ? model.ownProfileActions(dismiss: { model.profileRequest = nil })
+                ? model.ownProfileActions(startsOn: request.ownSurface, dismiss: { model.profileRequest = nil })
                 : nil
         )
         // **Placed by alignment guides, not by `.position` or by a measured
@@ -477,6 +477,9 @@ extension AppModel {
     /// about the app and belongs somewhere a new layer has to be inserted into,
     /// not repeated in every control that might be under it.
     enum EscapeLayer: Equatable {
+        /// The call, full screen — under every layer, because it is applied
+        /// before all of them and everything a tile raises comes up over it.
+        case callFullScreen
         /// Bottom of the group: `.presentsMedia()` is applied first at the
         /// window root, and an earlier `.overlay` draws under a later one.
         case mediaViewer
@@ -501,12 +504,16 @@ extension AppModel {
         case profile
         case gameProfile
         case tenureBadge
+        /// Share Your Screen — drawn by `.presentsVoiceSurfaces()`, after every
+        /// layer a message or a profile raises and under the quick switcher.
+        case goLive
         case quickSwitcher
     }
 
     /// Which of them is on top right now, or nil when none is open.
     var escapeLayer: EscapeLayer? {
         if isQuickSwitchShown { return .quickSwitcher }
+        if isGoLiveSheetOpen { return .goLive }
         if tenureBadgeRequest != nil { return .tenureBadge }
         if gameProfileRequest != nil { return .gameProfile }
         if profileRequest != nil { return .profile }
@@ -516,6 +523,7 @@ extension AppModel {
         if eventsPanel != nil { return .events }
         if reactionsList != nil { return .reactions }
         if mediaViewer != nil { return .mediaViewer }
+        if isCallFullScreen { return .callFullScreen }
         return nil
     }
 

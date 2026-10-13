@@ -110,7 +110,7 @@ struct WelcomeScreenSheet: View {
             }
             .buttonStyle(.plain)
             .foregroundStyle(Ink.primary)
-            .specularEdge()
+            .overlay { Capsule().strokeBorder(Palette.edge) }
             .keyboardShortcut(.defaultAction)
         }
         .padding(.horizontal, Spacing.group)

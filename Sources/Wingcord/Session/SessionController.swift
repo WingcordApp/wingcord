@@ -99,6 +99,9 @@ final class SessionController {
     /// and a click on the same row — asks once.
     private var profileFetches: Set<UserID> = []
     var paletteFetches: Set<URL> = []
+    /// The activity directory's two requests are in flight — the call's shelf
+    /// and the launcher both ask, often in the same instant.
+    var isLoadingActivityDirectory = false
     /// The same guard for an activity's icon. Keyed by application rather than
     /// by URL because an app has one icon and the card asks for it once.
     var activityAccentFetches: Set<ApplicationID> = []
@@ -268,11 +271,27 @@ final class SessionController {
     /// Invite cards whose button is being answered: one accept per code at a
     /// time — see `joinFromInviteCard`.
     var inviteCardJoins: Set<String> = []
-    /// Profile cards asked about this session — see `resolveUserCards`.
-    var userCardFetches: Set<UserCardKey> = []
+    /// The local RPC server, while an account is signed in — see
+    /// `SessionController+LocalRPC`.
+    var localRPC: LocalRPCServer?
+    /// Each app's pictures by name, and links already turned into `mp:`
+    /// references — Discord's asset store and `fetchAssetIds`' own cache.
+    var localRPCAssetNames: [ApplicationID: [String: String]] = [:]
+    var localRPCAssetLinks: [String: String] = [:]
+    /// Hosted cards asked about this session — see `resolveHostedCards`.
+    var hostedCardFetches: Set<HostedCardKey> = []
+    /// Servers whose event answers an event card has asked for this session —
+    /// once a server, however many cards it has.
+    var eventCardAnswerFetches: Set<GuildID> = []
+    /// Servers being joined from an event card's Join — one join at a time.
+    var eventCardJoins: Set<GuildID> = []
     /// Inbox folds waiting to be written — see `foldInboxGroup`.
     var pendingInboxFolds: [InboxFoldKey: InboxFold] = [:]
     var inboxFoldWrite: Task<Void, Never>?
+    /// People's volumes and mutes waiting to be written — see
+    /// `scheduleAudioContextWrite`.
+    var pendingAudioContext: [AudioContextKey: AudioContextProto.Change] = [:]
+    var audioContextWrite: Task<Void, Never>?
     /// Unread groups whose message bodies the inbox is fetching.
     ///
     /// Its own set rather than `jumpFetches`: both fetch the same route for the
@@ -307,6 +326,10 @@ final class SessionController {
         let rest = DiscordREST(metadata: metadata)
         self.rest = rest
         voice = VoiceController(model: model, rest: rest)
+        // Expired upload links are refreshed as the account — see
+        // `AttachmentLinks`. The client is this controller's for its life, so
+        // it is handed over once; signing out forgets what it refreshed.
+        Task { await AttachmentLinks.shared.setClient(rest) }
     }
 
     // MARK: Lifecycle
@@ -435,6 +458,7 @@ final class SessionController {
         teardownConnection()
         isTornDown = false
         startGameDetection()
+        startLocalRPC()
         let socket = GatewaySocket(metadata: metadata)
         self.socket = socket
         voice.attach(socket: socket)
@@ -447,7 +471,6 @@ final class SessionController {
         model.summaryLoader = { [weak self] channelID, request in
             self?.loadSummaries(in: channelID, request)
         }
-
         eventTask = Task { [weak self] in
             await socket.connect(token: token)
             guard let stream = await socket.events else {
@@ -470,6 +493,8 @@ final class SessionController {
     /// presences against invisible ids, cached rosters, folders, and every badge
     /// derived from them.
     func signOut() {
+        Task { await AttachmentLinks.shared.forget() }
+        stopLocalRPC()
         startingAccountID = nil
         teardownConnection()
         stopSpotify()
@@ -699,7 +724,8 @@ final class SessionController {
         // carried: `absent` and `0` lock the same perks for different reasons.
         Self.trace(
             "ready: premium_type=\(snapshot.premiumType.map(String.init) ?? "absent") "
-            + "age_status=\(snapshot.ageVerificationStatus.map(String.init) ?? "absent")"
+            + "age_status=\(snapshot.ageVerificationStatus.map(String.init) ?? "absent") "
+            + "age_gated=\(snapshot.ageGatedFeatures.rawValue)"
         )
         // **Also worth keeping: never captured off a real READY.** Discord's
         // client reads `guild_join_requests` from it; an account with an
@@ -711,6 +737,10 @@ final class SessionController {
             ageVerificationStatus: snapshot.ageVerificationStatus
         )
         if let verification = snapshot.accountVerification { model.accountVerification = verification }
+        model.ageGatedFeatures = snapshot.ageGatedFeatures
+        // A presence the reader made that is on goes out with its pictures as
+        // soon as the session can say so — DESIGN-NOTES §11.
+        if model.activeCustomPresence != nil { model.customPresenceChanged(immediately: true) }
 
         var readStates = snapshot.readStates
         for channelID in snapshot.mutedChannelIDs {
@@ -775,6 +805,11 @@ final class SessionController {
         model.serverThemePreferences = snapshot.settings.serverThemes
         model.inboxCollapse = snapshot.settings.inboxCollapse
         model.syncedPreferences = snapshot.settings.preferences
+        // The account's theme, where it is one of Discord's; and from now, the
+        // reader's choices go back to it. See `SessionController+ThemeSync`.
+        adoptAccountTheme(model.syncedPreferences.accountTheme)
+        ThemeStore.shared.onChoose = { [weak self] choice in self?.writeAccountTheme(for: choice) }
+        applyAudioContext(snapshot.settings.audioContext)
         // A new session may have missed summaries while it was away.
         model.markSummariesStale()
         model.mutedGuildIDs = snapshot.mutedGuildIDs
@@ -981,7 +1016,7 @@ final class SessionController {
             resolveActivityLaunch(with: message)
             resolveSpotifyUnfurls(in: [message])
             resolveInvites(in: [message])
-            resolveUserCards(in: [message], inGuild: model.channelIndex.guildID(of: message.channelID))
+            resolveHostedCards(in: [message], inGuild: model.channelIndex.guildID(of: message.channelID))
             resolveMessageMembers(in: [message], channelID: message.channelID)
 
         case .messageUpdated(let message):
@@ -1316,11 +1351,13 @@ final class SessionController {
             if let nonce = modal.nonce { model.pendingInteractions[nonce] = nil }
             model.interactionModal = InteractionModalState(modal: modal, answers: modal.initialAnswers)
 
-        case .userSettingsChanged(let folders, let preferences):
+        case .userSettingsChanged(let folders, let preferences, let audioContext):
             // The rail rearranged in another client — or the echo of this
             // one's own write, which changes nothing it has not already drawn.
             if let folders { applyFolderSettings(folders) }
             model.syncedPreferences.apply(preferences)
+            if let theme = preferences.accountTheme { adoptAccountTheme(theme) }
+            if let audioContext { applyAudioContext(audioContext) }
 
         case .guildSettingsChanged(let guildID, let pinned, let muted, let settings):
             // **Only the private-channel entry carries pins**, and it is the
@@ -1591,7 +1628,7 @@ final class SessionController {
                 model.messageContentRevision &+= 1
                 resolveSpotifyUnfurls(in: page.messages)
                 resolveInvites(in: page.messages)
-                resolveUserCards(in: page.messages, inGuild: model.channelIndex.guildID(of: channelID))
+                resolveHostedCards(in: page.messages, inGuild: model.channelIndex.guildID(of: channelID))
                 resolveMessageMembers(in: page.messages, channelID: channelID)
             } catch {
                 Self.trace(
@@ -2185,7 +2222,7 @@ final class SessionController {
                 model.messageContentRevision &+= 1
                 resolveSpotifyUnfurls(in: page.messages)
                 resolveInvites(in: page.messages)
-                resolveUserCards(in: page.messages, inGuild: model.channelIndex.guildID(of: channelID))
+                resolveHostedCards(in: page.messages, inGuild: model.channelIndex.guildID(of: channelID))
                 resolveMessageMembers(in: page.messages, channelID: channelID)
                 let target: MessageID? = switch anchor {
                 case .message(let messageID): messageID
@@ -2355,10 +2392,15 @@ final class SessionController {
     /// main actor, because it walks every sampled pixel and a profile card
     /// opening is the worst possible moment to spend that on the main thread.
     func deriveTheme(of user: User) {
-        guard let url = model.themeArtworkURL(of: user, user.decoration),
-              model.derivedPalettes[url] == nil,
-              paletteFetches.insert(url).inserted
-        else { return }
+        guard let url = model.themeArtworkURL(of: user, user.decoration) else { return }
+        derivePalette(at: url)
+    }
+
+    /// Quantises one picture at the profile's rendition, once — a profile's
+    /// artwork, or the avatar a call tile takes its colour from (Discord reads
+    /// both from the same picture at 80, so they share one entry).
+    func derivePalette(at url: URL) {
+        guard model.derivedPalettes[url] == nil, paletteFetches.insert(url).inserted else { return }
         Task { [weak self] in
             guard let self else { return }
             defer { paletteFetches.remove(url) }
@@ -2430,6 +2472,7 @@ final class SessionController {
         _ content: String,
         in channelID: ChannelID,
         replyingTo: MessageID?,
+        pingsRepliedAuthor: Bool = true,
         stickerIDs: [UInt64] = [],
         attachments: [PendingAttachment] = [],
         poll: PollDraft? = nil,
@@ -2439,9 +2482,11 @@ final class SessionController {
             content, stickerIDs: stickerIDs, attachments: attachments, poll: poll, listenAlong: listenAlong
         ), let author = model.currentUserID
         else { return nil }
+        let attachments = PendingAttachment.anonymising(attachments)
         let request = OutgoingMessage.Request(
             content: content.trimmingCharacters(in: .whitespacesAndNewlines),
             replyingTo: replyingTo,
+            pingsRepliedAuthor: pingsRepliedAuthor,
             stickerIDs: stickerIDs,
             poll: poll,
             listenAlong: listenAlong
@@ -2480,6 +2525,7 @@ final class SessionController {
             entry.request.content,
             in: channelID,
             replyingTo: entry.request.replyingTo,
+            pingsRepliedAuthor: entry.request.pingsRepliedAuthor,
             stickerIDs: entry.request.stickerIDs,
             attachments: entry.files,
             poll: entry.request.poll,
@@ -2515,17 +2561,19 @@ final class SessionController {
         in channelID: ChannelID,
         at date: Date,
         replyingTo: MessageID? = nil,
+        pingsRepliedAuthor: Bool = true,
         attachments: [PendingAttachment] = [],
         poll: PollDraft? = nil
     ) async throws {
         let row: ScheduledMessage?
         do {
-            let uploaded = try await upload(attachments, in: channelID) { _ in }
+            let uploaded = try await upload(PendingAttachment.anonymising(attachments), in: channelID) { _ in }
             row = try await rest.scheduleMessage(
                 in: channelID,
                 content: content.trimmingCharacters(in: .whitespacesAndNewlines),
                 at: date,
                 replyingTo: replyingTo,
+                pingsRepliedAuthor: pingsRepliedAuthor,
                 attachments: uploaded,
                 poll: poll
             )
@@ -2566,6 +2614,7 @@ final class SessionController {
                     content: entry.request.content,
                     nonce: entry.nonce,
                     replyingTo: entry.request.replyingTo,
+                    pingsRepliedAuthor: entry.request.pingsRepliedAuthor,
                     stickerIDs: entry.request.stickerIDs,
                     attachments: uploaded,
                     poll: entry.request.poll,
@@ -2664,11 +2713,29 @@ final class SessionController {
     /// is one for the whole send, as Discord's is, weighted by size so a large
     /// file is most of it.
     private func upload(
-        _ files: [PendingAttachment],
+        _ chosen: [PendingAttachment],
         in channelID: ChannelID,
         progress: @escaping @MainActor (Double) -> Void
     ) async throws -> [UploadedAttachment] {
-        guard !files.isEmpty else { return [] }
+        guard !chosen.isEmpty else { return [] }
+        // **A HEIC or JXR picture goes up as a JPEG**, as Discord's desktop
+        // sends it (`CloudUpload.upload`, DESIGN-NOTES §14) — off this thread,
+        // and saying what it was chosen as, as Discord's says.
+        var files: [PendingAttachment] = []
+        var originalTypes: [String?] = []
+        for file in chosen {
+            let type = file.contentType?.preferredMIMEType
+            originalTypes.append(type)
+            guard let conversion = UploadConversion(filename: file.filename, contentType: type),
+                  let jpeg = await Task.detached(priority: .userInitiated, operation: {
+                      MediaCompressor.convertToJPEG(file.url, named: file.filename, size: file.size, conversion)
+                  }).value
+            else {
+                files.append(file)
+                continue
+            }
+            files.append(file.replaced(by: jpeg, named: UploadConversion.jpegName(for: file.filename)))
+        }
         let slots = try await rest.createUploadSlots(
             in: channelID, for: files.map(\.uploadRequest)
         )
@@ -2676,7 +2743,7 @@ final class SessionController {
         var sent = 0
         var uploaded: [UploadedAttachment] = []
         uploaded.reserveCapacity(slots.count)
-        for (file, slot) in zip(files, slots) {
+        for (index, (file, slot)) in zip(files, slots).enumerated() {
             let before = Double(sent)
             try await rest.upload(file.url, to: slot) { fraction in
                 Task { @MainActor in
@@ -2688,7 +2755,8 @@ final class SessionController {
                 id: slot.id,
                 filename: slot.filename,
                 uploadedFilename: slot.uploadedFilename,
-                altText: file.altText
+                altText: file.altText,
+                originalContentType: originalTypes[index]
             ))
         }
         return uploaded

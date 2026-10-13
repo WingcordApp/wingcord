@@ -243,10 +243,9 @@ struct GuildProfileCard: View {
 
     /// Join, or apply to join.
     ///
-    /// **`.glass`, like Open Server above it**, rather than Discord's green
-    /// slab: this card is one of the app's flyouts and the affirmative control
-    /// on it is the same object the joined case already draws. §4 — a second
-    /// material on a surface that already has one is glass on glass.
+    /// **A standard bordered button, like Open Server**, rather than Discord's
+    /// green slab: this card is one of the app's flyouts and the affirmative
+    /// control on it is the same object the joined case already draws.
     @ViewBuilder
     private var entryButton: some View {
         let isApplying = profile.entry == .apply
@@ -255,12 +254,10 @@ struct GuildProfileCard: View {
                 isApplying ? "Apply to Join" : "Join",
                 systemImage: isApplying ? "square.and.pencil" : "plus"
             )
-            .font(.system(.subheadline, weight: .semibold))
             .frame(maxWidth: .infinity)
-            .padding(.vertical, Spacing.base)
-            .contentShape(.rect)
         }
-        .buttonStyle(.glass)
+        .buttonStyle(.bordered)
+        .controlSize(.large)
         .disabled(isEntering)
         .padding(.horizontal, Spacing.margin)
         .padding(.top, Spacing.snug)
@@ -301,12 +298,10 @@ struct GuildProfileCard: View {
         } else if profile.isJoined {
             Button { openGuild(profile.guildID) } label: {
                 Label("Open Server", systemImage: "arrow.forward")
-                    .font(.system(.subheadline, weight: .semibold))
                     .frame(maxWidth: .infinity)
-                    .padding(.vertical, Spacing.base)
-                    .contentShape(.rect)
             }
-            .buttonStyle(.glass)
+            .buttonStyle(.bordered)
+            .controlSize(.large)
             .padding(.horizontal, Spacing.margin)
             .padding(.top, Spacing.snug)
             .padding(.bottom, Spacing.margin)
@@ -368,38 +363,20 @@ private struct CountDot: View {
 
 /// The words a server describes itself with.
 ///
-/// Capped, with the remainder counted. A server may carry five and the card is
-/// 320 points wide; three rows of chips would push the description off the
-/// bottom of the thing they are meant to summarise.
+/// Capped, with the remainder counted — Discord's "+ N more", a chip like the
+/// rest that opens them (`MoreTraitsChip`). A server may carry five and the
+/// card is 320 points wide; three rows of chips would push the description off
+/// the bottom of the thing they are meant to summarise.
 private struct TraitFlow: View {
     var traits: [GuildTrait]
 
     private static let visible = 4
 
     var body: some View {
-        let shown = traits.prefix(Self.visible)
-        let overflow = traits.count - shown.count
         FlowLayout(spacing: Spacing.tight) {
-            ForEach(shown) { trait in
-                HStack(spacing: 4) {
-                    if let emoji = trait.emoji {
-                        ExpressionGlyph(emoji: emoji, side: 12)
-                    }
-                    Text(trait.label)
-                        .font(.system(.caption2))
-                        .foregroundStyle(InkColor.primary)
-                        .lineLimit(1)
-                }
-                .padding(.horizontal, 7)
-                .padding(.vertical, 3)
-                .glassEffect(.clear, in: .rect(cornerRadius: 8))
-            }
-            if overflow > 0 {
-                Text("+ \(overflow) more")
-                    .font(.system(.caption2))
-                    .foregroundStyle(InkColor.tertiary)
-                    .padding(.horizontal, 7)
-                    .padding(.vertical, 3)
+            ForEach(traits.prefix(Self.visible)) { GuildTraitChip(trait: $0) }
+            if traits.count > Self.visible {
+                MoreTraitsChip(traits: Array(traits.dropFirst(Self.visible)))
             }
         }
     }
@@ -415,10 +392,16 @@ private struct TraitFlow: View {
 /// side by side, where five show five icons and a `+7` that opens the rest.
 /// The reason is the row's job: with one game the name is the information, and
 /// with twelve the icons are.
+///
+/// **The rest open in the card, not in a popover of their own.** This card is
+/// itself a popover when a tag chip raised it, and the HIG's rule is one
+/// popover at a time — so `+7` unfolds the list under the row, and the card
+/// grows to hold it.
 struct GuildProfileGameRow: View {
     var games: [GuildProfileGame]
     var open: ((ApplicationID) -> Void)?
 
+    @Environment(\.motion) private var motion
     @State private var isShowingRest = false
 
     /// How many marks the row draws before the rest become a count. Five, which
@@ -442,48 +425,50 @@ struct GuildProfileGameRow: View {
             .buttonStyle(.plain)
             .disabled(open == nil)
         } else {
-            HStack(spacing: Spacing.base) {
-                ForEach(games.prefix(Self.inlineLimit)) { game in
-                    Button { open?(game.id) } label: {
-                        GuildProfileGameMark(game: game, side: Self.side)
-                    }
-                    .buttonStyle(.plain)
-                    .disabled(open == nil)
-                    .help(game.name)
-                    .accessibilityLabel(Text(game.name))
-                }
-                if games.count > Self.inlineLimit {
-                    Button { isShowingRest = true } label: {
-                        Text("+\(games.count - Self.inlineLimit)")
-                            .font(.system(.caption, weight: .semibold))
-                            .foregroundStyle(InkColor.secondary)
-                            .monospacedDigit()
-                            .frame(width: Self.side, height: Self.side)
-                            .background(
-                                Palette.surfaceRaised,
-                                in: .rect(cornerRadius: 9, style: .continuous)
-                            )
-                            .contentShape(.rect)
-                    }
-                    .buttonStyle(.plain)
-                    .accessibilityLabel(
-                        Text("Show \(games.count - Self.inlineLimit) more games")
+            VStack(alignment: .leading, spacing: Spacing.tight) {
+                marks
+                if isShowingRest {
+                    GuildProfileGameList(
+                        games: Array(games.dropFirst(Self.inlineLimit)),
+                        open: { open?($0) }
                     )
-                    .popover(isPresented: $isShowingRest, arrowEdge: .top) {
-                        GuildProfileGameList(
-                            games: Array(games.dropFirst(Self.inlineLimit)),
-                            open: {
-                                isShowingRest = false
-                                open?($0)
-                            }
-                        )
-                        // The list carries no material: the popover's glass is
-                        // the body — §4.9.
-                        .presentationBackground(.clear)
-                    }
+                    .transition(.opacity)
                 }
-                Spacer(minLength: 0)
             }
+            .animation(motion.standard, value: isShowingRest)
+        }
+    }
+
+    private var marks: some View {
+        HStack(spacing: Spacing.base) {
+            ForEach(games.prefix(Self.inlineLimit)) { game in
+                Button { open?(game.id) } label: {
+                    GuildProfileGameMark(game: game, side: Self.side)
+                }
+                .buttonStyle(.plain)
+                .disabled(open == nil)
+                .help(game.name)
+                .accessibilityLabel(Text(game.name))
+            }
+            if games.count > Self.inlineLimit, !isShowingRest {
+                Button { isShowingRest = true } label: {
+                    Text("+\(games.count - Self.inlineLimit)")
+                        .font(.system(.caption, weight: .semibold))
+                        .foregroundStyle(InkColor.secondary)
+                        .monospacedDigit()
+                        .frame(width: Self.side, height: Self.side)
+                        .background(
+                            Palette.surfaceRaised,
+                            in: .rect(cornerRadius: 9, style: .continuous)
+                        )
+                        .contentShape(.rect)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(
+                    Text("Show \(games.count - Self.inlineLimit) more games")
+                )
+            }
+            Spacer(minLength: 0)
         }
     }
 }
@@ -573,14 +558,13 @@ private struct GuildProfileGameList: View {
                             .lineLimit(1)
                         Spacer(minLength: 0)
                     }
-                    .padding(.horizontal, Spacing.snug)
                     .frame(minHeight: 36)
                     .contentShape(.rect)
                 }
                 .buttonStyle(.plain)
             }
         }
-        .padding(.vertical, Spacing.base)
-        .frame(width: 230)
+        // The card's own measure, so each mark lines up under the row's.
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 }

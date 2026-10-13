@@ -1,8 +1,8 @@
 import AVFoundation
 import CoreMedia
 import Foundation
-import OSLog
 import ScreenCaptureKit
+import Synchronization
 
 // MARK: - Screen share
 //
@@ -13,6 +13,19 @@ import ScreenCaptureKit
 // through a screenshot loop, and it can capture an application's **audio**
 // alongside its pixels — which is what makes sharing a game or a video with
 // sound possible at all.
+//
+// **What is captured is chosen in the system's own picker**, never in a list
+// this app draws. `SCContentSharingPicker` is Control Center's, it is what
+// Discord uses on a Mac when its "Use operating system menus to select a screen
+// capture source" is on, and a pick made in it grants the capture that one
+// source without asking for Screen Recording at all. The cost is that the
+// filter comes back whole: a display picked there includes this app's own
+// windows, exactly as Discord's display shares include Discord's.
+//
+// **Captured from the pick, sent from Go Live.** The capture starts the moment
+// a source is picked, so the Go Live sheet shows the picture that will be
+// sent; nothing reaches an encoder until a media session takes the capture
+// over and routes its outputs there.
 //
 // Three things it does that a naive integration misses, and each shows up as a
 // visible defect:
@@ -28,62 +41,152 @@ import ScreenCaptureKit
 //     full retina dimensions means encoding 5120x2880, which no channel has the
 //     bitrate for and no tile has the pixels to show.
 
-public struct ShareableTarget: Hashable, Sendable, Identifiable {
-    public enum Kind: Hashable, Sendable {
-        case display(CGDirectDisplayID)
-        case window(CGWindowID)
-    }
+/// What was picked in the system's picker, and what it measures.
+///
+/// **`@unchecked` because `SCContentFilter` is not marked `Sendable`**, and
+/// nothing here mutates it: the picker hands it over complete, this reads its
+/// size once, and ScreenCaptureKit is the only thing that reads it after that.
+public struct ShareSource: @unchecked Sendable {
+    let filter: SCContentFilter
+    /// Discord's name for what is shared (its module 613235): the windows'
+    /// titles, else the applications' names, else "Entire Screen".
+    public let name: String
+    /// The source's own size, in pixels.
+    public let width: Int
+    public let height: Int
+    /// Whether windows or applications were picked rather than a display —
+    /// what makes Discord's menu offer "Add Window" or "Add Application".
+    public let hasWindows: Bool
+    public let hasApplications: Bool
 
-    public var id: String
-    public var kind: Kind
-    public var title: String
-    /// The owning application, for a window. Nil for a display.
-    public var application: String?
-    public var width: Int
-    public var height: Int
+    init(filter: SCContentFilter) {
+        self.filter = filter
+        let scale = CGFloat(filter.pointPixelScale)
+        width = Int((filter.contentRect.width * scale).rounded())
+        height = Int((filter.contentRect.height * scale).rounded())
+        let windows = filter.includedWindows.compactMap { $0.title.flatMap { $0.isEmpty ? nil : $0 } }
+        let applications = filter.includedApplications.map(\.applicationName)
+        hasWindows = !filter.includedWindows.isEmpty
+        hasApplications = !filter.includedApplications.isEmpty
+        if !windows.isEmpty {
+            name = windows.joined(separator: ", ")
+        } else if !applications.isEmpty {
+            name = applications.joined(separator: ", ")
+        } else if !filter.includedDisplays.isEmpty || filter.style == .display {
+            name = "Entire Screen"
+        } else {
+            // Discord's own words for a pick it cannot name.
+            name = "A window, screen, or app"
+        }
+    }
 }
 
 public final class ScreenShareCapture: NSObject, @unchecked Sendable {
-    private static let log = Logger(subsystem: "dev.wingcord.Wingcord", category: "ScreenShare")
 
-    public var onFrame: (@Sendable (CVPixelBuffer, CMTime) -> Void)?
-    /// A **copy** of the share's frames, at the capture's own rate, for the
-    /// local self-view.
-    ///
-    /// **ScreenCaptureKit has no `AVCaptureVideoPreviewLayer`.** A camera's
-    /// self-view is a second hardware path that never goes near the encoder,
-    /// which is why it has no latency and why `cameraSession` is handed out
-    /// rather than drawn. A share has no such thing, so the only picture of our
-    /// own screen is these frames.
-    ///
-    /// Without it the self tile falls through to the **inbound** video view,
-    /// which waits for a stream from our own user id that by definition never
-    /// arrives — measured live as a tile that stayed black for a whole call
-    /// while the capture, the encoder and the send path were all healthy.
-    ///
-    /// **And the frames may not be ScreenCaptureKit's own.** Its buffers come
-    /// from a pool `queueDepth` frames deep, and a buffer that is still
-    /// referenced cannot be recycled — `AVSampleBufferDisplayLayer` retains
-    /// every one it is given, so handing them straight over drains the pool and
-    /// the stream stops producing. It does not error and it does not stop; it
-    /// simply never calls the delegate again. Measured: one keyframe out, then
-    /// `frames=0` for the rest of the call with the packet count frozen.
-    ///
-    /// So each preview frame is copied into a pool of ours first. **At the
-    /// capture's own rate**, because a self-view is how the reader judges what
-    /// the far end is getting and a stuttering one reads as a stuttering share:
-    /// throttling this to eight a second was measured as "very low fps, like
-    /// 4-5" by the person watching it. The copy is a `memcpy` of a frame
-    /// bounded by the quality box — 1280×720 of NV12 is about 1.4 MB — and the
-    /// pool makes it allocation-free after the first few.
-    public var onPreviewSample: (@Sendable (CMSampleBuffer) -> Void)?
-    /// Interleaved stereo float32 at 48 kHz, from the shared application.
-    public var onAudio: (@Sendable (AVAudioPCMBuffer) -> Void)?
-    /// The stream stopped for a reason that is not us — the window closed, the
-    /// user revoked the permission, the display went away.
-    public var onStopped: (@Sendable (String) -> Void)?
+    /// The box a share is fitted inside, how often it is captured, and
+    /// whether its sound comes with it.
+    public struct Quality: Sendable, Equatable {
+        public var width: Int
+        public var height: Int
+        public var framerate: Int
+        public var capturesAudio: Bool
 
-    private var stream: SCStream?
+        public init(width: Int, height: Int, framerate: Int, capturesAudio: Bool) {
+            self.width = width
+            self.height = height
+            self.framerate = framerate
+            self.capturesAudio = capturesAudio
+        }
+    }
+
+    /// Where the capture's output goes.
+    ///
+    /// **Swapped while it runs**: a Go Live sheet's preview before the share
+    /// is live, the encoder and the self tile after. So the whole set sits
+    /// behind one lock that the capture queue reads once per sample, and a
+    /// caller replaces it in one write rather than closure by closure — half
+    /// a set is a frame routed to an encoder whose preview is still the
+    /// sheet's.
+    public struct Outputs: Sendable {
+        /// Every frame whose content changed.
+        public var frame: (@Sendable (CVPixelBuffer, CMTime) -> Void)?
+        /// The last picture that changed, offered again on every tick the
+        /// screen does not — so a viewer who needs a keyframe of a screen at
+        /// rest can be sent one. The receiver decides whether anybody is
+        /// waiting.
+        public var still: (@Sendable (CVPixelBuffer, CMTime) -> Void)?
+        /// A **copy** of each frame, at the capture's own rate, for a preview.
+        ///
+        /// **ScreenCaptureKit has no `AVCaptureVideoPreviewLayer`.** A
+        /// camera's self-view is a second hardware path that never goes near
+        /// the encoder; a share has no such thing, so the only picture of our
+        /// own screen is these frames. Without them the self tile falls
+        /// through to the **inbound** video view, which waits for a stream
+        /// from our own user id that by definition never arrives — measured
+        /// live as a tile that stayed black for a whole call while the
+        /// capture, the encoder and the send path were all healthy.
+        ///
+        /// **And the frames may not be ScreenCaptureKit's own.** Its buffers
+        /// come from a pool `queueDepth` frames deep, and a buffer that is
+        /// still referenced cannot be recycled — `AVSampleBufferDisplayLayer`
+        /// retains every one it is given, so handing them straight over
+        /// drains the pool and the stream stops producing. It does not error
+        /// and it does not stop; it simply never calls the delegate again.
+        /// Measured: one keyframe out, then `frames=0` for the rest of the
+        /// call with the packet count frozen.
+        ///
+        /// So each frame is copied into a pool of ours first. **At the
+        /// capture's own rate**, because a preview is how the reader judges
+        /// what the far end is getting and a stuttering one reads as a
+        /// stuttering share: throttling this to eight a second was measured as
+        /// "very low fps, like 4-5" by the person watching it. The copy is a
+        /// `memcpy` of a frame bounded by the quality box, and the pool makes
+        /// it allocation-free after the first few.
+        public var preview: (@Sendable (CMSampleBuffer) -> Void)?
+        /// One 20 ms frame of the shared sound: 1,920 interleaved stereo
+        /// samples at 48 kHz, and its linear level.
+        public var audio: (@Sendable (UnsafePointer<Int16>, Float) -> Void)?
+        /// The capture stopped for a reason that is not us — the window
+        /// closed, the reader stopped it from the menu bar, the permission
+        /// was revoked.
+        public var stopped: (@Sendable (String) -> Void)?
+
+        public init(
+            frame: (@Sendable (CVPixelBuffer, CMTime) -> Void)? = nil,
+            still: (@Sendable (CVPixelBuffer, CMTime) -> Void)? = nil,
+            preview: (@Sendable (CMSampleBuffer) -> Void)? = nil,
+            audio: (@Sendable (UnsafePointer<Int16>, Float) -> Void)? = nil,
+            stopped: (@Sendable (String) -> Void)? = nil
+        ) {
+            self.frame = frame
+            self.still = still
+            self.preview = preview
+            self.audio = audio
+            self.stopped = stopped
+        }
+    }
+
+    public enum Failure: Error, Sendable {
+        /// Asked to change a capture that is not running.
+        case notRunning
+    }
+
+    private let outputs = Mutex(Outputs())
+
+    /// The running stream and what it was asked for. Changed from whichever
+    /// actor drives the share — the app before Go Live, the media session
+    /// after — and never from the capture queue.
+    ///
+    /// **`@unchecked` for the `SCStream`**, which is not marked `Sendable` but
+    /// whose methods may be called from any thread; this only holds it and
+    /// hands it back.
+    private struct Control: @unchecked Sendable {
+        var stream: SCStream?
+        var source: ShareSource?
+        var quality: Quality?
+    }
+
+    private let control = Mutex(Control())
     private let queue = DispatchQueue(label: "dev.wingcord.screenshare", qos: .userInitiated)
 
     // MARK: The self-view's own copies
@@ -105,116 +208,145 @@ public final class ScreenShareCapture: NSObject, @unchecked Sendable {
     /// first frame with a capture running perfectly behind it — and it is what
     /// the inbound path already avoids by rebasing to zero.
     private var previewClockBase: CMTime?
+    /// The picture the screen last changed to, for `Outputs.still`.
+    ///
+    /// **One of ScreenCaptureKit's own buffers, and only ever one.** Its pool
+    /// is `queueDepth` frames deep and a held buffer is not recycled — the
+    /// self-view once held every frame it was given and stopped the capture
+    /// dead. This holds the latest and lets it go the moment the next arrives,
+    /// so the pool always keeps all but one, and a still screen costs no copy.
+    /// Touched only from `queue`.
+    private var lastPicture: CVPixelBuffer?
+
+    // MARK: The sound's own frames
+    //
+    // ScreenCaptureKit delivers sound in buffers of its own length, and Opus
+    // takes exactly 20 ms. These gather one frame, interleaved, as `Int16` —
+    // allocated once, and touched only from `queue`.
+
+    private var soundFrame = [Int16](repeating: 0, count: OpusFormat.interleavedCount)
+    private var soundFilled = 0
+    private var soundEnergy: Float = 0
+    /// Room for the two channel buffers a stereo capture delivers, so reading
+    /// one allocates nothing.
+    private let soundBuffers = AudioBufferList.allocate(maximumBuffers: 2)
+    private var hasReportedSoundFormat = false
 
     public override init() { super.init() }
 
-    // MARK: What can be shared
+    deinit { free(soundBuffers.unsafeMutablePointer) }
 
-    /// Everything the user could pick.
+    // MARK: Routing
+
+    /// Replaces where everything goes, in one write.
     ///
-    /// Throws when Screen Recording has not been granted — and that is the
-    /// *only* way to find out. There is no authorisation-status API for screen
-    /// capture the way there is for the camera; asking for the content is the
-    /// check, which is why the caller has to treat a throw here as "send them
-    /// to System Settings" rather than as a failure.
-    public static func shareable() async throws -> [ShareableTarget] {
-        let content = try await SCShareableContent.excludingDesktopWindows(
-            false,
-            onScreenWindowsOnly: true
-        )
-        var targets: [ShareableTarget] = []
-        targets.reserveCapacity(content.displays.count + content.windows.count)
-
-        for display in content.displays {
-            targets.append(ShareableTarget(
-                id: "display:\(display.displayID)",
-                kind: .display(display.displayID),
-                title: content.displays.count > 1
-                    ? "Display \(display.displayID)"
-                    : "Entire Screen",
-                application: nil,
-                width: display.width,
-                height: display.height
-            ))
-        }
-        for window in content.windows {
-            // Untitled windows and the tiny ones are panels, shadows and
-            // menu-bar helpers. A picker that lists them is a picker nobody can
-            // find their editor in.
-            guard let title = window.title, !title.isEmpty,
-                  window.frame.width > 120, window.frame.height > 120 else { continue }
-            targets.append(ShareableTarget(
-                id: "window:\(window.windowID)",
-                kind: .window(window.windowID),
-                title: title,
-                application: window.owningApplication?.applicationName,
-                width: Int(window.frame.width),
-                height: Int(window.frame.height)
-            ))
-        }
-        return targets
+    /// **And the preview's clock starts again**, because a preview is a new
+    /// renderer whose own clock starts at zero when its view is made. A frame
+    /// still timed from when the capture began is ahead of that renderer by
+    /// however long the capture ran before the view existed, and is shown that
+    /// much late — every frame, for as long as the preview runs.
+    public func route(_ outputs: Outputs) {
+        self.outputs.withLock { $0 = outputs }
+        queue.async { [self] in previewClockBase = nil }
     }
 
+    /// The stream, for the picker to present against when the reader changes
+    /// what is shared.
+    var stream: SCStream? { control.withLock { $0.stream } }
+
+    /// What is being shared, while it runs.
+    public var source: ShareSource? { control.withLock { $0.source } }
 
     // MARK: Running
 
-    public struct Quality: Sendable, Equatable {
+    /// The size frames arrive at, for a source in a quality's box.
+    public struct Shape: Sendable, Equatable {
         public var width: Int
         public var height: Int
-        public var framerate: Int
-        public var capturesAudio: Bool
-
-        public init(width: Int, height: Int, framerate: Int, capturesAudio: Bool) {
-            self.width = width
-            self.height = height
-            self.framerate = framerate
-            self.capturesAudio = capturesAudio
-        }
-
-        public static let standard = Quality(
-            width: 1_280, height: 720, framerate: 30, capturesAudio: true
-        )
     }
 
-    public func start(target: ShareableTarget, quality: Quality) async throws {
-        let content = try await SCShareableContent.excludingDesktopWindows(
-            false,
-            onScreenWindowsOnly: true
+    /// Starts capturing a picked source.
+    ///
+    /// - Returns: the size its frames will arrive at.
+    @discardableResult
+    public func start(source: ShareSource, quality: Quality) async throws -> Shape {
+        let shape = Self.shape(of: source, in: quality)
+        let stream = SCStream(
+            filter: source.filter,
+            configuration: Self.configuration(shape: shape, quality: quality),
+            delegate: self
         )
-        let filter: SCContentFilter
-        switch target.kind {
-        case .display(let id):
-            guard let display = content.displays.first(where: { $0.displayID == id }) else {
-                throw Failure.targetGone
-            }
-            // Wingcord's own windows are excluded from a full-screen share.
-            // Without it the shared picture contains the call it is being shared
-            // into, which is the infinite corridor everybody has seen once.
-            let own = content.applications.first {
-                $0.bundleIdentifier == Bundle.main.bundleIdentifier
-            }
-            filter = SCContentFilter(
-                display: display,
-                excludingApplications: own.map { [$0] } ?? [],
-                exceptingWindows: []
-            )
-        case .window(let id):
-            guard let window = content.windows.first(where: { $0.windowID == id }) else {
-                throw Failure.targetGone
-            }
-            filter = SCContentFilter(desktopIndependentWindow: window)
-        }
+        try stream.addStreamOutput(self, type: .screen, sampleHandlerQueue: queue)
+        // **Always, and switched by the configuration.** Share Audio can be
+        // turned on while the share runs, and an output added to a running
+        // stream is not one ScreenCaptureKit promises to honour.
+        try stream.addStreamOutput(self, type: .audio, sampleHandlerQueue: queue)
+        try await stream.startCapture()
+        control.withLock { $0 = Control(stream: stream, source: source, quality: quality) }
+        return shape
+    }
 
-        let configuration = SCStreamConfiguration()
-        // The aspect of the source, fitted inside the quality's box. A
-        // configuration whose ratio differs from the source's is letterboxed by
-        // ScreenCaptureKit into bars this app then spends bitrate encoding.
-        let fitted = Self.fit(
-            width: target.width, height: target.height,
+    /// Moves a running capture to another box, frame rate, or sound setting.
+    @discardableResult
+    public func update(quality: Quality) async throws -> Shape {
+        guard let (stream, source) = control.withLock({ control in
+            control.stream.flatMap { stream in control.source.map { (stream, $0) } }
+        }) else { throw Failure.notRunning }
+        let shape = Self.shape(of: source, in: quality)
+        try await stream.updateConfiguration(Self.configuration(shape: shape, quality: quality))
+        control.withLock { $0.quality = quality }
+        if !quality.capturesAudio { queue.async { [self] in soundFilled = 0 } }
+        return shape
+    }
+
+    /// Moves a running capture to another source — Discord's Change Windows.
+    @discardableResult
+    public func update(source: ShareSource) async throws -> Shape {
+        guard let (stream, quality) = control.withLock({ control in
+            control.stream.flatMap { stream in control.quality.map { (stream, $0) } }
+        }) else { throw Failure.notRunning }
+        let shape = Self.shape(of: source, in: quality)
+        try await stream.updateContentFilter(source.filter)
+        try await stream.updateConfiguration(Self.configuration(shape: shape, quality: quality))
+        control.withLock { $0.source = source }
+        // The held picture belongs to what was shared before.
+        queue.async { [self] in lastPicture = nil }
+        return shape
+    }
+
+    public func stop() async {
+        let stream = control.withLock { control -> SCStream? in
+            defer { control = Control() }
+            return control.stream
+        }
+        route(Outputs())
+        // **The preview's clock starts again with the next share.** Keeping the
+        // old base makes a second share's first frame arrive minutes ahead of
+        // the renderer's timebase, which is the freeze this rebasing exists to
+        // prevent — one share later.
+        queue.async { [self] in
+            previewClockBase = nil
+            lastPicture = nil
+            soundFilled = 0
+        }
+        try? await stream?.stopCapture()
+    }
+
+    private static func shape(of source: ShareSource, in quality: Quality) -> Shape {
+        let fitted = fit(
+            width: source.width, height: source.height,
             into: quality.width, by: quality.height
         )
-        configuration.width = fitted.width
-        configuration.height = fitted.height
+        return Shape(width: fitted.width, height: fitted.height)
+    }
+
+    private static func configuration(shape: Shape, quality: Quality) -> SCStreamConfiguration {
+        let configuration = SCStreamConfiguration()
+        // The source's aspect, fitted inside the quality's box. A configuration
+        // whose ratio differs from the source's is letterboxed by
+        // ScreenCaptureKit into bars this app then spends bitrate encoding.
+        configuration.width = shape.width
+        configuration.height = shape.height
         configuration.minimumFrameInterval = CMTime(
             value: 1, timescale: CMTimeScale(quality.framerate)
         )
@@ -223,29 +355,15 @@ public final class ScreenShareCapture: NSObject, @unchecked Sendable {
         // Five frames of headroom. Fewer drops frames on any hitch; more is
         // latency the viewer sees and can never get back.
         configuration.queueDepth = 5
+        configuration.scalesToFit = true
         configuration.capturesAudio = quality.capturesAudio
         configuration.sampleRate = Int(OpusFormat.sampleRate)
         configuration.channelCount = Int(OpusFormat.channels)
-        configuration.scalesToFit = true
-
-        let stream = SCStream(filter: filter, configuration: configuration, delegate: self)
-        try stream.addStreamOutput(self, type: .screen, sampleHandlerQueue: queue)
-        if quality.capturesAudio {
-            try stream.addStreamOutput(self, type: .audio, sampleHandlerQueue: queue)
-        }
-        try await stream.startCapture()
-        self.stream = stream
-    }
-
-    public func stop() async {
-        guard let stream else { return }
-        self.stream = nil
-        // **The preview's clock starts again with the next share.** Keeping the
-        // old base makes a second share's first frame arrive minutes ahead of
-        // the renderer's timebase, which is the freeze this rebasing exists to
-        // prevent — one share later.
-        queue.async { [self] in previewClockBase = nil }
-        try? await stream.stopCapture()
+        // **Never our own sound.** This app plays the call; a share that
+        // captured it would send everybody's voices back to them, a stream's
+        // length late.
+        configuration.excludesCurrentProcessAudio = true
+        return configuration
     }
 
     /// The largest box with the source's aspect that fits inside the target,
@@ -260,7 +378,7 @@ public final class ScreenShareCapture: NSObject, @unchecked Sendable {
     /// does, and a laptop's 1710-wide display fitted into 720p gives 1108,
     /// which is not a multiple of eight let alone sixteen.
     ///
-    /// Discord's own presets — 1280×720, 1920×1080, 848×480 — are all whole
+    /// Discord's own boxes — 1280×720, 1920×1080, 2560×1440 — are all whole
     /// macroblocks, which is one fewer difference between what this client
     /// sends and what a client whose stream renders sends. Rounded **down**, so
     /// the result still fits inside the target.
@@ -274,14 +392,15 @@ public final class ScreenShareCapture: NSObject, @unchecked Sendable {
         return (fittedWidth, fittedHeight)
     }
 
-    // MARK: The self-view
+    // MARK: The preview
 
-    /// Copies one frame into a pool of ours and hands it to the self-view.
+    /// Copies one frame into a pool of ours and hands it to the preview — the
+    /// Go Live sheet before the share is live, the self tile after.
     ///
     /// Runs on the capture queue, and returns without allocating when nothing
     /// is attached or the interval has not elapsed.
     private func emitPreview(_ source: CVPixelBuffer, at time: CMTime) {
-        guard let onPreviewSample else { return }
+        guard let deliver = outputs.withLock({ $0.preview }) else { return }
         let shape = (
             width: CVPixelBufferGetWidth(source),
             height: CVPixelBufferGetHeight(source),
@@ -367,7 +486,7 @@ public final class ScreenShareCapture: NSObject, @unchecked Sendable {
             sampleBufferOut: &sample
         ) == noErr, let sample else { return }
 
-        onPreviewSample(sample)
+        deliver(sample)
     }
 
     /// Plane-by-plane, honouring both buffers' own row strides.
@@ -429,13 +548,97 @@ public final class ScreenShareCapture: NSObject, @unchecked Sendable {
         return true
     }
 
-    public enum Failure: Error, Sendable { case targetGone }
+    // MARK: The sound
+
+    /// Gathers one buffer of the shared sound into 20 ms frames.
+    ///
+    /// Runs on the capture queue. **Allocates nothing**: the buffer list is
+    /// read in place into storage made once, and each finished frame is handed
+    /// over as a pointer into `soundFrame`.
+    private func gatherSound(_ sampleBuffer: CMSampleBuffer) {
+        guard let deliver = outputs.withLock({ $0.audio }),
+              let format = CMSampleBufferGetFormatDescription(sampleBuffer),
+              let description = CMAudioFormatDescriptionGetStreamBasicDescription(format)?.pointee
+        else { return }
+        let isFloat = description.mFormatFlags & kAudioFormatFlagIsFloat != 0
+        let isInterleaved = description.mFormatFlags & kAudioFormatFlagIsNonInterleaved == 0
+        let channels = Int(description.mChannelsPerFrame)
+        // Asked for 48 kHz float, which is what ScreenCaptureKit delivers; any
+        // other shape is said once and dropped rather than sent at the wrong
+        // speed.
+        guard isFloat, description.mBitsPerChannel == 32,
+              description.mSampleRate == Double(OpusFormat.sampleRate),
+              channels == 1 || channels == 2
+        else {
+            if !hasReportedSoundFormat {
+                hasReportedSoundFormat = true
+                VoiceTrace.fault(
+                    "screen share sound is \(description.mSampleRate) Hz, "
+                    + "\(channels) channels, flags \(description.mFormatFlags); not sent"
+                )
+            }
+            return
+        }
+
+        var blockBuffer: CMBlockBuffer?
+        guard CMSampleBufferGetAudioBufferListWithRetainedBlockBuffer(
+            sampleBuffer,
+            bufferListSizeNeededOut: nil,
+            bufferListOut: soundBuffers.unsafeMutablePointer,
+            bufferListSize: AudioBufferList.sizeInBytes(maximumBuffers: 2),
+            blockBufferAllocator: nil,
+            blockBufferMemoryAllocator: nil,
+            flags: kCMSampleBufferFlag_AudioBufferList_Assure16ByteAlignment,
+            blockBufferOut: &blockBuffer
+        ) == noErr else { return }
+
+        let frames = CMSampleBufferGetNumSamples(sampleBuffer)
+        let left: UnsafePointer<Float>
+        let right: UnsafePointer<Float>
+        let stride: Int
+        if isInterleaved || channels == 1 {
+            guard let base = soundBuffers[0].mData?.assumingMemoryBound(to: Float.self)
+            else { return }
+            left = UnsafePointer(base)
+            right = channels == 2 ? UnsafePointer(base + 1) : UnsafePointer(base)
+            stride = channels
+        } else {
+            guard soundBuffers.count >= 2,
+                  let first = soundBuffers[0].mData?.assumingMemoryBound(to: Float.self),
+                  let second = soundBuffers[1].mData?.assumingMemoryBound(to: Float.self)
+            else { return }
+            left = UnsafePointer(first)
+            right = UnsafePointer(second)
+            stride = 1
+        }
+
+        let frameLength = soundFrame.count
+        for index in 0..<frames {
+            let l = max(-1, min(1, left[index * stride]))
+            let r = max(-1, min(1, right[index * stride]))
+            soundFrame[soundFilled] = Int16(l * 32_767)
+            soundFrame[soundFilled + 1] = Int16(r * 32_767)
+            soundEnergy += l * l + r * r
+            soundFilled += 2
+            if soundFilled == frameLength {
+                let level = (soundEnergy / Float(frameLength)).squareRoot()
+                soundFrame.withUnsafeBufferPointer { deliver($0.baseAddress!, level) }
+                soundFilled = 0
+                soundEnergy = 0
+            }
+        }
+    }
 }
 
 extension ScreenShareCapture: SCStreamDelegate {
     public func stream(_ stream: SCStream, didStopWithError error: any Error) {
-        self.stream = nil
-        onStopped?(error.localizedDescription)
+        let isOurs = control.withLock { control -> Bool in
+            guard control.stream === stream else { return false }
+            control = Control()
+            return true
+        }
+        guard isOurs else { return }
+        outputs.withLock { $0.stopped }?(error.localizedDescription)
     }
 }
 
@@ -447,43 +650,127 @@ extension ScreenShareCapture: SCStreamOutput {
     ) {
         switch type {
         case .screen:
-            // **Only frames whose content actually changed.** ScreenCaptureKit
-            // repeats the previous frame to keep the stream alive, and encoding
-            // the repeats spends a third of the bitrate re-sending a still
-            // picture the far end already has.
             guard let attachments = CMSampleBufferGetSampleAttachmentsArray(
                 sampleBuffer, createIfNecessary: false
             ) as? [[SCStreamFrameInfo: Any]],
                 let raw = attachments.first?[.status] as? Int,
-                let status = SCFrameStatus(rawValue: raw), status == .complete,
-                let pixels = CMSampleBufferGetImageBuffer(sampleBuffer)
+                let status = SCFrameStatus(rawValue: raw)
             else { return }
-            onFrame?(pixels, CMSampleBufferGetPresentationTimeStamp(sampleBuffer))
-            // After the encoder, never instead of it: a preview that is not
-            // attached must cost this path a nil check and nothing else.
-            emitPreview(pixels, at: CMSampleBufferGetPresentationTimeStamp(sampleBuffer))
+            let time = CMSampleBufferGetPresentationTimeStamp(sampleBuffer)
+            let routed = outputs.withLock { ($0.frame, $0.still) }
+            switch status {
+            case .complete:
+                guard let pixels = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
+                routed.0?(pixels, time)
+                // After the encoder, never instead of it: a preview that is not
+                // attached must cost this path a nil check and nothing else.
+                emitPreview(pixels, at: time)
+                lastPicture = pixels
+            case .idle:
+                // **Only frames whose content actually changed go to the
+                // encoder.** ScreenCaptureKit repeats the tick to keep the
+                // stream alive, and encoding the repeats spends a third of the
+                // bitrate re-sending a picture the far end already has — so a
+                // still screen is offered, and sent only to somebody waiting.
+                guard let lastPicture else { return }
+                routed.1?(lastPicture, time)
+            default:
+                // Blank, suspended, stopped: there is no picture to stand on.
+                lastPicture = nil
+            }
 
         case .audio:
-            guard let format = CMSampleBufferGetFormatDescription(sampleBuffer),
-                  let description = CMAudioFormatDescriptionGetStreamBasicDescription(format)
-            else { return }
-            let audioFormat = AVAudioFormat(streamDescription: description)
-            guard let audioFormat,
-                  let buffer = AVAudioPCMBuffer(
-                      pcmFormat: audioFormat,
-                      frameCapacity: AVAudioFrameCount(CMSampleBufferGetNumSamples(sampleBuffer))
-                  ) else { return }
-            buffer.frameLength = buffer.frameCapacity
-            guard CMSampleBufferCopyPCMDataIntoAudioBufferList(
-                sampleBuffer,
-                at: 0,
-                frameCount: Int32(buffer.frameLength),
-                into: buffer.mutableAudioBufferList
-            ) == noErr else { return }
-            onAudio?(buffer)
+            gatherSound(sampleBuffer)
 
         default:
             break
         }
+    }
+}
+
+// MARK: - The picker
+
+/// The system's own picker for what to share — Control Center's, the one every
+/// app on the Mac presents.
+///
+/// **One observer for the whole app**, because the picker is one object for
+/// the whole process: it says what was picked, and for which running stream if
+/// any, and the app decides whether that is a new share or a change to the one
+/// already running.
+@MainActor
+public final class ScreenSourcePicker: NSObject {
+    public static let shared = ScreenSourcePicker()
+
+    public enum Event: Sendable {
+        /// A source was picked. `isChange` when it was picked for a capture
+        /// already running — Discord's Change Windows, or the menu bar's own
+        /// control for the share.
+        case picked(ShareSource, isChange: Bool)
+        case cancelled
+        case failed(String)
+    }
+
+    public var onEvent: ((Event) -> Void)?
+
+    private var isObserving = false
+
+    private override init() { super.init() }
+
+    /// Whether the system offers this app's picker at all — in its own menu
+    /// as well as when this app presents it. Discord keeps it on for as long
+    /// as the reader is somewhere they may stream.
+    public var isActive: Bool {
+        get { SCContentSharingPicker.shared.isActive }
+        set {
+            let picker = SCContentSharingPicker.shared
+            if newValue, !isObserving {
+                isObserving = true
+                var configuration = SCContentSharingPickerConfiguration()
+                // Everything Discord's menu can name: a display, windows, or
+                // applications, one or several.
+                configuration.allowedPickerModes = [
+                    .singleDisplay, .singleWindow, .multipleWindows,
+                    .singleApplication, .multipleApplications,
+                ]
+                configuration.allowsChangingSelectedContent = true
+                picker.defaultConfiguration = configuration
+                picker.add(self)
+            }
+            picker.isActive = newValue
+        }
+    }
+
+    /// Presents the picker — for a new share, or to change what `capture` is
+    /// sharing.
+    public func present(changing capture: ScreenShareCapture? = nil) {
+        isActive = true
+        if let stream = capture?.stream {
+            SCContentSharingPicker.shared.present(for: stream)
+        } else {
+            SCContentSharingPicker.shared.present()
+        }
+    }
+}
+
+extension ScreenSourcePicker: SCContentSharingPickerObserver {
+    public nonisolated func contentSharingPicker(
+        _ picker: SCContentSharingPicker, didCancelFor stream: SCStream?
+    ) {
+        Task { @MainActor in self.onEvent?(.cancelled) }
+    }
+
+    public nonisolated func contentSharingPicker(
+        _ picker: SCContentSharingPicker,
+        didUpdateWith filter: SCContentFilter,
+        for stream: SCStream?
+    ) {
+        let source = ShareSource(filter: filter)
+        let isChange = stream != nil
+        Task { @MainActor in self.onEvent?(.picked(source, isChange: isChange)) }
+    }
+
+    public nonisolated func contentSharingPickerStartDidFailWithError(_ error: any Error) {
+        let message = error.localizedDescription
+        Task { @MainActor in self.onEvent?(.failed(message)) }
     }
 }

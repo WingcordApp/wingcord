@@ -51,7 +51,9 @@ enum FrecencyProto {
     private enum Field {
         static let favoriteGIFs = 2
         static let applicationCommandFrecency = 7
+        static let favoriteSoundboardSounds = 8
         static let applicationFrecency = 9
+        static let playedSoundFrecency = 11
         static let guildAndChannelFrecency = 12
     }
 
@@ -67,6 +69,7 @@ enum FrecencyProto {
     private enum ItemField {
         static let totalUses = 1
         static let recentUses = 2
+        static let frecency = 3
         static let score = 4
     }
 
@@ -296,6 +299,162 @@ enum FrecencyProto {
         entry.string(field: MapEntryField.key, gif.url.absoluteString)
         entry.message(field: MapEntryField.value, value.data)
         return FavoriteEntry(key: gif.url.absoluteString, order: order, raw: entry.data)
+    }
+
+    // MARK: The soundboard
+
+    private enum FavoriteSoundsField {
+        static let soundIDs = 1
+        static let orderedSoundIDs = 2
+    }
+
+    /// The account's starred sounds, read from Discord's own descriptor:
+    ///
+    /// ```
+    /// FavoriteSoundboardSounds favorite_soundboard_sounds = 8 {
+    ///   repeated fixed64 sound_ids         = 1
+    ///   repeated fixed64 ordered_sound_ids = 2
+    /// }
+    /// ```
+    ///
+    /// Packed, as proto3 writes a repeated scalar — and an unpacked element is
+    /// read as well, as every protobuf reader must.
+    static func favoriteSounds(in data: Data) -> SoundboardFavorites {
+        var favorites = SoundboardFavorites()
+        var reader = ProtobufReader(data)
+        while let field = reader.next() {
+            guard field.number == Field.favoriteSoundboardSounds, field.wireType == 2 else { continue }
+            var message = reader.reader(for: field)
+            while let list = message.next() {
+                let values: [UInt64] = switch list.wireType {
+                case 2: message.packedFixed64(for: list)
+                case 1: [list.value]
+                default: []
+                }
+                switch list.number {
+                case FavoriteSoundsField.soundIDs: favorites.soundIDs += values
+                case FavoriteSoundsField.orderedSoundIDs: favorites.orderedSoundIDs += values
+                default: continue
+                }
+            }
+        }
+        return favorites
+    }
+
+    /// The body of `PATCH /users/@me/settings-proto/2` for the favourites.
+    ///
+    /// Field 8 whole, because the updater replaces a top-level field — with the
+    /// two lists rewritten and anything else in the message carried across as
+    /// the bytes it came as.
+    ///
+    /// - Parameter blob: the whole frecency blob, fetched just before.
+    static func favoriteSoundsPatch(_ favorites: SoundboardFavorites, in blob: Data) -> String {
+        var message = Data()
+        var reader = ProtobufReader(blob)
+        while let field = reader.next() {
+            if field.number == Field.favoriteSoundboardSounds, let data = reader.data(for: field) { message = data }
+        }
+        message = ActivityPrivacyProto.replacing(
+            field: FavoriteSoundsField.soundIDs,
+            with: packed(FavoriteSoundsField.soundIDs, favorites.soundIDs),
+            in: message
+        )
+        message = ActivityPrivacyProto.replacing(
+            field: FavoriteSoundsField.orderedSoundIDs,
+            with: packed(FavoriteSoundsField.orderedSoundIDs, favorites.orderedSoundIDs),
+            in: message
+        )
+        var top = ProtobufWriter()
+        top.message(field: Field.favoriteSoundboardSounds, message)
+        return top.base64
+    }
+
+    /// One packed list, or nothing for an empty one — proto3 writes no field
+    /// for an empty repeated scalar.
+    private static func packed(_ number: Int, _ values: [UInt64]) -> Data? {
+        guard !values.isEmpty else { return nil }
+        var writer = ProtobufWriter()
+        writer.packedFixed64(field: number, values)
+        return writer.data
+    }
+
+    /// The played-sound table whole — every entry's kept uses as well as its
+    /// counts, which `SoundFrecency` scores again and writes back. Field 11,
+    /// keyed by the sound's id as a string:
+    ///
+    /// ```
+    /// PlayedSoundFrecency played_sound_frecency = 11 {
+    ///   map<string, FrecencyItem> played_sounds = 1
+    /// }
+    /// FrecencyItem {
+    ///   uint32 total_uses  = 1
+    ///   repeated uint64 recent_uses = 2   // milliseconds, packed varints
+    ///   int32  frecency    = 3
+    ///   int32  score       = 4
+    /// }
+    /// ```
+    static func playedSoundHistory(base64: String) -> [String: SoundFrecency.Use] {
+        guard let data = Data(base64Encoded: base64) else { return [:] }
+        var reader = ProtobufReader(data)
+        var history: [String: SoundFrecency.Use] = [:]
+        while let field = reader.next() {
+            guard field.number == Field.playedSoundFrecency, field.wireType == 2 else { continue }
+            var map = reader.reader(for: field)
+            while let element = map.next() {
+                guard element.number == mapField, element.wireType == 2 else { continue }
+                var entry = map.reader(for: element)
+                var key: String?
+                var use: SoundFrecency.Use?
+                while let part = entry.next() {
+                    switch part.number {
+                    case MapEntryField.key where part.wireType == 2: key = entry.string(for: part)
+                    case MapEntryField.value where part.wireType == 2: use = playedSound(entry.reader(for: part))
+                    default: continue
+                    }
+                }
+                if let key, let use { history[key] = use }
+            }
+        }
+        return history
+    }
+
+    private static func playedSound(_ reader: ProtobufReader) -> SoundFrecency.Use {
+        var reader = reader
+        var use = SoundFrecency.Use(totalUses: 0, recentUses: [])
+        while let field = reader.next() {
+            switch field.number {
+            case ItemField.totalUses where field.wireType == 0: use.totalUses = Int(field.value)
+            case ItemField.recentUses where field.wireType == 2: use.recentUses = reader.packedVarints(for: field)
+            case ItemField.frecency where field.wireType == 0: use.frecency = Int(Int32(truncatingIfNeeded: field.value))
+            case ItemField.score where field.wireType == 0: use.score = Int(Int32(truncatingIfNeeded: field.value))
+            default: continue
+            }
+        }
+        return use
+    }
+
+    /// Field 11 whole, from `SoundFrecency.written` — Discord's own write
+    /// (`playedSoundFrecency.playedSounds`, the hundred most recently played).
+    ///
+    /// **Safe to build rather than re-frame**, the rule `ProtobufWriter` holds
+    /// to: Discord's descriptor gives the wrapper one field, the map, and the
+    /// item four, and all four are written here. Proto3 leaves out a zero.
+    static func playedSoundsPatch(_ history: [String: SoundFrecency.Use]) -> String {
+        var map = ProtobufWriter()
+        for (key, use) in history.sorted(by: { $0.key < $1.key }) {
+            var item = ProtobufWriter()
+            if use.totalUses > 0 { item.varint(field: ItemField.totalUses, UInt64(use.totalUses)) }
+            if !use.recentUses.isEmpty { item.packedVarints(field: ItemField.recentUses, use.recentUses) }
+            if use.frecency > 0 { item.varint(field: ItemField.frecency, UInt64(use.frecency)) }
+            if use.score > 0 { item.varint(field: ItemField.score, UInt64(use.score)) }
+            var entry = ProtobufWriter()
+            entry.string(field: MapEntryField.key, key)
+            entry.message(field: MapEntryField.value, item.data)
+            map.message(field: mapField, entry.data)
+        }
+        var top = ProtobufWriter()
+        top.message(field: Field.playedSoundFrecency, map.data)
+        return top.base64
     }
 
     /// Applications, by how much the account uses them.

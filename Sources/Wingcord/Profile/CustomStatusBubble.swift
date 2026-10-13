@@ -90,6 +90,10 @@ struct CustomStatusBubble: View {
     /// route** — you do not react to yourself, and a control that cannot send
     /// is the inert one §5.5 forbids.
     var answer: CustomStatusAnswering?
+    /// Whether the words can be selected and copied. Somebody else's status
+    /// can; the reader's own is the button that edits it, and a selectable
+    /// label inside a button takes the click the button exists for.
+    var isSelectable = false
 
     var body: some View {
         bubble
@@ -218,6 +222,7 @@ struct CustomStatusBubble: View {
                     .fixedSize(horizontal: false, vertical: true)
                     .multilineTextAlignment(.leading)
             } else if let text, !text.isEmpty {
+                SelectableIf(isSelectable) {
                 Text(text)
                     .font(.system(.subheadline))
                     // The plate's own ink. **Not the hierarchy**, which would
@@ -233,6 +238,7 @@ struct CustomStatusBubble: View {
                     .lineLimit(isExpanded ? nil : layout.collapsedLineLimit)
                     .fixedSize(horizontal: false, vertical: true)
                     .multilineTextAlignment(.leading)
+                }
             }
         }
         .padding(.horizontal, layout.bubbleHorizontalPadding)
@@ -429,5 +435,25 @@ private struct StatusReplyField: View {
         let trimmed = draft.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
         send(trimmed)
+    }
+}
+
+/// Selection on a label that only sometimes takes it. A wrapper rather than a
+/// ternary, because `.enabled` and `.disabled` are different types.
+private struct SelectableIf<Content: View>: View {
+    var isSelectable: Bool
+    @ViewBuilder var content: Content
+
+    init(_ isSelectable: Bool, @ViewBuilder content: () -> Content) {
+        self.isSelectable = isSelectable
+        self.content = content()
+    }
+
+    var body: some View {
+        if isSelectable {
+            content.textSelection(.enabled)
+        } else {
+            content
+        }
     }
 }

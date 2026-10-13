@@ -126,8 +126,8 @@ struct ThemeGround: Equatable {
     /// corner outward, or nil for a ground with no light of its own.
     var glow: Gradient?
     /// The brightest ground a coloured name can land on: the page at its
-    /// lightest, with the roster's own lift over it — the roster is where a
-    /// name meets the corner light. What `AppModel.roleColor` checks against.
+    /// lightest, which the roster shares — the roster is where a name meets the
+    /// corner light. What `AppModel.roleColor` checks against.
     var inkCeiling: UInt32
     /// Whether this ground is a dark room or a light one — for a picture of it
     /// drawn inside a window of the other kind, like a gallery tile.
@@ -141,7 +141,7 @@ struct ThemeGround: Equatable {
         return ThemeGround(
             angle: 180, page: flat, frame: flat,
             pageVeil: 0, frameVeil: 0, paintsFrame: false, glow: nil,
-            inkCeiling: underRoster(canvas)
+            inkCeiling: canvas
         )
     }()
 
@@ -159,7 +159,7 @@ struct ThemeGround: Equatable {
         frameVeil: 0,
         paintsFrame: true,
         glow: nil,
-        inkCeiling: underRoster(0xF7_F6_F3),
+        inkCeiling: 0xF7_F6_F3,
         appearance: .light
     )
 
@@ -178,7 +178,7 @@ struct ThemeGround: Equatable {
         glow = Gradient(stops: Self.glowFalloff.map {
             Gradient.Stop(color: light.opacity(strength * $0.share), location: $0.location)
         })
-        inkCeiling = Self.underRoster(seed.inkCeiling)
+        inkCeiling = seed.inkCeiling
     }
 
     /// One of Discord's: its own gradient, its angle and its veils — thinned by
@@ -198,7 +198,7 @@ struct ThemeGround: Equatable {
         let veil = pageVeil
         let veilColor: UInt32 = theme.base == .light ? 0xFF_FF_FF : 0
         let brightest = theme.stops.map(\.color).max { InkContrast.luminance($0) < InkContrast.luminance($1) } ?? 0
-        inkCeiling = Self.underRoster(InkContrast.composite(veilColor, over: brightest, opacity: veil))
+        inkCeiling = InkContrast.composite(veilColor, over: brightest, opacity: veil)
     }
 
     /// A server's theme: its two colours spread evenly along its angle, under
@@ -218,7 +218,7 @@ struct ThemeGround: Equatable {
         appearance = theme.room
         let veilColor: UInt32 = theme.room == .light ? 0xFF_FF_FF : 0
         let brightest = theme.stops.max { InkContrast.luminance($0) < InkContrast.luminance($1) } ?? 0
-        inkCeiling = Self.underRoster(InkContrast.composite(veilColor, over: brightest, opacity: pageVeil))
+        inkCeiling = InkContrast.composite(veilColor, over: brightest, opacity: pageVeil)
     }
 
     private init(
@@ -236,15 +236,6 @@ struct ThemeGround: Equatable {
         self.glow = glow
         self.inkCeiling = inkCeiling
     }
-
-    /// A ground with the roster's lift over it — see `WorkspacePane.rosterLift`.
-    private static func underRoster(_ ground: UInt32) -> UInt32 {
-        InkContrast.composite(0xFF_FF_FF, over: ground, opacity: WorkspacePane.rosterLift)
-    }
-
-    /// The page's gradient alone, for a preview of the walk that needs nothing
-    /// else — Plumage's thread, redrawn on every event of a drag.
-    static func page(of seed: ThemeSeed) -> Gradient { sampled(seed, seed.field(at:)) }
 
     private static func sampled(_ seed: ThemeSeed, _ point: (Double) -> Oklch) -> Gradient {
         let count = (seed.anchors.count - 1) * samplesPerLeg + 1

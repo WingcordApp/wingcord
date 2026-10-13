@@ -20,8 +20,21 @@ struct MessageMenuRequest: Identifiable, Hashable, Sendable {
     var channelID: ChannelID
     /// In the SwiftUI root's space — see `NSView.anchorInHostingRoot`.
     var anchor: CGRect
+    /// The transcript's selection when the menu was asked for, if there was
+    /// one — what Copy and Search with Google act on.
+    var selectedText: String?
 
     var id: UInt64 { messageID.rawValue }
+}
+
+/// The traits a drawn invite card had no room for, opened from its "+ N more"
+/// chip — `GuildTraitsFlyout`, anchored where the chip is.
+struct TraitsFlyoutRequest: Identifiable, Hashable, Sendable {
+    var traits: [GuildTrait]
+    /// In the SwiftUI root's space — see `NSView.anchorInHostingRoot`.
+    var anchor: CGRect
+
+    var id: Self { self }
 }
 
 /// The emoji picker, opened to react rather than to compose.
@@ -158,6 +171,8 @@ struct UserMenuRequest: Identifiable, Hashable, Sendable {
     /// for resolving a nickname. Nil in a direct message.
     var guildID: GuildID?
     var anchor: CGRect
+    /// Raised from a call tile — see `UserMenu.isFromCall`.
+    var isFromCall = false
 
     var id: UInt64 { userID.rawValue }
 }
@@ -175,6 +190,9 @@ struct DirectMessageMenuRequest: Identifiable, Hashable, Sendable {
     /// has several and therefore none.
     var userID: UserID?
     var anchor: CGRect
+    /// Whose call tile raised it, in a direct message's call — then the menu
+    /// is about them as well as the conversation, and carries the call's items.
+    var callUserID: UserID?
 
     var id: UInt64 { channelID.rawValue }
 }

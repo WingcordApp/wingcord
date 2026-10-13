@@ -32,6 +32,7 @@ extension AppModel {
             accountLink: accountLink(for: gameID),
             community: communityCard(for: gameID, game: game),
             reviews: game.reviews,
+            steamURL: game.steamStoreURL,
             openCriticURL: game.openCriticURL,
             announcements: (announcements?.messages ?? []).compactMap(Self.announcementCard),
             // **The ids are enough, and the permission check that used to be
@@ -77,8 +78,13 @@ extension AppModel {
     /// asset, so it resolves through the same `/app-assets/{id}/store/` path
     /// the activity preview already probed.
     private func gameMedia(of game: Game) -> [GameMediaItem] {
-        let trailers = game.trailers.compactMap {
-            CDN.gameTrailer(id: $0.applicationID, assetID: $0.id).map(GameMediaItem.trailer)
+        let trailers = game.trailers.compactMap { trailer in
+            CDN.gameTrailer(id: trailer.applicationID, assetID: trailer.id).map {
+                GameMediaItem.trailer(
+                    video: $0,
+                    poster: CDN.gameTrailerPoster(id: trailer.applicationID, assetID: trailer.id, width: 720)
+                )
+            }
         }
         return trailers + gameScreenshotURLs(game, width: 720).map(GameMediaItem.still)
     }

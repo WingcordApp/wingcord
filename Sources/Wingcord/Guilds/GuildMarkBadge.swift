@@ -46,19 +46,31 @@ struct GuildMarkFlyout: View {
     static let maxWidth: CGFloat = 190
 
     var body: some View {
+        // Measured at the width it is drawn at — `CappedWidth` — or "People
+        // with an invite link can join." wraps past the glass sized for it.
+        CappedWidth(max: Self.maxWidth) {
+            content
+        }
+        // It is an answer about the thing under the pointer, so it must never
+        // become the thing under the pointer.
+        .allowsHitTesting(false)
+        .accessibilityHidden(true)
+    }
+
+    private var content: some View {
         VStack(spacing: 0) {
             VStack(spacing: 0) {
                 Text(mark.title)
-                    .font(.system(size: 12, weight: .bold))
+                    .font(.system(.callout, weight: .bold))
                     .foregroundStyle(InkColor.primary)
                 if let subtitle = mark.subtitle {
                     Text(subtitle)
-                        .font(.system(size: 12, weight: .medium))
+                        .font(.system(.callout, weight: .medium))
                         .foregroundStyle(InkColor.secondary)
                 }
                 if let detail = mark.detail {
                     Text(detail)
-                        .font(.system(size: 12, weight: .medium))
+                        .font(.system(.callout, weight: .medium))
                         .foregroundStyle(InkColor.secondary)
                 }
             }
@@ -69,11 +81,6 @@ struct GuildMarkFlyout: View {
 
             if mark.isBoosted { boostStrip }
         }
-        .frame(maxWidth: Self.maxWidth)
-        // It is an answer about the thing under the pointer, so it must never
-        // become the thing under the pointer.
-        .allowsHitTesting(false)
-        .accessibilityHidden(true)
     }
 
     /// Level and boosts, split evenly, on Discord's gradient.

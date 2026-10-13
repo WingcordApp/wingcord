@@ -161,7 +161,7 @@ struct StickerSheet: View {
                                 )
                             }
                         }
-                        .buttonStyle(.glass)
+                        .buttonStyle(.bordered)
                         .controlSize(.small)
                     }
                 }
@@ -262,7 +262,7 @@ struct SoundSheet: View {
                             .lineLimit(1)
                         Spacer()
                         Button("Browse", action: pick)
-                            .buttonStyle(.glass)
+                            .buttonStyle(.bordered)
                             .controlSize(.small)
                     }
                 }

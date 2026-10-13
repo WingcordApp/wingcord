@@ -26,7 +26,7 @@ public struct ActivityStatusLine: Hashable, Sendable {
         case activity
         /// A stage.
         case stage
-        /// In a voice channel or a call. **The one Discord draws green.**
+        /// In a voice channel or a call.
         case voice
     }
 

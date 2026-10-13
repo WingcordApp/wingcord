@@ -37,7 +37,7 @@ struct ServerInsightsPane: View {
                 } trailing: {
                     if let url = URL(string: "https://discord.com/developers/servers/\(guildID.rawValue)") {
                         Link("Go to Server Insights", destination: url)
-                            .buttonStyle(.glassProminent)
+                            .buttonStyle(.borderedProminent)
                             .controlSize(.small)
                     }
                 }

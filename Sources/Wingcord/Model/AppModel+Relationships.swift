@@ -18,13 +18,17 @@ extension AppModel {
     /// a server — a menu that opens onto "nothing to do here" is a menu that
     /// should not have opened. Inside one the reader's own menu has their
     /// profile, Edit Per-server Profile and their roles.
-    func openUserMenu(for userID: UserID, anchor: CGRect, inGuild guildID: GuildID? = nil) {
+    func openUserMenu(
+        for userID: UserID, anchor: CGRect, inGuild guildID: GuildID? = nil, isFromCall: Bool = false
+    ) {
         let guildID = guildID ?? selectedGuildID
         guard users[userID] != nil,
               userActions(for: userID) != nil || guildID != nil
         else { return }
         dismissMessageSurfaces()
-        userMenu = UserMenuRequest(userID: userID, guildID: guildID, anchor: anchor)
+        userMenu = UserMenuRequest(
+            userID: userID, guildID: guildID, anchor: anchor, isFromCall: isFromCall
+        )
     }
 
     func isBlocked(_ userID: UserID) -> Bool { blockedUserIDs.contains(userID) }
@@ -257,7 +261,7 @@ struct UserActions: Hashable, Sendable {
 
 /// One server the reader could invite somebody to, and the channel it would be
 /// minted in.
-struct InvitableGuild: Identifiable, Hashable, Sendable {
+nonisolated struct InvitableGuild: Identifiable, Hashable, Sendable {
     var id: GuildID
     var name: String
     var iconURL: URL?

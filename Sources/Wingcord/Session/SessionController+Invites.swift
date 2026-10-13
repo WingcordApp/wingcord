@@ -13,6 +13,9 @@ extension SessionController {
     /// (`InviteLookup.invalid`) and is kept; a network failure is logged and
     /// left unanswered, so the link stays a link rather than retrying on every
     /// page the channel loads.
+    ///
+    /// An invite that came back with an event not yet over is that event's
+    /// card instead (`346542`'s `ly`), measured as the answer lands.
     func resolveInvites(in messages: [Message]) {
         for message in messages {
             for code in InviteCard.codes(in: message.content)
@@ -22,6 +25,9 @@ extension SessionController {
                     do {
                         let lookup = try await rest.inviteCard(code)
                         model.inviteLookups[code] = lookup
+                        if case .resolved(let card) = lookup, let event = card.event, event.status.isLive {
+                            resolveEventCard(EventCardKey(guildID: event.guildID, eventID: event.id, invite: code))
+                        }
                         model.cardRevision &+= 1
                         if case .resolved(let card) = lookup, let profile = card.profile,
                            let guildID = card.guildID {

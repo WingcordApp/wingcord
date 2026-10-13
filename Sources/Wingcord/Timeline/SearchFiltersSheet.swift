@@ -90,13 +90,6 @@ struct SearchFiltersSheet: View {
         }
         .frame(width: Self.width)
         .frame(maxHeight: Self.maximumHeight)
-        .background(Palette.surface)
-        .clipShape(.rect(cornerRadius: Radius.card, style: .continuous))
-        .overlay {
-            RoundedRectangle(cornerRadius: Radius.card, style: .continuous)
-                .strokeBorder(Ink.quaternary, lineWidth: 1)
-        }
-        .presentationBackground(.clear)
         .animation(motion.standard, value: draft.dates.count)
     }
 
@@ -266,7 +259,9 @@ struct SearchFiltersSheet: View {
             }
             Spacer(minLength: Spacing.base)
             SurfaceQuietButton(title: "Cancel", systemImage: nil, action: dismiss)
+                .keyboardShortcut(.cancelAction)
             SurfaceFilledButton(title: "Apply Filters", systemImage: nil) { apply(draft) }
+                .keyboardShortcut(.defaultAction)
         }
         .padding(Spacing.group)
     }

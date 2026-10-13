@@ -38,7 +38,7 @@ struct ComposerContainer: View {
             controls: settings.composerControls,
             focusKey: channelID,
             canSend: model.permissionGate.canSend(in: channelID),
-            replyingToAuthor: replyingToAuthor,
+            reply: reply,
             isEditing: box?.editing != nil,
             // **One field, two destinations.** An edit borrows the bar and must
             // not eat the draft underneath it, so the binding routes by which
@@ -70,8 +70,10 @@ struct ComposerContainer: View {
             ),
             send: send(launch:),
             cancelReply: { model.cancelReply(in: channelID) },
+            jumpToReply: { model.jumpToReply(in: channelID) },
+            toggleReplyPing: { model.toggleReplyPing(in: channelID) },
             cancelEdit: { model.cancelEdit(in: channelID) },
-            replyToLatest: { model.replyToLatestMessage() },
+            editLatest: { model.editLatestOwnMessage(in: channelID) },
             escapeTranscript: { model.escapeTranscript(in: channelID) },
             attachActions: attachActions,
             scheduledAt: box?.scheduledAt,
@@ -80,8 +82,15 @@ struct ComposerContainer: View {
             canAttach: model.canAttachFiles(in: channelID),
             attachments: box?.attachments ?? [],
             attachmentRefusal: box?.attachmentRefusal,
+            compressingFiles: box?.compressingFiles ?? 0,
+            sendCompressed: { model.compressAttachments($0, in: channelID) },
+            alwaysCompress: { model.alwaysCompressAttachments($0, in: channelID) },
             removeAttachment: { model.removeAttachment($0, in: channelID) },
             toggleAttachmentSpoiler: { model.toggleAttachmentSpoiler($0, in: channelID) },
+            toggleAttachmentAnonymise: { model.toggleAttachmentAnonymise($0, in: channelID) },
+            modifyAttachment: { id, filename, altText, isSpoiler in
+                model.modifyAttachment(id, in: channelID, filename: filename, altText: altText, isSpoiler: isSpoiler)
+            },
             dismissAttachmentRefusal: { model.dismissAttachmentRefusal(in: channelID) },
             completions: completions,
             completionQuery: completionQuery ?? "",
@@ -112,10 +121,10 @@ struct ComposerContainer: View {
             pendingInteractions: pendingInteractions,
             // Only the request aimed at this conversation: a thread panel's
             // composer beside the main one must not open a picker too.
-            stickerPickerRequest: model.stickerPickerRequest?.channelID == channelID
-                ? model.stickerPickerRequest
+            controlRequest: model.composerControlRequest?.channelID == channelID
+                ? model.composerControlRequest
                 : nil,
-            takeStickerPickerRequest: { model.stickerPickerRequest = nil },
+            takeControlRequest: { model.composerControlRequest = nil },
             appLauncherRequest: model.appLauncherRequest?.channelID == channelID
                 ? model.appLauncherRequest
                 : nil,
@@ -129,6 +138,12 @@ struct ComposerContainer: View {
         // presentation modifier on a list ROW — evaluated by every row on every
         // pass. There is exactly one composer, and the panel has to be anchored
         // to the window the `+` is in.
+        // The menu bar's Upload a File…, for this conversation.
+        .onChange(of: model.fileImportRequest) { _, request in
+            guard request == channelID else { return }
+            model.fileImportRequest = nil
+            isChoosingFiles = true
+        }
         .fileImporter(
             isPresented: $isChoosingFiles,
             allowedContentTypes: [.item],
@@ -462,12 +477,34 @@ struct ComposerContainer: View {
         }
     }
 
-    private var replyingToAuthor: String? {
-        guard let replyID = model.messages(in: channelID)?.replyingTo,
-              let message = model.messages(in: channelID)?.messages.first(where: { $0.id == replyID }),
-              let user = model.users[message.authorID]
+    /// The reply bar's name, resolved the way the transcript resolves an
+    /// author — the server's name for them, their role's colour and gradient,
+    /// their style's face — so the person reads the same in the bar as in the
+    /// row they are being answered from.
+    private var reply: ComposerReply? {
+        guard let box = model.messages(in: channelID), let replyID = box.replyingTo,
+              let message = box.messages.first(where: { $0.id == replyID }),
+              model.users[message.authorID] != nil
         else { return nil }
-        return user.preferredName
+        let font = NSFont.systemFont(
+            ofSize: NSFont.preferredFont(forTextStyle: .caption1).pointSize,
+            weight: .semibold
+        )
+        let guildID = model.channelIndex[channelID]?.guildID
+        guard let author = model.authorInfo(
+            for: [.message(TimelineMessage(message: message, flags: []))],
+            inGuild: guildID,
+            authorFont: font
+        )[message.authorID] else { return nil }
+        return ComposerReply(
+            name: author.name,
+            colorValue: author.colorValue,
+            gradient: author.gradient,
+            face: author.nameFace,
+            tracking: author.nameTracking,
+            pings: box.replyPings,
+            showsMentionToggle: guildID != nil && message.authorID != model.currentUserID
+        )
     }
 
     private func send(launch: SendLaunch?) {

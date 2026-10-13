@@ -696,6 +696,9 @@ struct GuildDTO: Decodable, Sendable {
     var owner_configured_content_level: Int?
     /// What the server asks of an account before it may talk or apply.
     var verification_level: Int?
+    /// How many may be in a stage with a camera on — see
+    /// `Guild.maxStageVideoUsers`.
+    var max_stage_video_channel_users: Int?
 
     /// Discord moved a guild's own fields into a nested `properties` object on
     /// the READY payload while leaving them at the top level everywhere else.
@@ -740,6 +743,8 @@ struct GuildDTO: Decodable, Sendable {
         var owner_configured_content_level: Int?
         /// Nested here on READY, like every field beside it — §5.9.
         var verification_level: Int?
+        /// Nested here on READY, like every field beside it — §5.9.
+        var max_stage_video_channel_users: Int?
     }
 
     /// Whether this payload said anything about the theme at all.
@@ -785,7 +790,9 @@ struct GuildDTO: Decodable, Sendable {
                 ?? properties?.owner_configured_content_level)
                 .map { $0 == 1 || $0 == 3 } ?? false,
             verificationLevel: (verification_level ?? properties?.verification_level)
-                .map(VerificationLevel.init(rawValue:))
+                .map(VerificationLevel.init(rawValue:)),
+            maxStageVideoUsers: max_stage_video_channel_users
+                ?? properties?.max_stage_video_channel_users
         )
     }
 }
@@ -827,6 +834,41 @@ extension KeyedDecodingContainer {
     func decodeIfPresent(_ type: GuildThemeField.Type, forKey key: Key) throws -> GuildThemeField? {
         guard contains(key) else { return nil }
         return try decode(GuildThemeField.self, forKey: key)
+    }
+}
+
+/// A reply's `referenced_message` as it can arrive: the quoted message, an
+/// explicit `null`, or not at all.
+///
+/// **Discord's documented contract, and its client draws the difference.**
+/// `null` is a message that was deleted; an absent key is a server that did
+/// not try to fetch it, so nobody knows. The synthesised `decodeIfPresent`
+/// folds the two together — the header then called every unfetched quote
+/// deleted — so the overload below keeps them apart, as `GuildThemeField`'s
+/// does.
+enum QuotedField: Decodable, Sendable {
+    case deleted
+    case message(MessageDTO.QuotedDTO)
+
+    init(from decoder: any Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        self = container.decodeNil() ? .deleted : .message(try container.decode(MessageDTO.QuotedDTO.self))
+    }
+
+    var message: MessageDTO.QuotedDTO? {
+        if case .message(let quoted) = self { quoted } else { nil }
+    }
+
+    var isDeleted: Bool {
+        if case .deleted = self { true } else { false }
+    }
+}
+
+extension KeyedDecodingContainer {
+    /// Present-and-null is `.deleted`; absent is nil. See `QuotedField`.
+    func decodeIfPresent(_ type: QuotedField.Type, forKey key: Key) throws -> QuotedField? {
+        guard contains(key) else { return nil }
+        return try decode(QuotedField.self, forKey: key)
     }
 }
 
@@ -1164,15 +1206,16 @@ struct MessageDTO: Decodable, Sendable {
     /// decoded as one — rather than as the three fields the chip draws — because
     /// the caller puts it into `ChannelIndex` so that opening the chip resolves.
     var thread: ChannelDTO?
-    /// The message a reply quotes, sent inline. Absent when the target was
-    /// deleted, which is a real state the header has to draw.
+    /// The message a reply quotes, sent inline — or `null`, which is Discord
+    /// saying it was deleted, or absent, which is Discord not having looked it
+    /// up. See `QuotedField` for why the last two are kept apart.
     ///
     /// **A narrow type, not another `MessageDTO`.** Two reasons and both are
     /// load-bearing: a message may quote a message that quotes a message, which
     /// no struct can hold, and the header needs four fields out of the forty a
     /// full decode would build — embeds, component trees and polls included —
     /// only to throw them away, once per reply on every page of history.
-    var referenced_message: QuotedDTO?
+    var referenced_message: QuotedField?
     /// What a forward carries. An array in the payload and always of one, so it
     /// is read as one.
     var message_snapshots: [SnapshotDTO]?
@@ -1261,7 +1304,7 @@ struct MessageDTO: Decodable, Sendable {
     ///
     /// Harvested beside the page's own authors — see `DiscordREST.messages` —
     /// so the header can name and picture them with no second request.
-    var quotedAuthor: UserDTO? { referenced_message?.author }
+    var quotedAuthor: UserDTO? { referenced_message?.message?.author }
 
     /// **Search only.** Marks the matching message inside a result group. The
     /// groups once carried surrounding context and no longer do, so today it is
@@ -1347,7 +1390,7 @@ struct MessageDTO: Decodable, Sendable {
     /// reader can reach.
     private var replyReference: MessageReference? {
         guard let message_reference, (message_reference.type ?? 0) == 0 else { return nil }
-        let quoted = referenced_message
+        let quoted = referenced_message?.message
         return MessageReference(
             messageID: message_reference.message_id,
             channelID: message_reference.channel_id,
@@ -1360,7 +1403,8 @@ struct MessageDTO: Decodable, Sendable {
             // message it belongs to down the page.
             excerpt: MessageReference.excerpt(of: quoted?.content ?? ""),
             hasAttachment: !(quoted?.attachments?.isEmpty ?? true)
-                || !(quoted?.sticker_items?.isEmpty ?? true)
+                || !(quoted?.sticker_items?.isEmpty ?? true),
+            isDeleted: referenced_message?.isDeleted == true
         )
     }
 
@@ -1478,6 +1522,8 @@ struct ActivityDTO: Decodable, Sendable {
     /// Where the details and state lines link to.
     var details_url: String?
     var state_url: String?
+    /// A streaming activity's stream — Watch Stream's address.
+    var url: String?
 
     /// Any JSON value, accepted and discarded.
     struct Opaque: Decodable, Sendable {
@@ -1540,7 +1586,8 @@ struct ActivityDTO: Decodable, Sendable {
             stateURL: state_url.flatMap(URL.init(string:)),
             syncID: sync_id,
             offersPlay: (flags ?? 0) & Activity.playFlag != 0,
-            offersSync: (flags ?? 0) & Activity.syncFlag != 0
+            offersSync: (flags ?? 0) & Activity.syncFlag != 0,
+            url: url.flatMap(URL.init(string:))
         )
     }
 }
@@ -1648,6 +1695,9 @@ public struct ClientSettings: Sendable {
     /// Split view for threads, and the ignored-profile warning. See
     /// `SyncedPreferences`.
     public var preferences = SyncedPreferences()
+    /// Each person's volume and mute, for their voice and their stream. See
+    /// `AudioContextSettings`.
+    public var audioContext = AudioContextSettings()
 
     public init(
         folders: [GuildFolder],
@@ -1660,7 +1710,8 @@ public struct ClientSettings: Sendable {
         statusRaw: Data? = nil,
         serverThemes: ServerThemePreferences = ServerThemePreferences(),
         inboxCollapse: InboxCollapse = InboxCollapse(),
-        preferences: SyncedPreferences = SyncedPreferences()
+        preferences: SyncedPreferences = SyncedPreferences(),
+        audioContext: AudioContextSettings = AudioContextSettings()
     ) {
         self.folders = folders
         self.guildPositions = guildPositions
@@ -1673,6 +1724,7 @@ public struct ClientSettings: Sendable {
         self.serverThemes = serverThemes
         self.inboxCollapse = inboxCollapse
         self.preferences = preferences
+        self.audioContext = audioContext
     }
 }
 

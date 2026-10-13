@@ -32,7 +32,7 @@ struct MessageRequestBar: View {
         }
         .padding(Spacing.snug)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .glassEffect(.clear, in: .rect(cornerRadius: Radius.glass))
+        .glassEffect(.regular, in: .rect(cornerRadius: Radius.glass))
         .padding(.horizontal, Spacing.margin)
         .padding(.bottom, Spacing.snug)
     }

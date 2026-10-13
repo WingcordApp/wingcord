@@ -188,7 +188,7 @@ struct ExpressionPicker: View {
     private func art(_ art: ExpressionItem.Art) -> some View {
         switch art {
         case .glyph(let glyph):
-            Text(glyph).font(.system(size: 22))
+            Text(glyph).font(.system(.title))
         case .image(let url, let animated):
             // The still, with the film over it — the same stack the grid uses,
             // and the only way a Lottie sticker shows anything here at all,
@@ -298,7 +298,7 @@ struct ExpressionPicker: View {
     /// Discord puts it.
     ///
     /// **Its state is in its material**: accent-tinted glass while every pick
-    /// will be a super reaction, clear while none will, so the picker says
+    /// will be a super reaction, plain while none will, so the picker says
     /// which it is doing without the tooltip. The mark turns a full circle on
     /// each change, as Discord's does, and holds still under Reduce Motion.
     private var superReactionSwitch: some View {
@@ -313,8 +313,8 @@ struct ExpressionPicker: View {
         .buttonStyle(.plain)
         .glassEffect(
             isSuperReaction
-                ? .clear.tint(Palette.accent.opacity(0.7)).interactive()
-                : .clear.interactive(),
+                ? .regular.tint(Palette.accent.opacity(0.7)).interactive()
+                : .regular.interactive(),
             in: .circle
         )
         .animation(motion.glassMorph, value: isSuperReaction)
@@ -337,7 +337,7 @@ struct ExpressionPicker: View {
             }
         } label: {
             Text(settings.skinTone.swatch)
-                .font(.system(size: 15))
+                .font(.system(.title3))
                 .frame(width: Metrics.control, height: Metrics.control)
         }
         .menuStyle(.button)

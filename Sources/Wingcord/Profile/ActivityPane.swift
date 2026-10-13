@@ -54,12 +54,13 @@ struct CurrentActivityCard: View {
 
     @Environment(\.openURL) private var openURL
 
-    /// Discord's popout art, and the badge that rides its corner.
-    private static let artworkSide: CGFloat = 60
-    private static let badgeSide: CGFloat = 22
+    /// Discord's popout art, and the badge that rides its corner — the
+    /// Rich Presence builder's wells too (`EditablePresenceCard`).
+    static let artworkSide: CGFloat = 60
+    static let badgeSide: CGFloat = 22
     /// Concentric with the card around it: its 24-point corner less the
     /// 16-point margin the card sits in. Discord's own is 8.
-    private static let corner = Radius.row
+    static let corner = Radius.row
 
     var body: some View {
         let content = ActivityCardContent(activity)
@@ -85,6 +86,7 @@ struct CurrentActivityCard: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
             buttons
+            watch
             spotifyControls
             store
         }
@@ -259,18 +261,30 @@ struct CurrentActivityCard: View {
                 ForEach(Array(pairs.enumerated()), id: \.offset) { _, pair in
                     Button { openURL(pair.1) } label: {
                         Text(pair.0)
-                            .font(.system(.subheadline, weight: .medium))
-                            .foregroundStyle(InkColor.primary)
                             .lineLimit(1)
                             .frame(maxWidth: .infinity)
-                            .padding(.vertical, 7)
-                            .contentShape(.capsule)
                     }
-                    .buttonStyle(.plain)
-                    .interactiveChromeOverMedia()
+                    .buttonStyle(.bordered)
+                    .controlSize(.large)
                     .accessibilityHint(Text("Opens \(pair.1.host ?? "a website") in your browser"))
                 }
             }
+        }
+    }
+
+    /// Discord's Watch (`PRESS_WATCH_BUTTON`, module 908289's link): the
+    /// Twitch or YouTube stream a Streaming activity is, in the browser.
+    @ViewBuilder
+    private var watch: some View {
+        if let stream = activity.watchURL {
+            Button { openURL(stream) } label: {
+                Text("Watch")
+                    .lineLimit(1)
+                    .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.large)
+            .accessibilityHint(Text("Opens \(stream.host ?? "the stream") in your browser"))
         }
     }
 
@@ -300,15 +314,11 @@ struct CurrentActivityCard: View {
     private func spotifyControl(_ title: String, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Text(title)
-                .font(.system(.subheadline, weight: .medium))
-                .foregroundStyle(InkColor.primary)
                 .lineLimit(1)
                 .frame(maxWidth: .infinity)
-                .padding(.vertical, 7)
-                .contentShape(.capsule)
         }
-        .buttonStyle(.plain)
-        .interactiveChromeOverMedia()
+        .buttonStyle(.bordered)
+        .controlSize(.large)
     }
 
     /// The Spotify app, where one is installed to take `spotify:` addresses,
@@ -340,14 +350,17 @@ struct CurrentActivityCard: View {
             Button { openURL(offer.url) } label: {
                 storeLabel(offer.store, text: offer.store.callToAction)
             }
-            .buttonStyle(.plain)
-            .interactiveChromeOverMedia()
+            .buttonStyle(.bordered)
+            .controlSize(.large)
             .help("Open \(offer.store.title) in your browser")
             .accessibilityHint(Text("Opens \(offer.store.title) in your browser"))
         } else if storeOffers.count > 1 {
-            // The frame, the hit region and the material go on the MENU, after
-            // the style — a borderless menu lays its own label out. §1, "A
-            // borderless menu ignores a frame set on its label".
+            // **A bordered pull-down, the width of the card.** It was a
+            // borderless menu wearing a glass capsule: a borderless menu lays
+            // its own label out and drops the label's padding (§1), so the
+            // capsule shrank to one line of text and "Play" hung out of its
+            // foot (reference 45). The system's bordered menu button keeps its
+            // own height, and the frame goes on the menu, after the style.
             Menu {
                 ForEach(storeOffers) { offer in
                     Button(offer.store.title) { openURL(offer.url) }
@@ -355,11 +368,11 @@ struct CurrentActivityCard: View {
             } label: {
                 storeLabel(nil, text: "Play")
             }
-            .menuStyle(.borderlessButton)
+            .menuStyle(.button)
+            .buttonStyle(.bordered)
+            .controlSize(.large)
             .menuIndicator(.hidden)
             .frame(maxWidth: .infinity)
-            .contentShape(.capsule)
-            .interactiveChromeOverMedia()
             .accessibilityLabel(Text("Play"))
             .accessibilityHint(Text("Choose a store to open in your browser"))
         }
@@ -373,13 +386,9 @@ struct CurrentActivityCard: View {
                 ConnectionMark(service: store.brandService, side: 16)
             }
             Text(text)
-                .font(.system(.subheadline, weight: .medium))
-                .foregroundStyle(InkColor.primary)
                 .lineLimit(1)
         }
         .frame(maxWidth: .infinity)
-        .padding(.vertical, 7)
-        .contentShape(.capsule)
     }
 
     private var plate: some View {

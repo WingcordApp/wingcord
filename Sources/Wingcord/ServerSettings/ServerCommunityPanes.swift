@@ -114,7 +114,7 @@ struct CommunityPane: View {
                             disable(settings)
                         }
                     }
-                    .buttonStyle(.glass)
+                    .buttonStyle(.bordered)
                     .controlSize(.small)
                     .tint(Palette.destructive)
                     .disabled(!isAdmin)
@@ -303,7 +303,7 @@ struct TemplatePane: View {
                     HStack {
                         Spacer()
                         Button("Generate Template") { commit(nil) }
-                            .buttonStyle(.glassProminent)
+                            .buttonStyle(.borderedProminent)
                             .disabled(name.trimmingCharacters(in: .whitespaces).isEmpty)
                     }
                     .padding(.top, Spacing.margin)
@@ -364,7 +364,7 @@ struct TemplatePane: View {
                             NSPasteboard.general.setString(url.absoluteString, forType: .string)
                             copied = true
                         }
-                        .buttonStyle(.glass)
+                        .buttonStyle(.bordered)
                         .controlSize(.small)
                     }
                 }
@@ -555,7 +555,7 @@ struct EnableCommunityCard: View {
                         )
                     }
                 }
-                .buttonStyle(.glassProminent)
+                .buttonStyle(.borderedProminent)
                 .disabled(!hasAgreed || !requiresVerifiedEmail || !scansAllMedia)
             }
             .padding(.top, Spacing.margin)

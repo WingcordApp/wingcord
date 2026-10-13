@@ -8,6 +8,10 @@ import WingcordCore
 /// list, the direct-message list, the now bar — so a game reads the same in all
 /// of them.
 ///
+/// **Every one is green.** Discord's activity icon (module `864436`) colours
+/// the glyph with the online status colour whatever it stands for — a game, a
+/// song, a share or a call — and the line's words stay muted beside it.
+///
 /// `nonisolated` because the member list's painter runs off the main actor.
 nonisolated extension ActivityStatusLine.Glyph {
     var symbolName: String {
@@ -21,8 +25,4 @@ nonisolated extension ActivityStatusLine.Glyph {
         }
     }
 
-    /// Whether Discord draws this glyph in the online green rather than in the
-    /// line's own ink. Only a call is: it is the one lead that says somebody can
-    /// be joined right now.
-    var isLive: Bool { self == .voice }
 }

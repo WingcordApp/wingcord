@@ -4,10 +4,9 @@ import SwiftUI
 //
 // The one connection with no browser redirect: Discord proves a personal
 // domain in-app, by asking the reader to publish a token as a DNS TXT record
-// or a file at `/.well-known/discord`, then checking for it. Built the same
-// way the other two raised sheets in this app are — `GameServerConnectSheet`,
-// `ServerRulesSheet` — a floating card supplying its own material, not this
-// window's glass: it sits above the settings pane rather than inside it.
+// or a file at `/.well-known/discord`, then checking for it. A plain system
+// sheet, like every other in the app: the system's ground, Cancel on Escape
+// and the step's action on Return.
 
 struct ConnectDomainSheet: View {
     var sheet: DomainConnectionSheet
@@ -25,13 +24,6 @@ struct ConnectDomainSheet: View {
             footer
         }
         .frame(width: Self.width)
-        .background(Palette.surface)
-        .clipShape(.rect(cornerRadius: Radius.card, style: .continuous))
-        .overlay {
-            RoundedRectangle(cornerRadius: Radius.card, style: .continuous)
-                .strokeBorder(Ink.quaternary, lineWidth: 1)
-        }
-        .presentationBackground(.clear)
         .animation(motion.standard, value: sheet.phase)
         .task { isFocused = true }
     }
@@ -112,6 +104,7 @@ struct ConnectDomainSheet: View {
             SurfaceQuietButton(title: currentProof == nil ? "Cancel" : "Close", systemImage: nil) {
                 model.sessionController.dismissDomainConnectionSheet()
             }
+            .keyboardShortcut(.cancelAction)
             Spacer(minLength: 0)
             if isVerifying || isSubmitting {
                 ProgressView().controlSize(.small)
@@ -119,13 +112,13 @@ struct ConnectDomainSheet: View {
             if currentProof == nil {
                 SurfaceFilledButton(title: "Continue", systemImage: nil, action: submit)
                     .disabled(domainText.trimmingCharacters(in: .whitespaces).isEmpty || isSubmitting)
-                    .opacity(isSubmitting ? 0.45 : 1)
+                    .keyboardShortcut(.defaultAction)
             } else {
                 SurfaceFilledButton(title: "Verify", systemImage: nil) {
                     model.sessionController.retryDomainVerification()
                 }
                 .disabled(isVerifying)
-                .opacity(isVerifying ? 0.45 : 1)
+                .keyboardShortcut(.defaultAction)
             }
         }
         .padding(Spacing.group)

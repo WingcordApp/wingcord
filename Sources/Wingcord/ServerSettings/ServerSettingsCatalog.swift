@@ -262,8 +262,8 @@ enum ServerSettingsSection: String, CaseIterable, Identifiable, Hashable, Codabl
         var sections: [ServerSettingsSection]
     }
 
-    /// The groups, in Discord's order. Its headers are sentence case in the
-    /// strings and drawn in capitals.
+    /// The groups, in Discord's order and with its headers' words — drawn as
+    /// the system draws a sidebar section's header, not in Discord's capitals.
     static let groups: [Group] = [
         Group(header: nil, sections: [.profile, .tag, .serverTheme, .engagement, .boostPerks]),
         Group(header: "Expression", sections: [.emoji, .stickers, .soundboard]),

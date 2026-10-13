@@ -4,9 +4,10 @@ import WingcordCore
 
 nonisolated extension TimelineRowPainter {
 
-    /// Discord's affirmative green (`GREEN_430`) and its pressed shade.
-    private static let joinFill = CGColor(srgbRed: 0x24 / 255, green: 0x80 / 255, blue: 0x45 / 255, alpha: 1)
-    private static let joinFillHovered = CGColor(
+    /// Discord's affirmative green (`GREEN_430`) and its pressed shade — the
+    /// invite card's Join, and the event card's (`EmbedButtonStyle`).
+    static let joinFill = CGColor(srgbRed: 0x24 / 255, green: 0x80 / 255, blue: 0x45 / 255, alpha: 1)
+    static let joinFillHovered = CGColor(
         srgbRed: 0x1A / 255, green: 0x63 / 255, blue: 0x34 / 255, alpha: 1
     )
     /// `--text-status-online` and `--text-status-offline`.
@@ -49,15 +50,29 @@ nonisolated extension TimelineRowPainter {
             context.saveGState()
             context.addPath(outline)
             context.clip()
-            drawProfile(profile, offset: offset, context: context, ink: ink, images: images, scale: scale)
+            let fold: CGRect? = if case .collapsed(let fade) = slot.fold {
+                fade.offsetBy(dx: offset.x, dy: offset.y)
+            } else {
+                nil
+            }
+            // **A folded card's content is faded OUT, not painted over.** The
+            // fade used to run to the card's own fill — which is translucent,
+            // so a trait chip and "Invited by" ghosted through under the button
+            // (Alex's images 42–43). In a layer of its own, the content is
+            // erased along the fade and gone below it, and what shows instead
+            // is whatever the card is drawn on: §4.5's rule for hiding part of
+            // a picture.
+            if fold != nil { context.beginTransparencyLayer(auxiliaryInfo: nil) }
+            drawProfile(profile, offset: offset, context: context, ink: ink, hovered: hovered, images: images, scale: scale)
             if let mark = slot.mark {
                 GuildMarkArt.draw(
                     mark, in: slot.markRect.offsetBy(dx: offset.x, dy: offset.y),
                     context: context, isLight: ink.isLight
                 )
             }
-            if case .collapsed(let fade) = slot.fold {
-                drawFade(fade.offsetBy(dx: offset.x, dy: offset.y), to: ink.cardFill, context: context)
+            if let fold {
+                eraseBelow(fold, to: frame.maxY, context: context)
+                context.endTransparencyLayer()
             }
             context.restoreGState()
             // Discord's hairline around the profile card (`--border-subtle`).
@@ -113,6 +128,7 @@ nonisolated extension TimelineRowPainter {
         offset: CGPoint,
         context: CGContext,
         ink: ThemeInk,
+        hovered: CGPoint?,
         images: ImageStore,
         scale: CGFloat
     ) {
@@ -173,7 +189,11 @@ nonisolated extension TimelineRowPainter {
             context.addPath(CGPath(
                 roundedRect: chip, cornerWidth: chip.height / 2, cornerHeight: chip.height / 2, transform: nil
             ))
-            context.setStrokeColor(ink.hoverFill)
+            // `--border-subtle`, and the "+ N more" chip's `:hover` border —
+            // `--border-strong`, for which the selection's ink is the nearest
+            // this palette has — while the pointer is on it.
+            let isLit = hovered == trait.rect.origin && profile.moreTraits?.rect.origin == trait.rect.origin
+            context.setStrokeColor(isLit ? ink.selectionFill : ink.hoverFill)
             context.setLineWidth(1)
             context.strokePath()
             if let glyph = trait.glyph {
@@ -200,16 +220,20 @@ nonisolated extension TimelineRowPainter {
     }
 
     /// The fade a folded card's button floats over — Discord's
-    /// `linear-gradient(180deg, transparent, var(--background-surface-high))`.
-    private static func drawFade(_ rect: CGRect, to ground: CGColor, context: CGContext) {
-        guard let clear = ground.copy(alpha: 0),
-              let gradient = CGGradient(
-                  colorsSpace: ground.colorSpace, colors: [clear, ground] as CFArray, locations: [0, 1]
-              )
-        else { return }
+    /// `linear-gradient(180deg, transparent, var(--background-surface-high))`
+    /// as an erasure: the content goes from whole at the top of `rect` to gone
+    /// at its foot, and stays gone down to `bottom`.
+    private static func eraseBelow(_ rect: CGRect, to bottom: CGFloat, context: CGContext) {
+        let space = CGColorSpaceCreateDeviceGray()
+        guard let gradient = CGGradient(
+            colorsSpace: space,
+            colors: [CGColor(gray: 0, alpha: 0), CGColor(gray: 0, alpha: 1)] as CFArray,
+            locations: [0, 1]
+        ) else { return }
         context.saveGState()
+        context.setBlendMode(.destinationOut)
         context.clip(to: CGRect(x: rect.minX, y: rect.minY, width: rect.width,
-                                height: rect.height + InviteCardLayoutEngine.buttonHeight + 24))
+                                height: max(rect.height, bottom - rect.minY)))
         context.drawLinearGradient(
             gradient,
             start: CGPoint(x: rect.midX, y: rect.minY),

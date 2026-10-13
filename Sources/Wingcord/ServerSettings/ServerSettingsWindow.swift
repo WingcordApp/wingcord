@@ -4,26 +4,12 @@ import WingcordCore
 
 // MARK: - Opening the window
 //
-// **The second window in Wingcord that configures an `NSWindow`, and it does so
-// by reusing the first one's configuration rather than writing a second copy.**
-//
-// `INVARIANTS.md` §1 says the settings window is "the ONE exception, and it is
-// scoped", and that "a second window wanting the same treatment is a new
-// decision, not a precedent". This is that decision, taken deliberately:
-//
-//   - Every argument §1 makes for the settings window holds here word for word.
-//     Nothing on these pages is read for minutes at a time over a photograph,
-//     every surface is one this module owns, and the source list being the bare
-//     material *is* the design.
-//   - The alternative was twenty pages in the workspace's detail column, where
-//     they would sit on the opaque reading surface and need a second-level index
-//     to be reachable at all — a settings source list wearing a channel
-//     sidebar's clothes.
-//   - It reuses `settingsWindowChrome()`, `SettingsMetrics` and the row
-//     vocabulary rather than restating them. Two windows built from one set of
-//     measurements cannot drift; two sets of measurements will.
-//
-// The rules stay exactly as written for `Window("Wingcord")`.
+// A standard window, built exactly as the app's Settings is (DESIGN-NOTES
+// decision 16): the system's split view, a sidebar list with its search field,
+// and the page beside it under the window's own toolbar and title. Its own
+// window rather than pages in the workspace's detail column, which would need a
+// second-level index to be reachable at all — a settings list wearing a channel
+// sidebar's clothes.
 
 /// Which server's settings a window is showing.
 ///
@@ -106,9 +92,6 @@ struct ServerSettingsView: View {
     @State private var isDeletingServer = false
     @State private var query = ""
     @Environment(\.dismissWindow) private var dismissWindow
-    @State private var sidebar = SidebarWidth()
-    @State private var dragOrigin: CGFloat?
-    @Environment(\.motion) private var motion
 
     var body: some View {
         Group {
@@ -121,13 +104,10 @@ struct ServerSettingsView: View {
                 Color.clear
             }
         }
-        .ignoresSafeArea(.container, edges: .top)
         .frame(
             minWidth: SettingsMetrics.minWidth,
             minHeight: SettingsMetrics.minHeight
         )
-        .settingsWindowChrome()
-        .toolbar(removing: .title)
         .task(id: target.guildID) { build() }
         // The page a menu item asked for. Applied on every change of the scene
         // value, so a second "Invite People" on an already-open window moves it
@@ -146,7 +126,7 @@ struct ServerSettingsView: View {
     private func columns(_ store: ServerSettingsStore) -> some View {
         let guildName = model.guilds[target.guildID]?.name ?? "Server"
         let channel = store.openChannelID.flatMap { model.channelIndex[$0] }
-        return HStack(spacing: 0) {
+        return NavigationSplitView {
             Group {
                 if let channel {
                     ChannelSettingsSidebar(
@@ -169,18 +149,21 @@ struct ServerSettingsView: View {
                     )
                 }
             }
-            .frame(width: sidebar.current)
-            .opacity(sidebar.current < 1 ? 0 : 1)
-
+            .navigationSplitViewColumnWidth(
+                min: SettingsMetrics.sidebarMinWidth,
+                ideal: SettingsMetrics.sidebarWidth,
+                max: SettingsMetrics.sidebarMaxWidth
+            )
+        } detail: {
             ServerSettingsDetailPane(
                 store: store,
                 model: model,
                 page: channel.map { .channel($0.id, channelTab) } ?? .server(selection),
-                isSidebarCollapsed: sidebar.isCollapsed,
-                toggleSidebar: { withAnimation(motion.reposition) { sidebar.toggle() } }
+                // Which server, under the page's name — a window that can be
+                // open twice for two servers has to say which one this is.
+                subtitle: channel.map { model.displayName(of: $0) } ?? guildName
             )
         }
-        .overlay(alignment: .leading) { divider }
         // A channel opened onto starts on its first page.
         .onChange(of: store.openChannelID) { channelTab = .overview }
         .sheet(isPresented: $isDeletingServer) {
@@ -233,39 +216,6 @@ struct ServerSettingsView: View {
         // that disappears underneath itself.
         let pages = ServerSettingsSection.reachable(with: permissions).filter { !$0.isAction }
         if !pages.contains(selection) { selection = pages.first ?? .profile }
-    }
-
-    /// The grab handle, identical in behaviour to the settings window's — same
-    /// `SidebarWidth` value type, same projected-rest snap, same pointer style.
-    private var divider: some View {
-        Color.clear
-            .frame(width: 8)
-            .contentShape(.rect)
-            .offset(x: max(0, sidebar.current - 4))
-            .pointerStyle(.columnResize)
-            .gesture(
-                DragGesture(minimumDistance: 1)
-                    .onChanged { value in
-                        let origin = dragOrigin ?? sidebar.current
-                        if dragOrigin == nil { dragOrigin = origin }
-                        sidebar.drag(to: origin + value.translation.width)
-                    }
-                    .onEnded { value in
-                        let origin = dragOrigin ?? sidebar.current
-                        dragOrigin = nil
-                        let destination = sidebar.release(
-                            at: origin + value.translation.width,
-                            velocity: value.velocity.width
-                        )
-                        withAnimation(motion.handoff(
-                            velocity: value.velocity.width,
-                            over: destination - sidebar.current
-                        )) {
-                            sidebar.settle(to: destination)
-                        }
-                    }
-            )
-            .accessibilityHidden(true)
     }
 }
 

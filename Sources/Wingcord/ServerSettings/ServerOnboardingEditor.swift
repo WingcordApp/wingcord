@@ -122,7 +122,7 @@ struct OnboardingQuestionsEditor: View {
                 Label("Add a Question", systemImage: "plus")
                     .font(SettingsType.rowLabel)
             }
-            .buttonStyle(.glass)
+            .buttonStyle(.bordered)
             .controlSize(.small)
         }
     }

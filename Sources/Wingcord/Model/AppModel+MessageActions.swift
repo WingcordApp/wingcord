@@ -140,8 +140,12 @@ extension AppModel {
     /// stacking two banners the reader has to read to know what Enter will do.
     func beginReply(to messageID: MessageID, in channelID: ChannelID) {
         guard actions(for: messageID, in: channelID).contains(.reply) else { return }
+        // ⇧ held as Reply is pressed starts it quiet, as in Discord.
+        let quiet = NSApp.currentEvent?.modifierFlags.contains(.shift) == true
+        let pings = !quiet && message(messageID, in: channelID)?.authorID != currentUserID
         mutateBox(channelID) {
             $0.replyingTo = messageID
+            $0.replyPings = pings
             $0.editing = nil
         }
     }
@@ -149,6 +153,19 @@ extension AppModel {
     func cancelReply(in channelID: ChannelID) {
         guard messageBoxes[channelID]?.replyingTo != nil else { return }
         mutateBox(channelID) { $0.replyingTo = nil }
+    }
+
+    /// The reply bar's @ ON / OFF.
+    func toggleReplyPing(in channelID: ChannelID) {
+        guard messageBoxes[channelID]?.replyingTo != nil else { return }
+        mutateBox(channelID) { $0.replyPings.toggle() }
+    }
+
+    /// The reply bar's label: the message being answered, with the same jump a
+    /// quote's header takes.
+    func jumpToReply(in channelID: ChannelID) {
+        guard let target = messageBoxes[channelID]?.replyingTo else { return }
+        sessionController.jumpToMessage(target, in: channelID)
     }
 
     // MARK: Editing
@@ -175,13 +192,23 @@ extension AppModel {
     /// An empty body is not an edit — Discord refuses it, and the reader almost
     /// certainly meant Delete. Unchanged text is not an edit either: sending it
     /// would stamp "(edited)" on a message nobody changed.
-    func commitEdit(in channelID: ChannelID) {
+    func commitEdit(in channelID: ChannelID, checksEmbeds: Bool = true) {
         guard let edit = messageBoxes[channelID]?.editing else { return }
-        mutateBox(channelID) { $0.editing = nil }
         let trimmed = edit.text.trimmingCharacters(in: .whitespacesAndNewlines)
+        let rewrite = applyingFakeNitro(trimmed, stickerIDs: [], in: channelID)
+        // The plugin asks on an edit too — with the edit still open behind it.
+        if checksEmbeds, !trimmed.isEmpty, edit.hasChanges,
+           needsFakeNitroEmbedPrompt(bypassed: rewrite.bypassed, in: channelID)
+        {
+            fakeNitroEmbedPrompt = FakeNitroEmbedPrompt { [weak self] in
+                self?.commitEdit(in: channelID, checksEmbeds: false)
+            }
+            return
+        }
+        mutateBox(channelID) { $0.editing = nil }
         guard !trimmed.isEmpty, edit.hasChanges else { return }
         guard actions(for: edit.messageID, in: channelID).contains(.edit) else { return }
-        sessionController.edit(edit.messageID, in: channelID, content: trimmed)
+        sessionController.edit(edit.messageID, in: channelID, content: rewrite.content)
     }
 
     // MARK: Deleting
@@ -363,12 +390,28 @@ extension AppModel {
 
     // MARK: Menus
 
-    func openMessageMenu(for messageID: MessageID, in channelID: ChannelID, anchor: CGRect) {
+    func openMessageMenu(
+        for messageID: MessageID,
+        in channelID: ChannelID,
+        anchor: CGRect,
+        selectedText: String? = nil
+    ) {
         guard !actions(for: messageID, in: channelID).isEmpty else { return }
         dismissMessageSurfaces()
         messageMenu = MessageMenuRequest(
-            messageID: messageID, channelID: channelID, anchor: anchor
+            messageID: messageID,
+            channelID: channelID,
+            anchor: anchor,
+            selectedText: selectedText?.isEmpty == false ? selectedText : nil
         )
+    }
+
+    /// The selected words in a Google search, in the browser — Discord's.
+    func searchWithGoogle(_ text: String) {
+        var components = URLComponents(string: "https://www.google.com/search")
+        components?.queryItems = [URLQueryItem(name: "q", value: text)]
+        guard let url = components?.url else { return }
+        NSWorkspace.shared.open(url)
     }
 
     /// Closes every surface a message can raise.

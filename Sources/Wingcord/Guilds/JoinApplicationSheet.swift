@@ -92,7 +92,7 @@ struct JoinApplicationSheet: View {
             GuildProfileCard(profile: card, openGuild: { _ in }, showsEntry: false)
                 .background(Palette.surfaceRaised)
                 .clipShape(.rect(cornerRadius: Radius.card, style: .continuous))
-                .specularEdge(in: RoundedRectangle(cornerRadius: Radius.card, style: .continuous))
+                .overlay { RoundedRectangle(cornerRadius: Radius.card).strokeBorder(Palette.edge) }
         }
         .padding(.vertical, Spacing.base)
         .padding(.horizontal, Spacing.margin)
@@ -401,7 +401,7 @@ private extension View {
         padding(.horizontal, Spacing.snug)
             .padding(.vertical, Spacing.base)
             .background(Palette.surfaceRaised, in: .rect(cornerRadius: Radius.chip))
-            .specularEdge(in: RoundedRectangle(cornerRadius: Radius.chip))
+            .overlay { RoundedRectangle(cornerRadius: Radius.chip).strokeBorder(Palette.edge) }
     }
 }
 
@@ -486,7 +486,7 @@ private struct VerificationRequirementRow: View {
                     if isSending { ProgressView().controlSize(.small) }
                 }
             }
-            .buttonStyle(.glassProminent)
+            .buttonStyle(.borderedProminent)
             .controlSize(.small)
             .disabled(isSending)
         }

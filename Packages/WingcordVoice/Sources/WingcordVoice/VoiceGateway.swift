@@ -54,10 +54,18 @@ public actor VoiceGateway {
         /// Somebody's SSRC now belongs to somebody. The only way to know whose
         /// voice a packet is.
         case speaking(userID: UInt64, ssrc: UInt32, flags: Int)
-        /// Their video and screen-share SSRCs, from the server's own op 12.
-        case videoStreams(userID: UInt64, audioSSRC: UInt32, videoSSRC: UInt32)
+        /// Their video SSRCs, from the server's own op 12, and the one their
+        /// retransmissions arrive on.
+        case videoStreams(
+            userID: UInt64, audioSSRC: UInt32, videoSSRC: UInt32, retransmissionSSRC: UInt32
+        )
+        /// Opcode 15: how much of our picture the server's subscribers want.
+        case mediaSinkWants(MediaSinkWants)
         case clientsConnected([UInt64])
         case clientDisconnected(userID: UInt64)
+        /// Opcode 20: which kind of client somebody is on — Discord's
+        /// `RTC_CONNECTION_PLATFORM`, drawn as the mark beside their name.
+        case clientPlatform(userID: UInt64, platform: Int)
         case resumed
         /// - Parameter code: the websocket close code. §"Never log a close code
         ///   without its reason" is about the reader; a caller that recovers
@@ -398,6 +406,12 @@ public actor VoiceGateway {
             else { return }
             continuation?.yield(.clientsConnected([userID]))
 
+        case 20:
+            guard let payload = decode(ClientPlatformPayload.self, from: data),
+                  let userID = UInt64(payload.d.user_id), let platform = payload.d.platform
+            else { return }
+            continuation?.yield(.clientPlatform(userID: userID, platform: platform))
+
         case 12:
             // **The frame as it arrived, every time.** This is the only place
             // the server says which SSRC somebody's picture will be on, and a
@@ -414,8 +428,19 @@ public actor VoiceGateway {
             continuation?.yield(.videoStreams(
                 userID: userID,
                 audioSSRC: payload.d.audio_ssrc ?? 0,
-                videoSSRC: payload.d.video_ssrc ?? 0
+                videoSSRC: payload.d.video_ssrc ?? 0,
+                retransmissionSSRC: payload.d.rtx_ssrc ?? 0
             ))
+
+        case 15:
+            // **The server telling a publisher what its subscribers want.** A
+            // want per SSRC, and the pixels its viewers draw it at — measured
+            // as `{"pixelCounts":{"91568":0},"any":100}` on a share and
+            // `{"any":0,"95747":100}` on a call. It changes over the life of a
+            // session, and a client that never reads it encodes for nobody in
+            // particular. See `VideoQualityPolicy`.
+            guard let payload = decode(SinkWantsPayload.self, from: data) else { return }
+            continuation?.yield(.mediaSinkWants(payload.d))
 
         case 13:
             guard let payload = decode(ClientDisconnectPayload.self, from: data),
@@ -444,14 +469,8 @@ public actor VoiceGateway {
             break
         }
 
-        // **An opcode nobody acts on is a fact nobody has read.**
-        //
-        // Four of these arrive on every session — 15, 18, 20 and whatever the
-        // server adds next — and the trace has never said more than their
-        // number. Opcode 15 is the one that matters most: it is the server
-        // telling a *publisher* what its subscribers want, and a client that
-        // never reads it cannot know it is being asked for something it is not
-        // sending. A few of each, once, because they repeat.
+        // **An opcode nobody acts on is a fact nobody has read.** A few of
+        // each, printed whole, once, because they repeat.
         noteUnhandled(frame.op, data)
     }
 
@@ -483,7 +502,7 @@ public actor VoiceGateway {
         } catch {
             // A DAVE message this client cannot parse is not something to
             // struggle on with: the group would silently diverge from
-            // everybody else's. `VoiceEngine` reports it and asks to be re-added.
+            // everybody else's. `MediaSession` reports it and asks to be re-added.
             VoiceTrace.fault(
                 "dave \(DAVEOpcode.name(header.opcode))(\(header.opcode)) would not parse: \(error)"
             )
@@ -744,6 +763,16 @@ public actor VoiceGateway {
         send(Speaking(d: .init(speaking: flags.rawValue, ssrc: ssrc)))
     }
 
+    /// Opcode 15: what this end wants sent to it — a video turned off, a
+    /// person muted. See `InboundStreams.sinkWants`.
+    func sendMediaSinkWants(_ wants: MediaSinkWants) {
+        struct Wants: Encodable {
+            var op = 15
+            var d: MediaSinkWants
+        }
+        send(Wants(d: wants))
+    }
+
     // MARK: DAVE
 
     /// Opcode 26. Sent as soon as the session description names a non-zero
@@ -812,14 +841,15 @@ public actor VoiceGateway {
         // payload with it.
         //
         // **Never for the rest**: an IDENTIFY carries the voice token, and a
-        // log line is a file, a screen share and a sysdiagnose. Opcodes 5 and
-        // 12 carry SSRCs and a resolution and nothing else, and they are the
-        // whole of what this client tells a server about the media it is about
-        // to send — the difference between a stream that is forwarded and one
-        // that is accepted and dropped is somewhere in those two payloads, and
-        // until now the trace said only how many bytes long they were.
+        // log line is a file, a screen share and a sysdiagnose. Opcodes 5, 12
+        // and 15 carry SSRCs, a resolution and wants and nothing else, and
+        // they are the whole of what this client tells a server about the
+        // media it sends and the media it wants — the difference between a
+        // stream that is forwarded and one that is accepted and dropped is
+        // somewhere in those payloads, and until now the trace said only how
+        // many bytes long they were.
         let opcode = Self.opcode(of: data)
-        if opcode == "5" || opcode == "12" {
+        if opcode == "5" || opcode == "12" || opcode == "15" {
             VoiceTrace.write("\(role) send op=\(opcode) \(text)")
         } else {
             VoiceTrace.write("\(role) send op=\(opcode) \(data.count) bytes")
@@ -838,18 +868,9 @@ public actor VoiceGateway {
 
     private func noteUnhandled(_ opcode: Int, _ data: Data) {
         guard VoiceTrace.isOn, Self.handledOpcodes.contains(opcode) == false else { return }
-        // **Opcode 15 is never capped.** It is the server saying, by SSRC, how
-        // many pixels its subscribers want from us — measured as
-        // `{"pixelCounts":{"91568":0},"any":100}` on a share nobody could see,
-        // where 91568 was our own video SSRC. It is a handful of messages per
-        // call and it changes over the life of one, and *when* it changes is
-        // the reading: the call's went 100 → 0 → 100 while the stream's was
-        // sent once and never revised, not even when a viewer arrived.
-        if opcode != 15 {
-            let seen = unhandledSeen[opcode, default: 0]
-            guard seen < 3 else { return }
-            unhandledSeen[opcode] = seen + 1
-        }
+        let seen = unhandledSeen[opcode, default: 0]
+        guard seen < 3 else { return }
+        unhandledSeen[opcode] = seen + 1
         VoiceTrace.write(
             "\(role) op=\(opcode) unhandled: "
             + (String(data: data, encoding: .utf8) ?? "<not text>")
@@ -860,7 +881,7 @@ public actor VoiceGateway {
     /// because a case that is added without adding it here starts printing
     /// itself, which is the harmless direction.
     private static let handledOpcodes: Set<Int> = [
-        2, 4, 5, 6, 8, 9, 11, 12, 13, 18, 21, 22, 24,
+        2, 4, 5, 6, 8, 9, 11, 12, 13, 15, 18, 20, 21, 22, 24,
         25, 26, 27, 28, 29, 30, 31,
     ]
 
@@ -982,6 +1003,9 @@ struct SpeakingFlags: OptionSet, Sendable {
     init(rawValue: Int) { self.rawValue = rawValue }
 
     static let microphone = SpeakingFlags(rawValue: 1 << 0)
+    /// "Transmission of context audio for video, no speaking indicator" —
+    /// Discord's documented flag for a stream's own sound.
+    static let soundshare = SpeakingFlags(rawValue: 1 << 1)
     static let priority = SpeakingFlags(rawValue: 1 << 2)
     static let none = SpeakingFlags([])
 }
@@ -1068,6 +1092,16 @@ private struct ClientDisconnectPayload: Decodable {
 }
 
 /// Opcode 18: one client connecting. The bulk form is `ClientsConnectPayload`.
+/// Opcode 20: `{user_id, platform}` — DESKTOP 0, MOBILE 1, XBOX 2,
+/// PLAYSTATION 3, QUEST 4 (Discord's module 806931).
+private struct ClientPlatformPayload: Decodable {
+    var d: Body
+    struct Body: Decodable {
+        var user_id: String
+        var platform: Int?
+    }
+}
+
 private struct ClientConnectPayload: Decodable {
     var d: Body
     struct Body: Decodable {
@@ -1084,5 +1118,10 @@ private struct VideoPayload: Decodable {
         var user_id: String?
         var audio_ssrc: UInt32?
         var video_ssrc: UInt32?
+        var rtx_ssrc: UInt32?
     }
+}
+
+private struct SinkWantsPayload: Decodable {
+    var d: MediaSinkWants
 }

@@ -2,6 +2,18 @@ import SwiftUI
 
 // MARK: - The material vocabulary
 //
+// **Where glass goes is the HIG's call** (DESIGN-NOTES decisions 11–12,
+// INVARIANTS §4): the functional layer — controls and navigation — and never
+// the content layer. `.regular` by default; `.clear` only for a control over
+// media (a photo, a video frame, a banner, a game). Content takes a solid
+// ground or a standard material. Alex's own choices sit on top: the now bar is
+// floating `.clear` glass, the rail's hover pill `.regular`.
+//
+// **A button that sits IN content is not one of these**: a settings pane, a
+// sheet, a card or a page takes the system's `.bordered` / `.borderedProminent`
+// (INVARIANTS §4). These are for controls that float — over the transcript or
+// over media.
+//
 // Every glass surface in Wingcord goes through one of the modifiers below, and
 // each names the exact API it expands to. Nothing here invents a material: there
 // are no semi-transparent images, no hand-rolled `NSVisualEffectView`s, no
@@ -36,17 +48,20 @@ extension View {
 
     // MARK: Chrome over ordinary content
 
-    /// Floating chrome that is not itself clickable — a page-title capsule, a
-    /// date separator, a status pill, a category header.
+    /// Non-interactive chrome in the functional layer — a bar's body.
+    ///
+    /// **Not for content.** A date separator, a status pill or a category
+    /// header is content and takes no glass at all.
     ///
     /// `.glassEffect(.regular, in: shape)`
     func floatingChrome(in shape: some Shape = .capsule) -> some View {
         glassEffect(.regular, in: shape)
     }
 
-    /// Anything clickable. `.interactive()` is what produces the native
-    /// pointer-down highlight and lensing, which is also how this app satisfies
-    /// "respond on press, never on release" for free.
+    /// A floating control — anything clickable in the functional layer.
+    /// `.interactive()` is what produces the native pointer-down highlight and
+    /// lensing, which is also how this app satisfies "respond on press, never
+    /// on release" for free.
     ///
     /// **Not for a card inside a scrolling list.** Interactive glass warps and
     /// highlights toward the cursor; on a row in a scroll view the cursor stands
@@ -61,14 +76,10 @@ extension View {
 
     // MARK: Chrome over media
     //
-    // `.clear` wherever there is media or a lit ground behind the surface — over
-    // a server banner, over a photo, over a video frame. This is the app's
-    // identity: you see through the chrome and watch content lens as it passes
-    // underneath.
-    //
-    // Over the near-black reading surface this choice is wrong and the control
-    // vanishes; over artwork it is the whole reason the control reads as
-    // floating rather than printed on the picture.
+    // `.clear` only over media — a server banner, a photo, a video frame, a
+    // game: the HIG's one case for the clear variant, where the picture must
+    // stay prominent. Over the reading surface it is wrong and the control
+    // vanishes; there, `.regular`.
 
     /// `.glassEffect(.clear, in: shape)`
     func chromeOverMedia(in shape: some Shape = .capsule) -> some View {
@@ -80,13 +91,10 @@ extension View {
         glassEffect(.clear.interactive(), in: shape)
     }
 
-    /// Clear glass that still has to be *seen* at rest.
-    ///
-    /// The selection indicator is the case: it must refract what is underneath
-    /// it, which rules out `.regular` — that blurs the label into mush — but a
-    /// fully clear body over near-black is invisible when nothing is moving. The
-    /// tint is part of the material, not a fill behind it; a fill under glass is
-    /// what rule 3 forbids and is exactly what stops a surface lensing.
+    /// Clear glass over media that still has to be *seen* at rest — a label
+    /// over a banner. The tint is part of the material, not a fill behind it; a
+    /// fill under glass is what rule 3 forbids and is exactly what stops a
+    /// surface lensing.
     ///
     /// `.glassEffect(.clear.tint(color), in: shape)`
     func chromeOverMedia(tinted color: Color, in shape: some Shape = .capsule) -> some View {
@@ -123,6 +131,11 @@ extension View {
     // MARK: Specular
 
     /// A fixed sheen along a surface's upper edge, for surfaces that sit still.
+    ///
+    /// **Kept for the now bar alone** — Alex asked for its old look back
+    /// (2026-10-06). It imitates the material's own rim and ignores Increase
+    /// Contrast and Reduce Transparency, so everywhere else a still surface
+    /// takes a hairline (`Palette.edge`) or the system's own edge.
     ///
     /// Moving glass picks up the system's own specular response as it travels. A
     /// search field never moves, so it has no leading edge and gets nothing — on

@@ -1,4 +1,5 @@
 import AVFoundation
+import WingcordCore
 import Foundation
 import Observation
 
@@ -133,6 +134,20 @@ final class VideoPlayback {
             return
         }
 
+        // **A clip's link may have run out** — see `AttachmentLinks`. Only then
+        // is the start deferred, behind the refresh; a live link starts now.
+        guard AttachmentLink.needsRefresh(url) else {
+            start(url, autoplay: autoplay)
+            return
+        }
+        Task { [weak self] in
+            let fresh = await AttachmentLinks.shared.usable(url)
+            guard let self, !self.isTornDown, self.itemID == identity else { return }
+            self.start(fresh, autoplay: autoplay)
+        }
+    }
+
+    private func start(_ url: URL, autoplay: Bool) {
         let item = AVPlayerItem(url: url)
         player.replaceCurrentItem(with: item)
         observe(item)

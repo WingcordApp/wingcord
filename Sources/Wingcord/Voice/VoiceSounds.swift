@@ -43,6 +43,13 @@ enum VoiceSound: String, CaseIterable, Sendable {
 
     var loops: Bool { self == .outgoingCall }
 
+    /// Discord's `stage_waiting` — not a blip but a minute and a half, read as
+    /// it plays rather than decoded with the clips (`LoopedTrack`).
+    static var stageWaitingURL: URL? {
+        Bundle.module.url(forResource: "stage_waiting", withExtension: "m4a", subdirectory: "Sounds")
+            ?? Bundle.module.url(forResource: "stage_waiting", withExtension: "m4a")
+    }
+
     /// The clip in the app's resource bundle.
     ///
     /// `subdirectory` first, because the resources are declared with `.copy`

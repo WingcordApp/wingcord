@@ -437,10 +437,18 @@ public struct ActivityDirectory: Hashable, Sendable {
     /// Every launchable app the shelf knows, by id — the pool the Recents
     /// row and the invitation card resolve names and artwork against.
     public var apps: [ApplicationID: ActivityApp]
+    /// The shelf's own order — Discord's ranking, which a call's Suggested
+    /// Activities read from the top of.
+    public var shelf: [ApplicationID]
 
-    public init(collections: [ActivityCollection] = [], apps: [ApplicationID: ActivityApp] = [:]) {
+    public init(
+        collections: [ActivityCollection] = [],
+        apps: [ApplicationID: ActivityApp] = [:],
+        shelf: [ApplicationID] = []
+    ) {
         self.collections = collections
         self.apps = apps
+        self.shelf = shelf
     }
 
     public var isEmpty: Bool { collections.isEmpty && apps.isEmpty }
@@ -732,6 +740,19 @@ public struct RichPresenceActivity: Hashable, Sendable {
     public var flags: Int
     /// What following along needs beyond the track. Spotify's only.
     public var metadata: ListeningMetadata?
+    /// A Streaming activity's stream (`url`).
+    public var url: URL?
+    /// Where the details line and the state line link to.
+    public var detailsURL: URL?
+    public var stateURL: URL?
+    /// The buttons' links, in their labels' order — sent as
+    /// `metadata.button_urls`, which is what a reader's metadata route
+    /// answers with.
+    public var buttonURLs: [URL] = []
+    /// Which line names the activity in a member list — Discord's
+    /// `status_display_type`: 0 the name, 1 the state, 2 the details. Nil
+    /// where the app said nothing, which is the name.
+    public var statusDisplayType: Int?
 
     /// Spotify's `metadata` on a Listening activity (`655116`'s `getActivity`).
     public struct ListeningMetadata: Hashable, Sendable {

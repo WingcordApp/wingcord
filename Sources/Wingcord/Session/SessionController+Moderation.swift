@@ -264,12 +264,14 @@ extension SessionController {
         kind: ChannelKind,
         parentID: ChannelID?,
         isPrivate: Bool,
+        duplicating source: Channel? = nil,
         in guildID: GuildID
     ) async -> String? {
         let me = model.currentUserID
         let seesEverything = model.permissionGate.permissions(inGuild: guildID).contains(.administrator)
             || model.guilds[guildID]?.ownerID == me
-        let overwrites = ChannelCreation.overwrites(
+        // Duplicate Channel copies the permissions instead of making them.
+        let overwrites = source?.overwrites ?? ChannelCreation.overwrites(
             kind: kind,
             isPrivate: isPrivate,
             guildID: guildID,
@@ -282,7 +284,9 @@ extension SessionController {
                 name: name,
                 kind: kind,
                 parentID: kind == .category ? nil : parentID,
-                overwrites: overwrites
+                overwrites: overwrites,
+                bitrate: source?.bitrate,
+                userLimit: source?.userLimit
             )
             if let channel, [.text, .announcement, .forum, .media].contains(channel.kind),
                model.channelIndex[channel.id] != nil

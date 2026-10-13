@@ -26,6 +26,9 @@ struct VoiceTileGrid: View {
     var spotlight: (UserID?) -> Void
 
     @Environment(\.motion) private var motion
+    /// Read for Show Non-Video Participants and by the right-click, nothing
+    /// else.
+    @Environment(AppModel.self) private var model
     @Namespace private var tiles
 
     var body: some View {
@@ -40,15 +43,45 @@ struct VoiceTileGrid: View {
                 // `reposition` is the class for larger travel that is not a
                 // gesture, critically damped — a tile that has arrived
                 // somewhere should not wobble about it.
-                .animation(motion.reposition, value: participants.map(\.id))
+                .animation(motion.reposition, value: shown.map(\.id))
                 .animation(motion.reposition, value: spotlightUserID)
                 .animation(motion.reposition, value: proxy.size)
         }
+        // Each tile's colour is read out of its avatar once, and only for a
+        // call that is on screen.
+        .onChange(of: pendingGrounds, initial: true) { _, pictures in
+            for picture in pictures { model.sessionController.derivePalette(at: picture) }
+        }
+    }
+
+    /// The pictures whose colours the tiles drawn are still waiting for.
+    private var pendingGrounds: [URL] {
+        shown.compactMap { $0.ground == nil ? $0.groundArtwork : nil }
+    }
+
+    /// The menu a tile raises, from its ⋯ or a right-click: in a direct
+    /// message's call the conversation's, about the person on the tile; in a
+    /// server's the person menu — each with the call's items.
+    private func openMenu(for userID: UserID, at rect: CGRect) {
+        guard let callID = model.connectedVoiceChannelID else { return }
+        if let guildID = model.channelIndex[callID]?.guildID {
+            model.openUserMenu(for: userID, anchor: rect, inGuild: guildID, isFromCall: true)
+        } else {
+            model.openDirectMessageMenu(for: callID, anchor: rect, callUserID: userID)
+        }
+    }
+
+    /// The tiles drawn: everybody, or — with Discord's Show Non-Video
+    /// Participants off — the people with a picture, unless that is nobody.
+    private var shown: [VoiceParticipant] {
+        guard !model.showsNonVideoParticipants else { return participants }
+        let withVideo = participants.filter(\.showsVideo)
+        return withVideo.isEmpty ? participants : withVideo
     }
 
     @ViewBuilder
     private func content(in size: CGSize) -> some View {
-        if let spotlightUserID, let starring = participants.first(where: { $0.id == spotlightUserID }) {
+        if let spotlightUserID, let starring = shown.first(where: { $0.id == spotlightUserID }) {
             spotlightLayout(starring: starring, in: size)
         } else {
             grid(in: size)
@@ -58,11 +91,11 @@ struct VoiceTileGrid: View {
     // MARK: The even grid
 
     private func grid(in size: CGSize) -> some View {
-        let layout = VoiceGridLayout.solve(count: participants.count, in: size)
+        let layout = VoiceGridLayout.solve(count: shown.count, in: size)
         return VStack(spacing: VoiceGridLayout.spacing) {
-            ForEach(layout.rowRanges(count: participants.count), id: \.lowerBound) { range in
+            ForEach(layout.rowRanges(count: shown.count), id: \.lowerBound) { range in
                 HStack(spacing: VoiceGridLayout.spacing) {
-                    ForEach(participants[range]) { participant in
+                    ForEach(shown[range]) { participant in
                         tile(participant, isCompact: layout.tileSize.width < 220)
                             .frame(width: layout.tileSize.width, height: layout.tileSize.height)
                     }
@@ -75,7 +108,7 @@ struct VoiceTileGrid: View {
     // MARK: One person filling the stage
 
     private func spotlightLayout(starring: VoiceParticipant, in size: CGSize) -> some View {
-        let others = participants.filter { $0.id != starring.id }
+        let others = shown.filter { $0.id != starring.id }
         let layout = VoiceSpotlightLayout.solve(others: others.count, in: size)
         return VStack(spacing: VoiceSpotlightLayout.stripGap) {
             tile(starring, isCompact: false)
@@ -113,7 +146,9 @@ struct VoiceTileGrid: View {
             effectName: effects[participant.id],
             cameraSession: participant.id == selfUserID ? cameraSession : nil,
             attachVideo: attachVideo,
+            reportVideoPixels: model.reportVideoPixels,
             watch: watch,
+            openMenu: { openMenu(for: participant.id, at: $0) },
             isCompact: isCompact
         )
         // The whole of the travel. Keyed on the person, so a tile moving from
@@ -138,10 +173,9 @@ struct VoiceTileGrid: View {
             // over a video tile is chrome nobody asked for.
             spotlight(spotlightUserID == participant.id ? nil : participant.id)
         }
-        .contextMenu {
-            Button(spotlightUserID == participant.id ? "Leave Full Screen" : "Focus") {
-                spotlight(spotlightUserID == participant.id ? nil : participant.id)
-            }
-        }
+        // **The person menu, as Discord's call tile raises it** — with the
+        // call's own items, User Volume first. Double-click still fills the
+        // stage.
+        .onSecondaryClick { openMenu(for: participant.id, at: $0) }
     }
 }

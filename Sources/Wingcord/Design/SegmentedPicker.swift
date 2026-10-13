@@ -25,10 +25,22 @@ import SwiftUI
 /// Liquid Glass itself — putting `.glassEffect` on it, or dropping it into a
 /// `GlassEffectContainer`, is glass on glass (`INVARIANTS.md` §4 rule 2) and
 /// the second material is what turns a pill into a grey slab.
-struct SegmentedPicker<Value: Hashable>: NSViewRepresentable {
+struct SegmentedPicker<Value: Hashable>: View {
     /// The segments, in the order they are drawn. Titles are shown as sent.
     var options: [Option]
     @Binding var selection: Value
+
+    var body: some View {
+        SegmentedControl(options: options, selection: $selection)
+            // **The size is set here, in SwiftUI, and only here.** SwiftUI
+            // writes the environment's control size onto a hosted `NSControl`
+            // after `makeNSView` returns, so the `.extraLarge` this used to set
+            // on the control itself was overwritten with `.regular`: every strip
+            // in the app measured 24 points tall against Clock's 36 (references
+            // 54 and 55), and the selected cell drew as the regular size's thin
+            // inset rather than Clock's full pill.
+            .controlSize(.extraLarge)
+    }
 
     struct Option: Equatable {
         var value: Value
@@ -39,6 +51,15 @@ struct SegmentedPicker<Value: Hashable>: NSViewRepresentable {
             self.title = title
         }
     }
+}
+
+/// The `NSSegmentedControl` itself. Its size comes from the environment —
+/// `SegmentedPicker` sets it.
+private struct SegmentedControl<Value: Hashable>: NSViewRepresentable {
+    typealias Option = SegmentedPicker<Value>.Option
+
+    var options: [Option]
+    @Binding var selection: Value
 
     func makeCoordinator() -> Coordinator {
         Coordinator(selection: $selection, values: options.map(\.value))
@@ -53,13 +74,12 @@ struct SegmentedPicker<Value: Hashable>: NSViewRepresentable {
         control.role = .tabs
         control.trackingMode = .selectOne
         control.segmentDistribution = .fit
-        // **`.extraLarge`, and it is measured rather than chosen.** The four
-        // sizes resolve to 24, 28 and 36 points tall for the same 13-point
-        // label; Clock's own strip is 36, and at 28 the pill reads as a
-        // toolbar control that wandered into a page rather than as the page's
-        // own tab bar. Beside a 28-point close button the smaller one also
-        // looked like the shorter of two things that should have matched.
-        control.controlSize = .extraLarge
+        // **`.extraLarge`, and it is measured rather than chosen** — set by
+        // `SegmentedPicker` through the environment, which is the only place
+        // SwiftUI lets it stick. The sizes resolve to 24, 28 and 36 points tall
+        // for the same 13-point label; Clock's own strip is 36, and at 28 the
+        // pill reads as a toolbar control that wandered into a page rather than
+        // as the page's own tab bar.
         // Hug: this sits at the leading end of a bar beside a count and a close
         // button, and a control that stretched would push both off the edge.
         control.setContentHuggingPriority(.required, for: .horizontal)

@@ -2,6 +2,37 @@ import Foundation
 import WingcordCore
 
 extension AppModel {
+    /// The reader's full profile with its editor already open, at the account
+    /// scope — the own card's Edit Profile, and User › Edit Profile….
+    func editOwnProfile() {
+        guard let userID = currentUserID else { return }
+        profileRequest = ProfileRequest(
+            userID: userID,
+            guildID: selectedGuildID,
+            anchor: .zero,
+            depth: .full,
+            editsScope: .account
+        )
+    }
+
+    /// The reader's own card, beside the now bar's identity row, with its
+    /// controls — on `surface`: User › Set Status… opens it on the editor.
+    ///
+    /// **The MAIN profile, not the one worn in the open server.** Without it
+    /// the card came up with the reader's server nickname, their roles there
+    /// and their per-server avatar — the profile a *member list* shows, not
+    /// the one the identity row is about.
+    func openOwnCard(on surface: OwnProfileSurface = .root) {
+        guard let userID = currentUserID else { return }
+        profileRequest = ProfileRequest(
+            userID: userID,
+            showsMainProfile: true,
+            anchor: ownCardAnchor,
+            showsOwnActions: true,
+            ownSurface: surface
+        )
+        sessionController.loadProfile(of: userID, inGuild: nil)
+    }
 
     /// Resolves everything a profile surface draws.
     ///
@@ -352,6 +383,20 @@ extension AppModel {
             return
         }
         sessionController.openConversation(with: userID)
+    }
+
+    /// Discord's Start a Call: the conversation with them — made where there is
+    /// none yet — and a call in it that rings them.
+    func callPerson(_ userID: UserID) {
+        guard userID != currentUserID else { return }
+        if let existing = directMessageChannel(with: userID) {
+            openDirectMessage(existing)
+            startCall(in: existing)
+            return
+        }
+        sessionController.openConversation(with: userID) { [weak self] channelID in
+            self?.startCall(in: channelID)
+        }
     }
 
     /// Leaves the profile for a server the two share — Discord's mutual

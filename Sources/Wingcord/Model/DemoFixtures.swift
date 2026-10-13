@@ -2049,9 +2049,9 @@ enum DemoFixtures {
     ) -> MessageReference? {
         guard index % 11 == 5, index >= 4 else { return nil }
         guard index != 60 else {
-            // The one whose target is gone. A reference with no author is
-            // exactly what Discord sends for a deleted message.
-            return MessageReference(messageID: MessageID(rawValue: 1))
+            // The one whose target is gone — Discord's `null` for a deleted
+            // message, which is what makes it "deleted" rather than unloaded.
+            return MessageReference(messageID: MessageID(rawValue: 1), isDeleted: true)
         }
         let target = messages[index - 4]
         return MessageReference(

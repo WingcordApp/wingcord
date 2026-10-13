@@ -38,7 +38,7 @@ struct CommandPalette: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            header
+            if !query.isEmpty || sections.isEmpty { header }
             list
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -46,11 +46,15 @@ struct CommandPalette: View {
         .accessibilityElement(children: .contain)
     }
 
-    /// What the list is answering.
+    /// What the list is answering — **only while a query narrows it**, or over
+    /// nothing at all.
     ///
     /// The query is repeated back for the reason the emoji list repeats its
     /// shortcode: the list is derived from the draft, and a reader who typed
-    /// `/base64 dec` needs to see which part of it was taken.
+    /// `/base64 dec` needs to see which part of it was taken. With nothing
+    /// typed the section headings are the structure, and a "COMMANDS" over
+    /// them was a second heading style stacked on the first (Alex, 2026-10-07,
+    /// image 29).
     private var header: some View {
         Text(query.isEmpty ? "COMMANDS" : "MATCHING  /\(query)")
             .font(Typeface.sectionHeader)
@@ -59,7 +63,7 @@ struct CommandPalette: View {
             .truncationMode(.middle)
             .padding(.horizontal, Spacing.snug)
             .padding(.top, Spacing.snug)
-            .padding(.bottom, Spacing.base)
+            .padding(.bottom, Spacing.tight)
             .accessibilityHidden(true)
     }
 
@@ -87,16 +91,19 @@ struct CommandPalette: View {
                             Section {
                                 rows(of: section)
                             } header: {
-                                sectionHeader(section)
+                                sectionHeader(section, isFirst: section.id == sections.first?.id)
                             }
                         }
                     }
                     .padding(.horizontal, Spacing.base)
-                    .padding(.bottom, Spacing.base)
                 }
                 .scrollIndicators(.never)
                 .softScrollEdgesVertical()
                 .frame(maxHeight: Self.maxHeight)
+                // **Outside the scroll view, so the viewport stops short of the
+                // panel's rounded foot.** Inside it, the margin scrolled away
+                // with the rows and the last one in view was cut by the corner.
+                .padding(.bottom, Spacing.base)
                 // The keyboard moves the selection; the list has to follow it or
                 // holding Down walks off the bottom into nothing.
                 .onChange(of: selection) { _, index in
@@ -138,11 +145,15 @@ struct CommandPalette: View {
 
     /// Whose commands these are: the application's mark and name, or a clock
     /// over the account's own most-used.
-    private func sectionHeader(_ section: CommandSection) -> some View {
-        HStack(spacing: Spacing.base) {
+    ///
+    /// **On the rows' own columns** — the same inset and the same gap — so the
+    /// mark sits over the rows' icons and the name over their names; and in
+    /// the list's one heading style, the one the emoji and mention lists use.
+    private func sectionHeader(_ section: CommandSection, isFirst: Bool) -> some View {
+        HStack(spacing: Spacing.snug) {
             if section.isFrequent {
                 Image(systemName: "clock")
-                    .font(.system(.caption2, weight: .semibold))
+                    .font(.system(.caption, weight: .semibold))
                     .foregroundStyle(Ink.tertiary)
                     .frame(width: Metrics.commandRowIcon, height: Metrics.commandRowIcon)
             } else {
@@ -154,13 +165,14 @@ struct CommandPalette: View {
             }
             Text(section.title)
                 .font(Typeface.sectionHeader)
-                .foregroundStyle(Ink.secondary)
+                .textCase(.uppercase)
+                .foregroundStyle(Ink.tertiary)
                 .lineLimit(1)
             Spacer(minLength: 0)
         }
-        .padding(.horizontal, Spacing.tight)
-        .padding(.vertical, Spacing.tight)
-        .padding(.top, Spacing.base)
+        .padding(.horizontal, Spacing.base)
+        .padding(.top, isFirst ? Spacing.snug : Spacing.margin)
+        .padding(.bottom, Spacing.tight)
         .accessibilityAddTraits(.isHeader)
     }
 

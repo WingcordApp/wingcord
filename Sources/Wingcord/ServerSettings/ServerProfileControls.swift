@@ -45,7 +45,7 @@ struct ImageWell: View {
             Spacer(minLength: Spacing.base)
             HStack(spacing: Spacing.tight) {
                 Button("Change", action: pick)
-                    .buttonStyle(.glass)
+                    .buttonStyle(.bordered)
                     .controlSize(.small)
                 if let onRemove {
                     Button("Remove", role: .destructive, action: onRemove)
@@ -403,7 +403,7 @@ struct GamePickerSheet: View {
                     .foregroundStyle(Ink.primary)
                 Spacer()
                 Button("Done") { dismiss() }
-                    .buttonStyle(.glass)
+                    .buttonStyle(.bordered)
                     .controlSize(.small)
             }
             .padding(Spacing.margin)
@@ -525,7 +525,7 @@ private struct BadgeTile: View {
                     .foregroundStyle(isEnabled ? Ink.primary : Ink.tertiary)
                     .frame(height: 24)
                 Text(badge.title)
-                    .font(.system(size: 9))
+                    .font(.system(.caption2))
                     .foregroundStyle(Ink.tertiary)
                     .lineLimit(1)
                     .minimumScaleFactor(0.7)
