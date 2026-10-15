@@ -2430,7 +2430,15 @@ final class SessionController {
         // it. The latch is cleared by leaving.
         guard model.suppressedAckChannelID != channelID else { return }
         var state = model.readStates[channelID] ?? ReadState()
-        guard state.lastAcknowledgedID != messageID else { return }
+        // **Forward only.** The cursor can already stand past the newest
+        // message Discord has sent: the reader's own send is read the moment
+        // its echo is drawn (`AppModel.acknowledgeOwnMessage`), under a nonce
+        // newer than everything loaded. The transcript reaching its foot a
+        // moment later acknowledged the newest LOADED message — older than the
+        // echo — and moving the cursor back to it drew "NEW" in front of the
+        // reader's own words until Discord's copy arrived. Only Mark Unread
+        // moves the cursor back, and it writes the state itself.
+        guard state.lastAcknowledgedID.map({ $0.rawValue < messageID.rawValue }) ?? true else { return }
         state.lastAcknowledgedID = messageID
         state.mentionCount = 0
         model.readStates[channelID] = state

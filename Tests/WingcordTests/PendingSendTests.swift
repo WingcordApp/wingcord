@@ -83,6 +83,22 @@ struct PendingSendTests {
         #expect(model.readStates[channel]?.lastAcknowledgedID == answer)
     }
 
+    /// The flash Alex reported: the echo read at send, then the transcript
+    /// reaching its foot and acknowledging the newest message Discord has sent
+    /// — older than the echo — which moved the cursor back behind the reader's
+    /// own words until Discord's copy arrived.
+    @Test("Reaching the foot after a send never puts \"NEW\" back in front of it")
+    func readingToTheFootKeepsTheSendRead() {
+        let model = model()
+        model.readStates[channel] = ReadState(lastAcknowledgedID: MessageID(rawValue: 10 << 22))
+        let send = entry(20)
+        model.mutateBox(channel) { $0.outbox = [send] }
+        model.acknowledgeOwnMessage(send.id, in: channel)
+        model.markRead(channel)
+        #expect(model.readStates[channel]?.lastAcknowledgedID == send.id)
+        #expect(!model.timelineRows(for: channel).contains(.unreadDivider))
+    }
+
     @Test("A refusal turns the same row red, and Clyde's notice follows it")
     func refusedRowAndNotice() {
         let model = model()

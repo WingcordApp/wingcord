@@ -230,6 +230,12 @@ final class TimelineCoordinator: NSObject {
     /// relays nothing that has not changed. Kept only across a toggle: a live
     /// resize passes through hundreds of widths and none of them comes back.
     private var alternateRowCache: (width: Int, cache: [MessageID: TimelineLayoutEngine.CacheEntry])?
+    /// The layouts of the conversations most recently left — see
+    /// `RecentLayouts`. Let go when the system is short of memory.
+    private var recentRowCaches = RecentLayouts<[MessageID: TimelineLayoutEngine.CacheEntry]>()
+    /// Posted when the system is short of memory, to every transcript.
+    static let shedRecentLayouts = Notification.Name("TimelineCoordinator.shedRecentLayouts")
+    private var shedObserver: NSObjectProtocol?
 
     private var layoutTask: Task<Void, Never>?
     private var prefetchTask: Task<Void, Never>?
@@ -630,6 +636,16 @@ final class TimelineCoordinator: NSObject {
         // back to it, this is what sends the one that was withheld. Without it
         // an account that switches away and back keeps a channel unread until
         // the next message arrives in it.
+        // Conversations nobody is looking at are the first thing to go when
+        // the system runs short — `AppModel.relieveMemoryPressure` evicts
+        // their messages, and the layouts kept for them go with them.
+        shedObserver = NotificationCenter.default.addObserver(
+            forName: TimelineCoordinator.shedRecentLayouts,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated { self?.recentRowCaches.removeAll() }
+        }
         activationObserver = NotificationCenter.default.addObserver(
             forName: NSApplication.didBecomeActiveNotification,
             object: nil,
@@ -673,7 +689,7 @@ final class TimelineCoordinator: NSObject {
         let center = NotificationCenter.default
         for observer in [
             boundsObserver, frameObserver, scrollBeganObserver, scrollEndedObserver,
-            activationObserver,
+            activationObserver, shedObserver,
         ] {
             if let observer { center.removeObserver(observer) }
         }
@@ -682,8 +698,10 @@ final class TimelineCoordinator: NSObject {
         scrollBeganObserver = nil
         scrollEndedObserver = nil
         activationObserver = nil
+        shedObserver = nil
         rowCache.removeAll(keepingCapacity: false)
         alternateRowCache = nil
+        recentRowCaches.removeAll()
         hostedCardHosts.removeAll()
         screenEffects.stop()
         canvas?.onWidthChange = nil
@@ -843,6 +861,7 @@ final class TimelineCoordinator: NSObject {
             canvas?.hidesTimes = settings.hidesTimes
             rowCache.removeAll(keepingCapacity: true)
             alternateRowCache = nil
+            recentRowCaches.removeAll()
             if !items.isEmpty { runLayout(preservingPosition: true) }
         }
 
@@ -910,10 +929,11 @@ final class TimelineCoordinator: NSObject {
             // move between two channels for the rule below to protect, and a
             // window left cut off from the present has to open as one.
             self.reachesPresent = reachesPresent
-            // A different conversation shares nothing with the previous one, and
-            // keeping its layouts would hold every text block and decoded image
-            // of a channel nobody is looking at.
-            rowCache.removeAll(keepingCapacity: true)
+            // **The conversation left is kept laid out, and the one arrived at
+            // may already be** — the last two, so going back is free rather
+            // than a layout of every row. Two and no more: each holds the text
+            // blocks of a conversation nobody is looking at.
+            swapRecentRows(leaving: self.channelID, arriving: channelID)
             alternateRowCache = nil
             hostedCardHosts.removeAll()
             // A celebration belongs to the conversation it was said in.
@@ -991,6 +1011,17 @@ final class TimelineCoordinator: NSObject {
         publishPosition()
         trackTopicPlace()
         trackSummaryPlace()
+    }
+
+    /// Puts the leaving conversation's layouts aside and takes the arriving
+    /// one's back, if they were kept at this width.
+    private func swapRecentRows(leaving: ChannelID?, arriving: ChannelID) {
+        rowCache = recentRowCaches.swap(
+            leaving: leaving,
+            cache: rowCache,
+            arriving: arriving,
+            width: Int(layoutWidth.rounded())
+        ) ?? [:]
     }
 
     /// Plays a screen effect over the rows — for a reader at the foot, in a

@@ -288,6 +288,14 @@ struct SidebarPages: View {
             .opacity(pager.isDissolving ? 0 : 1)
             .frame(width: pageWidth, height: proxy.size.height, alignment: .leading)
         }
+        // **Down under the call card and the now bar** (Alex, 2026-10-15). The
+        // bars are the panel's bottom safe-area inset, and a reader that
+        // respects it stopped every list at the bars' top edge — so nothing
+        // ever passed under the now bar's clear glass. Reaching under them,
+        // each list is handed the bars' height as its safe area instead: rows
+        // scroll beneath the glass, and the last one still comes to rest above
+        // it.
+        .ignoresSafeArea(.container, edges: .bottom)
         // **No clip of its own.** The panel clips to its silhouette already,
         // and a clip here would also cut what a page draws above itself on
         // purpose — the banner and the travelling title, up under the header.

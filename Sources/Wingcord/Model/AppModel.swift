@@ -2000,6 +2000,8 @@ final class AppModel {
         presences = survivingPresences(inGuild: keptGuild)
 
         ImageStore.shared.purge()
+        // The layouts each transcript keeps of the conversations it left.
+        NotificationCenter.default.post(name: TimelineCoordinator.shedRecentLayouts, object: nil)
         // Filmstrips are the most expensive and least essential pixels the app
         // holds — up to forty-eight bitmaps for one ring around one avatar.
         AnimatedImageStore.shared.purge()

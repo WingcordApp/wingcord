@@ -9,12 +9,13 @@ import WingcordCore
 /// card above it, where the call is, and in the menu bar. With nothing else on
 /// it the card is one fixed object that never changes shape.
 ///
-/// **Floating clear glass over the channel list — Alex's choice (2026-10-06).**
-/// For one build it was an opaque card below the list; he asked for the glass
-/// and the float back. It is attached with `.safeAreaBar`, so the list both
-/// reserves its height and registers it as a bar, and the list's bottom
-/// scroll edge stays hidden (`softScrollEdgeTopOnly`) so the capsule refracts
-/// the rows themselves rather than an already-blurred band.
+/// **Floating glass over the channel list — Alex's choice (2026-10-06, and
+/// again 2026-10-15).** For one build it was an opaque card below the list; he
+/// asked for the glass and the float back. The redesign's pages then stopped
+/// short of it, and he asked a second time: they now reach under the panel's
+/// bottom inset (`SidebarPages`), and the list's bottom scroll edge stays
+/// hidden (`softScrollEdgeTopOnly`) so the capsule samples the rows themselves
+/// rather than an already-blurred band.
 struct NowBar: View, Equatable {
     var presentation: NowBarPresentation
     /// The silhouette. Passed in rather than read from `AppSettings` here, so
@@ -54,12 +55,13 @@ struct NowBar: View, Equatable {
         }
         .padding(.horizontal, Spacing.base)
         .frame(height: Metrics.nowBarHeight)
-        // **`.clear`, untinted.** The bar floats over the sidebar column, which
-        // is behind-window vibrancy — the reader's desktop with the channel
-        // list over it — and a tint is a flat value added to every pixel of
-        // the surface (measured: it doubled the veil a reference client
-        // carries).
-        .glassEffect(.clear, in: .rect(cornerRadius: cornerRadius))
+        // **`.regular`, untinted** (Alex, 2026-10-15). Once rows really passed
+        // under it, `.clear` let a conversation's name read straight through
+        // the reader's own — the frosted variant keeps the rows moving behind
+        // the bar without letting their words collide with it. Untinted, as
+        // before: a tint is a flat value added to every pixel of the surface
+        // (measured: it doubled the veil a reference client carries).
+        .glassEffect(.regular, in: .rect(cornerRadius: cornerRadius))
         // **The plate goes over the material, never behind it.** Clipped to
         // the bar's shape and held under full strength, so what is behind the
         // window still refracts through and the name and the gear stay

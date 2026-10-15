@@ -24,19 +24,23 @@ struct SidebarColumnContent: View {
                     .frame(maxWidth: .infinity, alignment: .center)
             } else {
                 SidebarPages()
-                    // **The call card and the now bar float over the lists**,
-                    // as a registered bar: every page reserves their height and
-                    // its rows pass underneath. Across the whole panel and
-                    // still while the pages slide — they are the account's,
-                    // not a page's. The now bar is clear glass that refracts
-                    // the rows (Alex, 2026-10-06); the call card is opaque,
-                    // because rows reading through the call was the fault he
-                    // reported in it.
+                    // **The call card and the now bar float over the lists**:
+                    // every page reaches under them (`SidebarPages`) and takes
+                    // their height as its safe area, so its rows pass beneath
+                    // and its last row rests above them. Across the whole panel
+                    // and still while the pages slide — they are the account's,
+                    // not a page's. The now bar is regular glass over the
+                    // rows (Alex, 2026-10-15); the call card is opaque, because
+                    // rows reading through the call was the fault he reported
+                    // in it.
                     //
-                    // **Nothing is painted behind these bars**: an opaque
-                    // ground under the now bar's glass leaves it nothing to
-                    // refract, and it reads as a flat plate.
-                    .safeAreaBar(edge: .bottom, spacing: 0) {
+                    // **An inset, not a registered bar.** As a `safeAreaBar`
+                    // the system drew a hard-edged dark band behind both bars,
+                    // over the rows — measured, and neither the list's nor the
+                    // pager's `scrollEdgeEffectHidden` removed it. Nothing is
+                    // painted behind these bars either: an opaque ground under
+                    // the now bar's glass leaves it nothing to refract.
+                    .safeAreaInset(edge: .bottom, spacing: 0) {
                         VStack(spacing: Spacing.base) {
                             VoiceHUDContainer()
                             NowBarContainer()
