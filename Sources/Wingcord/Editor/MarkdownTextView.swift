@@ -34,14 +34,38 @@ final class MarkdownTextView: NSTextView {
 
     override var readablePasteboardTypes: [NSPasteboard.PasteboardType] { [.string] }
 
+    /// The clipboard a paste of files reads: the general one, unless a test
+    /// hands the field its own.
+    var pasteboard: NSPasteboard = .general
+
     /// **Files first, as Discord's box takes them**: a paste carrying files is
     /// an attachment, and its text — a copied file's name, a copied picture's
     /// address — is not typed as well. Everything else is the text paste above.
     override func paste(_ sender: Any?) {
-        if let onPasteFiles, let files = PastedFiles.read(from: .general), onPasteFiles(files) {
+        if let onPasteFiles, let files = PastedFiles.read(from: pasteboard), onPasteFiles(files) {
             return
         }
         super.paste(sender)
+    }
+
+    /// **Paste stays live while the clipboard holds files.** The field reads
+    /// text alone (`readablePasteboardTypes`), so with only a picture or a
+    /// copied file on the clipboard AppKit judged Paste impossible and turned
+    /// the menu item off — and ⌘V, which is that item, never reached
+    /// `paste(_:)`, where files are taken. No image could be pasted at all.
+    override func validateUserInterfaceItem(_ item: any NSValidatedUserInterfaceItem) -> Bool {
+        if acceptsPastedFiles(for: item.action) { return true }
+        return super.validateUserInterfaceItem(item)
+    }
+
+    override func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
+        if acceptsPastedFiles(for: menuItem.action) { return true }
+        return super.validateMenuItem(menuItem)
+    }
+
+    private func acceptsPastedFiles(for action: Selector?) -> Bool {
+        action == #selector(paste(_:)) && isEditable && onPasteFiles != nil
+            && PastedFiles.hasFiles(on: pasteboard)
     }
     /// Text only, so a file dragged over the field falls through to the
     /// composer's own drop target rather than landing as a path.

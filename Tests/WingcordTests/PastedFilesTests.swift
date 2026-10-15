@@ -81,4 +81,40 @@ struct PastedFilesTests {
         board.setString("yeah", forType: .string)
         #expect(PastedFiles.read(from: board) == nil)
     }
+
+    @Test("Whether a paste carries files is answered from the types alone, in read's order")
+    func hasFiles() throws {
+        let files = pasteboard()
+        let file = FileManager.default.temporaryDirectory.appending(path: "pasted-\(UUID().uuidString).txt")
+        try Data("hello".utf8).write(to: file)
+        files.clearContents()
+        files.writeObjects([file as NSURL])
+        #expect(PastedFiles.hasFiles(on: files))
+
+        let picture = pasteboard()
+        picture.clearContents()
+        picture.setData(try png(), forType: .png)
+        #expect(PastedFiles.hasFiles(on: picture))
+
+        let text = pasteboard()
+        text.clearContents()
+        text.setString("yeah", forType: .string)
+        #expect(!PastedFiles.hasFiles(on: text))
+    }
+
+    /// The bug: the field reads text alone, so AppKit turned Paste off with a
+    /// picture on the clipboard and ⌘V never reached the code that takes it.
+    @Test("Paste stays on in the composer while the clipboard holds a picture")
+    @MainActor
+    func pasteStaysOn() throws {
+        let board = pasteboard()
+        board.clearContents()
+        board.setData(try png(), forType: .png)
+        let field = MarkdownTextView()
+        field.pasteboard = board
+        field.onPasteFiles = { _ in true }
+        let paste = NSMenuItem(title: "Paste", action: #selector(NSText.paste(_:)), keyEquivalent: "v")
+        #expect(field.validateMenuItem(paste))
+        #expect(field.validateUserInterfaceItem(paste))
+    }
 }

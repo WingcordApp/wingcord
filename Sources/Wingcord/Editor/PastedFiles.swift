@@ -21,6 +21,18 @@ import UniformTypeIdentifiers
 /// for a browser's Copy Image.
 enum PastedFiles {
 
+    /// Whether a paste would carry files — by the types on the pasteboard
+    /// alone, in `read`'s order and with its rule for a picture, reading no
+    /// data. Asked by the field's menu validation on every key equivalent and
+    /// every opening of the Edit menu, so it must cost nothing.
+    static func hasFiles(on pasteboard: NSPasteboard) -> Bool {
+        let types = pasteboard.types ?? []
+        if types.contains(.fileURL) { return true }
+        guard let firstPicture = types.firstIndex(where: pictureTypes.contains) else { return false }
+        guard let firstText = types.firstIndex(where: textTypes.contains) else { return true }
+        return firstPicture < firstText
+    }
+
     static func read(from pasteboard: NSPasteboard) -> [URL]? {
         if let urls = pasteboard.readObjects(
             forClasses: [NSURL.self],
