@@ -467,6 +467,18 @@ extension AppModel {
     /// scheme has been checked *here* rather than trusted from wherever the
     /// string came from. `INVARIANTS.md` §5.5: a client that navigates on an
     /// unchecked host is a client anybody who can write to it can steer.
+    /// A link followed from the events panel. **Going to a channel takes the
+    /// reader out of the panel**: a page stays up until what it raised has
+    /// happened, and arriving in the channel is that — left up, the panel hid
+    /// the very channel its link had just opened.
+    func openLinkFromEvents(_ string: String) {
+        if let link = ChannelLink.parse(string),
+           channelIndex[link.destinationID] != nil || channelIndex[link.channelID] != nil {
+            eventsPanel = nil
+        }
+        openLink(string)
+    }
+
     func openLink(_ string: String) {
         // A link into this account is a place in it, whichever surface it was
         // written on.

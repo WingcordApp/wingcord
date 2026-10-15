@@ -61,7 +61,8 @@ struct EventCard: View {
                         markdown: description,
                         font: .subheadline,
                         color: InkColor.secondary,
-                        onLink: { model.openLink($0) }
+                        mentions: model.mentionContext(),
+                        onLink: { model.openLinkFromEvents($0) }
                     )
                     .lineLimit(3)
                     .padding(.top, Spacing.base)
@@ -157,11 +158,14 @@ struct EventPlaceLabel: View {
                 Image(systemName: "mappin.and.ellipse")
                     .foregroundStyle(InkColor.secondary)
                     .accessibilityHidden(true)
+                // A link to a channel is the channel's chip — "🔒 No Access"
+                // for one the reader cannot see, as Discord draws a place.
                 ProseText(
                     markdown: place,
                     font: .subheadline,
                     color: InkColor.primary,
-                    onLink: { model.openLink($0) }
+                    mentions: model.mentionContext(),
+                    onLink: { model.openLinkFromEvents($0) }
                 )
                 .lineLimit(1)
             }

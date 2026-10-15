@@ -427,13 +427,18 @@ enum DemoFixtures {
                 // outcome for a fabricated guild and leaves the block showing
                 // its loading ground: a flat rectangle with measurable edges.
                 bannerHash: spec.hasBanner ? "demofixturebanner" : nil,
-                ownerID: userIDs[0],
+                // Somebody else owns the showcase server: an owner may see
+                // every room, and its hidden one has to be hidden from the demo
+                // account for the "No Access" chip to be drawn at all. It is
+                // also the one fixture server where the reader is a member and
+                // nothing more.
+                ownerID: spec.name == showcaseGuildName ? userIDs[1] : userIDs[0],
                 premiumTier: spec.hasBanner ? 2 : 0,
                 features: spec.isCommunity ? ["COMMUNITY"] : [],
                 memberCount: spec.memberCount
             )
             index.replaceChannels(
-                channels(for: guildID, spec: spec),
+                channels(for: guildID, spec: spec) + (spec.name == showcaseGuildName ? [staffRoom(in: guildID)] : []),
                 inGuild: guildID
             )
             folders.append(GuildFolder(guildIDs: [guildID]))
@@ -594,6 +599,10 @@ enum DemoFixtures {
         model.guilds = guilds
         model.folders = folders
         model.channelIndex = index
+        if let offset = guildSpecs.firstIndex(where: { $0.name == showcaseGuildName }) {
+            let guildID = GuildID(rawValue: UInt64(1000 + offset))
+            model.scheduledEvents[guildID] = [showcaseNight(in: guildID)]
+        }
         // `isStarting: false`: the lurk has already been acknowledged and the
         // GUILD_CREATE has already landed, which is the state every surface
         // draws against.
@@ -1696,6 +1705,48 @@ enum DemoFixtures {
         if name.hasPrefix("stage-") { return .stage }
         if name.contains("vc") || name == "lobby" { return .voice }
         return .text
+    }
+
+    /// The server that keeps a room from the demo account, and holds the event
+    /// pointing into it.
+    private static let showcaseGuildName = "Apple Devs"
+
+    /// A room kept from everyone — an `@everyone` overwrite that denies viewing
+    /// it — so the demo account has one channel it may not see.
+    ///
+    /// **It exists for the event below**: a place that is a link to a channel
+    /// the reader cannot see is Discord's "🔒 No Access" chip (Alex's images 50
+    /// and 51), and without a hidden room there is nothing to draw it against.
+    private static func staffRoom(in guildID: GuildID) -> Channel {
+        Channel(
+            id: ChannelID(rawValue: guildID.rawValue * 1000 + 900),
+            kind: .text,
+            guildID: guildID,
+            name: "staff-room",
+            parentID: ChannelID(rawValue: guildID.rawValue * 1000 + 1),
+            position: 99,
+            overwrites: [
+                PermissionOverwrite(id: guildID.rawValue, subject: .role, allow: [], deny: [.viewChannel]),
+            ]
+        )
+    }
+
+    /// An event happening now whose place is a link to that hidden room, and
+    /// whose description links a room everyone sees — both of Discord's chips,
+    /// on the sidebar's live card and on the event's page.
+    private static func showcaseNight(in guildID: GuildID) -> ScheduledEvent {
+        let server = guildID.rawValue
+        return ScheduledEvent(
+            id: server * 1_000_000 + 1,
+            guildID: guildID,
+            name: "Showcase Night",
+            description: "Post what you built in https://discord.com/channels/\(server)/\(server * 1000 + 4) "
+                + "— the winners are picked live.",
+            startsAt: .now.addingTimeInterval(-30 * 60),
+            endsAt: .now.addingTimeInterval(2 * 60 * 60),
+            status: .active,
+            location: .external("https://discord.com/channels/\(server)/\(server * 1000 + 900)")
+        )
     }
 
     private static func channels(for guildID: GuildID, spec: GuildSpec) -> [Channel] {

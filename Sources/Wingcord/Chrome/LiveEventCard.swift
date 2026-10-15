@@ -55,11 +55,14 @@ struct LiveEventCard: View {
                 Image(symbol: notice.placeSymbol)
                     .font(.caption)
                     .foregroundStyle(Ink.tertiary)
-                // Markdown, as Discord parses a location: a link in it is a link.
+                // Markdown, as Discord parses a location: a link in it is a
+                // link, and a link to a channel is the channel's chip — "🔒 No
+                // Access" for one the reader cannot see.
                 ProseText(
                     markdown: notice.place,
                     font: .caption,
                     color: InkColor.secondary,
+                    mentions: model.mentionContext(),
                     onLink: { model.openLink($0) }
                 )
                 .lineLimit(2)

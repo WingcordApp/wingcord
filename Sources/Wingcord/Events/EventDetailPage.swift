@@ -138,7 +138,8 @@ private struct EventInfo: View {
                     markdown: description,
                     font: .body,
                     color: InkColor.primary,
-                    onLink: { model.openLink($0) }
+                    mentions: model.mentionContext(),
+                    onLink: { model.openLinkFromEvents($0) }
                 )
                 .padding(.top, Spacing.tight)
             }

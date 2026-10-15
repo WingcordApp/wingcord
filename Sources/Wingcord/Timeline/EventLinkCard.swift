@@ -65,6 +65,7 @@ struct EventLinkCard: View {
                         markdown: description,
                         font: .subheadline,
                         color: InkColor.secondary,
+                        mentions: model.mentionContext(),
                         onLink: { model.openLink($0) }
                     )
                     .lineLimit(4)
@@ -273,7 +274,13 @@ private struct EventCardServerLine: View {
             HStack(alignment: .firstTextBaseline, spacing: Spacing.tight) {
                 Image(symbol: event.location.symbolName)
                     .accessibilityHidden(true)
-                ProseText(markdown: written, font: .caption, color: InkColor.primary, onLink: { model.openLink($0) })
+                ProseText(
+                    markdown: written,
+                    font: .caption,
+                    color: InkColor.primary,
+                    mentions: model.mentionContext(),
+                    onLink: { model.openLink($0) }
+                )
                     .lineLimit(1)
             }
             .font(.caption)

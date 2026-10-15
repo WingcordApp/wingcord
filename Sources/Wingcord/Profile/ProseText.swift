@@ -226,6 +226,17 @@ private struct ProseLine: View {
                         plays: context.playsEmoji,
                         onTap: context.onEmoji
                     )
+                case .chip(let parts, let style, let destination):
+                    ProseWord(
+                        text: "",
+                        parts: parts,
+                        style: style,
+                        font: context.font,
+                        color: context.color,
+                        open: destination.flatMap { url in
+                            context.onLink.map { handler in { handler(url) } }
+                        }
+                    )
                 }
     }
 }
@@ -241,13 +252,28 @@ private struct ProseLine: View {
 /// cover. The plate is the run's, so a three-word date is one pill.
 private struct ProseWord: View {
     var text: String
+    /// A chip's pieces, drawn in place of `text` when there are any — words
+    /// and glyphs on one plate, so a "🔒 No Access" is one pill.
+    var parts: [ProseChipPart] = []
     var style: ProseStyle
     var font: Font
     var color: Color
     var open: (() -> Void)?
 
+    private var content: Text {
+        guard !parts.isEmpty else { return Text(text) }
+        return parts.reduce(Text(verbatim: "")) { line, part in
+            switch part {
+            case .text(let words, let italic):
+                line + (italic ? Text(verbatim: words).italic() : Text(verbatim: words))
+            case .symbol(let name):
+                line + Text(Image(systemName: name))
+            }
+        }
+    }
+
     var body: some View {
-        let label = Text(text)
+        let label = content
             .font(style.font(base: font))
             .foregroundStyle(style.color(base: color))
             .strikethrough(style.inline.contains(.strikethrough))
@@ -368,6 +394,10 @@ struct ProseSegment: Identifiable {
         /// places.
         case word(String, ProseStyle, String?)
         case emoji(EmojiRef)
+        /// One of Discord's chips: a channel link or `<#id>` drawn as the place
+        /// it names — its parts in order, on the mention plate, and where a
+        /// click goes, if anywhere (`ProseSegment.channelChip`).
+        case chip([ProseChipPart], ProseStyle, String?)
     }
 
     /// Position in the line. Stable because the line is rebuilt whole.
@@ -444,7 +474,15 @@ struct ProseSegment: Identifiable {
                     // exists to forbid.
                     append(label, style: style.asLink, destination: url)
                 case .autoLink(let url):
-                    word(url, style.asLink, url)
+                    // A link into the account is a place, not a page on the
+                    // web, and Discord draws it as a chip naming the place —
+                    // in a bio or an event's place as in a message.
+                    if let mentions, let link = ChannelLink.parse(url),
+                       let chip = Self.channelChip(link, url: url, style: style, context: mentions) {
+                        emit(chip)
+                    } else {
+                        word(url, style.asLink, url)
+                    }
                 case .customEmoji(let emoji):
                     emit(.emoji(emoji))
                 case .userMention(let id):
@@ -458,9 +496,18 @@ struct ProseSegment: Identifiable {
                         word("@unknown-role", style)
                     }
                 case .channelMention(let id):
-                    // Discord's word for a channel nobody here can name.
-                    let name = mentions?.channels[id].map { "#\($0.name)" } ?? "#unknown"
-                    word(name, style.asMention)
+                    // The same chip a link draws: Discord's `<#id>` rule runs
+                    // the channel through the identical builder.
+                    if let mentions,
+                       let chip = Self.channelChip(
+                           ChannelLink(guildID: mentions.channels[id]?.guildID, channelID: id),
+                           url: nil, style: style, context: mentions
+                       ) {
+                        emit(chip)
+                    } else {
+                        // Discord's word for a channel nobody here can name.
+                        word("#unknown", style.asMention)
+                    }
                 case .commandMention(let name, _):
                     word("/\(name)", style.asMention)
                 case .gameMention(let id):
@@ -490,6 +537,96 @@ struct ProseSegment: Identifiable {
         // The trailing break always leaves one empty line behind it.
         if lines.last?.isEmpty == true { lines.removeLast() }
         return lines
+    }
+}
+
+// MARK: - Channel chips
+
+/// One piece of a chip: words, or a glyph drawn in the words' own ink.
+enum ProseChipPart: Equatable {
+    case text(String, italic: Bool = false)
+    case symbol(String)
+}
+
+extension ProseSegment {
+    /// Discord's channel chip for prose, in the transcript's order
+    /// (`MessageTextBuilder.Builder.appendChannelChip`, Discord's `F` and `k`
+    /// in module `999915`):
+    ///
+    /// - a channel the reader cannot see reads "No Access", behind a lock, and
+    ///   goes nowhere;
+    /// - a category is not a destination, and is written as plain `#name`;
+    /// - a conversation reads `@name › 💬`;
+    /// - in this server: `#channel`, `#channel › 💬` for one message in it, or
+    ///   `#forum › post` for one message in a post;
+    /// - in another server: `Server › #channel`, or `Server › 💬`;
+    /// - a channel nobody here can name reads *unknown*, after its server when
+    ///   that is one the account is in.
+    ///
+    /// - Returns: nil where Discord leaves a link a plain URL.
+    static func channelChip(
+        _ link: ChannelLink,
+        url: String?,
+        style: ProseStyle,
+        context: MentionContext
+    ) -> Kind? {
+        let mention = style.asMention
+        guard let channel = link.threadID.flatMap({ context.channels[$0] })
+            ?? context.channels[link.channelID]
+        else {
+            let server = link.guildID.flatMap { id in
+                id == context.currentGuildID ? nil : context.guildNames[id]
+            }
+            let unknown: [ProseChipPart] = [.text("#"), .text("unknown", italic: true)]
+            // A link still opens its URL; a bare mention of a channel nobody
+            // can name has nowhere to go.
+            return .chip(server.map { [.text(chipName($0))] + chevron + unknown } ?? unknown, mention, url)
+        }
+        guard channel.canView else {
+            return .chip([.symbol("lock.fill"), .text(" No Access")], mention, nil)
+        }
+        guard channel.isMentionable else {
+            return .word("#" + chipName(channel.name), style, nil)
+        }
+        guard let guildID = channel.guildID else {
+            guard channel.isConversation else { return nil }
+            return .chip(part(channel) + chevron + [message(isPost: false)], mention, url)
+        }
+        guard let server = context.guildNames[guildID] else {
+            guard url == nil else { return nil }
+            return .word("#unknown-channel", style, nil)
+        }
+        let hasMessage = link.messageID != nil
+        if guildID == context.currentGuildID {
+            if !hasMessage {
+                return .chip(part(channel), mention, url)
+            }
+            if channel.isPost, let forum = channel.parentID.flatMap({ context.channels[$0] }) {
+                return .chip(part(forum) + chevron + part(channel), mention, url)
+            }
+            return .chip(part(channel) + chevron + [message(isPost: channel.isPost)], mention, url)
+        }
+        let last = hasMessage && !channel.isPost ? [message(isPost: false)] : part(channel)
+        return .chip([.text(chipName(server))] + chevron + last, mention, url)
+    }
+
+    private static let chevron: [ProseChipPart] = [.text(" "), .symbol("chevron.compact.right"), .text(" ")]
+
+    private static func part(_ channel: LinkChannel) -> [ProseChipPart] {
+        switch channel.kind {
+        case .text: [.text("#" + chipName(channel.name))]
+        case .directMessage: [.text("@" + chipName(channel.name))]
+        default: [.symbol(channel.kind.symbolName), .text(" " + chipName(channel.name))]
+        }
+    }
+
+    private static func message(isPost: Bool) -> ProseChipPart {
+        .symbol(isPost ? "doc.text.fill" : "text.bubble.fill")
+    }
+
+    /// A name in a chip, cut at Discord's thirty-two characters.
+    private static func chipName(_ name: String) -> String {
+        name.count > 32 ? String(name.prefix(32)) + "…" : name
     }
 }
 
