@@ -86,6 +86,20 @@ final class ThemeStore {
     /// every view in the app that happens to read a `Palette` token.
     private(set) var backdrop: Backdrop?
 
+    // MARK: A wallpaper's dark room
+
+    /// Set while a wallpaper picture is behind the window and the reader asked
+    /// for the dark room then (`WallpaperStore.forcesDarkAppearance`). A light
+    /// theme is drawn as True Black meanwhile — its own choice is not touched
+    /// and nothing is persisted, as a server's theme is an override too.
+    private(set) var wallpaperForcesDark = false
+
+    func setWallpaperForcesDark(_ forces: Bool) {
+        guard forces != wallpaperForcesDark else { return }
+        wallpaperForcesDark = forces
+        apply(notifyingDrawnSurfaces: true)
+    }
+
     // MARK: A server's theme
 
     /// The theme of the server the reader is in, while it is the one drawn —
@@ -260,12 +274,17 @@ final class ThemeStore {
         // "Sync with computer" holds no appearance of its own: the system's is
         // the room, so it is let through before the choice is resolved.
         if choice == .system { Self.releaseAppearance() }
-        let own = Self.colors(
+        let chosen = Self.colors(
             for: choice,
             customSeed: customSeed,
             systemAccent: customFollowsSystemAccent,
             vividness: vividness
         )
+        // A light room under a wallpaper the reader wants dark is drawn as True
+        // Black for as long as the picture is up — see `wallpaperForcesDark`.
+        let forcedDark = wallpaperForcesDark && chosen.appearance == .light
+        let dark = ThemePreset.following(systemIsDark: true)
+        let own = forcedDark ? dark.colors(vividness: vividness) : chosen
         // A server's theme is drawn in the reader's own room: it carries a
         // version for each, and choosing which is the reader's theme's job.
         let server = serverTheme.flatMap { ServerTheme($0.theme, room: own.appearance) }
@@ -274,7 +293,9 @@ final class ThemeStore {
         // when it moved: an `@Observable` setter invalidates its readers
         // whether or not the value changed.
         let resolvedGround = server.map(ThemeGround.init(server:))
-            ?? Self.ground(for: choice, customSeed: customSeed, vividness: vividness)
+            ?? (forcedDark
+                ? dark.ground(vividness: vividness)
+                : Self.ground(for: choice, customSeed: customSeed, vividness: vividness))
         if resolvedGround != ground { ground = resolvedGround }
 
         let resolved = server?.colors ?? own
@@ -285,7 +306,8 @@ final class ThemeStore {
         // changes no colour, but it does change who owns the appearance — and
         // left unpinned, the next switch to Light would put the system's black
         // labels on its near-black ground.
-        if choice != .system { Self.pinAppearance(resolved.appearance) }
+        if choice != .system || forcedDark { Self.pinAppearance(resolved.appearance) }
+        BubbleTint.setLight(resolved.appearance == .light)
         guard resolved != colors || !isLoaded else { return }
         ThemeRuntime.install(resolved)
         colors = resolved

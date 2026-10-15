@@ -1515,20 +1515,35 @@ nonisolated enum TimelineRowPainter {
     ) {
         if let bubble = bubbles.bubble, !state.hidesBubble {
             let ink = ThemeInk.current
+            let tint = BubbleTint.current
             context.saveGState()
             context.translateBy(x: rowFrame.minX, y: rowFrame.minY)
             context.addPath(bubble.path)
             switch bubble.ground {
             case .accent: context.setFillColor(state.isHovered ? ink.ownBubbleHover : ink.ownBubble)
-            case .neutral: context.setFillColor(state.isHovered ? ink.otherBubbleHover : ink.otherBubble)
+            case .own: context.setFillColor(state.isHovered ? tint.ownHover : tint.own)
+            case .neutral: context.setFillColor(state.isHovered ? tint.otherHover : tint.other)
             }
             context.fillPath()
+            // The glass's edge: a hairline where a frosted bubble meets the
+            // wallpaper, so it reads as an object over the picture rather than
+            // a darker patch of it.
+            if let rim = tint.rim, bubble.ground != .accent {
+                context.addPath(bubble.path)
+                context.setStrokeColor(rim)
+                context.setLineWidth(1)
+                context.strokePath()
+            }
             if row.mentionsMe {
                 context.addPath(bubble.path)
                 context.setFillColor(ink.mentionedBubbleTint)
                 context.fillPath()
             }
             context.restoreGState()
+        }
+        if let failure = bubbles.failure, !state.hidesBubble {
+            drawFailure(failure, in: rowFrame, isHovered: state.hoveredComponent == failure.badge.origin,
+                        style: style, context: context)
         }
         guard state.showsGutterTimestamp, !bubbles.timeRect.isEmpty, !state.hidesBubble else { return }
         drawText(
@@ -1537,6 +1552,37 @@ nonisolated enum TimelineRowPainter {
             color: style.tertiaryColor,
             at: CGPoint(x: rowFrame.minX + bubbles.timeRect.minX, y: rowFrame.minY + bubbles.timeRect.minY),
             maxWidth: bubbles.timeRect.width + 8,
+            context: context
+        )
+    }
+
+    /// A refused send's marks: Messages' red disc with a white "!", which
+    /// brightens under the pointer, and "Not Delivered" in the same red.
+    private static func drawFailure(
+        _ failure: BubbleFailure,
+        in rowFrame: CGRect,
+        isHovered: Bool,
+        style: MessageTextStyle,
+        context: CGContext
+    ) {
+        let badge = failure.badge.offsetBy(dx: rowFrame.minX, dy: rowFrame.minY)
+        // The system red rather than the critical ink, which is softened for
+        // words and reads pink as a filled disc.
+        let red = isHovered ? NSColor.systemRed.highlight(withLevel: 0.15) ?? .systemRed : .systemRed
+        context.setFillColor(red.cgColor)
+        context.fillEllipse(in: badge)
+        drawSymbol(
+            "exclamationmark",
+            tint: .white,
+            in: badge.insetBy(dx: badge.width * 0.25, dy: badge.height * 0.25),
+            context: context
+        )
+        drawText(
+            BubbleFailure.caption,
+            font: style.metadataFont,
+            color: style.criticalColor,
+            at: CGPoint(x: rowFrame.minX + failure.caption.minX, y: rowFrame.minY + failure.caption.minY),
+            maxWidth: failure.caption.width + 8,
             context: context
         )
     }
@@ -2397,15 +2443,16 @@ nonisolated enum TimelineRowPainter {
         }
         defer { if shake != nil { context.restoreGState() } }
 
-        // **A rounded square, not a capsule.** See
+        // **A rounded square, not a capsule** — see
         // `TimelineMetrics.reactionChipRadius` for the measurement; a lozenge is
-        // what this drew and it is what neither reference client draws.
-        let path = CGPath(
-            roundedRect: frame,
-            cornerWidth: TimelineMetrics.reactionChipRadius,
-            cornerHeight: TimelineMetrics.reactionChipRadius,
-            transform: nil
-        )
+        // what this drew and it is what neither reference client draws. A
+        // tapback is the exception: Messages' round badge.
+        let radius = slot.isTapback ? frame.height / 2 : TimelineMetrics.reactionChipRadius
+        let path = CGPath(roundedRect: frame, cornerWidth: radius, cornerHeight: radius, transform: nil)
+        let tint = BubbleTint.current
+        // The reader's own tapback is solid, in the accent, as Messages draws
+        // its blue badge; and its count is white on it.
+        let isSolid = slot.isTapback && slot.isMine
         let burst = slot.kind == .burst ? slot.palette?.style(isLight: ThemeInk.current.isLight) : nil
         if let burst {
             // **A super reaction wears its emoji's colour**: a tinted fill, a
@@ -2426,6 +2473,30 @@ nonisolated enum TimelineRowPainter {
             if slot.isMine {
                 context.addPath(path)
                 context.setStrokeColor(SuperReactionInk.color(burst.background))
+                context.setLineWidth(1)
+                context.strokePath()
+            }
+        } else if isSolid {
+            context.addPath(path)
+            context.setFillColor(isHovered ? ThemeInk.current.ownBubbleHover : ThemeInk.current.ownBubble)
+            context.fillPath()
+        } else if slot.isTapback || tint.rim != nil {
+            // Glass, like the bubbles: the wallpaper's frost shows through the
+            // outline (`TimelineCanvasView.bubbleOutlines`), with the smoke
+            // over it — or, on the theme's ground, a lift that holds its own
+            // over the bubble a tapback rides. The reader's own chip takes
+            // the accent over that.
+            context.addPath(path)
+            context.setFillColor(isHovered ? tint.badgeHover : tint.badge)
+            context.fillPath()
+            if slot.isMine {
+                context.addPath(path)
+                context.setFillColor(NSColor.controlAccentColor.withAlphaComponent(isHovered ? 0.5 : 0.4).cgColor)
+                context.fillPath()
+            }
+            if let rim = tint.rim {
+                context.addPath(path)
+                context.setStrokeColor(slot.isMine ? NSColor.controlAccentColor.cgColor : rim)
                 context.setLineWidth(1)
                 context.strokePath()
             }
@@ -2466,11 +2537,16 @@ nonisolated enum TimelineRowPainter {
                               images: images, scale: scale, clock: clock)
         }
 
+        // A tapback carries a count only where there is more than one.
+        guard !slot.isTapback || slot.count > 1 else { return }
+        let onGlass = slot.isTapback || tint.rim != nil
         drawText(
             String(slot.count),
             font: style.metadataFont,
             color: burst.map { SuperReactionInk.ink($0.accent) }
-                ?? (slot.isMine ? NSColor.controlAccentColor : style.secondaryColor),
+                ?? (isSolid || (slot.isMine && onGlass) ? NSColor.white
+                    : slot.isMine ? NSColor.controlAccentColor
+                    : onGlass ? style.primaryColor : style.secondaryColor),
             at: CGPoint(x: glyphRect.maxX + TimelineMetrics.reactionGlyphGap, y: frame.midY - 7),
             maxWidth: max(
                 0,

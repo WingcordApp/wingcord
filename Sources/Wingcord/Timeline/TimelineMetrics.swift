@@ -222,6 +222,34 @@ nonisolated enum TimelineMetrics {
             + countWidth + reactionTrailingInset
     }
 
+    // Tapbacks: a bubble's first few reactions, riding its top corner the way
+    // Messages pins them (REDESIGN.md, "Reactions"). Layout, painter and the
+    // frost's outlines read the SAME constants.
+
+    /// The most reactions drawn as tapbacks; a message with more hangs them
+    /// all under its bubble as chips.
+    static let tapbackLimit = 3
+    /// Between the emoji and the badge's edge, all round.
+    static let tapbackInset: CGFloat = 4
+    /// A badge's height, and its width when it carries no count: a circle.
+    static let tapbackSide: CGFloat = reactionGlyphSide + tapbackInset * 2
+    /// How far inside the bubble's top corner the first badge's centre sits.
+    static let tapbackCornerInset = CGSize(width: 6, height: 2)
+    /// Between two badges.
+    static let tapbackGap: CGFloat = 3
+    /// The gap cut round each badge into the bubble it rides, so the two read
+    /// as two objects rather than one shape with a bump.
+    static let tapbackNotch: CGFloat = 2.5
+    /// How far a bubble steps down to make room for the half of its badges
+    /// that rises above it.
+    static let tapbackRise: CGFloat = tapbackSide / 2 - tapbackCornerInset.height + 2
+
+    /// A badge's width: a circle, or a capsule when a count follows the emoji.
+    static func tapbackWidth(countWidth: CGFloat?) -> CGFloat {
+        guard let countWidth else { return tapbackSide }
+        return tapbackInset + reactionGlyphSide + reactionGlyphGap + countWidth + reactionTrailingInset
+    }
+
     // The thread chip under a message that started one. Layout and painter read
     // the SAME constants — two halves of one geometry, and drifting them is
     // invisible until it isn't.

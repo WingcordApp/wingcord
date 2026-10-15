@@ -440,6 +440,8 @@ final class TimelineCanvasView: NSView {
     /// The bookmark control beside it was clicked: keep the message, or let it
     /// go.
     var onToggleBookmark: ((MessageID) -> Void)?
+    /// A refused send's red disc was clicked: send it again.
+    var onResend: ((MessageID) -> Void)?
     /// A reply's quoted line was clicked: go to what it quotes.
     var onOpenReplyTarget: ((MessageID) -> Void)?
     /// The open topic's marker was clicked: bring its panel back.
@@ -1183,14 +1185,25 @@ final class TimelineCanvasView: NSView {
         let frame = rowFrame(at: index)
         let scale = window.backingScaleFactor
         let ink = ThemeInk.current
+        let tint = BubbleTint.current
         let onAccent = bubble.ground == .accent
+        // The frost the row will show, which an accent bubble covers.
+        let frost = onAccent || !BubbleTint.showsFrost ? nil : WallpaperFrost.shared.image
+        let fill: CGColor = switch bubble.ground {
+        case .accent: ink.ownBubble
+        case .own: tint.own
+        case .neutral: tint.other
+        }
         let flight = BubbleFlight(
             nonce: nonce,
             landing: BubbleFlight.Landing(
                 body: bubble.rect.offsetBy(dx: frame.minX, dy: frame.minY),
                 radius: BubbleMetrics.cornerRadius(for: style.bodyFont),
                 tail: bubble.hasTail ? row.bubbles?.side : nil,
-                fill: onAccent ? ink.ownBubble : ink.otherBubble,
+                fill: fill,
+                rim: onAccent ? nil : tint.rim,
+                frost: frost,
+                window: frost == nil ? nil : windowInCanvas,
                 words: BubbleFlight.wordsImage(
                     block, style: style, plates: onAccent ? ink.ownBubblePlates : nil, scale: scale
                 ),
@@ -1219,6 +1232,7 @@ final class TimelineCanvasView: NSView {
         flights.append(flight)
         setNeedsDisplay(frame)
         reconcileFilms()
+        onBubbleOutlinesChange?()
     }
 
     /// Keeps each flight on its row as the rows change under it: `landing`
@@ -1238,6 +1252,20 @@ final class TimelineCanvasView: NSView {
         }
     }
 
+    /// The window's content, in this canvas's space — where the wallpaper and
+    /// its frost are laid.
+    private var windowInCanvas: CGRect? {
+        guard let content = window?.contentView else { return nil }
+        return convert(content.bounds, from: content)
+    }
+
+    /// The window moved over the rows — a scroll tick, a resize: each flight's
+    /// frost follows, as `BubbleFrostView`'s picture does.
+    func alignFlightFrost() {
+        guard !flights.isEmpty, let window = windowInCanvas else { return }
+        for flight in flights { flight.alignFrost(window: window) }
+    }
+
     /// The row paints its bubble, then the flight comes off — **in that
     /// order, in one transaction**, so no frame shows neither.
     private func land(_ flight: BubbleFlight) {
@@ -1247,6 +1275,36 @@ final class TimelineCanvasView: NSView {
         displayIfNeeded()
         flight.remove()
         reconcileFilms()
+        onBubbleOutlinesChange?()
+    }
+
+    // MARK: The frost's outlines
+
+    /// Told when a bubble's outline appears or goes without the rows changing —
+    /// a send taking off or landing — so the frost under the canvas follows.
+    var onBubbleOutlinesChange: (() -> Void)?
+
+    /// Every frosted bubble's outline in `rect`, in document coordinates — what
+    /// `BubbleFrostView` is masked to — and every reaction's, which are glass
+    /// too. An accent bubble is opaque and needs none, and a send still in the
+    /// air has no outline until it lands.
+    func bubbleOutlines(in rect: CGRect) -> CGPath {
+        let path = CGMutablePath()
+        guard !rows.isEmpty, var index = rowIndex(at: max(0, rect.minY)) else { return path }
+        while index < rows.count, offsets[index] < rect.maxY {
+            if case .message(let row) = rows[index].kind {
+                let origin = rowFrame(at: index).origin
+                let place = CGAffineTransform(translationX: origin.x, y: origin.y)
+                if let bubble = row.bubbles?.bubble, bubble.ground != .accent, !isFlying(row.id) {
+                    path.addPath(bubble.path, transform: place)
+                }
+                for slot in row.reactions {
+                    path.addPath(slot.outline, transform: place)
+                }
+            }
+            index += 1
+        }
+        return path
     }
 
     // MARK: Geometry
@@ -1274,6 +1332,23 @@ final class TimelineCanvasView: NSView {
     /// column resize from 300 to 240 yields a 1.25x horizontal stretch. Frame
     /// first, then bounds size, holds both axes at 1.0 through every step.
     func installViewport(frame newFrame: CGRect, bounds newBounds: CGRect) {
+        // **The width callback waits until the frame AND the bounds are in.**
+        // Setting the frame re-enters through `setFrameSize` → `onWidthChange`
+        // → a relayout, which positions this canvas again for the NEW document
+        // — and then the rest of this call used to finish, installing the
+        // bounds origin computed for the OLD one. The canvas then drew a slice
+        // of the document nowhere near its frame: a blank transcript, until some
+        // later width change happened to put it right. The split view always
+        // produced one of those after launch; the shell (REDESIGN.md) does not,
+        // which is how it surfaced.
+        let previousWidth = frame.width
+        isInstallingViewport = true
+        defer {
+            isInstallingViewport = false
+            if abs(previousWidth - frame.width) >= 1 {
+                onWidthChange?(frame.width)
+            }
+        }
         if frame != newFrame {
             frame = newFrame
             needsDisplay = true
@@ -1303,10 +1378,16 @@ final class TimelineCanvasView: NSView {
     override func setFrameSize(_ newSize: NSSize) {
         let previousWidth = frame.width
         super.setFrameSize(newSize)
-        if abs(previousWidth - newSize.width) >= 1 {
+        // Inside `installViewport` the callback is that method's to make, once
+        // the bounds are consistent with the frame.
+        if !isInstallingViewport, abs(previousWidth - newSize.width) >= 1 {
             onWidthChange?(newSize.width)
         }
     }
+
+    /// Set while `installViewport` is between assigning the frame and the
+    /// bounds. See there.
+    private var isInstallingViewport = false
 
     // MARK: Drawing
 
@@ -1742,6 +1823,8 @@ final class TimelineCanvasView: NSView {
             onToggleBookmark?(row.id)
         case .threadChip(let threadID, _):
             onOpenThread?(threadID)
+        case .resend:
+            onResend?(row.id)
         case .replyHeader(let target):
             // A strip with nothing behind it still swallows the click: falling
             // through would open the profile of whoever is underneath.
@@ -2036,6 +2119,9 @@ final class TimelineCanvasView: NSView {
         /// The chip under a message that started a thread. Carries the thread
         /// to open, and its origin in row space so the painter can light it.
         case threadChip(ChannelID, origin: CGPoint)
+        /// A refused send's red disc, which sends it again. Its origin in row
+        /// space, for the painter to light.
+        case resend(origin: CGPoint)
         /// The quoted line above a reply. Carries where to go, or nil when the
         /// quoted message is gone — which still swallows the click, because a
         /// strip that says "original message was deleted" is not a hole in the
@@ -2268,6 +2354,11 @@ final class TimelineCanvasView: NSView {
             return .threadChip(chip.targetID, origin: chip.rect.origin)
         }
 
+        // A little more than the disc, which is small for a pointer to find.
+        if let failure = row.bubbles?.failure, failure.badge.insetBy(dx: -4, dy: -4).contains(local) {
+            return .resend(origin: failure.badge.origin)
+        }
+
         for slot in row.reactions where slot.rect.contains(local) {
             return .reaction(slot.emoji, kind: slot.kind, origin: slot.rect.origin)
         }
@@ -2459,6 +2550,9 @@ final class TimelineCanvasView: NSView {
             case .threadChip(_, let origin):
                 // The origin is published so the painter lights the chip the
                 // pointer is on, exactly as a reaction chip does.
+                component = origin
+                cursor = .pointingHand
+            case .resend(let origin):
                 component = origin
                 cursor = .pointingHand
             case .replyHeader(let target):

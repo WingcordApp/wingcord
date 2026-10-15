@@ -69,6 +69,10 @@ final class SessionController {
     var socket: GatewaySocket?
     private var eventTask: Task<Void, Never>?
     private var isTornDown = false
+    /// Conversations whose newest message has been asked for this connection
+    /// — see `loadDirectMessagePreviews`. Asked once each, never again.
+    var requestedPreviewChannels: Set<ChannelID> = []
+    var isLoadingPreviews = false
 
     /// What this Mac is running, and the thing that publishes it.
     ///
@@ -609,6 +613,7 @@ final class SessionController {
 
     private func teardownConnection() {
         isTornDown = true
+        requestedPreviewChannels.removeAll()
         cancelFolderSave()
         stopGameDetection()
         eventTask?.cancel()

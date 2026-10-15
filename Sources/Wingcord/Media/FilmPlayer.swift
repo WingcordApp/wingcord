@@ -160,6 +160,7 @@ final class FilmPlayer {
         }
         let key = key
         let stills = drawsStills
+        let space = FilmSource.screenSpace
         loadTask = Task { [weak self] in
             guard let data = try? await ImageStore.shared.data(for: key.url) else {
                 // Nothing to show, and the owner keeps its still.
@@ -168,7 +169,7 @@ final class FilmPlayer {
             }
             guard !Task.isCancelled else { return }
             let source = await Task.detached(priority: .userInitiated) {
-                FilmSource(data: data, maximumPixelSize: key.maximumPixelSize, stills: stills)
+                FilmSource(data: data, maximumPixelSize: key.maximumPixelSize, stills: stills, displaySpace: space)
             }.value
             guard let self, !Task.isCancelled else { return }
             guard let source else {
@@ -238,6 +239,16 @@ final class FilmPlayer {
 
     /// The moment every resident loop counts from.
     private static let epoch = CACurrentMediaTime()
+}
+
+extension FilmSource {
+    /// The colour space a source's frames are matched to: the screen with the
+    /// key window, which is where a picture decoded now is about to be shown.
+    /// A window moved to another screen afterwards costs that screen's
+    /// conversion again, as every frame did before — never a wrong colour.
+    @MainActor static var screenSpace: CGColorSpace? {
+        NSScreen.main?.colorSpace?.cgColorSpace
+    }
 }
 
 /// A loop held whole: every frame, and when each one ends.

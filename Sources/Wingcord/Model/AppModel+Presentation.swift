@@ -97,6 +97,11 @@ struct SidebarMemoKey: Hashable, Sendable {
     /// Typing, on the same terms: only the DM list draws it, and only a direct
     /// message's typing moves this — see `AppModel.directMessageTypingRevision`.
     var typingRevision: UInt64
+    /// The reader's conversation folders, which only the DM list draws —
+    /// `DirectMessageFolders.revision`, zero for a server.
+    var folderRevision: UInt64 = 0
+    /// The conversations' newest messages, which only the DM list draws.
+    var previewRevision: UInt64 = 0
 }
 
 // MARK: - Projections
@@ -155,39 +160,52 @@ extension AppModel {
 
     /// The channel column for the selected guild.
     var sidebarPresentation: SidebarPresentation {
+        sidebarPresentation(for: selectedGuildID)
+    }
+
+    /// One list: a server's channels, or — for nil — the direct messages.
+    ///
+    /// **Two memos, one per kind**, because the sidebar's pages show both at
+    /// once (REDESIGN.md R8): the conversations on one, the last server opened
+    /// on the next, whichever of them holds the selection.
+    func sidebarPresentation(for guildID: GuildID?) -> SidebarPresentation {
         let key = SidebarMemoKey(
-            eventsRow: selectedGuildID.flatMap(sidebarEventsRow(for:)),
+            eventsRow: guildID.flatMap(sidebarEventsRow(for:)),
             structureRevision: channelIndex.structureRevision,
             valueRevision: channelIndex.valueRevision,
             sidebarRevision: sidebarRevision,
             roleRevision: roleRevision,
-            guildID: selectedGuildID,
+            guildID: guildID,
             collapsedCategories: collapsedCategoryIDs,
             followRevision: followRevision,
             voiceRevision: voiceRevision,
             voicePresenceRevision: voicePresenceRevision,
             speakingIDs: speakingUserIDs,
             hiddenSelection: hiddenSelectedChannelID,
-            surfaceRows: selectedGuildID.map(guildSurfaceRows(for:)) ?? [],
-            presenceRevision: selectedGuildID == nil ? presenceRevision : 0,
-            typingRevision: selectedGuildID == nil ? directMessageTypingRevision : 0
+            surfaceRows: guildID.map(guildSurfaceRows(for:)) ?? [],
+            presenceRevision: guildID == nil ? presenceRevision : 0,
+            typingRevision: guildID == nil ? directMessageTypingRevision : 0,
+            folderRevision: guildID == nil ? DirectMessageFolders.shared.revision : 0,
+            previewRevision: guildID == nil ? directMessagePreviewRevision : 0
         )
         let guildTable = guilds
         // Read before the early return, so a cache hit still registers the
         // dependency its reader needs.
         let userTable = users
 
-        if let sidebarCache, sidebarCache.key == key { return sidebarCache.value }
+        let cached = guildID == nil ? homeSidebarCache : sidebarCache
+        if let cached, cached.key == key { return cached.value }
 
         let value: SidebarPresentation
-        if let guildID = selectedGuildID {
+        if let guildID {
             // A guild that is selected but has not arrived yet is a real state
             // during bootstrap. It gets an empty list, not the DM list.
             value = guildTable[guildID].map { buildGuildSidebar(guild: $0, eventsRow: key.eventsRow) } ?? .empty
+            sidebarCache = (key, value)
         } else {
             value = buildDirectMessageSidebar(users: userTable)
+            homeSidebarCache = (key, value)
         }
-        sidebarCache = (key, value)
         return value
     }
 
@@ -246,6 +264,10 @@ extension AppModel {
         // no server here to show anything else of.
         if let guildID = shownJoinRequestGuildID {
             return WorkspacePresentation(primary: .joinRequest(guildID), supplementary: nil)
+        }
+        // The Friends page, on its own.
+        if isFriendsShown {
+            return WorkspacePresentation(primary: .friends, supplementary: nil)
         }
         // The home's own page, with the request being read beside it.
         if isMessageRequestsShown {
@@ -411,6 +433,29 @@ extension AppModel {
                 isVoiceChatShown: false
             )
         }
+        // The home's own pages are named the same way: what is in the column
+        // is the page, not the conversation selected behind it.
+        if isFriendsShown || isMessageRequestsShown {
+            return ChannelChrome(
+                channelID: nil,
+                name: isFriendsShown ? "Friends" : "Message Requests",
+                symbolName: isFriendsShown ? "person.2.fill" : "envelope.fill",
+                topic: nil,
+                isMemberListShown: false,
+                canShowMemberList: false,
+                isUserProfileShown: false,
+                canShowUserProfile: false,
+                canShowPins: false,
+                arePinsShown: false,
+                canShowThreads: false,
+                areThreadsShown: false,
+                canStartCall: false,
+                isInCall: false,
+                isCallOngoing: false,
+                canShowVoiceChat: false,
+                isVoiceChatShown: false
+            )
+        }
         guard let channelID = selectedChannelID, let channel = channelIndex[channelID] else {
             return .none
         }
@@ -553,15 +598,18 @@ extension AppModel {
                 + channelIDs.filter { !pinned.contains($0) }
         }
         var rows: [SidebarRow] = []
-        rows.reserveCapacity(channelIDs.count + 1)
+        rows.reserveCapacity(channelIDs.count + 2)
+        // Friends first, always: the page of people, as Discord's home heads
+        // its list with it (REDESIGN.md R12).
+        rows.append(.friends(pending: FriendRequest.incomingCount(of: relationships)))
         // **Only while something is waiting**, requests or spam — Discord's
         // `309199`'s `SM`. The badge counts the requests alone.
         if !channelIndex.messageRequestIDs(.pending).isEmpty || !channelIndex.messageRequestIDs(.spam).isEmpty {
             rows.append(.messageRequests(pending: pendingMessageRequestCount))
         }
 
-        for channelID in channelIDs {
-            guard let channel = channelIndex[channelID] else { continue }
+        func channelRow(_ channelID: ChannelID) -> SidebarRow? {
+            guard let channel = channelIndex[channelID] else { return nil }
             let state = unreadState(of: channel)
             // The other person, for a one-to-one conversation. A group has no
             // single face, so it takes the group glyph and no presence dot.
@@ -602,7 +650,7 @@ extension AppModel {
             // single person for any of these to be about.
             let presence = partnerID.flatMap { presences[$0] }
             let decoration = partner?.decoration
-            rows.append(.channel(SidebarChannel(
+            return .channel(SidebarChannel(
                 id: channelID,
                 name: name,
                 kind: channel.kind,
@@ -641,14 +689,152 @@ extension AppModel {
                 nameplatePalette: decoration?.nameplate?.palette ?? .none,
                 nameStyle: decoration?.displayNameStyle,
                 nameColorValue: nil,
-                isPinned: pinnedChannelIDs.contains(channelID)
+                isPinned: pinnedChannelIDs.contains(channelID),
+                // Only while it is still the newest: a message that has since
+                // been followed by one this client has not seen is not a
+                // preview of anything.
+                preview: latestDirectMessages[channelID]
+                    .flatMap { $0.id == channel.lastMessageID ? $0 : nil }
+                    .flatMap { message in
+                        previewLine(for: message).map { SidebarChannel.Preview(text: $0, sentAt: message.sentAt) }
+                    }
+            ))
+        }
+
+        func isUnread(_ channelID: ChannelID) -> Bool {
+            channelIndex[channelID].map { unreadState(of: $0).unread } ?? false
+        }
+
+        // Before the pins and the folders take any out: the search's list.
+        let everyConversation = channelIDs
+
+        // **The pinned ones above the list, as faces** — Messages' pins
+        // (REDESIGN.md R9) — and out of the list and the folders below them,
+        // where they would be the same conversation twice.
+        if !pinnedChannelIDs.isEmpty {
+            let pinned = channelIDs.filter { pinnedChannelIDs.contains($0) }
+            let tiles = pinned.compactMap { channelID -> SidebarChannel? in
+                if case .channel(let channel) = channelRow(channelID) { return channel }
+                return nil
+            }
+            if !tiles.isEmpty { rows.append(.pinnedGrid(tiles)) }
+            channelIDs.removeAll { pinnedChannelIDs.contains($0) }
+        }
+
+        // **The reader's folders, as categories** (REDESIGN.md R9): each opens
+        // and closes as a server's category does, its conversations in the
+        // list's own order inside it. The rest follow under a heading of their
+        // own — without one they would read as the last folder's.
+        let folders = DirectMessageFolders.shared.folders
+        if folders.isEmpty {
+            rows.append(contentsOf: channelIDs.compactMap(channelRow))
+        } else {
+            var filed = Set<UInt64>()
+            for folder in folders {
+                let members = Set(folder.channelIDs)
+                filed.formUnion(members)
+                let inside = channelIDs.filter { members.contains($0.rawValue) }
+                rows.append(.category(SidebarCategory(
+                    id: DirectMessageFolders.categoryID(for: folder.id),
+                    name: folder.name,
+                    isExpanded: !folder.isCollapsed,
+                    hasUnread: inside.contains(where: isUnread)
+                )))
+                if !folder.isCollapsed { rows.append(contentsOf: inside.compactMap(channelRow)) }
+            }
+            let unfiled = channelIDs.filter { !filed.contains($0.rawValue) }
+            let unfiledID = DirectMessageFolders.unfiledCategoryID
+            let isOpen = !collapsedCategoryIDs.contains(unfiledID)
+            rows.append(.category(SidebarCategory(
+                id: unfiledID,
+                name: "Direct Messages",
+                isExpanded: isOpen,
+                hasUnread: unfiled.contains(where: isUnread)
             )))
+            if isOpen { rows.append(contentsOf: unfiled.compactMap(channelRow)) }
         }
 
         return SidebarPresentation(
-            header: SidebarHeader(guildID: nil, name: "Direct Messages", bannerURL: nil),
-            rows: rows
+            // "Messages", as Messages heads its own list — the panel's header row
+            // is narrow beside its toggle and create menu (REDESIGN.md R9).
+            header: SidebarHeader(guildID: nil, name: "Messages", bannerURL: nil),
+            rows: rows,
+            conversations: everyConversation.compactMap { channelID in
+                if case .channel(let channel) = channelRow(channelID) { return channel }
+                return nil
+            }
         )
+    }
+
+    /// A message as one line under its conversation's name — Messages' preview:
+    /// the words with their markup read out, or what was sent when there are
+    /// none, and "You: " before the reader's own.
+    func previewLine(for message: Message) -> String? {
+        var text = message.content
+        if !text.isEmpty {
+            text = Self.readablePreview(text) { [users, channelIndex] id, kind in
+                switch kind {
+                case .user: users[UserID(rawValue: id)].map { "@" + $0.preferredName }
+                case .channel: channelIndex[ChannelID(rawValue: id)].map { "#" + $0.name }
+                }
+            }
+        }
+        if text.isEmpty {
+            if let attachment = message.attachments.first {
+                let type = attachment.contentType ?? ""
+                text = type.hasPrefix("image/") ? "Picture" : type.hasPrefix("video/") ? "Video" : attachment.filename
+            } else if !message.stickers.isEmpty {
+                text = "Sticker"
+            } else if let poll = message.poll {
+                text = "Poll: " + poll.question
+            } else if let embed = message.embeds.first {
+                text = embed.title ?? embed.url ?? "Link"
+            } else if let interaction = message.interaction {
+                // An app's answer with nothing but controls in it: say what
+                // was asked of it, as its header in the transcript does.
+                let invoker = interaction.userID == currentUserID
+                    ? "You" : users[interaction.userID]?.preferredName ?? "Someone"
+                return "\(invoker) used /\(interaction.name)"
+            }
+        }
+        // Nothing a line can say: the row keeps what the person is doing.
+        guard !text.isEmpty else { return nil }
+        return message.authorID == currentUserID ? "You: " + text : text
+    }
+
+    private nonisolated enum PreviewReference { case user, channel }
+
+    /// Discord's markup as a person would say it: mentions by name, custom
+    /// emoji by their word, spoilers hidden, emphasis dropped, one line.
+    private nonisolated static func readablePreview(
+        _ text: String,
+        name: (UInt64, PreviewReference) -> String?
+    ) -> String {
+        var out = text
+        out = out.replacingOccurrences(of: #"\|\|[^|]*\|\|"#, with: "▒▒▒", options: .regularExpression)
+        out = out.replacingOccurrences(of: #"<a?:([A-Za-z0-9_~]+):\d+>"#, with: ":$1:", options: .regularExpression)
+        for (pattern, kind) in [(#"<@!?(\d+)>"#, PreviewReference.user), (#"<#(\d+)>"#, .channel)] {
+            guard let regex = try? NSRegularExpression(pattern: pattern) else { continue }
+            let source = out
+            let range = NSRange(source.startIndex..., in: source)
+            var rebuilt = ""
+            var cursor = source.startIndex
+            for match in regex.matches(in: source, range: range) {
+                guard let whole = Range(match.range, in: source),
+                      let digits = Range(match.range(at: 1), in: source),
+                      let id = UInt64(source[digits])
+                else { continue }
+                rebuilt += source[cursor..<whole.lowerBound]
+                rebuilt += name(id, kind) ?? (kind == .user ? "@someone" : "#channel")
+                cursor = whole.upperBound
+            }
+            rebuilt += source[cursor...]
+            out = rebuilt
+        }
+        out = out.replacingOccurrences(of: #"<@&\d+>"#, with: "@role", options: .regularExpression)
+        out = out.replacingOccurrences(of: #"(\*\*|__|~~|`{1,3})"#, with: "", options: .regularExpression)
+        out = out.replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)
+        return out.trimmingCharacters(in: .whitespaces)
     }
 
     private func buildGuildSidebar(guild: Guild, eventsRow: SidebarEventsRow?) -> SidebarPresentation {
@@ -969,6 +1155,7 @@ extension AppModel {
         // requests page belongs to the home, and goes the same way.
         openGuildSurface = nil
         isMessageRequestsOpen = false
+        isFriendsOpen = false
         previewedChannelID = nil
         // Return to where the reader was, not to the top of the list.
         if let guildID {
@@ -989,6 +1176,7 @@ extension AppModel {
         // clicking the row you came from leaves the page up and does nothing.
         openGuildSurface = nil
         isMessageRequestsOpen = false
+        isFriendsOpen = false
         previewedChannelID = nil
         // A flyout describes the channel it was opened on. Carrying it across
         // is a card that names one channel while the transcript shows another.
@@ -1050,6 +1238,11 @@ extension AppModel {
     }
 
     func toggleCategory(_ categoryID: ChannelID) {
+        // A conversation folder keeps its own state, on this Mac.
+        if let folderID = DirectMessageFolders.folderID(from: categoryID), folderID != 0 {
+            DirectMessageFolders.shared.toggle(folderID)
+            return
+        }
         if collapsedCategoryIDs.contains(categoryID) {
             collapsedCategoryIDs.remove(categoryID)
         } else {

@@ -23,7 +23,9 @@ extension AppModel {
     ///   `(url, pixel size)` and both halves have to match the transcript's.
     /// A file card's Download.
     func downloadAttachment(messageID: MessageID, in channelID: ChannelID, attachmentIndex: Int) {
-        guard let attachments = messageBoxes[channelID]?.messages.first(where: { $0.id == messageID })?.attachments,
+        // The transcript's copy, or the inspector's — an older file found by
+        // search is in no transcript.
+        guard let attachments = knownMessage(messageID, in: channelID)?.attachments,
               attachments.indices.contains(attachmentIndex)
         else { return }
         AttachmentDownloads.download(attachments[attachmentIndex], model: self)
@@ -35,9 +37,8 @@ extension AppModel {
         attachmentIndex: Int,
         posterWidths: [CGFloat]
     ) {
-        guard let box = messageBoxes[channelID],
-              let message = box.messages.first(where: { $0.id == messageID })
-        else { return }
+        // The transcript's copy, or the inspector's — see `knownMessage`.
+        guard let message = knownMessage(messageID, in: channelID) else { return }
 
         let attachments = message.attachments
         guard attachments.indices.contains(attachmentIndex) else { return }

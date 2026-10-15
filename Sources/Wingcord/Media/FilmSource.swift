@@ -27,6 +27,7 @@ nonisolated final class FilmSource: @unchecked Sendable {
 
     private let source: CGImageSource
     private let options: CFDictionary
+    private let displaySpace: CGColorSpace?
     private let queue = DispatchQueue(label: "dev.wingcord.film", qos: .userInitiated)
 
     /// Reads an asset's frames, or nil when it cannot be read.
@@ -38,7 +39,10 @@ nonisolated final class FilmSource: @unchecked Sendable {
     ///   wants nil, before anything is decoded (`AnimatedDecoration`); one that
     ///   leaves its box empty for this picture wants the frame, because nothing
     ///   else will draw it (the transcript's layers, a profile effect's).
-    init?(data: Data, maximumPixelSize: Int, stills: Bool = false) {
+    /// - Parameter displaySpace: the colour space of the screen the frames
+    ///   are shown on, read by the owner on the main actor
+    ///   (`FilmSource.screenSpace`). Nil leaves every frame as decoded.
+    init?(data: Data, maximumPixelSize: Int, stills: Bool = false, displaySpace: CGColorSpace? = nil) {
         guard let source = CGImageSourceCreateWithData(
             data as CFData, [kCGImageSourceShouldCache: false] as CFDictionary
         ) else { return nil }
@@ -51,7 +55,8 @@ nonisolated final class FilmSource: @unchecked Sendable {
             kCGImageSourceShouldCacheImmediately: true,
             kCGImageSourceCreateThumbnailWithTransform: true,
         ] as CFDictionary
-        guard let first = CGImageSourceCreateThumbnailAtIndex(source, 0, options) else { return nil }
+        guard let decoded = CGImageSourceCreateThumbnailAtIndex(source, 0, options) else { return nil }
+        let first = Self.matched(decoded, to: displaySpace)
 
         var ends: [Double] = []
         ends.reserveCapacity(count)
@@ -65,6 +70,7 @@ nonisolated final class FilmSource: @unchecked Sendable {
         }
         self.source = source
         self.options = options
+        self.displaySpace = displaySpace
         self.frameCount = count
         self.ends = ends
         self.duration = clock
@@ -113,7 +119,9 @@ nonisolated final class FilmSource: @unchecked Sendable {
     /// Decodes one frame on this source's queue and hands it back there.
     func decode(_ index: Int, then deliver: @escaping @Sendable (CGImage?) -> Void) {
         queue.async { [self] in
-            deliver(CGImageSourceCreateThumbnailAtIndex(source, index, options))
+            deliver(CGImageSourceCreateThumbnailAtIndex(source, index, options).map {
+                Self.matched($0, to: displaySpace)
+            })
         }
     }
 
@@ -127,10 +135,40 @@ nonisolated final class FilmSource: @unchecked Sendable {
                     deliver(nil)
                     return
                 }
-                frames.append(frame)
+                frames.append(Self.matched(frame, to: displaySpace))
             }
             deliver(frames)
         }
+    }
+
+    /// A frame as the render server keeps it: premultiplied BGRA in the
+    /// display's own colour space.
+    ///
+    /// **Matched here, on this queue, rather than by Core Animation on the main
+    /// thread.** A layer's contents in any other colour space are converted
+    /// when the transaction that sets them commits — on the main thread, and
+    /// for a streamed loop on every frame, since every frame is a new image.
+    /// Measured on the demo at rest: converting the decorations' sRGB frames
+    /// was most of what its main thread did between messages, and the hitches
+    /// the frame meter caught while nothing moved.
+    static func matched(_ image: CGImage, to space: CGColorSpace?) -> CGImage {
+        guard let space else { return image }
+        let ready = CGImageAlphaInfo.premultipliedFirst.rawValue | CGBitmapInfo.byteOrder32Little.rawValue
+        if image.colorSpace == space, image.bitmapInfo.rawValue == ready, image.bitsPerPixel == 32 {
+            return image
+        }
+        guard let context = CGContext(
+            data: nil,
+            width: image.width,
+            height: image.height,
+            bitsPerComponent: 8,
+            bytesPerRow: 0,
+            space: space,
+            bitmapInfo: ready
+        ) else { return image }
+        context.setBlendMode(.copy)
+        context.draw(image, in: CGRect(x: 0, y: 0, width: image.width, height: image.height))
+        return context.makeImage() ?? image
     }
 
     /// A delay below this is what an authoring tool writes when it means "as

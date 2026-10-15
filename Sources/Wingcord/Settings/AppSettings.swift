@@ -131,12 +131,33 @@ final class AppSettings {
     ///
     /// **Layout, not paint**: every row changes shape, so it reaches the
     /// transcript through `TimelineSettings` and moves the revision.
-    var usesMessageBubbles = false {
+    var usesMessageBubbles = true {
         didSet {
             guard usesMessageBubbles != oldValue else { return }
             defaults.set(usesMessageBubbles, forKey: Key.messageBubbles)
             notifyPresentation()
         }
+    }
+
+    /// Whether the reader's own bubbles wear the accent. Off by default: in the
+    /// redesign both sides are frosted glass over the background, the reader's a
+    /// step lighter (REDESIGN.md R6). Layout, because the words on an accent
+    /// bubble are set white at layout time.
+    var tintsOwnBubbles = false {
+        didSet {
+            guard tintsOwnBubbles != oldValue else { return }
+            defaults.set(tintsOwnBubbles, forKey: Key.tintsOwnBubbles)
+            notifyPresentation()
+        }
+    }
+
+    /// Whether a message that says happy birthday, congratulations or happy
+    /// new year celebrates on screen as it arrives (REDESIGN.md R14) — the
+    /// Messages app's screen effects, drawn on this Mac only: nothing is sent,
+    /// and nobody else's client shows them. Reduce Motion turns them off
+    /// whatever this says.
+    var playsScreenEffects = true {
+        didSet { defaults.set(playsScreenEffects, forKey: Key.screenEffects) }
     }
 
     /// Whether the member list is shown by default in a new guild.
@@ -544,6 +565,55 @@ final class AppSettings {
         didSet { defaults.set(chromeShape.rawValue, forKey: Key.chromeShape) }
     }
 
+    // MARK: The window shell
+
+    /// Whether the sidebar is a glass panel floating inside the window, or a
+    /// column flush with its edges. See `SidebarStyle`.
+    var sidebarStyle: SidebarStyle = .floating {
+        didSet { defaults.set(sidebarStyle.rawValue, forKey: Key.sidebarStyle) }
+    }
+
+    /// Whether a server's banner art heads its channel list. Off, every server
+    /// starts as one without art: the list at the top, the name in the header.
+    var showsServerBanners = true {
+        didSet { defaults.set(showsServerBanners, forKey: Key.showsServerBanners) }
+    }
+
+    /// Whether the conversation list asks Discord for each conversation's newest
+    /// message, for its preview line — one request when the list first
+    /// appears (`SessionController.loadDirectMessagePreviews`). Off, a row
+    /// shows a preview only for conversations opened this session.
+    var loadsMessagePreviews = true {
+        didSet { defaults.set(loadsMessagePreviews, forKey: Key.loadsMessagePreviews) }
+    }
+
+    /// The pages the sidebar swipes between — see `SidebarPageLayout`.
+    var sidebarPages: SidebarPageLayout = .twoPages {
+        didSet { defaults.set(sidebarPages.rawValue, forKey: Key.sidebarPages) }
+    }
+
+    /// Whether the sidebar is out. View › Hide Sidebar, ⌃⌘S, and the header's
+    /// own toggle all write this one value.
+    var isSidebarShown = true {
+        didSet { defaults.set(isSidebarShown, forKey: Key.sidebarShown) }
+    }
+
+    /// The sidebar's width, as the reader last dragged it.
+    ///
+    /// A clamped facade over private storage, for the reason `textScale` is one:
+    /// clamping inside a `didSet` re-enters the setter.
+    var sidebarWidth: CGFloat {
+        get { storedSidebarWidth }
+        set { storedSidebarWidth = ShellMetrics.clampedSidebarWidth(newValue) }
+    }
+
+    private var storedSidebarWidth: CGFloat = ShellMetrics.sidebarIdealWidth {
+        didSet {
+            guard storedSidebarWidth != oldValue else { return }
+            defaults.set(Double(storedSidebarWidth), forKey: Key.sidebarWidth)
+        }
+    }
+
     /// The order of the four controls at the composer's trailing end.
     ///
     /// A preference because the reader reaches for one of them far more than the
@@ -555,6 +625,14 @@ final class AppSettings {
     /// a control needs no migration here.
     var composerControls: ComposerControlOrder = .default {
         didSet { defaults.set(composerControls.storage, forKey: Key.composerControls) }
+    }
+
+    /// Whether the GIF, sticker and app controls sit in the composer beside
+    /// the field — the arrangement before the redesign — rather than in `+`'s
+    /// menu, with only the emoji control and the send arrow in the field, as
+    /// Messages has it (REDESIGN.md R7).
+    var composerControlsInline = false {
+        didSet { defaults.set(composerControlsInline, forKey: Key.composerControlsInline) }
     }
 
     /// Extra space between message runs, in points, on top of the density the
@@ -1188,7 +1266,9 @@ final class AppSettings {
         storedUserColorSaturation =
             defaults.object(forKey: Key.userColorSaturation) as? Double ?? 1
         isCompactMode = defaults.object(forKey: Key.compactMode) as? Bool ?? false
-        usesMessageBubbles = defaults.object(forKey: Key.messageBubbles) as? Bool ?? false
+        usesMessageBubbles = defaults.object(forKey: Key.messageBubbles) as? Bool ?? true
+        tintsOwnBubbles = defaults.object(forKey: Key.tintsOwnBubbles) as? Bool ?? false
+        playsScreenEffects = defaults.object(forKey: Key.screenEffects) as? Bool ?? true
         showsMemberListByDefault = defaults.object(forKey: Key.showsMemberList) as? Bool ?? true
         sharesGameActivity = defaults.object(forKey: Key.sharesGameActivity) as? Bool ?? true
         isOverlayEnabled = defaults.object(forKey: Key.overlayEnabled) as? Bool ?? true
@@ -1249,6 +1329,18 @@ final class AppSettings {
             ?? .boxy
         composerControls = defaults.stringArray(forKey: Key.composerControls)
             .map(ComposerControlOrder.init(storage:)) ?? .default
+        composerControlsInline = defaults.object(forKey: Key.composerControlsInline) as? Bool ?? false
+        sidebarStyle = defaults.string(forKey: Key.sidebarStyle)
+            .flatMap(SidebarStyle.init(rawValue:)) ?? .floating
+        sidebarPages = defaults.string(forKey: Key.sidebarPages)
+            .flatMap(SidebarPageLayout.init(rawValue:)) ?? .twoPages
+        loadsMessagePreviews = defaults.object(forKey: Key.loadsMessagePreviews) as? Bool ?? true
+        showsServerBanners = defaults.object(forKey: Key.showsServerBanners) as? Bool ?? true
+        isSidebarShown = defaults.object(forKey: Key.sidebarShown) as? Bool ?? true
+        storedSidebarWidth = ShellMetrics.clampedSidebarWidth(
+            (defaults.object(forKey: Key.sidebarWidth) as? Double).map { CGFloat($0) }
+                ?? ShellMetrics.sidebarIdealWidth
+        )
         showsNameplateInNowBar = defaults.object(forKey: Key.nowBarNameplate) as? Bool ?? true
         showsSummaryBar = defaults.object(forKey: Key.showsSummaryBar) as? Bool ?? true
         suppressedCosmetics = CosmeticSuppression(
@@ -1397,6 +1489,8 @@ final class AppSettings {
         static let userColorSaturation = "accessibility.userColorSaturation"
         static let compactMode = "appearance.compactMode"
         static let messageBubbles = "appearance.messageBubbles"
+        static let tintsOwnBubbles = "appearance.tintsOwnBubbles"
+        static let screenEffects = "appearance.screenEffects"
         static let showsMemberList = "appearance.showsMemberList"
         static let sharesGameActivity = "activity.sharesGameActivity"
         static let overlayEnabled = "overlay.enabled"
@@ -1431,6 +1525,13 @@ final class AppSettings {
         /// Read once, for migration, and never written again.
         static let legacyComposerShape = "appearance.composerShape"
         static let composerControls = "appearance.composerControls"
+        static let composerControlsInline = "appearance.composerControlsInline"
+        static let sidebarStyle = "shell.sidebarStyle"
+        static let sidebarPages = "shell.sidebarPages"
+        static let loadsMessagePreviews = "shell.loadsMessagePreviews"
+        static let showsServerBanners = "shell.showsServerBanners"
+        static let sidebarShown = "shell.sidebarShown"
+        static let sidebarWidth = "shell.sidebarWidth"
         static let nowBarNameplate = "appearance.nowBarNameplate"
         static let showsSummaryBar = "chat.showsSummaryBar"
         static let suppressedCosmetics = "accessibility.suppressedCosmetics"

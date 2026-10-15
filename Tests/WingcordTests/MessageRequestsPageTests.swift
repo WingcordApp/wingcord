@@ -45,11 +45,14 @@ struct MessageRequestsPageTests {
 
     // MARK: The list
 
-    @Test("Requests are not conversations; one row stands for them, counting the pending")
+    @Test("Requests are not conversations; one row stands for them, counting the pending, under Friends")
     func sidebar() {
         let presentation = model().sidebarPresentation
         #expect(channelRows(presentation) == [friend])
-        #expect(presentation.rows.first == .messageRequests(pending: 1))
+        // Friends heads the home's list (REDESIGN.md R12); the requests row
+        // follows it.
+        #expect(presentation.rows.first == .friends(pending: 0))
+        #expect(presentation.rows.dropFirst().first == .messageRequests(pending: 1))
     }
 
     @Test("With nothing waiting there is no row at all")

@@ -36,6 +36,7 @@ struct ComposerContainer: View {
             channelSigil: model.channelIndex[channelID]?.kind.isPrivate == true ? "@" : "#",
             shape: settings.chromeShape,
             controls: settings.composerControls,
+            inlineControls: settings.composerControlsInline,
             focusKey: channelID,
             canSend: model.permissionGate.canSend(in: channelID),
             reply: reply,

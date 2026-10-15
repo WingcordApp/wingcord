@@ -22,7 +22,10 @@ final class AppModel {
 
     // MARK: Identity
 
-    var currentUserID: UserID?
+    var currentUserID: UserID? {
+        // The conversation folders are the account's (REDESIGN.md R9).
+        didSet { DirectMessageFolders.shared.setAccount(currentUserID?.rawValue) }
+    }
     /// What the reader's subscription buys, and their age group.
     ///
     /// **Never read the tier off `users[currentUserID]`.** That row is rewritten
@@ -292,6 +295,8 @@ final class AppModel {
     /// The Message Requests page — Discord's `/message-requests`. Closed like
     /// a server's page: by picking a conversation, or leaving the home.
     var isMessageRequestsOpen = false
+    /// The Friends page (REDESIGN.md R12), closed the same way.
+    var isFriendsOpen = false
     /// Which of its two lists it shows. A request read beside one list does
     /// not stay open over the other.
     var messageRequestsTab: MessageRequestsTab = .requests {
@@ -785,6 +790,9 @@ final class AppModel {
     /// "asked, and there are none" — collapsing the two makes the pane refetch
     /// on every open for every channel that has never pinned anything.
     var pinnedMessages: [ChannelID: [Message]] = [:]
+    /// The inspector's older media, links and files, by conversation and tab
+    /// — see `SessionController.loadLibraryPage`.
+    var libraryArchives: [LibraryArchiveKey: LibraryArchive] = [:]
     var pinsLoading: Set<ChannelID> = []
     /// Why the last pins fetch failed, in the reader's words.
     var pinsFailure: [ChannelID: String] = [:]
@@ -1518,6 +1526,13 @@ final class AppModel {
 
     @ObservationIgnored var railCache: (key: RailMemoKey, value: [RailItem])?
     @ObservationIgnored var sidebarCache: (key: SidebarMemoKey, value: SidebarPresentation)?
+    /// Each conversation's newest known message, for its preview line — see
+    /// `noteNewest`. Read by the list's memo, which keys on the revision.
+    @ObservationIgnored var latestDirectMessages: [ChannelID: Message] = [:]
+    /// Moves when a conversation's newest message does.
+    var directMessagePreviewRevision: UInt64 = 0
+    /// The direct-message list's own memo — see `sidebarPresentation(for:)`.
+    @ObservationIgnored var homeSidebarCache: (key: SidebarMemoKey, value: SidebarPresentation)?
     @ObservationIgnored var timelineCache: (key: TimelineMemoKey, value: [TimelineItem])?
     @ObservationIgnored var rosterCache: (key: RosterMemoKey, value: Roster)?
     @ObservationIgnored var forumCache: (key: ForumMemoKey, value: ForumPresentation)?
@@ -1802,6 +1817,7 @@ final class AppModel {
         noteDraft(of: box, replacing: messageBoxes[channelID], in: channelID)
         messageBoxes[channelID] = box
         touchBox(channelID)
+        noteNewest(of: box, in: channelID)
     }
 
     func mutateBox(_ channelID: ChannelID, _ body: (inout MessageBox) -> Void) {
@@ -1811,6 +1827,43 @@ final class AppModel {
         noteDraft(of: box, replacing: previous, in: channelID)
         messageBoxes[channelID] = box
         touchBox(channelID)
+        noteNewest(of: box, in: channelID)
+    }
+
+    /// Conversations' newest messages from `SessionController.loadDirectMessagePreviews`.
+    ///
+    /// **Only where it is still the newest**: a message that arrived while the
+    /// request was out has already put itself here, and a preview older than
+    /// it would put the row back in time.
+    func receivePreviews(_ messages: [Message]) {
+        var changed = false
+        for message in messages {
+            let channelID = message.channelID
+            if let known = latestDirectMessages[channelID], known.id.rawValue >= message.id.rawValue { continue }
+            latestDirectMessages[channelID] = message
+            changed = true
+        }
+        if changed { directMessagePreviewRevision &+= 1 }
+    }
+
+    /// Keeps each conversation's newest message for its row in the list
+    /// (REDESIGN.md R9) — Messages' preview line.
+    ///
+    /// **Here, because every way a message arrives goes through here**: a page
+    /// loading, the socket's live copy, an edit, a deletion. Only the newest
+    /// known one is kept, and only a change to it moves the revision the list
+    /// keys on, so a keystroke in a draft costs one comparison.
+    private func noteNewest(of box: MessageBox, in channelID: ChannelID) {
+        // A window cut off from the present does not end at the newest.
+        guard !box.hasMoreNewer, let newest = box.messages.last,
+              channelIndex[channelID]?.kind.isPrivate == true
+        else { return }
+        let current = latestDirectMessages[channelID]
+        guard newest.id != current?.id || newest.content != current?.content
+            || newest.editedAt != current?.editedAt
+        else { return }
+        latestDirectMessages[channelID] = newest
+        directMessagePreviewRevision &+= 1
     }
 
     /// Hands a changed draft to the store. A comparison per write, which for
@@ -1955,6 +2008,7 @@ final class AppModel {
         // Every memo now describes tables that no longer exist.
         railCache = nil
         sidebarCache = nil
+        homeSidebarCache = nil
         rosterCache = nil
         forumCache = nil
         channelsAndRolesCache = nil

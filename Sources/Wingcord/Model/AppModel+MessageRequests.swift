@@ -48,8 +48,26 @@ extension AppModel {
     /// The page is up — the direct-message home only, as Discord's is.
     var isMessageRequestsShown: Bool { isMessageRequestsOpen && selectedGuildID == nil }
 
+    /// The Friends page is up — the home's, like the requests page.
+    var isFriendsShown: Bool { isFriendsOpen && selectedGuildID == nil }
+
+    func openFriends() {
+        if discovery != nil { closeDiscovery() }
+        // Its row is on the conversations page, which a swipe brings up while
+        // a server is open (REDESIGN.md R8): the page is the home's.
+        if selectedGuildID != nil { selectGuild(nil) }
+        isMessageRequestsOpen = false
+        previewedChannelID = nil
+        profileRequest = nil
+        expressionInfoRequest = nil
+        isFriendsOpen = true
+    }
+
     func openMessageRequests() {
         if discovery != nil { closeDiscovery() }
+        // See `openFriends`: the row can be on screen while a server is open.
+        if selectedGuildID != nil { selectGuild(nil) }
+        isFriendsOpen = false
         guard !isMessageRequestsOpen else { return }
         isMessageRequestsOpen = true
         messageRequestsTab = .requests

@@ -32,11 +32,13 @@ struct BubbleLayoutTests {
     private func layout(
         _ messages: [Message],
         arrangement: MessageArrangement = .bubbles(namesAuthors: true),
+        settings: TimelineSettings = .comfortable,
+        failed: Set<MessageID> = [],
         cache: inout [MessageID: TimelineLayoutEngine.CacheEntry]
     ) -> [TimelineRow] {
         TimelineLayoutEngine(presentationRevision: 1).layout(
             TimelineLayoutEngine.Input(
-                items: TimelineReducer.rows(messages: messages),
+                items: TimelineReducer.rows(messages: messages, failed: failed),
                 width: Self.width,
                 style: MessageTextStyle.current(),
                 mentions: MentionContext(selfIDs: [Self.me.rawValue]),
@@ -52,7 +54,7 @@ struct BubbleLayoutTests {
                     ),
                 ],
                 calendar: .current,
-                settings: .comfortable,
+                settings: settings,
                 arrangement: arrangement
             ),
             cache: &cache
@@ -61,15 +63,26 @@ struct BubbleLayoutTests {
 
     private func rows(
         _ lines: [(UserID, String)],
-        arrangement: MessageArrangement = .bubbles(namesAuthors: true)
+        arrangement: MessageArrangement = .bubbles(namesAuthors: true),
+        settings: TimelineSettings = .comfortable,
+        failed: Set<MessageID> = []
+    ) -> [MessageRow] {
+        rows(messages(lines), arrangement: arrangement, settings: settings, failed: failed)
+    }
+
+    private func rows(
+        _ messages: [Message],
+        arrangement: MessageArrangement = .bubbles(namesAuthors: true),
+        settings: TimelineSettings = .comfortable,
+        failed: Set<MessageID> = []
     ) -> [MessageRow] {
         var cache: [MessageID: TimelineLayoutEngine.CacheEntry] = [:]
-        return layout(messages(lines), arrangement: arrangement, cache: &cache).compactMap {
+        return layout(messages, arrangement: arrangement, settings: settings, failed: failed, cache: &cache).compactMap {
             if case .message(let row) = $0.kind { row } else { nil }
         }
     }
 
-    @Test("The reader's bubbles trail in the accent and everyone else's lead, each hugging its words")
+    @Test("The reader's bubbles trail in their own glass and everyone else's lead, each hugging its words")
     func sides() throws {
         let laid = rows([(Self.them, "hello there"), (Self.me, "hi")])
         let theirs = try #require(laid[0].bubbles?.bubble)
@@ -78,11 +91,112 @@ struct BubbleLayoutTests {
         #expect(laid[1].bubbles?.side == .trailing)
         #expect(mine.rect.maxX == Self.width - Self.margin)
         #expect(theirs.rect.minX == Self.margin + BubbleMetrics.avatarSide + BubbleMetrics.avatarGap)
-        #expect(mine.ground == .accent)
+        #expect(mine.ground == .own)
         #expect(theirs.ground == .neutral)
         // Hugged: a word is not a lane-wide bar.
         #expect(mine.rect.width < 100)
         #expect(theirs.rect.width < 160)
+    }
+
+    @Test("The accent is the reader's opt-in, and only ever on their own bubbles")
+    func accentIsOptIn() throws {
+        var settings = TimelineSettings.comfortable
+        settings.tintsOwnBubbles = true
+        let laid = rows([(Self.them, "hello there"), (Self.me, "hi")], settings: settings)
+        #expect(laid[0].bubbles?.bubble?.ground == .neutral)
+        #expect(laid[1].bubbles?.bubble?.ground == .accent)
+    }
+
+    private func reacted(_ author: UserID, _ text: String, _ reactions: [Reaction]) -> Message {
+        Message(
+            id: MessageID(rawValue: 1),
+            channelID: ChannelID(rawValue: 9),
+            authorID: author,
+            content: text,
+            payload: MessagePayload(reactions: reactions)
+        )
+    }
+
+    private static func thumbs(_ count: Int, mine: Bool = false) -> Reaction {
+        Reaction(emoji: EmojiRef(name: "👍"), count: count, isMine: mine)
+    }
+
+    @Test("Up to three reactions ride the bubble's top corner, on the side facing the conversation")
+    func tapbacks() throws {
+        let reactions = [Self.thumbs(1), Reaction(emoji: EmojiRef(name: "🔥"), count: 4, isMine: true)]
+        let theirs = try #require(rows([reacted(Self.them, "a sentence of some length", reactions)]).first)
+        let bubble = try #require(theirs.bubbles?.bubble)
+        #expect(theirs.reactions.count == 2)
+        #expect(theirs.reactions.allSatisfy { $0.isTapback })
+        #expect(theirs.reactionControls.isEmpty)
+        let first = theirs.reactions[0].rect
+        // On the trailing top corner of somebody else's bubble, half above it…
+        #expect(first.midY < bubble.rect.minY + TimelineMetrics.tapbackSide / 2)
+        #expect(first.minY < bubble.rect.minY)
+        #expect(first.minX < bubble.rect.maxX && first.maxX > bubble.rect.maxX)
+        // …and the next leads away from the bubble.
+        #expect(theirs.reactions[1].rect.minX > first.maxX)
+        // A single reaction is a circle; a count makes it a capsule.
+        #expect(first.width == TimelineMetrics.tapbackSide)
+        #expect(theirs.reactions[1].rect.width > TimelineMetrics.tapbackSide)
+        // The bubble stepped down for them, so the badge stays inside its row.
+        #expect(first.minY >= 0)
+
+        let mine = try #require(rows([reacted(Self.me, "a sentence of some length", [Self.thumbs(2)])]).first)
+        let ownBubble = try #require(mine.bubbles?.bubble)
+        let badge = try #require(mine.reactions.first?.rect)
+        // The reader's own: the leading top corner.
+        #expect(badge.minX < ownBubble.rect.minX && badge.maxX > ownBubble.rect.minX)
+    }
+
+    @Test("A gap is cut round each tapback into the bubble it rides")
+    func tapbackNotch() throws {
+        let row = try #require(rows([reacted(Self.them, "a sentence of some length", [Self.thumbs(1)])]).first)
+        let bubble = try #require(row.bubbles?.bubble)
+        let badge = try #require(row.reactions.first?.rect)
+        // Inside the body's corner, under the badge: cut away.
+        let underBadge = CGPoint(x: badge.midX, y: bubble.rect.minY + 1)
+        #expect(!bubble.path.contains(underBadge))
+        // Well clear of it: still the bubble.
+        #expect(bubble.path.contains(CGPoint(x: bubble.rect.minX + 20, y: bubble.rect.midY)))
+    }
+
+    @Test("Past three reactions every one hangs under the bubble as a chip")
+    func chipsPastThree() throws {
+        let reactions = ["👍", "🔥", "😀", "🎉"].map { Reaction(emoji: EmojiRef(name: $0), count: 1, isMine: false) }
+        let row = try #require(rows([reacted(Self.them, "hello", reactions)]).first)
+        let bubble = try #require(row.bubbles?.bubble)
+        #expect(row.reactions.count == 4)
+        #expect(!row.reactions.contains { $0.isTapback })
+        #expect(row.reactions.allSatisfy { $0.rect.minY >= bubble.rect.maxY })
+    }
+
+    @Test("A refused send keeps its glass, with Messages' red mark beside it and the caption under it")
+    func failedSend() throws {
+        let row = try #require(rows([(Self.me, "this will not arrive")], failed: [MessageID(rawValue: 1)]).first)
+        let bubble = try #require(row.bubbles?.bubble)
+        let failure = try #require(row.bubbles?.failure)
+        #expect(bubble.ground == .own)
+        // The disc sits past the tail, inside the row, and the bubble made room.
+        #expect(failure.badge.minX > bubble.rect.maxX + BubbleMetrics.tailReach)
+        #expect(failure.badge.maxX <= Self.width - Self.margin + 0.5)
+        #expect(abs(failure.badge.midY - bubble.rect.midY) <= 1)
+        // The caption hangs under the bubble's trailing edge, and the row holds it.
+        #expect(failure.caption.minY > bubble.rect.maxY)
+        #expect(abs(failure.caption.maxX - bubble.rect.maxX) < 0.5)
+        var cache: [MessageID: TimelineLayoutEngine.CacheEntry] = [:]
+        let laid = layout(
+            messages([(Self.me, "this will not arrive")]), failed: [MessageID(rawValue: 1)], cache: &cache
+        )
+        let height = try #require(laid.first { if case .message = $0.kind { true } else { false } }?.height)
+        #expect(height >= failure.caption.maxY)
+
+        // Somebody else's message is never marked, and Discord's columns keep
+        // their own failure ink.
+        let columns = try #require(
+            rows([(Self.me, "this will not arrive")], arrangement: .columns, failed: [MessageID(rawValue: 1)]).first
+        )
+        #expect(columns.bubbles == nil)
     }
 
     @Test("Words sit inside their bubble, padded on every side, and the bubble stays in its lane")

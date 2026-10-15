@@ -190,40 +190,90 @@ nonisolated enum Palette {
 
 // MARK: - Foreground hierarchy
 //
-// Text legibility on glass comes from *vibrancy and weight*, never from making
-// the material more opaque. These map to SwiftUI's hierarchical styles, which
-// the system renders vibrantly against whatever is behind the glass and which
-// honour Increase Contrast automatically. Do not replace them with fixed greys:
-// a hardcoded #FFFFFF-at-60% adapts to nothing and fails contrast checks.
+// **Brighter than the system's own ramp, on purpose** (REDESIGN.md R13). The
+// system's secondary label is about 55% white in a dark room and its tertiary
+// about 25%, and this app used them for primary content — read channel names,
+// previews, the activity line — which is what read as pale and grey over the
+// themes' colour and over glass. Hierarchy here is carried by a gentler ramp
+// plus weight and size, the way Messages and Noodle carry it:
+//
+//   primary 94% · secondary 74% · tertiary 55% · quaternary 34% (dark room)
+//   primary 88% · secondary 66% · tertiary 50% · quaternary 30% (light room)
+//
+// Increase Contrast raises every rung. Fixed alphas rather than the vibrant
+// hierarchical styles: over a picture vibrancy composites against whatever the
+// photograph is, and the point of this ramp is that it does not.
 
 nonisolated enum Ink {
     /// Names, message bodies, primary labels.
-    static let primary = HierarchicalShapeStyle.primary
-    /// Timestamps, message previews, secondary metadata.
-    static let secondary = HierarchicalShapeStyle.secondary
+    static let primary = InkRamp.color(.primary)
+    /// Timestamps, message previews, secondary metadata — and read channel names.
+    static let secondary = InkRamp.color(.secondary)
     /// Placeholder text, disabled glyphs, the least important line in a row.
-    static let tertiary = HierarchicalShapeStyle.tertiary
-    /// Separators and the faintest structural marks.
-    static let quaternary = HierarchicalShapeStyle.quaternary
+    static let tertiary = InkRamp.color(.tertiary)
+    /// Separators and the faintest structural marks — never text a reader needs.
+    static let quaternary = InkRamp.color(.quaternary)
 }
 
-/// Concrete `Color` twins of `Ink`, for text that must hold a **fixed** value
-/// regardless of what is behind it.
+/// The ramp behind `Ink` and `InkColor`, resolved per appearance and contrast.
+nonisolated enum InkRamp {
+    enum Level {
+        case primary, secondary, tertiary, quaternary
+    }
+
+    /// White at these alphas in a dark room.
+    private static func darkAlpha(_ level: Level, increased: Bool) -> CGFloat {
+        switch level {
+        case .primary: increased ? 1.00 : 0.94
+        case .secondary: increased ? 0.86 : 0.74
+        case .tertiary: increased ? 0.70 : 0.55
+        case .quaternary: increased ? 0.48 : 0.34
+        }
+    }
+
+    /// Black at these alphas in a light room.
+    private static func lightAlpha(_ level: Level, increased: Bool) -> CGFloat {
+        switch level {
+        case .primary: increased ? 1.00 : 0.88
+        case .secondary: increased ? 0.78 : 0.66
+        case .tertiary: increased ? 0.62 : 0.50
+        case .quaternary: increased ? 0.42 : 0.30
+        }
+    }
+
+    static func nsColor(_ level: Level) -> NSColor {
+        NSColor(name: nil) { appearance in
+            let match = appearance.bestMatch(from: [
+                .darkAqua, .aqua,
+                .accessibilityHighContrastDarkAqua, .accessibilityHighContrastAqua,
+            ])
+            switch match {
+            case .accessibilityHighContrastDarkAqua:
+                return NSColor(srgbRed: 1, green: 1, blue: 1, alpha: darkAlpha(level, increased: true))
+            case .accessibilityHighContrastAqua:
+                return NSColor(srgbRed: 0, green: 0, blue: 0, alpha: lightAlpha(level, increased: true))
+            case .aqua:
+                return NSColor(srgbRed: 0, green: 0, blue: 0, alpha: lightAlpha(level, increased: false))
+            default:
+                return NSColor(srgbRed: 1, green: 1, blue: 1, alpha: darkAlpha(level, increased: false))
+            }
+        }
+    }
+
+    static func color(_ level: Level) -> Color {
+        Color(nsColor: nsColor(level))
+    }
+}
+
+/// Concrete `Color`s for text that must hold a **fixed** value regardless of
+/// what is behind it — text over artwork: a banner, a cover, a video frame.
 ///
-/// These are for text over **artwork** — a banner, a cover, a video frame —
-/// where vibrancy composites against a picture nobody chose and the result is
-/// unreadable rather than merely quiet. Everywhere else `Ink` is correct,
-/// materials included; reaching for a fixed colour to "fix" quiet text on a
-/// material fixes nothing while making the label stop tracking vibrancy,
-/// Increase Contrast and the system glass-intensity setting.
-///
-/// Not `Color.primary` / `Color.secondary` — those *are* the hierarchy under
-/// another name and behave identically, so reaching for them changes nothing
-/// while looking like it should.
+/// The same ramp as `Ink` now that `Ink` is fixed too; kept as its own name
+/// because the call sites say *why* they need a fixed colour.
 nonisolated enum InkColor {
-    static let primary = Color(nsColor: .labelColor)
-    static let secondary = Color(nsColor: .secondaryLabelColor)
-    static let tertiary = Color(nsColor: .tertiaryLabelColor)
+    static let primary = InkRamp.color(.primary)
+    static let secondary = InkRamp.color(.secondary)
+    static let tertiary = InkRamp.color(.tertiary)
 
     /// Full-strength ink for text and glyphs that float over *moving* content —
     /// the composer's field, a pill over the transcript: white in a dark room,

@@ -11,7 +11,7 @@ import WingcordCore
 /// title truncates instead of pushing the count off the end.
 struct ActivityLineView: View {
     var line: ActivityStatusLine
-    var ink: HierarchicalShapeStyle = Ink.tertiary
+    var ink: Color = Ink.tertiary
     /// A custom status's emoji, at about the line's own height.
     var emojiSide: CGFloat = 11
 

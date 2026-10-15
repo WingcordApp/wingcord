@@ -821,17 +821,27 @@ nonisolated struct ReactionSlot: Sendable {
     /// Nil on a plain chip, and on a super chip that arrived with no colours,
     /// which Discord draws plain as well.
     var palette: SuperReactionPalette?
+    /// A badge on its bubble's corner rather than a chip under it — see
+    /// `TimelineMetrics.tapbackLimit`.
+    var isTapback = false
 
     /// The emoji's box inside the chip — where the picture is drawn, where an
     /// animated one's frames are repainted, and what an effect is centred on.
     var glyphRect: CGRect {
         let side = TimelineMetrics.reactionGlyphSide
         return CGRect(
-            x: rect.minX + TimelineMetrics.reactionLeadingInset,
+            x: rect.minX + (isTapback ? TimelineMetrics.tapbackInset : TimelineMetrics.reactionLeadingInset),
             y: rect.midY - side / 2,
             width: side,
             height: side
         )
+    }
+
+    /// The chip's outline, in whatever space `rect` is in: a capsule for a
+    /// tapback, the measured rounded square for a chip.
+    var outline: CGPath {
+        let radius = isTapback ? rect.height / 2 : TimelineMetrics.reactionChipRadius
+        return CGPath(roundedRect: rect, cornerWidth: radius, cornerHeight: radius, transform: nil)
     }
 }
 
@@ -1452,6 +1462,7 @@ nonisolated struct TimelineLayoutEngine: Sendable {
         }
         // The bubble's own padding reaches past its words.
         if let bubble = row.bubbles?.bubble { bottom = max(bottom, bubble.rect.maxY) }
+        if let failure = row.bubbles?.failure { bottom = max(bottom, failure.caption.maxY) }
         for slot in row.stickers { bottom = max(bottom, slot.rect.maxY) }
         for slot in row.attachments { bottom = max(bottom, slot.rect.maxY) }
         if let upload = row.upload { bottom = max(bottom, upload.rect.maxY) }
@@ -1497,12 +1508,16 @@ nonisolated struct TimelineLayoutEngine: Sendable {
             bubbleSide = isMine ? .trailing : .leading
             namesAuthor = namesAuthors && !isMine
         }
-        let lane = bubbleSide.map {
-            MessageLane.bubble(
+        let isFailed = item.flags.contains(.failed)
+        let lane = bubbleSide.map { side in
+            var lane = MessageLane.bubble(
                 rowWidth: input.width,
-                side: $0,
+                side: side,
                 indent: namesAuthor ? BubbleMetrics.avatarSide + BubbleMetrics.avatarGap : 0
             )
+            // A refused send keeps room at the edge for its mark.
+            if isFailed, side == .trailing { lane.width -= BubbleMetrics.failureReserve }
+            return lane
         } ?? .column(rowWidth: input.width)
         let contentX = lane.minX
         let contentWidth = lane.width
@@ -1590,6 +1605,18 @@ nonisolated struct TimelineLayoutEngine: Sendable {
 
         var tagRect = CGRect.zero
         var roleIconRect = CGRect.zero
+        // **In bubbles the name is a caption** over the run's first bubble, as
+        // Messages names a group's people (REDESIGN.md R6): the name's own face
+        // and colour — a custom font or a role colour stays — a size down,
+        // on a line of its own height rather than Discord's header's.
+        let isCaption = bubbleSide != nil
+        let baseFace = author?.nameFace ?? input.style.authorFont
+        let nameFace = isCaption ? BubbleMetrics.captionFace(baseFace) : baseFace
+        let nameTracking = (author?.nameTracking ?? 0)
+            * (isCaption ? nameFace.pointSize / max(1, baseFace.pointSize) : 1)
+        let nameLine = isCaption
+            ? ceil(nameFace.ascender - nameFace.descender) + 2
+            : TimelineMetrics.headerHeight
         if hasAuthorLine {
             // In bubbles the face sits beside a run's LAST bubble, and the
             // name lines up with the words in the bubble under it.
@@ -1606,16 +1633,12 @@ nonisolated struct TimelineLayoutEngine: Sendable {
             // **Measured in the face it will be DRAWN in.** The bot badge and
             // the timestamp are placed off this width, so measuring in the
             // default face and drawing in another puts both in the wrong place.
-            let nameWidth = Self.measure(
-                name,
-                font: author?.nameFace ?? input.style.authorFont,
-                tracking: author?.nameTracking ?? 0
-            )
+            let nameWidth = Self.measure(name, font: nameFace, tracking: nameTracking)
             authorRect = CGRect(
                 x: nameX,
                 y: y,
                 width: nameWidth,
-                height: TimelineMetrics.headerHeight
+                height: nameLine
             )
             // The server tag, in the same chip the roster draws — see
             // `MemberRowGeometry.tagChipWidth`, which both the reservation and
@@ -1631,7 +1654,7 @@ nonisolated struct TimelineLayoutEngine: Sendable {
                     x: afterName + 6,
                     // Centred on the name's own line box rather than pinned to
                     // its top: the chip is 15 points and the header is taller.
-                    y: y + (TimelineMetrics.headerHeight - MemberRowGeometry.tagChipHeight) / 2,
+                    y: y + (nameLine - MemberRowGeometry.tagChipHeight) / 2,
                     width: width,
                     height: MemberRowGeometry.tagChipHeight
                 )
@@ -1645,7 +1668,7 @@ nonisolated struct TimelineLayoutEngine: Sendable {
                 let side = TimelineMetrics.roleIconSide
                 roleIconRect = CGRect(
                     x: afterName + TimelineMetrics.roleIconGap,
-                    y: y + (TimelineMetrics.headerHeight - side) / 2,
+                    y: y + (nameLine - side) / 2,
                     width: side,
                     height: side
                 )
@@ -1663,7 +1686,7 @@ nonisolated struct TimelineLayoutEngine: Sendable {
                     height: TimelineMetrics.headerHeight
                 )
             }
-            y += TimelineMetrics.headerHeight + TimelineMetrics.headerGap
+            y += nameLine + (isCaption ? BubbleMetrics.captionGap : TimelineMetrics.headerGap)
         }
         let contentTop = y
 
@@ -1679,11 +1702,13 @@ nonisolated struct TimelineLayoutEngine: Sendable {
         // link to a picture draws the picture — see `Message.displayedContent`.
         // Display only: the words the message actually carries are still what a
         // copy, a search and an accessibility label get.
-        let isFailed = item.flags.contains(.failed)
-        // The reader's bubble is the accent — unless Discord refused the send,
-        // which puts it on the neutral ground in the critical ink, here as
-        // everywhere: `.isFailed`.
-        let ground: MessageBubble.Ground = bubbleSide == .trailing && !isFailed ? .accent : .neutral
+        // The reader's bubble is their glass, or the accent where they asked
+        // for it. A send Discord refused keeps it: in bubbles the failure is
+        // Messages' red mark beside it (`BubbleFailure`), and only Discord's
+        // columns draw `.isFailed`'s critical ink on the words.
+        let ground: MessageBubble.Ground = bubbleSide == .trailing
+            ? (input.settings.tintsOwnBubbles ? .accent : .own)
+            : .neutral
         let drawnContent = input.settings.showsEmbeds ? message.displayedContent : message.content
         var words: (block: TimelineTextBlock, isJumbo: Bool)?
         if !drawnContent.isEmpty {
@@ -1691,7 +1716,7 @@ nonisolated struct TimelineLayoutEngine: Sendable {
             let isJumbo = document.jumboEmojiCount != nil
             let sized = isJumbo ? input.style.jumbo : input.style
             let onAccent = bubbleSide != nil && ground == .accent && !isJumbo
-            let style = isFailed ? sized.failed : (onAccent ? sized.onAccentBubble : sized)
+            let style = isFailed && bubbleSide == nil ? sized.failed : (onAccent ? sized.onAccentBubble : sized)
             let text = MessageTextBuilder.build(
                 document: document,
                 context: input.mentions,
@@ -2041,6 +2066,14 @@ nonisolated struct TimelineLayoutEngine: Sendable {
             return content
         }
 
+        // **Tapbacks**: a bubble's first few reactions ride its top corner,
+        // as Messages pins them, so the bubble steps down to make room for the
+        // half that rises above it. More than a few hang under it as chips —
+        // a corner holds three before it reads as a pile.
+        let wantsTapbacks = bubbleSide != nil && words?.isJumbo != true
+            && (1...TimelineMetrics.tapbackLimit).contains(Self.reactionChipCount(message.reactions))
+        if wantsTapbacks { y += TimelineMetrics.tapbackRise }
+
         // **One bubble holds the whole message** — its words and every card,
         // picture and sticker under them — the way Messages holds a link and
         // its preview in one. Only emoji on their own are drawn bare, as
@@ -2088,23 +2121,65 @@ nonisolated struct TimelineLayoutEngine: Sendable {
         y = content.bottom
         let bodyBottom = y
 
-        // Reaction chips.
-        let reactionRow = placed({ x -> (chips: [ReactionSlot], controls: [ReactionControlSlot], bottom: CGFloat) in
-            var chips: [ReactionSlot] = []
-            var controls: [ReactionControlSlot] = []
-            let bottom = Self.layoutReactions(
-                message.reactions,
-                contentX: x,
-                y: y,
-                width: contentWidth,
-                style: input.style,
-                // Discord never offers a bookmark on the reader's own message.
-                offersBookmark: !input.mentions.selfIDs.contains(message.authorID.rawValue),
-                into: &chips,
-                controls: &controls
+        // A refused send of the reader's own: the disc beside the bubble,
+        // centred on it, and the caption under its trailing edge.
+        var failure: BubbleFailure?
+        if isFailed, bubbleSide == .trailing, let shape = bubble?.rect {
+            let side = BubbleMetrics.failureBadgeSide
+            let font = input.style.metadataFont
+            let captionSize = CGSize(
+                width: Self.measure(BubbleFailure.caption, font: font),
+                height: ceil(font.ascender - font.descender)
             )
-            return (chips, controls, bottom)
-        }, width: { extent($0.chips.map(\.rect) + $0.controls.map(\.rect)) })
+            let mark = BubbleFailure(
+                badge: CGRect(
+                    x: shape.maxX + BubbleMetrics.tailReach + BubbleMetrics.failureGap,
+                    y: (shape.midY - side / 2).rounded(),
+                    width: side,
+                    height: side
+                ),
+                caption: CGRect(
+                    x: shape.maxX - captionSize.width,
+                    y: shape.maxY + BubbleMetrics.failureCaptionGap,
+                    width: captionSize.width,
+                    height: captionSize.height
+                )
+            )
+            failure = mark
+            y = mark.caption.maxY
+        }
+
+        // Reactions: tapbacks on the bubble's corner, with a gap cut round
+        // each into the bubble; or chips under the content.
+        let reactionRow: (chips: [ReactionSlot], controls: [ReactionControlSlot], bottom: CGFloat)
+        if wantsTapbacks, let bubbleSide, let shape = bubble {
+            let badges = Self.layoutTapbacks(
+                message.reactions,
+                bubble: shape.rect,
+                side: bubbleSide,
+                rowWidth: input.width,
+                style: input.style
+            )
+            bubble?.path = Self.notched(shape.path, around: badges)
+            reactionRow = (badges, [], y)
+        } else {
+            reactionRow = placed({ x -> (chips: [ReactionSlot], controls: [ReactionControlSlot], bottom: CGFloat) in
+                var chips: [ReactionSlot] = []
+                var controls: [ReactionControlSlot] = []
+                let bottom = Self.layoutReactions(
+                    message.reactions,
+                    contentX: x,
+                    y: y,
+                    width: contentWidth,
+                    style: input.style,
+                    // Discord never offers a bookmark on the reader's own message.
+                    offersBookmark: !input.mentions.selfIDs.contains(message.authorID.rawValue),
+                    into: &chips,
+                    controls: &controls
+                )
+                return (chips, controls, bottom)
+            }, width: { extent($0.chips.map(\.rect) + $0.controls.map(\.rect)) })
+        }
         let reactions = reactionRow.chips
         let reactionControls = reactionRow.controls
         y = reactionRow.bottom
@@ -2182,18 +2257,23 @@ nonisolated struct TimelineLayoutEngine: Sendable {
                 )
                 let anchor = bubble?.rect ?? content.bounds
                 // Level with the first line: the middle of a one-line bubble,
-                // the top line of a taller one — where the pill hangs too.
+                // the top line of a taller one — where the pill hangs too. Under
+                // the tapbacks, which share that side of the corner.
                 let band = min(anchor.height, BubbleMetrics.cornerRadius(for: input.style.bodyFont) * 2)
+                var timeY = (anchor.minY + band / 2 - size.height / 2).rounded()
+                if let badges = reactions.filter(\.isTapback).map(\.rect.maxY).max() {
+                    timeY = max(timeY, (badges + 2).rounded())
+                }
                 timeRect = CGRect(
                     x: bubbleSide == .trailing
                         ? anchor.minX - BubbleMetrics.timeGap - size.width
                         : anchor.maxX + BubbleMetrics.timeGap,
-                    y: (anchor.minY + band / 2 - size.height / 2).rounded(),
+                    y: timeY,
                     width: size.width,
                     height: size.height
                 )
             }
-            bubbleRow = BubbleRow(side: bubbleSide, bubble: bubble, timeRect: timeRect)
+            bubbleRow = BubbleRow(side: bubbleSide, bubble: bubble, timeRect: timeRect, failure: failure)
         }
 
         return MessageRow(
@@ -2211,8 +2291,9 @@ nonisolated struct TimelineLayoutEngine: Sendable {
             interactionHeader: interactionHeader,
             ephemeralNote: ephemeralNote,
             authorName: author?.name ?? "Unknown",
-            authorFace: author?.nameFace,
-            authorTracking: author?.nameTracking ?? 0,
+            // The face the name was measured in — a caption's in bubbles.
+            authorFace: isCaption ? nameFace : author?.nameFace,
+            authorTracking: nameTracking,
             authorGradient: hasAuthorLine
                 ? author?.gradient.map { $0.map { NSColor(Color(hex: $0)) } }
                 : nil,
@@ -2262,6 +2343,7 @@ nonisolated struct TimelineLayoutEngine: Sendable {
                 extra: Self.spokenBody(of: message),
                 isEphemeral: message.isEphemeral,
                 isEdited: message.editedAt != nil,
+                isFailed: isFailed,
                 reactions: message.reactions,
                 muted: input.settings.mutedSpokenDetails
             )
@@ -2828,6 +2910,89 @@ nonisolated struct TimelineLayoutEngine: Sendable {
             x += side + 4
         }
         return y + TimelineMetrics.reactionChipHeight
+    }
+
+    /// How many chips `reactions` make: one per kind an emoji has, so an
+    /// emoji with super and plain reactions is two.
+    static func reactionChipCount(_ reactions: [Reaction]) -> Int {
+        reactions.reduce(0) { $0 + ($1.burstCount > 0 ? 1 : 0) + ($1.count > 0 ? 1 : 0) }
+    }
+
+    /// A bubble's reactions as Messages' tapbacks: badges on its top corner on
+    /// the side facing the conversation — the leading corner of the reader's
+    /// own, the trailing corner of everybody else's — the first on the corner
+    /// and the rest leading away from the bubble, in the chips' own order.
+    static func layoutTapbacks(
+        _ reactions: [Reaction],
+        bubble: CGRect,
+        side: BubbleRow.Side,
+        rowWidth: CGFloat,
+        style: MessageTextStyle
+    ) -> [ReactionSlot] {
+        let height = TimelineMetrics.tapbackSide
+        let corner = TimelineMetrics.tapbackCornerInset
+        let minY = bubble.minY + corner.height - height / 2
+        // The edge of the next badge nearest the bubble.
+        var edge = side == .trailing
+            ? bubble.minX + corner.width + height / 2
+            : bubble.maxX - corner.width - height / 2
+        var slots: [ReactionSlot] = []
+
+        func place(_ reaction: Reaction, kind: ReactionKind, imageURL: URL?, palette: SuperReactionPalette?) {
+            let count = reaction.count(of: kind)
+            // A count only where there is more than one: a single tapback is
+            // a circle round its emoji, as Messages draws it.
+            let width = TimelineMetrics.tapbackWidth(
+                countWidth: count > 1 ? measure("\(count)", font: style.metadataFont) : nil
+            )
+            let minX = side == .trailing ? edge - width : edge
+            slots.append(ReactionSlot(
+                rect: CGRect(x: minX, y: minY, width: width, height: height),
+                emoji: reaction.emoji,
+                kind: kind,
+                count: count,
+                isMine: reaction.isMine(kind),
+                imageURL: imageURL,
+                palette: palette,
+                isTapback: true
+            ))
+            edge = side == .trailing ? minX - TimelineMetrics.tapbackGap : minX + width + TimelineMetrics.tapbackGap
+        }
+
+        for reaction in reactions {
+            let imageURL = reaction.emoji.id.flatMap {
+                CDN.emoji(id: $0, animated: reaction.emoji.isAnimated, side: TimelineMetrics.reactionGlyphSide)
+            }
+            if reaction.burstCount > 0 {
+                place(reaction, kind: .burst, imageURL: imageURL, palette: SuperReactionPalette(colors: reaction.burstColors))
+            }
+            if reaction.count > 0 {
+                place(reaction, kind: .normal, imageURL: imageURL, palette: nil)
+            }
+        }
+
+        // A bubble as wide as a narrow window leaves no room beside it: the
+        // badges slide back over its top edge rather than off the row.
+        let margin = TimelineMetrics.horizontalMargin / 2
+        let low = slots.map(\.rect.minX).min() ?? margin
+        let high = slots.map(\.rect.maxX).max() ?? rowWidth - margin
+        let shift = low < margin ? margin - low : (high > rowWidth - margin ? rowWidth - margin - high : 0)
+        if shift != 0 {
+            for index in slots.indices { slots[index].rect.origin.x += shift }
+        }
+        return slots
+    }
+
+    /// A bubble with a gap cut round each badge riding it.
+    static func notched(_ path: CGPath, around badges: [ReactionSlot]) -> CGPath {
+        guard !badges.isEmpty else { return path }
+        let cut = CGMutablePath()
+        let notch = TimelineMetrics.tapbackNotch
+        for badge in badges {
+            let ring = badge.rect.insetBy(dx: -notch, dy: -notch)
+            cut.addPath(CGPath(roundedRect: ring, cornerWidth: ring.height / 2, cornerHeight: ring.height / 2, transform: nil))
+        }
+        return path.subtracting(cut)
     }
 
     /// The button rows under a message, wrapped to the column.
@@ -3966,6 +4131,7 @@ nonisolated struct TimelineLayoutEngine: Sendable {
         extra: String,
         isEphemeral: Bool,
         isEdited: Bool,
+        isFailed: Bool = false,
         reactions: [Reaction],
         muted: SpokenDetail.Set
     ) -> String {
@@ -4000,6 +4166,9 @@ nonisolated struct TimelineLayoutEngine: Sendable {
         // easiest to miss, and it is the one that changes what somebody does
         // next.
         if isEphemeral { label += ". \(ephemeralNoteText)" }
+        // Messages' red mark, said: the one thing about a refused send that
+        // changes what the reader does next. Resend is in the row's actions.
+        if isFailed { label += ". Not delivered" }
         return label
     }
 }

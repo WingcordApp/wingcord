@@ -34,6 +34,13 @@ final class BubbleFlight {
 
     private let shape = CAShapeLayer()
     private let words = CALayer()
+    /// The wallpaper's frost through the body, on a frosted bubble — the
+    /// picture under `frostClip`, which the body's outline masks.
+    private let frostClip = CALayer()
+    private let frostMask = CAShapeLayer()
+    private let frostPicture = CALayer()
+    /// The window's content, in canvas space: where the frost's picture sits.
+    private var window: CGRect?
     /// Where the body's top-leading corner is headed, in canvas space.
     private var target: CGPoint
     /// Moves with every retarget, so only the newest spring's end lands it.
@@ -52,6 +59,12 @@ final class BubbleFlight {
         var radius: CGFloat
         var tail: BubbleRow.Side?
         var fill: CGColor
+        /// The glass's edge, on a frosted bubble.
+        var rim: CGColor?
+        /// The wallpaper's frost, on a frosted bubble, and the window's
+        /// content in canvas space — the picture is laid over that.
+        var frost: CGImage?
+        var window: CGRect?
         /// The words, drawn once, and where they sit in the body.
         var words: CGImage?
         var wordsFrame: CGRect
@@ -93,9 +106,29 @@ final class BubbleFlight {
         layer.anchorPoint = .zero
         layer.bounds = endBody
         layer.position = landing.body.origin
+        if let frost = landing.frost, let window = landing.window {
+            // The frost the row will show once it lands — the bubble carries
+            // its own patch of the picture the whole way, so the landing swaps
+            // the same pixels.
+            self.window = window
+            frostClip.frame = endBody
+            frostMask.frame = endBody
+            frostMask.path = endPath
+            frostMask.contentsScale = scale
+            frostClip.mask = frostMask
+            frostPicture.contents = frost
+            frostPicture.contentsGravity = .resizeAspectFill
+            frostPicture.frame = window.offsetBy(dx: -target.x, dy: -target.y)
+            frostClip.addSublayer(frostPicture)
+            layer.addSublayer(frostClip)
+        }
         shape.frame = endBody
         shape.path = endPath
         shape.fillColor = landing.fill
+        if let rim = landing.rim {
+            shape.strokeColor = rim
+            shape.lineWidth = 1
+        }
         shape.contentsScale = scale
         words.anchorPoint = .zero
         words.bounds = CGRect(origin: .zero, size: landing.wordsFrame.size)
@@ -115,7 +148,7 @@ final class BubbleFlight {
             layer.add(fade, forKey: "fade")
         } else {
             Self.fly(
-                layer: layer, shape: shape, words: words,
+                layer: layer, shapes: landing.frost == nil ? [shape] : [shape, frostMask], words: words,
                 landing: landing, takeOff: takeOff, endPath: endPath
             )
         }
@@ -128,7 +161,7 @@ final class BubbleFlight {
     /// new place from wherever it is, as §3 asks of every motion.
     private static func fly(
         layer: CALayer,
-        shape: CAShapeLayer,
+        shapes: [CAShapeLayer],
         words: CALayer,
         landing: Landing,
         takeOff: TakeOff,
@@ -179,7 +212,7 @@ final class BubbleFlight {
                 body: CGRect(origin: .zero, size: startSize), radius: landing.radius, tail: landing.tail
             )
             morph.toValue = endPath
-            shape.add(morph, forKey: "morph")
+            for shape in shapes { shape.add(morph, forKey: "morph") }
         }
         if abs(fontScale - 1) > 0.01 {
             let grow = spring.layerSpring(keyPath: "transform.scale")
@@ -198,6 +231,7 @@ final class BubbleFlight {
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         layer.position = destination
+        placeFrost()
         if !reducesMotion {
             generation += 1
             let generation = generation
@@ -211,6 +245,24 @@ final class BubbleFlight {
             layer.add(follow, forKey: "follow-\(generation)")
         }
         CATransaction.commit()
+    }
+
+    /// The window moved over the canvas — a scroll, a resize: the frost's
+    /// picture follows, so it is where the row's will be when the bubble lands.
+    func alignFrost(window: CGRect) {
+        guard self.window != nil, self.window != window else { return }
+        self.window = window
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        placeFrost()
+        CATransaction.commit()
+    }
+
+    /// Lays the picture so the patch inside the body is the one under the
+    /// landing place.
+    private func placeFrost() {
+        guard let window else { return }
+        frostPicture.frame = window.offsetBy(dx: -target.x, dy: -target.y)
     }
 
     /// Takes the flight off the canvas, at once and without a fade — the row

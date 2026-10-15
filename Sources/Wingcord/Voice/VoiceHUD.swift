@@ -89,11 +89,10 @@ private struct VoiceHUDHeader: View {
                     .foregroundStyle(Ink.primary)
                     .lineLimit(1)
                 if let since = presentation.connectedSince {
-                    // Drawn by the system, which updates the digits without
-                    // invalidating this view once a second.
-                    Text(timerInterval: since...Date.distantFuture, countsDown: false)
-                        .font(.callout.monospacedDigit())
-                        .foregroundStyle(Ink.secondary)
+                    // Its own view, ticking on its own: a timer text here
+                    // updated the sidebar's whole graph every second.
+                    CallTimerLabel(since: since)
+                        .fixedSize()
                 }
             }
             Spacer(minLength: 0)

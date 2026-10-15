@@ -182,6 +182,44 @@ extension DiscordREST {
         )
     }
 
+    /// Sends a friend request by username — Discord's Add Friend.
+    ///
+    /// `POST /users/@me/relationships` with `{username, discriminator: null}`,
+    /// exactly as Discord's client sends it: its `sendRequest` splits the tag
+    /// at "#", and `parseInt` of the missing half is `NaN`, which JSON writes
+    /// as null. The location rides in `x-context-properties`, as it does there.
+    ///
+    /// - Parameter discriminator: a legacy tag's four digits, for an account
+    ///   that still has one; nil for everybody else.
+    public func sendFriendRequest(username: String, discriminator: Int? = nil) async throws {
+        struct Body: Encodable {
+            var username: String
+            var discriminator: Int?
+
+            enum CodingKeys: String, CodingKey { case username, discriminator }
+
+            func encode(to encoder: any Encoder) throws {
+                var container = encoder.container(keyedBy: CodingKeys.self)
+                try container.encode(username, forKey: .username)
+                // Null, not absent: the shape Discord's own client sends.
+                if let discriminator {
+                    try container.encode(discriminator, forKey: .discriminator)
+                } else {
+                    try container.encodeNil(forKey: .discriminator)
+                }
+            }
+        }
+        struct Context: Encodable { var location = "Add Friend" }
+        let context = (try? JSONEncoder().encode(Context()))?.base64EncodedString()
+        _ = try await requestData(
+            method: "POST",
+            path: "/users/@me/relationships",
+            route: "users/@me/relationships",
+            body: Body(username: username, discriminator: discriminator),
+            headers: context.map { ["x-context-properties": $0] } ?? [:]
+        )
+    }
+
     // MARK: Notes
 
     /// Writes the reader's private note about somebody.

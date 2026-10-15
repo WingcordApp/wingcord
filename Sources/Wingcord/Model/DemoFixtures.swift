@@ -888,8 +888,22 @@ enum DemoFixtures {
         // Not authorised." over a conversation the fixture had filled. A fixture
         // that exceeds the store's own cache bound is a fixture that deletes
         // itself.
-        for channel in privateChannels.prefix(2) {
-            model.setMessages(transcript(in: channel.id, users: users), in: channel.id)
+        for (offset, channel) in privateChannels.prefix(2).enumerated() {
+            var box = transcript(in: channel.id, users: users)
+            // **The message the channel names as its newest is in the
+            // transcript**, as a READY's `last_message_id` always is — so the
+            // list's preview line (REDESIGN.md R9) has the words it shows, and
+            // the conversations keep the recency order the fixture gave them.
+            if let newest = channel.lastMessageID, let partner = channel.recipientIDs.first,
+               newest.rawValue > (box.messages.last?.id.rawValue ?? 0) {
+                box.messages.append(Message(
+                    id: newest,
+                    channelID: channel.id,
+                    authorID: partner,
+                    content: Self.latestWords[offset % Self.latestWords.count]
+                ))
+            }
+            model.setMessages(box, in: channel.id)
         }
 
         // **A read state per conversation, because READY carries one.** Without
@@ -2252,6 +2266,12 @@ enum DemoFixtures {
         "rin", "pip", "Voltcast", "Jay", "0xC0FFEE42", "2lumin0s", "vale",
         "Void", "torriel", "vexlor", "alegre", "Toffee", "Ceruleanate", "Dyno",
         "NQN", "kazume", "Quelix", "vrm", "million", "beagle", "jamesen",
+    ]
+
+    /// The newest thing said in each seeded conversation.
+    private static let latestWords = [
+        "are we still on for tonight? I can bring the **good** snacks",
+        "pushed the fix — can you check the sidebar swipe on your trackpad?",
     ]
 
     private static let bodies = [

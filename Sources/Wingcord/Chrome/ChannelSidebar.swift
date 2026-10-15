@@ -48,6 +48,8 @@ struct ChannelSidebar: View, Equatable {
     var openSurface: (GuildSurface) -> Void = { _ in }
     /// The Message Requests page, from its row at the head of the conversations.
     var openMessageRequests: () -> Void = {}
+    /// The Friends page, from its row above that (REDESIGN.md R12).
+    var openFriends: () -> Void = {}
     /// The events panel — on its list, or on one event.
     var openEvents: (GuildID, UInt64?) -> Void = { _, _ in }
     var dismissLiveEvent: (UInt64) -> Void = { _ in }
@@ -58,6 +60,10 @@ struct ChannelSidebar: View, Equatable {
     var createChannel: (ChannelID) -> Void = { _ in }
 
     @Environment(\.motion) private var motion
+    /// Where the header title starts, and the header row it centres in — see
+    /// `SidebarPages`, whose pages without a rail start it past the lights.
+    @Environment(\.sidebarTitleLeading) private var titleLeading
+    @Environment(\.sidebarHeaderBand) private var headerBand
     /// How far the list has been scrolled — see `SidebarScroll`.
     @State private var scroll = SidebarScroll()
     /// Whether the pointer is over the banner — see `SidebarBannerPointer`.
@@ -74,12 +80,46 @@ struct ChannelSidebar: View, Equatable {
     /// only thing in this view that does — every other number stays in the
     /// column's own space. See `chromeInsetProbe`.
     @State private var topInset: CGFloat = 0
+    /// How far below the sidebar panel's top edge this column begins, measured
+    /// in `SidebarPanelSpace` — what lifts the title into the header row.
+    ///
+    /// **Measured, not `topInset`.** The safe-area inset reads from the
+    /// window's top, not the panel's, so a floating panel's five points of
+    /// top inset put a title placed by it five points above the row it
+    /// belongs in (measured: centred at 20.5 against the lights' 25).
+    @State private var panelTop: CGFloat?
     /// How wide this column is. Measured for one reason only: an over-wide
     /// toolbar item is dropped rather than truncated, so the title has to know
     /// what it may occupy. See `SidebarBannerLayout.toolbarTitleWidth`.
     @State private var columnWidth: CGFloat = 0
 
-    private var hasBanner: Bool { presentation.header?.hasBanner ?? false }
+    /// The reader's Server banners switch, read here so a server with art
+    /// draws exactly as one without it when it is off.
+    @State private var settings = AppSettings.shared
+    /// The Messages page's search — see `visibleRows`.
+    @State private var query = ""
+
+    /// The direct-message home, whose list the search narrows.
+    private var isHome: Bool { presentation.header != nil && presentation.header?.guildID == nil }
+
+    private var isSearching: Bool {
+        isHome && !query.trimmingCharacters(in: .whitespaces).isEmpty
+    }
+
+    /// What the list draws: everything, or — while the home is searched —
+    /// every conversation whose name matches, closed folders and pins
+    /// included, most recent first, as plain rows.
+    private var visibleRows: [SidebarRow] {
+        guard isSearching else { return presentation.rows }
+        let needle = query.trimmingCharacters(in: .whitespaces)
+        return presentation.conversations
+            .filter { $0.name.localizedStandardContains(needle) }
+            .map(SidebarRow.channel)
+    }
+
+    private var hasBanner: Bool {
+        settings.showsServerBanners && (presentation.header?.hasBanner ?? false)
+    }
 
     /// Everything positioned against the banner, at rest. See
     /// `SidebarBannerLayout` for the arithmetic and for the one measurement it
@@ -90,7 +130,9 @@ struct ChannelSidebar: View, Equatable {
     /// how an earlier version parked the pill at the *previous* server's banner
     /// height on a server that had none.
     private var layout: SidebarBannerLayout {
-        SidebarBannerLayout(hasBanner: hasBanner, chromeInset: topInset, columnWidth: columnWidth)
+        SidebarBannerLayout(
+            hasBanner: hasBanner, chromeInset: topInset, columnWidth: columnWidth, titleLeading: titleLeading
+        )
     }
 
     var body: some View {
@@ -104,9 +146,35 @@ struct ChannelSidebar: View, Equatable {
                     // number here is measured against.
                     .ignoresSafeArea(.container, edges: .top)
             }
-            list
+            // The rows fade out under the panel's chrome; the banner behind
+            // them and the title over them are their own layers and keep it.
+            VStack(spacing: 0) {
+                // The conversations' search, fixed over the list as Messages
+                // keeps its own — the system's field on glass.
+                if isHome {
+                    SearchField(prompt: "Search", text: $query)
+                        .padding(.horizontal, Spacing.base + Spacing.hair)
+                        .padding(.top, Spacing.tight)
+                        .padding(.bottom, Spacing.tight)
+                }
+                list
+                    .fadesUnderSidebarChrome()
+                    .overlay(alignment: .top) {
+                        if isSearching, visibleRows.isEmpty {
+                            Text("No conversations match.")
+                                .font(.subheadline)
+                                .foregroundStyle(Ink.secondary)
+                                .padding(.top, Spacing.group)
+                        }
+                    }
+            }
         }
         .background(alignment: .top) { chromeInsetProbe }
+        .onGeometryChange(for: CGFloat?.self) { proxy in
+            proxy.bounds(of: SidebarPanelSpace.space).map { -$0.minY }
+        } action: { top in
+            panelTop = top
+        }
         // Over both layers, so it sits ON the artwork rather than in the band
         // below it.
         //
@@ -121,38 +189,21 @@ struct ChannelSidebar: View, Equatable {
                 TravellingPill(header: header, layout: layout, scroll: scroll)
             }
         }
-        // The other half of the name, and the half that is REACHABLE — see
-        // `showsToolbarTitle` for why the parked pill could not be.
-        //
-        // Placement is `.automatic`, not `.navigation`: measured on a live
-        // window, `.navigation` lands the item at x=376, AFTER the split view's
-        // sidebar toggle and out over the detail column. `.automatic` lands it
-        // at x=96, in the sidebar's own span of the bar — the gap between the
-        // traffic lights and the toggle that is otherwise flexible space — and
-        // at y=830..866, which is the toggle's own row to the point.
-        //
-        // Declared here rather than beside the rest of the chrome because the
-        // scroll position that decides it is this view's own. Routing it
-        // through the store instead would publish a write on every scroll tick
-        // to every surface observing it.
-        .toolbar {
-            ToolbarItem(placement: .automatic) {
-                if let header = presentation.header {
-                    TravellingToolbarTitle(header: header, layout: layout, scroll: scroll)
-                }
+        // The other half of the name: once the pill has ridden off the banner
+        // (or on a server with none), the name sits in the panel's header row,
+        // level with the traffic lights. The header is ours now rather than a
+        // toolbar, so the row is drawn here — where the scroll that decides it
+        // lives — and lifted into the header band above the list's safe area.
+        .overlay(alignment: .topLeading) {
+            if let header = presentation.header {
+                // In the panel's header row: its height, from the panel's top
+                // edge. Outside a panel (a preview), the chrome above it.
+                let lift = panelTop ?? topInset
+                TravellingToolbarTitle(header: header, layout: layout, scroll: scroll)
+                    .padding(.leading, titleLeading)
+                    .frame(height: max(1, panelTop == nil ? topInset : (headerBand ?? topInset)), alignment: .leading)
+                    .offset(y: -lift)
             }
-            // **A title, not a pill.** The bar's shared glass platter made
-            // "Direct Messages" and the server's name read as a capsule over
-            // the list; the column's title is plain text, the way a sidebar
-            // heads itself.
-            .sharedBackgroundVisibility(.hidden)
-            // Pushes the title to the LEADING edge of the sidebar's span.
-            // Without it the section right-aligns against the toggle and the
-            // name lands at x=196 — a hundred points right of where the
-            // floating pill just faded out, so the hand-off reads as a jump
-            // rather than as one name staying put while its material changes.
-            // With it, x=96 against the resting pill's 88.
-            ToolbarSpacer(.flexible)
         }
     }
 
@@ -174,6 +225,23 @@ struct ChannelSidebar: View, Equatable {
                 isSelected: target == .messageRequests
             )
             .tag(SidebarTarget.messageRequests)
+        case .friends(let pending):
+            SidebarActionRow(
+                symbolName: "person.2.fill",
+                title: "Friends",
+                count: pending,
+                isSelected: target == .friends
+            )
+            .tag(SidebarTarget.friends)
+        case .pinnedGrid(let channels):
+            // Its tiles select by themselves; the row is never the list's.
+            PinnedConversationsGrid(
+                channels: channels,
+                selectedID: { if case .channel(let id) = target { return id }; return nil }(),
+                select: { selectChannel($0) },
+                openMenu: { openMenu($0, $1) }
+            )
+            .selectionDisabled()
         case .events(let events):
             // Opens a panel rather than going anywhere, so it is a button in
             // the list and never its selection.
@@ -246,6 +314,8 @@ struct ChannelSidebar: View, Equatable {
                     openSurface(surface)
                 case .messageRequests:
                     openMessageRequests()
+                case .friends:
+                    openFriends()
                 case .none:
                     break
                 }
@@ -313,7 +383,7 @@ struct ChannelSidebar: View, Equatable {
     private var groups: [Group_] {
         var result: [Group_] = []
         var loose: [(Int, SidebarRow)] = []
-        for (index, row) in presentation.rows.enumerated() {
+        for (index, row) in visibleRows.enumerated() {
             if case .category(let category) = row {
                 if !loose.isEmpty {
                     result.append(Group_(id: 0, header: nil, rows: loose))
@@ -389,7 +459,7 @@ struct ChannelSidebar: View, Equatable {
         .scrollContentBackground(.hidden)
         // Collapsing or expanding a category adds or removes its channels, so
         // the row count is exactly the signal.
-        .animation(motion.standard, value: presentation.rows.count)
+        .animation(motion.standard, value: visibleRows.count)
         // One read, carrying the banner and the pill up together.
         .onScrollGeometryChange(for: CGFloat.self) { geometry in
             geometry.contentOffset.y + geometry.contentInsets.top
@@ -669,40 +739,36 @@ private struct ServerNamePill: View {
     }
 }
 
-/// The server's name in the toolbar, level with the sidebar toggle, for every
-/// moment the banner is not carrying it.
+/// The server's name in the panel's header, level with the sidebar toggle, for
+/// every moment the banner is not carrying it.
 ///
-/// **It draws no glass and sets no size**, for the same reason `ChannelPill`
-/// does not: a `ToolbarItem` on macOS 27 already arrives with the system's
-/// material at the system's size, and a second one inside it is the
-/// capsule-inside-a-platter that `INVARIANTS.md` §4 rule 2 forbids.
+/// **The header's own capsule, drawn here.** This used to be a toolbar item,
+/// and the toolbar drew its platter; the header is the app's own now
+/// (REDESIGN.md R2), and a `Button` left to the default style there came out
+/// as AppKit's grey push-button bezel. So it is the detail header's title
+/// capsule — `.regular` glass at the header control's height — carrying the
+/// banner pill's label: the server's mark, its name and a chevron. When the
+/// name changes the capsule's width springs with it (`glassMorph`), the morph
+/// the banner pill has always had.
 ///
-/// It is also the only version of the name that can be *pressed* up there.
-/// Measured on a live window, the top 32 points belong to `NSTitlebarView` — a
-/// sibling above the hosting view, which takes the mouse first — so a capsule
-/// drawn level with the toggle would be visible, unclickable, and would drag
-/// the window when pressed. A toolbar item is level with the toggle by
-/// construction and reachable by definition.
+/// The direct-message home has nothing to open, so its name is a heading, not
+/// a capsule.
 private struct ServerTitleItem: View, Equatable {
     var name: String
-    /// The widest the label may draw. See `SidebarBannerLayout.toolbarTitleWidth`
-    /// — over the span, the toolbar drops the item rather than truncating it.
+    /// The widest the capsule may draw — `SidebarBannerLayout.toolbarTitleWidth`,
+    /// what the header leaves between the lights and its own controls.
     var maxWidth: CGFloat
-    /// Whose menu the chevron opens. **Nil is the direct-message home**, which
-    /// is a destination and not a server: it has no invite, no settings and
-    /// nothing to leave, and a menu offering all three is three commands that
-    /// cannot mean anything. Without it this is a label rather than a control.
+    /// Whose menu it opens. **Nil is the direct-message home**, which is a
+    /// destination and not a server: it has no invite, no settings and nothing
+    /// to leave.
     var guildID: GuildID?
     /// Discord's mark, before the name — see `GuildMark`.
     var mark: GuildMark?
 
     @Environment(\.motion) private var motion
 
-    /// The sidebar's body runs on **every scroll tick**, so without a place to
-    /// stop, the label below would be re-measured on each one. Name and width
-    /// are the only things that can change what this draws; the closure is
-    /// recreated on every parent evaluation and is deliberately excluded, which
-    /// is the same trade `ChannelSidebar` itself makes.
+    /// The sidebar's body runs on every scroll tick; name, width, server and
+    /// mark are the only things that change what this draws.
     static func == (lhs: ServerTitleItem, rhs: ServerTitleItem) -> Bool {
         lhs.name == rhs.name
             && lhs.maxWidth == rhs.maxWidth
@@ -719,130 +785,67 @@ private struct ServerTitleItem: View, Equatable {
                 Button {
                     page = ServerMenuPage()
                     isMenuOpen = true
-                } label: { title }
-                    .accessibilityHint("Server options")
-                    // **A real toolbar item is the one place a presentation may
-                    // be inline** — `INVARIANTS.md` §1. It is one item evaluated
-                    // once, and the alternative is a window-root presenter
-                    // anchored to a rect the toolbar cannot report.
-                    .popover(isPresented: $isMenuOpen, arrowEdge: .bottom) {
-                        ServerOptionsMenu(
-                            guildID: guildID,
-                            startsOn: page.surface,
-                            inviteChannelID: page.inviteChannelID,
-                            close: { isMenuOpen = false }
-                        )
-                        .presentationBackground(.clear)
-                    }
-                    // It exists only while it has the name, so it always answers.
-                    .modifier(ServerMenuRequestAnswer(
-                        guildID: guildID, answers: true, page: $page, isMenuOpen: $isMenuOpen
-                    ))
+                } label: {
+                    label(opensMenu: true)
+                }
+                // `.plain`, then the glass: the default style is AppKit's
+                // push-button bezel, and glass over it is glass on a slab.
+                .buttonStyle(.plain)
+                .glassEffect(.regular.interactive(), in: .capsule)
+                .accessibilityHint("Server options")
+                .popover(isPresented: $isMenuOpen, arrowEdge: .bottom) {
+                    ServerOptionsMenu(
+                        guildID: guildID,
+                        startsOn: page.surface,
+                        inviteChannelID: page.inviteChannelID,
+                        close: { isMenuOpen = false }
+                    )
+                    .presentationBackground(.clear)
+                }
+                // It exists only while it has the name, so it always answers.
+                .modifier(ServerMenuRequestAnswer(
+                    guildID: guildID, answers: true, page: $page, isMenuOpen: $isMenuOpen
+                ))
             } else {
-                title.accessibilityAddTraits(.isHeader)
+                label(opensMenu: false)
+                    .accessibilityAddTraits(.isHeader)
             }
         }
-        // Switching servers reflows the label rather than cutting between two
-        // of them, and the system's material morphs along with the width.
+        // A cap, not a size: the capsule hugs a short name, and a long one
+        // truncates before it reaches the toggle.
+        .frame(maxWidth: maxWidth, alignment: .leading)
         .animation(motion.glassMorph, value: name)
         .help(name)
         .accessibilityLabel(Text(name))
     }
 
-    /// The label, sized by the toolbar wherever it can be.
-    ///
-    /// **A cap is imposed only on a name that needs one.** The `.frame(width:)`
-    /// below exists for exactly one reason — an over-wide toolbar item is
-    /// *dropped* rather than truncated, and the neighbouring controls slide into
-    /// the hole — so a name that already fits the sidebar's span has nothing to
-    /// be saved from, and giving it a hand-measured frame anyway is how the
-    /// platter came to sit a couple of points off its own text.
-    ///
-    /// The measurement and SwiftUI's own layout are two different text stacks
-    /// and they do not have to agree to a point. Where the cap is not needed,
-    /// they are not asked to: the item is sized the way `ChannelPill` is, by the
-    /// bar, which is the arrangement that has always looked right.
-    ///
-    /// **A width, not a maxWidth**, in the case that does need it. The bar sizes
-    /// its items against an unspecified proposal, where a maximum is advisory
-    /// and the label still reports its full ideal — measured, `maxWidth` left a
-    /// 35-character name being dropped exactly as before, while a width drew it
-    /// at 104.5 and put the toggle back at x=324.
-    /// How much breathing room a **bare label** needs inside its platter.
-    ///
-    /// **A toolbar platter hugs a `Text` far more tightly than it hugs a
-    /// control's label**, and this item is the only bare one in the app: on a
-    /// server it is a `Menu`, which arrives with the system's own control
-    /// insets, and on the direct-message home there is nothing to open so it is
-    /// a label. The two therefore came out visibly different — the DM title sat
-    /// with its first and last letters almost touching the ends of its capsule
-    /// while every other item in the bar breathed.
-    ///
-    /// Six points a side, which is the difference measured against the `Menu`
-    /// beside it. It is *not* a hand-set control size — `INVARIANTS.md` §1
-    /// forbids that and means it — it is padding on a piece of text the bar has
-    /// declined to treat as a control.
-    private static let bareLabelInset: CGFloat = 6
-
-    /// What the label's own frame may occupy, once its padding is taken out.
-    ///
-    /// The cap exists to stop the bar DROPPING an over-wide item, so the padding
-    /// has to come out of it rather than be added on top — otherwise the fix for
-    /// a cramped short name is what makes a long one disappear.
-    private var labelWidthCap: CGFloat {
-        let cap = guildID == nil ? max(20, maxWidth - Self.bareLabelInset * 2) : maxWidth
-        // The mark rides in front of the name and is never the part that gives.
-        return max(20, cap - markWidth)
-    }
-
-    /// The mark and its gap, which come out of the name's allowance.
-    private var markWidth: CGFloat {
-        mark == nil ? 0 : Self.markSide + Self.markGap
+    /// The banner pill's label, at the header's size.
+    private func label(opensMenu: Bool) -> some View {
+        HStack(spacing: Spacing.tight) {
+            if let mark {
+                GuildMarkBadge(mark: mark, side: Self.markSide)
+                    .padding(.trailing, Spacing.hair)
+            }
+            Text(name)
+                .font(.system(.body, weight: .semibold))
+                .foregroundStyle(InkColor.primary)
+                .lineLimit(1)
+                .truncationMode(.tail)
+                .contentTransition(.interpolate)
+            if opensMenu {
+                Image(systemName: "chevron.down")
+                    .font(.system(.caption2, weight: .bold))
+                    .foregroundStyle(InkColor.secondary)
+            }
+        }
+        // The capsule's ends are half its height away; a heading has none.
+        .padding(.leading, opensMenu ? (mark == nil ? 14 : 10) : 0)
+        .padding(.trailing, opensMenu ? 12 : 0)
+        .frame(height: ShellMetrics.headerControl)
+        .contentShape(.capsule)
     }
 
     private static let markSide: CGFloat = 18
-    private static let markGap = Spacing.tight + Spacing.hair
-
-    @ViewBuilder
-    private var title: some View {
-        let label = Text(name)
-            .fontWeight(.semibold)
-            .lineLimit(1)
-            .truncationMode(.tail)
-            .contentTransition(.interpolate)
-
-        HStack(spacing: Self.markGap) {
-            if let mark {
-                GuildMarkBadge(mark: mark, side: Self.markSide)
-            }
-            if naturalWidth > labelWidthCap {
-                label.frame(width: labelWidthCap, alignment: .leading)
-            } else {
-                label
-            }
-        }
-        .padding(.horizontal, guildID == nil ? Self.bareLabelInset : 0)
-    }
-
-    /// What the label would take if nothing stopped it.
-    ///
-    /// Measured through AppKit rather than asked of SwiftUI: a hidden `Text` and
-    /// an `onGeometryChange` would answer the same question a layout pass later
-    /// and write it into state that the next server invalidates.
-    ///
-    /// **The font has to be the one SwiftUI will actually draw.** `Text` in a
-    /// toolbar resolves to the body text style, which tracks the reader's text
-    /// size — so measuring against a fixed `systemFontSize` is right only at the
-    /// default and progressively wrong above and below it, which is a cap that
-    /// truncates a name that fits or drops one that would have.
-    ///
-    /// Rounded up with a point of slack, so a name near the cap is never
-    /// truncated by a rounding difference between the two stacks.
-    private var naturalWidth: CGFloat {
-        let body = NSFont.preferredFont(forTextStyle: .body)
-        let font = NSFontManager.shared.convert(body, toHaveTrait: .boldFontMask)
-        return ceil((name as NSString).size(withAttributes: [.font: font]).width) + 1
-    }
 }
 
 /// The server's own menu, under the name.
@@ -875,5 +878,98 @@ private struct ServerMenuRequestAnswer: ViewModifier {
             page = ServerMenuPage(surface: request.page, inviteChannelID: request.inviteChannelID)
             isMenuOpen = true
         }
+    }
+}
+
+// MARK: - Pinned conversations
+
+/// The pinned conversations as Messages pins them: faces in a grid over the
+/// list (REDESIGN.md R9). A face is the conversation — a click opens it, a
+/// secondary click its menu, where Unpin is.
+private struct PinnedConversationsGrid: View {
+    var channels: [SidebarChannel]
+    var selectedID: ChannelID?
+    var select: (ChannelID) -> Void
+    var openMenu: (ChannelID, CGRect) -> Void
+
+    private static let columns = [GridItem(.adaptive(minimum: 76, maximum: 110), spacing: Spacing.tight)]
+
+    var body: some View {
+        LazyVGrid(columns: Self.columns, alignment: .center, spacing: Spacing.base) {
+            ForEach(channels) { channel in
+                PinnedConversationTile(
+                    channel: channel,
+                    isSelected: channel.id == selectedID,
+                    select: { select(channel.id) },
+                    openMenu: { openMenu(channel.id, $0) }
+                )
+            }
+        }
+        .padding(.vertical, Spacing.tight)
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel(Text("Pinned conversations"))
+    }
+}
+
+private struct PinnedConversationTile: View {
+    var channel: SidebarChannel
+    var isSelected: Bool
+    var select: () -> Void
+    var openMenu: (CGRect) -> Void
+
+    @Environment(\.motion) private var motion
+    @State private var isHovering = false
+
+    static let face: CGFloat = 52
+
+    var body: some View {
+        Button(action: select) {
+            VStack(spacing: 5) {
+                AvatarView(url: channel.avatarURL, monogram: channel.monogram ?? "?", side: Self.face)
+                    .overlay {
+                        // The open conversation wears a ring, as a selected
+                        // row wears its highlight.
+                        Circle()
+                            .strokeBorder(Color.accentColor, lineWidth: isSelected ? 2.5 : 0)
+                            .padding(-4)
+                    }
+                    .overlay(alignment: .bottomTrailing) {
+                        if let status = channel.status {
+                            if channel.isTyping {
+                                TypingPill(tint: status.tint, height: 14).offset(x: 4, y: 2)
+                            } else {
+                                PresenceDot(status: status, side: 14).offset(x: 1, y: 1)
+                            }
+                        }
+                    }
+                    .overlay(alignment: .topTrailing) {
+                        if channel.mentionCount > 0 {
+                            Text(channel.mentionCount > 99 ? "99+" : "\(channel.mentionCount)")
+                                .font(.system(size: 11, weight: .bold))
+                                .foregroundStyle(.white)
+                                .padding(.horizontal, 5)
+                                .frame(minWidth: 18, minHeight: 18)
+                                .background(Capsule().fill(Palette.unreadBadge))
+                                .offset(x: 4, y: -2)
+                        }
+                    }
+                    .scaleEffect(isHovering ? 1.04 : 1)
+                Text(channel.name)
+                    .font(.system(.subheadline, weight: channel.isUnread ? .semibold : .medium))
+                    .foregroundStyle(channel.isUnread || isSelected ? Ink.primary : Ink.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+            }
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 4)
+            .contentShape(.rect)
+        }
+        .buttonStyle(.plain)
+        .onSecondaryClick(perform: openMenu)
+        .onHover { isHovering = $0 }
+        .animation(motion.hover, value: isHovering)
+        .help(channel.name)
+        .accessibilityLabel(Text(channel.name + (channel.isUnread ? ", unread" : "")))
+        .accessibilityAddTraits(isSelected ? .isSelected : [])
     }
 }

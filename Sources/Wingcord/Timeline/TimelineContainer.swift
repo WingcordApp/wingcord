@@ -21,6 +21,8 @@ struct TimelineContainer: View {
     /// This transcript's position as the chrome over it sees it. Written by the
     /// coordinator, read by the jump control and by nothing here.
     @State private var scroll = TranscriptScrollState()
+    /// The wallpaper's frost — read here so the drawn canvas hears it change.
+    @State private var frost = WallpaperFrost.shared
 
     var body: some View {
         let summaries = hostsSummaries ? model.summaries(in: channelID) : []
@@ -105,6 +107,7 @@ struct TimelineContainer: View {
             liveEvent: model.liveEvent(in: channelID).map {
                 TimelineLayoutEngine.LiveEvent(guildID: $0.guildID, id: $0.id, name: $0.name)
             },
+            frostRevision: frost.revision,
             model: model
         )
         // **Over the transcript's own corner, lifted clear of the composer** —

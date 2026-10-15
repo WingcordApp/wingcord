@@ -84,4 +84,26 @@ struct FilmSourceTests {
         #expect(still.firstFrame.width == 64)
         #expect(still.index(at: 12.3) == 0)
     }
+
+    /// Core Animation colour-matches a layer's contents on the main thread when
+    /// a transaction commits — every frame, for a streamed loop. Frames come
+    /// out of the decoder already in the screen's space, in its pixel format.
+    @Test("Frames are matched to the display's colour space as they are decoded")
+    func matchedToDisplay() async throws {
+        let display = try #require(CGColorSpace(name: CGColorSpace.displayP3))
+        let source = try #require(FilmSource(data: try gif(frames: 3), maximumPixelSize: 64, displaySpace: display))
+        let ready = CGImageAlphaInfo.premultipliedFirst.rawValue | CGBitmapInfo.byteOrder32Little.rawValue
+        #expect(source.firstFrame.colorSpace == display)
+        #expect(source.firstFrame.bitmapInfo.rawValue == ready)
+        let frame = await withCheckedContinuation { continuation in
+            source.decode(1) { continuation.resume(returning: $0) }
+        }
+        #expect(frame?.colorSpace == display)
+        #expect(frame?.bitmapInfo.rawValue == ready)
+        // Already matched: handed back as it is, with no second draw.
+        let first = source.firstFrame
+        #expect(FilmSource.matched(first, to: display) === first)
+        // No display given: the frame as decoded.
+        #expect(FilmSource.matched(first, to: nil) === first)
+    }
 }

@@ -103,9 +103,11 @@ nonisolated struct MessageTextStyle: @unchecked Sendable {
             authorFont: manager.convert(body, toHaveTrait: .boldFontMask),
             metadataFont: metadata,
             metadataItalicFont: manager.convert(metadata, toHaveTrait: .italicFontMask),
-            primaryColor: tinted(.labelColor),
-            secondaryColor: tinted(.secondaryLabelColor),
-            tertiaryColor: tinted(.tertiaryLabelColor),
+            // The app's own ramp rather than the system's labels — brighter
+            // secondary and tertiary rungs (REDESIGN.md R13, `InkRamp`).
+            primaryColor: tinted(InkRamp.nsColor(.primary)),
+            secondaryColor: tinted(InkRamp.nsColor(.secondary)),
+            tertiaryColor: tinted(InkRamp.nsColor(.tertiary)),
             linkColor: .linkColor,
             underlinesLinks: AppSettings.shared.underlinesLinks,
             mentionColor: NSColor(Palette.accent),

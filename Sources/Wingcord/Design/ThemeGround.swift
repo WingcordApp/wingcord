@@ -345,6 +345,10 @@ private struct ThemeGroundModifier: ViewModifier {
     /// which is already living in a safe area and would otherwise expand out of
     /// its own row and paint over the column beside it.
     var spreads: Bool
+    /// Whether the old picture card's backdrop is drawn over the theme. False
+    /// under the window shell, where the wallpaper layer draws every picture
+    /// (REDESIGN.md R5).
+    var drawsPicture = true
 
     @State private var theme = ThemeStore.shared
     @State private var renderer = BackdropRenderer.shared
@@ -355,7 +359,7 @@ private struct ThemeGroundModifier: ViewModifier {
                 role: role,
                 ground: theme.ground,
                 identity: theme.groundIdentity,
-                backdrop: theme.shownBackdrop,
+                backdrop: drawsPicture ? theme.shownBackdrop : nil,
                 picture: renderer.image,
                 spreads: spreads
             )
@@ -371,6 +375,12 @@ extension View {
     /// nothing.
     func readingSurface() -> some View {
         modifier(ThemeGroundModifier(role: .reading, spreads: true))
+    }
+
+    /// The theme's ground alone, without the backdrop picture — what the
+    /// wallpaper layer lays its pictures over.
+    func themeGroundOnly() -> some View {
+        modifier(ThemeGroundModifier(role: .reading, spreads: true, drawsPicture: false))
     }
 
     /// The sidebar column's ground: nothing, the theme's frame, or the picture.

@@ -41,6 +41,9 @@ nonisolated struct TimelineSettings: @unchecked Sendable {
     /// a transcript turns this into `.bubbles`, which is why the engine reads
     /// `Input.arrangement` and never this.
     var usesBubbles: Bool
+    /// Whether the reader's own bubbles wear the accent — off by default,
+    /// where they are the frosted, lighter of the two (REDESIGN.md R6).
+    var tintsOwnBubbles: Bool
     /// Whether a link's card is laid out at all. Off means the embed is not
     /// measured, not merely hidden — a card that is laid out and then not drawn
     /// costs its framesetting for nothing.
@@ -80,6 +83,7 @@ nonisolated struct TimelineSettings: @unchecked Sendable {
     init(
         isCompact: Bool,
         usesBubbles: Bool = false,
+        tintsOwnBubbles: Bool = false,
         showsEmbeds: Bool,
         uses24HourTime: Bool,
         showsSeconds: Bool = false,
@@ -91,6 +95,7 @@ nonisolated struct TimelineSettings: @unchecked Sendable {
     ) {
         self.isCompact = isCompact
         self.usesBubbles = usesBubbles
+        self.tintsOwnBubbles = tintsOwnBubbles
         self.showsEmbeds = showsEmbeds
         self.uses24HourTime = uses24HourTime
         self.showsSeconds = showsSeconds
@@ -189,6 +194,7 @@ nonisolated struct TimelineSettings: @unchecked Sendable {
         return TimelineSettings(
             isCompact: settings.isCompactMode,
             usesBubbles: settings.usesMessageBubbles,
+            tintsOwnBubbles: settings.tintsOwnBubbles,
             showsEmbeds: settings.showsEmbeds,
             uses24HourTime: settings.uses24HourTime,
             showsSeconds: settings.showsSeconds,
@@ -212,6 +218,7 @@ extension TimelineSettings: Equatable {
     nonisolated static func == (lhs: TimelineSettings, rhs: TimelineSettings) -> Bool {
         lhs.isCompact == rhs.isCompact
             && lhs.usesBubbles == rhs.usesBubbles
+            && lhs.tintsOwnBubbles == rhs.tintsOwnBubbles
             && lhs.showsEmbeds == rhs.showsEmbeds
             && lhs.uses24HourTime == rhs.uses24HourTime
             && lhs.showsSeconds == rhs.showsSeconds

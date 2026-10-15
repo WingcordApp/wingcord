@@ -93,6 +93,13 @@ struct ChannelOptionsMenu: View {
                 AppModel.copy("https://discord.com/channels/\(guildID.rawValue)/\(channel.id.rawValue)")
                 close()
             }
+            if channel.kind.isConversation {
+                // The channel's own wallpaper, on this Mac only (REDESIGN.md R5).
+                FlyoutRow(title: "Change Background…", symbolName: "photo.on.rectangle") {
+                    close()
+                    WallpaperStore.shared.requestEditing(channel.id)
+                }
+            }
         }
         if channel.kind == .voice {
             voiceStatusRow(channel, guildID: guildID, permissions: permissions)

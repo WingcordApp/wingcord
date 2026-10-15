@@ -149,6 +149,11 @@ struct WingcordApp: App {
                 )
         }
         .defaultSize(width: 1180, height: 760)
+        // **No title bar and no toolbar** — the shell draws its own header rows
+        // level with the traffic lights (REDESIGN.md R2). Measured 2026-10-13:
+        // in a hidden-title-bar window with no toolbar, a control drawn in that
+        // band takes clicks; with a toolbar it did not (INVARIANTS §1).
+        .windowStyle(.hiddenTitleBar)
         .commands { WingcordCommands(model: model) }
 
         // An ordinary `Window`, not a `Settings` scene — see `SettingsWindow`
@@ -212,6 +217,12 @@ struct WingcordCommands: Commands {
         // point at scenes this app does not have; Discord's ⇧⌘N, Create or
         // join a server, stands where they were.
         CommandGroup(replacing: .newItem) {
+            // Messages' ⌘N, and the friends it writes to (REDESIGN.md R12).
+            Button("New Message…") { NewMessageRequest.shared.isShown = true }
+                .keyboardShortcut("n", modifiers: .command)
+                .disabled(!isWorkspace)
+            Button("Add Friend…") { AddFriendRequest.shared.isShown = true }
+                .disabled(!isWorkspace)
             ShortcutMenuItem(shortcut: .addServer, model: model)
                 .disabled(!isWorkspace)
         }
@@ -234,8 +245,49 @@ struct WingcordCommands: Commands {
         // the default, the availability test and the verb, so a row in the
         // Shortcuts pane and an item here cannot come to mean different things.
 
-        // View › Show/Hide Sidebar, ⌃⌘S — the reference's "Expand Side Bar".
-        SidebarCommands()
+        // View › Show/Hide Sidebar, ⌃⌘S — the reference's "Expand Side Bar" —
+        // and the sidebar's style. The shell's own toggle, not the split view's:
+        // there is no split view any more.
+        CommandGroup(replacing: .sidebar) {
+            Button(AppSettings.shared.isSidebarShown ? "Hide Sidebar" : "Show Sidebar") {
+                ShellActions.toggleSidebar()
+            }
+            .keyboardShortcut("s", modifiers: [.control, .command])
+            .disabled(!isWorkspace)
+            Picker("Sidebar Style", selection: Binding(
+                get: { AppSettings.shared.sidebarStyle },
+                set: { ShellActions.setSidebarStyle($0) }
+            )) {
+                ForEach(SidebarStyle.allCases) { style in
+                    Text(style.label).tag(style)
+                }
+            }
+            .disabled(!isWorkspace)
+            Divider()
+            // The pages a two-finger swipe moves between — REDESIGN.md R8.
+            // ⌃⌘ rather than ⌥⌘: ⌥⌘→ is Discord's own Direct Messages key.
+            Button("Previous Sidebar Page") { SidebarPager.shared.step(-1) }
+                .keyboardShortcut(.leftArrow, modifiers: [.control, .command])
+                .disabled(!isWorkspace)
+            Button("Next Sidebar Page") { SidebarPager.shared.step(1) }
+                .keyboardShortcut(.rightArrow, modifiers: [.control, .command])
+                .disabled(!isWorkspace)
+            // The rack, expanded — the rail's own button, as a command.
+            Button(SidebarPager.shared.isRackExpanded ? "Hide All Servers" : "Show All Servers") {
+                SidebarPager.shared.toggleAllServers()
+            }
+            .keyboardShortcut(.downArrow, modifiers: [.control, .command])
+            .disabled(!isWorkspace)
+            Picker("Sidebar Pages", selection: Binding(
+                get: { AppSettings.shared.sidebarPages },
+                set: { AppSettings.shared.sidebarPages = $0 }
+            )) {
+                ForEach(SidebarPageLayout.allCases) { layout in
+                    Text(layout.label).tag(layout)
+                }
+            }
+            .disabled(!isWorkspace)
+        }
 
         CommandGroup(after: .pasteboard) {
             Group {

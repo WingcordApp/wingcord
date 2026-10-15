@@ -213,6 +213,49 @@ struct ComposerSendButton: View {
     }
 }
 
+/// The send arrow inside Messages' field: a disc at the capsule's trailing end.
+///
+/// **Monochrome** (REDESIGN.md R7): the room's own ink, white in a dark room,
+/// with the arrow cut out of it — the bubbles are glass now, and an accent disc
+/// would be the one coloured thing left in the conversation. Like
+/// `ComposerSendButton`, always drawn and armed only once there is something
+/// to send, so the field's end never moves under the caret.
+struct MessagesSendButton: View {
+    var isArmed: Bool
+    var action: () -> Void
+
+    @Environment(\.motion) private var motion
+
+    /// The disc, and its air inside the 38-point capsule.
+    static let side: CGFloat = 28
+    static let inset: CGFloat = (Metrics.composerControlHeight - side) / 2
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: "arrow.up")
+                .font(.system(size: 14, weight: .bold))
+                .foregroundStyle(isArmed ? AnyShapeStyle(Self.cutout) : AnyShapeStyle(Ink.tertiary))
+                .frame(width: Self.side, height: Self.side)
+                .background {
+                    Circle().fill(isArmed ? AnyShapeStyle(InkColor.solid) : AnyShapeStyle(ComposerControlFill.resting))
+                }
+                .contentShape(.circle)
+        }
+        .buttonStyle(.plain)
+        .frame(height: Metrics.composerControlHeight)
+        .disabled(!isArmed)
+        // See `ComposerSendButton`: inert while disabled, so the field keeps
+        // the key while there is nothing to send.
+        .keyboardShortcut(.return, modifiers: [])
+        .animation(motion.standard, value: isArmed)
+        .help("Send")
+        .accessibilityLabel(Text("Send"))
+    }
+
+    /// The arrow, in the room's ground: dark on a dark room's white disc.
+    private static let cutout = Color.adaptive(dark: .black, light: .white)
+}
+
 /// The box a 32-point control sits in inside a boxy bar: the bar's own resting
 /// height, the control centred in it.
 ///

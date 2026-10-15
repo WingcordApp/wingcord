@@ -287,6 +287,7 @@ extension AppModel {
     ///
     /// One value, so a channel and a server page cannot both be lit.
     var sidebarTarget: SidebarTarget {
+        if isFriendsShown { return .friends }
         if isMessageRequestsShown { return .messageRequests }
         if let openGuildSurface { return .surface(openGuildSurface) }
         if let selectedChannelID { return .channel(selectedChannelID) }

@@ -59,12 +59,17 @@ final class PresentationRevision {
         // The system text size. On macOS this is the accessibility text-size
         // preference; a surface that ignores it is unreadable for the people who
         // most need it not to be.
+        Self.installDisplayOptions()
         observers.append(center.addObserver(
             forName: NSWorkspace.accessibilityDisplayOptionsDidChangeNotification,
             object: nil,
             queue: .main
         ) { _ in
-            MainActor.assumeIsolated { PresentationRevision.shared.invalidate() }
+            MainActor.assumeIsolated {
+                Self.installDisplayOptions()
+                WallpaperFrost.shared.displayOptionsDidChange()
+                PresentationRevision.shared.invalidate()
+            }
         })
 
         // Light ⇄ dark. Observed on the app rather than on a view, because the
@@ -73,6 +78,16 @@ final class PresentationRevision {
         appearanceObservation = NSApp?.observe(\.effectiveAppearance) { _, _ in
             MainActor.assumeIsolated { PresentationRevision.shared.invalidate() }
         }
+    }
+
+    /// Reduce Transparency and Increase Contrast, for the bubbles' painter,
+    /// which runs off the main actor and cannot ask the workspace itself.
+    private static func installDisplayOptions() {
+        let workspace = NSWorkspace.shared
+        BubbleTint.setAccessibility(
+            reducesTransparency: workspace.accessibilityDisplayShouldReduceTransparency,
+            increasesContrast: workspace.accessibilityDisplayShouldIncreaseContrast
+        )
     }
 
     // No `deinit`. This is a process-lifetime singleton, so there is nothing to

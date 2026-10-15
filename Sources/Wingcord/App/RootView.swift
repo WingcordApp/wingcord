@@ -11,15 +11,8 @@ import WingcordCore
 struct RootView: View {
     @Environment(AppModel.self) private var model
 
-    /// Whether the window's toolbar is up. The comment on the modifier that
-    /// reads it gives the three reasons it is not.
-    private var showsToolbar: Bool {
-        model.showsWorkspace && !model.isColumnTakenOver && !model.isFullProfileShown
-            && !model.isCallFullScreen
-    }
-
     var body: some View {
-        MainWindow()
+        WindowShell()
             .opacity(model.showsWorkspace ? 1 : 0)
             .overlay {
                 if !model.showsWorkspace {
@@ -34,39 +27,6 @@ struct RootView: View {
                 ActionNoticeView(notice: model.actionNotice) {
                     model.actionNotice = nil
                 }
-            }
-            // No chrome before there is anything to be chrome FOR.
-            //
-            // The split view is always in the tree — it is held at opacity 0 so
-            // its column widths and scroll positions survive a reconnect — and a
-            // split view installs its own sidebar toggle whether or not anyone
-            // can see the sidebar. Hiding the window's toolbar is what removes
-            // it, because the item is the system's and there is nothing of ours
-            // to take away.
-            // **And hidden over a takeover, for the same reason.** The gate and
-            // discovery both draw `ChannelChrome.none`, which empties every
-            // control the bar builds — but the *search field* is the system's,
-            // installed by `.searchable`, and an empty chrome value cannot
-            // remove it. It sat over discovery offering to search a server
-            // nobody could see. There is nothing else in the bar during a
-            // takeover, so the bar goes.
-            // **And hidden under the full profile, which is the third
-            // reason and the only one that is not about what the bar contains.**
-            // See `AppModel.isFullProfileShown`: that surface dims the window
-            // and the toolbar is the one strip a layer in the content view
-            // cannot dim.
-            .toolbarVisibility(showsToolbar ? .automatic : .hidden, for: .windowToolbar)
-            // **Every change is traced.** A toolbar that went missing in a long
-            // session is what this came from; the line names which of the
-            // three inputs moved, so the next report is a log read rather than
-            // a guess.
-            .onChange(of: showsToolbar) { _, shown in
-                DiagnosticLog.trace(
-                    "window",
-                    "toolbar \(shown ? "shown" : "hidden"): workspace=\(model.showsWorkspace) "
-                        + "takeover=\(model.isColumnTakenOver) fullProfile=\(model.isFullProfileShown) "
-                        + "connection=\(model.connectionState)"
-                )
             }
             .animation(.easeOut(duration: 0.2), value: model.showsWorkspace)
             .animation(.easeOut(duration: 0.2), value: model.isColumnTakenOver)

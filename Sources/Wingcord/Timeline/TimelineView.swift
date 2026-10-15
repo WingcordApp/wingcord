@@ -111,6 +111,10 @@ struct TimelineView: NSViewRepresentable {
     /// The event on now in this channel, whose card a stage start wears —
     /// see `AppModel.liveEvent(in:)`.
     var liveEvent: TimelineLayoutEngine.LiveEvent?
+    /// Moves when the wallpaper's frost changes — read by the container for the
+    /// reason the accents are: a drawn canvas only hears what SwiftUI
+    /// re-evaluates (REDESIGN.md R6).
+    var frostRevision: UInt64 = 0
     var model: AppModel
 
     func makeCoordinator() -> TimelineCoordinator {
@@ -153,6 +157,7 @@ struct TimelineView: NSViewRepresentable {
             head: head,
             postActions: postActions
         )
+        context.coordinator.applyFrost(revision: frostRevision)
     }
 
     /// **Teardown is explicit and complete.** A representable that leaves its
@@ -215,9 +220,16 @@ final class TimelineCoordinator: NSObject {
     private var postActions: PostActions?
     /// The live profile cards over the rows in view — see `HostedCardHosts`.
     private let hostedCardHosts = HostedCardHosts()
+    /// Balloons, confetti and fireworks over the rows — see `ScreenEffect`.
+    private let screenEffects = ScreenEffectPlayer()
 
     /// Laid-out message rows, reused across passes. Swept by the engine.
     private var rowCache: [MessageID: TimelineLayoutEngine.CacheEntry] = [:]
+    /// The layouts at the width the transcript had before a sidebar toggle —
+    /// the other of the two widths it moves between — so toggling back
+    /// relays nothing that has not changed. Kept only across a toggle: a live
+    /// resize passes through hundreds of widths and none of them comes back.
+    private var alternateRowCache: (width: Int, cache: [MessageID: TimelineLayoutEngine.CacheEntry])?
 
     private var layoutTask: Task<Void, Never>?
     private var prefetchTask: Task<Void, Never>?
@@ -436,6 +448,10 @@ final class TimelineCoordinator: NSObject {
             guard let self, let channelID = self.channelID else { return }
             self.model.toggleBookmark(of: messageID, in: channelID)
         }
+        canvas.onResend = { [weak self] messageID in
+            guard let self, let channelID = self.channelID else { return }
+            self.model.sessionController.resend(messageID, in: channelID)
+        }
         canvas.onOpenThread = { [weak self] threadID in
             // The store decides between the panel and the whole column, on the
             // thread's parent — see `AppModel.openThread`.
@@ -527,6 +543,11 @@ final class TimelineCoordinator: NSObject {
 
         let document = TimelineDocumentView(frame: .zero)
         document.addSubview(canvas)
+        // The bubbles' frost, under the canvas — see `BubbleFrostView`.
+        let frost = BubbleFrostView(frame: .zero)
+        document.addSubview(frost, positioned: .below, relativeTo: canvas)
+        self.frostView = frost
+        canvas.onBubbleOutlinesChange = { [weak self] in self?.syncFrostOutlines() }
 
         let scrollView = TimelineScrollView()
         scrollView.documentView = document
@@ -662,7 +683,9 @@ final class TimelineCoordinator: NSObject {
         scrollEndedObserver = nil
         activationObserver = nil
         rowCache.removeAll(keepingCapacity: false)
+        alternateRowCache = nil
         hostedCardHosts.removeAll()
+        screenEffects.stop()
         canvas?.onWidthChange = nil
         canvas?.onOpenLink = nil
         canvas?.onVisibleRangeChange = nil
@@ -819,6 +842,7 @@ final class TimelineCoordinator: NSObject {
             canvas?.alwaysShowsTimestamps = settings.alwaysShowsTimestamps
             canvas?.hidesTimes = settings.hidesTimes
             rowCache.removeAll(keepingCapacity: true)
+            alternateRowCache = nil
             if !items.isEmpty { runLayout(preservingPosition: true) }
         }
 
@@ -890,7 +914,10 @@ final class TimelineCoordinator: NSObject {
             // keeping its layouts would hold every text block and decoded image
             // of a channel nobody is looking at.
             rowCache.removeAll(keepingCapacity: true)
+            alternateRowCache = nil
             hostedCardHosts.removeAll()
+            // A celebration belongs to the conversation it was said in.
+            screenEffects.stop()
             // A clip does not play on in a channel the reader has left.
             embedPlayer?.stop()
             embedPlayer = nil
@@ -935,12 +962,19 @@ final class TimelineCoordinator: NSObject {
         }
 
         if channelChanged || items != self.items {
+            // What was newest before, for telling an arrival from history.
+            let previousNewest = channelChanged
+                ? nil
+                : self.items.last(where: { $0.messageID != nil })?.messageID
             self.items = items
             // **Laid out against what the window reached BEFORE this update.**
             // A newer page that just reconnected it to the present lands while
             // the reader is at the old foot, and sticking to the new one would
             // skip them past a hundred messages they have not read.
             runLayout(preservingPosition: !channelChanged)
+            if reachesPresent, let effect = ScreenEffect.celebrated(in: items, after: previousNewest) {
+                celebrate(effect)
+            }
         }
         self.reachesPresent = reachesPresent
         if pendingPresent, reachesPresent {
@@ -957,6 +991,17 @@ final class TimelineCoordinator: NSObject {
         publishPosition()
         trackTopicPlace()
         trackSummaryPlace()
+    }
+
+    /// Plays a screen effect over the rows — for a reader at the foot, in a
+    /// window that is in front, with effects on and Reduce Motion off.
+    private func celebrate(_ effect: ScreenEffect) {
+        guard isNearBottom, NSApp.isActive, AppSettings.shared.playsScreenEffects,
+              !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion,
+              let scrollView, let window = scrollView.window,
+              window.occlusionState.contains(.visible)
+        else { return }
+        screenEffects.play(effect, over: scrollView)
     }
 
     /// Clears a jump the store is holding once it has been taken, for the
@@ -1084,9 +1129,37 @@ final class TimelineCoordinator: NSObject {
 
     private func relayout(forWidth width: CGFloat) {
         guard !isTornDown, abs(width - layoutWidth) >= 1 else { return }
+        if ShellTransition.isActive {
+            // Trade caches: this width's layouts from the last toggle, if any,
+            // and the width being left kept for the way back.
+            let leaving = (width: Int(layoutWidth.rounded()), cache: rowCache)
+            if let alternate = alternateRowCache, alternate.width == Int(width.rounded()) {
+                rowCache = alternate.cache
+            }
+            alternateRowCache = leaving
+        } else {
+            alternateRowCache = nil
+        }
         layoutWidth = width
+        // **The sidebar moving is not a resize.** The shell changes this
+        // column's width once and slides the panel; the one re-layout that
+        // follows dissolves on the render server instead of cutting, so the
+        // rows that moved do not jump (REDESIGN.md R4). A fade, so Reduce
+        // Motion keeps it.
+        if ShellTransition.isActive, let layer = scrollView?.layer {
+            let dissolve = CATransition()
+            dissolve.type = .fade
+            dissolve.duration = Self.columnDissolve
+            dissolve.timingFunction = CAMediaTimingFunction(name: .easeOut)
+            // Core Animation files a transition under this key whatever key is
+            // given; using it makes a second toggle replace the first.
+            layer.add(dissolve, forKey: kCATransition)
+        }
         runLayout(preservingPosition: true)
     }
+
+    /// How long the transcript takes to dissolve into its new width.
+    private static let columnDissolve: TimeInterval = 0.16
 
     /// Builds the row layouts and installs them.
     ///
@@ -1193,6 +1266,8 @@ final class TimelineCoordinator: NSObject {
         isApplyingUpdate = false
 
         positionCanvas()
+        // The rows moved under the window; the frost's picture must not.
+        frostView?.alignToWindow()
         reconcileUserCards()
         placeEmbedPlayer()
         schedulePrefetch()
@@ -1324,6 +1399,32 @@ final class TimelineCoordinator: NSObject {
             currentFrame: canvas.frame
         )
         canvas.installViewport(frame: geometry.frame, bounds: geometry.bounds)
+        syncFrostOutlines()
+    }
+
+    // MARK: The frost
+
+    private var frostView: BubbleFrostView?
+    private var frostRevision: UInt64 = .max
+
+    /// The wallpaper's frost changed: a new picture under the bubbles, and new
+    /// tints over them.
+    func applyFrost(revision: UInt64) {
+        guard revision != frostRevision, !isTornDown else { return }
+        frostRevision = revision
+        // Not under Reduce Transparency: the bubbles are solid then.
+        frostView?.setImage(BubbleTint.showsFrost ? WallpaperFrost.shared.image : nil)
+        syncFrostOutlines()
+        canvas?.needsDisplay = true
+    }
+
+    /// Keeps the frost on the canvas's footprint, masked to the bubbles in it.
+    private func syncFrostOutlines() {
+        guard let frostView, let canvas, !frostView.isHidden else { return }
+        frostView.mirror(frame: canvas.frame, boundsOrigin: canvas.bounds.origin)
+        frostView.setOutlines(canvas.bubbleOutlines(in: canvas.bounds))
+        frostView.alignToWindow()
+        canvas.alignFlightFrost()
     }
 
     private func setScrolling(_ scrolling: Bool) {

@@ -244,6 +244,57 @@ private struct AppearancePane: View {
     @Namespace private var themeRing
 
     var body: some View {
+        // **The background first** — in the redesign it is the window's
+        // picture, behind the sidebar's glass and the conversation, and the
+        // theme is what shows when there is none (REDESIGN.md R5).
+        SettingsGroup("Background") {
+            WallpaperSettingsCard()
+        }
+
+        SettingsGroup("Window") {
+            SettingsCard {
+                CardHeaderRow(
+                    title: "Sidebar",
+                    help: "Floating sits the sidebar on the background as a glass panel; "
+                        + "docked runs it flush with the window's edge."
+                )
+                SettingsSegmentedControl(
+                    selection: Binding(
+                        get: { settings.sidebarStyle },
+                        set: { ShellActions.setSidebarStyle($0) }
+                    ),
+                    options: SidebarStyle.allCases.map {
+                        .init($0, $0.label, symbolName: $0 == .floating ? "sidebar.squares.leading" : "sidebar.leading")
+                    }
+                )
+                CardDivider()
+                CardHeaderRow(
+                    title: "Pages",
+                    help: "Swipe the sidebar with two fingers between your messages and your servers. "
+                        + "Three stops gives the servers a named list of their own, with the channels past it."
+                )
+                SettingsSegmentedControl(
+                    selection: $settings.sidebarPages,
+                    options: SidebarPageLayout.allCases.map {
+                        .init($0, $0.label, symbolName: $0 == .twoPages ? "rectangle.split.2x1" : "rectangle.split.3x1")
+                    }
+                )
+                CardDivider()
+                SettingsToggle(
+                    title: "Server banners",
+                    help: "Shows a server's banner art at the top of its channels.",
+                    isOn: $settings.showsServerBanners
+                )
+                CardDivider()
+                SettingsToggle(
+                    title: "Message previews",
+                    help: "Shows the newest message under each conversation. Asks Discord once "
+                        + "for them when the list appears, the way its mobile app does.",
+                    isOn: $settings.loadsMessagePreviews
+                )
+            }
+        }
+
         SettingsGroup("Theme") {
             ThemeGallery(ring: themeRing)
             SettingsCard {
@@ -316,10 +367,6 @@ private struct AppearancePane: View {
             )
         }
 
-        SettingsGroup("Picture") {
-            BackdropCard()
-        }
-
         SettingsGroup("Preview") {
             SettingsMessagePreview()
             SettingsFootnote(
@@ -340,6 +387,13 @@ private struct AppearancePane: View {
                     options: ChromeShape.allCases.map {
                         .init($0, $0.label, symbolName: $0.symbolName)
                     }
+                )
+                CardDivider()
+                SettingsToggle(
+                    title: "GIF, sticker and app buttons in the bar",
+                    help: "Off, they live in the + menu and the field holds only the emoji "
+                        + "button and send — the way Messages does it.",
+                    isOn: $settings.composerControlsInline
                 )
                 CardDivider()
                 SettingsChromePreview(
@@ -365,9 +419,24 @@ private struct AppearancePane: View {
             SettingsCard {
                 SettingsToggle(
                     title: "Messages in bubbles",
-                    help: "Yours on the right in the accent, everyone else's on the left — "
+                    help: "Yours on the right, everyone else's on the left — "
                         + "the way Messages draws a conversation.",
                     isOn: $settings.usesMessageBubbles
+                )
+                CardDivider()
+                SettingsToggle(
+                    title: "Tint my messages with the accent",
+                    help: "Your bubbles in the accent colour rather than frosted glass.",
+                    isOn: $settings.tintsOwnBubbles
+                )
+                .disabled(!settings.usesMessageBubbles)
+                CardDivider()
+                SettingsToggle(
+                    title: "Screen effects",
+                    help: "Balloons for a happy birthday, confetti for congratulations, "
+                        + "fireworks for a happy new year — on this Mac only. "
+                        + "Off while Reduce Motion is on.",
+                    isOn: $settings.playsScreenEffects
                 )
             }
         }

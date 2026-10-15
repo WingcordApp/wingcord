@@ -271,8 +271,26 @@ struct SidebarChannelRow: View {
                     if let tag = channel.tag {
                         SidebarTagChip(text: tag, badgeURL: channel.tagBadgeURL)
                     }
+                    // When the newest message was sent, as Messages dates
+                    // its rows (REDESIGN.md R9).
+                    if let preview = channel.preview {
+                        Spacer(minLength: Spacing.tight)
+                        Text(Self.previewTime(preview.sentAt))
+                            .font(.system(.subheadline))
+                            .foregroundStyle(Ink.tertiary)
+                            .lineLimit(1)
+                            .fixedSize()
+                    }
                 }
-                if let line = channel.activityLine {
+                // The newest message where it is known; what they are doing
+                // where it is not. Typing has its own mark on the row.
+                if let preview = channel.preview {
+                    Text(preview.text)
+                        .font(.system(.callout))
+                        .foregroundStyle(channel.isUnread ? Ink.primary : Ink.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                } else if let line = channel.activityLine {
                     ActivityLineView(line: line)
                 }
             }
@@ -285,6 +303,18 @@ struct SidebarChannelRow: View {
         }
     }
 
+    /// Today's time, Yesterday, the weekday within the week, then the date —
+    /// Messages' own ladder.
+    private static func previewTime(_ date: Date) -> String {
+        let calendar = Calendar.current
+        if calendar.isDateInToday(date) { return date.formatted(date: .omitted, time: .shortened) }
+        if calendar.isDateInYesterday(date) { return "Yesterday" }
+        if let days = calendar.dateComponents([.day], from: date, to: .now).day, days < 7 {
+            return date.formatted(.dateTime.weekday(.wide))
+        }
+        return date.formatted(.dateTime.day().month(.abbreviated))
+    }
+
     /// One string for one node. The row draws a name, a tag and a status line;
     /// letting the platform derive a label from three views is the permanent
     /// accessibility tax §2 is about.
@@ -292,7 +322,11 @@ struct SidebarChannelRow: View {
         var parts = [channel.name]
         if channel.isTyping { parts.append("typing") }
         if let tag = channel.tag { parts.append(tag) }
-        if let line = channel.activityLine { parts.append(line.spokenText) }
+        if let preview = channel.preview {
+            parts.append(preview.text)
+        } else if let line = channel.activityLine {
+            parts.append(line.spokenText)
+        }
         return parts.joined(separator: ", ")
     }
 

@@ -1,6 +1,11 @@
 import AppKit
 
-extension MainWindow {
+/// The workspace window, for code outside SwiftUI that has to reach it.
+///
+/// A namespace now — the view that used to carry the name became `WindowShell`
+/// (REDESIGN.md) — kept under the old name so every caller still reads the same.
+@MainActor
+enum MainWindow {
     /// Activates the app with the main window key — from the global shortcut,
     /// and from a settings window handing the reader back to a page.
     ///

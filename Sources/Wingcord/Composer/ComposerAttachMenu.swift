@@ -19,6 +19,12 @@ struct ComposerAttachActions {
     var listenAlong: Invitation?
     /// Puts the composer into scheduling at the time picked.
     var schedule: ((Date) -> Void)?
+    /// The pickers that leave the bar when the field holds only the emoji
+    /// control — Messages' arrangement. Set by the composer, never by the
+    /// conversation.
+    var openGIFs: (() -> Void)?
+    var openStickers: (() -> Void)?
+    var openActivities: (() -> Void)?
 
     struct Invitation {
         var title: String
@@ -28,7 +34,12 @@ struct ComposerAttachActions {
     var isEmpty: Bool {
         uploadFile == nil && selectPhotos == nil && createThread == nil && createPoll == nil && useApps == nil
             && listenAlong == nil && schedule == nil
+            && openGIFs == nil && openStickers == nil && openActivities == nil
     }
+
+    /// Whether any of the pickers is listed, which puts them under a rule of
+    /// their own.
+    var listsPickers: Bool { openGIFs != nil || openStickers != nil || openActivities != nil }
 }
 
 /// The `+` menu — Discord's `channel-attach`, in its order: files, a thread,
@@ -90,6 +101,18 @@ struct ComposerAttachMenu: View {
         if actions.schedule != nil {
             FlyoutRow(title: "Schedule Message", symbolName: "clock", accessory: .disclosure) {
                 surface = .schedule
+            }
+        }
+        if actions.listsPickers {
+            FlyoutDivider()
+            if let openGIFs = actions.openGIFs {
+                FlyoutRow(title: "GIFs", symbolName: "play.rectangle.on.rectangle") { run(openGIFs) }
+            }
+            if let openStickers = actions.openStickers {
+                FlyoutRow(title: "Stickers", symbolName: "rectangle.fill.on.rectangle.angled.fill") { run(openStickers) }
+            }
+            if let openActivities = actions.openActivities {
+                FlyoutRow(title: "Activities", symbolName: "gamecontroller") { run(openActivities) }
             }
         }
     }

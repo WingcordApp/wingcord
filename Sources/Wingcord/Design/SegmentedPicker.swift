@@ -29,9 +29,17 @@ struct SegmentedPicker<Value: Hashable>: View {
     /// The segments, in the order they are drawn. Titles are shown as sent.
     var options: [Option]
     @Binding var selection: Value
+    /// Whether the strip spans the width it is offered, its segments equal —
+    /// a column's own tabs (the inspector, the sidebar's pages) rather than a
+    /// strip that hugs its labels at the head of a page.
+    var fillsWidth = false
+
+    /// How tall the extra-large strip draws — measured, 36 points, Clock's.
+    /// For the controls set beside it, so a row of pills shares one height.
+    static var stripHeight: CGFloat { 36 }
 
     var body: some View {
-        SegmentedControl(options: options, selection: $selection)
+        SegmentedControl(options: options, selection: $selection, fillsWidth: fillsWidth)
             // **The size is set here, in SwiftUI, and only here.** SwiftUI
             // writes the environment's control size onto a hosted `NSControl`
             // after `makeNSView` returns, so the `.extraLarge` this used to set
@@ -45,10 +53,20 @@ struct SegmentedPicker<Value: Hashable>: View {
     struct Option: Equatable {
         var value: Value
         var title: String
+        /// An SF Symbol drawn instead of the title, which becomes the
+        /// segment's tooltip and accessibility label — the HIG's icon
+        /// segments for switching an inspector's views.
+        var symbolName: String?
 
         init(_ value: Value, _ title: String) {
             self.value = value
             self.title = title
+        }
+
+        init(_ value: Value, _ title: String, symbolName: String) {
+            self.value = value
+            self.title = title
+            self.symbolName = symbolName
         }
     }
 }
@@ -60,6 +78,7 @@ private struct SegmentedControl<Value: Hashable>: NSViewRepresentable {
 
     var options: [Option]
     @Binding var selection: Value
+    var fillsWidth: Bool
 
     func makeCoordinator() -> Coordinator {
         Coordinator(selection: $selection, values: options.map(\.value))
@@ -73,7 +92,7 @@ private struct SegmentedControl<Value: Hashable>: NSViewRepresentable {
         control.borderShape = .capsule
         control.role = .tabs
         control.trackingMode = .selectOne
-        control.segmentDistribution = .fit
+        control.segmentDistribution = fillsWidth ? .fillEqually : .fit
         // **`.extraLarge`, and it is measured rather than chosen** — set by
         // `SegmentedPicker` through the environment, which is the only place
         // SwiftUI lets it stick. The sizes resolve to 24, 28 and 36 points tall
@@ -82,8 +101,9 @@ private struct SegmentedControl<Value: Hashable>: NSViewRepresentable {
         // as the page's own tab bar.
         // Hug: this sits at the leading end of a bar beside a count and a close
         // button, and a control that stretched would push both off the edge.
-        control.setContentHuggingPriority(.required, for: .horizontal)
-        control.setContentCompressionResistancePriority(.required, for: .horizontal)
+        // A filling strip takes the width it is offered instead.
+        control.setContentHuggingPriority(fillsWidth ? .defaultLow : .required, for: .horizontal)
+        control.setContentCompressionResistancePriority(fillsWidth ? .defaultLow : .required, for: .horizontal)
         apply(to: control, context: context)
         return control
     }
@@ -107,7 +127,8 @@ private struct SegmentedControl<Value: Hashable>: NSViewRepresentable {
         nsView: NSSegmentedControl,
         context: Context
     ) -> CGSize? {
-        nsView.intrinsicContentSize
+        guard fillsWidth, let width = proposal.width else { return nsView.intrinsicContentSize }
+        return CGSize(width: width, height: nsView.intrinsicContentSize.height)
     }
 
     private func apply(to control: NSSegmentedControl, context: Context) {
@@ -115,8 +136,23 @@ private struct SegmentedControl<Value: Hashable>: NSViewRepresentable {
             control.segmentCount = options.count
         }
         for (index, option) in options.enumerated() {
-            if control.label(forSegment: index) != option.title {
+            if let symbolName = option.symbolName {
+                // Icon-only: the title names it on hover and to VoiceOver.
+                if control.label(forSegment: index) != "" { control.setLabel("", forSegment: index) }
+                if control.toolTip(forSegment: index) != option.title {
+                    control.setToolTip(option.title, forSegment: index)
+                    control.setImage(
+                        NSImage(systemSymbolName: symbolName, accessibilityDescription: option.title),
+                        forSegment: index
+                    )
+                }
+            } else if control.label(forSegment: index) != option.title {
                 control.setLabel(option.title, forSegment: index)
+            }
+            // A filling strip leaves the widths to its equal distribution.
+            if fillsWidth {
+                if control.width(forSegment: index) != 0 { control.setWidth(0, forSegment: index) }
+                continue
             }
             // **Measured label plus a fixed pad, not zero.** Left to size
             // itself the control packs 227 points into three segments — 76

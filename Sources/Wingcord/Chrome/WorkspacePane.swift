@@ -59,11 +59,10 @@ struct WorkspacePane: View {
 
     private var columns: some View {
         HStack(spacing: 0) {
+            // Search is the header's own field now (`HeaderSearch`), offered on
+            // the same surfaces the toolbar's was.
             PrimaryPane(content: presentation.primary)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .modifier(ToolbarSearch(
-                    isOffered: !presentation.primary.isServerPage && !presentation.primary.isCall
-                ))
 
             if let supplementary = presentation.supplementary {
                 HStack(spacing: 0) {
@@ -103,13 +102,11 @@ struct WorkspacePane: View {
         // critically damped, because a column that has arrived somewhere should
         // not wobble about it.
         .animation(motion.reposition, value: presentation.supplementary)
-        // The reading surface is opaque, and only the reading surface.
-        //
-        // A translucent transcript is legible over a terminal and unreadable
-        // over a photograph — the desktop reads straight through the message
-        // text. The bleed belongs to the CHROME: the sidebar column is vibrant
-        // and this is not.
-        .readingSurface()
+        // **No ground of its own.** The window draws one ground under
+        // everything (`WindowShell`) — the theme, or the reader's picture — and
+        // the conversation sits on it, the way Messages and Noodle sit theirs on
+        // a wallpaper. Legibility comes from the bubbles' frost and the ink, not
+        // from painting the column opaque (REDESIGN.md R5–R6).
     }
 }
 
@@ -153,6 +150,8 @@ private struct PrimaryPane: View {
             DiscoveryContainer()
         case .messageRequests:
             MessageRequestsPage()
+        case .friends:
+            FriendsPage()
         case .joinRequest:
             JoinRequestStatusContainer()
         }
@@ -191,19 +190,18 @@ private struct SupplementaryPane: View {
     /// See `WorkspacePane.chromeHeight`.
     var chromeHeight: CGFloat = 0
 
+    @Environment(AppModel.self) private var model
+
     var body: some View {
         switch content {
         case .members:
-            // **Under the chrome, and paid for as a content inset.** Left inside
-            // the safe area the roster stopped at the toolbar's foot, so the
-            // strip across the window's top was treated over the transcript and
-            // bare over the people beside it — one row of chrome with a hard
-            // vertical seam in it.
-            MemberListContainer(topInset: chromeHeight)
-                .frame(width: Proportions.memberColumnIdeal)
-                .ignoresSafeArea(.container, edges: .top)
+            // **The inspector** (REDESIGN.md R11): the roster first, then what
+            // the conversation shared. Under the chrome, and paid for as a
+            // content inset — left inside the safe area the roster stopped at
+            // the header's foot, one row of chrome with a seam in it.
+            InspectorPane(base: .members, channelID: model.selectedChannelID, chromeHeight: chromeHeight)
         case .userProfile(let userID):
-            DirectMessageProfileContainer(userID: userID)
+            InspectorPane(base: .profile(userID), channelID: model.selectedChannelID, chromeHeight: chromeHeight)
         case .thread(let channelID):
             ThreadPanelContainer(channelID: channelID)
         case .search:

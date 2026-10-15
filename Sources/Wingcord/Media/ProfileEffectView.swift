@@ -99,6 +99,7 @@ struct ProfileEffectView: NSViewRepresentable {
             view?.prepare(aspects: effect.layers.map(ProfileEffectView.aspect(of:)))
 
             startTime = AnimationClock.shared.time
+            let space = FilmSource.screenSpace
             for (index, layer) in effect.layers.enumerated() {
                 // The longest side as the card draws it. A decode never
                 // enlarges, so a card wider than the art costs the art's own
@@ -110,7 +111,7 @@ struct ProfileEffectView: NSViewRepresentable {
                     // `stills`: a layer of one frame is shown for its slot like
                     // any other, since nothing is drawn under an effect's layers.
                     let source = await Task.detached(priority: .userInitiated) {
-                        FilmSource(data: data, maximumPixelSize: pixelSize, stills: true)
+                        FilmSource(data: data, maximumPixelSize: pixelSize, stills: true, displaySpace: space)
                     }.value
                     guard let self, !Task.isCancelled, self.effect?.skuID == effect.skuID,
                           !self.retired.contains(index), let source,

@@ -112,14 +112,23 @@ public struct Message: Hashable, Sendable, Identifiable, Codable {
     }
 
     private static func isOnlyFakeStickers(_ content: String) -> Bool {
+        // Most messages carry no link at all, and this runs for every message
+        // on every layout — a width change lays out the whole transcript.
+        guard content.contains("http") else { return false }
         var rest = content
-        for match in content.matches(of: /\[[^\]]*\]\((https?:\/\/[^)\s]+)\)|https?:\/\/\S+/) {
+        for match in content.matches(of: linkPattern) {
             let url = match.output.1.map(String.init) ?? String(match.output.0)
             guard case .sticker? = FakeNitroLink(url: url) else { continue }
             rest = rest.replacingOccurrences(of: String(match.output.0), with: "")
         }
         return rest != content && rest.allSatisfy(\.isWhitespace)
     }
+
+    /// A link, bare or masked. **Built once and kept**: a regex literal in a
+    /// function body is parsed and compiled again on every call, and sampled
+    /// during a sidebar toggle that was 40 % of the whole transcript's
+    /// re-layout.
+    nonisolated(unsafe) private static let linkPattern = /\[[^\]]*\]\((https?:\/\/[^)\s]+)\)|https?:\/\/\S+/
 
     /// The stickers to draw: the ones sent, and any sent as fake Nitro links —
     /// which the words no longer show. See `FakeNitroLink`.

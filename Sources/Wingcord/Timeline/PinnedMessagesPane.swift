@@ -19,6 +19,9 @@ import WingcordCore
 /// lights it, which is the whole reason anybody opens this.
 struct PinnedMessagesPane: View {
     var channelID: ChannelID
+    /// The inspector column's width when the pane is one of its tabs
+    /// (REDESIGN.md R11); nil for the popover off the header's pin.
+    var columnWidth: CGFloat? = nil
 
     @Environment(AppModel.self) private var model
     @Environment(\.motion) private var motion
@@ -36,7 +39,13 @@ struct PinnedMessagesPane: View {
     /// See the note on the frame below.
     private static let minimumHeight: CGFloat = 260
     /// What a card is laid out against: the pane less the list's own margins.
-    static var cardWidth: CGFloat { width - Spacing.snug * 2 - Spacing.base * 2 }
+    static var cardWidth: CGFloat { cardWidth(in: width) }
+
+    static func cardWidth(in paneWidth: CGFloat) -> CGFloat {
+        paneWidth - Spacing.snug * 2 - Spacing.base * 2
+    }
+
+    private var paneWidth: CGFloat { columnWidth ?? Self.width }
 
     var body: some View {
         // Read at the top rather than inside the branches, so an arrival while
@@ -45,15 +54,18 @@ struct PinnedMessagesPane: View {
         let pinned = model.pinnedMessages[channelID]
         let isLoading = model.pinsLoading.contains(channelID)
         let failure = model.pinsFailure[channelID]
-        let cards = model.pinnedCards(in: channelID, width: Self.cardWidth)
+        let cards = model.pinnedCards(in: channelID, width: Self.cardWidth(in: paneWidth))
 
         VStack(alignment: .leading, spacing: 0) {
-            Text("Pinned messages")
-                .font(.system(.headline))
-                .foregroundStyle(Ink.primary)
-                .padding(.horizontal, Spacing.margin)
-                .padding(.top, Spacing.margin)
-                .padding(.bottom, Spacing.snug)
+            // A column's tab already says what it is.
+            if columnWidth == nil {
+                Text("Pinned messages")
+                    .font(.system(.headline))
+                    .foregroundStyle(Ink.primary)
+                    .padding(.horizontal, Spacing.margin)
+                    .padding(.top, Spacing.margin)
+                    .padding(.bottom, Spacing.snug)
+            }
 
             if let failure {
                 notice(failure, symbolName: "exclamationmark.triangle")
@@ -71,7 +83,7 @@ struct PinnedMessagesPane: View {
                     .padding(.vertical, Spacing.group)
             }
         }
-        .frame(width: Self.width)
+        .frame(width: paneWidth)
         // **A minimum, and it is what stops the popover opening as a sliver.**
         // AppKit sizes a popover from its content's *first* layout, and on that
         // pass the pins have not been fetched — the pane is a title over a
@@ -87,8 +99,8 @@ struct PinnedMessagesPane: View {
         // sliver; the alignment is what keeps the content where a
         // header belongs.
         .frame(
-            minHeight: Self.minimumHeight,
-            maxHeight: Self.maximumHeight,
+            minHeight: columnWidth == nil ? Self.minimumHeight : nil,
+            maxHeight: columnWidth == nil ? Self.maximumHeight : .infinity,
             alignment: .top
         )
         .animation(motion.standard, value: cards.count)
@@ -100,6 +112,10 @@ struct PinnedMessagesPane: View {
         // scroll gate like every other optional fetch.
         .task(id: cards.map(\.id)) {
             await prefetch(cards)
+        }
+        // A column asks for the pins itself; the popover's button already did.
+        .task(id: columnWidth == nil ? nil : channelID) {
+            if columnWidth != nil { model.sessionController.loadPins(in: channelID) }
         }
     }
 
@@ -123,6 +139,7 @@ struct PinnedMessagesPane: View {
                 ForEach(cards) { card in
                     PinnedRow(
                         card: card,
+                        cardWidth: Self.cardWidth(in: paneWidth),
                         presentationRevision: presentation.value,
                         artworkGeneration: artworkGeneration,
                         canUnpin: model.actions(for: card.id, in: channelID).contains(.unpin),
@@ -151,6 +168,7 @@ struct PinnedMessagesPane: View {
 /// One pinned message, and the two things it can do.
 private struct PinnedRow: View {
     var card: MessageCard
+    var cardWidth: CGFloat
     var presentationRevision: UInt64
     var artworkGeneration: UInt64
     var canUnpin: Bool
@@ -170,7 +188,7 @@ private struct PinnedRow: View {
                 // The height is the layout's, so the row is placed once. A
                 // measured height here would cost a second layout pass per
                 // card and would settle visibly on the first frame.
-                .frame(width: PinnedMessagesPane.cardWidth, height: card.height)
+                .frame(width: cardWidth, height: card.height)
                 .padding(Spacing.base)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .background {

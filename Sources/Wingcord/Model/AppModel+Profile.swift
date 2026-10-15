@@ -254,7 +254,14 @@ extension AppModel {
     /// only as far as body text needs. Most role colours pass through untouched.
     func roleColor(_ value: UInt32?) -> UInt32? {
         guard AppSettings.shared.roleColorPlacement.tintsNames else { return nil }
-        return userColor(value).map { InkContrast.legible($0, on: ThemeStore.shared.ground.inkCeiling) }
+        return userColor(value).map { InkContrast.legible($0, on: nameGround) }
+    }
+
+    /// What a coloured name has to read against: the wallpaper's veiled
+    /// brightest patch while a picture is up (REDESIGN.md, Phase 7 — a red
+    /// role read low on Aurora), the theme's own brightest ground otherwise.
+    var nameGround: UInt32 {
+        WallpaperFrost.shared.nameGround ?? ThemeStore.shared.ground.inkCeiling
     }
 
     /// A profile's two colours, chosen or derived.

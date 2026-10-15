@@ -115,7 +115,7 @@ extension AppModel {
             roleRevision: roleRevision,
             structureRevision: channelIndex.structureRevision,
             colorSaturation: userColorSaturation,
-            inkCeiling: ThemeStore.shared.ground.inkCeiling,
+            inkCeiling: nameGround,
             typers: selectedChannelID.map { Set(typers(in: $0).keys) } ?? [],
             voice: rosterVoiceFacts()
         )

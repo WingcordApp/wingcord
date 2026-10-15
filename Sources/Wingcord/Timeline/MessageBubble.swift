@@ -85,13 +85,32 @@ nonisolated struct BubbleRow: @unchecked Sendable {
     /// Where the time sits: beside the content, on the side it leaves open.
     /// Drawn under the pointer, or always with the setting that asks for it.
     var timeRect: CGRect
+    /// A send Discord refused — the reader's own, so trailing.
+    var failure: BubbleFailure? = nil
+}
+
+/// A refused send, in bubbles, marked as Messages marks one: a red disc beside
+/// the bubble — which resends it — and "Not Delivered" under it. The bubble
+/// itself stays the reader's glass: the mark says what went wrong, and words
+/// in the critical ink on top of it would say it twice.
+nonisolated struct BubbleFailure: Sendable, Equatable {
+    /// The disc, in row space.
+    var badge: CGRect
+    /// The caption's line, in row space.
+    var caption: CGRect
+
+    static let caption = "Not Delivered"
 }
 
 /// One bubble: its body, and the outline the painter fills.
 nonisolated struct MessageBubble: @unchecked Sendable {
     enum Ground: Sendable, Equatable {
-        /// The reader's own words, in the accent.
+        /// The reader's own words, in the accent — only when the reader asked
+        /// for it (`TimelineSettings.tintsOwnBubbles`).
         case accent
+        /// The reader's own words, frosted a step lighter than everybody
+        /// else's — the redesign's default (REDESIGN.md R6).
+        case own
         /// Everybody else's, and a send Discord refused.
         case neutral
     }
@@ -122,6 +141,24 @@ nonisolated enum BubbleMetrics {
     static let avatarGap: CGFloat = 8
     /// Between the content and the time beside it.
     static let timeGap: CGFloat = 8
+    /// The name over the first bubble of somebody's run: a step under the
+    /// words' size — 12 points at the default 13, and scaled with the reader's
+    /// text size like every other line of the transcript — and the air between
+    /// it and the bubble.
+    static let captionScale: CGFloat = 12.0 / 13.0
+    static let captionGap: CGFloat = 2
+
+    /// `face` at the caption's size — the same font, custom or not.
+    static func captionFace(_ face: NSFont) -> NSFont {
+        NSFont(descriptor: face.fontDescriptor, size: (face.pointSize * captionScale).rounded()) ?? face
+    }
+    /// A refused send's disc, its air from the tail, and the caption's from
+    /// the bubble's foot.
+    static let failureBadgeSide: CGFloat = 20
+    static let failureGap: CGFloat = 6
+    static let failureCaptionGap: CGFloat = 3
+    /// What a refused send's lane gives up at its trailing end for the disc.
+    static let failureReserve: CGFloat = tailReach + failureGap + failureBadgeSide
 
     /// A bubble's corner for words in `font`: half a one-line bubble's height,
     /// so one line is a capsule and a paragraph keeps the same corner.

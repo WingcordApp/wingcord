@@ -361,6 +361,41 @@ extension SessionController {
         }
     }
 
+    /// Discord's Add Friend: a request to whoever answers to `tag`, and the
+    /// sentence the sheet shows either way — Discord's own, from its
+    /// `sendRequest` and the error mapping beside it.
+    func sendFriendRequest(to tag: String) async -> Result<String, FriendRequestFailure> {
+        var tag = tag.trimmingCharacters(in: .whitespacesAndNewlines)
+        // "@name" is how a username is written everywhere else in the app.
+        if !tag.contains("#"), tag.hasPrefix("@") { tag.removeFirst() }
+        guard !tag.isEmpty else { return .failure(FriendRequestFailure(message: Self.friendRequestDefault)) }
+        let parts = tag.split(separator: "#", maxSplits: 1).map(String.init)
+        do {
+            try await rest.sendFriendRequest(
+                username: parts[0],
+                discriminator: parts.count > 1 ? Int(parts[1]) : nil
+            )
+            return .success("Success! Your friend request to \(tag) was sent.")
+        } catch DiscordREST.Failure.api(_, let code, let message) {
+            Self.trace("friend request to \(tag) failed: \(code.map(String.init) ?? "-") \(message ?? "")")
+            let text: String = switch code {
+            case 80000: "\(tag) isn't accepting friend requests right now."
+            case 80002: "Bots can't be added as friends."
+            case 80003: "That's you! You can't send yourself a friend request."
+            case 80007: "You're already friends with that user!"
+            case 30002: "You've reached the most friends Discord allows."
+            default: Self.friendRequestDefault
+            }
+            return .failure(FriendRequestFailure(message: text))
+        } catch {
+            Self.trace("friend request to \(tag) failed: \(Self.describe(error))")
+            return .failure(FriendRequestFailure(message: Self.describe(error)))
+        }
+    }
+
+    private static let friendRequestDefault =
+        "Hm, didn't work. Double check that the username is correct."
+
     // MARK: Notes
 
     func writeNote(_ note: String, for userID: UserID) {
@@ -971,6 +1006,51 @@ extension SessionController {
             } catch {
                 Self.trace("decline request \(channelID) failed: \(Self.describe(error))")
                 model.reportActionFailure(AppModel.messageRequestFailure)
+            }
+        }
+    }
+}
+
+/// Why a friend request did not go, in the words the sheet shows.
+struct FriendRequestFailure: Error, Equatable {
+    var message: String
+}
+
+// MARK: - Conversation previews
+
+extension SessionController {
+    /// The newest message of each conversation in the list that has none yet,
+    /// for its preview line (REDESIGN.md R9).
+    ///
+    /// **One request, when the list is first there** — Discord's mobile app's
+    /// own (`DiscordREST.preloadMessages`), for up to a hundred conversations,
+    /// most recent first; conversations already asked about are never asked
+    /// again on this connection, and a conversation opened since has its
+    /// transcript, which is better. Off with Settings › Appearance › Window ›
+    /// Message previews.
+    func loadDirectMessagePreviews() {
+        guard AppSettings.shared.loadsMessagePreviews, !isLoadingPreviews,
+              model.connectionState == .ready
+        else { return }
+        let wanted = model.channelIndex.privateChannelIDs().filter { channelID in
+            guard !requestedPreviewChannels.contains(channelID),
+                  let newest = model.channelIndex[channelID]?.lastMessageID
+            else { return false }
+            return model.latestDirectMessages[channelID]?.id != newest
+        }
+        let batch = Array(wanted.prefix(DiscordREST.previewChannelLimit))
+        guard !batch.isEmpty else { return }
+        requestedPreviewChannels.formUnion(batch)
+        isLoadingPreviews = true
+        Task { [weak self] in
+            guard let self else { return }
+            defer { isLoadingPreviews = false }
+            do {
+                let page = try await rest.preloadMessages(channelIDs: batch)
+                absorb(page)
+                model.receivePreviews(page.messages)
+            } catch {
+                Self.trace("previews for \(batch.count) conversations failed: \(Self.describe(error))")
             }
         }
     }

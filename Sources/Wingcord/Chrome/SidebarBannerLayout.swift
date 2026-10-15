@@ -45,6 +45,9 @@ nonisolated struct SidebarBannerLayout: Equatable {
     /// and the reader can drag it anywhere between `channelColumnMin` and
     /// `channelColumnMax`. Only the toolbar title needs it.
     var columnWidth: CGFloat = 0
+    /// Where the header's title starts — past the rail, or past the traffic
+    /// lights on a page with no rail.
+    var titleLeading: CGFloat = Self.headerTitleLeading
 
     // MARK: The two constants
 
@@ -174,46 +177,26 @@ nonisolated struct SidebarBannerLayout: Equatable {
         hasBanner ? Self.bannerHeight + Spacing.base : 0
     }
 
-    // MARK: The toolbar's span
+    // MARK: The header's span
     //
-    // Measured on a live window with a 368pt sidebar (68pt rail + 300pt column):
-    // the traffic lights end at x=79 and the bar's first usable point is x=92,
-    // while the split view's own toggle owns x=324..360 — the last 44 points of
-    // the sidebar. Everything between is what a title may occupy: 232 points
-    // there, and less on a narrower column.
+    // The name sits in the sidebar panel's header row once the pill has ridden
+    // off the banner: after the traffic lights, before the toggle and the
+    // create menu at the row's trailing end. The row is the app's own now (see
+    // `ShellMetrics`), so an over-wide name truncates instead of being dropped
+    // the way a toolbar item was — the cap is about not running under the
+    // controls, not about surviving the bar's layout.
 
-    /// Where the sidebar's span of the toolbar begins — past the traffic lights.
-    private static let barLeadingDeadZone: CGFloat = 92
-    /// What the split view's own sidebar toggle reserves at the trailing end.
-    private static let barToggleReserve: CGFloat = 44
-    /// Everything a title needs beyond its label: the platter's own padding and
-    /// disclosure chevron, plus the clearance the bar insists on keeping before
-    /// the toggle.
-    ///
-    /// Both halves measured by sweeping the cap on a live window. The platter is
-    /// **label + 24.5** at every width tried. The clearance is the part that
-    /// bites: a platter ending 23 points short of the toggle is kept, and one
-    /// ending 9 points short is **dropped** — the item vanishes and the toggle
-    /// slides to the leading edge to fill the hole. 56 leaves about 28 points of
-    /// slack at every sidebar width, which is the margin an accessibility text
-    /// size can move the label by.
-    private static let barTitleOverhead: CGFloat = 56
+    /// Where the name begins, in the channel column's own space: clear of the
+    /// traffic lights, which end about where the rail does.
+    static let headerTitleLeading: CGFloat = 20
 
-    /// The widest the toolbar's server name may draw before it has to truncate.
-    ///
-    /// **A cap, not a hope.** An item wider than the span is not squeezed to fit
-    /// — it is DROPPED, and the toggle slides into its place at the leading
-    /// edge. Measured with a 35-character name: three platters where four
-    /// belonged, and the toggle at x=96 instead of x=324. That is the whole of
-    /// "on scroll the name disappears", and it is invisible on any server whose
-    /// name happens to be short.
-    ///
-    /// A truncated name is still a name. A dropped one is nothing, and it takes
-    /// the toolbar's layout with it.
+    /// What the header's trailing controls take: the toggle, the create menu,
+    /// the gaps between them and the row's own trailing padding.
+    private static let headerTrailingReserve: CGFloat =
+        ShellMetrics.headerControl + 56 + Spacing.base * 2 + 10
+
+    /// The widest the header's server name may draw before it truncates.
     var toolbarTitleWidth: CGFloat {
-        let span = Proportions.railWidth + columnWidth
-            - Self.barLeadingDeadZone
-            - Self.barToggleReserve
-        return max(Metrics.control, span - Self.barTitleOverhead)
+        max(Metrics.control, columnWidth - titleLeading - Self.headerTrailingReserve)
     }
 }

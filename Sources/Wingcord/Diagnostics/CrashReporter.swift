@@ -34,11 +34,21 @@ nonisolated enum CrashReporter {
     nonisolated(unsafe) private static var isInstalled = false
 
     /// Where reports go.
+    ///
+    /// **The release app keeps the folder it always had; any other bundle id —
+    /// the isolated demo copy, a probe — gets one of its own.** Launching sweeps
+    /// empty reports, and a running app's own report is empty until it crashes,
+    /// so a demo copy sharing the folder would delete the real app's live report
+    /// (and the session log is truncated per launch, by whoever launches).
     static var reportDirectory: URL {
         let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)
             .first ?? URL.temporaryDirectory
-        return base.appending(path: "Wingcord/Diagnostics", directoryHint: .isDirectory)
+        let identifier = Bundle.main.bundleIdentifier ?? releaseIdentifier
+        let folder = identifier == releaseIdentifier ? "Wingcord" : identifier
+        return base.appending(path: "\(folder)/Diagnostics", directoryHint: .isDirectory)
     }
+
+    private static let releaseIdentifier = "dev.wingcord.Wingcord"
 
     /// Installs the handlers. Call once, early.
     static func install() {

@@ -33,6 +33,9 @@ struct GuildRail: View, Equatable {
     var isHomeSelected: Bool
     var homeMentionCount: Int
     var homeHasUnread: Bool
+    /// Show All Servers, at the rail's head — where the rack expands into the
+    /// list (REDESIGN.md R10). Nil where there is no list to expand into.
+    var showAllServers: (() -> Void)? = nil
 
     /// Compares **only** the value inputs.
     ///
@@ -47,6 +50,7 @@ struct GuildRail: View, Equatable {
             && lhs.isHomeSelected == rhs.isHomeSelected
             && lhs.homeMentionCount == rhs.homeMentionCount
             && lhs.homeHasUnread == rhs.homeHasUnread
+            && (lhs.showAllServers == nil) == (rhs.showAllServers == nil)
     }
 
     var selectHome: () -> Void = {}
@@ -79,6 +83,9 @@ struct GuildRail: View, Equatable {
     var body: some View {
         ScrollView {
             VStack(spacing: Spacing.base) {
+                if let showAllServers {
+                    AllServersRailButton(action: showAllServers)
+                }
                 HomeRailTile(
                     isSelected: isHomeSelected,
                     mentionCount: homeMentionCount,
@@ -167,4 +174,38 @@ private struct RailDivider: View {
             .padding(.horizontal, 18)
             .accessibilityHidden(true)
     }
+}
+
+/// Show All Servers: the rack opening out into every server by name, over the
+/// channels (REDESIGN.md R10). Small and quiet at the rail's head — the swipe
+/// right from the rack does the same, and this is the control for a pointer.
+private struct AllServersRailButton: View {
+    var action: () -> Void
+
+    @Environment(\.motion) private var motion
+    @State private var isHovering = false
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: "list.bullet")
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(isHovering ? Ink.primary : Ink.secondary)
+                .frame(width: Metrics.guildTile, height: 26)
+                .background {
+                    Capsule().fill(isHovering ? RailButtonInk.hover : RailButtonInk.rest)
+                }
+                .contentShape(.capsule)
+        }
+        .buttonStyle(.plain)
+        .frame(width: Proportions.railWidth)
+        .onHover { isHovering = $0 }
+        .animation(motion.hover, value: isHovering)
+        .help("Show All Servers")
+        .accessibilityLabel(Text("Show All Servers"))
+    }
+}
+
+private nonisolated enum RailButtonInk {
+    static let rest = Color.relative(dark: 0.06, light: 0.05)
+    static let hover = Color.relative(dark: 0.12, light: 0.09)
 }

@@ -42,6 +42,7 @@ struct DirectMessageMenu: View {
         case nickname
         case note
         case apps
+        case folders
     }
 
     static let width: CGFloat = 248
@@ -62,6 +63,7 @@ struct DirectMessageMenu: View {
                 case .nickname: nicknameEditor(actions)
                 case .note: noteEditor(actions)
                 case .apps: appsList(actions)
+                case .folders: folderPicker()
                 }
             } else {
                 // The conversation went while its menu was open — closed here,
@@ -106,6 +108,18 @@ struct DirectMessageMenu: View {
         ) {
             model.setDirectMessagePinned(!actions.isPinned, channelID: channelID)
             close()
+        }
+        if callUserID == nil {
+            // The reader's own folders of conversations (REDESIGN.md R9).
+            row(id: "folder", title: "Move to Folder", symbolName: "folder", opensSurface: true) {
+                surface = .folders
+            }
+            // The conversation's own wallpaper (REDESIGN.md R5) — local to
+            // this Mac, as Noodle keeps a background out of message delivery.
+            row(id: "background", title: "Change Background…", symbolName: "photo.on.rectangle") {
+                close()
+                WallpaperStore.shared.requestEditing(channelID)
+            }
         }
 
         divider
@@ -304,6 +318,37 @@ struct DirectMessageMenu: View {
                 model.setDirectMessageMuted(duration, channelID: channelID)
                 close()
             }
+        }
+    }
+
+    /// The reader's folders, the one this conversation is in ticked, and a
+    /// new one.
+    @ViewBuilder
+    private func folderPicker() -> some View {
+        let store = DirectMessageFolders.shared
+        let current = store.folder(containing: channelID)?.id
+        back
+        divider
+        ForEach(store.folders) { folder in
+            row(
+                id: "folder-\(folder.id)",
+                title: folder.name,
+                symbolName: folder.id == current ? "checkmark" : "folder"
+            ) {
+                store.move(channelID, to: folder.id == current ? nil : folder.id)
+                close()
+            }
+        }
+        if current != nil {
+            row(id: "folder-none", title: "Remove from Folder", symbolName: "folder.badge.minus") {
+                store.move(channelID, to: nil)
+                close()
+            }
+        }
+        if !store.folders.isEmpty { divider }
+        row(id: "folder-new", title: "New Folder…", symbolName: "folder.badge.plus") {
+            close()
+            store.requestNewFolder(with: channelID)
         }
     }
 

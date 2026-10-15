@@ -90,6 +90,17 @@ struct ConversationPane: View {
             bottomInset: composerHeight,
             hostsSummaries: true
         )
+            // **Out of the column's animation.** When the sidebar moves, the
+            // header and the composer glide with it, but the transcript takes
+            // its final width at once and dissolves into it — a drawn canvas
+            // asked for every intermediate width re-lays out every row on each
+            // frame, which is the lag the old split view had (REDESIGN.md R4).
+            .transaction { $0.animation = nil }
+            // **Rows fade out as they pass under the header**, rather than
+            // scrolling sharp behind its glass. There is no toolbar to give
+            // AppKit's own scroll edge something to key off any more, so this
+            // is Noodle's arrangement: the pixels themselves are masked.
+            .mask { TranscriptTopFade(clearHeight: chromeHeight) }
             // **The one composed thing over the drawn transcript.** It is glass,
             // Core Graphics cannot draw glass, and there is exactly one of it at
             // a time — see `MessageActionBar`. Overlaid rather than inset, so it
@@ -224,5 +235,35 @@ private struct DropHalo: View {
         }
         .allowsHitTesting(false)
         .transition(.materialize(from: .bottom))
+    }
+}
+
+/// The mask that fades the transcript under the header.
+///
+/// Clear across the header's own band at the very top, opaque a little below
+/// it, so rows dissolve into the shade behind the header's glass instead of
+/// being cut by its edge.
+struct TranscriptTopFade: View {
+    /// How far down the header reaches.
+    var clearHeight: CGFloat
+
+    /// How far past the header the fade runs before the rows are whole.
+    private static let reach: CGFloat = 22
+
+    var body: some View {
+        VStack(spacing: 0) {
+            LinearGradient(
+                stops: [
+                    .init(color: .clear, location: 0),
+                    .init(color: .white.opacity(0.10), location: 0.5),
+                    .init(color: .white, location: 1),
+                ],
+                startPoint: .top,
+                endPoint: .bottom
+            )
+            .frame(height: max(1, clearHeight + Self.reach))
+            Color.white
+        }
+        .allowsHitTesting(false)
     }
 }

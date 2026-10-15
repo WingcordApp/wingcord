@@ -230,6 +230,10 @@ struct RailFolder: Hashable, Sendable, Identifiable {
 struct SidebarPresentation: Hashable, Sendable {
     var header: SidebarHeader?
     var rows: [SidebarRow]
+    /// Every conversation, most recent first — what the Messages page's search
+    /// looks through, the ones in closed folders and the pinned ones included.
+    /// Empty for a server.
+    var conversations: [SidebarChannel] = []
 
     static let empty = SidebarPresentation(header: nil, rows: [])
 }
@@ -268,6 +272,12 @@ enum SidebarRow: Hashable, Sendable, Identifiable {
     /// Message Requests, at the head of the conversations — drawn only while
     /// there is a request or spam waiting, with the pending ones counted.
     case messageRequests(pending: Int)
+    /// Friends, above it — always drawn, with the requests waiting on the
+    /// reader counted (REDESIGN.md R12).
+    case friends(pending: Int)
+    /// The pinned conversations, as Messages pins them: a grid of faces above
+    /// the list, out of the list itself (REDESIGN.md R9).
+    case pinnedGrid([SidebarChannel])
 
     var id: UInt64 {
         switch self {
@@ -280,6 +290,8 @@ enum SidebarRow: Hashable, Sendable, Identifiable {
         // Beside the surfaces' small integers, and as far from a snowflake.
         case .events: 99
         case .messageRequests: 98
+        case .friends: 97
+        case .pinnedGrid: 96
         }
     }
 }
@@ -352,6 +364,8 @@ enum SidebarTarget: Hashable, Sendable {
     case channel(ChannelID)
     case surface(GuildSurface)
     case messageRequests
+    /// The Friends page (REDESIGN.md R12).
+    case friends
 }
 
 struct SidebarCategory: Hashable, Sendable, Identifiable {
@@ -434,6 +448,14 @@ struct SidebarChannel: Hashable, Sendable, Identifiable {
     /// that worked it out for itself would be a second copy of a decision the
     /// order already made.
     var isPinned = false
+    /// A conversation's newest message, Messages-style (REDESIGN.md R9) — nil
+    /// where it is not known yet, and the activity line stands in.
+    var preview: Preview? = nil
+
+    struct Preview: Hashable, Sendable {
+        var text: String
+        var sentAt: Date
+    }
 
     /// Whether this row draws the taller, two-line form.
     ///
@@ -635,6 +657,8 @@ struct WorkspacePresentation: Hashable, Sendable {
         case discovery
         /// The Message Requests page, on the direct-message home.
         case messageRequests
+        /// The Friends page, on the direct-message home (REDESIGN.md R12).
+        case friends
         /// An application's own page — Discord's `/member-verification/{id}`,
         /// for a server the reader has applied to and is not in. A takeover,
         /// for the gate's reason: there is no server here to sit beside.
@@ -646,6 +670,16 @@ struct WorkspacePresentation: Hashable, Sendable {
         var isServerPage: Bool {
             if case .guildSurface = self { return true }
             return false
+        }
+
+        /// One of the home's own pages — Friends, Message Requests — which
+        /// carry their own lists, and leave no conversation to search: the
+        /// one selected behind them is not what the reader is looking at.
+        var isHomePage: Bool {
+            switch self {
+            case .friends, .messageRequests: true
+            default: false
+            }
         }
 
         /// A voice or stage channel: the call, whose bar carries no search.

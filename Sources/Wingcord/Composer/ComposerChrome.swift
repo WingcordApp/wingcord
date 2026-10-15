@@ -83,3 +83,32 @@ private struct ComposerSendDivider: View {
             .accessibilityHidden(true)
     }
 }
+
+/// Messages' arrangement (REDESIGN.md R7): `+` a glass circle of its own, then
+/// one capsule holding the words and, at its trailing end, the emoji control
+/// and the send arrow.
+///
+/// **The capsule keeps its resting corner as it grows**, for `ComposerChrome`'s
+/// reason: a radius that tracked a three-line field would round it into a
+/// lozenge. Bottom-aligned, so a grown field keeps its controls on the last
+/// line.
+struct MessagesComposerChrome<Leading: View, Input: View, Trailing: View>: View {
+    @ViewBuilder var leading: Leading
+    @ViewBuilder var input: Input
+    @ViewBuilder var trailing: Trailing
+
+    var body: some View {
+        HStack(alignment: .bottom, spacing: Spacing.base) {
+            leading
+            HStack(alignment: .bottom, spacing: Spacing.hair) {
+                input
+                trailing
+            }
+            // The words start a capsule's corner in; the send disc sits as far
+            // from the end as from the top and bottom.
+            .padding(.leading, Spacing.snug + Spacing.hair)
+            .padding(.trailing, MessagesSendButton.inset)
+            .glassEffect(.regular, in: .rect(cornerRadius: Metrics.composerControlHeight / 2))
+        }
+    }
+}

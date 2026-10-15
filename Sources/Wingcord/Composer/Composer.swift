@@ -39,6 +39,12 @@ struct Composer: View {
     /// is: this view reaches for nothing observable, and the settings editor
     /// draws it from the order being edited rather than from the one in force.
     var controls: ComposerControlOrder = .default
+    /// Whether the GIF, sticker and app controls sit in the bar — the classic
+    /// arrangement, `shape`'s — or in `+`'s menu, with the field holding only
+    /// the emoji control and the send arrow, as Messages' does (REDESIGN.md
+    /// R7). Passed in for the reason `shape` is; the settings editor draws the
+    /// classic bar, whose controls it rearranges.
+    var inlineControls: Bool = true
     /// Whether the trailing controls may be dragged into a new order.
     ///
     /// **Off in the window, on only in the editor that has a container for it.**
@@ -376,76 +382,39 @@ struct Composer: View {
     }
 
     private var composerRow: some View {
-        ComposerChrome(shape: shape) {
-            // A conversation where none of the menu's rows can work gets no
-            // `+` at all rather than a dimmed one — `INVARIANTS.md` §5.5. In
-            // the enclosed arrangement that closes up against the field, which
-            // is right: there is nothing to add. The settings preview draws it
-            // inert, as it draws the other controls.
-            if isReorderable || !attachActions.isEmpty {
-                attachControl
-            }
-        } input: {
-            HStack(alignment: .bottom, spacing: Spacing.base) {
-                if let pendingCommand {
-                    CommandComposerBar(pending: pendingCommand, onEdit: focusCommandOption)
+        Group {
+            if inlineControls {
+                ComposerChrome(shape: shape) {
+                    // A conversation where none of the menu's rows can work gets
+                    // no `+` at all rather than a dimmed one — `INVARIANTS.md`
+                    // §5.5. In the enclosed arrangement that closes up against
+                    // the field, which is right: there is nothing to add. The
+                    // settings preview draws it inert, as it draws the other
+                    // controls.
+                    if isReorderable || !attachActions.isEmpty {
+                        attachControl
+                    }
+                } input: {
+                    field
+                } controls: {
+                    expressionControls
+                } send: {
+                    ComposerSendButton(shape: shape, isArmed: canCommit, action: pressedReturn)
                 }
-
-                // **Discord's box**: the markdown stays visible and styled as it
-                // is typed, and a selection brings up the formatting bar. See
-                // `MarkdownEditor`.
-                MarkdownEditor(
-                    text: fieldText,
-                    isFocused: $isFocused,
-                    placeholder: placeholder,
-                    font: NSFont.preferredFont(forTextStyle: .body),
-                    // Solid across the whole bar rather than the hierarchy: a
-                    // `.secondary` glyph washes out on glass, and a composer
-                    // whose placeholder is invisible reads as broken. See
-                    // `InkColor.solid`.
-                    ink: .composerSolid,
-                    lines: 1...Metrics.composerMaxLines,
-                    returnSubmits: true,
-                    // Whatever is open owns these keys, and hands them straight
-                    // back when nothing is. Handing one back is what lets Return
-                    // still send and the arrows still move the caret the rest of
-                    // the time.
-                    onKey: { key in
-                        let result: KeyPress.Result = switch key {
-                        case .up: pressedUp()
-                        case .down: pressedDown()
-                        // Shift-Return is a new line, whatever is open.
-                        case .return(let shift): shift ? .ignored : pressedReturnKey()
-                        case .tab: pressedTab()
-                        case .backspace: pressedBackspace()
-                        case .escape: pressedEscape()
-                        }
-                        return result == .handled
-                    },
-                    onSubmit: pressedReturn,
-                    onPasteFiles: canAttach ? { urls in
-                        pasteFiles(urls)
-                        return true
-                    } : nil,
-                    // A picked mention shows as Discord's box shows it, while
-                    // the token stays what is typed and sent.
-                    chips: mentionChip,
-                    chipRevision: mentionChipRevision,
-                    anchor: textAnchor
-                )
-                .frame(minHeight: Metrics.composerFieldMinHeight)
+                .animation(motion.glassMorph, value: shape)
+            } else {
+                MessagesComposerChrome {
+                    if !menuActions.isEmpty {
+                        attachControl
+                    }
+                } input: {
+                    field
+                } trailing: {
+                    emojiControl
+                    MessagesSendButton(isArmed: canCommit, action: pressedReturn)
+                }
             }
-            // The field's own air, so a bar grown to three lines keeps it. The
-            // row's height comes from this plus the field's minimum, which is
-            // what leaves a 32-point control centred inside a 38-point bar
-            // rather than setting the bar's height itself.
-            .padding(.vertical, Spacing.tight)
-        } controls: {
-            expressionControls
-        } send: {
-            ComposerSendButton(shape: shape, isArmed: canCommit, action: pressedReturn)
         }
-        .animation(motion.glassMorph, value: shape)
         .contentShape(.rect)
         // Clicking anywhere on the bar puts the caret in the field, which is
         // what every composer on this platform does.
@@ -454,6 +423,64 @@ struct Composer: View {
         // `.onChange`, so the first channel of a session is focused too — a
         // change handler has nothing to compare against on the way in.
         .task(id: focusKey) { isFocused = true }
+    }
+
+    /// The words: the command being filled in, if any, and the editor.
+    private var field: some View {
+        HStack(alignment: .bottom, spacing: Spacing.base) {
+            if let pendingCommand {
+                CommandComposerBar(pending: pendingCommand, onEdit: focusCommandOption)
+            }
+
+            // **Discord's box**: the markdown stays visible and styled as it
+            // is typed, and a selection brings up the formatting bar. See
+            // `MarkdownEditor`.
+            MarkdownEditor(
+                text: fieldText,
+                isFocused: $isFocused,
+                placeholder: placeholder,
+                font: NSFont.preferredFont(forTextStyle: .body),
+                // Solid across the whole bar rather than the hierarchy: a
+                // `.secondary` glyph washes out on glass, and a composer
+                // whose placeholder is invisible reads as broken. See
+                // `InkColor.solid`.
+                ink: .composerSolid,
+                lines: 1...Metrics.composerMaxLines,
+                returnSubmits: true,
+                // Whatever is open owns these keys, and hands them straight
+                // back when nothing is. Handing one back is what lets Return
+                // still send and the arrows still move the caret the rest of
+                // the time.
+                onKey: { key in
+                    let result: KeyPress.Result = switch key {
+                    case .up: pressedUp()
+                    case .down: pressedDown()
+                    // Shift-Return is a new line, whatever is open.
+                    case .return(let shift): shift ? .ignored : pressedReturnKey()
+                    case .tab: pressedTab()
+                    case .backspace: pressedBackspace()
+                    case .escape: pressedEscape()
+                    }
+                    return result == .handled
+                },
+                onSubmit: pressedReturn,
+                onPasteFiles: canAttach ? { urls in
+                    pasteFiles(urls)
+                    return true
+                } : nil,
+                // A picked mention shows as Discord's box shows it, while
+                // the token stays what is typed and sent.
+                chips: mentionChip,
+                chipRevision: mentionChipRevision,
+                anchor: textAnchor
+            )
+            .frame(minHeight: Metrics.composerFieldMinHeight)
+        }
+        // The field's own air, so a bar grown to three lines keeps it. The
+        // row's height comes from this plus the field's minimum, which is
+        // what leaves a 32-point control centred inside a 38-point bar
+        // rather than setting the bar's height itself.
+        .padding(.vertical, Spacing.tight)
     }
 
     /// **One field, three destinations.** A command borrows the bar exactly as
@@ -702,10 +729,48 @@ struct Composer: View {
 
     private var attachControl: some View {
         let action: (() -> Void)? = isReorderable ? nil : { pressedPlus() }
-        return ComposerAttachButton(shape: shape, isActive: isAttachMenuOpen, action: action)
+        // Messages' `+` is a glass circle of its own, which is the pill's.
+        return ComposerAttachButton(shape: inlineControls ? shape : .pill, isActive: isAttachMenuOpen, action: action)
             .popover(isPresented: $isAttachMenuOpen, arrowEdge: .top) {
-                ComposerAttachMenu(actions: attachActions) { isAttachMenuOpen = false }
+                ComposerAttachMenu(actions: menuActions) { isAttachMenuOpen = false }
             }
+    }
+
+    /// `+`'s rows: the conversation's, and — when the field holds only the
+    /// emoji control — the pickers that left the bar, which open over that
+    /// control. On the next turn: the menu's popover is still closing, and
+    /// a second one presented in the same pass is dropped.
+    private var menuActions: ComposerAttachActions {
+        guard !inlineControls, !isReorderable else { return attachActions }
+        var actions = attachActions
+        func open(_ control: ComposerControl) -> () -> Void {
+            { Task { @MainActor in openControl = control } }
+        }
+        actions.openGIFs = open(.gif)
+        actions.openStickers = open(.sticker)
+        if activityChannelID != nil { actions.openActivities = open(.apps) }
+        return actions
+    }
+
+    /// The one picker control Messages keeps in the field. Every picker opens
+    /// from it — the emoji, and the GIFs, stickers and activities `+` lists —
+    /// so the flyout points at the field whichever it is.
+    private var emojiControl: some View {
+        ComposerControlButton(
+            label: ComposerControl.emoji.label,
+            isActive: openControl != nil,
+            shape: .pill,
+            action: { openControl = openControl == nil ? .emoji : nil }
+        ) {
+            ComposerControlMark(control: .emoji)
+        }
+        .frame(height: Metrics.composerControlHeight)
+        .popover(
+            isPresented: Binding(get: { openControl != nil }, set: { if !$0 { openControl = nil } }),
+            arrowEdge: .top
+        ) {
+            if let openControl { flyout(for: openControl) }
+        }
     }
 
     /// `+` opens its menu, and a double-click opens the file panel straight
