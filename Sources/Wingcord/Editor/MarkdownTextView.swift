@@ -25,6 +25,8 @@ final class MarkdownTextView: NSTextView {
     /// Files on the clipboard at a paste — see `PastedFiles`. Answers whether
     /// they were taken; a paste they were not is an ordinary one.
     var onPasteFiles: (([URL]) -> Bool)?
+    /// Whether this is the chat input — see `MarkdownEditor.isChatInput`.
+    var isChatInput = false
 
     /// The chips painted over their tokens — see `EditorMention`. Set by the
     /// field after each restyle.
@@ -67,6 +69,27 @@ final class MarkdownTextView: NSTextView {
         action == #selector(paste(_:)) && isEditable && onPasteFiles != nil
             && PastedFiles.hasFiles(on: pasteboard)
     }
+    /// The system's menu, and — in the chat input, with Vencord's SilentTyping
+    /// on and its "Context menu" setting — the plugin's checkbox at its end
+    /// (decision 18; Discord's own menu has a Send Message Button item for the
+    /// plugin to follow, which this one does not). Read as the menu opens, as
+    /// the plugin's `settings.use` reads it.
+    override func menu(for event: NSEvent) -> NSMenu? {
+        let menu = super.menu(for: event)
+        let settings = AppSettings.shared
+        guard isChatInput, settings.silentTyping, settings.silentTypingInContextMenu, let menu else { return menu }
+        menu.addItem(.separator())
+        let item = NSMenuItem(title: "Enable Silent Typing", action: #selector(toggleSilentTyping(_:)), keyEquivalent: "")
+        item.target = self
+        item.state = settings.silentTypingIsOn ? .on : .off
+        menu.addItem(item)
+        return menu
+    }
+
+    @objc private func toggleSilentTyping(_ sender: Any?) {
+        AppSettings.shared.silentTypingIsOn.toggle()
+    }
+
     /// Text only, so a file dragged over the field falls through to the
     /// composer's own drop target rather than landing as a path.
     override var acceptableDragTypes: [NSPasteboard.PasteboardType] { [.string] }

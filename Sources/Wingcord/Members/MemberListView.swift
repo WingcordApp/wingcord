@@ -553,20 +553,16 @@ final class MemberListCoordinator: NSObject {
         prefetchTask = Task { [weak self] in
             await ScrollWorkGate.waitUntilInactive()
             guard !Task.isCancelled else { return }
-            var landed = false
-            await withTaskGroup(of: Bool.self) { group in
-                for (key, bucket) in requests {
-                    group.addTask {
-                        await ImageStore.shared.image(for: key, bucket: bucket) != nil
-                    }
+            // Repainted as faces land, coalesced (`ImageBatch`) — one slow
+            // avatar must not keep the rest of the column as monograms.
+            await ImageBatch.load(
+                requests,
+                using: { await ImageStore.shared.image(for: $0.0, bucket: $0.1) != nil },
+                landed: { [weak self] _ in
+                    guard let self, !self.isTornDown else { return }
+                    self.canvas?.needsDisplay = true
                 }
-                for await didLoad in group where didLoad { landed = true }
-            }
-            guard landed else { return }
-            await MainActor.run {
-                guard let self, !self.isTornDown else { return }
-                self.canvas?.needsDisplay = true
-            }
+            )
         }
     }
 }

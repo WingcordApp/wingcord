@@ -45,6 +45,9 @@ struct Composer: View {
     /// R7). Passed in for the reason `shape` is; the settings editor draws the
     /// classic bar, whose controls it rearranges.
     var inlineControls: Bool = true
+    /// Vencord's SilentTyping icon, or nil where it is not shown. Passed in for
+    /// the reason `shape` is.
+    var silentTyping: SilentTypingControl?
     /// Whether the trailing controls may be dragged into a new order.
     ///
     /// **Off in the window, on only in the editor that has a container for it.**
@@ -397,7 +400,10 @@ struct Composer: View {
                 } input: {
                     field
                 } controls: {
-                    expressionControls
+                    HStack(spacing: Spacing.hair) {
+                        silentTypingButton
+                        expressionControls
+                    }
                 } send: {
                     ComposerSendButton(shape: shape, isArmed: canCommit, action: pressedReturn)
                 }
@@ -410,6 +416,7 @@ struct Composer: View {
                 } input: {
                     field
                 } trailing: {
+                    silentTypingButton
                     emojiControl
                     MessagesSendButton(isArmed: canCommit, action: pressedReturn)
                 }
@@ -468,6 +475,7 @@ struct Composer: View {
                     pasteFiles(urls)
                     return true
                 } : nil,
+                isChatInput: true,
                 // A picked mention shows as Discord's box shows it, while
                 // the token stays what is typed and sent.
                 chips: mentionChip,
@@ -750,6 +758,22 @@ struct Composer: View {
         actions.openStickers = open(.sticker)
         if activityChannelID != nil { actions.openActivities = open(.apps) }
         return actions
+    }
+
+    /// Vencord's chat-bar button: the keyboard, struck through in red while
+    /// typing is hidden, and its tooltip saying what a press will do.
+    @ViewBuilder
+    private var silentTypingButton: some View {
+        if let silentTyping {
+            ComposerControlButton(
+                label: silentTyping.isOn ? "Disable Silent Typing" : "Enable Silent Typing",
+                shape: inlineControls ? shape : .pill,
+                action: isReorderable ? nil : silentTyping.toggle
+            ) {
+                SilentTypingMark(isOn: silentTyping.isOn)
+            }
+            .frame(height: Metrics.composerControlHeight)
+        }
     }
 
     /// The one picker control Messages keeps in the field. Every picker opens

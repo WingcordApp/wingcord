@@ -33,6 +33,10 @@ struct MarkdownEditor: View {
     /// clipboard — answered with whether they were taken. Nil where the field
     /// takes text only. See `PastedFiles`.
     var onPasteFiles: (([URL]) -> Bool)?
+    /// Whether this is the chat input — whose right-click menu carries what
+    /// Discord's `textarea-context` menu does, such as Silent Typing's
+    /// checkbox — rather than some other markdown field.
+    var isChatInput = false
     /// How each mention token is drawn — nil leaves tokens as text, which is
     /// right for a field whose text is not a message.
     var chips: ((EditorMention) -> EditorChip?)?
@@ -58,6 +62,7 @@ struct MarkdownEditor: View {
             onKey: onKey,
             onSubmit: onSubmit,
             onPasteFiles: onPasteFiles,
+            isChatInput: isChatInput,
             chips: chips,
             chipRevision: chipRevision,
             anchor: anchor,
@@ -83,6 +88,7 @@ private struct MarkdownEditorRepresentable: NSViewRepresentable {
     var onKey: ((EditorKey) -> Bool)?
     var onSubmit: (() -> Void)?
     var onPasteFiles: (([URL]) -> Bool)?
+    var isChatInput: Bool
     var chips: ((EditorMention) -> EditorChip?)?
     var chipRevision: UInt64
     var anchor: EditorAnchor?
@@ -111,6 +117,7 @@ private struct MarkdownEditorRepresentable: NSViewRepresentable {
         // Refreshed rather than captured once: it closes over the channel the
         // composer is on now.
         textView.onPasteFiles = onPasteFiles
+        textView.isChatInput = isChatInput
 
         var needsStyle = false
         if textView.font != font {

@@ -616,9 +616,12 @@ public enum CDN {
     /// stays grey for the life of the process — which is exactly the symptom
     /// "videos have no preview" describes.
     ///
-    /// Discord's media proxy transcodes: `format=jpg` on a video path answers
-    /// with a still from it. Documented under CDN & file uploads, and the
-    /// response carries `X-Discord-Transform-Duration` to prove it did the work.
+    /// Discord's media proxy transcodes: an image `format` on a video path
+    /// answers with a still from it. **`webp`, as Discord's own client asks**
+    /// (`591818`'s `j`, and `ImageComponentForMessageAttachment`: the proxy URL
+    /// with `format=webp` is every video's poster there) — the one format the
+    /// proxy is certain to serve for a video, because it is the one Discord's
+    /// own posters depend on. ImageIO decodes WebP.
     ///
     /// Nil when the proxy cannot serve it — anything that is not `http(s)` is a
     /// local fixture or somebody else's host, and appending a query there is a
@@ -636,7 +639,7 @@ public enum CDN {
         let bound = height.map { Int(($0 * scale).rounded(.up)) } ?? pixels * 4
         var items = components.queryItems ?? []
         items.removeAll { $0.name == "width" || $0.name == "height" || $0.name == "format" }
-        items.append(URLQueryItem(name: "format", value: "jpg"))
+        items.append(URLQueryItem(name: "format", value: "webp"))
         items.append(URLQueryItem(name: "width", value: String(pixels)))
         items.append(URLQueryItem(name: "height", value: String(bound)))
         components.queryItems = items

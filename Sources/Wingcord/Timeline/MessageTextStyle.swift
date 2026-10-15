@@ -49,6 +49,9 @@ nonisolated struct MessageTextStyle: @unchecked Sendable {
     /// A refused send's words — Discord's `--text-feedback-critical`, `#FFA19C`
     /// in a dark room and `#BA2633` in a light one.
     var criticalColor = Self.criticalInk(isLight: false)
+    /// Discord's code colours for the room — what an `ansi` block's colours
+    /// and a highlighted block's tokens are drawn in. See `CodePalette`.
+    var codePalette = CodePalette(room: .dark)
 
     /// The em-space the inline emoji box is measured against, so an emoji tracks
     /// the text size rather than being pinned at 20pt forever.
@@ -112,6 +115,10 @@ nonisolated struct MessageTextStyle: @unchecked Sendable {
             underlinesLinks: AppSettings.shared.underlinesLinks,
             mentionColor: NSColor(Palette.accent),
             criticalColor: criticalInk(isLight: ThemeStore.shared.colors.appearance == .light),
+            codePalette: CodePalette(room: .init(
+                isLight: ThemeStore.shared.colors.appearance == .light,
+                highContrast: NSWorkspace.shared.accessibilityDisplayShouldIncreaseContrast
+            )),
             emojiWidth: body.pointSize * 1.28,
             emojiAscent: body.ascender * 1.05,
             emojiDescent: abs(body.descender),

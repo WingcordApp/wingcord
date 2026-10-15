@@ -190,4 +190,62 @@ nonisolated enum TimelineViewportPolicy {
         let distance = documentHeight + bottomInset - viewport.maxY
         return distance > viewport.height * (wasShowing ? 0.5 : 1)
     }
+
+    // MARK: Pictures ahead of the reader (REDESIGN.md D12)
+
+    /// How far past each edge of the viewport pictures are asked for: a screen.
+    /// Further than the canvas's own overscan, so a row usually arrives with
+    /// its picture already decoded instead of popping in once it is in view.
+    static let pictureReachScreens: CGFloat = 1
+
+    /// The fastest scroll that is still somebody reading, in screens a second.
+    /// Slower than this, pictures are fetched ahead of the scroll; faster is a
+    /// fling, and a fling passes hundreds of rows nobody looks at — fetching
+    /// for all of them is bandwidth and decode spent on nothing, and puts the
+    /// destination's pictures behind them in the decode queue.
+    static let readingScreensPerSecond: CGFloat = 1.5
+
+    /// The band of the document whose rows' pictures are wanted now.
+    static func pictureReach(viewport: CGRect) -> ClosedRange<CGFloat> {
+        let margin = viewport.height * pictureReachScreens
+        return (viewport.minY - margin)...(viewport.maxY + margin)
+    }
+
+    /// Whether a scroll at `speed` points a second may fetch ahead of itself —
+    /// always when nothing is scrolling.
+    static func fetchesDuringScroll(isScrolling: Bool, speed: CGFloat, viewportHeight: CGFloat) -> Bool {
+        !isScrolling || speed <= viewportHeight * readingScreensPerSecond
+    }
+
+    /// The order rows are asked for in: those on screen, then the rest nearest
+    /// the viewport first — the decode queue is first come, first served.
+    /// Stable, so rows the same distance away keep document order.
+    static func pictureOrder(
+        _ rows: Range<Int>,
+        frame: (Int) -> CGRect,
+        viewport: CGRect
+    ) -> [Int] {
+        rows
+            .map { index -> (index: Int, distance: CGFloat) in
+                let row = frame(index)
+                let distance = max(0, viewport.minY - row.maxY, row.minY - viewport.maxY)
+                return (index, distance)
+            }
+            .enumerated()
+            .sorted { lhs, rhs in
+                lhs.element.distance == rhs.element.distance
+                    ? lhs.offset < rhs.offset
+                    : lhs.element.distance < rhs.element.distance
+            }
+            .map(\.element.index)
+    }
+
+    /// A scroll's speed in points a second, smoothed over its last few ticks —
+    /// one tick's step over one tick's interval is whatever the event loop was
+    /// doing at that instant. A pause longer than a few frames starts again.
+    static func smoothedSpeed(previous: CGFloat, movement: CGFloat, elapsed: TimeInterval) -> CGFloat {
+        guard elapsed > 0 else { return previous }
+        let step = abs(movement) / CGFloat(elapsed)
+        return elapsed > 0.1 ? step : previous * 0.5 + step * 0.5
+    }
 }

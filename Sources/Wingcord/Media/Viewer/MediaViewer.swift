@@ -1,58 +1,60 @@
 import SwiftUI
 
-/// The lightbox: one picture, one clip or one animation, at the size the window
-/// can give it.
+/// The lightbox: a message's pictures, clips and animations, one at a time, at
+/// the size the window can give them — opened out of the thumbnail that was
+/// clicked and closed back into it (REDESIGN.md D8), paged through as a gallery
+/// (D9).
 ///
 /// **One surface for all three kinds, with three sets of controls.** What a
-/// reader does with a photograph and what they do with a video have almost
-/// nothing in common — one zooms, the other scrubs — so the bar under the stage
-/// is built from the kind and only the top bar is shared. A single bar carrying
-/// every control for every kind would be four fifths disabled at all times.
+/// reader does with a photograph and with a video have almost nothing in
+/// common — one zooms, the other scrubs — so the bar under the stage is built
+/// from the kind and only the top bar is shared.
 ///
-/// **The stage is inset above the chrome for video and full-bleed for
-/// everything else**, and that asymmetry is `INVARIANTS.md` §4's last rule
-/// rather than an oversight: glass over playing video re-samples its blur every
-/// frame and leaves the glyphs on top of it illegible, so the bars sit over the
-/// scrim instead. A still picture — even one that animates — is exactly what
-/// clear glass is for, and letting it pass underneath is the whole reason this
-/// app uses the material at all.
+/// **The viewer animates itself in and out** rather than leaving it to a
+/// transition: the picture's flight is the arrival and the departure, and the
+/// scrim follows it (`MediaStageController.presence`), so the two are one
+/// movement rather than a fade beside a flight. The chrome waits for the
+/// landing (`MediaViewerChrome.isShown`). The viewer is taken off the window
+/// only once the picture has landed back in its box.
 struct MediaViewer: View {
     var request: MediaViewerRequest
+    /// One picture along, wrapping — the arrows, the chevrons, a swipe.
     var step: (Int) -> Void
-    var close: () -> Void
-
-    /// How much of the stage the chrome reserves at each end, for video.
-    private static let chromeBand: CGFloat = 76
+    /// One picture by its place — the gallery strip.
+    var show: (Int) -> Void
+    /// Takes the viewer off the window at once. Called when the flight home
+    /// has landed, never before.
+    var dismiss: () -> Void
 
     @State private var stage = MediaStageController()
     @State private var playback = VideoPlayback()
     @State private var actions = MediaActions()
+    /// The strip's pick while the page slides to it.
+    @State private var jumpTarget: Int?
     @FocusState private var isFocused: Bool
 
     var body: some View {
         ZStack {
-            MediaBackdrop(stage: stage, close: close)
+            MediaBackdrop(stage: stage)
 
             if let item = request.current {
                 MediaStage(
                     item: item,
+                    previous: request.item(offsetBy: -1),
+                    next: request.item(offsetBy: 1),
                     controller: stage,
                     player: item.isVideo ? playback.player : nil,
-                    onDismiss: close,
+                    home: thumbnail,
+                    onRequestClose: { close(velocity: $0) },
+                    onPage: paged,
                     onContentClick: playback.togglePlayback
                 )
-                .padding(.vertical, item.isVideo ? Self.chromeBand : 0)
-                // **A picture runs to the window's edges; a video stops at the
-                // safe area.** Letting a still pass under the titlebar is the
-                // same thing the transcript does and is the whole reason the
-                // chrome is glass. A video cannot: §4's last rule sends
-                // anything over playing video to a scrim, and the window's own
-                // titlebar is not one this app controls.
-                //
-                // A parameter rather than an `if`, so the stage keeps one
-                // identity and stepping from a photograph to a clip does not
-                // rebuild the player underneath it.
-                .ignoresSafeArea(edges: item.isVideo ? [] : .all)
+                // **The stage runs to the window's edges, every kind.** A
+                // video keeps clear of the chrome inside the canvas
+                // (`letterboxInsets`) rather than by a frame out here, so
+                // paging between a photograph and a clip never re-lays the
+                // stage under a moving page.
+                .ignoresSafeArea()
                 .accessibilityLabel(Text(item.altText ?? item.filename))
 
                 MediaViewerChrome(
@@ -60,27 +62,30 @@ struct MediaViewer: View {
                     stage: stage,
                     playback: playback,
                     actions: actions,
-                    step: step,
-                    close: close
+                    page: { stage.page(by: $0) },
+                    jump: jump,
+                    close: { close() }
                 )
             }
         }
-        // **The chrome respects the safe area and everything under it ignores
-        // it.** `NSTitlebarView` is a sibling *above* the hosting view — §1 —
-        // so a bar drawn into the titlebar's strip is a bar with the traffic
-        // lights and the app's own toolbar items printed on top of it. Measured
-        // on a live window: the close button landed underneath the red one.
-        // The viewer takes the keyboard for as long as it is up: Escape closes,
-        // the arrows do what the kind on screen says they do, and space is the
+        // The viewer takes the keyboard while it is up: Escape closes, the
+        // arrows do what the kind on screen says they do, and space is the
         // universal "act on this".
         .focusable()
         .focused($isFocused)
         .focusEffectDisabled()
-        .onAppear { isFocused = true }
-        .onExitCommand(perform: close)
+        .onAppear {
+            isFocused = true
+            stage.onClosed = finish
+            lift()
+        }
+        .onExitCommand { close() }
         .onKeyPress(action: handle(key:))
-        // Loading is keyed on the item, so stepping between attachments swaps
-        // what the player holds instead of building a second one.
+        // The picture on stage is out of its box; the one paged away from goes
+        // back into its own.
+        .onChange(of: request.index) { lift() }
+        // Loading is keyed on the item, so stepping swaps what the player
+        // holds instead of building a second one.
         .task(id: request.current?.id) {
             let item = request.current
             playback.load(
@@ -89,9 +94,67 @@ struct MediaViewer: View {
                 autoplay: true
             )
         }
-        // Only the player. A save in flight is deliberately left to finish —
-        // see `MediaActions.save`.
-        .onDisappear(perform: playback.tearDown)
+        // Only the player. A save in flight is left to finish — see
+        // `MediaActions.save`.
+        .onDisappear {
+            playback.tearDown()
+            MediaSources.shared.lift(nil, origin: request.origin)
+        }
+    }
+
+    // MARK: The thumbnail
+
+    /// Where the picture on stage sits in the surface it came from — asked as
+    /// the stage opens and again as it closes, because the reader may have
+    /// paged to another picture since.
+    private func thumbnail() -> MediaSources.Thumbnail? {
+        guard let key = request.sourceKey else { return nil }
+        return MediaSources.shared.thumbnail(for: key, origin: request.origin)
+    }
+
+    private func lift() {
+        MediaSources.shared.lift(request.sourceKey, origin: request.origin)
+    }
+
+    // MARK: Closing
+
+    /// Every way out — Escape, ✕, a click beside the picture, a throw, a
+    /// squeeze — flies the picture home, and the stage goes when it lands.
+    private func close(velocity: CGPoint = .zero) {
+        guard !stage.isClosing else { return }
+        playback.pauseForClose()
+        stage.close(home: thumbnail(), velocity: velocity)
+    }
+
+    /// The picture has landed in its box: the box takes it back on the same
+    /// pass that the stage goes, so there is no frame with both or neither.
+    private func finish() {
+        MediaSources.shared.lift(nil, origin: request.origin)
+        dismiss()
+    }
+
+    // MARK: Paging
+
+    private func paged(_ direction: Int) {
+        if let jumpTarget {
+            self.jumpTarget = nil
+            show(jumpTarget)
+        } else {
+            step(direction)
+        }
+    }
+
+    private func jump(to index: Int) {
+        guard index != request.index, request.items.indices.contains(index), !stage.isClosing else { return }
+        let direction = index > request.index ? 1 : -1
+        // A neighbour is a page; anything further is the same page, with the
+        // picture laid beside the stage first.
+        if request.item(offsetBy: direction)?.id == request.items[index].id {
+            stage.page(by: direction)
+        } else {
+            jumpTarget = index
+            stage.jump(to: request.items[index], direction: direction)
+        }
     }
 
     // MARK: Keys
@@ -99,19 +162,17 @@ struct MediaViewer: View {
     /// One handler rather than a modifier per key.
     ///
     /// **The arrows do what the media on screen does.** In a video they seek,
-    /// which is what they do in every player; over a picture they step to the
-    /// next attachment, which is what they do in every viewer. Command-arrow
-    /// always steps, so the one gesture that means "next" is available whatever
-    /// is showing.
+    /// as in every player; over a picture they turn the page, as in every
+    /// viewer. Command-arrow always turns it.
     private func handle(key: KeyPress) -> KeyPress.Result {
         let isVideo = request.current?.isVideo ?? false
         switch key.key {
         case .escape:
             close()
         case .leftArrow where key.modifiers.contains(.command) || !isVideo:
-            step(-1)
+            stage.page(by: -1)
         case .rightArrow where key.modifiers.contains(.command) || !isVideo:
-            step(1)
+            stage.page(by: 1)
         case .leftArrow:
             playback.skip(by: -5)
         case .rightArrow:
@@ -124,8 +185,7 @@ struct MediaViewer: View {
         return .handled
     }
 
-    /// What the space bar means here: play or pause where there is something
-    /// playing, and fit or fill where there is not.
+    /// Space: play or pause where something plays, fit or fill where not.
     private func act() {
         guard let item = request.current else { return }
         switch item.kind {
@@ -139,60 +199,75 @@ struct MediaViewer: View {
     }
 }
 
-/// The scrim, and the click that lands on nothing.
+/// The scrim.
 ///
-/// **Its own view so the fade is the only thing a dismiss gesture
-/// invalidates.** `dismissProgress` moves at event rate; read from the viewer's
-/// own body it would re-evaluate the stage, both bars and everything they are
-/// built from, sixty times a second during the one gesture that most needs the
-/// frames.
+/// **Its own view so a fade is the only thing a gesture or a flight
+/// invalidates.** Presence and dismissal move at frame rate; read from the
+/// viewer's body they would re-evaluate the stage and both bars sixty times a
+/// second during the moments that most need the frames.
+///
+/// It takes no clicks: the stage covers the window, and a click beside the
+/// picture is the canvas's to answer (`onBackgroundClick`).
 private struct MediaBackdrop: View {
     var stage: MediaStageController
-    var close: () -> Void
 
     var body: some View {
         Rectangle()
             .fill(.black)
             .ignoresSafeArea()
-            // A fixed scrim, not a material. What is behind it is the whole
-            // window — a transcript, a roster, artwork — and a sampled material
-            // cannot promise the picture on top of it reads at any given
-            // moment. §4 sends anything over content nobody chose to a scrim
-            // for exactly this reason.
-            .opacity(0.94 * (1 - stage.dismissProgress * 0.8))
-            .contentShape(.rect)
-            .onTapGesture(perform: close)
-            .accessibilityLabel("Close")
-            .accessibilityAddTraits(.isButton)
+            // A fixed scrim, not a material: what is behind it is the whole
+            // window, and a sampled material cannot promise the picture on top
+            // of it reads at any given moment (§4).
+            .opacity(0.94 * stage.presence * (1 - stage.dismissProgress * 0.8))
+            .allowsHitTesting(false)
+            .accessibilityHidden(true)
     }
 }
 
 /// Everything floating over the stage.
 ///
-/// One view, so the dismiss fade is applied once — and so the viewer's own body
-/// never reads `dismissProgress` at all.
+/// One view, so the fade is applied once — and so the viewer's own body never
+/// reads presence or dismissal at all.
 private struct MediaViewerChrome: View {
     var request: MediaViewerRequest
     var stage: MediaStageController
     var playback: VideoPlayback
     var actions: MediaActions
-    var step: (Int) -> Void
+    var page: (Int) -> Void
+    var jump: (Int) -> Void
     var close: () -> Void
 
     @Environment(\.motion) private var motion
 
     var body: some View {
+        // One container, so the pieces render as one pass of material while
+        // they are up over a page turning or a picture being zoomed.
+        GlassEffectContainer(spacing: 0) { content }
+            .opacity(isShown ? 1 : 0)
+            .animation(isShown ? motion.fade : motion.fadeQuick, value: isShown)
+            .allowsHitTesting(isShown)
+    }
+
+    /// **Up once the picture has nearly landed, gone as soon as it takes off —
+    /// never over a flight.** Clear glass re-samples whatever moves beneath it
+    /// every frame, and six pieces of it over a picture growing out of its
+    /// thumbnail halved the frame rate: 8–14 frames of 40 dropped opening and
+    /// 5–8 closing, against 1–4 and 2 with the chrome waiting (measured from
+    /// the compositor's own frame times, REDESIGN.md §9.4). The last tenth of a
+    /// flight is a few points a frame, so the bars fading in over it cost
+    /// nothing anyone sees; a throw takes them away the moment it starts.
+    private var isShown: Bool {
+        stage.presence >= 0.9 && !stage.isClosing && stage.dismissProgress < 0.02
+    }
+
+    private var content: some View {
         ZStack {
             MediaStatusOverlay(stage: stage, playback: playback)
 
             if let item = request.current {
                 VStack(spacing: 0) {
                     HStack(alignment: .top, spacing: Spacing.base) {
-                        MediaGlassButton(
-                            systemImage: "xmark",
-                            label: "Close",
-                            action: close
-                        )
+                        MediaGlassButton(systemImage: "xmark", label: "Close", action: close)
                         Spacer(minLength: Spacing.snug)
                         MediaActionCluster(
                             item: item,
@@ -204,7 +279,12 @@ private struct MediaViewerChrome: View {
                         )
                     }
                     Spacer(minLength: 0)
-                    bottomBar(for: item)
+                    VStack(spacing: Spacing.base) {
+                        if request.hasSiblings {
+                            MediaGalleryStrip(request: request, select: jump)
+                        }
+                        bottomBar(for: item)
+                    }
                 }
                 .padding(Spacing.margin)
 
@@ -213,17 +293,11 @@ private struct MediaViewerChrome: View {
                 }
             }
         }
-        // The chrome goes with the picture: a bar left at full strength over a
-        // surface being thrown away reads as two things happening rather than
-        // one.
-        .opacity(1 - stage.dismissProgress)
-        .allowsHitTesting(stage.dismissProgress < 0.02)
-        .animation(motion.fade, value: request.index)
     }
 
     @ViewBuilder
     private func bottomBar(for item: MediaItem) -> some View {
-        Group {
+        let bar = Group {
             if item.isVideo {
                 MediaVideoControls(playback: playback)
                     .frame(maxWidth: 720)
@@ -234,39 +308,22 @@ private struct MediaViewerChrome: View {
                 MediaZoomControls(stage: stage)
             }
         }
-        .padding(.horizontal, Spacing.snug)
-        .padding(.vertical, Spacing.base)
-        .glassEffect(
-            .clear.tint(Palette.flyoutTint),
-            in: .rect(cornerRadius: Radius.glass, style: .continuous)
-        )
-        // The bar for a video is not the bar for a picture, and a cross-fade
-        // between them is the honest way to say so. Keyed on the kind rather
-        // than on the item, so stepping between two photographs leaves the bar
-        // alone.
-        .transition(.materialize(from: .bottom))
+        bar
+            .padding(.horizontal, Spacing.snug)
+            .padding(.vertical, Spacing.base)
+            .glassEffect(.clear.tint(Palette.flyoutTint), in: .rect(cornerRadius: Radius.glass, style: .continuous))
+            // A video's bar is not a picture's: the honest change between them
+            // is a cross-fade, keyed on the kind.
+            .transition(.materialize(from: .bottom))
     }
 
-    /// The two chevrons, and the only place the position is said.
-    ///
-    /// **In the label rather than in a counter on screen.** A "2 of 3" pill is a
-    /// second piece of permanent chrome over the picture saying what the
-    /// chevrons' presence already says; put in the help text and the
-    /// accessibility label it costs nothing and is still available to anyone who
-    /// asks for it.
+    /// The two chevrons. The position is said in their labels and in the
+    /// strip, not in a "2 of 3" pill over somebody's photograph.
     private var steppers: some View {
         HStack {
-            MediaGlassButton(
-                systemImage: "chevron.left",
-                label: "Previous (\(position))",
-                action: { step(-1) }
-            )
+            MediaGlassButton(systemImage: "chevron.left", label: "Previous (\(position))") { page(-1) }
             Spacer(minLength: 0)
-            MediaGlassButton(
-                systemImage: "chevron.right",
-                label: "Next (\(position))",
-                action: { step(1) }
-            )
+            MediaGlassButton(systemImage: "chevron.right", label: "Next (\(position))") { page(1) }
         }
         .padding(.horizontal, Spacing.margin)
     }
@@ -281,11 +338,8 @@ private struct MediaViewerChrome: View {
     }
 }
 
-/// Loading, and the two ways this can fail.
-///
-/// **Its own view for the same reason the backdrop is one**: both of the
-/// properties it reads change rarely, and reading them from the viewer's body
-/// would tie the whole surface to a spinner.
+/// Loading, and the two ways this can fail. Its own view for the backdrop's
+/// reason: both properties change rarely.
 private struct MediaStatusOverlay: View {
     var stage: MediaStageController
     var playback: VideoPlayback

@@ -336,7 +336,7 @@ private struct TopicPreviewFlyout: View {
         .task { model.previewTopic(topic, in: channelID) }
         .task(id: card?.id) {
             guard let card else { return }
-            if await MessageCardArtwork.prefetch([card]) { artworkGeneration &+= 1 }
+            await MessageCardArtwork.prefetch([card]) { artworkGeneration &+= 1 }
         }
     }
 }

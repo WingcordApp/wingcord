@@ -312,3 +312,54 @@ private struct ComposerCircleBody<Mark: View>: View {
             .contentShape(.circle)
     }
 }
+
+/// What the composer needs to draw Vencord's SilentTyping button: whether
+/// typing is hidden, and what a press does.
+struct SilentTypingControl {
+    var isOn: Bool
+    var toggle: () -> Void
+}
+
+/// The plugin's mark, drawn from the system's keyboard rather than copied: the
+/// keyboard, and while typing is hidden a red stroke across it with the
+/// keyboard cut away either side of the stroke, as the plugin masks its own.
+struct SilentTypingMark: View {
+    var isOn: Bool
+
+    var body: some View {
+        Image(systemName: "keyboard")
+            .font(.system(size: 17, weight: .medium))
+            .frame(width: 24, height: 24)
+            .mask {
+                if isOn {
+                    ZStack {
+                        Rectangle()
+                        SilentTypingStroke()
+                            .stroke(style: StrokeStyle(lineWidth: 5.5, lineCap: .round))
+                            .blendMode(.destinationOut)
+                    }
+                    .compositingGroup()
+                } else {
+                    Rectangle()
+                }
+            }
+            .overlay {
+                if isOn {
+                    // The plugin's `--status-danger`: the system's red.
+                    SilentTypingStroke()
+                        .stroke(Color.red, style: StrokeStyle(lineWidth: 2, lineCap: .round))
+                }
+            }
+            .accessibilityHidden(true)
+    }
+}
+
+/// The stroke, bottom-left to top-right across the glyph's box.
+private nonisolated struct SilentTypingStroke: Shape {
+    func path(in rect: CGRect) -> Path {
+        var path = Path()
+        path.move(to: CGPoint(x: rect.minX + 3, y: rect.maxY - 3))
+        path.addLine(to: CGPoint(x: rect.maxX - 3, y: rect.minY + 3))
+        return path
+    }
+}

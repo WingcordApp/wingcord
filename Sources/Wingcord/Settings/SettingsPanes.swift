@@ -208,6 +208,39 @@ private struct GeneralPane: View {
                 }
             }
             .padding(.top, SettingsMetrics.cardToHeader)
+
+            // Vencord's SilentTyping (decision 16), in the plugin's words, as
+            // the card above is.
+            SettingsCard {
+                SettingsToggle(
+                    title: "Silent Typing",
+                    help: "Hide that you are typing",
+                    isOn: $settings.silentTyping
+                )
+                if settings.silentTyping {
+                    CardDivider()
+                    // Each setting's name over its description, as Vencord's
+                    // settings draw them and the card above has them.
+                    SettingsToggle(
+                        title: "Show icon",
+                        help: "Show an icon for toggling the plugin",
+                        isOn: $settings.silentTypingShowsIcon
+                    )
+                    CardDivider()
+                    SettingsToggle(
+                        title: "Context menu",
+                        help: "Add option to toggle the functionality in the chat input context menu",
+                        isOn: $settings.silentTypingInContextMenu
+                    )
+                    CardDivider()
+                    SettingsToggle(
+                        title: "Is enabled",
+                        help: "Toggle functionality",
+                        isOn: $settings.silentTypingIsOn
+                    )
+                }
+            }
+            .padding(.top, SettingsMetrics.cardToHeader)
         }
 
         SettingsGroup("Language") {
@@ -1482,6 +1515,16 @@ private struct StoragePane: View {
     /// would spend more on reporting the cost than the cost it reports.
     @State private var report: StorageReport?
 
+    /// Read off `ImageStore.Budget`, so the sentence cannot drift from the
+    /// table it describes.
+    private static var imageBudgetHelp: String {
+        typealias Budget = ImageStore.Budget
+        let megabytes = { (bytes: Int) in bytes / (1024 * 1024) }
+        return "What the image caches may hold between them: avatars \(megabytes(Budget.thumbnails)) MB, "
+            + "attachments \(megabytes(Budget.attachments)) MB, artwork \(megabytes(Budget.artwork)) MB, "
+            + "and the media viewer \(megabytes(Budget.stage)) MB while it is open."
+    }
+
     var body: some View {
         SettingsCard {
             SettingsMeterRow(
@@ -1501,7 +1544,7 @@ private struct StoragePane: View {
                 SettingsValueRow(
                     title: "Decoded image budget",
                     value: SettingsMeterRow.bytes(ImageStore.shared.residentBudget),
-                    help: "What the three image caches may hold between them: avatars 48 MB, attachments 32 MB, artwork 16 MB."
+                    help: Self.imageBudgetHelp
                 )
                 CardDivider()
                 SettingsValueRow(

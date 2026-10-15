@@ -11,16 +11,26 @@ import WingcordCore
 ///     the whole window, so the sidebar's glass and the conversation sit on the
 ///     same picture and no column can come out black (the per-column backdrop's
 ///     fault). Nothing else in the window paints an opaque ground of its own.
-///  2. **The sidebar slides; the detail changes width once.** The panel moves
-///     on an offset, which re-lays out nothing. The detail's leading inset moves
-///     with the same spring, but the transcript inside it is exempt from the
-///     animation and cross-fades its one re-layout instead (`ShellTransition`).
+///  2. **The sidebar slides, and the conversation slides with it.** The
+///     panel moves on an offset, which re-lays out nothing — and so does the
+///     conversation beside it (REDESIGN.md D10): it is pushed along as one
+///     piece by a render-time offset, and laid out at its new width exactly
+///     once — as a hide begins, so the room it gains slides in from the
+///     window's edge, or as a show ends, once what no longer fits has slid
+///     off it. That one re-layout the transcript dissolves (`ShellTransition`).
+///     Resizing it on every frame instead re-laid the whole column 60 times a
+///     second (REDESIGN.md §5, Phase 7: 48–71 ms frames).
 ///  3. **The chrome is ours, and every control in it is also a menu command**
 ///     (the HIG's toolbar rule, kept now there is no toolbar).
 struct WindowShell: View {
     @Environment(AppModel.self) private var model
     @Environment(\.motion) private var motion
     @State private var settings = AppSettings.shared
+    /// Where the conversation is laid out from, while a slide is between two
+    /// arrangements — nil when it follows the layout, which is at rest.
+    @State private var laidLeading: CGFloat?
+    /// How far the conversation is pushed from where it is laid out.
+    @State private var slide = ConversationSlide()
 
     var body: some View {
         let layout = ShellLayout(
@@ -31,13 +41,25 @@ struct WindowShell: View {
         )
         ZStack(alignment: .topLeading) {
             DetailColumn(layout: layout)
-                .padding(.leading, layout.detailLeading)
+                .padding(.leading, laidLeading ?? layout.detailLeading)
+                // **The conversation is moved, never re-laid, while the panel
+                // travels — and only the conversation.** Offsetting the whole
+                // column carried the roster and the header's trailing
+                // controls with it: on a hide they were pushed off the
+                // window's edge and slid back in. `WorkspacePane` moves its
+                // primary pane by this and clips it; the header glides its
+                // title (`DetailHeader`).
+                .environment(\.conversationSlide, slide)
 
             SidebarPanel(layout: layout)
+                // The animated part of a change of state, keyed on the state
+                // and never on the width: a drag on the panel's edge must
+                // track the pointer 1:1.
+                .animation(motion.reposition, value: ShellMotionKey(layout))
         }
-        // The animated part of a change of state, keyed on the state and never
-        // on the width: a drag on the panel's edge must track the pointer 1:1.
-        .animation(motion.reposition, value: ShellMotionKey(layout))
+        .onChange(of: ShellMotionKey(layout)) { old, new in
+            slideConversation(from: old.detailLeading, to: new.detailLeading)
+        }
         .ignoresSafeArea()
         // The ground is the shell's BACKGROUND, so nothing it draws can size
         // the window's content.
@@ -139,18 +161,115 @@ private struct FolderNameSheet: View {
     }
 }
 
+extension WindowShell {
+    /// Pushes the conversation from one leading edge to the other along with
+    /// the panel — `reposition`, the panel's own class, so the two move as one.
+    ///
+    /// **Laid out once, at whichever end hides the change.** Gaining room (a
+    /// hide), it takes its new width at once and is pushed back from where it
+    /// stood, so the room it gained comes in from the window's edge as it
+    /// travels. Losing room (a show), it keeps its width while it travels — what
+    /// no longer fits goes off the window's edge — and takes the narrower one as
+    /// the panel lands. Under Reduce Motion the panel and the column change
+    /// place without travel, as every arrangement here does.
+    private func slideConversation(from old: CGFloat, to new: CGFloat) {
+        let distance = new - old
+        var settle = Transaction()
+        settle.disablesAnimations = true
+        guard abs(distance) >= 1, !motion.reduceMotion else {
+            withTransaction(settle) {
+                laidLeading = nil
+                slide = ConversationSlide()
+            }
+            return
+        }
+        // The re-layout that follows is the shell rearranging, not a resize.
+        ShellTransition.begin()
+        // **One write, and the animated value is a progress.** The offset
+        // used to be set to where the conversation stood and then animated
+        // back to zero — two writes to one value in one event, which SwiftUI
+        // coalesces: the animation ran from the value last DRAWN, zero, to
+        // zero, and the conversation sat at its new place under the panel for
+        // the whole slide. Its ends are fixed here instead and only `progress`
+        // animates, from the zero it rests at.
+        if distance < 0 {
+            // Gaining room: laid out wide now, pushed back to where it stood.
+            withTransaction(settle) { laidLeading = nil }
+            withAnimation(motion.reposition, completionCriteria: .logicallyComplete) {
+                slide = ConversationSlide(from: -distance, to: 0, progress: 1)
+            } completion: {
+                withTransaction(settle) { slide = ConversationSlide() }
+            }
+        } else {
+            // Losing room: kept as it is while it travels, laid narrower when
+            // the panel lands.
+            withTransaction(settle) { laidLeading = old }
+            withAnimation(motion.reposition, completionCriteria: .logicallyComplete) {
+                slide = ConversationSlide(from: 0, to: distance, progress: 1)
+            } completion: {
+                ShellTransition.begin()
+                withTransaction(settle) {
+                    laidLeading = nil
+                    slide = ConversationSlide()
+                }
+            }
+        }
+    }
+}
+
 /// What changes the shell's arrangement as one gesture. The width is
 /// deliberately absent — see `WindowShell`.
-private struct ShellMotionKey: Equatable {
+struct ShellMotionKey: Equatable {
     var style: SidebarStyle
     var isSidebarShown: Bool
     var isTakenOver: Bool
+    /// Where the conversation begins in this arrangement — carried for the
+    /// slide, and not compared: a drag on the panel's edge moves it 1:1.
+    var detailLeading: CGFloat
 
     init(_ layout: ShellLayout) {
         style = layout.style
         isSidebarShown = layout.isSidebarShown
         isTakenOver = layout.isTakenOver
+        detailLeading = layout.detailLeading
     }
+
+    static func == (lhs: ShellMotionKey, rhs: ShellMotionKey) -> Bool {
+        lhs.style == rhs.style && lhs.isSidebarShown == rhs.isSidebarShown && lhs.isTakenOver == rhs.isTakenOver
+    }
+}
+
+/// How far the conversation is pushed from where it is laid out while the
+/// sidebar travels — `WindowShell.slideConversation` — as two fixed ends and
+/// the progress between them, which is the only part that animates
+/// (`ConversationSlide.Offset`). At rest it is all zeros.
+struct ConversationSlide: Equatable, Sendable {
+    var from: CGFloat = 0
+    var to: CGFloat = 0
+    var progress: CGFloat = 0
+
+    var isMoving: Bool { from != 0 || to != 0 }
+
+    /// Moves a view by the slide, interpolating `progress` alone, so a slide
+    /// whose ends change in the same transaction still travels between them.
+    struct Offset: ViewModifier, Animatable {
+        var slide: ConversationSlide
+
+        nonisolated var animatableData: CGFloat {
+            get { slide.progress }
+            set { slide.progress = newValue }
+        }
+
+        func body(content: Content) -> some View {
+            content.offset(x: slide.from + (slide.to - slide.from) * slide.progress)
+        }
+    }
+}
+
+extension EnvironmentValues {
+    /// The conversation's slide while the sidebar travels. See
+    /// `ConversationSlide`.
+    @Entry var conversationSlide = ConversationSlide()
 }
 
 // MARK: - Acts

@@ -51,7 +51,7 @@ struct PlaintextPreviewCard: View {
             await model.loadPlaintextPreview(key)
         }
         .sheet(isPresented: $showsWholeFile) {
-            PlaintextFileSheet(key: key, wrapsText: state.wrapsText)
+            PlaintextFileSheet(key: key, state: state)
         }
         .accessibilityElement(children: .contain)
         .accessibilityLabel(Text(verbatim: key.filename))
@@ -62,26 +62,30 @@ struct PlaintextPreviewCard: View {
     // MARK: Text
 
     private func textArea(_ state: PlaintextPreviewState) -> some View {
-        let height = state.isExpanded
+        // A rendered document is never clipped at the fold: Discord drops the
+        // collapsed class for it (`!s && !N`) and lets it be as tall as it is,
+        // 118 to 500, folded or not.
+        let height = state.isExpanded || state.showsMarkdown
             ? min(Self.expandedMaxHeight, max(Self.minimumHeight, contentHeight))
             : Self.collapsedHeight
         return ZStack(alignment: .topLeading) {
             Color(cgColor: ThemeInk.current.plates.codeFill)
             if case .loaded(let text, let bytesLeft) = state.contents {
                 let excerpt = PlaintextPreview.excerpt(of: text, isExpanded: state.isExpanded, bytesLeft: bytesLeft)
-                ScrollView(state.wrapsText ? .vertical : [.vertical, .horizontal]) {
-                    CodeTextView(text: CodeText.plain(excerpt.text + excerpt.notice), wraps: state.wrapsText)
-                        .frame(minHeight: 100, alignment: .topLeading)
-                        // `.codeView`: padding 8, margin 8 8 0.
-                        .padding(8)
-                        .padding([.top, .horizontal], 8)
-                        .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { height in
-                            // And the edge along the top, which the stroke draws inside.
-                            contentHeight = height + 1
-                        }
+                // **A scroller only where there is something to scroll.**
+                // Folded, Discord's box is `overflow: hidden` — a clip — and a
+                // scroll view there took the wheel from the transcript for as
+                // long as the pointer was over the card, scrolling nothing.
+                if contentHeight > Self.expandedMaxHeight + 1 || (state.isExpanded && !state.wrapsText && !state.showsMarkdown) {
+                    ScrollView(state.wrapsText || state.showsMarkdown ? .vertical : [.vertical, .horizontal]) {
+                        textContent(state, excerpt: excerpt)
+                    }
+                    .scrollBounceBehavior(.basedOnSize)
+                } else {
+                    textContent(state, excerpt: excerpt)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                        .clipped()
                 }
-                // A file that fits does not hold the transcript's scroll.
-                .scrollBounceBehavior(.basedOnSize)
             } else {
                 ProgressView()
                     .controlSize(.small)
@@ -91,15 +95,49 @@ struct PlaintextPreviewCard: View {
         .frame(height: height)
     }
 
+    /// The text: the document rendered, or the code highlighted — measured,
+    /// for the card's height.
+    private func textContent(_ state: PlaintextPreviewState, excerpt: PlaintextPreview.Excerpt) -> some View {
+        Group {
+            if state.showsMarkdown {
+                // Discord's `eh`: the lines rendered, the notice trimmed and
+                // under them.
+                RenderedMarkdown(
+                    text: excerpt.text,
+                    notice: excerpt.notice.trimmingCharacters(in: .whitespacesAndNewlines)
+                )
+            } else {
+                // The notice is set as code too, as Discord's `ef` is handed
+                // the excerpt and its notice as one text.
+                HighlightedCode(text: excerpt.text + excerpt.notice, language: state.language) { code in
+                    CodeTextView(text: code, wraps: state.wrapsText)
+                }
+                .frame(minHeight: 100, alignment: .topLeading)
+                // `.codeView`: padding 8, margin 8 8 0.
+                .padding(8)
+                .padding([.top, .horizontal], 8)
+            }
+        }
+        .fixedSize(horizontal: !state.wrapsText && !state.showsMarkdown, vertical: true)
+        .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { height in
+            // And the edge along the top, which the stroke draws inside.
+            contentHeight = height + 1
+        }
+    }
+
     // MARK: Footer
 
     /// Expand or Collapse, the name and size, then — after a gap of at least
-    /// 16 — View whole file and ⋯, as Discord's footer orders them.
+    /// 16 — Change language, View whole file and ⋯, as Discord's footer orders
+    /// them (`languageIcon`, then 16 to each of the other two).
     private func footer(_ state: PlaintextPreviewState) -> some View {
         HStack(spacing: 0) {
             toggle(state)
             PlaintextFileName(key: key)
             Spacer(minLength: 16)
+            CodeLanguageButton(language: state.language) { language in
+                model.updatePlaintextPreview(key) { $0.language = language }
+            }
             if case .loaded = state.contents {
                 Button { showsWholeFile = true } label: {
                     Image(systemName: "arrow.up.left.and.arrow.down.right")
@@ -107,11 +145,20 @@ struct PlaintextPreviewCard: View {
                 .buttonStyle(.borderless)
                 .help("View whole file")
                 .accessibilityLabel(Text("View whole file"))
+                .padding(.leading, 16)
             }
-            PlaintextMoreMenu(key: key, wrapsText: Binding(
-                get: { state.wrapsText },
-                set: { wraps in model.updatePlaintextPreview(key) { $0.wrapsText = wraps } }
-            ))
+            PlaintextMoreMenu(
+                key: key,
+                language: state.language,
+                wrapsText: Binding(
+                    get: { state.wrapsText },
+                    set: { wraps in model.updatePlaintextPreview(key) { $0.wrapsText = wraps } }
+                ),
+                rendersMarkdown: Binding(
+                    get: { state.rendersMarkdown },
+                    set: { renders in model.updatePlaintextPreview(key) { $0.rendersMarkdown = renders } }
+                )
+            )
             .padding(.leading, 16)
             .padding(.trailing, 4)
         }
@@ -168,10 +215,13 @@ private struct PlaintextFileName: View {
     }
 }
 
-/// Discord's ⋯ (`em`): Download, and Wrap Text.
+/// Discord's ⋯ (`em`): Download, Wrap Text, and — for a markdown file only —
+/// Render Markdown.
 private struct PlaintextMoreMenu: View {
     var key: PlaintextCardKey
+    var language: String
     @Binding var wrapsText: Bool
+    @Binding var rendersMarkdown: Bool
 
     @Environment(AppModel.self) private var model
 
@@ -181,6 +231,9 @@ private struct PlaintextMoreMenu: View {
                 AttachmentDownloads.download(from: key.url, named: key.filename, model: model)
             }
             Toggle("Wrap Text", isOn: $wrapsText)
+            if PlaintextPreview.markdownLanguages.contains(language) {
+                Toggle("Render Markdown", isOn: $rendersMarkdown)
+            }
         } label: {
             Image(systemName: "ellipsis")
         }
@@ -202,27 +255,49 @@ struct PlaintextFileSheet: View {
     @Environment(AppModel.self) private var model
     @Environment(\.dismiss) private var dismiss
     @State private var wrapsText: Bool
+    @State private var language: String
+    @State private var rendersMarkdown: Bool
 
-    init(key: PlaintextCardKey, wrapsText: Bool) {
+    init(key: PlaintextCardKey, state: PlaintextPreviewState) {
         self.key = key
-        _wrapsText = State(initialValue: wrapsText)
+        _wrapsText = State(initialValue: state.wrapsText)
+        _language = State(initialValue: state.language)
+        _rendersMarkdown = State(initialValue: state.rendersMarkdown)
     }
 
     var body: some View {
         VStack(spacing: 0) {
             if case .loaded(let text, let bytesLeft) = model.plaintextPreview(key).contents {
-                CodeDocumentView(
-                    text: CodeText.plain(text + PlaintextPreview.wholeFileNotice(bytesLeft: bytesLeft)),
-                    wraps: wrapsText,
-                    inset: 16
-                )
+                let notice = PlaintextPreview.wholeFileNotice(bytesLeft: bytesLeft)
+                Group {
+                    if rendersMarkdown, PlaintextPreview.markdownLanguages.contains(language) {
+                        ScrollView {
+                            RenderedMarkdown(
+                                text: text,
+                                notice: notice.trimmingCharacters(in: .whitespacesAndNewlines)
+                            )
+                            .frame(maxWidth: .infinity, alignment: .topLeading)
+                        }
+                    } else {
+                        HighlightedCode(text: text + notice, language: language) { code in
+                            CodeDocumentView(text: code, wraps: wrapsText, inset: 16)
+                        }
+                    }
+                }
                 .background(Color(cgColor: ThemeInk.current.plates.codeFill))
             }
             Divider()
             HStack(spacing: 0) {
                 PlaintextFileName(key: key)
                 Spacer(minLength: 16)
-                PlaintextMoreMenu(key: key, wrapsText: $wrapsText)
+                CodeLanguageButton(language: language) { language = $0 }
+                PlaintextMoreMenu(
+                    key: key,
+                    language: language,
+                    wrapsText: $wrapsText,
+                    rendersMarkdown: $rendersMarkdown
+                )
+                    .padding(.leading, 16)
                     .padding(.trailing, 16)
                 Button("Close") { dismiss() }
                     .keyboardShortcut(.cancelAction)

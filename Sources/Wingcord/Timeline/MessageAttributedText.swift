@@ -51,6 +51,13 @@ nonisolated struct MessageText: @unchecked Sendable {
     let codeBlocks: [NSRange]
     /// The folded plain text, for one accessibility node.
     let plainLabel: String
+    /// Runs an `ansi` block draws a line over (`53`). CoreText has no
+    /// overline, so the painter rules them from the measured lines.
+    var overlines: [NSRange] = []
+    /// Whether a fenced block in it was drawn plain while highlight.js is
+    /// still answering — a row the transcript lays out again when it has
+    /// (`CodeHighlighter.didLand`).
+    var awaitsHighlighting = false
 
     struct LinkRun: Sendable {
         var range: NSRange
@@ -158,6 +165,8 @@ nonisolated extension MessageText {
         var plates: [Plate] = []
         var quotes: [NSRange] = []
         var codeBlocks: [NSRange] = []
+        var overlines: [NSRange] = []
+        var awaits = false
         var label = ""
         for piece in pieces {
             let offset = attributed.length
@@ -170,6 +179,8 @@ nonisolated extension MessageText {
             plates += piece.plates.map { Plate(range: moved($0.range), kind: $0.kind, padding: $0.padding) }
             quotes += piece.quotes.map(moved)
             codeBlocks += piece.codeBlocks.map(moved)
+            overlines += piece.overlines.map(moved)
+            awaits = awaits || piece.awaitsHighlighting
             label += piece.plainLabel
         }
         return MessageText(
@@ -181,7 +192,9 @@ nonisolated extension MessageText {
             plates: plates,
             quotes: quotes,
             codeBlocks: codeBlocks,
-            plainLabel: label
+            plainLabel: label,
+            overlines: overlines,
+            awaitsHighlighting: awaits
         )
     }
 
@@ -200,7 +213,9 @@ nonisolated extension MessageText {
             plates: (plates + added).sorted { $0.range.location < $1.range.location },
             quotes: quotes,
             codeBlocks: codeBlocks,
-            plainLabel: plainLabel
+            plainLabel: plainLabel,
+            overlines: overlines,
+            awaitsHighlighting: awaitsHighlighting
         )
     }
 }
@@ -297,6 +312,8 @@ nonisolated enum MessageTextBuilder {
         var plates: [MessageText.Plate] = []
         var quotes: [NSRange] = []
         var codeBlocks: [NSRange] = []
+        var overlines: [NSRange] = []
+        var awaitsHighlighting = false
         /// Whether the blocks being appended are inside a quote, whose own text
         /// is drawn in the subtle ink.
         var inQuote = false
@@ -316,9 +333,15 @@ nonisolated enum MessageTextBuilder {
                 append(nodes, attributes: style.heading(level: level))
             case .subtext(let nodes):
                 append(nodes, attributes: style.subtext)
-            case .codeBlock(_, let code):
+            case .codeBlock(let language, let code):
                 let start = output.length
-                appendRaw(code, attributes: style.codeBlock)
+                if language?.lowercased() == "ansi" {
+                    appendANSI(code)
+                } else if let language, !language.isEmpty {
+                    appendHighlighted(code, language: language)
+                } else {
+                    appendRaw(code, attributes: style.codeBlock)
+                }
                 let range = NSRange(location: start, length: output.length - start)
                 guard range.length > 0 else { return }
                 codeBlocks.append(range)
@@ -515,6 +538,76 @@ nonisolated enum MessageTextBuilder {
         mutating func appendRaw(_ value: String, attributes: [NSAttributedString.Key: Any]) {
             guard !value.isEmpty else { return }
             output.append(NSAttributedString(string: value, attributes: attributes))
+        }
+
+        /// An `ansi` block, as Discord draws one (`768947`'s `OT` over the
+        /// spans of `626551` — see `ANSIEscapes`): each run in its colour, on
+        /// its background, bold, italic, underlined, struck or overlined; dim,
+        /// reverse and hidden read and not drawn. The escapes themselves are
+        /// gone from the text.
+        mutating func appendANSI(_ code: String) {
+            let base = style.codeBlock
+            let palette = style.codePalette
+            let font = style.codeBlockFont
+            for span in ANSIEscapes.spans(in: code) {
+                var attributes = base
+                if let color = span.foreground.flatMap(palette.color(for:)) {
+                    attributes[.foregroundColor] = color
+                }
+                if let color = span.background.flatMap(palette.color(for:)) {
+                    attributes[.backgroundColor] = color
+                }
+                let bold = span.decorations.contains(.bold)
+                let italic = span.decorations.contains(.italic)
+                if bold || italic {
+                    attributes[.font] = Self.codeFace(font, bold: bold, italic: italic)
+                }
+                if span.decorations.contains(.underline) {
+                    attributes[.underlineStyle] = NSUnderlineStyle.single.rawValue
+                }
+                if span.decorations.contains(.strikethrough) {
+                    attributes[.strikethroughStyle] = NSUnderlineStyle.single.rawValue
+                }
+                let start = output.length
+                appendRaw(span.text, attributes: attributes)
+                if span.decorations.contains(.overline), output.length > start {
+                    overlines.append(NSRange(location: start, length: output.length - start))
+                }
+            }
+        }
+
+        /// A fenced block in a language, highlighted as Discord highlights it
+        /// (REDESIGN.md D2) — when highlight.js has answered. **A layout cannot
+        /// wait**, so a block it has not answered for is drawn plain, asked
+        /// about, and marked: the row is laid again when the answer lands, at
+        /// the same height, because the faces are monospaced at one width.
+        mutating func appendHighlighted(_ code: String, language: String) {
+            let start = output.length
+            appendRaw(code, attributes: style.codeBlock)
+            guard !code.isEmpty else { return }
+            switch CodeHighlighter.shared.cachedTokens(for: code, language: language) {
+            case .some(.some(let tokens)):
+                let block = NSMutableAttributedString(attributedString: output.attributedSubstring(
+                    from: NSRange(location: start, length: output.length - start)
+                ))
+                block.applyHighlighting(tokens, palette: style.codePalette, font: style.codeBlockFont)
+                output.replaceCharacters(in: NSRange(location: start, length: output.length - start), with: block)
+            case .some(.none):
+                break
+            case .none:
+                CodeHighlighter.shared.prefetch(code, language: language)
+                awaitsHighlighting = true
+            }
+        }
+
+        /// The block's monospaced face, bolder or slanted.
+        private static func codeFace(_ font: NSFont, bold: Bool, italic: Bool) -> NSFont {
+            var face = bold ? NSFont.monospacedSystemFont(ofSize: font.pointSize, weight: .bold) : font
+            if italic {
+                let traits = face.fontDescriptor.symbolicTraits.union(.italic)
+                face = NSFont(descriptor: face.fontDescriptor.withSymbolicTraits(traits), size: face.pointSize) ?? face
+            }
+            return face
         }
 
         /// A role's plate: its colour, or its gradient, or the plain mention
@@ -839,7 +932,9 @@ nonisolated enum MessageTextBuilder {
                 plates: plates,
                 quotes: quotes,
                 codeBlocks: codeBlocks,
-                plainLabel: plainLabel
+                plainLabel: plainLabel,
+                overlines: overlines,
+                awaitsHighlighting: awaitsHighlighting
             )
         }
     }

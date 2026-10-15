@@ -373,6 +373,14 @@ struct WingcordCommands: Commands {
                 set: { _ in model.toggleShowsCustomPresence() }
             ))
             .disabled(AppSettings.shared.customPresences.isEmpty)
+            // Vencord's `/silenttype`. Wingcord has no built-in commands, so
+            // the plugin's switch lives here, beside its other toolbox item
+            // (decision 19) — dimmed while the plugin is off.
+            Toggle("Enable Silent Typing", isOn: Binding(
+                get: { AppSettings.shared.silentTypingIsOn },
+                set: { AppSettings.shared.silentTypingIsOn = $0 }
+            ))
+            .disabled(!AppSettings.shared.silentTyping)
         }
 
         CommandMenu("Channel") {

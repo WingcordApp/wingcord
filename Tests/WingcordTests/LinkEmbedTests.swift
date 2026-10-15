@@ -58,7 +58,7 @@ struct LinkEmbedTests {
         }
         #expect(file.absoluteString.hasSuffix("overview-640kbps.mp4"))
         // The proxy's still of the file, not the og image.
-        #expect(media.url?.query()?.contains("format=jpg") == true)
+        #expect(media.url?.query()?.contains("format=webp") == true)
         #expect(abs(media.rect.width / media.rect.height - 16.0 / 9.0) < 0.02)
         #expect(media.rect.width <= 400)
         // No corner thumbnail beside the media.

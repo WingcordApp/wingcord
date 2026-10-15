@@ -251,24 +251,20 @@ struct MessageCard: Identifiable, Sendable {
 /// every other optional fetch, over the one request builder the transcript
 /// uses.
 enum MessageCardArtwork {
-    /// - Returns: whether anything was fetched, so the caller repaints once for
-    ///   the batch rather than once per picture.
-    static func prefetch(_ cards: [MessageCard]) async -> Bool {
+    /// - Parameter landed: runs as pictures land — coalesced, so the caller
+    ///   repaints once per burst rather than once per picture, and never only
+    ///   once the slowest has arrived (`ImageBatch`).
+    static func prefetch(_ cards: [MessageCard], landed: @escaping @MainActor @Sendable () -> Void) async {
         let requests = TimelineImageRequests.requests(
             for: cards.flatMap(\.messageRows),
             scale: 2,
             loadsArtwork: AppSettings.shared.loadsImagesAutomatically,
             playsAnimatedEmoji: AnimationClock.playsAnimatedEmoji
         )
-        guard !requests.isEmpty else { return false }
+        guard !requests.isEmpty else { return }
         await ScrollWorkGate.waitUntilInactive()
-        guard !Task.isCancelled else { return false }
-        await withTaskGroup(of: Void.self) { group in
-            for request in requests {
-                group.addTask { _ = await request.load() }
-            }
-        }
-        return !Task.isCancelled
+        guard !Task.isCancelled else { return }
+        await ImageBatch.load(requests) { _ in landed() }
     }
 }
 

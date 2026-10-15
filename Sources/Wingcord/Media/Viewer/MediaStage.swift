@@ -22,28 +22,25 @@ final class MediaStageController {
     /// A multiple of the fit scale: 1 shows the whole picture.
     private(set) var zoomScale: CGFloat = 1
     private(set) var maximumZoom: CGFloat = 3
-    /// Whether this kind of media zooms at all. Video does not — see
-    /// `MediaCanvasView.Fill`.
+    /// Whether this kind of media zooms at all. Video does not.
     private(set) var isZoomable = false
 
-    /// Frames in the loaded filmstrip, or zero when the media does not move.
-    ///
-    /// **The honest answer to "is this a GIF".** A `.gif` that turns out to hold
-    /// one frame is a still, and its controls should not appear; the decode is
-    /// the only thing that knows.
+    /// Frames in the loaded filmstrip, or zero when the media does not move —
+    /// the honest answer to "is this a GIF", which only the decode knows.
     private(set) var frameCount = 0
     private(set) var frameIndex = 0
 
     private(set) var isLoading = true
     private(set) var failure: String?
 
-    /// How far a dismiss gesture has travelled: 0 at rest, 1 at the point of no
-    /// return.
-    ///
-    /// **Read by the scrim and the two bars and by nothing else.** Observation
-    /// tracks per property, so a gesture in flight invalidates a fade and not
-    /// the stage, the controls' contents or the info the bars are built from.
+    /// How far a throw or a squeeze has gone: 0 at rest, 1 at the point of no
+    /// return. Read by the scrim and the bars and nothing else, so a gesture in
+    /// flight invalidates a fade and not the stage.
     private(set) var dismissProgress: Double = 0
+
+    /// How far the stage is in: 0 at the thumbnail, 1 open. The scrim and the
+    /// chrome follow the picture's flights through it.
+    private(set) var presence: Double = 0
 
     /// Playback, written by the chrome and forwarded to the canvas.
     var isFilmPlaying = true {
@@ -67,11 +64,34 @@ final class MediaStageController {
     /// The frame on screen, for the pasteboard.
     func currentImage() -> CGImage? { canvas?.currentImage() }
 
+    /// Slides to the picture `direction` away — see `MediaCanvasView.page`.
+    func page(by direction: Int) { canvas?.page(by: direction) }
+
+    /// Slides straight to `item`, from the side it is on — the gallery
+    /// strip's pick of a picture that is not beside this one.
+    func jump(to item: MediaItem, direction: Int) { jumpHandler?(item, direction) }
+    @ObservationIgnored fileprivate var jumpHandler: ((MediaItem, Int) -> Void)?
+
+    /// Flies the picture home, into `home` where it is on screen, and calls
+    /// `onClosed` when it has landed. A second call while it flies is ignored.
+    func close(home: MediaSources.Thumbnail?, velocity: CGPoint = .zero) {
+        guard let canvas else {
+            onClosed?()
+            return
+        }
+        canvas.close(home: home, velocity: velocity)
+    }
+
+    var isClosing: Bool { canvas?.isClosing ?? false }
+
+    /// What landing home means to the viewer: the stage going.
+    @ObservationIgnored var onClosed: (() -> Void)?
+
     // MARK: Written by the stage
 
     fileprivate func report(zoom: CGFloat, maximum: CGFloat, zoomable: Bool) {
-        // A `@State`-shaped write of an equal value still invalidates every
-        // reader, and the settle reports one of these per frame.
+        // An equal write still invalidates every reader, and a settle reports
+        // one of these per frame.
         if abs(zoomScale - zoom) > 0.0005 { zoomScale = zoom }
         if abs(maximumZoom - maximum) > 0.0005 { maximumZoom = maximum }
         if isZoomable != zoomable { isZoomable = zoomable }
@@ -96,27 +116,35 @@ final class MediaStageController {
         guard dismissProgress != progress else { return }
         dismissProgress = progress
     }
+
+    fileprivate func report(presence value: Double) {
+        guard presence != value else { return }
+        presence = value
+    }
 }
 
-/// The SwiftUI face of `MediaCanvasView`: it owns the fetch and the decode, and
-/// hands the view something to composite.
+/// The SwiftUI face of `MediaCanvasView`: it owns the fetches and the decode,
+/// lays the neighbours beside the stage, and hands the view things to show.
 ///
 /// **Two decode ceilings, and the second is only ever paid by somebody who
-/// zoomed.** A photograph from a phone is four thousand pixels wide and decodes
-/// to forty-four megabytes at full size, which is more than the whole attachment
-/// cache is allowed to hold — so the picture opens at a 2048-pixel rendition,
-/// which is sharp at fit and sharp to roughly 200% on any display this runs on.
-/// Past that the reader has asked to look closely, and the original is fetched
-/// once. Nobody who simply opened a picture pays for either.
+/// zoomed.** A phone photograph is four thousand pixels wide and forty-four
+/// megabytes decoded — more than the whole attachment cache — so it opens at a
+/// 2048-pixel rendition, sharp at fit and to about 200%. Past that the reader
+/// has asked to look closely, and the original is fetched once.
 struct MediaStage: NSViewRepresentable {
     var item: MediaItem
+    /// The pictures either side, for paging. Nil where there are none.
+    var previous: MediaItem?
+    var next: MediaItem?
     var controller: MediaStageController
     /// The player, for video. Nil for everything else.
     var player: AVPlayer?
-    /// A pinch, a throw or a click beside the media. Held by the coordinator and
-    /// refreshed on every update, so the viewer's close action can never go
-    /// stale behind it.
-    var onDismiss: () -> Void
+    /// Where the picture's thumbnail is, for the opening flight.
+    var home: () -> MediaSources.Thumbnail?
+    /// A throw, a squeeze or a click beside the media asking to close.
+    var onRequestClose: (CGPoint) -> Void
+    /// A page turned under the fingers or the arrows.
+    var onPage: (Int) -> Void
     /// A click on the video itself.
     var onContentClick: () -> Void
 
@@ -127,19 +155,11 @@ struct MediaStage: NSViewRepresentable {
     /// Zoom past this and the close-up is worth its bytes.
     static let closeUpThreshold: CGFloat = 1.9
 
-    /// A filmstrip's ceiling, in decoded bytes.
-    ///
-    /// **A byte budget is a frame count in disguise and belongs to the caller** —
-    /// `INVARIANTS.md` §2. A GIF drawn at a lightbox's size is a hundred times
-    /// the pixels of one drawn beside a name, so the decoration's 6 MB default
-    /// would buy three frames of it. Thirty-two megabytes at the ceiling below is
-    /// around forty frames of a typical 600-pixel reaction GIF, which is the
-    /// whole loop.
+    /// A filmstrip's ceiling, in decoded bytes — a frame count in disguise
+    /// (`INVARIANTS.md` §2): about forty frames of a 600-pixel reaction GIF.
     static let filmByteBudget = 32 * 1024 * 1024
-    /// And its pixel ceiling, which is what keeps the budget buying frames
-    /// rather than resolution nobody asked for. A GIF authored at 480 pixels
-    /// gains nothing from a larger box; ImageIO does not upscale, so a small
-    /// asset costs its own size and no more.
+    /// And its pixel ceiling, which keeps the budget buying frames rather than
+    /// resolution nobody asked for.
     static let filmPixels = 1280
 
     @Environment(\.motion) private var motion
@@ -154,9 +174,12 @@ struct MediaStage: NSViewRepresentable {
 
     func updateNSView(_ view: MediaCanvasView, context: Context) {
         view.reducesMotion = motion.reduceMotion
-        context.coordinator.onDismiss = onDismiss
-        context.coordinator.onContentClick = onContentClick
-        context.coordinator.configure(item: item, player: player)
+        let coordinator = context.coordinator
+        coordinator.onRequestClose = onRequestClose
+        coordinator.onPage = onPage
+        coordinator.onContentClick = onContentClick
+        coordinator.configure(item: item, player: player, home: home)
+        coordinator.lay(previous: previous, next: next)
     }
 
     static func dismantleNSView(_ view: MediaCanvasView, coordinator: Coordinator) {
@@ -166,18 +189,21 @@ struct MediaStage: NSViewRepresentable {
     @MainActor
     final class Coordinator {
         private let controller: MediaStageController
-        var onDismiss: () -> Void = {}
+        var onRequestClose: (CGPoint) -> Void = { _ in }
+        var onPage: (Int) -> Void = { _ in }
         var onContentClick: () -> Void = {}
         private weak var view: MediaCanvasView?
         private var itemID: AttachmentID?
         private var loadedPixels = 0
         private var loadTask: Task<Void, Never>?
+        private var neighborTask: Task<Void, Never>?
+        private var neighborIDs: (AttachmentID?, AttachmentID?) = (nil, nil)
         private var isTornDown = false
-        /// Whether anything is on screen. A failure over a picture the reader can
-        /// already see is a message contradicted by the thing behind it.
+        private var hasOpened = false
+        /// Whether anything is on screen. A failure over a picture the reader
+        /// can already see is a message contradicted by the thing behind it.
         private var hasVisibleContent = false
-        /// The item currently installed, kept so an escalation has something to
-        /// re-request without the chrome handing it back down.
+        /// The item currently installed, so an escalation can re-request it.
         private var pendingItem: MediaItem?
 
         init(controller: MediaStageController) {
@@ -191,59 +217,110 @@ struct MediaStage: NSViewRepresentable {
             view.filmRate = controller.filmRate
             view.onZoomChange = { [weak self] scale in
                 guard let self, let view = self.view else { return }
-                self.controller.report(
-                    zoom: scale,
-                    maximum: view.maximumZoom,
-                    zoomable: view.isTransformable
-                )
+                self.controller.report(zoom: scale, maximum: view.maximumZoom, zoomable: view.isTransformable)
                 self.escalateIfNeeded(scale)
             }
-            view.onFrameChange = { [weak self] index in
-                self?.controller.report(frame: index)
-            }
-            view.onDismissProgress = { [weak self] progress in
-                self?.controller.report(dismissProgress: progress)
-            }
-            view.onDismiss = { [weak self] in
-                self?.onDismiss()
-            }
-            view.onBackgroundClick = { [weak self] in
-                self?.onDismiss()
-            }
-            view.onContentClick = { [weak self] in
-                self?.onContentClick()
-            }
+            view.onFrameChange = { [weak self] index in self?.controller.report(frame: index) }
+            view.onDismissProgress = { [weak self] progress in self?.controller.report(dismissProgress: progress) }
+            view.onPresence = { [weak self] presence in self?.controller.report(presence: presence) }
+            view.onRequestClose = { [weak self] velocity in self?.onRequestClose(velocity) }
+            view.onBackgroundClick = { [weak self] in self?.onRequestClose(.zero) }
+            view.onContentClick = { [weak self] in self?.onContentClick() }
+            view.onClosed = { [weak self] in self?.controller.onClosed?() }
+            view.onPage = { [weak self] direction in self?.onPage(direction) }
+            controller.jumpHandler = { [weak self] item, direction in self?.jump(to: item, direction: direction) }
         }
 
-        func configure(item: MediaItem, player: AVPlayer?) {
-            guard !isTornDown, itemID != item.id else { return }
+        /// Lays `item` on the side it is coming from and turns the page to it.
+        private func jump(to item: MediaItem, direction: Int) {
+            guard let view, direction != 0 else { return }
+            let incoming = neighbor(item)
+            view.setNeighbors(
+                previous: direction < 0 ? incoming : neighbor(neighborItems.previous),
+                next: direction > 0 ? incoming : neighbor(neighborItems.next)
+            )
+            // The pair the canvas holds is no longer the one `lay` set.
+            neighborIDs = (nil, nil)
+            view.page(by: direction)
+        }
+
+        func configure(item: MediaItem, player: AVPlayer?, home: @escaping () -> MediaSources.Thumbnail?) {
+            guard !isTornDown, itemID != item.id, let view else { return }
             itemID = item.id
             loadTask?.cancel()
             loadTask = nil
             loadedPixels = 0
-            hasVisibleContent = false
-
-            guard let view else { return }
+            pendingItem = item
             controller.report(frameCount: 0)
             controller.report(frame: 0)
 
-            guard item.kind != .video else {
-                view.setPlayer(player)
+            // **A page has already put this item's picture on stage** — the
+            // neighbour's, which may be sharper than the poster. Kept, and
+            // only the sharper renditions are asked for.
+            let isOnStage = view.contentIdentity == AnyHashable(item.id)
+            hasVisibleContent = isOnStage
+
+            if item.kind == .video {
+                view.setPlayer(player, videoSize: Self.pixelSize(of: nil, fallback: item))
+                if !isOnStage { view.showPoster(posterImage(for: item), identity: item.id) }
                 controller.report(zoom: 1, maximum: 1, zoomable: false)
                 controller.report(loading: false, failure: nil)
-                return
+            } else {
+                view.setPlayer(nil)
+                if !isOnStage {
+                    // **The picture the transcript already decoded, on this
+                    // frame.** Without it the lightbox opens onto a grey
+                    // rectangle for as long as a full-size fetch takes.
+                    let poster = posterImage(for: item)
+                    view.setStill(poster, pixelSize: Self.pixelSize(of: poster, fallback: item), identity: item.id)
+                    hasVisibleContent = poster != nil
+                }
+                controller.report(loading: !hasVisibleContent, failure: nil)
+                load(item, pixels: MediaStage.openingPixels)
             }
-            view.setPlayer(nil)
 
-            // **The picture the transcript already decoded, drawn on this
-            // frame.** Without it the lightbox opens onto a grey rectangle for
-            // as long as a full-size fetch takes, which on a picture the reader
-            // is looking at *right now* reads as the viewer having failed.
+            if !hasOpened {
+                hasOpened = true
+                view.prepareOpen(home: home)
+            }
+        }
+
+        /// Lays the pictures either side of the stage: what is in memory now,
+        /// and a sharper copy of each as it arrives — Discord preloads them as
+        /// well (`947056`'s `R`), so a page lands on a picture already sharp.
+        func lay(previous: MediaItem?, next: MediaItem?) {
+            guard let view else { return }
+            view.canPage = previous != nil || next != nil
+            neighborItems = (previous, next)
+            guard neighborIDs != (previous?.id, next?.id) else { return }
+            neighborIDs = (previous?.id, next?.id)
+            view.setNeighbors(previous: neighbor(previous), next: neighbor(next))
+            neighborTask?.cancel()
+            let pictures = [previous, next].compactMap { $0 }.filter { $0.kind == .image }
+            guard !pictures.isEmpty else { return }
+            neighborTask = Task { [weak self] in
+                for item in pictures {
+                    let url = item.renditionURL(forPixelWidth: MediaStage.openingPixels)
+                    let key = ImageStore.Key(url: url, maximumPixelSize: MediaStage.openingPixels)
+                    guard let image = await ImageStore.shared.image(for: key, bucket: .stage),
+                          !Task.isCancelled, let self, !self.isTornDown
+                    else { continue }
+                    self.view?.updateNeighbor(item.id, image: image)
+                }
+            }
+        }
+
+        private var neighborItems: (previous: MediaItem?, next: MediaItem?) = (nil, nil)
+
+        private func neighbor(_ item: MediaItem?) -> MediaCanvasView.Neighbor? {
+            guard let item else { return nil }
             let poster = posterImage(for: item)
-            view.setStill(poster, pixelSize: pixelSize(of: poster, fallback: item))
-            hasVisibleContent = poster != nil
-            controller.report(loading: poster == nil, failure: nil)
-            load(item, pixels: MediaStage.openingPixels)
+            return MediaCanvasView.Neighbor(
+                identity: item.id,
+                image: poster,
+                pixelSize: Self.pixelSize(of: poster, fallback: item),
+                isVideo: item.isVideo
+            )
         }
 
         /// A closer look, once, when the reader has actually asked for one.
@@ -258,14 +335,11 @@ struct MediaStage: NSViewRepresentable {
         }
 
         private func load(_ item: MediaItem, pixels: Int) {
-            pendingItem = item
             loadTask?.cancel()
             loadTask = Task { [weak self] in
                 guard let self else { return }
                 let outcome = await Self.fetch(item, pixels: pixels)
-                guard !Task.isCancelled, !self.isTornDown,
-                      self.itemID == item.id, let view = self.view
-                else { return }
+                guard !Task.isCancelled, !self.isTornDown, self.itemID == item.id, let view = self.view else { return }
                 switch outcome {
                 case .film(let film):
                     self.loadedPixels = pixels
@@ -275,24 +349,22 @@ struct MediaStage: NSViewRepresentable {
                     self.controller.report(loading: false, failure: nil)
                 case .still(let image):
                     self.loadedPixels = pixels
+                    if self.hasVisibleContent {
+                        // The same picture, sharper: the reader's zoom stays.
+                        view.sharpen(image)
+                    } else {
+                        view.setStill(image, pixelSize: CGSize(width: image.width, height: image.height), identity: item.id)
+                    }
                     self.hasVisibleContent = true
-                    view.setStill(
-                        image,
-                        pixelSize: CGSize(width: image.width, height: image.height)
-                    )
                     self.controller.report(loading: false, failure: nil)
                 case .failed:
-                    // A poster already on screen is a better answer than an
-                    // error drawn over the top of it — the reader can see the
-                    // picture, and being told it failed to load is nonsense.
+                    // A poster on screen is a better answer than an error over
+                    // it — the reader can see the picture.
                     guard !self.hasVisibleContent else {
                         self.controller.report(loading: false, failure: nil)
                         return
                     }
-                    self.controller.report(
-                        loading: false,
-                        failure: "Couldn’t load \(item.filename)"
-                    )
+                    self.controller.report(loading: false, failure: "Couldn’t load \(item.filename)")
                 }
             }
         }
@@ -303,8 +375,7 @@ struct MediaStage: NSViewRepresentable {
             case failed
         }
 
-        /// Off the main actor by construction: both stores are `nonisolated`, so
-        /// the decode of a megapixel picture never lands in a display pass.
+        /// Off the main actor by construction: both stores are `nonisolated`.
         private static func fetch(_ item: MediaItem, pixels: Int) async -> Outcome {
             if item.kind == .animated {
                 let key = AnimatedImageStore.Key(
@@ -315,40 +386,34 @@ struct MediaStage: NSViewRepresentable {
                 if let film = await AnimatedImageStore.shared.image(for: key) {
                     return .film(film)
                 }
-                // A single-frame GIF is a still, and every renderer has to cope
-                // with one. Falling through is what makes that free.
+                // A single-frame GIF is a still; falling through makes that free.
             }
             let url = item.renditionURL(forPixelWidth: pixels)
             let key = ImageStore.Key(url: url, maximumPixelSize: pixels)
-            if let image = await ImageStore.shared.image(for: key, bucket: .attachment) {
+            // The viewer's own bucket — the transcript's cannot be evicted by
+            // a close-up (`ImageStore.Bucket`).
+            if let image = await ImageStore.shared.image(for: key, bucket: .stage) {
                 return .still(image)
             }
             return .failed
         }
 
-        /// The transcript's own rendition, peeked synchronously.
-        ///
-        /// **The key has to equal the one the transcript's prefetch built**, or
-        /// this looks in a slot nothing was ever put in — the same trap
-        /// `INVARIANTS.md` §2 records for the painter.
+        /// The transcript's own rendition, peeked synchronously. **The key has
+        /// to equal the one the transcript's prefetch built**, or this looks in a
+        /// slot nothing was ever put in (`INVARIANTS.md` §2).
         private func posterImage(for item: MediaItem) -> CGImage? {
-            guard let url = item.posterURL, let view else { return nil }
-            let scale = view.window?.backingScaleFactor ?? 2
-            let key = ImageStore.Key(
-                url: url,
-                maximumPixelSize: Int((item.posterWidth * scale).rounded(.up))
-            )
+            guard let url = item.posterURL else { return nil }
+            let scale = view?.window?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? 2
+            let key = ImageStore.Key(url: url, maximumPixelSize: Int((item.posterWidth * scale).rounded(.up)))
             return ImageStore.shared.cached(key, bucket: .attachment)
         }
 
-        /// The aspect to lay the poster out at: the decoded picture's, or the
-        /// dimensions Discord sent, or nothing — and nothing is a real answer
-        /// that letterboxes rather than guessing a square.
-        private func pixelSize(of image: CGImage?, fallback item: MediaItem) -> CGSize {
+        /// The aspect to lay a picture out at: the decoded picture's, or the
+        /// dimensions Discord sent, or nothing — and nothing letterboxes rather
+        /// than guessing a square.
+        private static func pixelSize(of image: CGImage?, fallback item: MediaItem) -> CGSize {
             if let image { return CGSize(width: image.width, height: image.height) }
-            guard let width = item.pixelWidth, let height = item.pixelHeight,
-                  width > 0, height > 0
-            else { return .zero }
+            guard let width = item.pixelWidth, let height = item.pixelHeight, width > 0, height > 0 else { return .zero }
             return CGSize(width: width, height: height)
         }
 
@@ -357,8 +422,14 @@ struct MediaStage: NSViewRepresentable {
             isTornDown = true
             loadTask?.cancel()
             loadTask = nil
+            neighborTask?.cancel()
+            neighborTask = nil
+            // The renditions go with the viewer; the transcript's thumbnails,
+            // in their own bucket, stay.
+            ImageStore.shared.emptyStage()
             controller.canvas = nil
-            onDismiss = {}
+            onRequestClose = { _ in }
+            onPage = { _ in }
             onContentClick = {}
             view?.tearDown()
             view = nil

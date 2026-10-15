@@ -35,7 +35,9 @@ extension AppModel {
         messageID: MessageID,
         in channelID: ChannelID,
         attachmentIndex: Int,
-        posterWidths: [CGFloat]
+        posterWidths: [CGFloat],
+        posterURLs: [URL?] = [],
+        origin: MediaViewerRequest.Origin = .transcript
     ) {
         // The transcript's copy, or the inspector's — see `knownMessage`.
         guard let message = knownMessage(messageID, in: channelID) else { return }
@@ -59,7 +61,9 @@ extension AppModel {
             let width = posterWidths.indices.contains(position)
                 ? posterWidths[position]
                 : Metrics.attachmentThumbnail
-            guard let item = MediaItem(attachment, posterWidth: width) else { continue }
+            let poster = posterURLs.indices.contains(position) ? posterURLs[position] : nil
+            guard let item = MediaItem(attachment, posterWidth: width, posterURL: poster, attachmentIndex: position)
+            else { continue }
             if position == attachmentIndex { index = items.count }
             items.append(item)
         }
@@ -67,6 +71,8 @@ extension AppModel {
         mediaViewer = MediaViewerRequest(
             items: items,
             index: index,
+            messageID: messageID,
+            origin: origin,
             authorName: authorName(of: message, in: channelID),
             sentAt: message.sentAt
         )
@@ -75,6 +81,12 @@ extension AppModel {
     /// Steps to the next or previous piece of media in the same message.
     func stepMedia(by delta: Int) {
         mediaViewer?.step(delta)
+    }
+
+    /// Shows one of the message's pieces of media — the gallery strip's pick.
+    func showMedia(at index: Int) {
+        guard let request = mediaViewer, request.items.indices.contains(index) else { return }
+        mediaViewer?.index = index
     }
 
     private func authorName(of message: Message, in channelID: ChannelID) -> String {

@@ -27,6 +27,7 @@ struct WorkspacePane: View {
     /// the inset describes and reports zero — §2's rule, paid for three times in
     /// this app now.
     @State private var chromeHeight: CGFloat = 0
+    @Environment(\.conversationSlide) private var conversationSlide
 
     var body: some View {
         columns
@@ -62,7 +63,13 @@ struct WorkspacePane: View {
             // Search is the header's own field now (`HeaderSearch`), offered on
             // the same surfaces the toolbar's was.
             PrimaryPane(content: presentation.primary)
+                // Pushed back to where it stood while the sidebar travels,
+                // then carried with the panel (`WindowShell`) — and clipped at
+                // its sides, so a conversation laid out wider than its column
+                // never shows under the roster, which is the same ground.
+                .modifier(ConversationSlide.Offset(slide: conversationSlide))
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .clipShape(SideClip(isClipping: conversationSlide.isMoving))
 
             if let supplementary = presentation.supplementary {
                 HStack(spacing: 0) {
@@ -333,5 +340,17 @@ private struct DiscoveryContainer: View {
                 model.applicationInstallRequest = nil
             }
         }
+    }
+}
+
+/// A clip on the left and right edges only — the conversation's canvases run
+/// to the window's top and bottom under the chrome, and must keep doing so.
+/// Nothing at all at rest, so the shape costs no mask when no slide is running.
+private nonisolated struct SideClip: Shape {
+    var isClipping: Bool
+
+    func path(in rect: CGRect) -> Path {
+        guard isClipping else { return Path(rect.insetBy(dx: -100_000, dy: -100_000)) }
+        return Path(CGRect(x: rect.minX, y: rect.minY - 100_000, width: rect.width, height: rect.height + 200_000))
     }
 }

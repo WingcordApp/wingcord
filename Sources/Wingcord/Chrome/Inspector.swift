@@ -404,7 +404,8 @@ struct ChannelMediaGrid: View {
                                         messageID: item.messageID,
                                         in: channelID,
                                         attachmentIndex: item.attachmentIndex,
-                                        posterWidths: []
+                                        posterWidths: [],
+                                        origin: .inspector
                                     )
                                 }
                             }

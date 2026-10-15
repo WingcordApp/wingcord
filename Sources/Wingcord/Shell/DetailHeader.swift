@@ -24,6 +24,10 @@ struct DetailHeader: View {
         .padding(.leading, layout.detailHeaderLeadingClearance + Spacing.snug)
         .padding(.trailing, Spacing.snug)
         .frame(height: ShellMetrics.headerHeight)
+        // The title glides to its new centre with the panel, on the panel's
+        // spring, while the trailing controls — whose edge does not move —
+        // stay where they are. Keyed as the panel is, never on the width.
+        .animation(motion.reposition, value: ShellMotionKey(layout))
         .dragsWindow()
         .background(alignment: .top) { HeaderShade() }
     }

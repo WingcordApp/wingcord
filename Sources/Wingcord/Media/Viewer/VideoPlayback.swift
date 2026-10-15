@@ -279,6 +279,14 @@ final class VideoPlayback {
         isPlaying = true
     }
 
+    /// Stops the sound as the stage starts home — a clip shrinking into its
+    /// thumbnail must not go on talking from it.
+    func pauseForClose() {
+        guard isPlaying else { return }
+        player.pause()
+        isPlaying = false
+    }
+
     func beginScrub() {
         isScrubbing = true
     }

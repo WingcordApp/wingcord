@@ -23,6 +23,10 @@ nonisolated struct MediaItem: Equatable, Sendable, Identifiable {
 
     var id: AttachmentID
     var kind: Kind
+    /// The attachment's place among its message's `attachments` — what the
+    /// transcript's thumbnail is found by (`MediaSources`). Not the item's
+    /// place in the viewer, which skips what it cannot show.
+    var attachmentIndex: Int = 0
     /// The original upload on `cdn.discordapp.com`, byte for byte what was sent.
     ///
     /// Used directly for video and for anything animated: the media proxy
@@ -97,7 +101,13 @@ nonisolated struct MediaItem: Equatable, Sendable, Identifiable {
     /// in the same box a picture is, and opening a lightbox onto bytes nobody
     /// can render is worse than the click doing nothing — the caller sends
     /// those to the browser instead.
-    init?(_ attachment: Attachment, posterWidth: CGFloat) {
+    /// - Parameter posterURL: the URL the transcript drew this attachment
+    ///   from. **The key has to be the transcript's exactly** — the same
+    ///   `width` *and* `height` the CDN was asked for — or the peek looks in a
+    ///   slot nothing was put in, and the viewer opens on nothing until its own
+    ///   rendition arrives. Rebuilt from the width alone when there is none
+    ///   (the inspector's tiles, which draw their own).
+    init?(_ attachment: Attachment, posterWidth: CGFloat, posterURL: URL? = nil, attachmentIndex: Int = 0) {
         guard let sourceURL = URL(string: attachment.url) else { return nil }
         let type = attachment.contentType ?? ""
         let kind: Kind
@@ -113,9 +123,13 @@ nonisolated struct MediaItem: Equatable, Sendable, Identifiable {
 
         id = attachment.id
         self.kind = kind
+        self.attachmentIndex = attachmentIndex
         self.sourceURL = sourceURL
         proxyURL = attachment.proxyURL
-        posterURL = CDN.resizedAttachment(proxyURL: attachment.proxyURL, width: posterWidth)
+        self.posterURL = posterURL ?? (kind == .video
+            ? CDN.videoPoster(proxyURL: attachment.proxyURL, width: posterWidth)
+                ?? URL(string: attachment.proxyURL).flatMap { $0.isFileURL ? $0 : nil }
+            : CDN.resizedAttachment(proxyURL: attachment.proxyURL, width: posterWidth))
         self.posterWidth = posterWidth
         filename = attachment.filename
         contentType = attachment.contentType
@@ -150,8 +164,18 @@ nonisolated struct MediaItem: Equatable, Sendable, Identifiable {
 /// step to the next picture in the same message is one people close and reopen
 /// four times.
 nonisolated struct MediaViewerRequest: Equatable, Sendable {
+    /// The surface the picture was opened from — where its flight starts and
+    /// ends (`MediaSources`).
+    enum Origin: Equatable, Sendable {
+        case transcript
+        case inspector
+    }
+
     var items: [MediaItem]
     var index: Int
+    /// The message the pictures belong to, for finding their thumbnails.
+    var messageID: MessageID?
+    var origin: Origin = .transcript
     /// Who posted it and when, for the info card. On the request rather than on
     /// each item: it belongs to the message, and copying it per attachment would
     /// be the same two fields three times.
@@ -163,6 +187,19 @@ nonisolated struct MediaViewerRequest: Equatable, Sendable {
     }
 
     var hasSiblings: Bool { items.count > 1 }
+
+    /// The thumbnail the current picture flies to and from.
+    var sourceKey: MediaSources.Key? {
+        guard let messageID, let current else { return nil }
+        return MediaSources.Key(messageID: messageID, attachmentIndex: current.attachmentIndex)
+    }
+
+    /// The item `delta` places away, wrapping as `step` does — what the
+    /// gallery lays beside the picture on stage.
+    func item(offsetBy delta: Int) -> MediaItem? {
+        guard items.count > 1 else { return nil }
+        return items[(index + delta % items.count + items.count) % items.count]
+    }
 
     /// Steps by `delta`, wrapping. Wrapping rather than stopping: a two-picture
     /// message is the common case, and a Next that greys out after one press is

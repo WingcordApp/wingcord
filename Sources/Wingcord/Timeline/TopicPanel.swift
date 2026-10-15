@@ -104,7 +104,7 @@ private struct TopicPanelCard: View {
         }
         .modalPanel(in: RoundedRectangle(cornerRadius: Radius.card))
         .task(id: cards.map(\.id)) {
-            if await MessageCardArtwork.prefetch(cards) { artworkGeneration &+= 1 }
+            await MessageCardArtwork.prefetch(cards) { artworkGeneration &+= 1 }
         }
     }
 

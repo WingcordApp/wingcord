@@ -1,3 +1,4 @@
+import AVFoundation
 import AppKit
 import CoreGraphics
 import Foundation
@@ -73,11 +74,19 @@ nonisolated final class ImageStore: @unchecked Sendable {
         /// Avatars, guild icons, emoji — small, numerous, re-shown constantly.
         static let thumbnails = 48 * 1024 * 1024
         /// Chat attachments and embed artwork — large, seen once, scrolled past.
-        static let attachments = 32 * 1024 * 1024
+        /// **Three screens of them**: the transcript asks a screen ahead of the
+        /// reader either way (REDESIGN.md D12), and a laptop window's worth of
+        /// 2× thumbnails is around ten megabytes — at 32 MB the look-ahead
+        /// evicted what the reader had just scrolled past, which came back as
+        /// placeholders on the way up.
+        static let attachments = 64 * 1024 * 1024
         /// Banners and profile art. Small in count, large each.
         static let artwork = 16 * 1024 * 1024
+        /// The media viewer's renditions — the picture on stage, its
+        /// neighbours, a close-up — emptied when the viewer closes (D14).
+        static let stage = 96 * 1024 * 1024
 
-        static var total: Int { thumbnails + attachments + artwork }
+        static var total: Int { thumbnails + attachments + artwork + stage }
     }
 
     /// Which bucket an image belongs to.
@@ -86,15 +95,23 @@ nonisolated final class ImageStore: @unchecked Sendable {
     /// opposite: a single fling through an image channel would otherwise evict
     /// every avatar in the roster to make room for photographs nobody will look
     /// at again.
+    ///
+    /// **The viewer is a bucket of its own**, and the transcript's cannot be
+    /// evicted by it. Sharing `attachment`, a gallery of three at 2048 pixels
+    /// was 31 MB of a 32 MB bucket and one 12-megapixel close-up was 50 MB —
+    /// every thumbnail in the transcript went, and the picture flew home onto
+    /// a placeholder that then flashed back in.
     enum Bucket: Sendable {
         case thumbnail
         case attachment
         case artwork
+        case stage
     }
 
     private let thumbnails = NSCache<NSString, Entry>()
     private let attachments = NSCache<NSString, Entry>()
     private let artwork = NSCache<NSString, Entry>()
+    private let stage = NSCache<NSString, Entry>()
 
     private let session: URLSession
     /// Bounds how many decodes are in flight.
@@ -104,6 +121,15 @@ nonisolated final class ImageStore: @unchecked Sendable {
     /// its compressed bytes and its decode buffer, and the peak is however many
     /// the gesture touched. malloc does not hand those pages back, so the peak
     /// becomes the floor.
+    ///
+    /// **It gates the decode, not the download** (REDESIGN.md D13). The
+    /// download used to run inside it as well, so six slow photographs held
+    /// all six places and every avatar and emoji queued behind them for as
+    /// long as the network took. A download holds compressed bytes — a tenth
+    /// of what it decodes to — and how many run at once is bounded by what is
+    /// wanted: the transcript asks for a screen around the reader and never
+    /// under a fling (`TimelineView.schedulePrefetch`), and the session keeps
+    /// its own connections per host.
     private let decodeGate = ConcurrencyGate(limit: 6)
     /// In-flight requests, so twelve rows showing the same avatar make one
     /// request rather than twelve.
@@ -127,6 +153,7 @@ nonisolated final class ImageStore: @unchecked Sendable {
         thumbnails.totalCostLimit = Budget.thumbnails
         attachments.totalCostLimit = Budget.attachments
         artwork.totalCostLimit = Budget.artwork
+        stage.totalCostLimit = Budget.stage
 
         let configuration = URLSessionConfiguration.default
         // A disk cache is what makes a relaunch cheap and a re-decode after an
@@ -229,46 +256,70 @@ nonisolated final class ImageStore: @unchecked Sendable {
     }
 
     private func attemptLoad(key: Key, bucket: Bucket) async -> LoadOutcome {
+        // **A clip on this Mac is its own poster** — a `--demo` fixture, whose
+        // files Discord's proxy never sees, so no `format=webp` still exists
+        // for it. Its first frame, at the size asked for.
+        if key.url.isFileURL, Self.isVideoFile(key.url) {
+            guard let frame = await Self.posterFrame(of: key.url, maximumPixelSize: key.maximumPixelSize) else {
+                return .permanentFailure
+            }
+            cache(for: bucket).setObject(Entry(image: frame), forKey: key.cacheKey, cost: frame.height * frame.bytesPerRow)
+            return .image(frame)
+        }
         // **An upload's link may have run out**: fetch with a freshly signed
         // one, and cache under the link the caller holds — see
         // `AttachmentLinks`. Anything that is not a signed upload skips the hop.
         let isSigned = AttachmentLink.isSigned(key.url)
         let url = isSigned ? await AttachmentLinks.shared.usable(key.url) : key.url
-        return await decodeGate.run {
-            do {
-                var (data, response) = try await session.data(from: url)
-                // A refusal of a signed link is asked once more with a fresh
-                // signature — the expiry it carried may simply be wrong.
-                if isSigned, Self.isRefusal(response),
-                   let retry = await AttachmentLinks.shared.retrying(key.url)
-                {
-                    (data, response) = try await session.data(from: retry)
-                }
-                if let http = response as? HTTPURLResponse,
-                   !(200..<300).contains(http.statusCode)
-                {
-                    return http.statusCode >= 500 || http.statusCode == 429
-                        ? .transientFailure
-                        : .permanentFailure
-                }
-                guard let image = Self.decode(data, maximumPixelSize: key.maximumPixelSize) else {
-                    // Bytes arrived and were not a picture. Asking again gets
-                    // the same bytes.
-                    return .permanentFailure
-                }
-                cache(for: bucket).setObject(
-                    Entry(image: image),
-                    forKey: key.cacheKey,
-                    cost: image.height * image.bytesPerRow
-                )
-                return .image(image)
-            } catch is CancellationError {
-                return .permanentFailure
-            } catch {
-                Self.log.debug("image load failed: \(key.url.absoluteString, privacy: .public)")
-                return .transientFailure
+        let data: Data
+        do {
+            var (bytes, response) = try await session.data(from: url)
+            // A refusal of a signed link is asked once more with a fresh
+            // signature — the expiry it carried may simply be wrong.
+            if isSigned, Self.isRefusal(response),
+               let retry = await AttachmentLinks.shared.retrying(key.url)
+            {
+                (bytes, response) = try await session.data(from: retry)
             }
+            if let http = response as? HTTPURLResponse,
+               !(200..<300).contains(http.statusCode)
+            {
+                return http.statusCode >= 500 || http.statusCode == 429
+                    ? .transientFailure
+                    : .permanentFailure
+            }
+            data = bytes
+        } catch is CancellationError {
+            return .permanentFailure
+        } catch {
+            Self.log.debug("image load failed: \(key.url.absoluteString, privacy: .public)")
+            return .transientFailure
         }
+        // Only the decode waits for a place — see `decodeGate`.
+        let maximumPixelSize = key.maximumPixelSize
+        guard let image = await decodeGate.run({ Self.decode(data, maximumPixelSize: maximumPixelSize) }) else {
+            // Bytes arrived and were not a picture. Asking again gets the
+            // same bytes.
+            return .permanentFailure
+        }
+        cache(for: bucket).setObject(
+            Entry(image: image),
+            forKey: key.cacheKey,
+            cost: image.height * image.bytesPerRow
+        )
+        return .image(image)
+    }
+
+    nonisolated static func isVideoFile(_ url: URL) -> Bool {
+        ["mp4", "mov", "m4v", "webm", "mkv"].contains(url.pathExtension.lowercased())
+    }
+
+    /// A video file's first frame, fitted inside `maximumPixelSize`.
+    nonisolated static func posterFrame(of url: URL, maximumPixelSize: Int) async -> CGImage? {
+        let generator = AVAssetImageGenerator(asset: AVURLAsset(url: url))
+        generator.appliesPreferredTrackTransform = true
+        generator.maximumSize = CGSize(width: maximumPixelSize, height: maximumPixelSize)
+        return try? await generator.image(at: .zero).image
     }
 
     /// Fetches bytes through this store's session.
@@ -297,6 +348,21 @@ nonisolated final class ImageStore: @unchecked Sendable {
     /// for as `text/plain`, through the same signed-link handling as every
     /// other attachment here.
     func textPreview(_ url: URL) async throws -> TextPreviewResponse {
+        // A file on this Mac — only ever a `--demo` fixture (`DemoMedia`),
+        // whose attachments are files — answered as the CDN answers the
+        // ranged GET: the first 50,001 bytes and the whole file's length.
+        if url.isFileURL {
+            let handle = try FileHandle(forReadingFrom: url)
+            defer { try? handle.close() }
+            let data = try handle.read(upToCount: 50_001) ?? Data()
+            let total = try handle.seekToEnd()
+            return TextPreviewResponse(
+                data: data,
+                contentType: "text/plain; charset=utf-8",
+                contentRange: "bytes 0-\(max(0, data.count - 1))/\(total)",
+                contentLength: "\(data.count)"
+            )
+        }
         func request(_ url: URL) -> URLRequest {
             var request = URLRequest(url: url)
             request.setValue(PlaintextPreview.rangeHeader, forHTTPHeaderField: "Range")
@@ -484,13 +550,29 @@ nonisolated final class ImageStore: @unchecked Sendable {
         thumbnails.removeAllObjects()
         attachments.removeAllObjects()
         artwork.removeAllObjects()
+        stage.removeAllObjects()
     }
 
-    /// Drops the two buckets whose contents are cheapest to re-fetch, keeping
-    /// the avatars a roster is about to re-draw.
+    /// Drops the buckets whose contents are cheapest to re-fetch, keeping the
+    /// avatars a roster is about to re-draw.
     func shedLargeImages() {
         attachments.removeAllObjects()
         artwork.removeAllObjects()
+        stage.removeAllObjects()
+    }
+
+    /// Drops the media viewer's renditions — called as it closes. A picture
+    /// opened again comes back from the disk cache, a decode rather than a
+    /// download; held, they would be ninety-odd megabytes nobody is looking at.
+    func emptyStage() {
+        stage.removeAllObjects()
+    }
+
+    /// Which cache a bucket is — for the tests that hold the viewer's bucket
+    /// apart from the transcript's. Two buckets with one identity share a
+    /// budget, and the larger can empty the smaller.
+    func cacheIdentity(for bucket: Bucket) -> ObjectIdentifier {
+        ObjectIdentifier(cache(for: bucket))
     }
 
     private func cache(for bucket: Bucket) -> NSCache<NSString, Entry> {
@@ -498,6 +580,7 @@ nonisolated final class ImageStore: @unchecked Sendable {
         case .thumbnail: thumbnails
         case .attachment: attachments
         case .artwork: artwork
+        case .stage: stage
         }
     }
 }

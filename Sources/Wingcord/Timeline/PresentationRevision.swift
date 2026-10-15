@@ -140,5 +140,9 @@ extension MessageTextStyle: Equatable {
             && lhs.lineSpacing == rhs.lineSpacing
             && lhs.paragraphSpacing == rhs.paragraphSpacing
             && lhs.emojiWidth == rhs.emojiWidth
+            // The one set of colours a row bakes in rather than resolving at
+            // paint time: a code block's tokens and an `ansi` block's spans.
+            // Increase Contrast moves it without moving anything else.
+            && lhs.codePalette.room == rhs.codePalette.room
     }
 }

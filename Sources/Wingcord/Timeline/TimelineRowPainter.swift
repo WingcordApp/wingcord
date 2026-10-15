@@ -1067,6 +1067,17 @@ nonisolated enum TimelineRowPainter {
 
         drawFrame(block, at: origin, context: context)
 
+        // An `ansi` block's overlines (`53`), which CoreText cannot draw: a
+        // rule along the top of each line the run crosses, in the run's ink.
+        for range in block.text.overlines {
+            let ink = block.text.attributed.attribute(.foregroundColor, at: range.location, effectiveRange: nil)
+            context.setFillColor((ink as? NSColor)?.cgColor ?? style.primaryColor.cgColor)
+            for rect in block.selectionRects(for: range) {
+                let frame = rect.offsetBy(dx: origin.x, dy: origin.y)
+                context.fill(CGRect(x: frame.minX, y: frame.minY + 1, width: frame.width, height: 1))
+            }
+        }
+
         // Glyphs painted through something other than their ink: a gradient
         // role, and a hovered mention's white on its solid plate.
         for (frame, index) in overpaint {
@@ -1942,10 +1953,19 @@ nonisolated enum TimelineRowPainter {
             context.setFillColor(ThemeInk.current.surfaceRaised)
             context.fill(frame)
             // Discord's blurred stand-in over the plate until the picture
-            // lands — never for a hidden spoiler, whose cover is the point.
-            if !isHidden, let placeholder = PlaceholderImages.shared.image(slot.placeholder) {
+            // lands. **And a hidden spoiler's cover** (REDESIGN.md D16):
+            // Discord draws the picture itself blurred by 40 points at 55 %
+            // brightness (`--__obscured-background-blur-radius`, `-brightness`).
+            // The stand-in is that blur already, and it arrives with the
+            // message — the picture is never fetched until it is uncovered, so
+            // the cover says what colour of thing is under it and nothing more.
+            if let placeholder = PlaceholderImages.shared.image(slot.placeholder) {
                 context.interpolationQuality = .high
                 drawFlipped(placeholder, in: frame, context: context, fit: .init(cropsToFill: slot.cropsToFill))
+                if isHidden {
+                    context.setFillColor(NSColor.black.withAlphaComponent(0.45).cgColor)
+                    context.fill(frame)
+                }
             }
         }
         context.restoreGState()

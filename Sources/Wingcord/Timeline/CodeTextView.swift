@@ -8,8 +8,9 @@ import SwiftUI
 /// than the face's own leading, which only a paragraph style can set — and
 /// the text is selectable as Discord's is, ⌘A included, which an AppKit text
 /// view does natively.
-enum CodeText {
-    static let font = NSFont.monospacedSystemFont(ofSize: 14, weight: .regular)
+nonisolated enum CodeText {
+    // Immutable once made, so read from any thread — as `AppBadge.font` is.
+    nonisolated(unsafe) static let font = NSFont.monospacedSystemFont(ofSize: 14, weight: .regular)
     static let lineHeight: CGFloat = 16
 
     /// Plain code in the reader's ink.
@@ -17,7 +18,20 @@ enum CodeText {
         NSAttributedString(string: text, attributes: attributes)
     }
 
-    static let attributes: [NSAttributedString.Key: Any] = {
+    /// Code in Discord's colours for the room: highlight.js's tokens over the
+    /// plain text, or the plain text where there are none.
+    static func highlighted(
+        _ text: String,
+        tokens: [CodeHighlighter.Token]?,
+        palette: CodePalette
+    ) -> NSAttributedString {
+        guard let tokens, !tokens.isEmpty else { return plain(text) }
+        let attributed = NSMutableAttributedString(string: text, attributes: attributes)
+        attributed.applyHighlighting(tokens, palette: palette, font: font)
+        return attributed
+    }
+
+    nonisolated(unsafe) static let attributes: [NSAttributedString.Key: Any] = {
         let paragraph = NSMutableParagraphStyle()
         paragraph.minimumLineHeight = lineHeight
         paragraph.maximumLineHeight = lineHeight
@@ -39,6 +53,7 @@ enum CodeText {
 
     /// A read-only text view with no inset, no padding and no ground: the
     /// card around it is Discord's box.
+    @MainActor
     static func makeTextView() -> NSTextView {
         let view = NSTextView(usingTextLayoutManager: false)
         view.isEditable = false
@@ -122,5 +137,49 @@ struct CodeDocumentView: NSViewRepresentable {
             height: .greatestFiniteMagnitude
         )
         if wraps { view.frame.size.width = scroll.contentSize.width }
+    }
+}
+
+/// Code in a language, coloured once highlight.js has answered — and on its
+/// first frame when it already has, so a card scrolled back into view does not
+/// flash plain first.
+///
+/// **The answer is asked for off the main actor** (`CodeHighlighter`); until
+/// it lands the text is drawn plain, which is what Discord draws while its
+/// highlighter's chunk loads, and the size cannot change when it does: the
+/// faces are monospaced at one width, bold or not.
+struct HighlightedCode<Content: View>: View {
+    var text: String
+    var language: String
+    /// Draws the attributed text — a `CodeTextView` in a card, a
+    /// `CodeDocumentView` in the whole file.
+    @ViewBuilder var content: (NSAttributedString) -> Content
+
+    @State private var answer: Answer?
+
+    private struct Request: Hashable {
+        var text: String
+        var language: String
+    }
+
+    private struct Answer {
+        var request: Request
+        var tokens: [CodeHighlighter.Token]?
+    }
+
+    var body: some View {
+        let request = Request(text: text, language: language)
+        let palette = PresentationRevision.shared.style.codePalette
+        let tokens: [CodeHighlighter.Token]? = if let answer, answer.request == request {
+            answer.tokens
+        } else {
+            CodeHighlighter.shared.cachedTokens(for: text, language: language) ?? nil
+        }
+        content(CodeText.highlighted(text, tokens: tokens, palette: palette))
+            .task(id: request) {
+                let tokens = await CodeHighlighter.shared.tokens(for: request.text, language: request.language)
+                guard !Task.isCancelled else { return }
+                answer = Answer(request: request, tokens: tokens)
+            }
     }
 }

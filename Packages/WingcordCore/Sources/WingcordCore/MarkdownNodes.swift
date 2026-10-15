@@ -156,8 +156,11 @@ public struct MarkdownDocument: Hashable, Sendable {
             appendPlain(nodes, to: &out)
         case .heading(_, let nodes):
             appendPlain(nodes, to: &out)
-        case .codeBlock(_, let code):
-            out += code
+        case .codeBlock(let language, let code):
+            // An `ansi` block reads as the text it spells: the escapes are
+            // how it is coloured, not what it says — and a reply's quote line
+            // shows it with them taken out, as Discord's inline rules do.
+            out += language?.lowercased() == "ansi" ? ANSIEscapes.plainText(of: code) : code
         case .quote(let children):
             for (index, child) in children.enumerated() {
                 if index > 0 { out += "\n" }

@@ -1,3 +1,4 @@
+import AVFoundation
 import CoreGraphics
 import Foundation
 import Testing
@@ -95,10 +96,76 @@ struct AttachmentSlotTests {
     func videoPoster() {
         let slot = slot(attachment(name: "clip.mp4", type: "video/mp4", width: 1920, height: 1080))
         #expect(slot?.kind == AttachmentSlot.Kind.video)
-        // Without `format=jpg` the proxy answers with the video, `CGImageSource`
+        // Without `format=webp` the proxy answers with the video, `CGImageSource`
         // decodes nothing, and the store records a permanent failure — which is
         // a grey box for the life of the process.
-        #expect(slot?.url?.query()?.contains("format=jpg") == true)
+        #expect(slot?.url?.query()?.contains("format=webp") == true)
+    }
+
+    /// Alex's image 22: the demo clip, a file on this Mac, drew a plate with a
+    /// play badge and nothing in it — the proxy has no still of a file it
+    /// never saw, so the poster URL was nil and nothing was ever asked for.
+    @Test("A clip on this Mac is its own poster: its first frame")
+    func localClipPoster() async throws {
+        let file = URL.temporaryDirectory.appending(path: "wingcord-poster-\(UUID().uuidString).mp4")
+        defer { try? FileManager.default.removeItem(at: file) }
+        try await Self.writeRedClip(to: file)
+
+        let clip = WingcordCore.Attachment(
+            id: AttachmentID(rawValue: 1), filename: "clip.mp4",
+            url: file.absoluteString, proxyURL: file.absoluteString,
+            contentType: "video/mp4", size: 1024, width: 64, height: 36, durationSeconds: 1
+        )
+        let slot = try #require(slot(clip))
+        #expect(slot.kind == AttachmentSlot.Kind.video)
+        #expect(slot.url == file)
+
+        let frame = try #require(
+            await ImageStore.shared.image(for: ImageStore.Key(url: file, maximumPixelSize: 64), bucket: .attachment)
+        )
+        #expect(frame.width == 64)
+        // The frame, not a plate: red.
+        let pixels = RenderProbe.pixels(width: 8, height: 8) { context, _ in
+            context.draw(frame, in: CGRect(x: 0, y: 0, width: 8, height: 8))
+        }
+        #expect(pixels[0] > 180 && pixels[1] < 80 && pixels[2] < 80)
+    }
+
+    /// Two frames of 64 × 36 red H.264 — `DemoMedia`'s encoder, smaller.
+    private static func writeRedClip(to file: URL) async throws {
+        let writer = try AVAssetWriter(outputURL: file, fileType: .mp4)
+        let input = AVAssetWriterInput(mediaType: .video, outputSettings: [
+            AVVideoCodecKey: AVVideoCodecType.h264, AVVideoWidthKey: 64, AVVideoHeightKey: 36,
+        ])
+        let receiver = writer.inputPixelBufferReceiver(
+            for: input,
+            pixelBufferAttributes: CVPixelBufferCreationAttributes(
+                pixelFormatType: CVPixelFormatType(rawValue: kCVPixelFormatType_32ARGB),
+                size: CVImageSize(width: 64, height: 36)
+            )
+        )
+        try writer.start()
+        writer.startSession(atSourceTime: .zero)
+        let pool = try #require(receiver.pixelBufferPool)
+        for index in 0..<2 {
+            var buffer = try pool.makeMutablePixelBuffer()
+            buffer.accessUnsafeMutableRawPlaneBytes { planes in
+                guard let plane = planes.first, let base = plane.bytes.baseAddress,
+                      let context = CGContext(
+                          data: base, width: 64, height: 36, bitsPerComponent: 8,
+                          bytesPerRow: plane.properties.bytesPerRow,
+                          space: CGColorSpace(name: CGColorSpace.sRGB)!,
+                          bitmapInfo: CGImageAlphaInfo.noneSkipFirst.rawValue
+                      )
+                else { return }
+                context.setFillColor(red: 1, green: 0, blue: 0, alpha: 1)
+                context.fill(CGRect(x: 0, y: 0, width: 64, height: 36))
+            }
+            try await receiver.append(CVReadOnlyPixelBuffer(consume buffer), with: CMTime(value: CMTimeValue(index), timescale: 30))
+        }
+        receiver.finish()
+        await writer.finishWriting()
+        #expect(writer.status == .completed)
     }
 
     /// **The measurement this pins**, taken on the live proxy: given only a

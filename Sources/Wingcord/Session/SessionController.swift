@@ -309,7 +309,7 @@ final class SessionController {
     /// eight — often enough that it never lapses mid-sentence, rarely enough
     /// that a fast typist sends one request per eight seconds rather than one
     /// per keystroke.
-    private var lastTypingSent: [ChannelID: Date] = [:]
+    private(set) var lastTypingSent: [ChannelID: Date] = [:]
     private static let typingInterval: TimeInterval = 8
     /// The one timer that lets typing indicators lapse, and when it fires.
     private var typingExpiryTask: Task<Void, Never>?
@@ -2280,6 +2280,9 @@ final class SessionController {
     /// timer per channel is a timer that outlives the channel; a timestamp is
     /// one comparison on a keystroke and nothing at all when nobody is typing.
     func reportTyping(in channelID: ChannelID) {
+        // Vencord's SilentTyping: `startTyping` dispatches nothing — no
+        // request, and so no slowmode clock from its answer either.
+        guard !AppSettings.shared.hidesTyping else { return }
         let now = Date()
         if let last = lastTypingSent[channelID], now.timeIntervalSince(last) < Self.typingInterval {
             return

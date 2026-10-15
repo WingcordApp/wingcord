@@ -37,6 +37,11 @@ struct ComposerContainer: View {
             shape: settings.chromeShape,
             controls: settings.composerControls,
             inlineControls: settings.composerControlsInline,
+            // Vencord's SilentTyping icon (decision 17), when the plugin is on
+            // and its "Show icon" is.
+            silentTyping: settings.silentTyping && settings.silentTypingShowsIcon
+                ? SilentTypingControl(isOn: settings.silentTypingIsOn) { settings.silentTypingIsOn.toggle() }
+                : nil,
             focusKey: channelID,
             canSend: model.permissionGate.canSend(in: channelID),
             reply: reply,

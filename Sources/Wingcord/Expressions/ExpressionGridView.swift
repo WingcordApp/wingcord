@@ -845,30 +845,27 @@ final class ExpressionGridCoordinator: NSObject {
         prefetchTask = Task { [weak self] in
             await ScrollWorkGate.waitUntilInactive()
             guard !Task.isCancelled else { return }
-            var landed = false
-            await withTaskGroup(of: Bool.self) { group in
-                for key in requests {
-                    group.addTask { await ImageStore.shared.image(for: key) != nil }
-                }
-                for await didLoad in group where didLoad { landed = true }
-            }
-            if landed {
-                await MainActor.run {
+            // Stills first, then the films that make them move — each drawn as
+            // it lands, coalesced (`ImageBatch`), so one slow sticker does not
+            // keep the rest of the grid blank.
+            await ImageBatch.load(
+                requests,
+                using: { await ImageStore.shared.image(for: $0) != nil },
+                landed: { [weak self] _ in
                     guard let self, !self.isTornDown else { return }
                     self.canvas?.needsDisplay = true
                 }
-            }
+            )
             guard !films.isEmpty, !Task.isCancelled else { return }
-            await withTaskGroup(of: Void.self) { group in
-                for key in films {
-                    group.addTask { _ = await AnimatedImageStore.shared.image(for: key) }
+            await ImageBatch.load(
+                films,
+                using: { await AnimatedImageStore.shared.image(for: $0) != nil },
+                landed: { [weak self] _ in
+                    guard let self, !self.isTornDown else { return }
+                    self.canvas?.refreshAnimationState()
+                    self.canvas?.needsDisplay = true
                 }
-            }
-            await MainActor.run {
-                guard let self, !self.isTornDown else { return }
-                self.canvas?.refreshAnimationState()
-                self.canvas?.needsDisplay = true
-            }
+            )
         }
     }
 }

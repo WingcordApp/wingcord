@@ -70,8 +70,13 @@ struct ExpressionPicker: View {
 
     /// The panel's size. A popover has no natural one, and a grid inside a
     /// container that sizes to its content has no width to lay out against.
-    static let width: CGFloat = 388
-    static let height: CGFloat = 424
+    ///
+    /// **Discord's** (Alex, 2026-10-15: "a bit bigger, its too small"): its
+    /// picker opens 498 wide — the narrowest its drag handle allows,
+    /// `expressionPickerWidth`'s `MIN` — and 486 tall with its tabs
+    /// (`positionContainer`). It was 388 by 424 here.
+    static let width: CGFloat = 498
+    static let height: CGFloat = 486
 
     /// The rail's icon side. Here rather than inside the rail because the grid's
     /// top inset is derived from it, and the two must not drift.

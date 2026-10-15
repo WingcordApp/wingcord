@@ -115,6 +115,9 @@ nonisolated enum TimelineImageRequests {
         loadsArtwork: Bool,
         playsAnimatedEmoji: Bool = true,
         filmsOnLayers: Bool = false,
+        /// The spoilered attachments the reader has uncovered, by message — a
+        /// spoiler's picture is fetched only once it is drawn.
+        revealedAttachments: (MessageID) -> Set<Int> = { _ in [] },
         onActivityIcon: ((ActivityInvite) -> Void)? = nil
     ) -> [Request] {
         var requests: [Request] = []
@@ -363,7 +366,12 @@ nonisolated enum TimelineImageRequests {
             // a voice note and a document draw from the layout alone, and a
             // request for their bytes would be a download of the whole file to
             // decode nothing.
-            for slot in row.attachments where !slot.isSpoiler && slot.carriesArtwork {
+            // **A spoiler's picture once it is uncovered**: before, it is
+            // never drawn and so never fetched — and it used to stay that way
+            // after the reveal, an empty plate where the picture should be.
+            let revealed = row.attachments.contains(where: \.isSpoiler) ? revealedAttachments(row.id) : []
+            for (index, slot) in row.attachments.enumerated()
+            where slot.carriesArtwork && (!slot.isSpoiler || revealed.contains(index)) {
                 guard loadsArtwork, let url = slot.url else { continue }
                 let key = ImageStore.Key(
                     url: url,
@@ -415,4 +423,39 @@ nonisolated enum TimelineImageRequests {
         return requests
     }
 
+    /// The same requests, in the order the rows are given, each with the
+    /// messages that draw it — so a surface repaints just those rows when the
+    /// picture lands (`ImageBatch`), not the whole canvas.
+    ///
+    /// Row by row through the one builder above, which keeps its dedup per row;
+    /// a picture several rows share is asked for once and remembered for all
+    /// of them.
+    static func requestsByMessage(
+        for rows: [MessageRow],
+        scale: CGFloat,
+        loadsArtwork: Bool,
+        playsAnimatedEmoji: Bool = true,
+        filmsOnLayers: Bool = false,
+        revealedAttachments: (MessageID) -> Set<Int> = { _ in [] },
+        onActivityIcon: ((ActivityInvite) -> Void)? = nil
+    ) -> (requests: [Request], owners: [ImageStore.Key: [MessageID]]) {
+        var requests: [Request] = []
+        var owners: [ImageStore.Key: [MessageID]] = [:]
+        for row in rows {
+            let asked = Self.requests(
+                for: [row],
+                scale: scale,
+                loadsArtwork: loadsArtwork,
+                playsAnimatedEmoji: playsAnimatedEmoji,
+                filmsOnLayers: filmsOnLayers,
+                revealedAttachments: revealedAttachments,
+                onActivityIcon: onActivityIcon
+            )
+            for request in asked {
+                if owners[request.key] == nil { requests.append(request) }
+                owners[request.key, default: []].append(row.id)
+            }
+        }
+        return (requests, owners)
+    }
 }

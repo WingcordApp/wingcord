@@ -74,6 +74,8 @@ let package = Package(
                 .copy("Resources/SuperReactions"),
                 .process("Resources/Glyphs.xcassets"),
                 .copy("Resources/Art"),
+                // highlight.js 11.11.1, every language — see `CodeHighlighter`.
+                .copy("Resources/Highlight"),
             ],
             swiftSettings: [
                 .defaultIsolation(MainActor.self),

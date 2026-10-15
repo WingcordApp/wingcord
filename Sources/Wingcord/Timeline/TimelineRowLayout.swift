@@ -1165,6 +1165,11 @@ nonisolated struct TimelineLayoutEngine: Sendable {
         var gifStickers: [StickerRef]?
         var message: Message
         var row: MessageRow
+        /// The highlighter's revision when the row was laid out with a code
+        /// block still waiting on it — nil when nothing was. **Only such rows
+        /// are rebuilt when answers land**, as only rows with cards are when a
+        /// card does.
+        var awaitingHighlightAt: UInt64? = nil
 
         func matches(
             _ message: Message,
@@ -1196,6 +1201,7 @@ nonisolated struct TimelineLayoutEngine: Sendable {
                 && self.stageStartEvent == stageStartEvent
                 && self.gifStickers == gifStickers
                 && self.message == message
+                && (awaitingHighlightAt.map { $0 == CodeHighlighter.revision } ?? true)
         }
     }
 
@@ -1377,6 +1383,9 @@ nonisolated struct TimelineLayoutEngine: Sendable {
                     rows.append(TimelineRow(height: rowHeight(of: row), kind: .message(row)))
                     continue
                 }
+                // Read before the build: an answer landing while the row is
+                // built must leave it stale, not fresh.
+                let highlightAt = CodeHighlighter.revision
                 var row = if let autoMod {
                     Self.autoModRow(message, autoMod, input: input, parser: parser)
                 } else if message.message.isSystemEvent {
@@ -1401,7 +1410,8 @@ nonisolated struct TimelineLayoutEngine: Sendable {
                     stageStartEvent: stageStartEvent,
                     gifStickers: gifStickers,
                     message: message.message,
-                    row: row
+                    row: row,
+                    awaitingHighlightAt: row.textBlock?.text.awaitsHighlighting == true ? highlightAt : nil
                 )
                 rows.append(TimelineRow(height: rowHeight(of: row), kind: .message(row)))
             }
@@ -3841,7 +3851,10 @@ nonisolated struct TimelineLayoutEngine: Sendable {
         // fetch it too small.
         let decodeHeight = pixels.flatMap { $0.width > 0 ? decodeWidth * $0.height / $0.width : nil }
         let url: URL? = if isVideo {
+            // A clip on this Mac — a `--demo` fixture — is its own poster:
+            // `ImageStore` takes its first frame (`posterFrame(of:)`).
             CDN.videoPoster(proxyURL: attachment.proxyURL, width: decodeWidth, height: decodeHeight)
+                ?? URL(string: attachment.proxyURL).flatMap { $0.isFileURL ? $0 : nil }
         } else {
             CDN.resizedAttachment(
                 proxyURL: attachment.proxyURL, width: decodeWidth, height: decodeHeight, animated: isAnimated

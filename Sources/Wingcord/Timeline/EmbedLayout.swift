@@ -629,7 +629,7 @@ nonisolated enum EmbedLayoutEngine {
     struct VideoFile {
         var url: URL
         var poster: Embed.Media
-        /// A still of the file, from the proxy — `format=jpg` on a video path.
+        /// A still of the file, from the proxy — an image `format` on a video path.
         var usesFrameOfFile: Bool
 
         func posterURL(_ width: CGFloat, _ height: CGFloat) -> URL? {

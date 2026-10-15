@@ -1097,6 +1097,40 @@ final class AppSettings {
         }
     }
 
+    /// Vencord's SilentTyping (decisions 16–19): off, as a plugin is until it
+    /// is switched on.
+    var silentTyping = false {
+        didSet {
+            guard silentTyping != oldValue else { return }
+            defaults.set(silentTyping, forKey: Key.silentTyping)
+        }
+    }
+    /// "Show an icon for toggling the plugin" — the composer's struck keyboard.
+    var silentTypingShowsIcon = false {
+        didSet {
+            guard silentTypingShowsIcon != oldValue else { return }
+            defaults.set(silentTypingShowsIcon, forKey: Key.silentTypingShowsIcon)
+        }
+    }
+    /// "Add option to toggle the functionality in the chat input context menu".
+    var silentTypingInContextMenu = true {
+        didSet {
+            guard silentTypingInContextMenu != oldValue else { return }
+            defaults.set(silentTypingInContextMenu, forKey: Key.silentTypingInContextMenu)
+        }
+    }
+    /// "Toggle functionality" — what the icon, the menu item and the User
+    /// menu flip. On by default, so switching the plugin on hides typing.
+    var silentTypingIsOn = true {
+        didSet {
+            guard silentTypingIsOn != oldValue else { return }
+            defaults.set(silentTypingIsOn, forKey: Key.silentTypingIsOn)
+        }
+    }
+
+    /// Whether typing goes unreported: the plugin on, and its functionality.
+    var hidesTyping: Bool { silentTyping && silentTypingIsOn }
+
     /// Discord's "Sync theme across my devices" (`shouldSync("appearance")`,
     /// on unless switched off): one of Discord's themes chosen here is
     /// written to the account, and one chosen in Discord is taken here.
@@ -1423,6 +1457,10 @@ final class AppSettings {
             .flatMap(FileNameAnonymiser.Method.init(rawValue:)) ?? .randomCharacters
         randomisedLength = defaults.object(forKey: Key.randomisedLength) as? Int ?? 7
         consistentFileName = defaults.string(forKey: Key.consistentFileName) ?? "image"
+        silentTyping = defaults.object(forKey: Key.silentTyping) as? Bool ?? false
+        silentTypingShowsIcon = defaults.object(forKey: Key.silentTypingShowsIcon) as? Bool ?? false
+        silentTypingInContextMenu = defaults.object(forKey: Key.silentTypingInContextMenu) as? Bool ?? true
+        silentTypingIsOn = defaults.object(forKey: Key.silentTypingIsOn) as? Bool ?? true
         customPresences = defaults.data(forKey: Key.customPresences)
             .flatMap { try? JSONDecoder().decode([CustomPresence].self, from: $0) } ?? []
         lastCustomPresenceID = defaults.string(forKey: Key.lastCustomPresence).flatMap(UUID.init(uuidString:))
@@ -1598,6 +1636,10 @@ final class AppSettings {
         static let anonymisingMethod = "anonymiseFileNames.method"
         static let randomisedLength = "anonymiseFileNames.randomisedLength"
         static let consistentFileName = "anonymiseFileNames.consistent"
+        static let silentTyping = "silentTyping.enabled"
+        static let silentTypingShowsIcon = "silentTyping.showIcon"
+        static let silentTypingInContextMenu = "silentTyping.contextMenu"
+        static let silentTypingIsOn = "silentTyping.isEnabled"
         static let customPresences = "richPresence.presences"
         static let activeCustomPresence = "richPresence.active"
         static let lastCustomPresence = "richPresence.last"

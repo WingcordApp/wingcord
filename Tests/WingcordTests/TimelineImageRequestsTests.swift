@@ -81,6 +81,53 @@ struct TimelineImageRequestsTests {
         return try #require(requests.first { $0.key.url == url })
     }
 
+    @Test("A spoiler's picture is fetched once it is uncovered, and not before")
+    func revealedSpoiler() throws {
+        let url = "file:///tmp/SPOILER_\(UUID().uuidString).png"
+        let attachment = WingcordCore.Attachment(
+            id: AttachmentID(rawValue: 7),
+            filename: "SPOILER_picture.png",
+            url: url,
+            proxyURL: url,
+            contentType: "image/png",
+            width: 64,
+            height: 48
+        )
+        let message = Message(
+            id: MessageID(rawValue: 5 << 22),
+            channelID: ChannelID(rawValue: 1),
+            authorID: UserID(rawValue: 1),
+            content: "",
+            payload: MessagePayload(attachments: [attachment])
+        )
+        var cache: [MessageID: TimelineLayoutEngine.CacheEntry] = [:]
+        let rows = TimelineLayoutEngine(presentationRevision: 1).layout(
+            TimelineLayoutEngine.Input(
+                items: [.message(TimelineMessage(message: message, flags: [.head, .tail]))],
+                width: 520,
+                style: MessageTextStyle.current(),
+                mentions: MentionContext(),
+                channelName: "general",
+                authors: [:],
+                calendar: .current,
+                settings: PresentationRevision.shared.timeline
+            ),
+            cache: &cache
+        )
+        guard case .message(let row)? = rows.first?.kind else {
+            Issue.record("expected a message row")
+            return
+        }
+        #expect(row.attachments.first?.isSpoiler == true)
+        let covered = TimelineImageRequests.requests(for: [row], scale: 2, loadsArtwork: true)
+        #expect(!covered.contains { $0.key.url.absoluteString == url })
+        let uncovered = TimelineImageRequests.requests(
+            for: [row], scale: 2, loadsArtwork: true,
+            revealedAttachments: { $0 == message.id ? [0] : [] }
+        )
+        #expect(uncovered.contains { $0.key.url.absoluteString == url })
+    }
+
     @Test("A film that turns out to be one frame is fetched as the painter's still")
     func filmFallsBackToTheStill() async throws {
         let row = try #require(row(attaching: try oneFrameGIF()))

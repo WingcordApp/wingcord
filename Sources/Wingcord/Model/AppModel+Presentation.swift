@@ -407,7 +407,7 @@ extension AppModel {
         // **The gate has no chrome at all.** It is a takeover, not a page inside
         // the app: naming a channel over it, or offering a roster toggle beside
         // it, describes a window the reader is not in. An empty name is already
-        // how this bar draws nothing — see `ChannelToolbar`.
+        // how the header draws no title — see `DetailHeader`.
         if isColumnTakenOver { return .none }
         // The pill names whatever the column is showing, which on a server page
         // is the page. Its own branch rather than a nil channel, so the bar has

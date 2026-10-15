@@ -335,15 +335,10 @@ struct InboxFlyout: View {
         guard !requests.isEmpty else { return }
         await ScrollWorkGate.waitUntilInactive()
         guard !Task.isCancelled else { return }
-        await withTaskGroup(of: Void.self) { group in
-            for request in requests {
-                group.addTask { _ = await request.load() }
-            }
-        }
-        guard !Task.isCancelled else { return }
-        // One nudge for the batch: the cards peek the caches on their next
-        // draw, and a repaint per picture would repaint the panel per avatar.
-        artworkGeneration &+= 1
+        // A nudge per landing, coalesced (`ImageBatch`): the cards peek the
+        // caches on their next draw, and one slow picture must not hold the
+        // rest of the panel's back.
+        await ImageBatch.load(requests) { _ in artworkGeneration &+= 1 }
     }
 }
 

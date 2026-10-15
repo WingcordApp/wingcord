@@ -297,6 +297,16 @@ final class TimelineCanvasView: NSView {
     /// Which spoilered attachments have been uncovered, keyed the same way and
     /// deliberately in a separate table — see `TimelineRowPainter.State`.
     private var revealedAttachments: [MessageID: Set<Int>] = [:]
+    /// The picture the media viewer has out of its box — on stage, or flying
+    /// there or back — whose box is left empty, so the picture is never in two
+    /// places (REDESIGN.md D8). See `MediaSources`.
+    var liftedAttachment: MediaSources.Key? {
+        didSet {
+            guard liftedAttachment != oldValue else { return }
+            if let oldValue { invalidateMessage(oldValue.messageID) }
+            if let liftedAttachment { invalidateMessage(liftedAttachment.messageID) }
+        }
+    }
     /// An application id → the colour its invitation card is ruled with.
     ///
     /// Pushed in rather than read from the store: the painter is `nonisolated`
@@ -371,7 +381,17 @@ final class TimelineCanvasView: NSView {
     /// transcript already decoded, and that cache entry is keyed by the size it
     /// was drawn at — a peek built from any other number looks in a slot nothing
     /// was ever put in.
-    var onOpenAttachment: ((MessageID, Int, [CGFloat]) -> Void)?
+    /// A picture clicked: the message, its place, and each attachment's drawn
+    /// width and URL — the thumbnail the viewer opens on, peeked by the exact
+    /// key the transcript cached it under.
+    var onOpenAttachment: ((MessageID, Int, [CGFloat], [URL?]) -> Void)?
+    /// A spoilered attachment was uncovered — its picture is wanted now.
+    var onRevealAttachment: (() -> Void)?
+
+    /// The spoilered attachments uncovered in a message, for the fetch.
+    func revealedAttachmentIndexes(of messageID: MessageID) -> Set<Int> {
+        revealedAttachments[messageID] ?? []
+    }
     /// A file card's Download, by message and attachment.
     var onDownloadAttachment: ((MessageID, Int) -> Void)?
     /// Stars or un-stars a GIF in the transcript.
@@ -1159,6 +1179,28 @@ final class TimelineCanvasView: NSView {
         invalidateRow(index)
     }
 
+    /// Where one of a message's pictures is drawn, in window coordinates — the
+    /// box the media viewer flies it out of and back into — or nil when its row
+    /// is not laid out or the box is out of sight.
+    func attachmentThumbnail(_ key: MediaSources.Key) -> MediaSources.Thumbnail? {
+        guard let index = rows.firstIndex(where: { $0.messageID == key.messageID }),
+              case .message(let message) = rows[index].kind,
+              message.attachments.indices.contains(key.attachmentIndex)
+        else { return nil }
+        let slot = message.attachments[key.attachmentIndex]
+        guard slot.kind == .image || slot.kind == .video else { return nil }
+        let row = rowFrame(at: index)
+        let frame = slot.rect.offsetBy(dx: row.minX, dy: row.minY)
+        guard frame.intersects(visibleRect), window != nil else { return nil }
+        return MediaSources.Thumbnail(
+            frame: convert(frame, to: nil),
+            // `drawAttachmentArtwork`'s corner.
+            cornerRadius: 8,
+            cropsToFill: slot.cropsToFill,
+            window: window
+        )
+    }
+
     // MARK: A send's flight
 
     /// Sends on their way from the composer into their bubbles — see
@@ -1437,6 +1479,11 @@ final class TimelineCanvasView: NSView {
                 if case .message(let message) = row.kind {
                     state.hidesBubble = isFlying(message.id)
                     state.layered = films.layered[message.id] ?? .init()
+                    // A picture the viewer has lifted leaves its box empty, as
+                    // one playing on a layer does.
+                    if let lifted = liftedAttachment, lifted.messageID == message.id {
+                        state.layered.attachments.insert(lifted.attachmentIndex)
+                    }
                     if selection != nil, let block = message.textBlock {
                         state.selectedRange = selectedRange(
                             of: message.id, length: block.text.attributed.length
@@ -1597,10 +1644,16 @@ final class TimelineCanvasView: NSView {
 
     /// The rows currently inside the canvas's window, as an index range.
     func visibleRowRange() -> Range<Int> {
+        rowRange(from: bounds.minY, to: bounds.maxY)
+    }
+
+    /// The rows any part of which lies between two heights in the document —
+    /// the canvas's window, or the reach the transcript asks pictures for.
+    func rowRange(from minY: CGFloat, to maxY: CGFloat) -> Range<Int> {
         guard !rows.isEmpty else { return 0..<0 }
-        let first = rowIndex(at: bounds.minY) ?? 0
+        let first = rowIndex(at: max(0, minY)) ?? 0
         var last = first
-        while last < rows.count, offsets[last] < bounds.maxY { last += 1 }
+        while last < rows.count, offsets[last] < maxY { last += 1 }
         return first..<max(first, last)
     }
 
@@ -1733,9 +1786,11 @@ final class TimelineCanvasView: NSView {
                 revealedAttachments[row.id, default: []].insert(attachmentIndex)
                 invalidateRow(index)
                 reconcileFilms()
+                // Its picture was never fetched while it was covered.
+                onRevealAttachment?()
                 return
             }
-            onOpenAttachment?(row.id, attachmentIndex, row.attachments.map(\.decodeWidth))
+            onOpenAttachment?(row.id, attachmentIndex, row.attachments.map(\.decodeWidth), row.attachments.map(\.url))
         case .downloadAttachment(let attachmentIndex, _):
             onDownloadAttachment?(row.id, attachmentIndex)
         case .favoriteGIF(let attachmentIndex):

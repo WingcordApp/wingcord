@@ -236,6 +236,8 @@ final class TimelineCoordinator: NSObject {
     /// Posted when the system is short of memory, to every transcript.
     static let shedRecentLayouts = Notification.Name("TimelineCoordinator.shedRecentLayouts")
     private var shedObserver: NSObjectProtocol?
+    /// highlight.js answering for blocks this transcript drew plain.
+    private var highlightObserver: NSObjectProtocol?
 
     private var layoutTask: Task<Void, Never>?
     private var prefetchTask: Task<Void, Never>?
@@ -271,6 +273,15 @@ final class TimelineCoordinator: NSObject {
     /// Where the viewport's top was on the last tick, so a page is asked for in
     /// the direction the reader is travelling. See `viewportDidChange`.
     private var lastViewportMinY: CGFloat = 0
+    /// When that tick was, and how fast the viewport has been moving — the
+    /// difference between a reader, whose pictures are fetched ahead of the
+    /// scroll, and a fling, whose are not. See `schedulePrefetch`.
+    private var lastViewportTime: CFTimeInterval = 0
+    private var scrollSpeed: CGFloat = 0
+    /// Where the pictures were last planned from, and whether that batch went
+    /// ahead at once — so a tick that has moved a few points does not rebuild
+    /// it, and one that crosses from a fling to reading does.
+    private var lastPicturePlan: (minY: CGFloat, fetchesNow: Bool)?
     /// Where the chrome over the transcript reads its position from.
     private var scroll: TranscriptScrollState?
     /// What was last told to `scroll` — compared here, so an unchanged answer
@@ -532,15 +543,26 @@ final class TimelineCoordinator: NSObject {
                 selectedText: canvas.selectedText()
             )
         }
-        canvas.onOpenAttachment = { [weak self] messageID, index, widths in
+        canvas.onOpenAttachment = { [weak self] messageID, index, widths, urls in
             guard let self, let channelID = self.channelID else { return }
             self.model.openMedia(
                 messageID: messageID,
                 in: channelID,
                 attachmentIndex: index,
-                posterWidths: widths
+                posterWidths: widths,
+                posterURLs: urls
             )
         }
+
+        // The media viewer flies a picture out of its box here and back into
+        // it, and leaves the box empty while the picture is out.
+        MediaSources.shared.register(self, provider: MediaSources.Provider(
+            origin: .transcript,
+            thumbnail: { [weak self] key in self?.canvas?.attachmentThumbnail(key) },
+            lift: { [weak self] key in self?.canvas?.liftedAttachment = key }
+        ))
+
+        canvas.onRevealAttachment = { [weak self] in self?.schedulePrefetch() }
 
         canvas.onDownloadAttachment = { [weak self] messageID, index in
             guard let self, let channelID = self.channelID else { return }
@@ -653,6 +675,21 @@ final class TimelineCoordinator: NSObject {
         ) { [weak self] _ in
             MainActor.assumeIsolated { self?.acknowledgeIfRead() }
         }
+        // A code block's colours have arrived: the rows that drew it plain are
+        // stale by the highlighter's revision, and only they are rebuilt — at
+        // the height they already had.
+        highlightObserver = NotificationCenter.default.addObserver(
+            forName: CodeHighlighter.didLand,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self, !self.isTornDown,
+                      self.rowCache.values.contains(where: { $0.awaitingHighlightAt != nil })
+                else { return }
+                self.runLayout(preservingPosition: true)
+            }
+        }
     }
 
     /// Marks the channel read, when the reader is actually reading it.
@@ -689,7 +726,7 @@ final class TimelineCoordinator: NSObject {
         let center = NotificationCenter.default
         for observer in [
             boundsObserver, frameObserver, scrollBeganObserver, scrollEndedObserver,
-            activationObserver, shedObserver,
+            activationObserver, shedObserver, highlightObserver,
         ] {
             if let observer { center.removeObserver(observer) }
         }
@@ -699,6 +736,7 @@ final class TimelineCoordinator: NSObject {
         scrollEndedObserver = nil
         activationObserver = nil
         shedObserver = nil
+        highlightObserver = nil
         rowCache.removeAll(keepingCapacity: false)
         alternateRowCache = nil
         recentRowCaches.removeAll()
@@ -714,6 +752,8 @@ final class TimelineCoordinator: NSObject {
         canvas?.onOpenEmoji = nil
         canvas?.onOpenSticker = nil
         canvas?.onOpenAttachment = nil
+        canvas?.onRevealAttachment = nil
+        MediaSources.shared.unregister(self)
         canvas?.onToggleFavoriteGIF = nil
         canvas?.onPlayVideo = nil
         embedPlayer?.stop()
@@ -1397,6 +1437,11 @@ final class TimelineCoordinator: NSObject {
         let current = scrollView.contentView.bounds
         let movement = current.minY - lastViewportMinY
         lastViewportMinY = current.minY
+        let now = CACurrentMediaTime()
+        scrollSpeed = TimelineViewportPolicy.smoothedSpeed(
+            previous: scrollSpeed, movement: movement, elapsed: now - lastViewportTime
+        )
+        lastViewportTime = now
         // The reader moved: the summary they went to stops being named, and
         // the bar goes back to naming what is on screen. The jump's own scroll
         // never reaches here — it runs inside `isApplyingUpdate`.
@@ -1405,7 +1450,7 @@ final class TimelineCoordinator: NSObject {
         }
         if movement <= 0 { requestEarlierHistoryIfNeeded(viewport: current) }
         if movement >= 0 { requestLaterHistoryIfNeeded(viewport: current) }
-        schedulePrefetch()
+        schedulePrefetch(onScrollTick: true)
         // Scrolling down to the end is the reader saying they have seen what
         // was below them, and it is the one path a layout cannot cover.
         acknowledgeIfRead()
@@ -1784,71 +1829,117 @@ final class TimelineCoordinator: NSObject {
 
     // MARK: Image prefetch
 
-    /// Requests the images the visible rows need.
+    /// Asks for the pictures around the viewport, and repaints each row as its
+    /// pictures land.
     ///
-    /// **Once per viewport change, not once per row per frame.** The painter only
-    /// peeks; this is the one place a request is started, so a scroll across a
-    /// hundred rows issues one pass rather than a hundred tasks per display
-    /// cycle.
+    /// **Once per plan, not once per row per frame.** The painter only peeks;
+    /// this is the one place a request is started.
     ///
-    /// It waits behind the scroll gate: a fling should not spend its frames
-    /// starting network requests for rows it is about to pass, and the images
-    /// are wanted at the moment the gesture stops rather than during it.
-    private func schedulePrefetch() {
-        guard !isTornDown, let canvas else { return }
+    /// **A screen ahead of a reader, nothing ahead of a fling** (REDESIGN.md
+    /// D12). The rows on screen and a screen either side are asked for, those
+    /// on screen first. A scroll at reading speed fetches as it goes, so a row
+    /// usually arrives with its picture already decoded rather than popping in
+    /// once the reader stops; a fling waits for the gesture to end, as every
+    /// optional piece of work does — it passes hundreds of rows nobody looks
+    /// at, and fetching for all of them would queue the destination's pictures
+    /// behind theirs. A scroll tick re-plans once the viewport has moved a
+    /// quarter of a screen, or crossed between reading and flinging.
+    ///
+    /// **Each row repaints as its own pictures land** (D11), through
+    /// `ImageBatch` — never once for the whole batch, which let one slow
+    /// download keep every other picture in view on its placeholder. A row is
+    /// a sliver of the canvas, so this is cheap enough to do mid-scroll.
+    private func schedulePrefetch(onScrollTick: Bool = false) {
+        guard !isTornDown, let canvas, let scrollView else { return }
+        let viewport = scrollView.contentView.bounds
+        let fetchesNow = TimelineViewportPolicy.fetchesDuringScroll(
+            isScrolling: canvas.isScrolling, speed: scrollSpeed, viewportHeight: viewport.height
+        )
+        if onScrollTick, let plan = lastPicturePlan, plan.fetchesNow == fetchesNow,
+           abs(viewport.minY - plan.minY) < viewport.height / 4
+        {
+            return
+        }
+        lastPicturePlan = (viewport.minY, fetchesNow)
         prefetchTask?.cancel()
-        let urls = visibleImageRequests(canvas: canvas)
-        guard !urls.isEmpty else { return }
+        let wanted = pictureRequests(canvas: canvas, viewport: viewport)
+        guard !wanted.requests.isEmpty else { return }
 
         prefetchTask = Task { [weak self] in
-            await ScrollWorkGate.waitUntilInactive()
+            if !fetchesNow { await ScrollWorkGate.waitUntilInactive() }
             guard !Task.isCancelled else { return }
-            await withTaskGroup(of: Bool.self) { group in
-                for request in urls {
-                    group.addTask { await request.load() }
-                }
-                var landed = false
-                for await didLoad in group where didLoad { landed = true }
-                guard landed else { return }
-                await MainActor.run {
-                    guard let self, !self.isTornDown else { return }
-                    // One invalidation for the batch. Invalidating per image
-                    // would repaint the viewport once per avatar.
-                    self.canvas?.needsDisplay = true
-                    // Film that has just landed may be the first moving thing on
-                    // screen, and the canvas only subscribes to the clock when
-                    // there is one.
-                    self.canvas?.refreshStickerAnimation()
-                }
+            await ImageBatch.load(wanted.requests) { [weak self] landed in
+                self?.picturesLanded(landed, owners: wanted.owners)
             }
         }
     }
 
-    /// The pictures the visible rows need, asked for once per viewport change.
+    /// The pictures the rows around the viewport need, rows on screen first,
+    /// each with the messages that draw it.
     ///
     /// The set itself is built by `TimelineImageRequests`, which every surface
-    /// that draws messages shares — see the note there for why there is only one
-    /// of these.
-    private func visibleImageRequests(canvas: TimelineCanvasView) -> [TimelineImageRequests.Request] {
+    /// that draws messages shares — see the note there for why there is only
+    /// one of these.
+    private func pictureRequests(
+        canvas: TimelineCanvasView,
+        viewport: CGRect
+    ) -> (requests: [TimelineImageRequests.Request], owners: [ImageStore.Key: [MessageID]]) {
         let scale = canvas.window?.backingScaleFactor ?? 2
+        let reach = TimelineViewportPolicy.pictureReach(viewport: viewport)
+        let order = TimelineViewportPolicy.pictureOrder(
+            canvas.rowRange(from: reach.lowerBound, to: reach.upperBound),
+            frame: { canvas.rowFrame(at: $0) },
+            viewport: viewport
+        )
         var rows: [MessageRow] = []
         // A conversation's head is the one other row that draws faces.
         var head: [TimelineImageRequests.Request] = []
-        for index in canvas.visibleRowRange() {
+        for index in order {
             switch canvas.rows[index].kind {
             case .message(let row): rows.append(row)
             case .conversationStart(let slot): head = TimelineImageRequests.requests(forHead: slot, scale: scale)
             default: continue
             }
         }
-        return head + TimelineImageRequests.requests(
+        var wanted = TimelineImageRequests.requestsByMessage(
             for: rows,
             scale: scale,
             loadsArtwork: AppSettings.shared.loadsImagesAutomatically,
             playsAnimatedEmoji: AnimationClock.playsAnimatedEmoji,
             filmsOnLayers: true,
+            revealedAttachments: { [weak canvas] in canvas?.revealedAttachmentIndexes(of: $0) ?? [] },
             onActivityIcon: { [weak model] in model?.sessionController.deriveActivityAccent($0) }
         )
+        // The head has no message to repaint, so a face it draws is owned by
+        // nobody — and its landing repaints the canvas (`picturesLanded`).
+        for request in head {
+            if wanted.owners.removeValue(forKey: request.key) == nil {
+                wanted.requests.insert(request, at: 0)
+            }
+        }
+        return wanted
+    }
+
+    /// Pictures have landed: the rows that draw them are repainted and nothing
+    /// else — or the whole canvas, for a picture no message owns.
+    private func picturesLanded(
+        _ landed: [TimelineImageRequests.Request],
+        owners: [ImageStore.Key: [MessageID]]
+    ) {
+        guard !isTornDown, let canvas else { return }
+        var messages = Set<MessageID>()
+        for request in landed {
+            guard let ids = owners[request.key] else {
+                canvas.needsDisplay = true
+                messages.removeAll()
+                break
+            }
+            messages.formUnion(ids)
+        }
+        for id in messages { canvas.invalidateMessage(id) }
+        // Film that has just landed may be the first moving thing on screen,
+        // and the canvas only subscribes to the clock when there is one.
+        canvas.refreshStickerAnimation()
     }
 
     // MARK: Actions

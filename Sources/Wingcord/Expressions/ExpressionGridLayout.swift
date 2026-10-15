@@ -61,12 +61,14 @@ nonisolated struct ExpressionGridMetrics: Equatable, Sendable {
     static func resolve(for mode: ExpressionMode, width: CGFloat) -> ExpressionGridMetrics {
         switch mode {
         case .emoji:
-            // Dense and tight: emoji are scanned in bulk rather than looked at
-            // one at a time.
-            resolve(width: width, target: 32, minimumSpacing: 6, minimumColumns: 6)
+            // Discord's: a 40-point emoji in a 48-point cell
+            // (`--custom-emoji-picker-constants-emoji-size-medium`, 4 of
+            // padding a side) — dense, because emoji are scanned in bulk
+            // rather than looked at one at a time.
+            resolve(width: width, target: 40, minimumSpacing: 8, minimumColumns: 6)
         case .stickers:
-            // Large enough to read as a picture.
-            resolve(width: width, target: 72, minimumSpacing: 10, minimumColumns: 3)
+            // Large enough to read as a picture, grown with the panel.
+            resolve(width: width, target: 88, minimumSpacing: 10, minimumColumns: 3)
         case .gifs:
             // Not drawn by this layout — the GIF tab is a masonry of variable
             // heights, which is a different problem. Answered anyway so the

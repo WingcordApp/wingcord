@@ -771,6 +771,17 @@ enum DemoFixtures {
             model, index: index, guildID: voiceGuildID ?? first, me: me, others: userIDs
         )
         populateConversations(model, me: me, users: users, userIDs: userIDs)
+
+        // A session measures a text file's preview as its message arrives
+        // (`resolveHostedCards`); the fixtures arrive all at once, so their two
+        // files are measured here — on the next turn, once the app is up to
+        // host a card offscreen.
+        Task { @MainActor in
+            for attachment in DemoMedia.textFiles() {
+                let key = HostedCardKey.plaintext(PlaintextCardKey(attachment))
+                model.noteHostedCardSize(HostedCardHosts.measure(key, model: model), for: key)
+            }
+        }
     }
 
     /// A game in front, for `--overlay`.
@@ -2056,6 +2067,9 @@ enum DemoFixtures {
     /// Near the foot of the 220-message transcript, so it is on screen when the
     /// channel opens rather than two hundred rows up.
     private static let bareImageLinkIndex = 214
+    /// Near the foot, with the `ansi` blocks: a source file and a README, for
+    /// the text preview's highlighting and Render Markdown.
+    private static let textFilesIndex = 209
 
     /// The GIF that link unfurls into. A real file on disk — see `DemoMedia` —
     /// so the row actually animates rather than reserving a box for a 404.
@@ -2065,6 +2079,7 @@ enum DemoFixtures {
 
     private static func content(at index: Int) -> String {
         if index == bareImageLinkIndex { return bareImageLinkURL }
+        if let ansi = ansiBodies[index] { return ansi }
         return switch index % 23 {
         case 7: "🎉"
         case 18: "😀 🎉 ✨"
@@ -2204,6 +2219,9 @@ enum DemoFixtures {
                 )
             )])
         }
+        if index == textFilesIndex {
+            return MessagePayload(attachments: DemoMedia.textFiles())
+        }
         return switch index % 31 {
         case 12:
             MessagePayload(
@@ -2236,8 +2254,11 @@ enum DemoFixtures {
                 ])]
             )
         case 25:
+            // Wumpus waving is a Lottie sticker — the CDN has no `.png` of it
+            // (404), only `/stickers/….json` — so it is declared as one, which
+            // is also what puts the Lottie path on screen in the demo.
             MessagePayload(stickers: [
-                StickerRef(id: 749_054_660_769_218_631, name: "Wave", format: .png),
+                StickerRef(id: 749_054_660_769_218_631, name: "Wave", format: .lottie),
             ])
         case 8:
             // Three real files, so the lightbox has something to open — a
@@ -2317,6 +2338,27 @@ enum DemoFixtures {
         "rin", "pip", "Voltcast", "Jay", "0xC0FFEE42", "2lumin0s", "vale",
         "Void", "torriel", "vexlor", "alegre", "Toffee", "Ceruleanate", "Dyno",
         "NQN", "kazume", "Quelix", "vrm", "million", "beagle", "jamesen",
+    ]
+
+    /// `ansi` blocks near the foot of every transcript, where they are on
+    /// screen when it opens: Alex's message from image 19 — 24-bit colour,
+    /// letter by letter, which Discord draws as image 20 — and the sixteen,
+    /// the decorations Discord draws, a background and the 256 table.
+    private static let ansiBodies: [Int: String] = [
+        212: "```ansi\n"
+            + "\u{1B}[38;2;255;0;0mT\u{1B}[38;2;0;255;0me\u{1B}[38;2;0;0;255ms\u{1B}[38;2;255;0;0mt\u{1B}[0m "
+            + "\u{1B}[38;2;253;152;85mt\u{1B}[38;2;238;133;110me\u{1B}[38;2;223;115;136ms\u{1B}[38;2;209;97;162mt\u{1B}[0m "
+            + "\u{1B}[38;2;163;84;84mt\u{1B}[38;2;255;178;178me\u{1B}[38;2;163;84;84ms\u{1B}[38;2;255;178;178mt\u{1B}[0m"
+            + "\n```",
+        216: "```ansi\n"
+            + "\u{1B}[30mblack \u{1B}[31mred \u{1B}[32mgreen \u{1B}[33myellow \u{1B}[34mblue "
+            + "\u{1B}[35mmagenta \u{1B}[36mcyan \u{1B}[37mwhite\u{1B}[0m\n"
+            + "\u{1B}[90mblack \u{1B}[91mred \u{1B}[92mgreen \u{1B}[93myellow \u{1B}[94mblue "
+            + "\u{1B}[95mmagenta \u{1B}[96mcyan \u{1B}[97mwhite\u{1B}[0m\n"
+            + "\u{1B}[1mbold\u{1B}[0m \u{1B}[3mitalic\u{1B}[0m \u{1B}[4munderline\u{1B}[0m "
+            + "\u{1B}[9mstrike\u{1B}[0m \u{1B}[53moverline\u{1B}[0m \u{1B}[41;97m on red \u{1B}[0m "
+            + "\u{1B}[48;5;24;38;5;214m 256 colours \u{1B}[0m"
+            + "\n```",
     ]
 
     /// The newest thing said in each seeded conversation.

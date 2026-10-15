@@ -159,9 +159,9 @@ struct PinnedMessagesPane: View {
     }
 
     private func prefetch(_ cards: [MessageCard]) async {
-        // One nudge for the batch: the cards peek the caches on their next
-        // draw, and a repaint per picture would repaint the pane per avatar.
-        if await MessageCardArtwork.prefetch(cards) { artworkGeneration &+= 1 }
+        // A nudge per burst of landings: the cards peek the caches on their
+        // next draw (`MessageCardArtwork`).
+        await MessageCardArtwork.prefetch(cards) { artworkGeneration &+= 1 }
     }
 }
 

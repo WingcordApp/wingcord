@@ -71,7 +71,8 @@ nonisolated enum DemoMedia {
                 name: "wingcord-still.png",
                 type: "image/png",
                 size: stillSize,
-                bytes: 1_482_016
+                bytes: 1_482_016,
+                placeholder: stillPlaceholder
             ),
             attachment(
                 id: 5_000_000_000_000_000_002,
@@ -93,6 +94,100 @@ nonisolated enum DemoMedia {
         ]
     }
 
+    /// A source file and a README, written once, so a text preview has
+    /// something to show: highlighting and the language picker on the one,
+    /// Render Markdown on the other.
+    static func textFiles() -> [Attachment] { textGenerated }
+
+    private static let textGenerated: [Attachment] = {
+        try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        func write(_ text: String, named name: String, id: UInt64) -> Attachment {
+            let url = directory.appending(path: name)
+            let data = Data(text.utf8)
+            if (try? Data(contentsOf: url)) != data { try? data.write(to: url) }
+            return Attachment(
+                id: AttachmentID(rawValue: id),
+                filename: name,
+                url: url.absoluteString,
+                proxyURL: url.absoluteString,
+                contentType: "text/plain; charset=utf-8",
+                size: data.count
+            )
+        }
+        return [
+            write(sourceSample, named: "TimelineLayout.swift", id: 5_000_000_000_000_000_011),
+            write(markdownSample, named: "README.md", id: 5_000_000_000_000_000_012),
+        ]
+    }()
+
+    private static let sourceSample = """
+    import AppKit
+
+    /// Lays out one row of the transcript.
+    struct TimelineLayout {
+        var width: CGFloat
+        var lineSpacing: CGFloat = 2
+
+        // Rows are measured once and cached by width.
+        func height(of text: String, font: NSFont) -> CGFloat {
+            let attributed = NSAttributedString(string: text, attributes: [.font: font])
+            let bounds = attributed.boundingRect(
+                with: CGSize(width: width, height: .greatestFiniteMagnitude),
+                options: [.usesLineFragmentOrigin]
+            )
+            return ceil(bounds.height) + lineSpacing * 2
+        }
+    }
+
+    @MainActor
+    final class TimelineCache {
+        private var heights: [Int: CGFloat] = [:]
+        static let shared = TimelineCache()
+
+        func store(_ height: CGFloat, for id: Int) {
+            guard height > 0 else { return }
+            heights[id] = height
+        }
+    }
+
+    let layout = TimelineLayout(width: 480)
+    print("Height: \\(layout.height(of: "Hello", font: .systemFont(ofSize: 13)))")
+    """
+
+    private static let markdownSample = """
+    # Wingcord
+
+    A native **macOS** client for *Discord*, built with SwiftUI and AppKit.
+
+    ## Features
+
+    - Frosted bubbles over your own wallpaper
+    - A glass sidebar with pages
+      - Messages and Servers
+    - Highlighted code, `inline code` too
+
+    1. Download the app
+    2. Sign in
+    3. Pick a theme
+
+    > Every rule in INVARIANTS.md cost something.
+
+    ```swift
+    let greeting = "Hello"
+    print(greeting)
+    ```
+
+    | Surface | Material |
+    | --- | --- |
+    | Sidebar | Liquid Glass |
+    | Bubbles | Standard material |
+
+    ---
+
+    Read more at [the docs](https://example.com/docs) or https://example.com.
+    ![Screenshot](https://example.com/shot.png)
+    """
+
     /// The same picture again, hidden.
     ///
     /// A spoilered attachment is named `SPOILER_…` by the uploader and Discord
@@ -112,7 +207,8 @@ nonisolated enum DemoMedia {
         type: String,
         size: CGSize,
         bytes: Int,
-        duration: Double? = nil
+        duration: Double? = nil,
+        placeholder: String? = nil
     ) -> Attachment {
         let string = file.absoluteString
         return Attachment(
@@ -125,9 +221,17 @@ nonisolated enum DemoMedia {
             width: Int(size.width),
             height: Int(size.height),
             description: "A generated fixture, so the viewer has something to view.",
-            durationSeconds: duration
+            durationSeconds: duration,
+            placeholder: placeholder
         )
     }
+
+    /// The still's ThumbHash — Discord's `placeholder` — computed once from
+    /// `demo-still.png` with the reference encoder, and checked by decoding it
+    /// back through `MediaPlaceholder` (average colour 20,16,22 against the
+    /// picture's 20,17,24). The spoiler's cover is drawn from it (D16); redo it
+    /// if `writeStillIfNeeded` draws something else.
+    private static let stillPlaceholder = "xQcCBIAIGFh3h4eHdXf4iIxweA=="
 
     // MARK: Drawing
 
