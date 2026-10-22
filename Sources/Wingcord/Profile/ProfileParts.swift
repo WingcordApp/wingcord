@@ -52,6 +52,14 @@ struct BadgeRow: View {
     @State private var directoryBadge: Int?
     @State private var showsDirectory = false
     @State private var showsCustomizer = false
+    /// Which page each flyout is on. **The directory and "Customize your
+    /// badges" swap inside the one flyout** rather than one closing to open the
+    /// other: the customizer's own flyout hangs off the pencil, which exists
+    /// only while editing — so outside the editor "Customize Your Badges" opened
+    /// nothing at all (Alex, 2026-10-22), and two popovers trading places in one
+    /// turn is unreliable even where both anchors exist.
+    @State private var rowPanel = BadgePanel.directory
+    @State private var pencilPanel = BadgePanel.customize
 
     @Environment(AppModel.self) private var model
     /// Whose flyout is up.
@@ -139,6 +147,7 @@ struct BadgeRow: View {
             if badges.count > Self.shownLimit {
                 Button("+\(badges.count - Self.shownLimit)") {
                     directoryBadge = nil
+                    rowPanel = .directory
                     showsDirectory = userID != nil
                 }
                 .buttonStyle(.plain)
@@ -149,6 +158,7 @@ struct BadgeRow: View {
             }
             if isEditing, userID != nil {
                 Button {
+                    pencilPanel = .customize
                     showsCustomizer = true
                 } label: {
                     Image(systemName: "pencil")
@@ -159,22 +169,26 @@ struct BadgeRow: View {
                 .foregroundStyle(InkColor.secondary)
                 .help("Customize your badges")
                 .popover(isPresented: $showsCustomizer, arrowEdge: .bottom) {
-                    if let userID {
-                        BadgeCustomizer(userID: userID) {
-                            showsCustomizer = false
-                            directoryBadge = nil
-                            showsDirectory = true
-                        }
-                    }
+                    if let userID { badgePanel($pencilPanel, userID: userID) }
                 }
             }
         }
         .popover(isPresented: $showsDirectory, arrowEdge: .bottom) {
-            if let userID {
-                BadgeDirectory(userID: userID, initialBadgeID: directoryBadge) {
-                    showsDirectory = false
-                    showsCustomizer = true
-                }
+            if let userID { badgePanel($rowPanel, userID: userID) }
+        }
+    }
+
+    /// The directory or the customizer, switching in place.
+    @ViewBuilder
+    private func badgePanel(_ panel: Binding<BadgePanel>, userID: UserID) -> some View {
+        switch panel.wrappedValue {
+        case .directory:
+            BadgeDirectory(userID: userID, initialBadgeID: directoryBadge) {
+                panel.wrappedValue = .customize
+            }
+        case .customize:
+            BadgeCustomizer(userID: userID) {
+                panel.wrappedValue = .directory
             }
         }
     }
@@ -189,6 +203,7 @@ struct BadgeRow: View {
         dismiss()
         model.loadBadgeCatalog(of: userID)
         directoryBadge = BadgeKind.forProfileID(badge.id)?.rawValue
+        rowPanel = .directory
         showsDirectory = true
     }
 
@@ -1756,3 +1771,9 @@ struct ProfileAvatar: View {
 /// light too.
 private let profileSkeletonLine = Color.relative(dark: 0.08, light: 0.07)
 private let profilePrivateStrip = Color.relative(dark: 0.10, light: 0.06)
+
+/// The badge flyout's two pages.
+private enum BadgePanel {
+    case directory
+    case customize
+}
